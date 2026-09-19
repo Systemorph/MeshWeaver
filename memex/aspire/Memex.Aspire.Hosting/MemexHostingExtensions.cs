@@ -142,7 +142,15 @@ public static class MemexHostingExtensions
         this IDistributedApplicationBuilder builder, string name, string recordPath) =>
         builder.AddMemex(name, DeploymentRecordJson.ReadFile(recordPath));
 
-    // ── the fluent surface: one-to-one with DeploymentRecordExtensions ─────────────────────────
+    // ── the fluent surface: the DeploymentRecordExtensions transforms an AppHost reaches by name ──
+    // NOT one-to-one with that class — it carries a good many more transforms than have a named
+    // method here (WithRegistry, WithSecretMount, WithInlineEnv, WithDrain, …), and those are set
+    // through Configure below, which is what every named method here IS. So a missing forwarder
+    // costs a caller the short spelling, never the ability to set the field, and adding one is a
+    // convenience rather than a fix. Do not read the parity table in
+    // Doc/Architecture/ConfiguringAnInstanceFromAspire as promising a method here: its Method
+    // column is the RECORD-transform surface, and RendererParityTest resolves it against
+    // DeploymentRecordExtensions alone.
 
     /// <summary>
     /// Applies a pure transform to the portal's record and re-syncs what Aspire derives from it
@@ -219,6 +227,14 @@ public static class MemexHostingExtensions
     public static IResourceBuilder<MemexPortalResource> WithSocialLinkedIn(this IResourceBuilder<MemexPortalResource> p, string? clientId) => p.Configure(r => r.WithSocialLinkedIn(clientId));
     /// <summary>GitHub App — <see cref="DeploymentRecordExtensions.WithGitHubApp"/>.</summary>
     public static IResourceBuilder<MemexPortalResource> WithGitHubApp(this IResourceBuilder<MemexPortalResource> p, string clientId, string installationId, string? installationOwner = null) => p.Configure(r => r.WithGitHubApp(clientId, installationId, installationOwner));
+    /// <summary>
+    /// The App a CONTROL instance dispatches this deployment's pipelines as —
+    /// <see cref="DeploymentRecordExtensions.WithOpsGitHubApp"/>. 🚨 This configures NOTHING about the
+    /// portal this builder runs: <see cref="DeploymentRecordJson.ForPortal"/> projects the block out of
+    /// the <c>Deployment__Record</c> environment, so it reaches only the record file
+    /// <see cref="PublishRecord"/> writes for the control instance.
+    /// </summary>
+    public static IResourceBuilder<MemexPortalResource> WithOpsGitHubApp(this IResourceBuilder<MemexPortalResource> p, string clientId, string? installationId = null, string? installationOwner = null, string? privateKeySecret = null, string? privateKeyConfigKey = null) => p.Configure(r => r.WithOpsGitHubApp(clientId, installationId, installationOwner, privateKeySecret, privateKeyConfigKey));
     /// <summary>AI providers — <see cref="DeploymentRecordExtensions.WithAi"/>.</summary>
     public static IResourceBuilder<MemexPortalResource> WithAi(this IResourceBuilder<MemexPortalResource> p, Func<AiProviders, AiProviders> configure) => p.Configure(r => r.WithAi(configure));
     /// <summary>The hosting operator — <see cref="DeploymentRecordExtensions.WithOperator"/>.</summary>

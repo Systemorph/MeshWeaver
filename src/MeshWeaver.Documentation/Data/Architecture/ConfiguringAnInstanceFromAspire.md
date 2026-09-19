@@ -144,6 +144,17 @@ Helm values are the paths in the values file `HelmValues.Render` produces (`conf
 is the portal ConfigMap). A dash means the field is the record's or the operator's alone — it
 configures no container.
 
+🚨 **The Method column names a `DeploymentRecordExtensions` transform, NOT an Aspire builder method,
+and the two surfaces are not the same size.** `MemexHostingExtensions` forwards the transforms an
+AppHost reaches by name — a majority of the table, not all of it: `WithRegistry`, `WithSecretMount`,
+`WithInlineEnv`, `WithDrain`, `WithHttpPort`, `WithStorageAccount`, `WithOpsGitHubApp` and a dozen
+more have a row here and no named method there. **That is not a gap in what an AppHost can set.**
+Every named facade method *is* `Configure(record => transform(record))` with one transform, and
+`Configure` — like the `AddMemex(name, configure)` overload — is public, so any row of this table is
+set as `.Configure(r => r.WithOpsGitHubApp("ops-client"))` whether or not a short spelling exists.
+A missing forwarder costs a caller the spelling, never the field, and `RendererParityTest` deliberately
+resolves this column against `DeploymentRecordExtensions` alone — it asserts nothing about the facade.
+
 | Method | Record field | Helm value | Config key |
 |---|---|---|---|
 | `WithHost(host, dnsZone)` | `Host`, `DnsZone` | `ingress` (host) — the DNS record is the operator's | — |

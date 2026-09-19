@@ -54,10 +54,6 @@ public static class DeploymentRecordJson
         JsonSerializer.Serialize(record, indented ? new JsonSerializerOptions(Options) { WriteIndented = true } : Options);
 
     /// <summary>
-    /// A record from JSON — the configuration value, a record file, or the mesh node's
-    /// <c>content</c> object. Throws on malformed JSON; returns null for an empty value.
-    /// </summary>
-    /// <summary>
     /// The record as the DESCRIBED deployment's own portal may see it. 🚨 <see cref="DeploymentContent.OpsGitHubApp"/>
     /// is read BY a control instance ABOUT this deployment — the App the control instance dispatches
     /// this deployment's pipelines as — and it never belongs in the described portal's configuration:
@@ -73,6 +69,10 @@ public static class DeploymentRecordJson
     public static string WritePortal(DeploymentContent record, bool indented = false) =>
         Write(ForPortal(record), indented);
 
+    /// <summary>
+    /// A record from JSON — the configuration value, a record file, or the mesh node's
+    /// <c>content</c> object. Throws on malformed JSON; returns null for an empty value.
+    /// </summary>
     public static DeploymentContent? Read(string? json) =>
         string.IsNullOrWhiteSpace(json) ? null : JsonSerializer.Deserialize<DeploymentContent>(json, Options);
 
