@@ -90,19 +90,24 @@ occurrence will say which of the two it was. Settling #4528 needs that evidence.
 The paragraph above expected the next occurrence to be informative. It was informative in the
 direction nobody wrote down: **the shape fix did not stop the attempt timeout.**
 
-Measured 2026-09-19 19:0xZ, read-only, from `Ops/Status/{memex,memex-cloud}` on the control instance
-and the incident node the log watcher folds these events onto.
+Read-only, from `Ops/Status/{memex,memex-cloud}` on the control instance and the incident node the log
+watcher folds these events onto. Each reading carries the sample time of the object it came from, so
+every number below is attributable to one read rather than to a session window:
+`Ops/Status/memex` **sampled 2026-09-19T18:53:11Z**, `Ops/Status/memex-cloud` **sampled
+2026-09-19T19:03:22Z**, and the incident node **re-read at 2026-09-19T19:07:24Z**.
 
-| deployment | image | commit | replicas | pods up since | carries the shape fix? |
+| deployment | image | commit | replicas | pods started | carries the shape fix? |
 |---|---|---|---|---|---|
-| `memex` | `3.0.0-ci.8968` | `96f88406` | 2/2, `converged: true` | 2026-09-19T08:10Z | **yes** |
-| `memex-cloud` | `3.0.0-ci.8969` | `c25f86ae` | 3/3, `converged: true` | 2026-09-19T08:35Z | **yes** |
+| `memex` | `3.0.0-ci.8968` | `96f88406` | 2/2, `converged: true` | 2026-09-19T08:10:37Z, 08:11:39Z | **yes** |
+| `memex-cloud` | `3.0.0-ci.8969` | `c25f86ae` | 3/3, `converged: true` | 2026-09-19T08:34:53Z, 08:39:58Z, 08:39:59Z | **yes** |
 
 All ten retained samples on the incident read
-`Source: 'plugin-registry-bundles-standard//Standard-AttemptTimeout'`, spanning 19:00:52Z → 19:06:53Z
-across five pods, and its shape counter advanced **375 → 397 in sixteen minutes**. So the 120 s
-*attempt* budget on this pipeline is exceeded roughly one and a half times a minute, on five replicas
-of two deployments, all of which have been running the streaming transfer for ten hours.
+`Source: 'plugin-registry-bundles-standard//Standard-AttemptTimeout'`, spanning
+**2026-09-19T19:00:52Z → 19:06:53Z** across five pods, and its shape counter advanced **375 → 397**
+between the node's own `lastSeen` of **18:51:53Z** and **19:06:53Z** — 22 occurrences in exactly
+fifteen minutes. So the 120 s *attempt* budget on this pipeline is exceeded roughly one and a half
+times a minute, on five replicas of two deployments, every one of which had been running the
+streaming transfer for between 10 h 23 m and 10 h 56 m at the time of these reads.
 
 **That relocates the cost, and the relocation is what the fix bought.** With
 `HttpCompletionOption.ResponseHeadersRead` the body leaves the Polly attempt and `CopyStallBounded`
