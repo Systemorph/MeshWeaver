@@ -135,25 +135,31 @@ The section above is about a close that races the *delivery* — post-close line
 still running the old image. This is its inverse, measured on 2026-09-19, and it bites the closing
 side rather than the reopening one.
 
-**Five issues were closed partly on dormancy and every one of them reopened within a day:**
+**Three teardown faults were closed partly on dormancy and all three reopened within a day:**
 
 | issue | closed | reopened | newest occurrence |
 |---|---|---|---|
-| #1449 | 09-18 06:07:05 | 09-18 15:36:25 | 09-18 15:35:29Z |
 | #1540 | 09-18 05:58:27 | 09-19 05:08:26 | 09-19 05:07:01Z |
 | #1547 | 09-18 05:57:08 | 09-19 05:07:26 | 09-19 05:10:25Z |
 | #1548 | 09-18 05:57:09 | 09-19 05:05:27 | 09-19 05:12:06Z |
-| #1422 | 09-17 11:27:46 | 09-19 05:36:25 | 09-19 05:35:41Z |
 
 Every reopen is **correct** by the post-close predicate — each occurrence genuinely postdates its
 close. The mistake is upstream, in the reasoning that closed them: one carried the words *"15 days
 with no occurrence"*.
 
-🚨 **All five fired inside a single 31-minute window, 05:05–05:36Z, and that window is a roll.**
-These are teardown and boot faults — `ObjectDisposedException` unregistering a grain from the
-directory, a route leg outliving the quiescence budget, a NodeType recompile at pod start. They fire
-when pods stop and start, and they are silent when nothing is stopping or starting. Fifteen quiet
-days meant fifteen days without a roll, not fifteen days of health.
+🚨 **All three fired inside one seven-minute window, 05:05–05:12Z, and that window is a roll.** Their
+subjects are teardown by construction — `ObjectDisposedException` unregistering a grain from the
+directory, a mesh hub resolving from a disposed Autofac scope. They fire when pods stop, and they
+are silent when nothing is stopping them. Fifteen quiet days meant fifteen days without a roll, not
+fifteen days of health.
+
+🚨 **Correlation with a roll window is NOT the same finding as the mechanism.** Two more issues
+reopened across the same period — #1422 (Release-snapshot cleanup, whose reopen is a cascade racing
+a concurrent delete) and #1449 (a PostgreSQL `CreateNode` Unicode failure) — and it is tempting to
+sweep them in. Their records identify neither as teardown- or boot-shaped, and #1449's occurrence
+(09-18 15:35:29Z) is not in the window at all. Firing *during* a roll is evidence; needing a roll in
+order to fire is the claim, and only the three above carry it. An earlier draft of this section
+asserted all five, which is the very over-reach the page exists to warn about.
 
 **The predicate:** silence is evidence only over a window in which the fault's trigger actually
 occurred. For a roll-triggered fault, a dormancy argument has to name the rolls it survived. Without
