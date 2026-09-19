@@ -1713,9 +1713,26 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             attribution_error: ProvenanceUnavailable | None = None
             if verify_source and freeze_kind == "sha":
                 attributed, attribution_error = attribution_of(fetch, jobs, number, receipts)
-            freeze_names_this_run = bool(freeze_kind) and (
-                freeze_kind == "set" or not verify_source or sha == freeze_value
-                or (attributed is not None and attributed[0] == freeze_value))
+            if not freeze_kind:
+                freeze_names_this_run = False
+            elif freeze_kind == "set" or not verify_source:
+                # A set freeze is already down to one run number and an unverified sha freeze is
+                # already down to one head sha — both filters ran above, so the scan is on that run.
+                freeze_names_this_run = True
+            elif attributed is not None:
+                # 🚨 A RECEIPT THAT EXISTS IS THE ANSWER, and `head_sha` is NOT a second chance
+                # (Copilot's review of #4920). Accepting either would resurrect #4242 from the other
+                # side: a run whose HEAD matches the freeze while its receipt names a different
+                # source — an ordinary re-bake — would be judged the frozen run, and if it is
+                # unsealed the escalation below aborts the whole scan before the run whose receipt
+                # actually matches is ever reached. Under `--verify-source` the set's sha IS the
+                # receipt's, and that is the option's entire definition.
+                freeze_names_this_run = attributed[0] == freeze_value
+            else:
+                # No receipt could be read, so `head_sha` is the only evidence there is. An
+                # escalation here is still right: the ProvenanceUnavailable arm below says
+                # "unverified" rather than claiming the set is something it could not read.
+                freeze_names_this_run = sha == freeze_value
             # The Plugins publication is found on its own, over the same runs: the newest one whose
             # seal succeeded — even where the platform trio did not (a red platform bake beside a
             # green seal leaves a publication for that identity, and it is newer than the set
@@ -3708,6 +3725,35 @@ def self_test() -> int:
         failures.append("#4780: the frozen set was taken while its plugins seal was pending, but "
                         "the `Frozen set is still sealing its plugins` warning was not spoken — a "
                         "reader has to be told the upstream fetch may not find it yet")
+
+    # 🚨 …AND A RECEIPT THAT EXISTS IS THE ANSWER, so `head_sha` is not a second chance (Copilot's
+    # review of #4920). Accepting either resurrects #4242 from the other side: a run whose HEAD
+    # matches the freeze while its receipt names a different source — an ordinary re-bake — is judged
+    # the frozen run, and if it is UNSEALED the escalation aborts the whole scan before the run whose
+    # receipt actually matches is reached.
+    #
+    # Fixture: #8530 is the newest, its head IS the frozen sha, it has a successful platform bake (so
+    # a receipt exists) naming a DIFFERENT source, and its promote leg failed — unsealed. #8506 is
+    # fully sealed and its receipt names the frozen sha. The freeze must resolve to #8506.
+    head_only = "f" * 40
+    decoy = [_run(8530, head_only), _run(8506, C)]
+    id_decoy, id_real = 70011, 70012
+    decoy_jobs = {
+        1000 + 8530: _jobs_with_bake_id(id_decoy, promote="failure"),   # unsealed, receipt exists
+        1000 + 8506: _jobs_with_bake_id(id_real),                       # sealed, the frozen one
+    }
+    decoy_logs = {
+        id_decoy: _receipt("d" * 40, "3.0.0-ci.8530"),   # a re-bake: head != what it published
+        id_real: _receipt(head_only, "3.0.0-ci.8506"),   # the run the freeze actually names
+    }
+    decoy_full = dict(full)
+    decoy_full[("mw-plugin-test", "3.0.0-ci.8506")] = D1
+    decoy_full[("memex-portal-ai", "3.0.0-ci.8506")] = D2
+    case("a run whose HEAD matches the freeze but whose RECEIPT does not must not abort the scan", True,
+         lambda: choose(_fetch_with_logs(decoy_logs, runs=decoy, jobs=decoy_jobs),
+                        _registry(decoy_full), tester, portal, freeze=head_only,
+                        log=logs.append, verify_source=True),
+         lambda c: c.sha == head_only and c.set_name == "3.0.0-ci.8506")
     total += 1
     if MAX_LOG_BYTES <= 0 or FINAL_BAKE_RECEIPT.search(_receipt()) is None:
         failures.append("the receipt pattern must match the line publish-bake-bundles.sh writes")

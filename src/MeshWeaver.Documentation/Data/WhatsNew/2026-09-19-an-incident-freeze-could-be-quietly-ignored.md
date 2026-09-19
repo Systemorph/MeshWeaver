@@ -38,11 +38,14 @@ happening.
 
 For the one case where the answer can change a decision — a freeze by commit, with verification on —
 the receipt is now read *before* the decisions the freeze governs, and the freeze is matched against
-it. A starting commit that matches still counts, so the ordinary build where the two agree behaves
-exactly as before, and no extra reading happens on any other path. A build that cannot produce a
-receipt at all still leaves the honest answer — "no evidence that this is the frozen build" — rather
-than an invented one, because during an incident most builds in view are not the frozen one and
-stopping on the first of them would make the option unusable.
+it. When a receipt exists it is the **only** basis: a build's starting commit is not a second chance.
+That matters, because a build is often a re-run over a commit someone else's build published, so a
+starting commit that happens to match while the receipt names something else would pick the wrong
+build and, if that build is incomplete, stop the search before the right one is reached. A build that
+cannot produce a receipt at all still falls back to its starting commit and still leaves the honest
+answer — "no evidence that this is the frozen build" — rather than an invented one, because during an
+incident most builds in view are not the frozen one and stopping on the first of them would make the
+option unusable. No extra reading happens on any other path.
 
 When the frozen build is taken while its companion publication is still sealing, the existing warning
 saying so is now actually printed, which is the line that tells a reader the publication may not be
