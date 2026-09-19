@@ -133,8 +133,19 @@ target the tag has *now*. So each promotion is additionally written to an **appe
 the set, the evidence that qualified it, and when — which survives the next promotion. The pointer
 answers "what is stable"; the record answers "why, and what was stable before".
 
-CD publishes the mirrored image pointer `3.0.0-stable` in the same step that moves the tag, beside
-the `3.0.0-latest` it already publishes — one writer, one step, so the two cannot drift apart.
+CD publishes a mirrored image pointer `3.0.0-stable` beside the `3.0.0-latest` it already publishes.
+
+🚨 **These are TWO writes and they are not atomic**, so "one writer, one step" is not a guarantee: a
+Git ref update and a registry tag push succeed independently, and a failure or a retry between them
+leaves the two naming different releases with nothing to notice it. The contract is therefore
+ordered and one-sided:
+
+- **The Git tag is authoritative.** It is what CI resolves and what the promotion record describes.
+- **The image pointer is published only after the tag update is confirmed**, never before and never
+  in parallel — so the window can only ever hold an image pointer that lags, not one that leads.
+- **Divergence is reconciled, not assumed away.** The promoter compares the two on every run and
+  re-publishes the image pointer from the authoritative tag, which is idempotent and is also the
+  correct behaviour under retry.
 
 ## What a channel is NOT
 
@@ -156,11 +167,18 @@ opposite of what it is for.
 
 ## How each consumer reads a channel
 
-**CI.** The resolver takes a channel name, resolves the pointer to a set, and then behaves as it
-always did — including "newest sealed **at or below** that set", which degrades gracefully when the
-pointed-at set's images have been purged, where a hard freeze would go red. Pull requests follow
+**CI.** The resolver takes a channel name and resolves the pointer to a set. Pull requests follow
 `stable`; `main`, the release dispatch and the daily poll follow `latest` — which is what makes
 `main` the place a regression shows up first, and keeps pull requests off it until it is proven.
+
+🚨 **A `stable` target that cannot be resolved FAILS CLOSED.** An earlier draft of this page said
+resolution would fall back to "newest sealed **at or below** that set" and called it graceful
+degradation. It is not: if the set `stable` names has been purged, quietly taking an older one makes
+`stable` denote a release that never earned the channel's evidence — which contradicts the channel
+contract, and contradicts the retention rule below in the same page. A promoted channel that cannot
+find its target is a **refusal**, and it is an incident about retention rather than a resolution
+outcome. At-or-below remains what best-effort resolution does; it is not what a promoted channel
+does.
 
 This **replaces** the per-repo ceiling: the ceiling's rule becomes the promotion rule for `stable`,
 computed once for the fleet instead of re-derived by every pull-request run. The `platform:newest`
