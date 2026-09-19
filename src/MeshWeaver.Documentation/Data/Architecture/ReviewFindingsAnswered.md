@@ -421,11 +421,17 @@ thread's root now has a comment whose `in_reply_to_id` points at it; and **every
 `in_reply_to_id` — including the sweep query above, and `check-review-answered.py`'s own predicate —
 counts the finding as answered.** The finding is untreated and nothing says so.
 
-Measured on 2026-09-19: of 208 replies posted during one sweep, **74 were these stubs** (38 in Memex,
-23 in Crm, 13 in Manufacturing), each one a `@`-prefixed filename or absolute path. Three of the four
-sessions that hit it believed they had replied and reported thread counts to prove it — the proof
-being the very field that cannot distinguish the two. The fourth caught it only by reading one reply
-back.
+Measured on 2026-09-19: **100 posts across four sessions** went out this way, each a `@`-prefixed
+filename or absolute path — Memex 41, Crm 24, Reinsurance 20, Manufacturing 15. Three of the four
+sessions believed they had replied and reported thread counts to prove it; the proof was the very
+field that cannot distinguish the two. The fourth caught it only by reading one reply back.
+
+🚨 **And the first audit of it was itself understated, for a structural reason worth keeping.** A
+thread-centric sweep — enumerate the review threads on the *swept* pull requests, check their replies
+— saw **74 of the 100**. The flag is a property of the **call site**, not of the thread, so it also
+hits PR-level issue comments (`issues/comments`, a different endpoint) and replies on the sweep's
+*own* pull requests, neither of which a thread-centric audit reaches. **Re-audit by call site**: every
+comment authored today on both endpoints whose body matches `^@`. That found the remaining 26.
 
 So the verification is **read the body back and check its length**, never the reply's existence:
 
@@ -438,9 +444,18 @@ A length near 20 is the bug. **Repair with `PATCH /repos/{o}/{r}/pulls/comments/
 second reply** — re-posting leaves the stub standing beside the real answer, and the thread then reads
 as two answers, one of them noise.
 
+🚨 **A stub also inflates every "how much is left" count, so a denominator taken before the repair is
+understated by its own stub total.** A stubbed thread has a reply, so the sweep query above calls the
+finding treated — which means any backlog figure published while stubs are outstanding is a floor, and
+not by a knowable margin. Re-measure after repairing, and when reporting a backlog say whether the
+count was taken before or after. Two of this sweep's per-repo denominators were re-taken for exactly
+this reason.
+
 This is the sweep's own instance of the defect class it exists to find: an answer that reads like a
 pass. The question to ask of any reply mechanism is the one that applies to a gate — *if this had
-failed, would the output differ?* Here it would not have.
+failed, would the output differ?* Here it would not have. And note the verification that works is not
+merely a length check: `@r_115_4028258629.md` is 20 characters, which is *short*, not obviously wrong.
+Assert a **content signature** you know is in the file — the verdict string the reply opens with.
 
 ### 🚨 One defect, five copies — fix the canonical, then RE-COPY IMMEDIATELY
 
