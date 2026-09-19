@@ -451,11 +451,20 @@ not by a knowable margin. Re-measure after repairing, and when reporting a backl
 count was taken before or after. Two of this sweep's per-repo denominators were re-taken for exactly
 this reason.
 
+**The general rule, of which this is one instance: any `gh api` write whose payload came from a file
+is verified by reading the field back.** `-f` and `-F` differ silently in both directions — `-f`
+treats `@path` as a literal string, and `-F` type-coerces a value that merely looks numeric or
+boolean — so the flag is the wrong thing to reason about. The response is not evidence either: it
+carries an id and a 201 whatever went in. Read the stored field and compare it with the source.
+
+And the comparison is not a length check. `@r_115_4028258629.md` is 20 characters, which is *short*,
+not obviously wrong, and a genuinely terse reply would fail the same test. Assert a **content
+signature** you know is in the file — the verdict string the reply opens with — or byte-compare
+against the draft, allowing for the trailing newline GitHub appends.
+
 This is the sweep's own instance of the defect class it exists to find: an answer that reads like a
 pass. The question to ask of any reply mechanism is the one that applies to a gate — *if this had
-failed, would the output differ?* Here it would not have. And note the verification that works is not
-merely a length check: `@r_115_4028258629.md` is 20 characters, which is *short*, not obviously wrong.
-Assert a **content signature** you know is in the file — the verdict string the reply opens with.
+failed, would the output differ?* Here it would not have.
 
 ### 🚨 One defect, five copies — fix the canonical, then RE-COPY IMMEDIATELY
 
