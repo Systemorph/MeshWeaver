@@ -1727,7 +1727,12 @@ internal class RoutingGrain(
                     var detail = string.IsNullOrEmpty(activationError) ? ex.Message : activationError;
                     // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally, which is the same
                     // defect #2346/#2451 removed from the result arm above and left standing here.
-                    var errorType = ClassifyDeliveryException(ex, scopeDisposed);
+                    // 🚨 `activationError` IS the discriminator this classifier needs (review on
+                    // #4914): non-empty means the registry holds a real activation error for this
+                    // grain, i.e. the persistent fault loop above — which emits the SAME Orleans
+                    // rejection text as an ordinary idle deactivation and must stay terminal.
+                    var errorType = ClassifyDeliveryException(
+                        ex, scopeDisposed, activationErrorRecorded: !string.IsNullOrEmpty(activationError));
                     logger.LogWarning(ex,
                         "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender as {ErrorType}: {Detail}",
                         grainKey, errorType, detail);
@@ -1831,12 +1836,71 @@ internal class RoutingGrain(
     /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
     /// <see cref="IsScopeTeardown"/>. Null (the default) keeps the pre-#2638 answer for callers that
     /// have no container to probe, such as a pure classification test.</param>
-    internal static ErrorType ClassifyDeliveryException(Exception ex, Func<bool>? scopeDisposed = null) =>
+    internal static ErrorType ClassifyDeliveryException(
+        Exception ex, Func<bool>? scopeDisposed = null, bool activationErrorRecorded = true) =>
         OrleansRoutingService.IsDirectoryUnstable(ex)
         || IsShutdownShaped(ex)
+        || IsDeactivatedActivation(ex, activationErrorRecorded)
         || IsScopeTeardown(ex, scopeDisposed)
             ? ErrorType.ShuttingDown
             : ErrorType.Failed;
+
+    /// <summary>
+    /// 🚨 <b>The TARGET GRAIN deactivated while the message was in flight — issue #2299.</b> Orleans
+    /// forwards a message whose activation has gone away, and when the forwards are exhausted it
+    /// rejects with <c>… after "DeactivateOnIdle was called." to invalid activation. Rejecting
+    /// now.</c>
+    ///
+    /// <para><b>Why it belongs here.</b> The rule this classifier states is that only conditions
+    /// that are <i>a lifecycle transition by construction</i> qualify. A grain deactivating on idle
+    /// is exactly that — the grain-level analogue of the host going away, which
+    /// <see cref="IsShutdownShaped"/> already accepts — and the target re-activates on the next
+    /// call. Reported as <see cref="ErrorType.Failed"/> it tore down consumers that carry their own
+    /// recovery machinery, which is the damage #2346/#2357 removed for the silo-level shapes and
+    /// left standing for this one. Measured on memex 2026-09-17, 191 occurrences against a single
+    /// address.</para>
+    ///
+    /// <para>🚨 <b>This matches Orleans' own message text, which is a weaker signal than a type and
+    /// is known to be fragile</b> — the same shape <see cref="OrleansRoutingService.IsDirectoryUnstable"/>
+    /// already uses beside it. There is no typed rejection reason to read:
+    /// <c>OrleansMessageRejectionException</c> (a subclass of the <c>OrleansException</c> tested
+    /// here) carries every rejection kind, and accepting the type alone would classify genuine
+    /// refusals as transient — the one direction this file says must
+    /// not happen (<i>"Anything this does not recognise stays terminal, so a genuine defect is still
+    /// reported as one"</i>). So the test is the narrowest phrase that means "the activation is
+    /// gone", and if Orleans re-words it this silently returns to the pre-#2299 answer rather than
+    /// misclassifying anything — the safe direction to fail in, and the reason the test beside this
+    /// pins the PRODUCTION string verbatim rather than a paraphrase.</para>
+    ///
+    /// <para>🚨 <b>AND THE TEXT ALONE IS AMBIGUOUS — the SAME rejection means two opposite
+    /// things</b> (review on #4914). <see cref="GrainActivationFailureRegistry"/> documents the
+    /// other one: a per-node hub in a PERSISTENT activation-fault loop — a broken NodeType compile
+    /// that cannot materialise a hub configuration — has an alive window of about zero, so every
+    /// delivery lands in a deactivation window and Orleans answers with this exact sentence. That
+    /// grain never recovers, and reporting it as a lifecycle transition would hide a real defect
+    /// behind a transient NACK.
+    ///
+    /// <para>So the text is a NECESSARY condition and the registry is the discriminator: the grain
+    /// recorded its true activation error on every faulted activation, so
+    /// <paramref name="activationErrorRecorded"/> being FALSE is what separates "deactivated on
+    /// idle, will be back" from "cannot activate at all". The default is <c>true</c> — assume the
+    /// worse case — so a caller that cannot consult the registry leaves the verdict terminal,
+    /// exactly as before this predicate existed.</para></para>
+    ///
+    /// <para>The walk is <see cref="ExceptionChain"/>'s, for the same reason
+    /// <see cref="IsScopeTeardown"/> uses it: this arrives through Rx <c>Catch</c> arms and
+    /// <c>PostFailure</c>'s two-transport <see cref="AggregateException"/>.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <param name="activationErrorRecorded">Whether the failure registry holds a real activation
+    /// error for this grain — i.e. it is the persistent loop, not an idle deactivation. Defaults to
+    /// <c>true</c> at every caller that cannot answer, which keeps the verdict terminal.</param>
+    /// <returns><c>true</c> when the target activation was deactivated, not broken.</returns>
+    internal static bool IsDeactivatedActivation(Exception ex, bool activationErrorRecorded) =>
+        !activationErrorRecorded
+        && ExceptionChain.Contains(ex, e =>
+            e is global::Orleans.Runtime.OrleansException
+            && e.Message.Contains("to invalid activation", StringComparison.Ordinal));
 
     /// <summary>
     /// 🚨 <b>The routing turn is executing after the process's DI container was disposed — issue
