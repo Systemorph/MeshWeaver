@@ -69,8 +69,21 @@ is checked against two facts the listing cannot fake, and a listing that fails e
     exists, so a page whose newest run is older than it is provably stale.
 
 A freeze is exempt (it names one set, and an incident is when it must keep working), and a
-freshness check keeps its baseline on this refusal like on any other. The resolver does not
-re-read: the red is the harmless answer, and a re-run of the job reads the listing again.
+freshness check keeps its baseline on this refusal like on any other.
+
+🚨 THE CEILING BRANCH IS RE-READ BEFORE IT IS REFUSED (MeshWeaver#4750), THE AGE BRANCH IS NOT.
+The two branches are not the same kind of fact. A ceiling shortfall is PROVEN — a run numbered at
+least as high as the ceiling exists, because this repository's own `main` passed on it, so a page
+1 without one is a read inconsistency and nothing else, and it has a crisp condition to re-read
+FOR. The age branch is an INFERENCE from core CD's cadence: a genuinely quiet core serves the same
+page every time, so re-reading burns the budget to reach the same refusal. So a provable staleness
+re-reads page 1 up to STALE_REREADS times on a short backoff and refuses only if it is STILL
+stale — the refusal, the conditions and the strictness are unchanged, and only the number of times
+the page is asked for before it moved. Measured 2026-09-18: three occurrences in one day (two PRs
+and, once, `main` itself — 17, 17 and 18 downstream jobs red), every hand re-run green minutes
+later with no code change. That is the same argument already accepted for a 502, and it is NOT a
+gate testing its own input: the answer a re-read is allowed to change is GitHub's, never this
+script's verdict about it.
 
 🚨 THE CEILING READS A SECOND LISTING — the CALLING repository's own main runs — and it is NOT
 guarded that way, by design: there is no fact its page can be checked against (a repository's main
@@ -81,8 +94,10 @@ and URL, and why each was skipped — and orders its remedies by that evidence, 
 one-click test that decides whether the listing or `main` is at fault. Three times a stale page
 produced that refusal (2026-09-14, 2026-09-17 twice over) and twice the reader went and looked at a
 `main` that was fine, because the old text closed on "Fix main" (MeshWeaver#4664). The refusal's
-strictness is unchanged: a stale listing still refuses rather than resolving, and still does not
-retry.
+strictness is unchanged: a stale listing still refuses rather than resolving. THIS listing does
+not re-read either — #4750's re-read applies only to the core CD page, where a ceiling supplies
+the crisp condition to re-read for; here the ceiling IS what is being established, so there is
+nothing to re-read toward and a repeat read could only be "ask until the answer is nicer".
 
 FRESHNESS — A RE-RUN MUST NOT TEST A STALE SET
 ----------------------------------------------
@@ -305,6 +320,14 @@ def _created(run: dict) -> float | None:
         return None
 
 
+def _newest_main_run(runs: list[dict]) -> int | None:
+    """The highest `run_number` among the `main` rows of one listing page, or None when it has
+    none. A row with no `head_branch` counts as main — the listing is already filtered to
+    `branch=main`, and the self-test fixtures leave the field off."""
+    numbers = [int(r["run_number"]) for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
+    return max(numbers) if numbers else None
+
+
 def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> str | None:
     """Why page 1 of the main-cd listing cannot be the newest page, or None when nothing proves it.
 
@@ -314,7 +337,7 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
     main_runs = [r for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
     if not main_runs:
         return None
-    newest = max(int(r["run_number"]) for r in main_runs)
+    newest = _newest_main_run(runs)
     if passed_ceiling is not None and newest < passed_ceiling:
         return (f"its newest run is main-cd #{newest}, but this repository's `main` has already "
                 f"passed on core CD #{passed_ceiling}, which the page does not contain")
@@ -328,6 +351,104 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
                 f"{run.get('created_at')} — {hours:.0f} h ago, while core CD runs on {CORE_BRANCH} at "
                 f"least hourly (refused beyond {LISTING_MAX_AGE_HOURS} h)")
     return None
+
+
+def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | None:
+    """The page's newest main run when it is BELOW a declared ceiling — the ONE staleness this
+    script can PROVE rather than infer — or None.
+
+    PROVEN, because the ceiling is a run number the CALLING repository's own `main` has already
+    passed on: a run numbered at least that high EXISTS, so a page 1 that does not contain one is
+    a GitHub read inconsistency and can be nothing else. The AGE branch of `stale_listing` is an
+    INFERENCE from core CD's measured cadence instead — a genuinely quiet core serves the same
+    page for hours — which is the whole reason only this branch is re-read (MeshWeaver#4750)."""
+    if passed_ceiling is None:
+        return None
+    newest = _newest_main_run(runs)
+    return newest if newest is not None and newest < passed_ceiling else None
+
+
+# ─────────────── RE-READING A PROVABLY STALE PAGE 1 (MeshWeaver#4750) ───────────────
+# `fetch` already retries every GitHub-side failure that ANNOUNCES itself — a 5xx, a 403/429 rate
+# limit, a transport fault. A stale-but-200 listing was the one that did not, and it is the one
+# whose own refusal text prescribes a retry. Measured 2026-09-18, three times in one day on
+# MeshWeaver.Plugins, every hand re-run minutes later green with NO code change:
+#
+#   PR #2071   run 35328406174 attempt 1   17 downstream jobs red   (page 1 ~2,600 runs behind)
+#   PR #2043   run 35334000904             17 downstream jobs red
+#   main       run 35345612101 attempt 1   18 downstream jobs red   (left MAIN without a verdict,
+#                                                                    the branch the PR ceiling
+#                                                                    for the whole fleet is
+#                                                                    derived from)
+#
+# 🚨 THE SAFETY PROPERTY IS UNCHANGED. A page that is still stale after the re-reads is still
+# REFUSED, never resolved from — the same bounded retry already accepted for a 502, and for the
+# same reason: GitHub failing to answer is not an answer. What a re-read must never become is a
+# gate asking again until it likes the reply, which is why it runs ONLY where the staleness is
+# provable (`ceiling_shortfall`) and why the refusal is unconditional once the budget is spent.
+STALE_REREADS = 3
+STALE_REREAD_BACKOFF_SECONDS = 20.0   # 20 s, 40 s, 60 s — 2 minutes inside the lane's 25.
+
+
+def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, *,
+                    now: Callable[[], float], sleep: Callable[[float], None],
+                    log: Callable[[str], None]) -> tuple[list[dict], str | None, int]:
+    """Page 1, why it still cannot be the newest page (or None), and how many times it was RE-READ.
+
+    🚨 IT PROVES IT RE-READ. One line per re-read, naming how many runs page 1 held and its newest
+    main run — because a function that logs only its verdict leaves "re-read twice and it cleared"
+    indistinguishable from "the condition never fired", which is the same ambiguity as the refusal
+    this exists to remove."""
+    why_stale = stale_listing(runs, passed_ceiling, now())
+    if why_stale is None or ceiling_shortfall(runs, passed_ceiling) is None:
+        return runs, why_stale, 0
+    rereads = 0
+    for attempt in range(1, STALE_REREADS + 1):
+        wait = STALE_REREAD_BACKOFF_SECONDS * attempt
+        log(f"  page 1 is PROVABLY stale — {why_stale}. Re-reading it in {wait:.0f}s "
+            f"({attempt} of {STALE_REREADS}; MeshWeaver#4750 — three measured pages cleared "
+            "within minutes, with no code change)")
+        sleep(wait)
+        fresh = cd_runs(fetch, 1)
+        rereads = attempt
+        if not fresh:
+            # 🚨 An EMPTY page says NOTHING about staleness — `stale_listing` has no main rows to
+            # judge, so adopting it would turn a refusal into a resolution off a page holding no
+            # candidates at all. Keep the page that at least had rows, and the refusal it earned.
+            log(f"  re-read {attempt} of {STALE_REREADS}: page 1 came back EMPTY — not adopted; "
+                "the previous page and its refusal stand")
+            continue
+        runs = fresh
+        newest = _newest_main_run(runs)
+        why_stale = stale_listing(runs, passed_ceiling, now())
+        log(f"  re-read {attempt} of {STALE_REREADS}: page 1 holds {len(runs)} run(s), newest "
+            f"main-cd #{newest if newest is not None else '?'} — "
+            + ("SETTLED, resolving from it" if why_stale is None else f"still stale ({why_stale})"))
+        if why_stale is None:
+            return runs, None, rereads
+        if ceiling_shortfall(runs, passed_ceiling) is None:
+            # The ceiling cleared and the AGE branch tripped instead. That one has no crisp
+            # condition to re-read FOR, so it is refused here rather than burning the budget.
+            break
+    return runs, why_stale, rereads
+
+
+def reread_note(rereads: int) -> str:
+    """What is APPENDED to the #4433 refusal when page 1 was re-read before it.
+
+    🚨 The sentence this follows is kept BYTE-FOR-BYTE, including the clause that is no longer
+    true of the ceiling branch ("the resolver refuses rather than re-reading"). A transient-retry
+    steward keys its signature on that exact text (MeshWeaver.Plugins#2077/#2123), and a re-worded
+    refusal would silently stop being recognised as the known transient it is — on a red nobody is
+    reading, which is when a signature has to work. So the correction is appended, where it costs
+    no signature, rather than edited in."""
+    if rereads <= 0:
+        return ""
+    seconds = sum(STALE_REREAD_BACKOFF_SECONDS * n for n in range(1, rereads + 1))
+    return (f" [MeshWeaver#4750: page 1 WAS re-read {rereads} time(s) over ~{seconds:.0f}s before "
+            "this refusal and was still stale every time — what each re-read held is logged line "
+            "by line above. The sentence before this one predates the re-reads and is kept "
+            "verbatim because a transient-retry signature keys on it.]")
 
 
 def run_jobs_of(fetch: Fetch, repo: str, run_id: int) -> list[dict]:
@@ -1445,8 +1566,11 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
         if not runs:
             break
         # 🚨 PAGE 1 IS WHERE "NEWEST" IS DECIDED, so it is the page checked (#4433). A freeze names
-        # one set and must keep working in an incident, so it is not refused here.
-        why_stale = stale_listing(runs, passed_ceiling, now()) if page == 1 and not freeze_kind else None
+        # one set and must keep working in an incident, so it is neither re-read nor refused here.
+        why_stale, rereads = None, 0
+        if page == 1 and not freeze_kind:
+            runs, why_stale, rereads = settle_page_one(
+                fetch, runs, passed_ceiling, now=now, sleep=sleep, log=log)
         if why_stale:
             raise ResolutionError(
                 f"GitHub served a STALE run listing (MeshWeaver#4433): page 1 of {CORE_CD_WORKFLOW} "
@@ -1454,7 +1578,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 "from it would take an old set and report it as the newest (measured 2026-09-15: "
                 "page 1 began ~260 runs behind, twice, and a re-read minutes later was correct). "
                 "Re-run this job; the resolver refuses rather than re-reading, because this red is "
-                "the harmless answer and a silently old platform is not.")
+                "the harmless answer and a silently old platform is not." + reread_note(rereads))
         for run in runs:
             if run.get("head_branch") not in (None, CORE_BRANCH):
                 continue
@@ -2372,9 +2496,12 @@ def self_test() -> int:
          lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
                         freeze="3.0.0-ci.8203", log=logs.append, now=three_days),
          lambda c: c.set_name == "3.0.0-ci.8203")
+    # `sleep` is a no-op here and in every ceiling case below: a ceiling shortfall now re-reads
+    # page 1 first (#4750), and the real `time.sleep` would spend the budget on the wall clock.
     case("a page FRESH by age whose newest run is below main's passed ceiling is RED", False,
          lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
-                        log=logs.append, now=lambda: made_at + 3600, passed_ceiling=8676),
+                        log=logs.append, now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=lambda _: None),
          lambda message: "STALE" in message and "#8676" in message and "#8207" in message)
     case("…a ceiling AT the page's newest run is not staleness", True,
          lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
@@ -2384,6 +2511,84 @@ def self_test() -> int:
          lambda: choose(_fetch_for(list(reversed(aged)), sealed_two), _registry(full), tester,
                         portal, log=logs.append, now=three_days),
          lambda message: "STALE" in message and made in message)
+
+    # ── #4750: a PROVABLY stale page 1 is RE-READ before it is refused ──────────────────────────
+    # 🚨 The CONTROL for the keyed refusal text. An INDEPENDENT literal copy on purpose: asserting
+    # a module constant against itself would pass however the refusal were re-worded, and a
+    # transient-retry steward keys its signature on this exact sentence
+    # (MeshWeaver.Plugins#2077/#2123). If this literal stops matching, the steward stopped
+    # recognising the refusal — that is the failure this case exists to make loud.
+    KEYED_4433 = ("Re-run this job; the resolver refuses rather than re-reading, because this red "
+                  "is the harmless answer and a silently old platform is not.")
+    settled = [_run(8676, C, created_at=made)] + aged
+    sealed_three = {**sealed_two, 1000 + 8676: _jobs()}
+    full3 = {**full, ("mw-plugin-test", "3.0.0-ci.8676"): D1,
+             ("memex-portal-ai", "3.0.0-ci.8676"): D2,
+             ("mw-plugin-test", C[:7]): D1, ("memex-portal-ai", C[:7]): D2}
+
+    def _flipping_page_one(pages: list[list[dict]]) -> tuple[Fetch, dict]:
+        """A fetch whose page 1 answers `pages[0]`, then `pages[1]`, …, repeating the last. Every
+        other path is served from the union, so a run chosen off ANY of the pages is readable.
+        `state["page1"]` counts the reads — the number this issue is about."""
+        state: dict = {"page1": 0, "slept": []}
+        base = _fetch_for([row for page in pages for row in page], sealed_three)
+
+        def fetch(path: str):
+            if "/runs?" in path and re.search(r"[?&]page=1(?:&|$)", path):
+                index = min(state["page1"], len(pages) - 1)
+                state["page1"] += 1
+                return {"workflow_runs": pages[index]}
+            return base(path)
+        return fetch, state
+
+    fetch_settles, settles = _flipping_page_one([aged, settled])
+    case("#4750: a page 1 stale by the CEILING is RE-READ, and a settled re-read resolves", True,
+         lambda: choose(fetch_settles, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=settles["slept"].append),
+         lambda c: c.set_name == "3.0.0-ci.8676" and settles["page1"] == 2
+         and settles["slept"] == [20.0]
+         and any(l.strip().startswith("re-read 1 of 3:") and "#8676" in l and "SETTLED" in l
+                 for l in logs))
+
+    fetch_stuck, stuck = _flipping_page_one([aged])
+    case("#4750: …a page still stale after every re-read is REFUSED, keyed text VERBATIM", False,
+         lambda: choose(fetch_stuck, _registry(full), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=stuck["slept"].append),
+         lambda message: KEYED_4433 in message and "#4750" in message
+         and f"re-read {STALE_REREADS} time(s)" in message
+         and stuck["page1"] == 1 + STALE_REREADS and stuck["slept"] == [20.0, 40.0, 60.0]
+         # 🚨 It PROVES it re-read: one line per re-read, naming what page 1 held each time.
+         and sum(1 for l in logs if l.strip().startswith("re-read ")) == STALE_REREADS
+         and all(f"re-read {n} of {STALE_REREADS}:" in "".join(logs)
+                 for n in range(1, STALE_REREADS + 1)))
+
+    fetch_aged, aged_state = _flipping_page_one([aged])
+    case("#4750: a page stale by AGE alone is NOT re-read — an inference has nothing to settle",
+         False,
+         lambda: choose(fetch_aged, _registry(full), tester, portal, log=logs.append,
+                        now=three_days, sleep=aged_state["slept"].append),
+         lambda message: "STALE" in message and "#4750" not in message
+         and aged_state["page1"] == 1 and aged_state["slept"] == [])
+
+    fetch_frozen, frozen = _flipping_page_one([aged])
+    case("#4750: a FREEZE reads page 1 ONCE — an incident must not wait on re-reads", True,
+         lambda: choose(fetch_frozen, _registry(full), tester, portal, freeze="3.0.0-ci.8203",
+                        log=logs.append, now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=frozen["slept"].append),
+         lambda c: c.set_name == "3.0.0-ci.8203" and frozen["page1"] == 1
+         and frozen["slept"] == [])
+
+    fetch_empty, empty = _flipping_page_one([aged, []])
+    case("#4750: an EMPTY re-read is not ADOPTED — a page with no rows proves no freshness", False,
+         lambda: choose(fetch_empty, _registry(full), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=empty["slept"].append),
+         lambda message: "STALE" in message and "#8676" in message and "#8207" in message
+         and empty["page1"] == 1 + STALE_REREADS
+         and any("came back EMPTY" in l for l in logs))
+
     total += 1
     stale_rows, stale_override = refresh(
         {"run-number": "8203", "set": "3.0.0-ci.8203"},
@@ -3391,7 +3596,10 @@ def self_test() -> int:
           "this repository's declared FLOOR is refused on every path including under a freeze, a transient "
           "GitHub 5xx is retried (bounded) and named as a server error, a run "
           "listing whose page 1 is provably STALE (its newest run over 12 h old, or older than the "
-          "set main has passed) is refused rather than resolved from, and every dead end is RED "
+          "set main has passed) is refused rather than resolved from — after a bounded RE-READ, "
+          "which it proves line by line, where the staleness is the PROVABLE kind (the ceiling) "
+          "and never where it is an inference (the age) or a freeze, and whose refusal keeps the "
+          "#4433 sentence verbatim, and every dead end is RED "
           "naming why.")
     return 0
 
