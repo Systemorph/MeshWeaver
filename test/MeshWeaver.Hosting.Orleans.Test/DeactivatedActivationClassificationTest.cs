@@ -40,7 +40,7 @@ public class DeactivatedActivationClassificationTest
     [Fact]
     public void TheProductionRejection_IsClassifiedAsShuttingDown()
         => RoutingGrain.ClassifyDeliveryException(
-                new OrleansException(ProductionRejection))
+                new OrleansException(ProductionRejection), activationErrorRecorded: false)
             .Should().Be(ErrorType.ShuttingDown);
 
     [Fact]
@@ -50,8 +50,30 @@ public class DeactivatedActivationClassificationTest
         => RoutingGrain.ClassifyDeliveryException(
                 new AggregateException(
                     new InvalidOperationException("unrelated"),
-                    new OrleansException(ProductionRejection)))
+                    new OrleansException(ProductionRejection)),
+                activationErrorRecorded: false)
             .Should().Be(ErrorType.ShuttingDown);
+
+    [Fact]
+    public void ThePersistentActivationFaultLoop_StaysTerminal()
+    {
+        // 🚨 THE CASE THE REVIEW CAUGHT, and the reason the text alone cannot decide.
+        // GrainActivationFailureRegistry documents the collision: a per-node hub whose activation
+        // always faults (a broken NodeType compile) has an alive window of about zero, so every
+        // delivery lands in a deactivation window and Orleans emits THIS EXACT SENTENCE. That grain
+        // never recovers. Classifying it ShuttingDown would hide a real defect behind a transient
+        // NACK — the one direction ClassifyDeliveryException says must not happen.
+        RoutingGrain.ClassifyDeliveryException(
+                new OrleansException(ProductionRejection), activationErrorRecorded: true)
+            .Should().Be(ErrorType.Failed);
+    }
+
+    [Fact]
+    public void WithNoAnswerFromTheRegistry_ItStaysTerminal()
+        // The default is the worse case on purpose: a caller that cannot consult the registry gets
+        // exactly the pre-#4914 verdict rather than a guess.
+        => RoutingGrain.ClassifyDeliveryException(new OrleansException(ProductionRejection))
+            .Should().Be(ErrorType.Failed);
 
     [Fact]
     public void AnOrdinaryRejection_StaysTerminal()

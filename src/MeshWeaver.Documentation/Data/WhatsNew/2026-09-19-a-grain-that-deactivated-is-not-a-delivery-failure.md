@@ -26,7 +26,19 @@ down every consumer carrying its own recovery machinery, which is the damage alr
 the silo-level shapes and left standing for this one. Measured on 2026-09-17: 191 occurrences
 against a single address.
 
-## The signal is Orleans' own text, and that is a known weakness
+## The same sentence means two opposite things, so the text alone cannot decide
+
+A grain whose activation **always** faults — a broken NodeType compile that cannot produce a hub
+configuration — has an alive window of about zero, so every delivery lands in a deactivation window
+and Orleans emits *the same rejection*. That grain never comes back, and calling it a lifecycle
+transition would hide a real defect behind a transient answer.
+
+The registry the platform already keeps for this is the discriminator: the grain records its true
+activation error on every faulted activation, so the absence of a recorded error is what separates
+"deactivated on idle, will be back" from "cannot activate at all". Where a caller cannot consult it,
+the verdict stays terminal — the worse case is the default.
+
+## The signal is also Orleans' own text, and that is a known weakness
 
 There is no typed rejection reason to read — the rejection type carries every kind of refusal, so
 accepting it alone would classify genuine refusals as transient, which is the one direction the
