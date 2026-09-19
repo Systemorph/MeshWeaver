@@ -129,6 +129,60 @@ the rule for the three that are live. It also explains why Plugins#2014's predic
 correct, leaves a residue that still reads wrong: a close and a delivery are different events, and
 the reopen rule compares against the earlier one.
 
+## The mirror image: dormancy is only evidence if the trigger happened
+
+The section above is about a close that races the *delivery* — post-close lines coming from replicas
+still running the old image. This is its inverse, measured on 2026-09-19, and it bites the closing
+side rather than the reopening one.
+
+**Three teardown faults were closed partly on dormancy and all three reopened within a day:**
+
+| issue | closed | reopened | newest occurrence |
+|---|---|---|---|
+| #1540 | 09-18 05:58:27 | 09-19 05:08:26 | 09-19 05:07:01Z |
+| #1547 | 09-18 05:57:08 | 09-19 05:07:26 | 09-19 05:10:25Z |
+| #1548 | 09-18 05:57:09 | 09-19 05:05:27 | 09-19 05:12:06Z |
+
+Every reopen is **correct** by the post-close predicate — each occurrence genuinely postdates its
+close. The mistake is upstream, in the reasoning that closed them: one carried the words *"15 days
+with no occurrence"*.
+
+🚨 **All three fired inside one seven-minute window, 05:05–05:12Z, and that window is a roll.** Their
+subjects are teardown by construction — `ObjectDisposedException` unregistering a grain from the
+directory, a mesh hub resolving from a disposed Autofac scope. They fire when pods stop, and they
+are silent when nothing is stopping them. Fifteen quiet days meant fifteen days without a roll, not
+fifteen days of health.
+
+🚨 **Correlation with a roll window is NOT the same finding as the mechanism.** Two more issues
+reopened across the same period — #1422 (Release-snapshot cleanup, whose reopen is a cascade racing
+a concurrent delete) and #1449 (a PostgreSQL `CreateNode` Unicode failure) — and it is tempting to
+sweep them in. Their records identify neither as teardown- or boot-shaped, and #1449's occurrence
+(09-18 15:35:29Z) is not in the window at all. Firing *during* a roll is evidence; needing a roll in
+order to fire is the claim, and only the three above carry it. An earlier draft of this section
+asserted all five, which is the very over-reach the page exists to warn about.
+
+**The predicate:** silence is evidence only over a window in which the fault's trigger actually
+occurred. For a roll-triggered fault, a dormancy argument has to name the rolls it survived. Without
+that it is the same shape as [a sweep's zero with no denominator](../SearchCoverageAndRefusal) — a
+number that reads like an answer and measured nothing.
+
+Classifying by the timestamp is cheap and splits the backlog usefully. Of fifteen old incident
+issues checked the same day, three more sit in the roll window (#1126, #1840, #2833 — two compile-at-
+boot, one shutdown quiescence), while four fired at 08:54–09:03Z, after the image then running was
+built (#1246, #2307, #2480, #3045).
+
+🚨 **But "fired after the image was built" does NOT imply "fires on that image", and for a teardown
+fault it implies close to the opposite.** The pod that emits a teardown fault is the pod being
+REPLACED — it is running the image the roll is replacing, by construction. #2480 is exactly that
+shape: its subject is the mesh drain *at silo shutdown*, and its 08:59Z occurrence sits right after
+an 08:32Z roll, so the likeliest reading is the old replica tearing down, not the new one failing.
+The timestamp separates "during a roll" from "between rolls"; deciding WHICH image was running still
+needs the pod→image mapping, which the incident comments do not carry.
+
+So the classification gives three buckets, not two: silent-between-rolls, fires-during-normal-
+operation, and fires-at-teardown-on-the-outgoing-image — and only the middle one is evidence about
+the image now serving.
+
 ## How to read one, until both predicates exist
 
 - A reopen means **"re-read the record"**. It does not mean a fix regressed
@@ -140,6 +194,9 @@ the reopen rule compares against the earlier one.
   September, with the same headline.
 - **Compare it to three timestamps, in this order:** the close (was it even after?), today (is it
   recent?), and the image the reporting pod was running (could the fix have been in it?).
+- 🚨 **And before closing one on quiet, ask what the fault needs in order to fire.** A teardown or
+  boot fault is silent by construction while nothing rolls, so dormancy across a roll-free window is
+  not evidence — see the section above for five issues closed that way and reopened within a day.
 - A burn-down or "zero issues" reading across 2026-09-17T07:51Z is comparing two different
   populations. Say which side of the wave a count was taken on.
 
