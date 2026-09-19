@@ -163,5 +163,14 @@ public class FluentBuilderTest
             Assert.False(silent.ContainsKey("SelfUpdate__DefaultPattern"), "an absent pattern renders nothing");
         }
         Assert.Null(new DeploymentContent().WithUpdatePattern("  ").UpdatePattern);
+
+        // The key binds to an enum on the pod: the renderer emits the canonical casing and refuses
+        // a misspelling by name, instead of letting it abort the new replica's host.
+        var lower = DeploymentPortalConfig.PortalConfig(new DeploymentContent().WithUpdatePolicy(" stable "), PortalConfigOptions.Helm);
+        Assert.Equal("Stable", lower["SelfUpdate__DefaultPolicy"]);
+        var misspelled = new DeploymentContent().WithUpdatePolicy("Continuos");
+        var refusal = Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.PortalConfig(misspelled, PortalConfigOptions.Helm));
+        Assert.Contains("Continuos", refusal.Message);
+        Assert.Contains("SelfUpdate__DefaultPolicy", refusal.Message);
     }
 }

@@ -558,7 +558,11 @@ public static class DeploymentPortalConfig
         // SEED keys: the first creation of Admin/UpdatePolicy copies them, an existing node is never
         // touched. Absent renders nothing, and nothing is the chart's own default (Stable, no
         // pattern) — a record that says nothing must not narrow or widen what the image ships.
-        Set("SelfUpdate__DefaultPolicy", string.IsNullOrWhiteSpace(d.UpdatePolicy) ? null : d.UpdatePolicy!.Trim());
+        // The value binds to an ENUM on the pod (SelfUpdateOptions.DefaultPolicy): a misspelling that
+        // reached the ConfigMap would abort the host in the configuration binder, on the new
+        // ReplicaSet, while the old pods keep serving — the #2210 shape. So the renderer refuses
+        // anything but the three names, and emits them in their canonical casing.
+        Set("SelfUpdate__DefaultPolicy", UpdatePolicyName(d.UpdatePolicy));
         Set("SelfUpdate__DefaultPattern", string.IsNullOrWhiteSpace(d.UpdatePattern) ? null : d.UpdatePattern!.Trim());
         // The per-PACKAGE default update policy (Auto | Notify | None) the instance seeds onto every
         // install record — separate from the platform's own image policy (Admin/UpdatePolicy) since
@@ -671,6 +675,27 @@ public static class DeploymentPortalConfig
         if (p.Order is int order) c[$"{section}__Order"] = order.ToString();
         if (flagKey is not null && p.Enabled is bool enabled) c[flagKey] = enabled ? "true" : "false";
     }
+
+    /// <summary>The platform self-update policies the portal binds (<c>UpdatePolicyKind</c>), in the casing the binder reads.</summary>
+    public static readonly IReadOnlyList<string> UpdatePolicyNames = ["Continuous", "Stable", "None"];
+
+    /// <summary>
+    /// The canonical spelling of a record's <see cref="DeploymentContent.UpdatePolicy"/>, or
+    /// <c>null</c> for blank. Any other value throws: it would render into a key the pod binds to an
+    /// enum and abort the new replica's host in the configuration binder.
+    /// </summary>
+    public static string? UpdatePolicyName(string? policy)
+    {
+        if (string.IsNullOrWhiteSpace(policy))
+            return null;
+        var wanted = policy.Trim();
+        return UpdatePolicyNames.FirstOrDefault(n => string.Equals(n, wanted, StringComparison.OrdinalIgnoreCase))
+               ?? throw new InvalidOperationException(
+                   $"updatePolicy '{wanted}' is not a platform update policy — one of {string.Join(", ", UpdatePolicyNames)}. "
+                   + "It renders as SelfUpdate__DefaultPolicy, which the portal binds to an enum: a misspelling would "
+                   + "abort the new replica's host in the configuration binder while the old pods keep serving.");
+    }
+
 }
 
 /// <summary>
