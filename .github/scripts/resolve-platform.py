@@ -124,10 +124,15 @@ Env: GH_TOKEN (or GITHUB_TOKEN); ACR_USERNAME / ACR_PASSWORD unless --no-registr
 PLATFORM_BASELINE (optional JSON, see FRESHNESS). The registry credential supports ACR and the
 documented ghcr.io image overrides.
 Writes `sha`, `set`, `run-number`, `run-url`, `image-digest`, `portal-image-digest`,
-`tester-image`, `portal-image` (name@digest), `plugins-sealed`, `plugins-run`, `plugins-run-url`,
-`plugins-set`, `plugins-sealed-at`, `override`, `source` to $GITHUB_OUTPUT and a table to
-$GITHUB_STEP_SUMMARY when set. With --migration-image, also writes `migration-image-digest` and
-`migration-image` for that same sealed set.
+`tester-name`, `tester-image`, `portal-name`, `portal-image` (`name` is the repository alone,
+`image` is name@digest), `plugins-sealed`, `plugins-run`, `plugins-run-url`, `plugins-set`,
+`plugins-sealed-at`, `override`, `source` and `lag` to $GITHUB_OUTPUT, and a table to
+$GITHUB_STEP_SUMMARY when set. `lag` is always present and empty unless the optional main ceiling
+held this run back. With --migration-image, also writes `migration-name`, `migration-image-digest`
+and `migration-image` for that same sealed set.
+🚨 The `*-name` keys and `lag` were WRITTEN but not listed here (Copilot review on
+MeshWeaver.SocialMedia#181). An output a consumer cannot find in the contract is one nobody may
+depend on, and an undocumented key is removed by the next edit that does not know it exists.
 
 The satellites' copies are ports of the same rule (the reference implementation is
 MeshWeaver.Plugins, `Hosting/PlatformResolution.md`; the design of record for the consumer side is
@@ -539,6 +544,12 @@ MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a re
 # hold (MeshWeaver.Plugins#1947).
 MAIN_EVENTS_THAT_VOUCH = ("push", "repository_dispatch", "schedule", "workflow_dispatch")
 PLATFORM_REF_JOB = "Resolve the released platform"
+# 🚨 THE WALK BACK OVER ATTEMPTS IS BOUNDED, like every other walk this module makes. Each attempt
+# consulted costs a jobs read AND an annotations read, and `run_attempt` has no ceiling of its own,
+# so an unbounded walk spends its budget exactly during the incident that made someone re-run those
+# runs. Four is deep enough for the case that licensed the fallback at all — one partial re-run
+# after a flake, occasionally two — and a truncation is SAID rather than passed off as an answer.
+CEILING_ATTEMPTS_WALKED = 4
 NOTICE_TITLE = "Platform for this run"
 NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+[0-9A-Za-z.\-]*)[.-]ci\.(\d+)")
 
@@ -667,8 +678,16 @@ class CeilingEvidence(NamedTuple):
     age_hours: float | None      # of `newest_created`, at the moment of the refusal
     predating: int               # examined rows carrying no `Resolve the released platform` job
     unreadable: int              # examined rows whose annotations GitHub would not serve
-    silent: int                  # rows that carried the job and published no set
+    silent: int                  # rows that carried the job and published NO notice at all
     ambiguous: int               # rows that published two different sets under the notice title
+    # 🚨 SEPARATE FROM `silent`, and the separation is the point (Copilot review on
+    # MeshWeaver.Crm#128). A run that PUBLISHED a notice whose message names no set has answered —
+    # the fault is a malformed notice or a schema change that moved the set out of the message, and
+    # the remedy is to look at that notice. Counted as `silent` it was reported as a run that
+    # "published no notice", which is the opposite of true and sends the reader to fix `main` when
+    # main is doing its job. #4493 split the two per-run NOTES; the aggregate kept conflating them,
+    # so the refusal contradicted the note three lines above it.
+    unparseable: int             # rows whose notice was PRESENT and named no parseable set
 
 
 def _ago(hours: float | None) -> str:
@@ -752,6 +771,9 @@ def ceiling_refusal(evidence: CeilingEvidence) -> str:
                        "it, so not one of them COULD name a set")
     if ev.silent:
         counted.append(f"{ev.silent} DID carry that job and published no `{NOTICE_TITLE}` notice")
+    if ev.unparseable:
+        counted.append(f"{ev.unparseable} DID publish a `{NOTICE_TITLE}` notice that names no set "
+                       f"this reader can parse — present, not absent: read the notice itself")
     if ev.ambiguous:
         counted.append(f"{ev.ambiguous} DID carry it and published two different sets under "
                        f"`{NOTICE_TITLE}` — unreadable, skipped")
@@ -784,7 +806,8 @@ def ceiling_refusal(evidence: CeilingEvidence) -> str:
     # annotations GitHub refused — leading with `main` while naming ZERO runs that could implicate
     # it. Only a row that CARRIED the reporting job and still named no set says anything about
     # main; where there is none, the listing leads.
-    listing_first = (ev.silent + ev.ambiguous) == 0
+    answered_about_main = ev.silent + ev.unparseable + ev.ambiguous
+    listing_first = answered_about_main == 0
     if listing_first:
         remedies = [
             listing_test,
@@ -796,7 +819,7 @@ def ceiling_refusal(evidence: CeilingEvidence) -> str:
         ]
     else:
         remedies = [
-            (f"MAIN'S OWN ANSWER — {ev.silent + ev.ambiguous} of the {ev.examined} run(s) examined "
+            (f"MAIN'S OWN ANSWER — {answered_about_main} of the {ev.examined} run(s) examined "
              f"DID carry the\n"
              f"    `{PLATFORM_REF_JOB}` job and still named no set this reader can use. That is "
              f"main's own\n"
@@ -860,9 +883,36 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     """
     notes: list[str] = []
     best: int | None = None
-    predating = unreadable_runs = silent = ambiguous = 0
-    data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
-                 f"?branch=main&status=success&per_page={limit}")
+    predating = unreadable_runs = silent = ambiguous = unparseable = 0
+    # 🚨 THE LISTING IS READ INSIDE THE REFUSAL (Copilot review on MeshWeaver.SocialMedia#186).
+    # Every per-run read below already turns a `ResolutionError` into a SKIP with a named reason.
+    # This one did not, and it is the FIRST call the option makes — so a GitHub failure here left
+    # `main()` as an uncaught traceback: no `::error`, no step summary, no sentence saying whether
+    # `main` had passed nothing or GitHub had simply not answered. Those are opposite remedies, and
+    # the option whose entire purpose is to fail with a NAMED red verdict failed with a stack trace.
+    # It is also the module's standing discipline: a read that failed proves nothing, and is said.
+    try:
+        data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
+                     f"?branch=main&status=success&per_page={limit}")
+    except ResolutionError as error:
+        notes.append(f"the run listing for {repo} main could not be read: {error}")
+        return Ceiling(None, notes, (
+            f"❌ WHICH SET {repo}'s `main` HAS PASSED COULD NOT BE READ — the run LISTING itself "
+            f"did not answer.\n"
+            f"    GitHub said: {error}\n"
+            f"    This is NOT evidence about main. Nothing was read, so nothing is known about "
+            f"what main has\n"
+            f"    passed — and taking the newest sealed set on a failed read is precisely what "
+            f"this rule exists\n"
+            f"    to prevent. The run is RED instead.\n"
+            f"    REMEDY: re-run this run. A listing read that failed is transient far more often "
+            f"than not;\n"
+            f"    re-run the WHOLE run, not just the failed jobs (MeshWeaver#4303). If it fails "
+            f"again with the\n"
+            f"    same status, check https://www.githubstatus.com/ before looking at this "
+            f"repository.\n"
+            f"    TO PROCEED WITHOUT EITHER: set the repository VARIABLE MW_PLATFORM_REF to one "
+            f"set (`X.Y.Z-ci.N`)."))
     # The event filter is applied HERE, not in the query: the API takes ONE event, and every event
     # in MAIN_EVENTS_THAT_VOUCH counts. `branch=main` already excludes pull-request and merge-queue
     # runs; the filter says so anyway, because a run that did not go through the full gate set must
@@ -887,7 +937,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             age_hours=((now() - _created(newest)) / 3600
                        if newest and _created(newest) is not None else None),
             predating=predating, unreadable=unreadable_runs, silent=silent,
-            ambiguous=ambiguous)
+            ambiguous=ambiguous, unparseable=unparseable)
 
     if not runs:
         notes.append(f"no successful run of {SATELLITE_CD_WORKFLOW} on {repo} main "
@@ -933,7 +983,8 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         searched = 0
         unreadable: str | None = None
         latest_attempt = max(1, int(run.get("run_attempt") or 1))
-        for attempt in range(latest_attempt, 0, -1):
+        floor_attempt = max(1, latest_attempt - CEILING_ATTEMPTS_WALKED + 1)
+        for attempt in range(latest_attempt, floor_attempt - 1, -1):
             try:
                 jobs_of = (run_jobs_of(fetch, repo, run_id) if attempt == latest_attempt
                            else run_jobs_of_attempt(fetch, repo, run_id, attempt))
@@ -961,14 +1012,38 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                 break
             candidate = (annotations if isinstance(annotations, list)
                          else annotations.get("annotations") or [])
-            if any(NOTICE_TITLE in str(row.get("title") or "") for row in candidate):
+            # 🚨 ANY NON-EMPTY LIST IS *THIS* ATTEMPT'S ANSWER (Copilot review on
+            # MeshWeaver.Education#352, MeshWeaver.Crm#128, MeshWeaver.Reinsurance#221 — one
+            # finding against three vendored copies of this file). #4491's licence is a LOST
+            # annotation: the record came back EMPTY because a partial re-run re-created it
+            # carrying none. This guard asked instead whether any row matched our TITLE, which is
+            # strictly broader — a latest attempt that published something ELSE (a `::warning`
+            # from a step in the same job lands on the same check run) walked back too, and an
+            # older attempt's set was published under a note asserting the newer attempt carried
+            # none. That note is false in exactly the way #4491's own sentence was false, and the
+            # ceiling it yields is STALE — the one outcome `--passed-on-main` exists to prevent.
+            #
+            # So the walk stops on ANY answer. Whether that answer NAMES a set is the next
+            # branch's question, and it already has both sentences for it: present-but-unparseable
+            # and absent (#4493). Only an EMPTY list is a lost record, and only it may look back.
+            if candidate:
                 attempt_rows = candidate
-                if attempt != latest_attempt:
+                if attempt != latest_attempt and any(
+                        NOTICE_TITLE in str(row.get("title") or "") for row in candidate):
                     notes.append(
                         f"main run {run_id}: attempt {latest_attempt} carries no "
                         f"`{NOTICE_TITLE}` annotation (a partial re-run re-creates the record "
                         f"without it) — read from attempt {attempt}, which published one (#4491)")
                 break
+            if attempt == floor_attempt and floor_attempt > 1:
+                # The truncation is SAID. A bounded search reported as an exhausted one is a
+                # gate that passes having checked less than it claims, and `best` is a max over
+                # the runs examined — so this run costs a data point, never a wrong ceiling.
+                notes.append(
+                    f"main run {run_id}: attempts {latest_attempt}..{floor_attempt} all carry an "
+                    f"EMPTY annotation list — the walk back stopped after "
+                    f"{CEILING_ATTEMPTS_WALKED} attempt(s) and this run is SKIPPED rather than "
+                    f"read from an attempt {CEILING_ATTEMPTS_WALKED} re-runs old")
         # The unreadable branch is FIRST: with the walk stopping on the error, an unreadable latest
         # attempt also leaves `searched == 0`, and "no `Resolve the released platform` job" would
         # then be the wrong sentence for it — the job may well be there, we could not look.
@@ -1006,7 +1081,6 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             continue
         found = distinct[0] if distinct else None
         if found is None:
-            silent += 1
             # 🚨 "PRESENT BUT UNPARSEABLE" IS NOT "ABSENT" (Copilot review, #4493). `named` filters
             # on the title AND the set pattern, so an annotation carrying the production title
             # whose message names no set lands here too — and reported as "no annotation" it hides
@@ -1015,6 +1089,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             # title-matching annotation, so the two branches separate cleanly.
             titled = [row for row in rows if NOTICE_TITLE in str(row.get("title") or "")]
             if titled:
+                unparseable += 1
                 first = str(titled[0].get("message") or "")
                 notes.append(
                     f"main run {run_id}: {len(titled)} `{NOTICE_TITLE}` annotation(s) are PRESENT "
@@ -1022,6 +1097,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                     f"{first[:120]!r}) — skipped. An annotation that does not PARSE is not an "
                     "absent one, and only this sentence tells them apart")
             else:
+                silent += 1
                 notes.append(
                     f"main run {run_id}: no `{NOTICE_TITLE}` annotation on any of its "
                     f"{searched} attempt(s) carrying a `{PLATFORM_REF_JOB}` job — skipped")
@@ -1112,6 +1188,36 @@ ACCEPT = ",".join((
 ))
 
 
+# A registry answers these while it is perfectly healthy and the credential is perfectly good:
+# 429 under load, 5xx from a node rolling, 408 on a slow upstream. They are answers about THIS
+# MOMENT, not about the token — so they are retried, bounded, exactly as a dropped connection is.
+# Everything else is a verdict on the first answer and is not retried.
+REGISTRY_TRANSIENT = (408, 429, 500, 502, 503, 504)
+
+
+def registry_blame(code: int, phase: str) -> str:
+    """What an HTTP status from the registry actually implicates.
+
+    🚨 One sentence for every status was a CONFIDENTLY WRONG diagnosis (Copilot review on
+    MeshWeaver.SocialMedia#181): this read `A 401/403 is the registry credential (ACR_USERNAME /
+    ACR_PASSWORD) — not a missing release.` whatever came back, so a reader handed a 503 went and
+    rotated a credential that was never implicated. During an incident that is the most expensive
+    kind of wrong an error message can be, because it is acted on. A message that names the cause
+    must be told by the status; where the status does not tell, it says that instead of guessing.
+    """
+    if code in (401, 403):
+        return ("A 401/403 is the registry CREDENTIAL (ACR_USERNAME / ACR_PASSWORD) — not a "
+                "missing release.")
+    if code == 404 and phase == "token endpoint":
+        return ("A 404 from the TOKEN endpoint is the endpoint, not the tag: this registry does "
+                "not serve the OAuth2 token path this resolver asked for.")
+    if code in REGISTRY_TRANSIENT:
+        return (f"HTTP {code} is TRANSIENT and was retried 3 times before this. The registry is "
+                "refusing or rate-limiting right now; the credential is not implicated. Re-run.")
+    return (f"HTTP {code} at the {phase} is not a status this resolver can attribute — read it "
+            "against the registry's own docs before assuming either the credential or the tag.")
+
+
 def registry_resolver(user: str, password: str) -> Resolve:
     """`<registry>/<repo>:<tag>` → its manifest digest, or None when the tag does not exist.
     PULL scope only — the credential CI holds answered 401 to `metadata_read` (run 33495452756),
@@ -1147,9 +1253,19 @@ def registry_resolver(user: str, password: str) -> Resolve:
             except urllib.error.HTTPError as error:
                 if error.code == 404 and phase == "manifest":
                     return None                       # the tag is not there: absent, not an error
+                # 🚨 A TRANSIENT STATUS IS RETRIED; A VERDICT IS NOT (Copilot review on
+                # MeshWeaver.Manufacturing#82). This block wrapped EVERY status and raised on the
+                # first answer, so a dropped connection was retried three times while a 429 or 503
+                # from the same registry — the transient answer a registry actually gives under
+                # load — took the CI critical path RED immediately. The retry structure was
+                # already here; only the HTTP path did not use it.
+                if error.code in REGISTRY_TRANSIENT and attempt < 2:
+                    last = error
+                    time.sleep(2 * (attempt + 1))
+                    continue
                 raise ResolutionError(
-                    f"{image}:{tag} {phase} → HTTP {error.code}. A 401/403 is the registry credential "
-                    "(ACR_USERNAME / ACR_PASSWORD) — not a missing release.") from error
+                    f"{image}:{tag} {phase} → HTTP {error.code}. "
+                    + registry_blame(error.code, phase)) from error
             except ResolutionError:
                 raise
             except Exception as error:                # noqa: BLE001 — transport
@@ -2085,6 +2201,81 @@ def self_test() -> int:
     finally:
         urllib.request.urlopen, time.sleep = real_urlopen, real_sleep
 
+    # ── 🚨 THE REGISTRY GETS THE SAME TREATMENT GITHUB DOES (Copilot review on
+    #    MeshWeaver.Manufacturing#82 and MeshWeaver.SocialMedia#181) ─────────────────────────────
+    # Two findings against one block, and they are the same block for the same reason: this
+    # resolver retried a TRANSPORT error (a dropped connection) three times while a 429 or a 503
+    # from the very same registry — the transient answer a registry actually gives under load —
+    # was wrapped and raised on the first try. So the CI critical path went RED on a condition the
+    # retry structure sitting around it was built for. And whatever the status, the message said
+    # "A 401/403 is the registry credential (ACR_USERNAME / ACR_PASSWORD)", sending every reader of
+    # a 503 to check a credential that was never the problem. An error message that names the wrong
+    # cause with confidence is worse than one that names none.
+    class _Resp(io.BytesIO):
+        """Enough of an HTTPResponse for both calls: a JSON body and a headers mapping."""
+        def __init__(self, body: bytes = b"{}", headers: dict | None = None):
+            super().__init__(body)
+            self.headers = headers or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    DIGEST = "sha256:" + "d" * 64
+
+    def registry_scripted(codes: list[int | None]):
+        """`codes[i]` is the status of call i+1; None means answer normally. Calls alternate
+        token endpoint → manifest HEAD, so a pair per attempt."""
+        calls = {"n": 0}
+
+        def urlopen(request, timeout=0):
+            calls["n"] += 1
+            code = codes[calls["n"] - 1] if calls["n"] <= len(codes) else None
+            if code is not None:
+                raise urllib.error.HTTPError(
+                    request.full_url, code, "err", {}, io.BytesIO(b""))
+            if "/v2/" in request.full_url:            # the manifest HEAD
+                return _Resp(headers={"Docker-Content-Digest": DIGEST})
+            return _Resp(b'{"access_token": "tok"}')  # the token endpoint
+        return urlopen, calls
+
+    try:
+        time.sleep = lambda _seconds: None                      # type: ignore[assignment]
+        for label, codes, want, want_calls, says, forbid in (
+            ("a 503 from the TOKEN endpoint is transient — retried, then answered",
+             [503], DIGEST, 3, None, None),
+            ("a 429 from the token endpoint is retried too (a registry under load, not a verdict)",
+             [429], DIGEST, 3, None, None),
+            ("a 503 from the MANIFEST head is retried — the second call of the pair, same rule",
+             [None, 503], DIGEST, 4, None, None),
+            ("transient codes are BOUNDED — 3 attempts, then RED naming the registry, not the "
+             "token (the script offers 6 refusals; the BOUND is what stops it)",
+             [503, 503, 503, 503, 503, 503], None, 3, "HTTP 503", "ACR_USERNAME"),
+            ("a 401 is a VERDICT — not retried, and it DOES name the credential",
+             [401], None, 1, "ACR_USERNAME", None),
+            ("a 403 is a verdict too", [403], None, 1, "ACR_USERNAME", None),
+            ("a manifest 404 is ABSENT, not an error — the tag is simply not there",
+             [None, 404], "absent", 2, None, None),
+            ("a 500 is RED naming HTTP 500, and does NOT blame a credential it cannot implicate",
+             [500, 500, 500, 500, 500, 500], None, 3, "HTTP 500", "ACR_USERNAME"),
+        ):
+            total += 1
+            opener, calls = registry_scripted(codes)
+            urllib.request.urlopen = opener                     # type: ignore[assignment]
+            try:
+                answer = registry_resolver("u", "p")("reg.example.com/repo", "3.0.0-ci.1")
+                got, text = ("absent" if answer is None else answer), ""
+            except ResolutionError as error:
+                got, text = None, str(error)
+            if got != want or calls["n"] != want_calls \
+                    or (says and says not in text) or (forbid and forbid in text):
+                failures.append(f"{label}: got={got!r} calls={calls['n']} "
+                                f"(expected {want!r} in {want_calls}) message={text[:200]!r}")
+    finally:
+        urllib.request.urlopen, time.sleep = real_urlopen, real_sleep
+
     # ── a STALE listing (#4433): page 1 served from an old snapshot is refused, never resolved ──
     made = "2026-09-12T12:00:00Z"
     made_at = datetime.fromisoformat(made.replace("Z", "+00:00")).timestamp()
@@ -2180,9 +2371,12 @@ def self_test() -> int:
             raise AssertionError(path)
         return fetch
 
-    def _ceiling_case(name: str, fetch: Fetch, expect: int | None, says: str = "") -> None:
+    def _ceiling_case(name: str, fetch: Fetch, expect: int | None, says: str = "",
+                      absent: str = "") -> None:
         """`says` is looked for in the per-run notes AND in the refusal — one is the log a reader
-        scrolls, the other the sentence they act on, and a case may pin either."""
+        scrolls, the other the sentence they act on, and a case may pin either. `absent` pins the
+        opposite: a sentence that must NOT be spoken, for the cases where the wrong behaviour is
+        not a wrong NUMBER but a true-sounding note about how a right one was reached."""
         nonlocal total
         total += 1
         result = main_passed_ceiling(fetch, SATELLITE, log=logs.append)
@@ -2192,6 +2386,9 @@ def self_test() -> int:
         elif says and not any(says in line for line in spoken):
             failures.append(f"{name}: nothing said {says!r} — notes={result.notes}, "
                             f"refusal={result.refusal!r}")
+        elif absent and any(absent in line for line in spoken):
+            failures.append(f"{name}: said {absent!r}, which must not be said here — "
+                            f"notes={result.notes}")
 
     def _refusal_of(fetch: Fetch) -> str:
         return main_passed_ceiling(fetch, SATELLITE, log=logs.append).refusal
@@ -2528,6 +2725,107 @@ def self_test() -> int:
                   "SKIPPED, not answered from an older attempt that did",
                   _fetch_attempt_without_job(), None, f"no `{PLATFORM_REF_JOB}` job")
 
+    # ── 🚨 AN ANSWER THAT IS NOT THE ONE WE WANTED IS STILL AN ANSWER (review on #352/#128/#221) ─
+    # #4491's licence is a LOST annotation — an EMPTY list, because a partial re-run re-creates the
+    # record carrying none. The guard implemented "no annotation matching our TITLE", which is
+    # strictly broader: a latest attempt that published SOMETHING ELSE (a `::warning` from a step
+    # in the same job lands on the same check run) took the fallback too, and an older attempt's
+    # set was then asserted under a note saying the newer attempt carried none. That note is false
+    # in exactly the way #4491's own sentence was false, and the ceiling it publishes is STALE —
+    # which is the one outcome `--passed-on-main` exists to prevent.
+    #
+    # The distinction is the whole of it: EMPTY means the record lost what the attempt published;
+    # NON-EMPTY means the attempt published this, and whether it names a set is the next branch's
+    # question, never a reason to speak for an older attempt.
+    def _fetch_attempt_untitled(earlier: str = "3.0.0-ci.8203") -> Fetch:
+        """The LATEST attempt's list came back NON-EMPTY, carrying an unrelated annotation."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 560, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 741, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 742, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/741/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earlier} — core {B[:9]}"}]}
+            if "/check-runs/742/annotations" in path:
+                return {"annotations": [{"title": "Some other check",
+                                         "message": "an unrelated annotation on the same job"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a latest attempt whose annotation list is NON-EMPTY but carries no platform "
+                  "notice ⇒ the run is SKIPPED — an older attempt's set is NOT resurrected",
+                  _fetch_attempt_untitled(), None, "no `Platform for this run` annotation")
+    _ceiling_case("…and no note claims a fallback happened, because none did",
+                  _fetch_attempt_untitled(), None, absent="read from attempt 1")
+
+    # ── 🚨 THE WALK BACK IS BOUNDED (review on #206) ─────────────────────────────────────────────
+    # Each attempt consulted costs a jobs read AND an annotations read, and `run_attempt` has no
+    # ceiling of its own. Twelve runs each re-run a dozen times is 288 extra calls on the CI
+    # critical path — spent, by construction, during the incident that made someone re-run them.
+    # The module bounds every other walk it makes (MAIN_RUNS_EXAMINED, PLUGINS_LOOKBACK); this one
+    # is bounded too, and SAYS so when it stops, so a truncated search is never read as an answer.
+    def _fetch_attempt_deep(attempts: int, earliest_named: str = "3.0.0-ci.8203") -> Fetch:
+        """Every attempt but the FIRST lost its annotations; attempt 1 published a set."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 561, "created_at": "2026-09-14T08:00:00Z", "run_attempt": attempts}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 751, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path or "/attempts/" in path:
+                return {"total_count": 1, "jobs": [{"id": 752, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/751/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earliest_named} — core {B[:9]}"}]}
+            if "/check-runs/752/annotations" in path:
+                return {"annotations": []}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a run re-run more times than the walk is allowed to look back ⇒ the walk STOPS "
+                  "and says it was bounded, rather than spending a call per attempt",
+                  _fetch_attempt_deep(CEILING_ATTEMPTS_WALKED + 6), None,
+                  f"stopped after {CEILING_ATTEMPTS_WALKED} attempt(s)")
+    _ceiling_case("…and a run within the bound still reaches the attempt that published a set",
+                  _fetch_attempt_deep(CEILING_ATTEMPTS_WALKED), 8203, "8203")
+
+    # ── 🚨 THE RUN LISTING IS READ INSIDE THE REFUSAL, NOT OUTSIDE IT (review on #186) ───────────
+    # Every per-run read in this function already turns a `ResolutionError` into a SKIP with a
+    # named reason. The LISTING call did not: a GitHub failure there escaped `main()` as an
+    # uncaught traceback, so the one option whose whole purpose is to fail with a named RED
+    # verdict failed with a stack trace instead — no `::error`, no step summary, and nothing
+    # telling the reader whether main had passed anything or GitHub had simply not answered.
+    def _listing_unreadable(path: str):
+        if "/actions/workflows/" in path:
+            raise ResolutionError("HTTP 503 (GitHub server error) after 4 attempts")
+        raise AssertionError(path)
+
+    total += 1
+    try:
+        _unread = main_passed_ceiling(_listing_unreadable, SATELLITE, log=logs.append)
+    except Exception as error:                       # noqa: BLE001 — an escape here IS the failure
+        failures.append("an unreadable run LISTING must be a named refusal, not an escaping "
+                        f"{type(error).__name__}: {error}")
+    else:
+        if _unread.number is not None:
+            failures.append("an unreadable run listing must never yield a ceiling — got "
+                            f"{_unread.number}")
+        elif not _unread.refusal or "listing" not in _unread.refusal.lower():
+            failures.append("the refusal for an unreadable run listing must name the LISTING as "
+                            f"what could not be read — got {(_unread.refusal or '')[:160]!r}")
+
     # ── 🚨 PRESENT-BUT-UNPARSEABLE IS NOT ABSENT (review, #4493) ────────────────────────────────
     # An annotation carrying the production title whose message names no set reaches the same dead
     # end as no annotation at all. Reported as "no annotation" it hides a malformed notice or a
@@ -2555,6 +2853,19 @@ def self_test() -> int:
                   "alone",
                   _fetch_unparseable("the platform set is now reported elsewhere"), None,
                   "the platform set is now reported elsewhere")
+    # 🚨 …AND THE SUMMARY SEPARATES THEM TOO (Copilot review on MeshWeaver.Crm#128). #4493 split
+    # the two per-run NOTES and left the aggregate counting both as `silent`, under a sentence
+    # saying those runs "published no notice" — which is the opposite of true for the unparseable
+    # half, and points the reader at "main published nothing" when the actual fault is a malformed
+    # notice or a schema change. The refusal is the sentence an operator acts on; it must not
+    # contradict the note three lines above it.
+    _ceiling_case("the REFUSAL counts a present-but-unparseable notice apart from a silent run, "
+                  "rather than reporting it as a run that published nothing",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  "names no set this reader can parse")
+    _ceiling_case("…and does not claim that run published no notice, because it published one",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  absent=f"1 DID carry that job and published no `{NOTICE_TITLE}` notice")
 
     # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
     # `Resolve the released platform` runs `resolve-platform.py --self-test` and
