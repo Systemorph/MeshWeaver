@@ -340,6 +340,33 @@ jobs:
       - name: "This repo's vendored resolve-platform.py matches the platform's canonical (advisory until the guard's flip date, red after)"
         run: python3 "$RUNNER_TEMP/check-resolver-copy.py" --root . --canonical "$RUNNER_TEMP/resolve-platform.canonical.py"
 
+      # 🚨 AND THE SAME RULE FOR THE LOCAL NODE-TEST HARNESS (MeshWeaver#4785). `run-node-tests.py`
+      # is the command AGENTS.md tells an author to run before pushing, and it IMPORTS
+      # `compile-check.py` — a canonical whose surface moves. It existed only as three vendored
+      # copies, so when core #4711 replaced the compile model and removed `usings_union` they broke
+      # at once and DIFFERENTLY (Reinsurance: AttributeError before a single test ran, its own
+      # self-test still green; Crm: a locally re-derived union, so it kept running against a model
+      # the gate had abandoned; Plugins: alive only via a vendored compile-check fork carrying the
+      # removed helper) — and not one lane in the fleet was red, because no CI job invoked the
+      # caller. The canonical now lives in core and a satellite keeps a LAUNCHER. This guard refuses
+      # the copy coming back; `run-node-tests.py --self-test` in core's own CI is what proves the
+      # canonical still reproduces the gate. A repo with no launcher at all passes — it invokes the
+      # canonical directly, which is also an end state.
+      - name: Fetch the platform's node-test launcher guard at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the node-test launcher guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-node-test-launcher.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-node-test-launcher.py" \
+            || { echo "::error::could not fetch .github/scripts/check-node-test-launcher.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-node-test-launcher.py" | grep -q "check-node-test-launcher" || { echo "::error::the fetched check-node-test-launcher.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+      - name: "A re-vendored node-test harness is named — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-node-test-launcher.py" --self-test
+      - name: "This repo's scripts/run-node-tests.py launches the platform's canonical, and carries no copy of it"
+        run: python3 "$RUNNER_TEMP/check-node-test-launcher.py" --root .
+
       # 🚨 A 40-HEX SUBSTITUTION CANNOT SEE AN ABBREVIATED SHA, and the pin-move procedure in every
       # node repo's ci.yml is exactly such a substitution ("move each value by grepping its OLD
       # value"). The narrative comment names the pin SHORT — `core <9-hex>` — so the sed moves the

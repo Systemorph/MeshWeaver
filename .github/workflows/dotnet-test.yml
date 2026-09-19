@@ -2070,6 +2070,19 @@ jobs:
     - name: "NodeType import-scope parser can fail (self-test)"
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # 🚨 THE LOCAL LOOP, RUN WHERE ITS INPUT CHANGES (#4785). `run-node-tests.py` is the command
+    # AGENTS.md tells an author to run before pushing, and it IMPORTS compile-check.py above. When
+    # #4711 replaced the compile model and removed `usings_union`, the harness died with an
+    # AttributeError in all three repos that vendored it — and every lane in the fleet stayed green,
+    # because no CI job anywhere invoked the caller. So the caller is invoked HERE, in the same job
+    # as the canonical it depends on: this step reds on the commit that moves the surface, not on
+    # some author's next local run. Its cases assert that the harness compiles the unit the GATE
+    # builds — measured falsifiable 2026-09-19: re-deriving the shaping locally reds 6 cases,
+    # renaming `build_unit` reds 1 naming the symbol, and reverting to one `<Compile>` per file
+    # reds 1. No reference set and no dotnet build — it is textual and takes under a second.
+    - name: "The local node-test harness compiles what the gate compiles (self-test)"
+      run: python3 .github/scripts/run-node-tests.py --self-test
+
     # 🚨 The module-pack lane's static-asset assertion (#2384). It replaced
     # `staticAssets | length > 0`, which was blind twice over: OpenStreetMap's 7 vendored Leaflet
     # files satisfied `7 > 0` while the one file its view imports was missing, and AppleMaps did not
