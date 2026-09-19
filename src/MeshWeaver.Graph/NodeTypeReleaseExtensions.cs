@@ -103,13 +103,17 @@ public static class NodeTypeReleaseExtensions
     /// <param name="onError">The caller's refusal sink — invoked with the same reason that is logged.</param>
     /// <param name="report">Warning sink (the logger in production), given the reason.</param>
     /// <param name="scheduler">Timer seam; <see cref="Scheduler.Default"/> in production.</param>
+    /// <param name="onRefused">The caller's CLASSIFIED refusal sink — same reason, plus
+    /// <see cref="NodeTypeReleaseFailure.NoAnswerWithinBound"/>, which is this arm's own class and
+    /// is a different defect from every bounded failure the leg can report itself.</param>
     internal static IObservable<bool> BoundReleaseLeg(
         IObservable<bool> leg,
         string nodeTypePath,
         TimeSpan bound,
         Action<string>? onError,
         Action<string>? report,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        Action<NodeTypeReleaseRefusal>? onRefused = null)
         => leg
             .Take(1)
             .Timeout(
@@ -124,6 +128,8 @@ public static class NodeTypeReleaseExtensions
                         + "assembly it already had.";
                     report?.Invoke(reason);
                     onError?.Invoke(reason);
+                    onRefused?.Invoke(new NodeTypeReleaseRefusal(
+                        nodeTypePath, NodeTypeReleaseFailure.NoAnswerWithinBound, reason));
                     return Observable.Return(false);
                 }),
                 scheduler ?? Scheduler.Default);
@@ -144,13 +150,19 @@ public static class NodeTypeReleaseExtensions
     /// <see cref="NodeTypeDefinition.ReleaseNotes"/> is used.</param>
     /// <param name="onError">Invoked (with a human-readable reason) when the caller lacks
     /// <c>Compile</c> or the trigger write fails — the clean refusal path.</param>
+    /// <param name="onRefused">🚨 The same refusal, CLASSIFIED — see
+    /// <see cref="NodeTypeReleaseFailure"/>. Additive: it fires alongside
+    /// <paramref name="onError"/>, never instead of it, and every existing caller keeps behaving
+    /// exactly as it did. A caller that LOGS a refusal should use this one, so the class reaches the
+    /// message TEMPLATE instead of a structured parameter (#1549).</param>
     public static void RequestNodeTypeRelease(
         this IMessageHub hub,
         string nodeTypePath,
         bool force = false,
         string? releaseNotes = null,
-        Action<string>? onError = null)
-        => hub.ObserveNodeTypeRelease(nodeTypePath, force, releaseNotes, onError)
+        Action<string>? onError = null,
+        Action<NodeTypeReleaseRefusal>? onRefused = null)
+        => hub.ObserveNodeTypeRelease(nodeTypePath, force, releaseNotes, onError, onRefused)
             .Subscribe(_ => { });
 
     /// <summary>
@@ -179,18 +191,26 @@ public static class NodeTypeReleaseExtensions
     /// <see cref="NodeTypeDefinition.ReleaseNotes"/> is used.</param>
     /// <param name="onError">Invoked (with a human-readable reason) when the caller lacks
     /// <c>Compile</c> or the trigger write fails — the clean refusal path.</param>
+    /// <param name="onRefused">🚨 The same refusal, CLASSIFIED — see
+    /// <see cref="NodeTypeReleaseFailure"/>. Every arm below states its own class; the class is
+    /// never recovered from <paramref name="onError"/>'s text. Additive, so no existing caller
+    /// changes behaviour.</param>
     /// <returns>A COLD observable; Subscribe to request the release.</returns>
     public static IObservable<bool> ObserveNodeTypeRelease(
         this IMessageHub hub,
         string nodeTypePath,
         bool force = false,
         string? releaseNotes = null,
-        Action<string>? onError = null)
+        Action<string>? onError = null,
+        Action<NodeTypeReleaseRefusal>? onRefused = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(nodeTypePath))
         {
-            onError?.Invoke("RequestNodeTypeRelease requires a NodeType path.");
+            const string noPath = "RequestNodeTypeRelease requires a NodeType path.";
+            onError?.Invoke(noPath);
+            onRefused?.Invoke(new NodeTypeReleaseRefusal(
+                nodeTypePath ?? string.Empty, NodeTypeReleaseFailure.NoNodeTypePath, noPath));
             return Observable.Return(false);
         }
 
@@ -229,8 +249,11 @@ public static class NodeTypeReleaseExtensions
                         logger?.LogInformation(
                             "[RequestNodeTypeRelease] Refused: user '{User}' lacks Compile on '{Path}'",
                             userId ?? "(anonymous)", nodeTypePath);
-                        onError?.Invoke(
-                            "You need the Compile permission (Editor or above) to create a release.");
+                        const string denied =
+                            "You need the Compile permission (Editor or above) to create a release.";
+                        onError?.Invoke(denied);
+                        onRefused?.Invoke(new NodeTypeReleaseRefusal(
+                            nodeTypePath, NodeTypeReleaseFailure.CompileDenied, denied));
                         return Observable.Return(false);
                     }
 
@@ -264,7 +287,15 @@ public static class NodeTypeReleaseExtensions
                         {
                             logger?.LogWarning(ex,
                                 "[RequestNodeTypeRelease] Trigger write failed for {Path}", nodeTypePath);
-                            onError?.Invoke($"Failed to start the release: {ex.Message}");
+                            var reason = $"Failed to start the release: {ex.Message}";
+                            onError?.Invoke(reason);
+                            // 🚨 THE arm the bucket was made of: every shape a cross-hub write can
+                            // end in arrives here, and only here is the exception still in hand. The
+                            // class is decided from it — never re-derived downstream from `reason`.
+                            onRefused?.Invoke(new NodeTypeReleaseRefusal(
+                                nodeTypePath,
+                                NodeTypeReleaseFailureClassifier.ClassifyTriggerWriteFault(ex),
+                                reason));
                             return Observable.Return(false);
                         });
                 })
@@ -272,7 +303,10 @@ public static class NodeTypeReleaseExtensions
                 {
                     logger?.LogWarning(ex,
                         "[RequestNodeTypeRelease] Permission check faulted for {Path}", nodeTypePath);
-                    onError?.Invoke($"Failed to verify Compile permission: {ex.Message}");
+                    var reason = $"Failed to verify Compile permission: {ex.Message}";
+                    onError?.Invoke(reason);
+                    onRefused?.Invoke(new NodeTypeReleaseRefusal(
+                        nodeTypePath, NodeTypeReleaseFailure.PermissionCheckFailed, reason));
                     return Observable.Return(false);
                 })
                 // EXACTLY one emission, always — a permission source that completes without
@@ -284,6 +318,8 @@ public static class NodeTypeReleaseExtensions
             ReleaseRequestBound,
             onError,
             reason => logger?.LogWarning(
-                "[RequestNodeTypeRelease] {Path}: {Reason}", nodeTypePath, reason));
+                "[RequestNodeTypeRelease] {Path}: {Reason}", nodeTypePath, reason),
+            scheduler: null,
+            onRefused: onRefused);
     }
 }

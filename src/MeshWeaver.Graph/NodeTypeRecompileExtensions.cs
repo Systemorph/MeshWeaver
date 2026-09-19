@@ -43,6 +43,127 @@ public static class NodeTypeRecompileExtensions
     private static readonly TimeSpan PrebuiltSeedBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// 🚨 The release-refusal log line, ONE TEMPLATE PER FAILURE CLASS — issue #1549.
+    ///
+    /// <para><b>What was wrong.</b> Every refusal went through a single template,
+    /// <c>"[Recompile] Release request for {Path} failed: {Message}"</c>, with the whole reason
+    /// inside a structured parameter. The incident identity discriminates on the fault's own words
+    /// as they appear in the FIRST body line of the burst, so a cause that differs only inside
+    /// <c>{Message}</c> — or, worse, on a SECOND line (<c>Object name: 'MeshNodeStreamCache'</c>) —
+    /// has nothing stable of its own to be keyed on. Four unrelated conditions arrived as one
+    /// ticket, and closing it against any one of them was followed within days by a recurrence on
+    /// another: a base-state stall, a routing no-verdict, a host teardown, and a release requested
+    /// for a node that does not exist, which is not a defect at all. The record, with the
+    /// measurement, is <c>Doc/Architecture/ReleaseFailureClasses</c>.</para>
+    ///
+    /// <para>🚨 <b>Why a switch of LITERAL templates and not a selected format string.</b> The class
+    /// has to be in the template as written text — that is the part a reader greps, a fingerprint
+    /// keys on and a ticket title carries. Fourteen literal calls make every one of them visible in
+    /// one place and impossible to assemble at runtime by accident; a helper returning a chosen
+    /// string would read as one template to every tool that inspects call sites. <c>{Path}</c> and
+    /// <c>{Message}</c> stay structured parameters in all of them, so nothing a query filters on
+    /// moves into prose.</para>
+    ///
+    /// <para>🚨 <b>Every class keeps Error.</b> Some of these are provably NOT defects
+    /// (<see cref="NodeTypeReleaseFailure.NodeMissing"/>,
+    /// <see cref="NodeTypeReleaseFailure.CompileDenied"/>,
+    /// <see cref="NodeTypeReleaseFailure.OwnerRecycling"/>) and a level for each is a real question —
+    /// but it is a SEPARATE one, with its own cost/value argument per class, and answering it in the
+    /// same change would make a level change look like a side effect of naming the class. Naming
+    /// them is what makes that question answerable at all: until now there was one line to argue
+    /// about, and it covered everything.</para>
+    /// </summary>
+    /// <param name="logger">The channel's logger; a null logger writes nothing, as everywhere else
+    /// in this file.</param>
+    /// <param name="refusal">The classified refusal, exactly as
+    /// <see cref="NodeTypeReleaseExtensions.ObserveNodeTypeRelease"/>'s arm produced it.</param>
+    internal static void LogReleaseRefusal(ILogger? logger, NodeTypeReleaseRefusal refusal)
+    {
+        ArgumentNullException.ThrowIfNull(refusal);
+        if (logger is null)
+            return;
+        var path = refusal.NodeTypePath;
+        var message = refusal.Reason;
+        switch (refusal.Failure)
+        {
+            case NodeTypeReleaseFailure.NoNodeTypePath:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — NO NODETYPE PATH was supplied: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.CompileDenied:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — COMPILE DENIED to the caller: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.PermissionCheckFailed:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the COMPILE PERMISSION CHECK COULD NOT RUN, so nothing was decided: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.NodeMissing:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — NO NODE EXISTS at that path: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.OwnerUnreachable:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the OWNING HUB REACHED NO VERDICT on the trigger write: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.OwnerRecycling:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the OWNING ACTIVATION WAS RECYCLING, so the write never applied: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.WriteDenied:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the OWNER DENIED the trigger write: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.WriteRejected:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the OWNER REJECTED the merged value: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.BaseStateNeverArrived:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — NO INITIAL STATE for the node ever arrived, so the write had nothing to diff against: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.HostTearingDown:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the HOST WAS TEARING DOWN under the in-flight write: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.StorageUnavailable:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the DATA STORE COULD NOT BE REACHED: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.TransientHubFailure:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — a TRANSIENT HUB OR ROUTING MISS ended the write: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.NoAnswerWithinBound:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the RELEASE LEG NEVER ANSWERED within its ordered bound: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.Unclassified:
+            default:
+                // 🚨 Named, not absorbed. An arrival here says a real shape has no rule yet — which
+                // is a finding about the classifier, and must not be filed as any of the classes
+                // above. It is the one template that is expected to shrink to zero traffic.
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — UNCLASSIFIED trigger-write fault, no rule claimed its shape: {Message}",
+                    path, message);
+                break;
+        }
+    }
+
+    /// <summary>
     /// The mesh-wide recompile closure for <paramref name="changedNodePaths"/> — every NodeType
     /// whose own node changed OR whose expanded <c>Sources</c>/<c>Tests</c> queries reach a changed
     /// path, in dependency order (dependencies before dependents). Derivation ONLY: nothing is
@@ -239,14 +360,15 @@ public static class NodeTypeRecompileExtensions
                     // current builds, and this stays the one place that guarantees a request lands.
                     using (accessService?.ImpersonateAsSystem())
                         foreach (var path in ordered)
-                            hub.RequestNodeTypeRelease(path, onError: msg =>
-                            {
-                                logger?.LogError(
-                                    "[Recompile] Release request for {Path} failed: {Message}", path, msg);
-                                progress?.Invoke(
+                            hub.RequestNodeTypeRelease(path,
+                                onError: msg => progress?.Invoke(
                                     $"Recompile of {path} could not be requested: {msg} — its assembly is STALE until compiled manually.",
-                                    LogLevel.Error);
-                            });
+                                    LogLevel.Error),
+                                // 🚨 #1549 — the LOG line takes the CLASSIFIED sink, so the failure
+                                // class lands in the message TEMPLATE. The progress line above keeps
+                                // the sentence a human reads; this one keeps the words a fingerprint
+                                // reads. See LogReleaseRefusal.
+                                onRefused: refusal => LogReleaseRefusal(logger, refusal));
                     return ordered;
                 });
             })
