@@ -365,8 +365,19 @@ text.** Measured 2026-09-19, one limiter with three faces:
 
 A review reply was refused four times over 43 minutes that way and landed on the fifth attempt. A
 watcher grepping for *"secondary rate limit"* sees nothing in that case, and a watcher checking only for
-`403` sees nothing either. **Key the decision on the absence of what you asked for**: no `id` or
-`number` came back, so it did not happen, whatever the wrapper said.
+`403` sees nothing either. **So key the decision on whether the `id` or `number` you asked for came
+back, not on what the refusal said.**
+
+🚨 **But an absent id means NOT CONFIRMED, never "it did not happen"** — and that difference decides
+whether a retry is safe. A response can be lost or suppressed *after* the server has committed, so
+retrying on the absent id is how a duplicate gets created. It matters most in the case this section is
+about: a stub reply is repaired with `PATCH`, and a second `POST` leaves the first standing beside it.
+**Before retrying, re-read the collection and look for your own content** — the same baseline rule
+stated below for auditing somebody else's posts, applied to your own retry.
+
+The two API-boundary shapes above, the `403` and the `422`, genuinely did create nothing. It is the
+porcelain's silent exit 0 that is ambiguous, because silence from a wrapper says nothing about what the
+server did.
 
 The read limit is independent of the creation one and can land immediately after a successful write — it
 did, six seconds after that reply finally posted, delaying its verification by eight minutes. So budget
