@@ -141,4 +141,27 @@ public class FluentBuilderTest
         Assert.Equal("Filesystem", config["Deployment__Backend"]);
         Assert.Equal("8080", config["ASPNETCORE_HTTP_PORTS"]);
     }
+
+    /// <summary>
+    /// What a NEW instance starts with: the record's platform policy and pattern render as the
+    /// self-updater's seed keys, and a record that says nothing renders neither — the chart's own
+    /// default (Stable, no pattern) must not be narrowed or widened by silence.
+    /// </summary>
+    [Fact]
+    public void UpdatePolicyAndPattern_SeedANewInstance_ThroughTheConfig()
+    {
+        var record = new DeploymentContent().WithUpdatePolicy("Continuous").WithUpdatePattern(" 3.0.0-ci* ");
+        Assert.Equal("3.0.0-ci*", record.UpdatePattern);
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(record, options);
+            Assert.Equal("Continuous", config["SelfUpdate__DefaultPolicy"]);
+            Assert.Equal("3.0.0-ci*", config["SelfUpdate__DefaultPattern"]);
+
+            var silent = DeploymentPortalConfig.PortalConfig(new DeploymentContent(), options);
+            Assert.False(silent.ContainsKey("SelfUpdate__DefaultPolicy"), "an absent policy renders nothing — the image's own default stands");
+            Assert.False(silent.ContainsKey("SelfUpdate__DefaultPattern"), "an absent pattern renders nothing");
+        }
+        Assert.Null(new DeploymentContent().WithUpdatePattern("  ").UpdatePattern);
+    }
 }

@@ -68,6 +68,21 @@ public record DeploymentContent
     public string? UpdatePolicy { get; init; }
 
     /// <summary>
+    /// The version PATTERN the platform self-update follows under <c>Continuous</c> — a glob over the
+    /// registry tag, e.g. <c>3.0.0-ci*</c> (the fleet's line while no clean release above 3.0.0
+    /// exists). <c>Continuous</c> without a pattern is Stable (clean releases only).
+    ///
+    /// <para>🚨 This and <see cref="UpdatePolicy"/> are what a NEW instance STARTS with: they render
+    /// as <c>SelfUpdate__DefaultPolicy</c> / <c>SelfUpdate__DefaultPattern</c>, which the
+    /// self-updater seeds onto <c>Admin/UpdatePolicy</c> the first time that node is created. An
+    /// EXISTING node is never touched by configuration — it is edited on the instance (Settings →
+    /// Updates). Maintainer, 2026-09-19: <i>"need to put this to the config where we start"</i>, after
+    /// memex-cloud sat frozen for a week on a policy node that had no <c>policy</c> field at all.</para>
+    /// </summary>
+    [Description("Version pattern the Continuous self-update follows, e.g. 3.0.0-ci* — seeds a NEW instance's Admin/UpdatePolicy")]
+    public string? UpdatePattern { get; init; }
+
+    /// <summary>
     /// The DEFAULT per-package (module) update policy this instance seeds onto every install
     /// record it creates — <c>Auto</c> (track the registry unattended), <c>Notify</c> (remind,
     /// a person clicks Update) or <c>None</c> (pinned). Renders as

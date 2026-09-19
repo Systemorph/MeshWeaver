@@ -110,6 +110,16 @@ public static class DeploymentRecordExtensions
     public static DeploymentContent WithUpdatePolicy(this DeploymentContent d, string policy) => d with { UpdatePolicy = policy };
 
     /// <summary>
+    /// The version pattern the Continuous self-update follows (<c>3.0.0-ci*</c> on the fleet's
+    /// line). Together with <see cref="WithUpdatePolicy"/> this is what a NEW instance starts with:
+    /// both render into the portal's config (<c>SelfUpdate__DefaultPolicy</c> /
+    /// <c>SelfUpdate__DefaultPattern</c>) and seed its <c>Admin/UpdatePolicy</c> on first creation.
+    /// Null or blank clears it. See <see cref="DeploymentContent.UpdatePattern"/>.
+    /// </summary>
+    public static DeploymentContent WithUpdatePattern(this DeploymentContent d, string? pattern) =>
+        d with { UpdatePattern = string.IsNullOrWhiteSpace(pattern) ? null : pattern.Trim() };
+
+    /// <summary>
     /// The default update policy every package installed on this instance is SEEDED with —
     /// <c>Auto</c>, <c>Notify</c> or <c>None</c> (<c>PluginCatalog:DefaultUpdatePolicy</c>); a package
     /// re-stamped later keeps its own. Independent of <see cref="WithUpdatePolicy"/>, which moves the

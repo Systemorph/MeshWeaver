@@ -553,6 +553,13 @@ public static class DeploymentPortalConfig
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
+        // 🚨 What a NEW instance STARTS with (maintainer 2026-09-19: "need to put this to the config
+        // where we start"). The record's platform policy and pattern render as the self-updater's
+        // SEED keys: the first creation of Admin/UpdatePolicy copies them, an existing node is never
+        // touched. Absent renders nothing, and nothing is the chart's own default (Stable, no
+        // pattern) — a record that says nothing must not narrow or widen what the image ships.
+        Set("SelfUpdate__DefaultPolicy", string.IsNullOrWhiteSpace(d.UpdatePolicy) ? null : d.UpdatePolicy!.Trim());
+        Set("SelfUpdate__DefaultPattern", string.IsNullOrWhiteSpace(d.UpdatePattern) ? null : d.UpdatePattern!.Trim());
         // The per-PACKAGE default update policy (Auto | Notify | None) the instance seeds onto every
         // install record — separate from the platform's own image policy (Admin/UpdatePolicy) since
         // 2026-09-14. Absent renders nothing: the chart's default keeps the legacy AutoUpdateByDefault
