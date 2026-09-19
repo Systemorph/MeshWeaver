@@ -85,6 +85,41 @@ production bundle was obtainable while writing this, precisely because nothing r
 changed is that the attempt budget now bounds responsiveness rather than size, and the next
 occurrence will say which of the two it was. Settling #4528 needs that evidence.
 
+## Measured after the roll: the fix is live on every replica and the budget is still exceeded
+
+The paragraph above expected the next occurrence to be informative. It was informative in the
+direction nobody wrote down: **the shape fix did not stop the attempt timeout.**
+
+Measured 2026-09-19 19:0xZ, read-only, from `Ops/Status/{memex,memex-cloud}` on the control instance
+and the incident node the log watcher folds these events onto.
+
+| deployment | image | commit | replicas | pods up since | carries the shape fix? |
+|---|---|---|---|---|---|
+| `memex` | `3.0.0-ci.8968` | `96f88406` | 2/2, `converged: true` | 2026-09-19T08:10Z | **yes** |
+| `memex-cloud` | `3.0.0-ci.8969` | `c25f86ae` | 3/3, `converged: true` | 2026-09-19T08:35Z | **yes** |
+
+All ten retained samples on the incident read
+`Source: 'plugin-registry-bundles-standard//Standard-AttemptTimeout'`, spanning 19:00:52Z → 19:06:53Z
+across five pods, and its shape counter advanced **375 → 397 in sixteen minutes**. So the 120 s
+*attempt* budget on this pipeline is exceeded roughly one and a half times a minute, on five replicas
+of two deployments, all of which have been running the streaming transfer for ten hours.
+
+**That relocates the cost, and the relocation is what the fix bought.** With
+`HttpCompletionOption.ResponseHeadersRead` the body leaves the Polly attempt and `CopyStallBounded`
+bounds the copy separately, so on these images an attempt timeout cannot be spent *streaming bytes*.
+It is spent before the response headers arrive — which points at the bundle **index** endpoint and
+its uncached per-request work rather than at the blob transfers this page was written about. The
+earlier attribution (*"it was the blob transfers, not the index"*) held for the pre-fix images and
+does not survive the roll.
+
+🚨 **A per-pod period is the reading that rules out "one large bundle".** The samples sit at a 180 s
+spacing with millisecond jitter — `…-2kcwk` at 19:00:52.047 · 19:03:52.052 · 19:06:52.052, five
+milliseconds of drift over six minutes. A fixed-period population is a repeating scheduled adopt
+whose attempt exceeds the budget *every time it runs*, not an unlucky request; the period is
+`PerPackageAdoptBudget`, i.e. the outer bound of the inversion below cutting each pass. So the
+inversion is no longer only a shape problem — it is the reason 397 occurrences in one day still
+cannot say which of the two call shapes timed out.
+
 ## Two findings this does not fix
 
 🚨 **The two budgets are inverted.** `RegistryUpdateReconciler.PerPackageAdoptBudget` is **3
@@ -97,9 +132,24 @@ that contradict each other is a shape problem, not a tuning one, and the fix is 
 the other rather than to raise either.
 
 🚨 **The incident fingerprint masks `Source:`**, so every Polly `OnTimeout` on every pipeline folds
-onto one incident node. The listing pipeline (#4222) and this transfer pipeline share a counter,
-which means neither can be closed on *"occurrences stopped advancing"*. That formula lives in the
-log watcher in MeshWeaver.Plugins.
+onto one incident node — the samples on it have also included `Orleans.Placement/(null)/Timeout`.
+That formula lives in the log watcher in MeshWeaver.Plugins and is unchanged.
+
+**What the masking costs is an attribution, and the attribution has to be repaired by hand.** The
+listing pipeline (#4222) and this transfer pipeline shared one counter, so neither could be closed on
+*"occurrences stopped advancing"*. When the listing fix reached the registry on 2026-09-19 the listing
+samples stopped and the transfer samples did not — so the counter's `issueNumber` was pointing at a
+defect that was fixed, and the recurrence bot would have reopened the fixed issue on the next tick,
+inside the hour. The step that makes such a close hold is to **repoint the incident node at the issue
+its current samples name** (`content.issueNumber` / `issueUrl`, an ordinary patch; the same operation
+had already been done once on this fingerprint, 1134 → 4222). The superseded predecessor node is left
+pointing at the closed issue on purpose: it is that issue's historical record, and if *it* ever
+advances again the reopen would be correct.
+
+🚨 **So the discriminator is `samples[]`, never the count.** Read the `Source:` value on a reopen of
+any issue attributed to a masked fingerprint before believing the reopen is about that issue. Two
+issues have now been reopened against fixed defects by this mechanism (#1134, then #4222 repeatedly),
+which is the argument for deriving the fingerprint from `Source:` rather than masking it.
 
 ## Where this sits
 
