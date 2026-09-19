@@ -481,6 +481,40 @@ public static class MeshNodeExtensions
                             req.UserId, req.NodePath);
                         return;
                     }
+                    // 🚨 A LOST RACE IS NOT A TRACKING FAILURE EITHER (#4912). By the time this
+                    // observer sees a Conflict, the framework has ALREADY done the thing the NACK
+                    // asks for: MeshNodeStreamExtensions names Conflict among "the provably-safe
+                    // NACK cases" and re-enqueues up to MaxOwnerDisposingReenqueues times, each
+                    // re-running THIS update lambda against the freshest state and re-diffing
+                    // (ConflictRebaseBound waits up to 5s for that state to arrive). So a Conflict
+                    // arriving here means the rebase budget was spent and a concurrent writer STILL
+                    // won — which for this path is a normal outcome, not a defect: the only writers
+                    // racing a given `{user}/_UserActivity/{path}` are other TrackActivity calls for
+                    // the SAME user and path, and the winner recorded the visit.
+                    //
+                    // 🚨 The cost/value trade-off, stated because a level change owes one. What is
+                    // lost is one AccessCount increment and a sub-second LastAccessedAt — a counter
+                    // that FoldOntoLive re-folds off the live node on the very next activity, so it
+                    // self-corrects. What Error cost instead: this line is the fingerprint's outer
+                    // text, so every lost race minted a production incident and reopened an
+                    // unrelated fixed ticket (#1910) — an Error nobody can act on, about a write the
+                    // platform deliberately retried and deliberately bounded. Debug keeps it
+                    // readable without paying for it; Information was rejected because those lines
+                    // ship to Loki and this is per-visit traffic on the cold-login hot path.
+                    //
+                    // Both Conflict forms are covered on purpose — total ("nothing was applied") and
+                    // partial ("what did not conflict was kept"). After the rebase budget they are
+                    // the same fact for a best-effort counter, and only the owner's structured Code
+                    // is read, never the message text.
+                    if (IsConcurrentWriteConflict(ex))
+                    {
+                        logger?.LogDebug(ex,
+                            "TrackActivity for user={UserId} path={Path} lost a concurrent write — "
+                            + "the owner refused after the framework's bounded re-apply. This visit's "
+                            + "increment is not recorded; the next activity re-folds off the live node.",
+                            req.UserId, req.NodePath);
+                        return;
+                    }
                     logger?.LogError(ex,
                         "Failed to track activity for user={UserId} path={Path}",
                         req.UserId, req.NodePath);
@@ -497,6 +531,20 @@ public static class MeshNodeExtensions
     /// </summary>
     private static bool IsAlreadyExistsRace(InvalidOperationException ex)
         => ex.Message.StartsWith("Node already exists:", StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when the failure carries the owner's <see cref="MeshNodeErrorCode.Conflict"/> NACK at
+    /// any depth — i.e. a concurrent writer changed the node since this write's base.
+    /// </summary>
+    /// <remarks>
+    /// Reads the structured <see cref="MeshNodeError.Code"/>, never the message, so it covers both
+    /// refusal shapes (total and partial) and cannot drift when either sentence is reworded. The
+    /// chain walk matters because the write is detached: the NACK reaches this observer wrapped by
+    /// whatever Rx and the post pipeline put around it.
+    /// </remarks>
+    internal static bool IsConcurrentWriteConflict(Exception ex)
+        => ExceptionChain.Contains(ex, e =>
+            e is MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Conflict });
 
     /// <summary>
     /// Registers all graph-related content and message types on the type registry under
