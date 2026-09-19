@@ -39,7 +39,7 @@ restart, and telling a sender to keep retrying a wedge is a storm.
 
 ## Measured
 
-Two production incidents, 191 and 3,959 occurrences, spanning every pod generation over four weeks.
+Two production incidents, 191 and 3,959 occurrences, recorded across 27 pods over four weeks.
 They are one root seen through two logs — one fingerprinted on the router's own verdict, the other on
 Orleans' per-attempt addressing log, which the retries multiply. The full account, including the
 shapes that are still open, is in

@@ -91,8 +91,9 @@ public class DepartedSiloClassificationTest
 
     /// <summary>
     /// Verbatim from #2307's newest bot fold (2026-09-19T13:26Z, sample of 2026-09-19 09:03:41Z) —
-    /// the same shape with nothing listening on the port rather than no route to the host. This is
-    /// the form every one of that incident's newest 21 occurrences carries.
+    /// the same shape with nothing listening on the port rather than no route to the host. All three
+    /// samples that fold carries are this shape; it reports 21 further occurrences it does not sample,
+    /// so three is what was READ, not a claim about all 21.
     /// </summary>
     private const string ConnectionRefusedText =
         "Exception while sending message: Orleans.Runtime.Messaging.ConnectionFailedException: "
