@@ -478,6 +478,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Environment Composition](EnvironmentComposition)
 - [Feature Flags](FeatureFlags)
 - [First-Run Setup](FirstRunSetup)
+- [First-run setup on a PROVISIONED instance](FirstRunSetupOnAProvisionedInstance) — a fleet-provisioned instance boots configured and unadministerable; the wizard keys on "no storage" and the onboarding gate on "no admin grant", so neither fires
 - [Image Cleanup](ImageCleanup)
 - [Instance Identity and Setup](InstanceIdentityAndSetup)
 - [Instance Lifecycle — State of Record](InstanceLifecycleStateOfRecord)
