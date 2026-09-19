@@ -360,6 +360,171 @@ in the repository forever (measured on Plugins#1453), so the lane lands observe-
 publishing its context on live pull requests in that repo, and only then is the context added.
 Proposed with the full measurement in #4776.
 
+### The same gap, measured wider — 240 merged pull requests
+
+The 120-PR sample above was extended on 2026-09-19 to the **30 most recently updated merged pull
+requests in each of eight repositories** (adding Memex, and deepening the six): **240 merged, 325
+findings, 182 never answered, across 93 pull requests.**
+
+| repository | merged swept | carried findings | ≥1 unanswered | findings | unanswered |
+|---|---:|---:|---:|---:|---:|
+| MeshWeaver | 30 | 25 | **0** | 59 | **0** |
+| MeshWeaver.Plugins | 30 | 17 | 7 | 56 | 23 |
+| MeshWeaver.Education | 30 | 17 | 13 | 31 | 23 |
+| MeshWeaver.Crm | 30 | 21 | 16 | 39 | 26 |
+| MeshWeaver.Manufacturing | 30 | 17 | 15 | 28 | 25 |
+| MeshWeaver.SocialMedia | 30 | 15 | 14 | 29 | 26 |
+| MeshWeaver.Reinsurance | 30 | 14 | 10 | 30 | 21 |
+| Memex | 30 | 22 | 18 | 53 | 38 |
+| **total** | **240** | **148** | **93** | **325** | **182** |
+
+Core is **0 of 59**, which is the check working — and it is also the control that makes every other
+row readable, because the same instrument finds both states. A zero here is a measurement, not a
+broken query. Memex is the worst of the eight and was not in the earlier sample.
+
+A further **45 unanswered findings sit on 24 open DRAFTS** (Plugins 34, of which #1910 alone is 13 of
+13; Memex 11). Those describe code that never shipped and are deliberately left; several drafts are
+abandoned.
+
+### Treating the backlog: bound it, and state the bound
+
+There are ~5,700 merged pull requests fleet-wide, so every sweep is partial. **Report the denominator
+you actually swept and what is left**, or the next session cannot tell a treated repository from an
+untreated one. Note that `sort=updated` is not `sort=created`: an older pull request that received a
+comment recently enters the window, which is why the windows differ in span per repo.
+
+```bash
+gh api "repos/Systemorph/<repo>/pulls?state=closed&per_page=100&sort=updated&direction=desc" \
+  --jq '.[]|select(.merged_at!=null)|.number'
+gh api "repos/Systemorph/<repo>/pulls/<n>/comments?per_page=100" \
+  --jq '{findings:[.[]|select(.user.login=="Copilot" and .in_reply_to_id==null)]|length,
+         replies:[.[]|select(.in_reply_to_id!=null)]|length}'
+```
+
+A finding counts as answered only when some comment's `in_reply_to_id` is that root's `id`. A
+PR-level comment answers nothing, and neither does resolving the thread.
+
+**Reply on every thread whatever the verdict.** Four verdicts, and the declines need their reason on
+the record *more* than the acceptances do: *real* (fix it), *real but cosmetic*, *obsolete* (verify
+against the current file and quote the evidence), *wrong* (say so, with the measurement). A merged
+finding nobody answered and nobody declined is indistinguishable from one nobody read.
+
+#### 🚨 `-F`, never `-f` — the reply that posts its own filename
+
+```bash
+gh api -X POST repos/Systemorph/<repo>/pulls/<n>/comments/<id>/replies -F body=@reply.md
+```
+
+**`-f body=@reply.md` sends the literal seven-to-twenty-character string `@reply.md` as the comment
+body**, and the POST returns a normal comment id with a 201. So it reads as a successful reply; the
+thread's root now has a comment whose `in_reply_to_id` points at it; and **every detector built on
+`in_reply_to_id` — including the sweep query above, and `check-review-answered.py`'s own predicate —
+counts the finding as answered.** The finding is untreated and nothing says so.
+
+Measured on 2026-09-19: **100 posts across four sessions** went out this way, each a `@`-prefixed
+filename or absolute path — Memex 41, Crm 24, Reinsurance 20, Manufacturing 15. Three of the four
+sessions believed they had replied and reported thread counts to prove it; the proof was the very
+field that cannot distinguish the two. The fourth caught it only by reading one reply back.
+
+🚨 **And the first audit of it was itself understated, for a structural reason worth keeping.** A
+thread-centric sweep — enumerate the review threads on the *swept* pull requests, check their replies
+— saw **74 of the 100**. The flag is a property of the **call site**, not of the thread, so it also
+hits PR-level issue comments (`issues/comments`, a different endpoint) and replies on the sweep's
+*own* pull requests, neither of which a thread-centric audit reaches. **Re-audit by call site**: every
+comment authored today on both endpoints whose body matches `^@`. That found the remaining 26.
+
+So the verification is **read the body back and check its length**, never the reply's existence:
+
+```bash
+gh api "repos/Systemorph/<repo>/pulls/<n>/comments?per_page=100" \
+  --jq '.[]|select(.in_reply_to_id!=null)|"\(.id) \(.body|length)"'
+```
+
+A length near 20 is the bug. **Repair with `PATCH /repos/{o}/{r}/pulls/comments/{reply_id}`, not a
+second reply** — re-posting leaves the stub standing beside the real answer, and the thread then reads
+as two answers, one of them noise.
+
+🚨 **A stub also inflates every "how much is left" count, so a denominator taken before the repair is
+understated by its own stub total.** A stubbed thread has a reply, so the sweep query above calls the
+finding treated — which means any backlog figure published while stubs are outstanding is a floor, and
+not by a knowable margin. Re-measure after repairing, and when reporting a backlog say whether the
+count was taken before or after. Two of this sweep's per-repo denominators were re-taken for exactly
+this reason.
+
+**The general rule, of which this is one instance: any `gh api` write whose payload came from a file
+is verified by reading the field back.** `-f` and `-F` differ silently in both directions — `-f`
+treats `@path` as a literal string, and `-F` type-coerces a value that merely looks numeric or
+boolean — so the flag is the wrong thing to reason about. The response is not evidence either: it
+carries an id and a 201 whatever went in. Read the stored field and compare it with the source.
+
+And the comparison is not a length check. `@r_115_4028258629.md` is 20 characters, which is *short*,
+not obviously wrong, and a genuinely terse reply would fail the same test. Assert a **content
+signature** you know is in the file — the verdict string the reply opens with — or byte-compare
+against the draft, allowing for the trailing newline GitHub appends.
+
+This is the sweep's own instance of the defect class it exists to find: an answer that reads like a
+pass. The question to ask of any reply mechanism is the one that applies to a gate — *if this had
+failed, would the output differ?* Here it would not have.
+
+### 🚨 One defect, five copies — fix the canonical, then RE-COPY IMMEDIATELY
+
+Findings cluster hard on vendored files, because the reviewer reads each repository's copy
+independently. Alongside the `gen-manifests.py` collapse above, the 2026-09-19 sweep found **25 of
+the 182 against five satellites' copies of `scripts/resolve-platform.py`**, collapsing to **five
+distinct defects** in core's canonical — one of them reported three times over (fixed in #4779; the
+one deferred as needing a design decision is #4780). Patching a vendored copy alone is how this
+fleet reached five vintages of one script (#1426).
+
+🚨 **A canonical fix REDS EVERY SATELLITE THE MOMENT IT MERGES, so the re-copy is part of the same
+piece of work — not a follow-up.** `node-repo-validate.yml` declares `platform-ref` with
+**`default: main`**, and `scripts-ref` falls back to it. A satellite whose `validate:` job passes no
+inputs — which is every one of them — therefore has the canonical fetched at core **`main`, live**,
+and `check-resolver-copy.py` has been hard-red since `RED_FROM 2026-09-15`. Measured 2026-09-19:
+core #4773 merged at 08:02:23Z and by 08:16Z every satellite's `validate / Validate node repos` — a
+**required** context in all of them — was failing with
+
+```
+scripts/resolve-platform.py has DRIFTED from the platform's canonical: 32 code line(s) differ
+(76 raw), RED since 2026-09-15T00:00:00Z
+```
+
+**Do not reason about this from a `platform-ref:` literal in a satellite's `ci.yml`.** Those literals
+pin *other* jobs (`compile-check`, `tag-modules`, the pack lanes); the `validate:` job passes nothing
+and takes the default. Reading the wrong job's input produces the confident and wrong conclusion that
+a canonical fix is invisible to the satellites — it is the opposite, and the guard's own docstring
+says so ("a canonical fetched at `@main` is live on merge for every caller", MeshWeaver#4027). Read
+the **run**: the job log prints `SCRIPTS_REF: main`.
+
+So the shape of the work is: fix the canonical, merge it, and re-copy into every satellite in the
+same sitting —
+
+```bash
+gh api repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py --jq .content \
+  | base64 -d > scripts/resolve-platform.py
+```
+
+— verifying the guard then reports `CODE-IDENTICAL` (exit 0). A re-run does not help an open pull
+request, because the guard reads the **branch's** copy: that branch needs `git merge origin/main`
+after the re-copy lands on the satellite's `main`.
+
+### 🚨 And while the copy is behind, the rest of the lane is silently ungated
+
+This is the more expensive half, and it is a **skip-trapdoor made by step ordering rather than by an
+`if:`**. The drift check sits mid-job, so its failure skipped **16 subsequent steps** of the same job
+(measured on MeshWeaver.SocialMedia#210, job 105867277548) — among them:
+
+- `Every PR-reachable secret in this repo is asserted by a preflight`
+- `Every manifest.lock is current (and carries a version)`
+- `Every module's version matches its content`
+- `No mapping in this repo's workflows writes a key twice`
+- `No pin comment names a commit this repo no longer pins`
+
+Each reported `skipped`, which under both protection mechanisms counts as satisfied. So for as long
+as a satellite's vendored resolver is behind, every pull request in it is **unchecked by all of
+those**, and the only visible symptom is one red about an unrelated file. Filed as #4784; the durable
+fix is `if: ${{ !cancelled() }}` on each independent guard, or one job per guard family, so that a
+single red reports rather than masks.
+
 ## Controls
 
 The predicate, replayed through the real REST adapter with `--as-of` on pull requests whose outcome
