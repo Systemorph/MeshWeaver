@@ -475,6 +475,23 @@ data:
   # #2494's safety net. Same typed-key rule as the line above: a real default, never "" — this
   # binds to a TimeSpan and an empty string aborts the host in the configuration binder.
   SelfUpdate__SafetyNetCheckInterval: "{{ .Values.config.memex_portal.SelfUpdate__SafetyNetCheckInterval | default "01:00:00" }}"
+  # ---- What a NEW install STARTS with: the platform policy + pattern the self-updater seeds onto
+  # Admin/UpdatePolicy the first time it creates that node (SelfUpdateOptions.DefaultPolicy /
+  # DefaultPattern). Rendered from the Deployment record's updatePolicy / updatePattern
+  # (DeploymentPortalConfig); the fleet's records say Continuous + 3.0.0-ci*. An EXISTING node is
+  # never touched by these keys. Rendered only when SET: the reader binds DefaultPolicy to an enum,
+  # so an empty string must never reach it — the same hasKey rule as Modules__AutoRecycleOnStaleBuild.
+  # Maintainer 2026-09-19, after memex-cloud sat a week on a policy node with no policy field:
+  # "need to put this to the config where we start".
+  # Guarded on the TRIMMED value, not `hasKey`: a key that is present but empty (or whitespace)
+  # must render nothing too — the binder would abort the host on "" exactly as on an absent default.
+  # (`if`, not `with`: check-values-are-read.sh reads `with …Values.config.` as a catch-all.)
+  {{- if (.Values.config.memex_portal.SelfUpdate__DefaultPolicy | default "" | trim) }}
+  SelfUpdate__DefaultPolicy: "{{ .Values.config.memex_portal.SelfUpdate__DefaultPolicy | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.SelfUpdate__DefaultPattern | default "" | trim) }}
+  SelfUpdate__DefaultPattern: "{{ .Values.config.memex_portal.SelfUpdate__DefaultPattern | trim }}"
+  {{- end }}
   # 🚨 How long the release-availability gate and the roll selector may take to ANSWER before the
   # verdict becomes Indeterminate — which HOLDS (MeshWeaver#4742). This is a knob for a slow SHARE
   # and NEVER the remedy for a slow read: what blew the shipped 60 s on memex.meshweaver.cloud was
