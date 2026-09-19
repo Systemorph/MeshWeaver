@@ -477,13 +477,32 @@ it works on any incident that carries one.
 
 `StructuralLogIncidentIdentity.Compute` is a pure function of the burst, so its payload is a dated
 artefact of the binary that computed it. Take the fingerprint out of a refused report's evidence line
-— `refused undiagnosable report <fp> for category <cat> …` — and test the candidate payloads:
+— `refused undiagnosable report <fp> for category <cat> …` — and test the candidate payloads.
+
+The 2026-08-09 payload is `{category}\n{eventId}\n{discriminator}`, and the discriminator switches on
+the PAIR `(exceptionType, topFrame)` — four branches, all four of which occur in the live record:
 
 | payload hashed (`sha256`, first 8 bytes, lower hex) | in force |
 |---|---|
-| `{category}\n{eventId}\n` | 2026-08-09 (core `8115e39425`, "Stop deriving incident identity from prose") |
-| `{category}\n{eventId}\n{exceptionType}` | same change, when the burst carried an exception |
+| `{category}\n{eventId}\n` — neither present | 2026-08-09 (core `8115e39425`, "Stop deriving incident identity from prose") |
+| `{category}\n{eventId}\n{exceptionType}` | same change, exception but no application frame |
+| `{category}\n{eventId}\n{topFrame}` | same change, **frame but no exception type** |
+| `{category}\n{eventId}\n{exceptionType}\|{topFrame}` | same change, both |
 | `site\n{category}\n{eventId}\n{fault}\n{detail}` — or `frame\n{frame}\n{fault}\n{detail}` | current |
+
+🚨 **The frame-only row is easy to miss and it addresses one of the busiest ids in the record.**
+Measured 2026-09-19, `Admin/_LogIncident/92c0e9442e275f65` ([#3110](https://github.com/Systemorph/MeshWeaver/issues/3110)):
+
+```
+SHA256("MeshWeaver.Messaging.MessageService\n0\n"
+     + "MeshWeaver.Messaging.MessageHub.HandleMessageAsync(IMessageDelivery delivery, "
+     + "AsyncDelivery[] ruleChain, CancellationToken cancellationToken)")[..8]  = 92c0e9442e275f65
+```
+
+No exception type in the key at all — so that one id addresses **every fault of every type that
+surfaces inside `MessageHub.HandleMessageAsync`**, the most-travelled method in the mesh. An issue
+filed from such an id is titled after whichever fault arrived first, and two occurrences of it can
+share nothing but the method they died in.
 
 Measured 2026-09-14 against `Admin/_LogIncident/log-burst-header-only-{memex,memex-cloud}` on the
 control instance, every refused fingerprint on both namespaces reproduced from the **first** row:
@@ -539,6 +558,86 @@ Two things this is good for beyond dating:
 - **Telling a fingerprint FOLD from a recurrence** — the same job the
   [reopen section](#-a-reopen-is-not-a-recurrence--read-samples-before-you-believe-it) describes, done
   arithmetically instead of by eye.
+
+### 🚨 One log SITE holds TWO buckets, and the second one's TITLE reads like a per-caller ticket
+
+Because the discriminator switches on the pair, a site that emits *both* shapes — some lines with an
+exception body attached, some bodyless — takes **two different branches of the table above** and mints
+**two** fingerprints, each of which then files its own GitHub issue about the same defect class.
+Measured 2026-09-19 on memex.systemorph.com,
+`MeshWeaver.Hosting.PostgreSql.PostgreSqlPartitionedMeshQuery` has exactly two, both reproducible
+locally (the site logs no application frame either way, so these are the exception-only and
+neither-present rows):
+
+| fingerprint | payload (branch) | issue | what folds onto it |
+|---|---|---|---|
+| `d4c8f6f74ecfa422` | `{category}\n0\n{UnanchoredQueryException}` — exception, no frame | [#3545](https://github.com/Systemorph/MeshWeaver/issues/3545), titled `nodeType:*Post` | every unanchored query **with** the exception body, whatever the caller |
+| `5d52ad4396af9a59` | `{category}\n0\n` — neither present | [#4443](https://github.com/Systemorph/MeshWeaver/issues/4443), titled `nodeType:Skill` | every **bodyless** one, whatever the caller |
+
+`search 'namespace:Admin/_LogIncident nodeType:LogIncident content.category:*PartitionedMeshQuery* select:name,lastModified limit:50'`
+→ `count: 2`, `truncated: false`, `coverage.partitions: ["admin"]`. Two buckets, two tickets, one site.
+
+🚨 **So a per-caller-looking TITLE is not evidence that a per-caller identity shipped.** #4443 names
+`nodeType:Skill` because that is the sample it happened to be filed from; its bucket is the whole
+site. #3545's thread had been waiting since 2026-09-13 for the identity that keeps a `nodeType:`
+term (`{types:…}`), and the check that settles it is arithmetic: the per-caller payloads for that
+very sample — `{category}\n0\n{types:Skill}` → `45d3d07500163cd1`, `{category}\n0\nnodeType:Skill` →
+`ed08112634d8759d` — appear **nowhere**, while the bare payload reproduces `5d52ad4396af9a59` byte
+for byte. Control on a second site, same day: `SHA256("Polly\n0\n")[..8] = 9ca334c1e8dad9ca`, which
+is `Admin/_LogIncident/833c5f2e6337f4d3`'s `reporterFingerprint` verbatim. The **reporter** still
+runs the 2026-08-09 function.
+
+### 🚨 The portal RE-ADDRESSES a reported fingerprint — so a frozen `lastSeen` is NOT a stopped fault
+
+Since 2026-09-19 the portal recomputes the identity of every report it accepts and keeps its own
+node, folding the reporter's id into it. The new fields are the tell — measured on nodes created
+`11:41:32Z` (`833c5f2e6337f4d3`) and `11:51:04Z` (`6b49ccecb9615d8f`):
+
+```jsonc
+{ "fingerprint": "6b49ccecb9615d8f",          // the PORTAL's id — the node's own path
+  "reporterFingerprint": "1b405a782123de6b",  // what the watcher computed (2026-08-09 payload)
+  "foldedFrom": ["1b405a782123de6b"],
+  "shapes": [ { "key": "6b49ccecb9615d8f", "detail": "Failed to deliver to {path}", "occurrences": 2 } ] }
+```
+
+The fold comment says it in words — *"Re-addressed by the current identity function: this incident
+inherited `1b405a782123de6b`. Those nodes are superseded and will not fold, file or comment again"* —
+and the successor **inherits the old node's issue link**, so the churn moves rather than ending.
+
+Two consequences for a triager, and the first one is a trap:
+
+- **The predecessor node goes quiet whether or not the fault did.** After a re-addressing its
+  `occurrences`/`lastSeen` freeze by construction, exactly as they would if the caller had been
+  fixed. `lastSeen` alone cannot tell those apart — the same warning the capture-gap section makes
+  about a stale `lastSeen`, now with a second cause.
+- **The successor sweep is by CATEGORY.** 🚨 `content.foldedFrom:<id>` does **not** match an array
+  member: the positive control `content.foldedFrom:1b405a782123de6b` returns `count: 0` on the very
+  node whose `foldedFrom` holds that value, so a zero there is a broken instrument, not an answer.
+  Sweep `content.category:*<Category>*` instead and read `count` against `truncated` and
+  `coverage.partitions`.
+
+🚨 **And the recompute instrument above dates the REPORTER only.** The portal's payload is not
+reproducible from the fields its node carries — `{category}\n{eventId}\n` combined with the exception
+type, the `normalizedMessage`, the shape `detail`, or any pairing of them, hashes to none of
+`6b49ccecb9615d8f`/`833c5f2e6337f4d3` (tried 2026-09-19). Date the watcher with the hash; do not try
+to date the portal with it.
+
+**Proving a fault has STOPPED across a re-addressing boundary takes two mechanisms plus a liveness
+control**, because neither covers the whole window:
+
+1. *Before* the boundary the predecessor node would have advanced — so its `lastSeen` bounds the
+   fault's end on that side.
+2. *After* it a successor node with that category would exist — so the category sweep covers the
+   other side.
+3. The ingest must be shown reading that namespace **across** the window, and the evidence for that
+   is a line CAPTURED from it inside the window (another incident's `lastSeen`), never the watcher's
+   own health.
+
+Worked example, the one that closed #3545: `d4c8f6f74ecfa422` froze at `2026-09-19T05:15:30Z`,
+re-addressing went live at `11:41Z`, the category sweep finds no successor, and memex-cloud lines
+were captured at `06:30:42Z` and `08:54:16Z` with a memex-cloud incident still updating at
+`19:00:24Z`. Zero unanchored fan-out lines on that portal after 05:15:30Z, with no hole in the
+window.
 
 ### 🚨 A bodyless capture can SWALLOW diagnosable bursts — `occurrences` is not a count of bodyless lines
 
