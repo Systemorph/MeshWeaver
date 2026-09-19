@@ -444,6 +444,22 @@ A length near 20 is the bug. **Repair with `PATCH /repos/{o}/{r}/pulls/comments/
 second reply** — re-posting leaves the stub standing beside the real answer, and the thread then reads
 as two answers, one of them noise.
 
+🚨 **TWO flag mistakes produce a stub, and they leave DIFFERENT first characters.** A sweep keyed on
+one of them misses the other, and the second is the worse instance because it looks less obviously
+wrong:
+
+| invocation | what is sent | stub starts with |
+|---|---|---|
+| `-f body=@reply.md` | the literal string `@reply.md` | **`@`** |
+| `-F body="$file"` — the `@` **omitted** | the path itself, e.g. `/tmp/reply.md` | **`/`** |
+
+`-F` reads a file **only** with the `@` prefix, so dropping it silently turns the path into the value.
+Measured 2026-09-19: the first mechanism produced most of the fleet's stubs, and the second produced a
+further batch that an `^@` sweep did not see. So **do not key the sweep on a flag or on `@`** — key it
+on the shape of the body: a reply that is a **single token with no whitespace** is a path, whatever put
+it there. Re-audited on that key, 0 of 533 comments authored during the sweep were stubs; the earlier
+`^@`-keyed pass could not have said so.
+
 🚨 **A stub also inflates every "how much is left" count, so a denominator taken before the repair is
 understated by its own stub total.** A stubbed thread has a reply, so the sweep query above calls the
 finding treated — which means any backlog figure published while stubs are outstanding is a floor, and
@@ -547,16 +563,21 @@ loop — that fallback is usually where the defect enters.
 
 #### The safe form for posting
 
-Build the payload as JSON and hand it to `--input`, which reads a file for every field and never
-interprets a value:
+Build the whole request body as JSON with `jq`, and hand **that one file** to `--input`:
 
 ```bash
 printf '%s' "$(jq -Rs '{body:.}' < reply.md)" > payload.json
 gh api --method POST "repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies" --input payload.json
 ```
 
-The one session that did this was the only one of four with no stub. It sidesteps the `-f`/`-F`
-question entirely rather than requiring anyone to remember which flag reads a file.
+🚨 **The safety is `jq`'s, not `--input`'s.** `--input` takes one file that **is** the complete request
+body — it has no per-field behaviour to confer any protection (Copilot review on #4788, which caught
+this page attributing it to the wrong half of the pipeline). What makes the recipe safe is that `jq`
+does the quoting and escaping, so no value is ever interpreted as a flag argument.
+
+The one session of four that posted this way was the only one with no stub. It sidesteps the
+`-f`/`-F` question entirely rather than requiring anyone to remember which flag reads a file — which
+matters more than it sounds, because **there are two ways to get that wrong, not one** (below).
 
 ### 🚨 One defect, five copies — fix the canonical, then RE-COPY IMMEDIATELY
 
