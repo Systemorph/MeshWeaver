@@ -226,7 +226,11 @@ Three consequences, each of which reverses a reading a triage pass would otherwi
 ### The fingerprint's `namespace` is not the deployment its NEWEST samples came from
 
 `content.namespace` is one value on a node whose samples accumulate for weeks, and a split can hand
-a successor a namespace that no longer matches the sample you are reading. **Pod names do not
+a successor a namespace that no longer matches the sample you are reading. It is worse than stale:
+**one fingerprint can span deployments while that field holds a single value.** `4ff70ec1124b1b3c`
+carries `namespace: memex` and its pod list contains both `…-6cd5d8f887-2kcwk` (in
+`Ops/Status/memex`'s roster, `3.0.0-ci.8968`) and `…-69956b6dbc-{v5r29,s246c}` (in
+`Ops/Status/memex-cloud`'s, `3.0.0-ci.8969`). No single value can be right for that node. **Pod names do not
 discriminate either:** on 2026-09-19 both portals ran a deployment called
 `memex-portal-deployment` and both produced the replicaset hash `69956b6dbc` (same image, same pod
 template) with different suffixes, so `…-69956b6dbc-gx6z6` and `…-69956b6dbc-v5r29` are not
