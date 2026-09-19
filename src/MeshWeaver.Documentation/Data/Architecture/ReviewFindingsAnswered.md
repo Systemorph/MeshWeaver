@@ -475,10 +475,19 @@ Reading a body from a file takes **both** the typed flag and the `@` prefix: `-F
 **Two independent near-misses each post the path itself as the whole reply**, and they are
 distinguishable by the body's first character:
 
-| what was written | what is posted | tell |
+| what was passed | what is posted | tell |
 |---|---|---|
-| `-F body=reply.md` — right flag, **no `@`** | `/Users/roland/.mwgate/reply1.md` | body starts with `/` |
-| `-f body=@reply.md` — **wrong flag**, `@` present | `@/private/tmp/.../reply-census.md` | body starts with `@` |
+| `-F body=/Users/roland/.mwgate/reply1.md` — right flag, **no `@`** | `/Users/roland/.mwgate/reply1.md` | body starts with `/` |
+| `-f body=@/private/tmp/…/reply-census.md` — **wrong flag**, `@` present | `@/private/tmp/…/reply-census.md` | body starts with `@` |
+
+Each row posts its own value verbatim, which is what makes the near-miss reproducible as written.
+🚨 **In the wild it does not look that obvious, because the path arrives in a variable** — the shape
+that hid the missing `@` from its author:
+
+```bash
+reply() { gh api graphql -f query='…' -f id="$1" -F body="$2"; }   # ← "$2" needs @, and has none
+reply "PRRT_kwDOTQ2qnM6XczkO" /Users/roland/.mwgate/reply1.md
+```
 
 `-f` sends its value literally and never interprets `@`; `-F` interprets `@value` as a file but
 passes a bare value through unchanged. Both apply to `gh api graphql` variables as well as REST
@@ -494,14 +503,23 @@ action. The answers had been *written* — the files were still on disk — and 
 
 🚨 **Never key detection on the stub's shape.** The body is whatever string the caller passed, and
 three shapes have already been observed: a bare absolute path, `@` followed by an absolute path,
-and a single `x`. Two predicates that do not depend on shape, used together over every reply:
+and a single `x`. Two predicates that do not depend on shape, used together over every **reply**:
 
 ```bash
-# a body containing NO whitespace at all — no genuine reply ever satisfies this
-jq -r '.[] | select(.body | test("\\s") | not) | "\(.id) \(.body)"' comments.json
-# every short reply, then READ the list: a real short answer names a commit, a stub names a file
+# SUSPECTS, not proof — a body with no whitespace at all
+jq -r '.[] | select(.in_reply_to_id != null and (.body | test("\\s") | not)) | "\(.id) \(.body)"' comments.json
+# every short reply — the backstop for a stub that DOES contain whitespace
 jq -r '.[] | select(.in_reply_to_id != null and (.body|length) < 200) | "\(.id) \(.body)"' comments.json
 ```
+
+🚨 **Neither predicate is a gate, and the first is a high-signal SUSPECT list rather than proof.** It
+has false positives — a bare commit SHA, or a lone `#1234`, is a legitimate whitespace-free reply —
+and false negatives, because a placeholder containing a space passes it, which is why the second
+predicate is the backstop and not a refinement. Both are scoped to `in_reply_to_id != null`: a
+top-level review comment is not a reply, and counting one as a stub is how a census overstates.
+**Read every hit.** The discriminator is what the body NAMES: a real answer names a commit or a
+finding, a stub names a file. The only thing here safe to automate is the *repair* verification
+below, where a byte-compare against the posted file is exact.
 
 **Repair with `PATCH`, never a second POST** — a new reply leaves the stub standing beside it:
 
