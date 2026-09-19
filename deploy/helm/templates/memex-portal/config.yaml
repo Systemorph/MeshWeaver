@@ -483,13 +483,14 @@ data:
   # so an empty string must never reach it — the same hasKey rule as Modules__AutoRecycleOnStaleBuild.
   # Maintainer 2026-09-19, after memex-cloud sat a week on a policy node with no policy field:
   # "need to put this to the config where we start".
-  # `with` on the TRIMMED value, not `hasKey`: a key that is present but empty (or whitespace) must
-  # render nothing too — the binder would abort the host on "" exactly as on an absent default.
-  {{- with (.Values.config.memex_portal.SelfUpdate__DefaultPolicy | default "" | trim) }}
-  SelfUpdate__DefaultPolicy: "{{ . }}"
+  # Guarded on the TRIMMED value, not `hasKey`: a key that is present but empty (or whitespace)
+  # must render nothing too — the binder would abort the host on "" exactly as on an absent default.
+  # (`if`, not `with`: check-values-are-read.sh reads `with …Values.config.` as a catch-all.)
+  {{- if (.Values.config.memex_portal.SelfUpdate__DefaultPolicy | default "" | trim) }}
+  SelfUpdate__DefaultPolicy: "{{ .Values.config.memex_portal.SelfUpdate__DefaultPolicy | trim }}"
   {{- end }}
-  {{- with (.Values.config.memex_portal.SelfUpdate__DefaultPattern | default "" | trim) }}
-  SelfUpdate__DefaultPattern: "{{ . }}"
+  {{- if (.Values.config.memex_portal.SelfUpdate__DefaultPattern | default "" | trim) }}
+  SelfUpdate__DefaultPattern: "{{ .Values.config.memex_portal.SelfUpdate__DefaultPattern | trim }}"
   {{- end }}
   # 🚨 How long the release-availability gate and the roll selector may take to ANSWER before the
   # verdict becomes Indeterminate — which HOLDS (MeshWeaver#4742). This is a knob for a slow SHARE
