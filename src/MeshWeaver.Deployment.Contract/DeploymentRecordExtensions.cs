@@ -83,6 +83,14 @@ public static class DeploymentRecordExtensions
     public static DeploymentContent WithInClusterPostgres(this DeploymentContent d, bool enabled = true) =>
         d with { InClusterPostgres = enabled };
 
+    /// <summary>
+    /// The instance's OWN database release — a CloudNativePG Cluster in its namespace on the db node
+    /// pool (Doc/Architecture/InClusterDatabases). Blank release → <c>{namespace}-db</c>.
+    /// </summary>
+    public static DeploymentContent WithInClusterDatabase(
+        this DeploymentContent d, string? release = null, int? instances = null, string? size = null, string? storageClass = null) =>
+        d with { InClusterDatabase = new InClusterDatabaseSpec { Release = release, Instances = instances, Size = size, StorageClass = storageClass } };
+
     // ── images ──────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>

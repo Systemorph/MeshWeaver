@@ -737,6 +737,34 @@ public sealed record HostingOperatorSpec
     }
 }
 
+/// <summary>
+/// The instance's OWN database, as a separate Helm release in its namespace (Doc/Architecture/
+/// InClusterDatabases): a CloudNativePG Cluster on the cluster's <c>db</c> node pool — primary and
+/// standby in two zones — whose owner credentials are generated in-cluster into the Secret
+/// <c>{Release}-app</c>. Present → the portal connects to <c>{Release}-rw</c> and the Provision
+/// installs the database release instead of creating a database on a shared server; absent → the
+/// record's <see cref="DeploymentContent.DatabaseServer"/> / <see cref="DeploymentContent.DatabaseHost"/>
+/// as before. Names and sizes only; nothing here is secret.
+/// </summary>
+public sealed record InClusterDatabaseSpec
+{
+    /// <summary>The database release (and CloudNativePG Cluster) name. Blank → <c>{namespace}-db</c>.</summary>
+    [Description("Database release name — blank derives {namespace}-db")]
+    public string? Release { get; init; }
+
+    /// <summary>PostgreSQL instances: primary + standbys, each in its own zone. Null → 2.</summary>
+    [Description("Instances (primary + standbys, one per zone)")]
+    public int? Instances { get; init; }
+
+    /// <summary>The volume size per instance. Blank → <c>32Gi</c>.</summary>
+    [Description("Volume size per instance")]
+    public string? Size { get; init; }
+
+    /// <summary>The zonal StorageClass. Blank → <c>memex-db-premiumv2</c> (the platform's).</summary>
+    [Description("Storage class — blank uses the platform's zonal Premium SSD v2 class")]
+    public string? StorageClass { get; init; }
+}
+
 /// <summary>OpenTelemetry export.</summary>
 public sealed record TelemetrySpec
 {

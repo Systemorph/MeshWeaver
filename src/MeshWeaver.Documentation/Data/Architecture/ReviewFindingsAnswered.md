@@ -307,16 +307,64 @@ maintainer's waiver from an agent's. The label event in the pull request's timel
   Read that file's diff yourself.
 - **Pull requests into other branches.** The ruleset reviews only the default branch, so a pull
   request into another branch reads red; the check is not required there.
-- **🚨 Every other repository in the fleet.** See below — this is the largest gap by a wide margin.
+- 🚨 **Every other repository in the fleet.** This check exists here and nowhere else. See below.
 
-## 🚨 The check exists only here, and the fleet is the measurement of that
+## 🚨 This is a CORE-ONLY gate, and the rest of the fleet shows what that costs
 
-Every repository in the fleet *requests* the automatic review. Only `Systemorph/MeshWeaver`
-*requires* it to be answered. So everywhere else a finding against code that then merged is not
-merely sometimes missed — it is structurally never read, because nothing ever asks.
+Measured 2026-09-19, from `branches/main/protection` and every active ruleset:
 
-**Measured 2026-09-19**, the 30 most recently updated merged pull requests in each of eight
-repositories — 240 merged, 325 findings:
+| repo | mechanism | requires `Automatic review answered`? | carries `review-answered.yml`? |
+|---|---|---|---|
+| MeshWeaver | ruleset `2128472` | **yes** | yes |
+| MeshWeaver.Plugins | classic, 8 contexts | no | **no** |
+| MeshWeaver.Reinsurance | classic, 6 contexts | no | no |
+| MeshWeaver.Crm | classic, 6 contexts | no | no |
+| MeshWeaver.SocialMedia | classic, 7 contexts | no | no |
+| MeshWeaver.Manufacturing | classic, 6 contexts | no | no |
+| MeshWeaver.Education | ruleset, 4 contexts | no | no |
+
+🚨 **MeshWeaver.Plugins is NOT covered**, against the common assumption that it is. Every satellite
+carries a `Copilot review for default branch` ruleset, so the review is *requested* everywhere —
+nothing outside core requires it to be *answered*.
+
+What that produces, over the last 20 merged pull requests of each of six repositories:
+
+| repo | merged sampled | carried findings | merged with ≥1 unanswered |
+|---|---|---|---|
+| MeshWeaver.Reinsurance | 20 | 11 | 7 |
+| MeshWeaver.Crm | 20 | 13 | 11 |
+| MeshWeaver.SocialMedia | 20 | 11 | 10 |
+| MeshWeaver.Manufacturing | 20 | 11 | 9 |
+| MeshWeaver.Education | 20 | 11 | 11 |
+| MeshWeaver.Plugins | 20 | 15 | 7 |
+| **total** | **120** | **72** | **55** |
+
+**In all 55 the ratio is N of N** — not one finding answered on any of them, never a partial. So
+outside core, findings are not *occasionally* missed, they are *structurally not read*: about twice
+the rate this repository measured before the gate landed (32 of 60, above).
+
+It is not cosmetic. On 2026-09-18, five satellite pull requests merged with 13 unanswered findings
+between them. Assessed on the code: **11 of the 13 were real**, and only two could be declined — one
+whose premise `git` itself rules out, one whose failure branch is unreachable. Those 11 reduce to
+**6 distinct defects**, because three were raised twice (independently, on two repositories' copies
+of one file) and three were three sites of one root. **Three of the six are in the platform's own
+canonical `gen-manifests.py`**, replicated byte-identically into four repositories — including a
+`--resolve` that reported `✓ … the merge can be committed` whenever git could not answer. Answered
+and fixed in #4775 after the merges; the remaining vintages in #4777.
+
+**Porting it is a workflow_call lane, never six copies** — the predicate is ~900 lines with its own
+self-test, the settle wait and the event-class concurrency split derived from #4649. Six hand-copies
+is how `gen-manifests.py` reached five vintages (#1426). 🚨 And the rollout order is not optional:
+five of the six use CLASSIC protection, where an *absent* required context blocks every pull request
+in the repository forever (measured on Plugins#1453), so the lane lands observe-only, is watched
+publishing its context on live pull requests in that repo, and only then is the context added.
+Proposed with the full measurement in #4776.
+
+### The same gap, measured wider — 240 merged pull requests
+
+The 120-PR sample above was extended on 2026-09-19 to the **30 most recently updated merged pull
+requests in each of eight repositories** (adding Memex, and deepening the six): **240 merged, 325
+findings, 182 never answered, across 93 pull requests.**
 
 | repository | merged swept | carried findings | ≥1 unanswered | findings | unanswered |
 |---|---:|---:|---:|---:|---:|
@@ -330,20 +378,20 @@ repositories — 240 merged, 325 findings:
 | Memex | 30 | 22 | 18 | 53 | 38 |
 | **total** | **240** | **148** | **93** | **325** | **182** |
 
-Core is **0 of 59**. That is the check working, and it is also the control that makes the other rows
-readable: the same instrument finds both states, so a zero is a measurement and not a broken query.
-In the repositories without the gate the usual ratio is **N of N** — where a pull request carried
-findings at all, *none* of them was answered.
+Core is **0 of 59**, which is the check working — and it is also the control that makes every other
+row readable, because the same instrument finds both states. A zero here is a measurement, not a
+broken query. Memex is the worst of the eight and was not in the earlier sample.
 
-Closing the gap is a protection edit in six repositories and is tracked separately (#4776). Five of
-them use classic protection, where an **absent** required context blocks every pull request forever,
-so the shim-job route in [Renaming a Required Check](../RenamingARequiredCheck) applies.
+A further **45 unanswered findings sit on 24 open DRAFTS** (Plugins 34, of which #1910 alone is 13 of
+13; Memex 11). Those describe code that never shipped and are deliberately left; several drafts are
+abandoned.
 
 ### Treating the backlog: bound it, and state the bound
 
-The backlog is ~5,700 merged pull requests fleet-wide, so a sweep is always partial. Report the
-denominator you actually swept and what is left, or the next session cannot tell a treated repository
-from an untreated one. Per repository:
+There are ~5,700 merged pull requests fleet-wide, so every sweep is partial. **Report the denominator
+you actually swept and what is left**, or the next session cannot tell a treated repository from an
+untreated one. Note that `sort=updated` is not `sort=created`: an older pull request that received a
+comment recently enters the window, which is why the windows differ in span per repo.
 
 ```bash
 gh api "repos/Systemorph/<repo>/pulls?state=closed&per_page=100&sort=updated&direction=desc" \
@@ -357,25 +405,32 @@ A finding counts as answered only when some comment's `in_reply_to_id` is that r
 PR-level comment answers nothing, and neither does resolving the thread.
 
 **Reply on every thread whatever the verdict.** Four verdicts, and the declines need their reason on
-the record more than the acceptances do: *real* (fix it), *real but cosmetic*, *obsolete* (verify
+the record *more* than the acceptances do: *real* (fix it), *real but cosmetic*, *obsolete* (verify
 against the current file and quote the evidence), *wrong* (say so, with the measurement). A merged
 finding nobody answered and nobody declined is indistinguishable from one nobody read.
 
-### 🚨 One defect, five copies — fix the canonical, and do NOT re-copy yet
+### 🚨 Fix the canonical — and do NOT re-copy in the same breath
 
 Findings cluster hard on vendored files, because the reviewer reads each repository's copy
-independently. In the 2026-09-19 sweep, 25 of the 182 were against five satellites' copies of
-`scripts/resolve-platform.py` and collapsed to **five distinct defects** in core's canonical
-`.github/scripts/resolve-platform.py` — one of them reported three times over. Fix the canonical;
-a patch to a vendored copy alone is how this fleet reached five vintages of one script (#1426).
+independently. Alongside the `gen-manifests.py` collapse above, the 2026-09-19 sweep found **25 of
+the 182 against five satellites' copies of `scripts/resolve-platform.py`**, collapsing to **five
+distinct defects** in core's canonical — one of them reported three times over (fixed in #4779; the
+one deferred as needing a design decision is #4780). Patching a vendored copy alone is how this
+fleet reached five vintages of one script (#1426).
 
-**But do not re-copy in the same breath.** `node-repo-validate.yml` fetches the canonical at the
-*caller's* `scripts-ref`/`platform-ref`, and every satellite pins that to a fixed core sha — so
-`check-resolver-copy.py` compares each copy against the canonical **as of its own pin**. A canonical
-fix is therefore invisible to the satellites and reds none of them; each copy picks it up when that
-repository next moves its pin, which is where the re-copy belongs. Re-copying first would put five
-copies *ahead* of their own pinned canonical, and a drift guard reports **distance, not direction** —
-so it would read as drift and go red exactly as if the copies were stale.
+**But the re-copy does not follow immediately, and doing it eagerly reds five repositories.**
+`node-repo-validate.yml` fetches the canonical at the *caller's* `scripts-ref`/`platform-ref`, and
+every satellite pins that to a fixed core sha — so `check-resolver-copy.py` compares each copy
+against the canonical **as of its own pin**. Two consequences, and both are the opposite of the
+intuition:
+
+- A canonical fix **reds nobody**. It is invisible to the satellites until each next moves its pin,
+  which is where the re-copy belongs — the same change, as the existing "re-copy the canonical" pull
+  requests do it.
+- Re-copying *first* puts five copies **ahead** of their own pinned canonical. A drift guard reports
+  **distance, not direction**, so that reads as drift and goes red exactly as if the copies were
+  stale. (Measured on five satellites in a separate incident, where copies cut from an unmerged core
+  draft reddened and "re-copy the canonical" would have reverted the newer code.)
 
 ## Controls
 
