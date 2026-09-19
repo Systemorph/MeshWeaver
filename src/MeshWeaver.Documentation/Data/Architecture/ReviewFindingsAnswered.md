@@ -466,6 +466,98 @@ This is the sweep's own instance of the defect class it exists to find: an answe
 pass. The question to ask of any reply mechanism is the one that applies to a gate — *if this had
 failed, would the output differ?* Here it would not have.
 
+#### 🚨 A control can be the thing that cannot fail
+
+The cases above are all **checks** that could not fail. The worse shape is a **control** that cannot
+fail, because a control is what you appeal to when you have stopped trusting the checks.
+
+Measured 2026-09-19 on MeshWeaver.Education#335. A finding said a liveness census could not parse the
+heartbeat it exists to read, so `wedged` was false by construction and the instrument reported a clean
+pool over a real wedge. It was written up, agreed with, and given a control: fed the tick lines the
+script's own header quotes as the cause of a past incident, the census went from **0 of 5 wedged** to
+**3 of 5, naming the window** — a swing so clean it read as proof.
+
+The parser was correct. The producer — `ProcessLiveness.Describe()` — renders every delta
+parenthesised and `gap` always as `actual/threshold`; its unit test asserts the rendered line, and a
+platform doc shows the same. The forms the control fed it (`poolCompleted=+11343`, a bare
+`gap=10.00s`) **appear in no real log**. The control had been built from an abbreviated transcription
+in a comment, so it proved something about the transcription and nothing about the parser.
+
+Three things generalise:
+
+- **An example that merely APPEARS in the code under test is not a fixture.** The header in question
+  was not prose describing a format — it was a *quoted log excerpt*, which is exactly why it
+  persuaded. A fixture is something the **producer wrote** (a format string, a golden file) or
+  something **a test asserts**. Nothing else earns the name, however much it looks like captured
+  output.
+- **A control that swings dramatically is not thereby a good control.** A fabricated input makes a
+  correct parser look broken, and the bigger the swing the more it reads as confirmation. Size of
+  effect is not evidence of validity.
+- **The falsifying artefact was in the same repository the whole time** — a sentence in the harness's
+  own README stating that the real captured log does produce the window — and was read afterwards,
+  while looking for somewhere to file the finding. Reach for the artefact that would falsify you
+  before the one that would confirm you.
+
+The real defect was the misleading transcription, which had by then generated the same false finding
+twice: once by the reviewer, once by the reader who agreed with it.
+
+#### The two-part key: a read-back needs a baseline
+
+This page's own sweep reported "182 of 182 findings answered, proven by read-back". The key it used
+was *a substantive reply exists on this thread* — and **that half alone is unfalsifiable**, because it
+passes on a reply an earlier session left. What makes the number mean anything is the other half: the
+same 182 were measured **unanswered at sweep start**.
+
+So the baseline measurement is not a caveat on the result, it is **half the instrument**. State both
+halves or neither. The same applies to any "N of N done" claim built by re-reading a store you also
+wrote to.
+
+#### 🚨 A watcher's polarity decides whether a failed read waits or FIRES
+
+The twin of *"a broken query reports not-yet forever"*, and worse, because this one **triggers an
+action**. Measured 2026-09-19 at 09:08:35Z on MeshWeaver.Plugins: a blob watcher armed as
+
+```bash
+until [ "$(gh api "$PATH" --jq '.sha' 2>/dev/null || true)" != "$BASELINE" ]; do sleep 60; done
+echo "ACT NOW — the file moved"
+```
+
+fired a **false ACT NOW**. GitHub answered the secondary-limit 403, `--jq '.sha'` returned the error
+body, and `!=` against the baseline was true. Nothing had moved. `|| true` plus `!=` on an
+unvalidated value compose into *any failed read is a positive result* — and the announcement named a
+remedy (merge and push), which had it been trusted would have merged a stale canonical and burned a CI
+run during the very limit that caused it.
+
+**The polarity is the whole difference, and it is easy to get right by accident and wrong by accident:**
+
+| form | what a 403 does |
+|---|---|
+| `until [ "$(read)" = "true" ]` | predicate **false** → keeps waiting. Annoying, **safe** |
+| `until [ "$(read)" != "$baseline" ]` | predicate **true** → **fires**. Unsafe |
+
+So: **write the condition so a failed read is FALSE, never TRUE** — wait for the value you expect,
+never for *difference* from a value you remember. Where difference is genuinely what you need,
+**shape-guard first** (a sha must be 40 hex characters; a size must be digits) and make *"could not
+read"* its own printed outcome that backs off, rather than a silent third state folded into one of the
+other two.
+
+The question to ask before arming any watcher is one line: **what does this print on a 403?** Ask it
+of the whole expression, including the `|| true` you added so a transient failure would not kill the
+loop — that fallback is usually where the defect enters.
+
+#### The safe form for posting
+
+Build the payload as JSON and hand it to `--input`, which reads a file for every field and never
+interprets a value:
+
+```bash
+printf '%s' "$(jq -Rs '{body:.}' < reply.md)" > payload.json
+gh api --method POST "repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies" --input payload.json
+```
+
+The one session that did this was the only one of four with no stub. It sidesteps the `-f`/`-F`
+question entirely rather than requiring anyone to remember which flag reads a file.
+
 ### 🚨 One defect, five copies — fix the canonical, then RE-COPY IMMEDIATELY
 
 Findings cluster hard on vendored files, because the reviewer reads each repository's copy
@@ -506,6 +598,14 @@ gh api repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py 
 — verifying the guard then reports `CODE-IDENTICAL` (exit 0). A re-run does not help an open pull
 request, because the guard reads the **branch's** copy: that branch needs `git merge origin/main`
 after the re-copy lands on the satellite's `main`.
+
+🚨 **And re-check the canonical immediately before the merge, not only before the push.** Measured
+2026-09-19: the canonical moved **twice in one morning** (201,067 → 228,485), so a re-copy that was
+byte-identical when it was pushed was stale before anyone merged it — three satellites re-copied the
+first canonical, landed it, and were behind again within the hour. Education's session checked before
+merging rather than after and found its own `main` still red on the guard at the intermediate size,
+which is the check that saved a pointless merge. The window between waves can be shorter than the time
+a pull request takes to go green.
 
 ### 🚨 And while the copy is behind, the rest of the lane is silently ungated
 
