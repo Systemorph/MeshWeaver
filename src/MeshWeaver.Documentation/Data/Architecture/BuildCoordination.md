@@ -152,6 +152,73 @@ which holds every silo's readiness probe down and stalls the rollout. Same asymm
 gate applies, and the opposite of `AssemblyCacheRetention`, where the wrong answer deletes
 bytes a running pod still needs.
 
+#### The convergence WINDOW, and which node it is asked about (#4729)
+
+Step 2's "deterministic election over data both sides have seen" only holds while both sides *have*
+seen the same data. A registration written milliseconds ago in the other cluster has not propagated
+yet, so a **fresh root election waits out `GrantSettleWindow` (5 s)** before it grants — long enough
+for a Postgres `NOTIFY` plus a mirror refresh (measured sub-second), after which every arbiter is
+electing from the same candidate set and computing the same winner, which makes concurrent grant
+writes idempotent. Five seconds once per build, against a bake measured in minutes.
+
+It is charged on **fresh root elections only**. A takeover is a different shape — the successor
+queue accumulated while the holder was alive and is long converged, and #1355's immediate-takeover
+property must not wait on a window. Chunks are excluded for a different reason: the root election
+already decided *the* builder, chunk claims arrive pre-arbitrated by it, and 37 chunks × 5 s would
+put minutes of pure waiting into a ~1m42s bake.
+
+🚨 **And it was charged on neither of the paths that need it.** `Arbitrate` decided "is this the
+root?" by comparing the path of the node it was HANDED against `Admin/Build`. The durable path never
+hands it that node — the whole point of the section above is that holder state lives on the claim
+LOCK — so `CommitGrant` hands it `Admin/Build/_Claim`. The comparison was false on every durable
+pass, and the window was skipped on **every host with an `IStorageAdapter`: every real deployment,
+and the only topology in which a second cluster exists to converge with**. The one path that still
+paid it was `GrantOnMirror` — a host with no durable store, hence one process and nobody to wait
+for.
+
+The evidence is a stopwatch reading rather than an argument.
+`MeshWeaver.Hosting.Test.TheSecondHoldersCompletionStillPublishesItsGoTest` drives **two** full root
+elections on a monolith mesh that does register an `IStorageAdapter`, and completed in **0.878 s**,
+where one window alone costs five seconds. Driven directly, the grant landed **42 ms** after the
+registration.
+
+It sat because the one test on the window —
+`BuildCoordinationTest.Arbitrate_FreshRootElection_WaitsOutTheSettleWindow`, in MeshWeaver.Plugins —
+hands `Arbitrate` a root node it builds itself. That is a true statement about the mirror path and
+says nothing at all about the other one: a unit test on a shape the production path never
+constructs.
+
+**The fix keeps ONE notion of "is this the root election", rather than two free to drift apart.**
+`BuildNodeType.IsRootElection(path)` answers for *either* record the decision can arrive on, and
+derives the lock's spelling from the root through the same `ClaimPath` that minted the lock:
+
+```csharp
+internal static bool IsRootElection(string? path) =>
+    string.Equals(path, RootPath, StringComparison.OrdinalIgnoreCase)
+    || string.Equals(path, ClaimPath(RootPath), StringComparison.OrdinalIgnoreCase);
+```
+
+The alternative — passing the Build path into `Arbitrate` as its own parameter — was rejected for
+the reason the defect exists: it puts the answer back in the callers' hands, two of them, each free
+to hand in the path of a different node. A `_Claim` *suffix* test was rejected too, as a second
+hand-written spelling of a path `ClaimPath` already derives.
+
+The durable pass's decision is now a named expression, `BuildNodeType.ArbitrateOnLock` — the sibling
+of `ArbitrateOnMirror`, for the same stated reason — so a test drives the composition the host runs,
+including the construction of a decision input carrying the LOCK's path.
+`MeshWeaver.Graph.Test.TheSettleWindowIsChargedOnTheDurablePathTest` asserts that both paths decide
+the same election the same way at the same instant, and that neither a chunk nor a takeover is ever
+held; `MeshWeaver.Hosting.Test.TheSettleWindowHoldsARootElectionOnADurableHostTest` measures it on a
+running mesh, as a LOWER bound on elapsed time and never an upper one — "and not much after" is a
+statement about how fast the runner is.
+
+**What it costs, and where.** Every root election on a deployed host now takes ~5 s longer than it
+did, which is exactly what #1424 budgeted and what every host without a database was already paying.
+The readiness probe a rollout waits on is gated by the GO, which follows the bake, so those five
+seconds are invisible there. Live build-coordination tests that drive a root election pay it too —
+in MeshWeaver.Plugins, `BuildCoordinationTest`'s claim-queue cases, whose own per-grant waits are
+budgeted at 15 s.
+
 ### 🚨 When may the claim be taken away — cluster MEMBERSHIP decides, not a clock
 
 A builder that dies mid-build must not wedge the fleet, so a claim has to be reclaimable. The
@@ -387,6 +454,98 @@ on durable state, exactly like the arbiter (and see #1366 for why the poll clock
 **Starting the listener is a separate decision.** It would make the GO propagate promptly across
 clusters instead of at the arbiter's next pass, but it changes behaviour for every partitioned-PG
 deployment and wants its own justification and measurement. The follower is correct without it.
+
+### …and the same shape once more, at the END of a build: a completion that lands on nothing (#4708)
+
+The two sections above are about a candidate STANDING DOWN. The identical mechanic bit the opposite
+end of the protocol — a holder FINISHING — and there it was louder, because the whole write
+disappeared rather than one field of it.
+
+`CompleteBuild` and `FailBuild` went through `UpdateBuildAsHolder`:
+
+```csharp
+// ❌ the guard runs on a copy this hub does not own
+stream.Update(curr =>
+{
+    var state = curr?.ContentAs<BuildState>(options);
+    if (curr is null || state?.ClaimedBy != holder) return curr!;   // ← silent no-op
+    return curr with { Content = change(state) };
+});
+```
+
+A lambda that returns its node unchanged trips `IsRecordNoOp`: **nothing is posted, and the caller
+is completed as a SUCCESS**, with every line on that path at `Debug`. `await …CompleteBuild(…)`
+returns promptly and successfully having written nothing.
+
+And the copy the guard reads is not only the mirror. The stream cache's per-path write queue hands
+each write **the state its predecessor computed locally** (`MeshNodeStreamHandle.PatchBaseSource`) —
+right for a diff, unsound for a condition. The predecessor of a completion is very often *another
+completion*, and a completion's locally computed state carries `ClaimedBy = null`: precisely the
+value that makes the next holder's guard fail. That asymmetry is the whole signature. Measured as
+**six failures of `BuildCoordinationTest.ClaimQueue_Go_And_HolderGuard` across five branches
+including `main`** (2026-09-17 → 09-18), every one of them a ~15 s timeout on the wait for the
+SECOND holder's GO and never on the first, with the test body itself running in 130–290 ms.
+
+In production the consequence is the stall this whole page exists to prevent, arriving through a
+third door: the fingerprint gets no GO, `ObserveBuildGo` never emits, and every silo's readiness
+probe stays down.
+
+The fix is the shape the record already uses one field over:
+
+- **`BuildState.ReportedOutcomes`** — holders that have reported how their build ended, keyed by
+  holder id and written **unconditionally** by `BuildNodeType.RecordOutcome` (`ReportBuildOutcome`
+  is the client surface; `CompleteBuild` / `FailBuild` are thin wrappers over it). Its own key makes
+  it merge-safe against every other holder; being unconditional makes it present in the patch
+  whatever the writer's copy showed.
+- **`BuildOutcome`** carries the whole terminal fact — the `BuildGo` to publish (absent on a failure,
+  and on a chunk close-out, which reaches `Ready` without publishing one), the error, and the
+  release paths a chunk wrote.
+- **`BuildNodeType.FoldReportedOutcomes`** — the arbiter applies an outcome reported by the holder
+  this node NAMES: the GO onto the per-fingerprint history, the error onto `Error`, the release
+  paths onto `WrittenPaths`, and the claim cleared. It runs on the node's own hub, so it is
+  serialised against state that never regresses.
+- **The superseded-builder property is preserved, not dropped.** A report from a holder the node no
+  longer names is REFUSED and logged. The verdict is the same one the old guard tried to reach; what
+  changed is *who reaches it*, and refusing here is sound exactly because the owner's state cannot be
+  stale. The warning names the holder the node carried when the fold BEGAN, not the field the fold
+  clears on its way through: applying the holder's own report sets `ClaimedBy` to null, so reading it
+  afterwards said `held by <nobody>` — on the runs where the map happened to enumerate the holder
+  first, and `ImmutableDictionary` guarantees no order at all.
+- **Fold-then-elect is one write on the mirror and two passes on the durable path**, and only the
+  first is composable. `GrantOnMirror` runs release → fold → `Arbitrate` inside one `Update` lambda,
+  so the freed build is granted in the same serialised write. `ArbitrateDurably` cannot: a durable
+  grant is a compare-and-set against the claim LOCK — a storage read plus a `WriteIfVersion` — which
+  no pure lambda can perform. Its bookkeeping branch therefore frees the build and RETURNS, and the
+  write it just made is what wakes the election: it publishes on the mirror's change feed, folding
+  moves the trigger key (holder cleared, reporters gone) so `DistinctUntilChanged` cannot swallow it,
+  and the candidate queued behind the holder is still queued and now grantable. Immediately, on a
+  real state change — not on the stale tick.
+- Reports are **consumed**, applied or refused, so nothing accumulates and a refused report is never
+  re-judged against a later claim. A holder's own report arriving twice — the write path's CONFLICT
+  re-attempt can produce that — is recognised by the GO already being on the history and logged at
+  `Debug` rather than as a refusal.
+- **`ArbitrationTrigger` wakes a pass for a report**, and the reporters are part of the change KEY.
+  The same two reasons as the stand-down mark: the report lands on a node with `RequestedClaims`
+  empty (the holder's own grant consumed its registration), and it arrives on a node whose other
+  trigger fields did not move, so a key that omitted it would be swallowed by
+  `DistinctUntilChanged`.
+- The claim **LOCK** is still dropped by the reporter itself (`ReleaseBuildClaim`, chained by
+  `ReportBuildOutcome`). That write was never the problem: it is a rowcount-gated delete conditional
+  on still owning the lock, so a superseded builder's report cannot release its successor's claim.
+
+What deliberately stays on `UpdateBuildAsHolder` is the **progress** surface — the heartbeat's
+visible stamp on the node and the chunk plan — where a refused write costs a stale projection that
+the next write or the next pass restates, never a build that ends on nothing. The heartbeat's
+load-bearing half is the lock stamp, which is a compare-and-set and unaffected.
+
+🚨 **A separate defect, found while diagnosing this one and fixed in #4729:** `CommitGrant` handed
+`Arbitrate` the **claim-lock** node, while `Arbitrate`'s `GrantSettleWindow` guard required
+`node.Path == RootPath` — so on every host that has an `IStorageAdapter`, i.e. every real
+deployment, #1424's convergence window never applied to a root election. It is an independent defect
+with its own blast radius (it changes grant timing fleet-wide), so it got its own change; the
+account, the measurement and the reasoning about the budget are in
+[The convergence WINDOW, and which node it is asked about](#the-convergence-window-and-which-node-it-is-asked-about-4729)
+above.
 
 ### The PRE-WARMER has the same two doors — and it did not, until #3404
 

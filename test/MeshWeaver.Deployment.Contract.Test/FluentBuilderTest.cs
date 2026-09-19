@@ -58,6 +58,51 @@ public class FluentBuilderTest
     }
 
     [Fact]
+    public void TheActionsExecutorReachesTheConfigWithTheOperatorJobOff()
+    {
+        // Plugins#1738: the control instance runs its actions through aks-ops.yml and the GitHub App,
+        // with the in-cluster Job disabled. The switch must therefore render on its own, and the
+        // Job flag must NOT come along with it.
+        var record = new DeploymentContent().WithOperatorExecutor(" actions ", "rbuergi");
+        Assert.False(record.Operator!.Enabled);
+        Assert.Equal("Actions", record.Operator.Executor);
+        Assert.Equal("rbuergi", record.Operator.Maintainer);
+
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(record, options);
+            Assert.Equal("Actions", config["Hosting__Operator__Executor"]);
+            Assert.Equal("rbuergi", config["Hosting__Operator__Maintainer"]);
+            Assert.False(config.ContainsKey("Hosting__Operator__Enabled"), "the executor switch must not arm the operator Job");
+        }
+
+        // Switching back keeps the maintainer, and an operator without an executor emits no key.
+        Assert.Equal("rbuergi", record.WithOperatorExecutor("Job").Operator!.Maintainer);
+        var jobOnly = DeploymentPortalConfig.PortalConfig(new DeploymentContent().WithOperator(), PortalConfigOptions.Helm);
+        Assert.False(jobOnly.ContainsKey("Hosting__Operator__Executor"), "blank means Job, and the chart's default says so");
+        Assert.False(jobOnly.ContainsKey("Hosting__Operator__Maintainer"));
+
+        // The portal reads anything but "Actions" as Job, so a misspelling must not reach it.
+        Assert.Throws<ArgumentException>(() => new DeploymentContent().WithOperatorExecutor("Action"));
+
+        // The maintainer is trimmed on the way in; null keeps it, blank clears it.
+        Assert.Equal("rbuergi", new DeploymentContent().WithOperatorExecutor("Actions", "  rbuergi ").Operator!.Maintainer);
+        Assert.Null(record.WithOperatorExecutor("Actions", "  ").Operator!.Maintainer);
+
+        // A record that never passed the transform (JSON, an initializer) renders the same way on
+        // both renderers, and a misspelling fails closed on both rather than reaching the portal.
+        var raw = new DeploymentContent { Operator = new HostingOperatorSpec { Executor = " actions ", Maintainer = " rbuergi " } };
+        var misspelled = new DeploymentContent { Operator = new HostingOperatorSpec { Executor = "Action" } };
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(raw, options);
+            Assert.Equal("Actions", config["Hosting__Operator__Executor"]);
+            Assert.Equal("rbuergi", config["Hosting__Operator__Maintainer"]);
+            Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.PortalConfig(misspelled, options));
+        }
+    }
+
+    [Fact]
     public void TheSameRecordRendersTheSameKeysForHelmAndForAspire()
     {
         // The two renderers differ in exactly the ways PortalConfigOptions names: Helm emits the
@@ -95,5 +140,37 @@ public class FluentBuilderTest
         Assert.Equal("PostgreSql", config["Graph__Storage__Type"]);
         Assert.Equal("Filesystem", config["Deployment__Backend"]);
         Assert.Equal("8080", config["ASPNETCORE_HTTP_PORTS"]);
+    }
+
+    /// <summary>
+    /// What a NEW instance starts with: the record's platform policy and pattern render as the
+    /// self-updater's seed keys, and a record that says nothing renders neither — the chart's own
+    /// default (Stable, no pattern) must not be narrowed or widened by silence.
+    /// </summary>
+    [Fact]
+    public void UpdatePolicyAndPattern_SeedANewInstance_ThroughTheConfig()
+    {
+        var record = new DeploymentContent().WithUpdatePolicy("Continuous").WithUpdatePattern(" 3.0.0-ci* ");
+        Assert.Equal("3.0.0-ci*", record.UpdatePattern);
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(record, options);
+            Assert.Equal("Continuous", config["SelfUpdate__DefaultPolicy"]);
+            Assert.Equal("3.0.0-ci*", config["SelfUpdate__DefaultPattern"]);
+
+            var silent = DeploymentPortalConfig.PortalConfig(new DeploymentContent(), options);
+            Assert.False(silent.ContainsKey("SelfUpdate__DefaultPolicy"), "an absent policy renders nothing — the image's own default stands");
+            Assert.False(silent.ContainsKey("SelfUpdate__DefaultPattern"), "an absent pattern renders nothing");
+        }
+        Assert.Null(new DeploymentContent().WithUpdatePattern("  ").UpdatePattern);
+
+        // The key binds to an enum on the pod: the renderer emits the canonical casing and refuses
+        // a misspelling by name, instead of letting it abort the new replica's host.
+        var lower = DeploymentPortalConfig.PortalConfig(new DeploymentContent().WithUpdatePolicy(" stable "), PortalConfigOptions.Helm);
+        Assert.Equal("Stable", lower["SelfUpdate__DefaultPolicy"]);
+        var misspelled = new DeploymentContent().WithUpdatePolicy("Continuos");
+        var refusal = Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.PortalConfig(misspelled, PortalConfigOptions.Helm));
+        Assert.Contains("Continuos", refusal.Message);
+        Assert.Contains("SelfUpdate__DefaultPolicy", refusal.Message);
     }
 }

@@ -16,20 +16,21 @@ public record SelfUpdateOptions
     /// <para>Two kinds of host are understood, told apart by <see cref="RegistryIsAzureContainerRegistry"/>:
     /// an Azure Container Registry (<c>*.azurecr.io</c>, the default — tags are listed through
     /// ACR's own <c>/acr/v1/{repo}/_tags</c> with Workload Identity), and ANY OTHER host, which is
-    /// read as an OCI Distribution registry — in this fleet the read-through mirror another
-    /// installation serves at <c>{portal}/v2</c> (#3353, <c>Doc/Architecture/ContainerRegistryInMemex</c>),
+    /// read as an OCI Distribution registry — in this fleet <c>cr.meshweaver.cloud</c>, the separate
+    /// distribution + docker_auth service (<c>Doc/Architecture/ContainerRegistryInMemex</c>),
     /// authenticated with this installation's own plugin-registry instance key. The chart renders
     /// it from <c>selfUpdate.registry</c>; the images the updater rolls to
-    /// (<see cref="PortalImage"/>, <see cref="MigrationImage"/>) are named on this host, so a
-    /// mirror-consuming installation must ALSO carry the pull secret the chart's
+    /// (<see cref="PortalImage"/>, <see cref="MigrationImage"/>) are named on this host, so an
+    /// installation consuming that registry must ALSO carry the pull secret the chart's
     /// <c>portal.imagePullSecret</c> declares, or the roll names an image its kubelet cannot pull.</para>
     /// </summary>
     public string Registry { get; init; } = "meshweaver.azurecr.io";
 
     /// <summary>
-    /// The username presented to a non-ACR registry's token endpoint (<c>Basic user:key</c>). The
-    /// mirror authenticates the KEY and discards the username by design (<c>RegistryCredential</c>),
-    /// so this is a placeholder there; another OCI registry may care.
+    /// The username presented to a non-ACR registry's token endpoint (<c>Basic user:key</c>).
+    /// <c>cr.meshweaver.cloud</c>'s docker_auth validates the KEY for any account name other than its
+    /// static publisher account, so this is a placeholder there — it must simply not be that
+    /// account's name; another OCI registry may care.
     /// </summary>
     public string RegistryUsername { get; init; } = "instance";
 
@@ -331,6 +332,33 @@ public record SelfUpdateOptions
     /// (Settings → Updates).
     /// </summary>
     public string? DefaultPattern { get; init; }
+
+    /// <summary>
+    /// The shipped, fail-closed value of <see cref="AvailabilityAnswerBudget"/> — also what a
+    /// non-positive configured value falls back to, because a budget of zero or less would mean no
+    /// bound at all and a tick that never completes is the exact failure the bound converts into an
+    /// honest hold.
+    /// </summary>
+    public static readonly TimeSpan DefaultAvailabilityAnswerBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// 🚨 How long the release-availability gate and the roll selector may take to ANSWER before the
+    /// verdict becomes <c>Indeterminate</c> — which is a HOLD, never clearance.
+    ///
+    /// <para><b>This is a knob for a slow SHARE, and never a remedy for a slow READ</b> (#4742). The
+    /// budget was blown on memex.meshweaver.cloud because the gate's denominator re-enumerated every
+    /// framework-identity directory the published root has ever held, on every tick, against a store
+    /// that gains roughly sixty a day — so the public instance held every candidate and sat six days
+    /// behind <c>main</c> while CD kept sealing. That read is now incremental
+    /// (<c>SealedBundleFloorCache</c>); widening this value would have bought a longer freeze with
+    /// the same ending. It exists so an operator whose storage is genuinely slower than the fleet's
+    /// can say so in configuration (<c>SelfUpdate__AvailabilityAnswerBudget</c>, e.g.
+    /// <c>00:02:00</c>) rather than wait for a release — the hold stays a hold either way.</para>
+    ///
+    /// <para>Keep it shorter than the check cadence, so a stalled tick can never overlap the next
+    /// one.</para>
+    /// </summary>
+    public TimeSpan AvailabilityAnswerBudget { get; init; } = DefaultAvailabilityAnswerBudget;
 
     /// <summary>The full image reference for a portal version tag.</summary>
     public string PortalImage(string tag) => $"{Registry}/{PortalRepository}:{tag}";

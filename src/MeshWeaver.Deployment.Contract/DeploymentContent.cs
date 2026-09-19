@@ -68,6 +68,21 @@ public record DeploymentContent
     public string? UpdatePolicy { get; init; }
 
     /// <summary>
+    /// The version PATTERN the platform self-update follows under <c>Continuous</c> — a glob over the
+    /// registry tag, e.g. <c>3.0.0-ci*</c> (the fleet's line while no clean release above 3.0.0
+    /// exists). <c>Continuous</c> without a pattern is Stable (clean releases only).
+    ///
+    /// <para>🚨 This and <see cref="UpdatePolicy"/> are what a NEW instance STARTS with: they render
+    /// as <c>SelfUpdate__DefaultPolicy</c> / <c>SelfUpdate__DefaultPattern</c>, which the
+    /// self-updater seeds onto <c>Admin/UpdatePolicy</c> the first time that node is created. An
+    /// EXISTING node is never touched by configuration — it is edited on the instance (Settings →
+    /// Updates). Maintainer, 2026-09-19: <i>"need to put this to the config where we start"</i>, after
+    /// memex-cloud sat frozen for a week on a policy node that had no <c>policy</c> field at all.</para>
+    /// </summary>
+    [Description("Version pattern the Continuous self-update follows, e.g. 3.0.0-ci* — seeds a NEW instance's Admin/UpdatePolicy")]
+    public string? UpdatePattern { get; init; }
+
+    /// <summary>
     /// The DEFAULT per-package (module) update policy this instance seeds onto every install
     /// record it creates — <c>Auto</c> (track the registry unattended), <c>Notify</c> (remind,
     /// a person clicks Update) or <c>None</c> (pinned). Renders as
@@ -182,11 +197,39 @@ public record DeploymentContent
     /// booting green without the feature (the 2026-08-26/27 AI-engine shape).
     ///
     /// <para>🚨 <c>Modules:Required</c> configuration overrides the image's own list BY INDEX —
-    /// entry N here replaces the image's entry N, it never appends. So when this list is used at
-    /// all, record the COMPLETE required set for the instance (the image baseline included), not a
-    /// delta; a partial list silently rewrites what the image's leading indices name.</para>
+    /// entry N here replaces the image's entry N, it never appends — and an indexed override
+    /// replaces only the entries it NAMES. So this list is NOT the complete required set on its
+    /// own (#4476): shorter than the image's, the image's tail survives and the instance requires
+    /// modules this record never names; EMPTY, nothing is rendered at all and the image's list
+    /// stands in full, so emptying this list does not relax the requirement — it restores it.</para>
+    ///
+    /// <para>Set <see cref="RequiredModulesAuthoritative"/> to say "these and only these". That is
+    /// what makes an empty list mean "require nothing", and it is the only way to state the set
+    /// without knowing how long the image's list is — which this record cannot know, and which has
+    /// already grown from seven entries to nine underneath a record that picked a free slot.</para>
     /// </summary>
     public ImmutableList<string> RequiredModules { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// 🚨 <see cref="RequiredModules"/> (plus <see cref="RequiredModuleSlots"/>) is the COMPLETE
+    /// required set for this instance: the image's own <c>Modules:Required</c> list does not apply,
+    /// including when this record names none.
+    ///
+    /// <para>Renders the scalar <c>Modules:RequiredIsAuthoritative=true</c>, which an array merge
+    /// cannot touch — the entries beside it are still index-merged, and a scalar is what carries a
+    /// claim an empty list could never make. Without it the entries are a by-index OVERLAY on the
+    /// image's list, which is what every record was before #4476 and what they all still are.</para>
+    ///
+    /// <para>🚨 Opt-in on purpose. The image's list is the PLATFORM's floor — the AI engine, the
+    /// chat renderer and the collaboration pack are each named there because losing one silently is
+    /// a measured outage — and every fleet record names five against the image's nine. Taking a
+    /// partial list as authoritative by default would have un-required four modules on every
+    /// instance the day it shipped. Where this is false, the running host REPORTS which required
+    /// modules came from the image and not from this record, so the gap is visible rather than
+    /// inferred (<c>MeshBuilderModuleActivation.UnstatedRequired</c>).</para>
+    /// </summary>
+    [Description("The required-module list is the complete set (the image's own list does not apply)")]
+    public bool RequiredModulesAuthoritative { get; init; }
 
     /// <summary>
     /// Where this deployment's database backups go — the path of a <c>Hosting/BackupStore</c> node.

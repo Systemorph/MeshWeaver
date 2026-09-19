@@ -160,7 +160,8 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
             return Observable.Return(NodeValidationResult.Valid());
 
         // Rule 3 — a TOP-LEVEL node IS a partition root, so only a partition-OWNING
-        // NodeType (NodeTypeDefinition.OwnsPartition: User, Space) may be created there.
+        // NodeType (NodeTypeDefinition.OwnsPartition — User, Space, or a type declared in mesh
+        // content such as Crm/Client) may be created there.
         // Everything else at the root ('') is illegal — content belongs inside a partition,
         // never as a bare top-level node (the prod `HelloWorld` Markdown / `BadTypeProbe`
         // incident). This is fail-CLOSED and structural: it does NOT depend on the
@@ -174,23 +175,45 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         // may write a non-owning node top-level.
         if (string.IsNullOrEmpty(context.Node.Namespace))
         {
-            var def = _hub.ServiceProvider.FindStaticNode(context.Node.NodeType ?? string.Empty)?.Content
-                as NodeTypeDefinition;
-            if (def is not { OwnsPartition: true })
+            NodeValidationResult RefuseNonOwning()
             {
-                var ownSpace = string.IsNullOrEmpty(userId)
-                    ? $"your own space ('<your-id>/{context.Node.Id}')"
-                    : $"your own space ('{userId}/{context.Node.Id}')";
+                var ownPath = string.IsNullOrEmpty(userId)
+                    ? $"<your-id>/{context.Node.Id}"
+                    : $"{userId}/{context.Node.Id}";
                 _logger.LogWarning(
                     "PartitionWriteGuard: blocked top-level Create by {User} of non-partition node '{Path}' (NodeType {NodeType})",
                     userId ?? "(anonymous)", context.Node.Path, context.Node.NodeType ?? "(untyped)");
-                return Observable.Return(NodeValidationResult.Invalid(
-                    $"Cannot create '{context.Node.Path}' at the top level: the root namespace ('') is reserved for " +
-                    $"partition roots, so a top-level node MUST be a partition-owning type — it must be a Space " +
-                    $"(which provisions the partition's schema). A '{context.Node.NodeType ?? "untyped"}' node does not " +
-                    $"own a partition (only User and Space do). Create it as a Space (inspect the required shape via its " +
-                    $"content schema at 'Space/schema'), or put your content in {ownSpace}.",
-                    NodeRejectionReason.InvalidPath));
+                // Worded in the CALLER's language — this is the message the create returns to them.
+                return NodeValidationResult.Invalid(
+                    LocalizationCatalog.Get(
+                        "access.partitionCreate.notOwningTopLevel", context.AccessContext?.Locale,
+                        context.Node.Path, context.Node.NodeType ?? "untyped", ownPath),
+                    NodeRejectionReason.InvalidPath);
+            }
+
+            // A type registered in src/ answers synchronously — and falls through to the rules below
+            // exactly as before.
+            if (_hub.ServiceProvider.FindStaticNode(context.Node.NodeType ?? string.Empty) is { } staticType)
+            {
+                if (staticType.ContentAs<NodeTypeDefinition>(_hub.JsonSerializerOptions) is not { OwnsPartition: true })
+                    return Observable.Return(RefuseNonOwning());
+            }
+            else
+            {
+                // 🚨 A type declared in MESH CONTENT (Crm/Client) is invisible to FindStaticNode, and
+                // asking only the static registry refused every top-level create of one as "must be a
+                // Space". Read its declaration. An owning type's top-level create IS the explicit
+                // partition-creation path — OwnsPartitionProvisioningValidator provisions the
+                // partition before the root write — so rule 2's existence probe below does not apply:
+                // the partition is being created by this very write (the same reason a Space is
+                // exempt from it).
+                return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)
+                    .Select(owns => owns switch
+                    {
+                        true => NodeValidationResult.Valid(),
+                        false => RefuseNonOwning(),
+                        null => PartitionOwningTypes.Undetermined(context),
+                    });
             }
         }
 

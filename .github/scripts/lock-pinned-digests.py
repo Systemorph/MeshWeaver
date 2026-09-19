@@ -237,6 +237,29 @@ TEMPLATED_RE = re.compile(r"\{\{")
 # today would pin the wrong bytes forever. These are reported as "floating", never locked.
 FLOATING_TAGS = {"latest", "main", "master", "edge", "stable", "nightly"}
 
+# 🚨 A LINE POINTER IS FLOATING TOO, and membership alone never saw it. CD publishes `3-latest`,
+# `3.0-latest` and `3.0.0-latest` on every promote (main-cd.yml Phase D / Hosting/Deployment's
+# `ImageLine`, whose `PointerSuffix` is literally "-latest" over a one-to-three-part numeric line).
+# None of those is IN the set, so `tag.lower() in FLOATING_TAGS` classified every one of them as an
+# ordinary PIN and locked it to whichever digest it happened to name at that moment — protecting a
+# manifest the pointer has already left, and reading in the report as a protected pin. Measured on
+# this file before the fix: `latest` floating, `3.0.0-latest` LOCKED.
+#
+# The shape is deliberately narrow — a numeric line of one to three parts, then one of the floating
+# words — so it cannot swallow an immutable tag. `3.0.0-ci.8702` does not match (its last segment is
+# `ci.8702`), nor does a sha, nor `staging-<sha>-<run>`.
+LINE_POINTER_RE = re.compile(
+    r"^\d+(?:\.\d+){0,2}-(?:" + "|".join(sorted(FLOATING_TAGS)) + r")$")
+
+
+def is_floating_tag(tag: str) -> bool:
+    """Whether `tag` names a MOVING manifest — a bare floating word, or a version-line pointer.
+
+    A floating tag has no fixed manifest to protect, so it is never locked and never counted as a
+    pin. Compared case-insensitively, the way the bare words always were."""
+    lowered = tag.strip().lower()
+    return lowered in FLOATING_TAGS or bool(LINE_POINTER_RE.match(lowered))
+
 # Where a deployment overlay lives. Narrow ON PURPOSE — see the module docstring: widening this to
 # every YAML/JSON under `deploy/` drags in test fixtures whose tags never existed.
 OVERLAY_DIR_SEGMENTS = ("deploy", "deployments")
@@ -248,6 +271,80 @@ def is_overlay_path(path: str) -> bool:
     if not any(segment in OVERLAY_DIR_SEGMENTS for segment in parts[:-1]):
         return False
     return bool(OVERLAY_FILE_RE.match(parts[-1]))
+
+
+# ── AXIS 2b: the image a Hosting/Deployment RECORD pins ────────────────────────────────────────
+#
+# 🚨 THE RECORD IS THE PIN THAT IS ACTUALLY APPLIED, AND IT WAS INVISIBLE HERE TWICE OVER
+# (Memex#219, measured 2026-09-17). `helm-release.yml` applies the COMMITTED pin when its `image`
+# input is empty, so a purged record tag is a broken deploy — and `Systemorph/Memex`'s records are
+# `mesh/Deployments/<name>.json`, which:
+#
+#   1. is not an overlay PATH — no `deploy`/`deployments` segment, and not a `values*.y*ml` name, so
+#      `is_overlay_path` answered False and the file was never read at all. Everything in it went
+#      unprotected, including the `repo:tag`-shaped `operator.image`, `gates[].image` and
+#      `portalNext.image` the ordinary extractor would have caught on sight; and
+#   2. spells the portal's own pin as TWO keys — `imageRepository` + `pinnedImageTag` — which no
+#      `repo:tag` rule can see even once the file IS read.
+#
+# Measured over the five committed records: FOUR carry a portal pin the overlay extractor does not
+# see — `memex` 3.0.0-ci.8692, `pearl` 3.0.0-ci.8080, `build` 3.0.0-ci.8411, and `memex-cloud` with
+# an EMPTY tag (floating, and reported as such rather than as a pin). That is the exact shape this
+# module's own docstring warns about: *"an overlay that pins its images somewhere else then extracts
+# as pinning NOTHING"* — a confidently wrong zero.
+#
+# Narrow for the same reason `is_overlay_path` is: a record is a `*.json` directly under a
+# `Deployments` directory. Widening this to every JSON under it would drag in `index.json` and any
+# fixture that happens to live there — both of which extract as pinning nothing anyway, but the
+# denominator this job prints would stop meaning "records".
+RECORD_DIR_SEGMENT = "Deployments"
+RECORD_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
+# `index.json` is a listing of the records, not a record. It pins nothing and never will.
+RECORD_FILE_EXCLUDE = frozenset({"index.json"})
+
+
+def is_deployment_record_path(path: str) -> bool:
+    """True for a committed Hosting/Deployment record — `…/Deployments/<name>.json`."""
+    parts = path.split("/")
+    if len(parts) < 2 or parts[-2] != RECORD_DIR_SEGMENT:
+        return False
+    return parts[-1] not in RECORD_FILE_EXCLUDE and bool(RECORD_FILE_RE.match(parts[-1]))
+
+
+def extract_record_pins(text: str, registry: str) -> tuple[list[tuple[str, str]],
+                                                           list[tuple[str, str]]]:
+    """(pins, floating) for the split `imageRepository` + `pinnedImageTag` pair of ONE record.
+
+    🚨 Returns the SPLIT pin only. Every `repo:tag`-shaped field in the same record
+    (`operator.image`, `gates[].image`, `portalNext.image`) is left to `extract_overlay_pins`, which
+    already reads them correctly out of the record's text — so the two extractors compose instead of
+    each half-knowing the other's shapes.
+
+    A record whose `pinnedImageTag` is EMPTY is FLOATING, not pinning: `memex-cloud` is exactly that
+    today, and reporting it as a pin would ask the registry to lock a tag that does not exist.
+    """
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        # Not a record this axis can read. It is not an error: the caller still runs the ordinary
+        # extractors over the same text, and a malformed record shows up as pinning nothing HERE
+        # rather than as a crash that stops the whole sweep.
+        return [], []
+    content = doc.get("content", doc)
+    if not isinstance(content, dict):
+        return [], []
+    repository = content.get("imageRepository")
+    tag = content.get("pinnedImageTag")
+    if not isinstance(repository, str) or not repository.strip():
+        return [], []
+    host, _, path = repository.partition("/")
+    if not path or host.lower() != f"{registry}.azurecr.io".lower():
+        # A record pinning a DIFFERENT registry is foreign, and `extract_foreign_pins` says so over
+        # the same text. Silently locking nothing is right; silently calling it "no pin" is not.
+        return [], []
+    if not isinstance(tag, str) or not tag.strip():
+        return [], [(path, "")]
+    return [(path, tag.strip())], []
 
 
 def extract_foreign_pins(text: str, registry: str) -> list[tuple[str, str, str]]:
@@ -311,7 +408,7 @@ def extract_overlay_pins(text: str, registry: str = "") -> tuple[list[tuple[str,
 
     def add(repo: str, tag: str) -> None:
         pair = (repo, tag)
-        if tag.lower() in FLOATING_TAGS:
+        if is_floating_tag(tag):
             if pair not in floating:
                 floating.append(pair)
         elif pair not in pins:
@@ -443,7 +540,9 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
                            "a measured zero.")
         return scan
     paths = [entry["path"] for entry in tree.get("tree", [])
-             if entry.get("type") == "blob" and is_overlay_path(entry.get("path", ""))]
+             if entry.get("type") == "blob"
+             and (is_overlay_path(entry.get("path", ""))
+                  or is_deployment_record_path(entry.get("path", "")))]
     for path in sorted(paths):
         rc, body, err = consistency.gh_api(f"repos/{gh_repo}/contents/{path}")
         if rc != 0:
@@ -457,6 +556,11 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             return scan
         scan.files += 1
         pins, floating = extract_overlay_pins(text, registry)
+        # The record's SPLIT pin, on top of whatever the `repo:tag` rules found in the same text.
+        if is_deployment_record_path(path):
+            record_pins, record_floating = extract_record_pins(text, registry)
+            pins = pins + record_pins
+            floating = floating + record_floating
         scan.pins.extend((repo, tag, path) for repo, tag in pins)
         scan.floating.extend((repo, tag, path) for repo, tag in floating)
         scan.instances.extend((ident, host, path)
@@ -472,13 +576,25 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
     if not base.is_dir():
         scan.unreadable = f"{root} is not a directory, so its overlays were never looked for."
         return scan
-    for path in sorted(base.rglob("values*.y*ml")):
+    # 🚨 BOTH globs, or the local arm answers a different question from the remote one — and the
+    # local arm is what a person runs by hand to check the remote arm's verdict.
+    # 🚨 The record glob is ANCHORED to the directory the predicate requires, not `**/*.json`: the
+    # remote arm filters GitHub's tree listing, which costs nothing, but a bare `rglob("*.json")`
+    # here walks `node_modules`, `bin/`, `obj/` and every fixture in a real working tree to discard
+    # almost all of it. `is_deployment_record_path` still decides — this only stops the walk from
+    # visiting files it is certain to reject.
+    candidates = sorted(set(base.rglob("values*.y*ml")) | set(base.glob("**/Deployments/*.json")))
+    for path in candidates:
         rel = path.relative_to(base).as_posix()
-        if not is_overlay_path(rel):
+        if not (is_overlay_path(rel) or is_deployment_record_path(rel)):
             continue
         scan.files += 1
         text = path.read_text(encoding="utf-8", errors="replace")
         pins, floating = extract_overlay_pins(text, registry)
+        if is_deployment_record_path(rel):
+            record_pins, record_floating = extract_record_pins(text, registry)
+            pins = pins + record_pins
+            floating = floating + record_floating
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
         scan.floating.extend((repo, tag, rel) for repo, tag in floating)
         scan.instances.extend((ident, host, rel) for ident, host in extract_overlay_instances(text))
@@ -1879,7 +1995,7 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
                 # PRESERVES a moving tag, and `main`/`master`/`edge`/`stable`/`nightly` move exactly
                 # as `latest` does — checking one spelling reports the other five as ordinary pins.
                 # One set, shared with the ACR path, so the two cannot drift apart.
-                moving = tag.strip().lower() in FLOATING_TAGS
+                moving = is_floating_tag(tag)
                 emit(f"        {repo}:{tag}"
                      + ("   🚨 a MOVING tag — outside this model (#3438)" if moving else ""))
                 emit(f"          pinned by {where}")
@@ -4358,6 +4474,80 @@ def self_test() -> int:
     check(not is_overlay_path("src/values.yaml"),
           "ARM 13: a values file outside any deploy path was accepted")
 
+    # ── ARM 13b: the Hosting/Deployment RECORD axis (Memex#219) ────────────────────────────────
+    # The record is the pin `helm-release.yml` APPLIES when its `image` input is empty, and it was
+    # invisible twice over: not an overlay path, and a pin split across two keys.
+    check(is_deployment_record_path("mesh/Deployments/pearl.json"),
+          "ARM 13b: Memex's real record path was rejected")
+    check(not is_deployment_record_path("mesh/Deployments/index.json"),
+          "ARM 13b: the record INDEX was accepted as a record — it lists records, it pins nothing")
+    check(not is_deployment_record_path("mesh/Deployments/sub/thing.json"),
+          "ARM 13b: a json NOT directly under Deployments/ was accepted")
+    check(not is_deployment_record_path("deployments/aks/memex/values.memex.public.yaml"),
+          "ARM 13b: an overlay was accepted as a record; the two axes must stay separable")
+
+    # The REAL pearl shape, verbatim in the fields that matter (measured 2026-09-17): its record
+    # pins an ACR tag its overlay does not, because the overlay pins the FLEET REGISTRY instead.
+    # That is the one live instance of this gap — `pearl` has never been installed, so AXIS 3's
+    # running-set protection cannot cover it either, and #219's own table names it.
+    pearl_record = json.dumps({
+        "$type": "Hosting/Deployment",
+        "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+        "pinnedImageTag": "3.0.0-ci.8080",
+        "operator": {"image": "meshweaver.azurecr.io/hosting-operator:1979979"},
+    })
+    pins, floating = extract_record_pins(pearl_record, "meshweaver")
+    check(pins == [("memex-portal-ai", "3.0.0-ci.8080")] and not floating,
+          f"ARM 13b: the record's SPLIT pin was not extracted: {pins!r} {floating!r}")
+    # The `repo:tag`-shaped fields in the same record stay the ordinary extractor's job, so the two
+    # compose rather than each half-knowing the other's shapes.
+    inline, _ = extract_overlay_pins(pearl_record, "meshweaver")
+    check(("hosting-operator", "1979979") in inline,
+          f"ARM 13b: the record's inline operator image was not extracted by the overlay rules: {inline!r}")
+
+    # An EMPTY pinnedImageTag is FLOATING, not a pin — `memex-cloud` is exactly this today, and
+    # reporting it as a pin would ask the registry to lock a tag that does not exist.
+    pins, floating = extract_record_pins(
+        json.dumps({"imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+                    "pinnedImageTag": ""}), "meshweaver")
+    check(not pins and floating == [("memex-portal-ai", "")],
+          f"ARM 13b: an empty pinnedImageTag was not reported as floating: {pins!r} {floating!r}")
+
+    # A record pinning ANOTHER registry is not this lane's to lock, and must not read as "no pin":
+    # `extract_foreign_pins` says so over the same text.
+    pins, floating = extract_record_pins(
+        json.dumps({"imageRepository": "cr.meshweaver.cloud/memex-portal-ai",
+                    "pinnedImageTag": "3.0.0-ci.8080"}), "meshweaver")
+    check(not pins and not floating,
+          f"ARM 13b: a foreign-registry record produced an ACR pin: {pins!r}")
+
+    # A malformed record must not stop the sweep — it pins nothing HERE and the ordinary extractors
+    # still run over the same text.
+    check(extract_record_pins("{ not json", "meshweaver") == ([], []),
+          "ARM 13b: a malformed record raised instead of extracting nothing")
+
+    # 🚨 AND THE WIRING, not only the predicates. Asserting `is_deployment_record_path` and
+    # `extract_record_pins` in isolation leaves the SCAN free to never call either — measured: an
+    # early version of this arm passed while the record path was unwired from the listing, which is
+    # a guard that cannot fail for the defect it was written for. This drives `scan_overlays_local`
+    # over a real directory so the listing, the predicate and both extractors are on one path.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "mesh" / "Deployments").mkdir(parents=True)
+        (root / "mesh" / "Deployments" / "pearl.json").write_text(pearl_record, encoding="utf-8")
+        # The index sits beside it and must be read as pinning nothing rather than skipped silently.
+        (root / "mesh" / "Deployments" / "index.json").write_text(
+            json.dumps({"deployments": ["pearl"]}), encoding="utf-8")
+        scan = scan_overlays_local(str(root), "Systemorph/Fixture", "meshweaver")
+        found = {(repo, tag) for repo, tag, _ in scan.pins}
+    check(scan.unreadable is None, f"ARM 13b: the local scan refused the fixture tree: {scan.unreadable}")
+    check(scan.files == 1,
+          f"ARM 13b: expected ONE record file to be read (index.json is not a record), got {scan.files}")
+    check(("memex-portal-ai", "3.0.0-ci.8080") in found,
+          f"ARM 13b: the scan did not surface the record's split pin — the axis is not WIRED: {sorted(found)}")
+    check(("hosting-operator", "1979979") in found,
+          f"ARM 13b: the scan did not surface the record's inline operator image: {sorted(found)}")
+
 
     # ══ AXIS 3 and the TAG half — MeshWeaver#3438 / #3858 / #3859 / #3860 ═══════════════════════
 
@@ -4731,7 +4921,10 @@ ingress:
 
     # 🚨 EVERY floating tag, not the string `latest` (#4324 review). `main`, `master`, `edge`,
     # `stable` and `nightly` move exactly as `latest` does and are PRESERVED by the extractor.
-    for _moving in sorted(FLOATING_TAGS):
+    # …and every LINE POINTER, which membership alone missed: `3.0.0-latest` is what CD actually
+    # publishes and what a record seeded by `ImageLine.PointerFor` names, and it was being locked.
+    for _moving in sorted(FLOATING_TAGS) + ["3-latest", "3.0-latest", "3.0.0-latest",
+                                            "3.0.0-stable"]:
         _scan = _scan2("Systemorph/Memex",
                        FIXTURE_OVERLAY_FOREIGN.replace("3.0.0-ci.8411", _moving),
                        "deployments/aks/build/values.build.public.yaml")

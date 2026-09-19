@@ -257,6 +257,17 @@ public static class GraphConfigurationExtensions
                 // IMessageHub, so the registry checked is the validating hub's own chain.
                 services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
 
+                // …and its companion, which asks the OTHER half of "can a reader ever materialise
+                // this?": not whether the content's own $type resolves here, but whether the
+                // payload BINDS to the content type the node's NodeType declares — read off the
+                // mesh-wide IMeshContentTypeRegistry, so it answers for an in-mesh compiled type
+                // too (the discriminator guard exempts those by construction). A member holding a
+                // value its declaration contradicts, and content NONE of whose members the
+                // declared type knows, were both stored verbatim and then read as an empty node on
+                // every consumer — Systemorph/MeshWeaver#4601, and the birth of the payload in
+                // #4600. Same scope and lifetime as the guard above.
+                services.AddScoped<INodeValidator, Security.ContentSchemaValidator>();
+
                 // 🚨 THE partition teardown, registered ONCE and matching every partition ROOT
                 // structurally (#3436) — the deletion-side mirror of the single, centralized
                 // OwnsPartitionProvisioningValidator. It used to be registered PER NODETYPE at
@@ -277,6 +288,15 @@ public static class GraphConfigurationExtensions
                 // enumerated, so a regression to per-type keying reds at boot instead of after
                 // the next space deletion. See PartitionTeardownCoverageGate.
                 services.AddHostedService<PartitionTeardownCoverageGate>();
+                // …and its CREATION-side twin: a top-level instance of a partition-owning type
+                // declared in mesh CONTENT (Crm/Client) gets what a Space's creator gets — the
+                // Admin grant and its Admin/Partition definition. Structural for the same reason:
+                // no src/ registration can name a type a package declares.
+                services.AddSingleton<INodePostCreationHandler>(sp =>
+                    new InMeshPartitionOwnerPostCreationHandler(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetService<ILoggerFactory>()
+                            ?.CreateLogger<InMeshPartitionOwnerPostCreationHandler>()));
 
                 // Write-boundary guard for the OTHER collision class in the same family
                 // (#2160/#2161/#2162, #2245, #2358): a NodeType declaration (Content IS a
@@ -349,6 +369,18 @@ public static class GraphConfigurationExtensions
                 // Notification* node types), so it resolves this seam optionally — registered
                 // HERE, with AddGraph, because the notification model is what AddGraph brings.
                 services.AddSingleton<ICompileFailureNotifier, CompileFailureNotifier>();
+
+                // 🚨 #4469 — the same shape, for the OTHER direction of the compile's ignorance.
+                // A NodeType parked on CS0246 for a symbol whose source node an import could not
+                // write had nothing anywhere connecting the error to the import that produced the
+                // state (memex.systemorph.com, 2026-09-15: one NUL byte, five Hosting NodeTypes,
+                // no instance action on the control instance for an evening). The importer records
+                // the refusal per node; this seam is how the compile pipeline READS it without a
+                // reference to MeshWeaver.Graph, which references IT.
+                services.AddSingleton<IPartitionImportRefusals>(sp =>
+                    new StaticRepoImportRefusals(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetService<ILogger<StaticRepoImportRefusals>>()));
 
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();

@@ -103,6 +103,79 @@ internal class DynamicMeshNodeAttributeGenerator
     }
 
     /// <summary>
+    /// The SOURCE-BEARING half of the generated skeleton: the import block the compile puts in
+    /// scope, and the authored code with its <c>using</c> lines removed. Everything a diagnostic
+    /// about AUTHORED text can be about is in here, and <see cref="GenerateAttributeSource"/>
+    /// emits exactly this between its header and the assembly attribute.
+    ///
+    /// <para>🚨 <b>It is a separate member so the PRE-PUSH GATE can be pinned to it</b>
+    /// (Systemorph/MeshWeaver#4711). <c>.github/scripts/compile-check.py</c> used to hand each of a
+    /// NodeType's sources to MSBuild as its OWN <c>&lt;Compile&gt;</c> item, while this path
+    /// concatenates them into ONE compilation unit. Under
+    /// <c>NullableContextOptions.Annotations</c> — what <c>EmitPipeline.CreateCompilationOptions</c>
+    /// sets, and what the gate mirrors — that difference is not cosmetic: nullable analysis runs
+    /// only in text that opted in with <c>#nullable enable</c>, and in one concatenated unit a
+    /// directive in the FIRST file is still in force in the LAST. The gate was therefore
+    /// structurally blind to a class of diagnostics the bake then reported — aggregated under the
+    /// NODETYPE's name, with no file and no line, against content that could not reproduce them.
+    /// Measured on MeshWeaver.Plugins/BusinessRules/Scope, 2026-09-18, same tree both ways: the
+    /// gate said <c>98 clean</c> while the bake said <c>CS8601 12× / CS8602 12×</c>, all 24 in
+    /// committed generated proxies that inherit a <c>#nullable enable</c> from a file sorting ahead
+    /// of them.</para>
+    ///
+    /// <para>The script now reproduces this shaping line for line, and
+    /// <c>ConcatenatedUnitParityTest</c> compares the two outputs against each other instead of
+    /// trusting two careful implementations to stay equal — the same reasoning as
+    /// <c>ModulePlatformFloorScriptParityTest</c>: two call sites computing the same fold
+    /// differently either never converge or never fire, and both are silent.</para>
+    /// </summary>
+    /// <param name="code">The COMBINED source text — <see cref="NodeCompileShaping.CombineSources"/>
+    /// output, i.e. every source file of the compile joined in node-path order.</param>
+    /// <returns>The import lines, to be emitted verbatim in this order, and the authored code with
+    /// its <c>using</c> directives removed.</returns>
+    internal static (ImmutableArray<string> Imports, string CodeWithoutUsings)
+        ShapeAuthoredSource(string? code)
+    {
+        // Extract using statements from user code (they must go at the top)
+        var (userUsings, userCodeWithoutUsings) = ExtractUsingStatements(code);
+
+        // Using statements (standard ones) — read from the single declaration so the emit path and
+        // the language service's `global using` rendering cannot drift apart (#1802).
+        var imports = ImmutableArray.CreateBuilder<string>();
+        foreach (var ns in StandardUsings)
+            imports.Add($"using {ns};");
+
+        // User-defined using statements (extracted from code files), DEDUPED — against each other
+        // and against StandardUsings.
+        //
+        // 🚨 This is the platform emitting a warning into content it does not own. Every source
+        // file the compile consumes contributes its own `using` lines, and the skeleton is ONE
+        // concatenated tree, so an author who correctly writes `using MeshWeaver.Layout;` at the
+        // top of each of three files — or writes it once where the standard set already has it —
+        // gets CS0105 "the using directive … appeared previously in this namespace" on source that
+        // is right. Measured on samples/Graph/Data before this landed: 119 occurrences over 20
+        // distinct directives across 23 of 27 NodeTypes, every one of them the concatenation's
+        // doing and none of them an authored mistake. A ratchet that baselined those would be
+        // recording the generator's debt against the content's name, in every repo in the fleet.
+        //
+        // The language-service path (GlobalUsings) has ALWAYS deduped — it builds a HashSet — so
+        // this also closes the drift #1802 exists to prevent: the two renderings of the same import
+        // scope now agree about what that scope contains.
+        var alreadyEmitted = new HashSet<string>(imports, StringComparer.Ordinal);
+        foreach (var userUsing in userUsings)
+        {
+            // Whole lines arrive, possibly indented and possibly `using static X;` or an alias.
+            // The trimmed text is the identity (C# ignores the leading whitespace); the line is
+            // emitted trimmed so two spellings of one import cannot both survive.
+            var directive = userUsing.Trim();
+            if (directive.Length > 0 && alreadyEmitted.Add(directive))
+                imports.Add(directive);
+        }
+
+        return (imports.ToImmutable(), userCodeWithoutUsings);
+    }
+
+    /// <summary>
     /// Generates the complete C# source code for a dynamic node assembly.
     /// </summary>
     /// <param name="node">The MeshNode being compiled.</param>
@@ -118,10 +191,8 @@ internal class DynamicMeshNodeAttributeGenerator
     {
         var safeClassName = SanitizeName(node.Path);
         var code = codeFile?.Code;
-        var hasCode = !string.IsNullOrWhiteSpace(code);
 
-        // Extract using statements from user code (they must go at the top)
-        var (userUsings, userCodeWithoutUsings) = ExtractUsingStatements(code);
+        var (imports, userCodeWithoutUsings) = ShapeAuthoredSource(code);
 
         var sb = new StringBuilder();
 
@@ -131,16 +202,8 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("// Source file for debugging support - do not edit manually");
         sb.AppendLine();
 
-        // Using statements (standard ones) — read from the single declaration so the emit path and
-        // the language service's `global using` rendering cannot drift apart (#1802).
-        foreach (var ns in StandardUsings)
-            sb.AppendLine($"using {ns};");
-
-        // User-defined using statements (extracted from code files)
-        foreach (var userUsing in userUsings)
-        {
-            sb.AppendLine(userUsing);
-        }
+        foreach (var directive in imports)
+            sb.AppendLine(directive);
         sb.AppendLine();
 
         // Assembly attribute - MUST come before any namespace declarations
@@ -159,11 +222,24 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("namespace MeshWeaver.Graph.Generated");
         sb.AppendLine("{");
 
-        // MeshNodeProviderAttribute class
+        // MeshNodeProviderAttribute class.
+        //
+        // 🚨 The doc comments are NOT decoration. These two members are `public`, the parse options
+        // have always been DocumentationMode.Diagnose, and without them every dynamic NodeType in
+        // the fleet emits exactly two CS1591 "missing XML comment" warnings that no author can fix
+        // — the declaration is the generator's. Measured on samples/Graph/Data: 54 of 325 CS1591
+        // sites, i.e. 2 × 27 types, and the same two on every type of every node repo. Baselining
+        // the platform's own undocumented API under the content's name is the band-aid; writing
+        // the comment is the fix.
+        sb.AppendLine("    /// <summary>");
+        sb.AppendLine($"    /// The generated node provider for MeshNode <c>{EscapeXml(node.Path)}</c>.");
+        sb.AppendLine("    /// Auto-generated by MeshWeaver's dynamic NodeType compile — do not edit.");
+        sb.AppendLine("    /// </summary>");
         sb.AppendLine($"    public class {safeClassName}MeshNodeProviderAttribute : MeshNodeProviderAttribute");
         sb.AppendLine("    {");
 
         // Nodes property
+        sb.AppendLine("        /// <summary>The single MeshNode this generated provider contributes.</summary>");
         sb.AppendLine("        public override IEnumerable<MeshNode> Nodes =>");
         sb.AppendLine("        [");
         sb.AppendLine($"            new MeshNode(\"{EscapeString(node.Path)}\")");
@@ -351,6 +427,24 @@ internal class DynamicMeshNodeAttributeGenerator
             .Replace("\r", "\\r")
             .Replace("\t", "\\t");
     }
+
+    /// <summary>
+    /// Escapes a value for use inside the generated XML doc comments.
+    ///
+    /// <para>🚨 A node path is author-controlled text landing inside a <c>///</c> comment, and an
+    /// unescaped <c>&amp;</c> or <c>&lt;</c> there is not cosmetic: it produces CS1570 ("badly
+    /// formed XML"), i.e. the generator would trade the two CS1591s it just fixed for a CS1570 on
+    /// any node whose path carries one. The newline replacement keeps the comment on ONE line, so a
+    /// path that somehow contains a line break cannot emit a second line outside the <c>///</c>.</para>
+    /// </summary>
+    /// <param name="value">The text to escape.</param>
+    private static string EscapeXml(string? value) =>
+        (value ?? string.Empty)
+            .Replace("&", "&amp;")
+            .Replace("<", "&lt;")
+            .Replace(">", "&gt;")
+            .Replace("\r", " ")
+            .Replace("\n", " ");
 
     /// <summary>
     /// Indents code with the specified prefix.

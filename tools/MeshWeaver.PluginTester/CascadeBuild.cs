@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -20,10 +20,13 @@ namespace MeshWeaver.PluginTester;
 /// for node repos (maintainer, 2026-08-30): <b>build always means compile AND run tests</b>, per
 /// package, over the package dependency network, as a reactive cascade, inside the container the
 /// platform build produced. Nothing here imports a node into a mesh. The sources are read from the
-/// checkout on disk, composed into Roslyn compilations exactly as the portal composes them
+/// checkout on disk and composed into Roslyn compilations exactly as the portal composes them
 /// (<see cref="NodeSetCompiler"/> — the same skeleton, the same options, the same
-/// <c>/app</c> reference set), and each package compiles against the assemblies its dependency
-/// packages just emitted.
+/// <c>/app</c> reference set), which since Systemorph/MeshWeaver.Plugins#1970 is the WHOLE of the
+/// reference set: the framework and its modules, and nothing a dependency package emitted. The
+/// sentence that used to end this paragraph — "each package compiles against the assemblies its
+/// dependency packages just emitted" — described the one place this lane did NOT match the portal,
+/// while the words around it asserted that it did.
 ///
 /// <para><b>The cascade.</b> <see cref="Cascade"/> gives every package a result stream; a package
 /// subscribes to its dependencies' streams and starts the moment the last one completes green.
@@ -45,13 +48,23 @@ namespace MeshWeaver.PluginTester;
 /// rather than run; the gate (<see cref="PluginGateRunner"/>) runs them, seeded from this build's
 /// <see cref="Options.OutputDirectory"/> so nothing is compiled twice. Reported, never hidden.</para>
 ///
-/// <para><b>Parity flag.</b> The portal compiles a type against the framework and its modules and
-/// reaches other packages' types by <c>shared=</c> source inclusion — never by referencing their
-/// emitted assemblies. This build references them (the maintainer's instruction: use the
-/// references the dependency packages produce). A type whose emitted assembly turns out to BIND a
-/// dependency package's assembly is therefore green here on grounds the portal does not have, and
-/// the report marks it <c>binds-dependency-assembly</c> so that difference is visible rather than
-/// discovered as a CompileError in production.</para>
+/// <para><b>The compile's reference set is the portal's.</b> The portal compiles a type against the
+/// framework and its modules and reaches other packages' types by <c>shared=</c> source inclusion —
+/// never by referencing their emitted assemblies — and since
+/// Systemorph/MeshWeaver.Plugins#1970 so does this build. It used to append every dependency
+/// package's emitted assemblies, which put a <c>shared=</c> type in the compilation TWICE (once
+/// from source, once imported): 1,452 CS0436 over 45 sites and 14 types on
+/// MeshWeaver.Plugins@e09554a, against zero from the <c>compile</c> verb on the same tree. Both
+/// verbs compiled the same 94 of 99 types, so the references bought no coverage to lose.</para>
+///
+/// <para>🚨 That REVERSES the instruction this paragraph used to record — <i>"use the references
+/// the dependency packages produce"</i> — and the maintainer took the reversal explicitly on that
+/// measurement. It also retires the <c>binds-dependency-assembly</c> flag, which existed only to
+/// make the resulting divergence visible: with the references gone no type can bind a dependency
+/// package's assembly, so the flag could never fire again, and a check that cannot fail is worse
+/// than no check. A type that binds a dependency package's types WITHOUT declaring
+/// <c>shared=</c> now fails its compile here with the ordinary missing-type diagnostic — which is
+/// what the portal would do with the same source, and is the point.</para>
 /// </summary>
 public static class CascadeBuild
 {
@@ -99,6 +112,10 @@ public static class CascadeBuild
         /// <summary>The source commit recorded in the bundles; defaults to the snapshot's.</summary>
         public string? SourceSha { get; init; }
 
+        /// <summary>The in-mesh warning debt this tree carries — see
+        /// <see cref="TreeBake.Options.Warnings"/>. Default: measure, report, enforce nothing.</summary>
+        public WarningBaseline Warnings { get; init; } = WarningBaseline.ObserveOnly;
+
         /// <summary>Where progress lines go.</summary>
         public TextWriter Output { get; init; } = Console.Out;
 
@@ -117,9 +134,16 @@ public static class CascadeBuild
         TimeSpan CompileTime,
         int SourceCount,
         string? DllPath,
-        StaticTestRunner.Run? Tests,
-        ImmutableArray<string> BindsDependencyAssemblies)
+        StaticTestRunner.Run? Tests)
     {
+        /// <summary>
+        /// The warnings this type's compile produced — structured and uncapped, empty on failure.
+        /// Folded across every package into the build's <see cref="Report.Warnings"/>; never
+        /// printed per type, because a source shared by eight NodeTypes would report its one defect
+        /// eight times. An init-only PROPERTY for the record-signature rule.
+        /// </summary>
+        public ImmutableArray<CompileWarning> Warnings { get; init; } = [];
+
         /// <summary>Compiled and every test that ran passed.</summary>
         public bool IsGreen => CompileError is null && (Tests is null || Tests.IsGreen);
     }
@@ -162,10 +186,22 @@ public static class CascadeBuild
         ImmutableArray<string> Bundles,
         string? FatalError = null)
     {
-        /// <summary>0 green, 1 any red or blocked, 70 fatal.</summary>
+        /// <summary>What this build measured about its NodeTypes' warnings, folded across every
+        /// package. Init-only PROPERTY for the record-signature rule.</summary>
+        public WarningInventory Warnings { get; init; } = WarningInventory.Empty;
+
+        /// <summary>The two warning ratchets' verdicts, in report order.</summary>
+        public ImmutableArray<WarningRatchet> WarningRatchets { get; init; } = [];
+
+        /// <summary>True when no ratchet carries a NEW or STALE entry — vacuously true in
+        /// observe-only mode, which the report line names.</summary>
+        public bool WarningsAccepted => WarningRatchets.All(r => r.Success);
+
+        /// <summary>0 green, 1 any red or blocked or a warning ratchet refusing, 70 fatal. 🚨 A
+        /// ratchet can turn a green build RED; it can never turn a red build green.</summary>
         public int ExitCode =>
             FatalError is not null ? 70
-            : Packages.All(p => p.IsGreen) ? 0
+            : Packages.All(p => p.IsGreen) && WarningsAccepted ? 0
             : 1;
     }
 
@@ -360,8 +396,25 @@ public static class CascadeBuild
         {
         }
 
+        // 🚨 The SAME warning fold and the SAME two ratchets the `compile` bake applies, through the
+        // one writer — the two producers must report a measurement identically or a known-debt
+        // entry means different things depending on which verb looked. Folded from the finished
+        // per-package results, so the packages' parallelism never reaches the accounting.
+        var inventory = WarningInventory.Of(results
+            .Where(p => p.Result is not null)
+            .SelectMany(p => p.Result!.Types)
+            .Where(t => t.CompileError is null)
+            .Select(t => (t.NodePath, t.Warnings)));
+        var ratchets = WarningReportWriter.Evaluate(inventory, options.Warnings);
+        WarningReportWriter.Write(options.Output, inventory, options.Warnings, ratchets);
+
         var report = new Report(
-            frameworkIdentity, results, Cascade.CriticalPath(results, DependenciesOf), wall.Elapsed, bundles);
+            frameworkIdentity, results, Cascade.CriticalPath(results, DependenciesOf), wall.Elapsed,
+            bundles)
+        {
+            Warnings = inventory,
+            WarningRatchets = [.. ratchets],
+        };
         Print(options.Output, report, DependenciesOf);
         if (options.ReportPath is { } reportPath)
             WriteJson(reportPath, report);
@@ -424,12 +477,32 @@ public static class CascadeBuild
             .SelectMany(d => d.Result!.EmittedAssemblies)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var dependencyNames = dependencyAssemblies
-            .Select(p => Path.GetFileNameWithoutExtension(p))
-            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-        var references = dependencyAssemblies.Length == 0
-            ? baseReferences
-            : baseReferences.Concat(dependencyAssemblies.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))).ToArray();
+        // 🚨 The compile references the FRAMEWORK AND ITS MODULES — never a dependency package's
+        // emitted assemblies (Systemorph/MeshWeaver.Plugins#1970). It used to append them, which is
+        // what the portal does NOT do: the portal reaches another package's types by `shared=`
+        // SOURCE inclusion, so that source is compiled INTO the consumer's own assembly and the
+        // dependency's copy is never in scope.
+        //
+        // Referencing both put the same type in the compilation twice — once from source, once
+        // imported — which is CS0436 by construction. Measured on MeshWeaver.Plugins@e09554a
+        // against set 3.0.0-ci.8925: 1,452 occurrences over 45 sites and 14 types, every one of
+        // the 45 naming a `DynamicNode_Store_*` assembly, and NOT ONE naming a module or a
+        // platform assembly. The `compile` verb, which never had these references, reported zero.
+        //
+        // Dropping them costs no coverage, and that is measured rather than assumed: on the same
+        // tree both verbs compiled the SAME 94 of 99 types, and the same five failures in both arms
+        // were a missing MODULE (`MeshWeaver.Maps`), never a missing dependency package. So nothing
+        // in the tree needed these references to compile.
+        //
+        // 🚨 This REVERSES a recorded instruction ("use the references the dependency packages
+        // produce"), and the maintainer took that call explicitly on the measurement above. The
+        // instruction predates the CS0436 finding; a reader meeting the two and finding them in
+        // disagreement should read this paragraph as the later word.
+        //
+        // What this does NOT change: `dependencyAssemblies` still feeds the TEST run below, where
+        // the question is what the harness can LOAD to execute a case, not what the compiler may
+        // bind. The two are different sets and only the compile one is a parity claim.
+        var references = baseReferences;
 
         options.Output.WriteLine(
             $"{Stamp()} [{id}] start — {types.Length} type(s), depends on "
@@ -474,7 +547,7 @@ public static class CascadeBuild
                 built.Add(new TypeBuild(
                     candidate.Node.Path, id,
                     $"{ex.GetType().Name}: {ex.Message}" + (gap is null ? string.Empty : $"\n   {gap}"),
-                    typeClock.Elapsed, resolution.Sources.Length, null, null, []));
+                    typeClock.Elapsed, resolution.Sources.Length, null, null));
                 options.Output.WriteLine($"{Stamp()} [{id}]   RED {candidate.Node.Path} ({typeClock.Elapsed.TotalMilliseconds:F0} ms)");
                 options.Output.WriteLine(ex.Message);
                 if (gap is not null)
@@ -483,11 +556,6 @@ public static class CascadeBuild
             }
             typeClock.Stop();
             emitted.Add(compiled.DllPath);
-
-            var binds = compiled.Dependencies.Keys
-                .Where(dependencyNames.Contains)
-                .OrderBy(k => k, StringComparer.Ordinal)
-                .ToImmutableArray();
 
             var sourceVersions = resolution.Sources
                 .Select(n => n.Path)
@@ -536,7 +604,10 @@ public static class CascadeBuild
 
             built.Add(new TypeBuild(
                 compiled.NodePath, id, null, typeClock.Elapsed, compiled.Inputs.MatchedSourcePaths.Length,
-                compiled.DllPath, tests, binds));
+                compiled.DllPath, tests)
+            {
+                Warnings = compiled.Warnings,
+            });
             options.Output.WriteLine(
                 $"{Stamp()} [{id}]   ok  {compiled.NodePath} ({typeClock.Elapsed.TotalMilliseconds:F0} ms, "
                 + $"{compiled.Inputs.MatchedSourcePaths.Length} source(s))"
@@ -544,7 +615,7 @@ public static class CascadeBuild
                     ? " tests: no test classes in the assembly"
                     : $" tests: {tests.Cases.Length} case(s) — {tests.Passed} passed, {tests.Failed} failed, "
                       + $"{tests.Skipped} skipped, {tests.NeedsMesh} needs-mesh")
-                + (binds.IsEmpty ? "" : $" binds-dependency-assembly: {string.Join(", ", binds)}"));
+                );
         }
         compileClock.Stop();
 
@@ -588,9 +659,7 @@ public static class CascadeBuild
                 Cascade.NodeOutcome.Red when b is not null => string.Join("; ",
                     b.Types.Where(t => !t.IsGreen).Select(t =>
                         t.CompileError is not null ? $"{t.NodePath}: compile" : $"{t.NodePath}: {t.Tests?.Failed} failed")),
-                _ => b is not null && b.Types.Any(t => !t.BindsDependencyAssemblies.IsEmpty)
-                    ? "binds-dependency-assembly"
-                    : "",
+                _ => "",
             };
             output.WriteLine(
                 $"{p.Id,-30} {Verdict(p.Outcome),-8} {p.Ready.TotalSeconds,7:F1} {p.Queued.TotalSeconds,8:F1} "
@@ -649,7 +718,6 @@ public static class CascadeBuild
                     compileMs = t.CompileTime.TotalMilliseconds,
                     sources = t.SourceCount,
                     compileError = t.CompileError,
-                    bindsDependencyAssemblies = t.BindsDependencyAssemblies,
                     tests = t.Tests is null ? null : new
                     {
                         loadError = t.Tests.LoadError,

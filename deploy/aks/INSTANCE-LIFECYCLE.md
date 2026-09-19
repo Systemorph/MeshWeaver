@@ -138,6 +138,17 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
   reported fact (`kv_copy_drift`), not a failure — and no value is ever printed or put on argv.
   It exists because `hosting-kv-purge` deletes by prefix: a cross-prefix mapping would let the
   first teardown take the shared credential with it.
+- **`hosting-kv-set` writes values a PERSON pasted — the onboarding secret step.** A sign-in app's
+  client secret, a mail app's secret, an AI provider key: pasted into a write-only box on the
+  control instance (the Fleet Console's setup dialog, or a live record's *Set Key Vault secrets*
+  dialog), stored encrypted on the request node, decrypted by the mesh for exactly one operator
+  Job, and handed to this step in the Job's ENVIRONMENT (`HOSTING_SECRETS`, base64 JSON of
+  object → value) — never on a command line. Each value reaches `az` through a mode-600 `--file`;
+  every named object must have a value or NOTHING is written; a declared object is then waited for
+  in the synced Secret by hash (`--wait object=syncedSecret/key`). It is the one operator script
+  besides `hosting-kv-rotate` that OVERWRITES: a pasted value is a person's decision to replace,
+  and Key Vault keeps the previous version. The mesh deletes the Job object the moment the run
+  ends. Nobody needs a vault permission of their own — the operator identity writes.
 - **`hosting-signin-app` never rotates the sign-in app's secret and never shows one**
   (MeshWeaver.Plugins#1719). A present `<prefix>Authentication-Microsoft-ClientSecret` is kept and
   the app the record names is VERIFIED to redirect to `https://<host>/signin-microsoft` (an identity

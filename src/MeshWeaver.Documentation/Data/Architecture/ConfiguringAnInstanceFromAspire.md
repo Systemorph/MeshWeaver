@@ -159,7 +159,8 @@ configures no container.
 | `WithInClusterPostgres(enabled)` | `InClusterPostgres` | `postgres.enabled` | — |
 | `WithImage(repository, tag, pullSecret, migrationRepository)` | `ImageRepository`, `PinnedImageTag`, `ImagePullSecret`, `MigrationImageRepository` | `portal.image`, `portal.imagePullSecret`, `migration.image`, `selfUpdate.registry` | — |
 | `WithPinnedImageTag(tag)` | `PinnedImageTag` | `portal.image` (the tag; the pin IS the roll) | — |
-| `WithUpdatePolicy(policy)` | `UpdatePolicy` | — (the self-updater reads the record) | — |
+| `WithUpdatePolicy(policy)` | `UpdatePolicy` | `config.memex_portal.SelfUpdate__DefaultPolicy` (seeds a NEW install's `Admin/UpdatePolicy`; the self-updater reads the record thereafter) | `SelfUpdate__DefaultPolicy` |
+| `WithUpdatePattern(pattern)` | `UpdatePattern` | `config.memex_portal.SelfUpdate__DefaultPattern` (seeds a NEW install's pattern under Continuous, e.g. `3.0.0-ci*`) | `SelfUpdate__DefaultPattern` |
 | `WithModuleUpdatePolicy(policy)` | `ModuleUpdatePolicy` | — (rendered into the portal's config) | `PluginCatalog__DefaultUpdatePolicy` |
 | `WithMinRollInterval(interval)` | `MinRollInterval` | `config.memex_portal.SelfUpdate__MinRollInterval` | `SelfUpdate__MinRollInterval` |
 | `WithAutoRecycleOnStaleBuild(enabled)` | `AutoRecycleOnStaleBuild` | `config.memex_portal.Modules__AutoRecycleOnStaleBuild` | `Modules__AutoRecycleOnStaleBuild` |
@@ -173,6 +174,7 @@ configures no container.
 | `WithRequiredModule(assembly)` | `RequiredModules` | `config.memex_portal.Modules__Required__N` | `Modules__Required__0` |
 | `ClearRequiredModules()` | `RequiredModules`, `RequiredModuleSlots` | `config.memex_portal.Modules__Required__N` | — |
 | `WithRequiredModuleSlot(slot, assembly)` | `RequiredModuleSlots` | `config.memex_portal.Modules__Required__N` | `Modules__Required__*` |
+| `WithRequiredModulesAuthoritative(authoritative)` | `RequiredModulesAuthoritative` | `config.memex_portal.Modules__RequiredIsAuthoritative` | `Modules__RequiredIsAuthoritative` |
 | `WithReplicas(replicas)` | `Replicas` | `replicas` | — |
 | `WithOrleansClustering(clustering)` | `OrleansClustering` | `config.memex_portal.Deployment__Orleans__Clustering` | `Deployment__Orleans__Clustering` |
 | `WithHttpPort(port)` | `HttpPort` | `config.memex_portal.ASPNETCORE_HTTP_PORTS` | `ASPNETCORE_HTTP_PORTS` |
@@ -200,6 +202,7 @@ configures no container.
 | `WithSocialLinkedIn(clientId)` | `SocialLinkedInClientId` | `config.memex_portal.Social__LinkedIn__ClientId` | `Social__LinkedIn__ClientId` |
 | `WithAi(configure)` | `Ai.OpenRouter`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light`, `Ai.Tiers.Utility` | `config.memex_portal.<Provider>__*`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
 | `WithOperator(enabled, ns, serviceAccount, image, environment)` | `Operator.Enabled`, `Operator.Namespace`, `Operator.ServiceAccount`, `Operator.Image`, `Operator.Environment` | `hostingOperator` | `Hosting__Operator__Enabled` |
+| `WithOperatorExecutor(executor, maintainer)` | `Operator.Executor`, `Operator.Maintainer` | `hostingOperator.executor`, `hostingOperator.maintainer` (rendered outside `enabled`: the Actions executor runs with the operator Job off) | `Hosting__Operator__Executor`, `Hosting__Operator__Maintainer` |
 | `WithRegistry(configure)` | `Registry.Host`, `Registry.Image`, `Registry.AuthImage`, `Registry.Issuer`, `Registry.StorageAccountName`, `Registry.StorageContainer`, `Registry.ServiceAccount`, `Registry.KeyVault`, `Registry.PublisherUsername`, `Registry.PublisherPasswordBcrypt`, `Registry.ValidationUrl`, `Registry.NotificationsUrl`, `Registry.Replicas` | `registry` | — |
 | `WithTelemetry(otlpEndpoint, otlpProtocol)` | `Telemetry.OtlpEndpoint`, `Telemetry.OtlpProtocol` | `config.memex_portal.OTEL_*` | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` |
 | `WithBackupStore(backupStore)` | `BackupStore` | — (the `Backup` action's target) | — |
@@ -301,6 +304,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `MinRollInterval` | Minimum interval between self-update rolls | Mindestabstand zwischen Selbst-Update-Rollouts |
 | `DeploymentContent` | `AutoRecycleOnStaleBuild` | Auto-recycle on a stale NodeType build | Bei veraltetem NodeType-Build automatisch neu laden |
 | `DeploymentContent` | `RequiredModuleSlots` | Boot modules at explicit slots (by-index override) | Boot-Module an expliziten Slots (Überschreiben nach Index) |
+| `DeploymentContent` | `RequiredModulesAuthoritative` | The required-module list is the complete set (the image's own list does not apply) | Die Liste der erforderlichen Module ist der vollständige Satz (die Liste des Images gilt nicht) |
 | `DeploymentContent` | `WebhookInboxTargets` | Webhook inbox targets, by slot (legacy — prefer the typed slots) | Webhook-Eingangsziele, nach Slot (veraltet — die typisierten Slots bevorzugen) |
 | `DeploymentContent` | `WebhookInbox` | Webhook inbox slots: target + the config key holding its HMAC secret | Webhook-Eingangs-Slots: Ziel + Konfigurationsschlüssel des HMAC-Geheimnisses |
 | `DeploymentContent` | `SocialLinkedInClientId` | Social LinkedIn client id | LinkedIn-Client-ID des Social-Plugins |
@@ -407,6 +411,8 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `HostingOperatorSpec` | `ServiceAccount` | Operator service account | Operator-Dienstkonto |
 | `HostingOperatorSpec` | `Image` | Operator image | Operator-Image |
 | `HostingOperatorSpec` | `Environment` | Job environment (KEY=VALUE) | Job-Umgebung (KEY=VALUE) |
+| `HostingOperatorSpec` | `Executor` | Executor: Job (in-cluster operator Job) or Actions (aks-ops.yml through the GitHub App) | Ausführung: Job (Operator-Job im Cluster) oder Actions (aks-ops.yml über die GitHub-App) |
+| `HostingOperatorSpec` | `Maintainer` | Maintainer: the one user id that may approve its own request | Maintainer: die eine Benutzer-ID, die den eigenen Antrag genehmigen darf |
 | `TelemetrySpec` | `OtlpEndpoint` | OTLP endpoint | OTLP-Endpunkt |
 | `TelemetrySpec` | `OtlpProtocol` | OTLP protocol | OTLP-Protokoll |
 | `DrainSpec` | `DrainSeconds` | Drain ceiling in seconds (termination grace) | Drain-Obergrenze in Sekunden (Beendigungsfrist) |

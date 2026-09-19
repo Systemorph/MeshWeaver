@@ -8,6 +8,11 @@ Order: -20260907
 
 # Your portal keeps a copy of the images it has already served
 
+> **Superseded (2026-09-17).** The in-portal image mirror this entry describes was never
+> switched on in any portal, and it has since been removed. The fleet's images are served by
+> `cr.meshweaver.cloud`, a separate registry service — see
+> [The container image mirror settings that did nothing are gone](/Doc/WhatsNew/2026-09-17-the-container-image-mirror-settings-that-did-nothing-are-gone).
+
 Your portal could already serve container images, but it fetched every one from the upstream
 registry every time — it passed bytes along without keeping any. Pulling the same image twice cost
 the same download twice, and if the upstream registry was unavailable, so was every image.

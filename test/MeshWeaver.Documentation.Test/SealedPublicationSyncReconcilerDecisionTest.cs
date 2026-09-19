@@ -86,6 +86,100 @@ public class SealedPublicationSyncReconcilerDecisionTest
                 "a torn publication is not evidence — #4212 holds the first import precisely so that "
                 + "an unsealed set never becomes the commit a Space is provisioned at");
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  #4499 — a FINAL verdict at the sealed commit is not re-attempted on every announcement
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>A source that REFUSED at the sealed commit — its subdirectory matched nothing — and
+    /// recorded that refusal as the attempt it was, under the configuration it carries.</summary>
+    private static GitHubSyncConfig RefusedAt(string commit, string subdirectory = "DeepSign")
+    {
+        var config = new GitHubSyncConfig
+        {
+            RepositoryUrl = "https://github.com/Systemorph/MeshWeaver.Plugins",
+            Branch = "main",
+            Subdirectory = subdirectory,
+            LastSyncCommitSha = OtherSha,
+            LastSyncOutcome = GitHubSyncService.RefusedOutcome,
+            LastAttemptedCommitSha = commit,
+            LastAttemptWasFinal = true,
+        };
+        return config with { LastAttemptedConfigFingerprint = GitHubSyncService.SourceFingerprint(config) };
+    }
+
+    [Fact]
+    public void ASourceWithAFinalVerdictAtTheSealedCommit_IsNotReattempted_AndIsNotRecordedAsAHold()
+    {
+        var plan = Decide(RefusedAt(SealedSha));
+        plan.Action.Should().Be(SealedSyncReconcile.Action.None,
+            "the refusal is a verdict about exactly these bytes as this source reads them — measured "
+            + "on memex.systemorph.com (#4499) the reconciler re-fetched the whole repository ~32×/hour "
+            + "at ONE unchanged seal, because only the webhook ever asked whether a verdict was final");
+        plan.Settled.Should().BeTrue(
+            "and it must be the SETTLED None, never a hold: recording a hold clears the attempt pair, "
+            + "which would licence the next announcement to re-attempt — refuse, hold, refuse, forever");
+        plan.SteadyState.Should().BeFalse("the source is not at the seal; it is settled short of it");
+    }
+
+    [Fact]
+    public void EditingTheSource_ReattemptsAtTheSameSealedCommit()
+    {
+        // The operator's fix: the subdirectory is corrected, the repository has not moved.
+        var corrected = RefusedAt(SealedSha) with { Subdirectory = "Signature" };
+        Decide(corrected).Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
+            "a verdict is final for the commit AS THIS SOURCE READ IT — a corrected subdirectory is a "
+            + "different read, and waiting for the repository to produce a new commit before trying the "
+            + "correction is the stranding this fingerprint exists to prevent");
+    }
+
+    [Fact]
+    public void ANewSealedCommit_Reattempts()
+        => Decide(RefusedAt(OtherSha) with { LastSyncCommitSha = null })
+            .Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
+                "the skip is scoped to the ONE commit already judged, never to the source");
+
+    [Fact]
+    public void AVerdictThatWasNotFinal_IsStillReattempted()
+        => Decide(RefusedAt(SealedSha) with { LastAttemptWasFinal = false })
+            .Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
+                "a failure that might not recur — an unreachable store, a truncated listing — must keep "
+                + "being attempted, or a transient becomes permanent (#3101)");
+
+    [Fact]
+    public void AFinalVerdictRecordedBeforeTheFingerprintExisted_IsReattemptedOnce()
+        => Decide(RefusedAt(SealedSha) with { LastAttemptedConfigFingerprint = null })
+            .Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
+                "a verdict with no recorded configuration cannot say it was reached under THIS one, so "
+                + "it licenses nothing — the safe direction is one more attempt, which records it");
+
+    [Fact]
+    public void TheFingerprint_IgnoresTheRecordedVerdict_AndReadsWhatTheImportReads()
+    {
+        var baseline = RefusedAt(SealedSha);
+        var fingerprint = GitHubSyncService.SourceFingerprint(baseline);
+
+        GitHubSyncService.SourceFingerprint(baseline with
+            {
+                LastSyncOutcome = "Imported", LastSyncCommitSha = SealedSha, LastSyncNote = "anything",
+                LastAttemptWasFinal = false,
+            })
+            .Should().Be(fingerprint, "the recorded last-sync fields are the verdict, never its input");
+        GitHubSyncService.SourceFingerprint(baseline with { Subdirectory = " /DeepSign/ " })
+            .Should().Be(fingerprint, "the import trims the subdirectory, so a cosmetic edit changes nothing it reads");
+        GitHubSyncService.SourceFingerprint(baseline with { Subdirectory = "deepsign" })
+            .Should().NotBe(fingerprint, "git paths are case-sensitive, so capitalisation IS a different read");
+        GitHubSyncService.SourceFingerprint(baseline with { Ignore = [] })
+            .Should().NotBe(fingerprint, "an explicit empty ignore list syncs Release/ too — a different import");
+        GitHubSyncService.SourceFingerprint(baseline with { Ignore = [" release/ ", "", "# the default, spelled out"] })
+            .Should().Be(fingerprint,
+                "SyncIgnore trims each pattern, drops blank and comment lines and matches case-insensitively, "
+                + "so this list IS the default rule set — an edit the importer cannot see must not unsettle a source");
+        GitHubSyncService.SourceFingerprint(baseline with { Ignore = ["Release/", "Drafts/"] })
+            .Should().NotBe(fingerprint, "an added rule changes what the import reads");
+        GitHubSyncService.SourceFingerprint(baseline with { TwoWay = true })
+            .Should().NotBe(fingerprint, "two-way changes what an import may overwrite, so it changes the verdict");
+    }
+
     [Fact]
     public void AnExportOnlySource_IsNeverImportedByASeal()
         => SealedSyncReconcile.Decide(

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -175,12 +175,12 @@ internal sealed class MeshService(
                     var r = d.Message;
                     if (r.Success)
                         return Observable.Return(r);
-                    return Observable.Throw<CreateNodesResponse>(r.RejectionReason switch
-                    {
-                        NodeCreationRejectionReason.ValidationFailed =>
-                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                        _ => new InvalidOperationException(r.Error ?? "Bulk node creation failed"),
-                    });
+                    // ONE mapping for both create verbs — see NodeCreationFailure. The copy that
+                    // used to live here dropped the typed reason AND (once #4507 gave the bulk leg
+                    // a transcript) the localizable refusal, so a bulk caller on the sanctioned
+                    // surface could neither classify the failure nor show it in the viewer's
+                    // language, unlike the singular one.
+                    return Observable.Throw<CreateNodesResponse>(r.ToException());
                 });
         }).CarryAccessContext(hub.ServiceProvider);
     }
@@ -245,13 +245,25 @@ internal sealed class MeshService(
                 {
                     var r = d.Message;
                     if (r.Success)
-                        return Observable.Return(true);
+                        // 🚨 THE `bool` IS THE HONEST HALF, and until #4668 it was a dead channel —
+                        // this method emitted `true` or threw, so no caller has ever seen `false`
+                        // and none can misread the new value as a failure. `true` = this call
+                        // removed the node; `false` = it was ALREADY gone, so nothing was removed
+                        // and the postcondition held before we arrived. Both are successes: a
+                        // caller that only wants the node gone ignores the value (that is the
+                        // idempotent read), a caller that wants to know what happened branches on
+                        // it. Throwing for the second case is what put `Node not found` in front of
+                        // a user who had done nothing wrong.
+                        return Observable.Return(!r.AlreadyAbsent);
                     return Observable.Throw<bool>(r.RejectionReason switch
                     {
                         NodeDeletionRejectionReason.ValidationFailed =>
                             new UnauthorizedAccessException(r.Error ?? "Access denied"),
                         NodeDeletionRejectionReason.Unauthorized =>
                             new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        // Still a failure, and deliberately so: reaching this now means the absence
+                        // was discovered MID-CASCADE, on a subtree that may be partially removed —
+                        // not the "there was nothing to do" case above.
                         NodeDeletionRejectionReason.NodeNotFound =>
                             new InvalidOperationException($"Node not found: {path}"),
                         _ => new InvalidOperationException(r.Error ?? "Node deletion failed")

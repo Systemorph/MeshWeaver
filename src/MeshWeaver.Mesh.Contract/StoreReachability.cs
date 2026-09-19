@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 
 namespace MeshWeaver.Mesh;
 
@@ -93,4 +93,53 @@ public static class StoreReachability
            + "started, so an UNKNOWN subset may already be durable. This is an availability failure, "
            + "not a refusal — but read the current state before retrying, because re-sending the "
            + "whole request could duplicate whatever landed.";
+
+    // ── The same verdicts, keyed (#4507) ───────────────────────────────────────────────────────
+    //
+    // 🚨 The ENGLISH half is composed by the two methods above, never retyped. That is what keeps
+    // the promise this class exists for — "so a user, an agent and a test all read the same words"
+    // — true across the localization seam as well: a reword of the sentence moves the fallback and
+    // the log line together, and only the catalog templates have to follow. A second literal here
+    // would be the drift the class was created to prevent.
+
+    /// <summary>The catalog key for <see cref="NodeCreationNotAttempted"/>.</summary>
+    public const string NodeCreationNotAttemptedKey = "activity.node.create.storeUnreachable";
+
+    /// <summary>The catalog key for <see cref="BulkCreationNotAttempted"/>.</summary>
+    public const string BulkCreationNotAttemptedKey = "activity.node.bulkCreate.storeUnreachable";
+
+    /// <summary>The catalog key for <see cref="BulkCreationMayHavePartiallyLanded"/>.</summary>
+    public const string BulkCreationPartiallyLandedKey = "activity.node.bulkCreate.storePartiallyLanded";
+
+    /// <summary>
+    /// <see cref="DescribeNotAttempted"/> for a SINGULAR create, carried with the catalog key that
+    /// renders it in the viewer's language.
+    /// </summary>
+    /// <param name="path">The path the create targeted.</param>
+    /// <returns>The keyed verdict.</returns>
+    public static LocalizableText NodeCreationNotAttempted(string path)
+        => LocalizableText.Keyed(
+            DescribeNotAttempted($"Node creation at '{path}'"),
+            NodeCreationNotAttemptedKey, ("path", path));
+
+    /// <summary>
+    /// <see cref="DescribeNotAttempted"/> for a BULK create, carried with its catalog key.
+    /// </summary>
+    /// <param name="count">How many nodes the request carried — the REQUEST's count, never the
+    /// attempted one (see the call site's note).</param>
+    /// <returns>The keyed verdict.</returns>
+    public static LocalizableText BulkCreationNotAttempted(int count)
+        => LocalizableText.Keyed(
+            DescribeNotAttempted($"Bulk creation of {count} node(s)"),
+            BulkCreationNotAttemptedKey, ("count", count));
+
+    /// <summary>
+    /// <see cref="DescribeMayHavePartiallyLanded"/> for a BULK create, carried with its catalog key.
+    /// </summary>
+    /// <param name="count">How many nodes the request carried.</param>
+    /// <returns>The keyed verdict.</returns>
+    public static LocalizableText BulkCreationMayHavePartiallyLanded(int count)
+        => LocalizableText.Keyed(
+            DescribeMayHavePartiallyLanded($"Bulk creation of {count} node(s)"),
+            BulkCreationPartiallyLandedKey, ("count", count));
 }

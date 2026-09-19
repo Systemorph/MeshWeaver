@@ -97,6 +97,7 @@ static async Task<int> RunBuild(string[] args)
     var maxParallel = Math.Max(1, Environment.ProcessorCount);
     var caseTimeout = TimeSpan.FromSeconds(60);
     var runTests = true;
+    var buildWarnings = WarningBaseline.ObserveOnly;
     for (var i = 0; i < args.Length; i++)
     {
         switch (args[i])
@@ -150,6 +151,31 @@ static async Task<int> RunBuild(string[] args)
             case "--no-tests":
                 runTests = false;
                 break;
+            // The SAME baseline the `compile` bake reads, for the same two ratchets — the two
+            // producers compile the same sources, so they must hold them to the same standard or a
+            // repo's debt means two different things depending on which verb ran.
+            case "--warning-baseline" when i + 1 < args.Length:
+            {
+                var buildBaselinePath = args[++i];
+                if (!File.Exists(buildBaselinePath))
+                {
+                    Console.Error.WriteLine(
+                        $"mw-plugin-test build: {WarningBaseline.MissingFileMessage(buildBaselinePath)}");
+                    return 2;
+                }
+                try
+                {
+                    buildWarnings = WarningBaseline.Load(buildBaselinePath);
+                }
+                catch (FormatException ex)
+                {
+                    Console.Error.WriteLine(
+                        "mw-plugin-test build: --warning-baseline file "
+                        + $"'{GateAllowlist.Describe(buildBaselinePath)}' is malformed — {ex.Message}");
+                    return 2;
+                }
+                break;
+            }
             case "-h" or "--help":
                 Console.WriteLine(BuildUsage());
                 return 0;
@@ -190,6 +216,7 @@ static async Task<int> RunBuild(string[] args)
         CaseTimeout = caseTimeout,
         RunTests = runTests,
         SourceSha = sourceSha,
+        Warnings = buildWarnings,
     }).Await(CancellationToken.None);
     return report.ExitCode;
 }
@@ -373,11 +400,13 @@ static string BuildProjectUsage() =>
 static string BuildUsage() =>
     "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "
     + "[--report <file>] [--max-parallel <n>] [--case-timeout <s>] [--no-tests] [--source-sha <sha>] "
-    + "[--app <dir> --shared-frameworks <dir>]\n"
+    + "[--warning-baseline <file>] [--app <dir> --shared-frameworks <dir>]\n"
     + "  Compiles AND tests each selected package (plus its in-repo requirements) as a dependency "
     + "cascade: a package starts when its dependencies are green, is blocked when one is red. "
     + "'all' (default) rebuilds everything. Sources are read from disk; nothing is imported into a mesh. "
-    + "--app/--shared-frameworks name the platform host to compile against (see `compile --help`).";
+    + "--app/--shared-frameworks name the platform host to compile against (see `compile --help`). "
+    + "--warning-baseline arms the same two in-mesh warning ratchets the bake applies (see "
+    + "`compile --help`); without it the build measures and reports but enforces nothing.";
 
 static int RunCompile(string[] args)
 {
@@ -388,6 +417,7 @@ static int RunCompile(string[] args)
     string? compileSharedFrameworks = null;
     var compileAllow = GateAllowlist.Empty;
     var compileAllowApplied = false;
+    var compileWarnings = WarningBaseline.ObserveOnly;
     var compileModules = new List<string>();
     for (var i = 0; i < args.Length; i++)
     {
@@ -477,7 +507,41 @@ static int RunCompile(string[] args)
                 compileModules.Add(compileModulePath);
                 break;
             }
-            case "--output" or "--source-sha" or "--allow" or "--module" or "--app" or "--shared-frameworks":
+            // 🚨 THE WARNING RATCHETS' BASELINE — a SEPARATE file from --allow, deliberately.
+            // --allow records a check that FAILS (a NodeType that does not compile); this records
+            // a NodeType that compiles and produces warnings, which is a different kind of debt
+            // owned by different people. Sharing one file would make a compile failure and a
+            // missing doc comment the same line, and the day the doc debt is paid down the ratchet
+            // would want that line gone while the compile debt still needs it.
+            //
+            // Absent = OBSERVE-ONLY: measure, report the inventory, enforce nothing, and PRINT the
+            // policy — a repo this change has never run in has no baseline to enforce, and a gate
+            // that cannot judge must SAY so rather than look like one that passed. A path that IS
+            // given and is not there is a hard refusal (WarningBaseline.MissingFileMessage).
+            case "--warning-baseline" when i + 1 < args.Length:
+            {
+                var baselinePath = args[++i];
+                if (!File.Exists(baselinePath))
+                {
+                    Console.Error.WriteLine(
+                        $"compile: {WarningBaseline.MissingFileMessage(baselinePath)}");
+                    return 2;
+                }
+                try
+                {
+                    compileWarnings = WarningBaseline.Load(baselinePath);
+                }
+                catch (FormatException ex)
+                {
+                    Console.Error.WriteLine(
+                        "compile: --warning-baseline file "
+                        + $"'{GateAllowlist.Describe(baselinePath)}' is malformed — {ex.Message}");
+                    return 2;
+                }
+                break;
+            }
+            case "--output" or "--source-sha" or "--allow" or "--module" or "--app"
+                or "--shared-frameworks" or "--warning-baseline":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
                 return 2;
             case "--help" or "-h":
@@ -526,6 +590,7 @@ static int RunCompile(string[] args)
         // resolution names MeshBuilder — which MeshFreeBakePathTest forbids anywhere the bake can
         // reach. The bake gets paths; it never meets a mesh type.
         ModuleAssemblyPaths = TesterModules.ResolvedPaths(compileModules),
+        Warnings = compileWarnings,
     });
     if (bake.FatalError is not null)
         Console.Error.WriteLine($"compile: FATAL — {bake.FatalError}");
@@ -560,14 +625,31 @@ static int RunCompile(string[] args)
             ? $" — {knownDebt} known-debt failure(s) allowed, {newFailures} new, "
               + $"{stale.Count} stale allow entr(ies)"
             : string.Empty));
+    // 🚨 The WARNING ratchets fold in on BOTH branches. The `--allow` branch recomputes the exit
+    // code from scratch rather than reading Report.ExitCode (a known-debt compile failure is
+    // tolerated here and not there), so a verdict added to the report and not to this expression
+    // would be printed and then discarded — a gate that reports red and exits 0.
+    if (!bake.WarningsAccepted)
+        Console.Error.WriteLine(
+            "compile: RED — the in-mesh warning standard was not met; see the "
+            + $"'{WarningReportWriter.Prefix}' lines above for the NEW and STALE entries.");
     if (!compileAllowApplied)
         return bake.ExitCode;
-    return bake.FatalError is null && newFailures == 0 && stale.Count == 0 ? 0 : 1;
+    return bake.FatalError is null && newFailures == 0 && stale.Count == 0 && bake.WarningsAccepted
+        ? 0
+        : 1;
 }
 
 static string CompileUsage() =>
     "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
+    + "[--warning-baseline <file>] "
     + "[--source-sha <sha>] [--module <dll>]... [--app <dir> --shared-frameworks <dir>]\n"
+    + "  --warning-baseline arms the two shrink-only in-mesh warning ratchets against <file>: one "
+    + "over the REAL warnings (CS0219, CS1574, …) and a separate one over CS1591 (a missing XML "
+    + "doc comment). Lines are '<NodeType path> <diagnostic id>'; an unlisted (type, code) pair "
+    + "fails the bake and a listed pair whose type compiled clean is STALE and fails it too, so "
+    + "the debt can only shrink. WITHOUT the flag the bake still MEASURES and reports the "
+    + "inventory and says, by name, that it enforced nothing.\n"
     + "  Compiles every NodeType of the node repos under <checkout-root> with MeshWeaver.Compiler "
     + "— no mesh — and writes one prebuilt-assembly bundle per package plus framework-mvid.txt. "
     + "--app names the PLATFORM HOST's application directory (a portal image's /app) and "
@@ -789,7 +871,7 @@ static int RunPlatformSurface(string[] args)
             }
             identity = resolved;
         }
-        surface = MeshWeaver.Mesh.ModulePlatformSurface.OfFiles(set.AssemblyPaths);
+        surface = PublishedHostSurface.Read(full, set.AssemblyPaths);
     }
 
     var json = surface.ToJson(identity);

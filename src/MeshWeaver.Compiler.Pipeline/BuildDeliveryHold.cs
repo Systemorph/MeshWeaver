@@ -84,6 +84,11 @@ public static class BuildDeliveryHold
             // the log/notification wording of the same facts).
             CompilationError = null,
             CompilationDiagnostics = null,
+            // #4469 — the import finding belongs to the FAILURE it explained, and this record is
+            // no longer that failure. Cleared wherever CompilationError/CompilationDiagnostics are,
+            // so a type that once carried one can never become Ok while retaining it and hand a
+            // later gate settle a stale refusal to prepend (Copilot review).
+            CompilationImportRefusals = null,
             // The build IS behind the source — IsDirty stays true, honestly. The next release
             // request re-runs the adoption pass (cheap, no Roslyn) and lands back here until a
             // bundle for this identity catches up.

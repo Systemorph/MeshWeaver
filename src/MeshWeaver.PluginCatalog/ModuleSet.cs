@@ -805,22 +805,21 @@ public static class ModuleSetStore
     /// <summary>
     /// Writes a record that is never rewritten: a temp file in the same directory, then a rename
     /// that does NOT overwrite. Two replicas racing the same path both produce the same bytes, so
-    /// the loser's failed rename is success — never a replace over a file a reader holds open,
+    /// the loser's refused rename is success — never a replace over a file a reader holds open,
     /// which is the SMB sharing violation of #2090.
+    ///
+    /// <para>🚨 A rename, never a copy (#2190). <c>File.Move(…, overwrite: false)</c> copied the temp
+    /// into the final name whenever its rename failed, so a replica reading the set index saw a
+    /// record that was incomplete and exclusively locked. <see cref="MeshWeaver.Utils.NoReplaceMove"/>
+    /// publishes the complete file or nothing.</para>
     /// </summary>
     private static void WriteOnce(string path, string content)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllText(temp, content);
-        try
-        {
-            File.Move(temp, path, overwrite: false);
-        }
-        catch (IOException) when (File.Exists(path))
-        {
+        if (!MeshWeaver.Utils.NoReplaceMove.TryMove(temp, path))
             // Another replica wrote the identical record first. That IS the outcome we wanted.
             File.Delete(temp);
-        }
     }
 }

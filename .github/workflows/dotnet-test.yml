@@ -1875,8 +1875,12 @@ jobs:
         # be satisfied by bundles the run under judgement never installed.
         log="${RUNNER_TEMP:-/tmp}/doc-gate.log"
         status=0
+        # .github/doc-gate-warnings.allow is the in-mesh WARNING debt this tree carries — the
+        # two shrink-only ratchets (one over the real warnings, a separate one over CS1591).
+        # Doc/Architecture/InMeshWarningStandard.
         bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" "$BAKE/doc" \
-          .github/doc-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/doc-gate" || status=$?
+          .github/doc-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/doc-gate" \
+          .github/doc-gate-warnings.allow || status=$?
         verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
         # ── Second stage: the samples trees — the "12k lines of C# no build ever type-checks"
         # from AGENTS.md. Same tester, same mechanics; .github/samples-gate.allow is its own
@@ -1886,7 +1890,8 @@ jobs:
         slog="${RUNNER_TEMP:-/tmp}/samples-gate.log"
         sstatus=0
         bash .github/scripts/bake-then-gate.sh "$TESTER" "$SSTAGE" "$BAKE/samples" \
-          .github/samples-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/samples-gate" || sstatus=$?
+          .github/samples-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/samples-gate" \
+          .github/samples-gate-warnings.allow || sstatus=$?
         sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" || true)"
         combined="$(printf '%s\n%s' "$verdict" "$sverdict" | grep . | head -1 || true)"
         {
@@ -1932,6 +1937,16 @@ jobs:
           echo
           echo '```'
           grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate-bake.log" "${RUNNER_TEMP:-/tmp}/samples-gate-bake.log" || true
+          echo '```'
+          echo
+          # The in-mesh WARNING inventory, folded — totals, the per-code table and both ratchets'
+          # verdicts. Four lines per tree, standing in for what would otherwise be hundreds of raw
+          # occurrences. Doc/Architecture/InMeshWarningStandard.
+          echo "### ⚠️ In-mesh warnings"
+          echo
+          echo '```'
+          grep -hE '^warnings: (.*raw occurrence|by code|.* ratchet —)' \
+            "${RUNNER_TEMP:-/tmp}/doc-gate-bake.log" "${RUNNER_TEMP:-/tmp}/samples-gate-bake.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     # 🚨 NO artifact upload — deliberately, since #1725. These bundles are keyed to THIS job's
@@ -2105,6 +2120,18 @@ jobs:
     - name: "The host-crash recorder writes a dead host into its trx, directory and all (self-test)"
       run: python3 .github/scripts/record-host-crash.py --self-test
 
+    # 🚨 THE STEWARD THAT SPENT A WEEK DECIDING WITHOUT READING ANYTHING (#4534). Its `gh api …/logs`
+    # read failed on every run from at least 2026-09-10, because the hosted runner's `gh` refuses a
+    # body carrying terminal escape sequences and every Actions log has them — and it reported that
+    # as "cannot prove a transient, no retry" over a GREEN job. It now reads the API directly and
+    # REDS when it cannot see its input. This self-test is why the recurrence cannot be silent: it
+    # drives a log with real ESC sequences through the reader, drives every unreadable shape to a
+    # loud exit 1, and drives a compile error and a 403-on-the-mint-URL to a refusal — so "the
+    # steward went blind again" and "the steward retried a real red" both arrive as a red here,
+    # on the pull request, instead of as a week of quiet green.
+    - name: "The transient steward reads its input, or reds (self-test)"
+      run: python3 .github/scripts/retry-known-transients.py --self-test
+
     # 🚨 Every job in every workflow carries a LITERAL `timeout-minutes` <= 45 (maintainer, 2026-09-02:
     # "hard cut CI runs after 45min — we pay all this"). GitHub's default is 360; one uncapped job in
     # the module-pack lane held a runner for six hours per run across 19 concurrent Plugins runs and
@@ -2113,6 +2140,16 @@ jobs:
       run: python3 .github/scripts/check-workflow-timeouts.py --self-test
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 💸 GitHub Actions cost is zero (maintainer, 2026-09-17: "we still incur cost for github actions.
+    # wtf? please see that it goes to 0"). A `workflow_call` lane's hosted minutes bill the CALLER, and
+    # every caller of these lanes but core itself is private — so no job inside one may name a literal
+    # runner. It resolves through the private-visibility org variables MW_RUNNER / MW_RUNNER_DOCKER
+    # (the caller's `vars`), falling back to `ubuntu-latest` only where they are invisible: here. The
+    # self-test takes --root so every real runner expression is mutated back to a literal and must fire.
+    - name: "Reusable workflows pick runners through the caller's runner variables — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-reusable-workflow-runners.py --self-test --root .
+    - name: "Reusable workflows pick runners through the caller's runner variables"
+      run: python3 .github/scripts/check-reusable-workflow-runners.py --root .
     # 🚨 THE SELF-TEST TAKES --root AND --fleet ON PURPOSE. Without them only the unit cases run,
     # and those pass against hand-written dicts while the real tree is broken — which is exactly
     # what happened: #3989's self-test asserted "the 2026-09-10 outage shape is caught" and was
@@ -2161,6 +2198,25 @@ jobs:
     - name: "The ci-failure ledger can say no (self-test)"
       run: python3 .github/scripts/ci-failure-ledger.py --self-test
 
+    # 🚨 The CI object store (ci-artifact-store.py) — the seam that lets a module bundle's DURABLE
+    # copy live on our own infra instead of in GitHub Actions storage (maintainer, 2026-09-17: "we
+    # still incur cost for github actions … please see that it goes to 0"). Core owns the script and
+    # every satellite fetches it at its scripts ref, and core is the ONE repo that must never use it:
+    # this repository is public, its Actions storage is free, and a fork PR holds no credential at
+    # all. So the rule proven here first is THE DEGRADE RULE — no store declared resolves to `gha`
+    # and exits 0 — because it is the mode core itself runs in and therefore the one whose breakage
+    # would be invisible until a satellite's lane went red. The rest: a locator carries the store and
+    # a sha256 and is refused when either disagrees, `put` is idempotent by content, a declared store
+    # that cannot be reached is RED under --require and never a quiet return to GitHub artifacts, and
+    # an `az` failure names the account rather than being swallowed.
+    - name: "The CI artifact store degrades to GitHub artifacts, and can say no (self-test)"
+      run: python3 .github/scripts/ci-artifact-store.py --self-test
+
+    - name: "Own-store named artifacts preserve rerun inputs and reject corrupt archives"
+      run: python3 .github/scripts/test_ci_run_artifacts.py
+    - name: "The composite actions execute the own-store transport contract"
+      run: python3 .github/scripts/test-ci-artifact-actions.py
+
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
     # is the only thing between "no per-instance credential was provisioned" and a lane that
@@ -2204,6 +2260,14 @@ jobs:
       run: python3 .github/scripts/check-pr-secret-preflight.py --self-test
     - name: "Every PR-reachable secret is asserted by a preflight"
       run: python3 .github/scripts/check-pr-secret-preflight.py --root .
+
+    # 🚨 review-answered.yml runs its own self-test before every verdict, but only on the events it
+    # listens to — so a pull request that breaks the predicate (a bot reply counted as an answer, a
+    # quota refusal counted as a review, a waiver that releases findings) would first go red on
+    # somebody ELSE's review event. Proving it here puts that red on the pull request that caused it.
+    # No credential, no network: every case is a fixture (#4299).
+    - name: "An unanswered or unreviewed pull request goes red — the check can say no (self-test)"
+      run: python3 .github/scripts/check-review-answered.py --self-test
 
     # 🚨 THE TWO SCRIPTS THAT DECIDE WHAT A SATELLITE'S PULL REQUEST DOES *NOT* REBUILD, proven
     # here because core is the repo that OWNS them — every satellite gets them fetched at its

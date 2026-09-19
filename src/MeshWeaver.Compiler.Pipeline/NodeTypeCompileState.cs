@@ -104,6 +104,12 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.LatestAssemblyPath"/>.</summary>
     public string? LatestAssemblyPath { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.LatestAssemblyMvid"/> — the IDENTITY of the bytes
+    /// the build produced, where the pair above is only their ADDRESS (#2471). Mirrored for the
+    /// same reason as the pair: a reader that has the address but not the identity cannot tell the
+    /// bytes it was served from the bytes this state is talking about.</summary>
+    public string? LatestAssemblyMvid { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CompiledSources"/>.</summary>
     public IReadOnlyDictionary<string, long>? CompiledSources { get; init; }
 
@@ -116,14 +122,37 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/>.</summary>
     public string? CompiledFrameworkVersion { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.CompiledModulesHash"/> — the installed-MODULE
+    /// fingerprint the build ran under (#1644/#1664). Mirrored for the same reason as the framework
+    /// version beside it: both answer "is this build still usable here", and the satellite carries
+    /// exactly what the sync seams mask (#4480).</summary>
+    public string? CompiledModulesHash { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.CompiledDependencies"/> — the per-type dependency
+    /// record the build was stamped with (#1707 slice 2), which supersedes the instance-wide hash
+    /// above when present. Mirrored for the same reason (#4480).</summary>
+    public ImmutableSortedDictionary<string, string>? CompiledDependencies { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.FailedBuildInputs"/>.</summary>
     public string? FailedBuildInputs { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.DispatchedBuildInputs"/> — what the compile IN
+    /// FLIGHT was dispatched for (#2544), null when no dispatch vouches for it. Mirrored for the
+    /// same reason as the failure token beside it (#4480).</summary>
+    public string? DispatchedBuildInputs { get; init; }
 
     /// <summary>See <see cref="NodeTypeDefinition.FailedSourceQueries"/> — the declared source
     /// queries that matched NOTHING when the standing failure was recorded (#3903). Mirrored for
     /// the same reason as the token beside it, and with the same three-shape contract: <c>null</c>
     /// is NOT DETERMINED, an empty list is "checked, every declared query matched".</summary>
     public System.Collections.Immutable.ImmutableList<string>? FailedSourceQueries { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.CompilationImportRefusals"/> — the source nodes
+    /// an IMPORT recorded as refused that explain the standing failure's unresolved names (#4469).
+    /// Mirrored for the same reason as the queries beside it, and with the same three-shape
+    /// contract: <c>null</c> is NOT DETERMINED, an empty list is "the bookkeeping was read and
+    /// explains none of these names".</summary>
+    public System.Collections.Immutable.ImmutableList<ImportRefusal>? CompilationImportRefusals { get; init; }
 
     /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourceFingerprint"/>.</summary>
     public string? AdoptedSourceFingerprint { get; init; }
@@ -182,12 +211,17 @@ public record NodeTypeCompileState
                 ReleaseNotes = definition.ReleaseNotes,
                 LatestAssemblyCollection = definition.LatestAssemblyCollection,
                 LatestAssemblyPath = definition.LatestAssemblyPath,
+                LatestAssemblyMvid = definition.LatestAssemblyMvid,
                 CompiledSources = definition.CompiledSources,
                 CurrentSourceVersions = definition.CurrentSourceVersions,
                 RequestedSourceStampAt = definition.RequestedSourceStampAt,
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
+                CompiledModulesHash = definition.CompiledModulesHash,
+                CompiledDependencies = definition.CompiledDependencies,
                 FailedBuildInputs = definition.FailedBuildInputs,
+                DispatchedBuildInputs = definition.DispatchedBuildInputs,
                 FailedSourceQueries = definition.FailedSourceQueries,
+                CompilationImportRefusals = definition.CompilationImportRefusals,
                 AdoptedSourceFingerprint = definition.AdoptedSourceFingerprint,
                 AdoptedSourcePaths = definition.AdoptedSourcePaths,
                 AdoptedSourceIncludes = definition.AdoptedSourceIncludes,
@@ -208,10 +242,14 @@ public record NodeTypeCompileState
         && RequestedReleaseAt is null && !RequestedReleaseForce && RequestedReleaseBy is null
         && LastReleaseRequestHandledAt is null && ReleaseNotes is null
         && LatestAssemblyCollection is null && LatestAssemblyPath is null
+        && LatestAssemblyMvid is null
         && CompiledSources is null && CurrentSourceVersions is null
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
+        && CompiledModulesHash is null && CompiledDependencies is null
+        && DispatchedBuildInputs is null
         && FailedSourceQueries is null
+        && CompilationImportRefusals is null
         && AdoptedSourceFingerprint is null && AdoptedSourcePaths is null
         && AdoptedSourceIncludes is null && CurrentSourceIncludes is null
         && AdoptedModuleVersion is null

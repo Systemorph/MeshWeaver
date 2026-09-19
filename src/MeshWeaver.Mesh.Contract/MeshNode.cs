@@ -319,6 +319,62 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? LastModifiedBy { get; init; }
 
     /// <summary>
+    /// 🚨 A NODE TIMESTAMP IS MINTED AT THE RESOLUTION EVERY BACKEND CAN HOLD — one MICROSECOND —
+    /// so the value in memory and the value in the row are the SAME value, not two that happen to
+    /// be close (#4506).
+    ///
+    /// <para><b>Why this is not cosmetic.</b> A <see cref="DateTimeOffset"/> tick is 100 ns;
+    /// PostgreSQL <c>timestamptz</c> — where <c>created_date</c> and <c>last_modified</c> live —
+    /// holds MICROSECONDS. A stamp taken straight from <c>DateTimeOffset.UtcNow</c> therefore comes
+    /// back from its own row DIFFERENT, and any code that compares the node it just wrote against
+    /// the node it reads back is comparing a value to a truncation of itself. Measured on
+    /// memex.meshweaver.cloud, 2026-09-16, on ONE node
+    /// (<c>Doc/_Activity/import-f7f86c9f5020ab36</c>): the timestamps that ride inside the JSON
+    /// <c>content</c> keep their tick (<c>…:47.9123072Z</c>, <c>…:47.9123038Z</c>,
+    /// <c>…:47.9123109Z</c> — three of three ending in a non-zero sub-microsecond digit), while the
+    /// same node's column-backed <c>createdDate</c> / <c>lastModified</c> come back at exactly six
+    /// fractional digits. Same process, same instant, two different values.</para>
+    ///
+    /// <para><b>What it broke.</b> The create rollback (<c>CompensateFailedCreate</c>, #638, and
+    /// every bulk rollback built on it in #4503) refuses to delete a row it did not create by
+    /// re-reading it and comparing <see cref="CreatedDate"/>. Against a truncating column that
+    /// comparison fails for the rollback's OWN row, so the rollback stood down on the node it had
+    /// just written and the caller was told to clean up by hand — which is precisely the
+    /// unrecoverable ghost #638 exists to prevent. Flooring the mint is the root fix: it removes the
+    /// discrepancy at the one place it is introduced, rather than teaching one comparison to
+    /// tolerate it.</para>
+    ///
+    /// <para>Rounding is deliberately NOT used: a store truncates, so flooring is what makes the
+    /// in-memory value equal to the durable one. A value already on a whole microsecond — every
+    /// value that has been through a row, and everything this method returns — is its own floor, so
+    /// applying it twice changes nothing.</para>
+    ///
+    /// <para>🚨 <b>Scope, stated so nobody has to guess it: the CREATE paths.</b> Both create verbs
+    /// and the installer's direct write mint through <see cref="StorageStableNow"/>, because
+    /// <see cref="CreatedDate"/> is the rollback's lineage token and is written exactly there
+    /// (Postgres holds <c>created_date</c> IMMUTABLE — set at INSERT, never in the
+    /// <c>ON CONFLICT SET</c>). The UPDATE audit stamp still mints a raw <c>UtcNow</c> for
+    /// <see cref="LastModified"/>: it compares the lambda's value against the LIVE node to ask "did
+    /// the caller touch this", so both sides are already the durable value and nothing crosses the
+    /// boundary — and flooring it would make two updates inside one microsecond produce an identical
+    /// stamp, which the no-op gate could read as "unchanged". Widen this only with that in
+    /// hand.</para>
+    /// </summary>
+    /// <param name="value">A timestamp about to be stamped onto a node.</param>
+    /// <returns><paramref name="value"/> floored to a whole microsecond.</returns>
+    public static DateTimeOffset StorageStable(DateTimeOffset value)
+        => value.AddTicks(-(value.Ticks % TimeSpan.TicksPerMicrosecond));
+
+    /// <summary>
+    /// <c>DateTimeOffset.UtcNow</c>, floored by <see cref="StorageStable"/> — the ONLY way a create
+    /// path mints <see cref="CreatedDate"/> / <see cref="LastModified"/>. See
+    /// <see cref="StorageStable"/> for why a raw <c>UtcNow</c> does not survive its own row.
+    /// </summary>
+    /// <returns>The current UTC instant, floored to a whole microsecond.</returns>
+    public static DateTimeOffset StorageStableNow()
+        => StorageStable(DateTimeOffset.UtcNow);
+
+    /// <summary>
     /// The node's own revision counter — the number of times this node has actually been
     /// changed. It increases by exactly one per REAL modification and by nothing at all when a
     /// write turns out to be a no-op.

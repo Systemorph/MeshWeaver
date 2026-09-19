@@ -146,6 +146,17 @@ and click **Re-import at this commit** — the Space is mirrored to that exact s
 (added / updated / removed to match), and the new commit is recorded. This is how you
 roll a Space forward or back to a specific repository state.
 
+> 🚨 **For a repository whose compiled modules this portal runs, "latest" means the latest this
+> portal can RUN** (since 2026-09-17, MeshWeaver#3845). When a publication of the repository is
+> sealed for the portal's framework identity, both buttons import **the sealed commit** — the commit
+> the portal's bundles were baked from — whatever branch or commit was asked for, and the activity
+> says so in a Warning line naming both. When that publication is torn, at an unknown commit or
+> disagreeing, they import **nothing** and say which publication holds the Space and what releases
+> it: **roll the portal** when a newer platform line is sealed, otherwise the publishing lane sealing
+> a newer commit. A repository this portal runs no publication of (a course, a document tree, a
+> deployment record) is unaffected and reads exactly what was asked. The rule and its reasons:
+> [The Sync-Ref Contract](../SyncRefContract).
+
 Import reuses the platform's content-addressed import pipeline (fingerprint gate +
 activity lock + canonical upsert + prune) — see
 [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport).
@@ -183,7 +194,7 @@ another's question is how an investigation goes wrong. They are deliberately ind
 | `lastSyncAttemptAt` + `lastSyncOutcome` | *When did a sync last RUN here, and what did it conclude?* | **Every** conclusion — an import, a no-op, one that preserved server-side edits, one that landed nothing. |
 | `lastSyncCommitSha` | *Which repo commit has this Space already got?* | Whenever the mesh genuinely reached that commit — **including** a no-op update, so a repo commit touching no node files does not leave the Space forever "behind". |
 | `lastSyncedAt` | *When were mesh and repo last RECONCILED?* — the two-way **conflict horizon** | Only on an import that really reconciled: **not** on a fingerprint-matched no-op, **not** when server-newer nodes were preserved, **not** when something failed to land. |
-| `lastAttemptedCommitSha` + `lastAttemptWasFinal` | *Have we already LOOKED at exactly these bytes, and could looking again change the answer?* | On every import conclusion; **cleared** by an export and by a hold. This is the pair that makes a green build free for a source that cannot converge — see [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost). |
+| `lastAttemptedCommitSha` + `lastAttemptWasFinal` (+ `lastAttemptedConfigFingerprint`) | *Have we already LOOKED at exactly these bytes, as this source is configured now, and could looking again change the answer?* | On every import conclusion, a refusal included; **cleared** by an export and by a hold. This is the pair that makes a green build or a publication announcement free for a source that cannot converge, and the fingerprint is what lets an edit of the source re-attempt at the same commit — see [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost). |
 
 The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
 and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms
@@ -226,7 +237,10 @@ The safe loop for anything you want to keep — the **git-first** discipline:
 1. **Edit in the repo** — or, if you edited live, **Sync now** (`op: commit`) *immediately*
    to capture it in the repo; never let live-only state accumulate.
 2. **Commit / open a PR**, review, **merge**.
-3. **Update to latest** (`op: update`) — pull the merged state back into the Space.
+3. **Update to latest** (`op: update`) — pull the merged state back into the Space. On a
+   repository whose modules this portal runs, the merged state arrives once it is **sealed** for the
+   portal's framework identity; until then the Space stays on the sealed commit and the activity says
+   why (see §4).
 4. **Recycle** any node whose **type or configuration changed**. Importing new content
    into a node that is already *running* does not swap its live views: a node that flipped
    `Markdown → Deck`, or whose `NodeType` source recompiled, keeps its old hub until you
@@ -468,6 +482,44 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    measured on memex-cloud as the first failure 2 h 01 min after the container started).
    `GitHubAppTokenRefreshTest` in `Memex.Portal.Shared.Test` holds the invariant with an
    injected clock: the second and third refresh mint, a fresh token replays.
+
+   **🚨 A token that was never minted is a different event from one GitHub rejected — and
+   they used to read the same.** Every fault out of `GetInstallationToken()` is now a
+   `GitHubAppTokenMintException` carrying the stage it stopped at: `NotConfigured`,
+   `Signing` (the key cannot sign — nothing reached GitHub), `InstallationDiscovery` (the App
+   is not installed where it is expected), `TokenExchange` (GitHub refused the exchange — the
+   nearest thing to "revoked"), `Response` (no token in the body) or `Transport` (no verdict
+   at all), plus GitHub's status code where one exists. The translation is total — anything
+   unexpected from the HTTP leaf is wrapped with the original as `InnerException`, and only a
+   cancellation passes through as itself, because a cancelled mint is not a failed one. The
+   type derives from `InvalidOperationException`, which is what all of these paths threw
+   before, so every existing catch behaves identically, and it never carries the key, the JWT
+   or the token.
+
+   Why the distinction has to be carried by a TYPE rather than a message: a consumer may
+   legitimately degrade to an anonymous fetch when no token can be minted — the Store's
+   package feed does, because a public source must keep working — and the *next* thing that
+   happens is GitHub refusing the private repositories, which Octokit reports as
+   `AuthorizationException: Bad credentials`. That sentence is about a credential that was
+   presented and judged. Read against a credential that was never issued it sends the reader
+   to the installation's repository permissions, which are fine, and away from the private key
+   or the installation, which are not (#4736 — four days of identical five-minute reports).
+   `GitHubAppTokenMintFailureTest` pins both sides: a failed mint is a
+   `GitHubAppTokenMintException` naming its stage, and a mint that SUCCEEDS and is then
+   refused downstream is not one.
+
+   Two things that follow, and neither is obvious from a log:
+
+   - **An empty token means anonymous, not "a bad token".** `OctokitGitHubRepoClient.Client`
+     builds a credential-free client for an empty string (Octokit's `new Credentials("")`
+     throws), so an anonymous read of a *private* repository answers **404**. A **401** on a
+     private source therefore means a token was presented — the mint succeeded and the
+     credential is the problem. The empty-token downgrade cannot produce a 401.
+   - **The Store's own degradation is not in this repository.** `StoreManifestSource.Token()`
+     is in-mesh C# in `Systemorph/MeshWeaver.Plugins` (`Store/Catalog/Source/`), so it
+     compiles at runtime in the portal and never in core's CI. It catches the mint failure,
+     names it at Error on the feed's own logger, and then lets the empty token flow on
+     purpose.
 
 All GitHub HTTP and serialization run through the controlled I/O pool — see
 [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling).

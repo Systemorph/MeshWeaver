@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -28,6 +29,11 @@ namespace MeshWeaver.Mesh;
 /// differing only in bookkeeping has not changed.</item>
 /// </list>
 ///
+/// <para>🚨 One member is mesh-written and still must NOT be preserved on import, because dropping
+/// it is how it CLEARS — see <see cref="StrippedButNotPreserved"/>. Those are stripped by the first
+/// and third rules and skipped by the second, so the strip paths use the UNION and the preserve
+/// path uses <see cref="MemberNames"/> alone.</para>
+///
 /// <para>This is the transitional ownership rule until the compile state moves off the
 /// NodeTypeDefinition entirely (into the compile activity / a <c>_Compile</c> satellite the sync
 /// never touches); once that lands this class keeps legacy repo files and stored nodes honest.</para>
@@ -46,6 +52,17 @@ public static class NodeTypeOperationalContent
     /// both casings denote the same member. Pinned against the <c>NodeTypeDefinition</c> record by
     /// <c>NodeTypeOperationalContentTest</c> in the Graph test suite, so the list cannot silently
     /// drift from the record.
+    ///
+    /// <para>🚨 In BOTH directions since #4480, and the reverse one is the direction that loses
+    /// data. <c>MemberNames ⊆ the record</c> catches an entry naming no property; it is
+    /// structurally blind to a runtime-state PROPERTY missing from here, which is what leaks the
+    /// mesh's own measurements into a repo file and lets a file overwrite them on the way back —
+    /// four were missing that way. So the guard is now three: that inclusion, the reverse one over
+    /// the control plane's naming convention, and a PARTITION that classifies every serialised
+    /// member of the record as repo-authored, mesh-owned-and-masked, or (with its reason)
+    /// stripped-but-never-preserved. Only the partition sees a member spelled outside the
+    /// convention — <c>dispatchedBuildInputs</c> was exactly that. See
+    /// <c>Doc/Architecture/NodeTypeMemberOwnership</c>.</para>
     ///
     /// <para>🚨 The case-insensitive comparer is load-bearing TWICE: for the JSON paths above, and
     /// for <see cref="WithTypedMembersReset"/>, which matches CLR PascalCase property names against
@@ -70,7 +87,29 @@ public static class NodeTypeOperationalContent
         "releaseNotes",
         "latestAssemblyCollection",
         "latestAssemblyPath",
+        // #4480 — the third member of the assembly triple, and the only one that is an IDENTITY:
+        // the MVID of the bytes the last successful build PRODUCED (#2471). Operational for the
+        // same reason the collection/path pair is, and for one sharper one: bind time compares it
+        // against the MVID of the bytes actually served, so an authored value forges a MATCH and
+        // turns off the stale-build detector that exists to catch a portal serving stale compiled
+        // code while reporting Ok — or forges a MISMATCH and refuses a correct bind. Export leaving
+        // it behind was incoherent on its own terms: the file then named bytes by an identity that
+        // exists nowhere on the importing mesh, while carrying no path to them.
+        "latestAssemblyMvid",
         "compiledSources",
+        // #4480 — the deployment's installed-MODULE fingerprint the assembly was compiled under
+        // (#1644/#1664). Operational for the same reason compiledFrameworkVersion is, and it
+        // DECIDES: HasUsableBuild invalidates a build stamped with a different non-null hash than
+        // the live set, so an authored hash that happens to match the importing deployment declares
+        // a FOREIGN build usable and suppresses the recompile a module update requires. The same
+        // class of forgery the adoptedSourceFingerprint entry names.
+        "compiledModulesHash",
+        // #4480 — the per-type DEPENDENCY RECORD the assembly was compiled with (#1707 slice 2).
+        // Operational for the same reason compiledModulesHash is, and it decides in one more place:
+        // PrebuiltAssemblySeeder.IsAlreadyAdopted compares the LIVE stamp against the BUNDLE's
+        // record, so an authored record matching the bundle makes a FRESH install read as
+        // already-adopted — the bytes are never seeded and the type parks on a stamp nobody earned.
+        "compiledDependencies",
         "currentSourceVersions",
         // #1834 — the adopter's REQUEST that the owner stamp compiledSources from its own
         // currentSourceVersions. Operational for the same reason both of those are, and for one
@@ -108,7 +147,55 @@ public static class NodeTypeOperationalContent
         // a finding about a partition it was never taken on — and the empty list is the shape that
         // reads as "checked, all present".
         "failedSourceQueries",
+        // #4469 — the source nodes an IMPORT recorded as refused that explain the standing
+        // failure's unresolved names. Operational for exactly the reason failedSourceQueries is,
+        // and for a sharper one: it is a measurement taken against THIS mesh's own import
+        // bookkeeping, so an authored copy would accuse an import that never ran here — the
+        // unfounded accusation the whole mechanism exists to refuse. Stripped on export, preserved
+        // from the live node on import.
+        "compilationImportRefusals",
+        // #4480 — the build-inputs token the IN-FLIGHT compile was dispatched for (#2544), cleared
+        // by every terminal write-back. Operational for the same reason failedBuildInputs is, and
+        // it is the member that proved a naming convention cannot be the guard: it is spelled
+        // outside the compile/release control plane's prefixes, so nothing ever named it as runtime
+        // state and nothing noticed it was missing from here. An authored token matching what a
+        // live request resolves to makes that request read as ALREADY IN FLIGHT and be CONSUMED —
+        // absorbed against a compile nobody dispatched, so the release it asked for is simply lost.
+        "dispatchedBuildInputs",
     };
+
+    /// <summary>
+    /// 🚨 MESH-WRITTEN, STRIPPED wherever a node becomes (or is compared as) a FILE — and
+    /// deliberately NOT PRESERVED from the live node on import. The THIRD ownership bucket (#4480),
+    /// and the one that needs a reason per entry, because it is the one place the two halves of the
+    /// seam rule come apart.
+    ///
+    /// <list type="bullet">
+    ///   <item><c>NodeTypeDefinition.PendingRetirement</c> — stamped by a
+    ///     repository-driven import when the repo RETIRED a type that still has live instances,
+    ///     through the probe's own <c>stream.Update</c> (never an upsert), and NOTHING in
+    ///     <c>src/</c> ever writes null back to it. The one thing that clears it is the repo
+    ///     shipping the type AGAIN: an upsert replaces the node's content wholesale, so a member
+    ///     the live node holds and the file does not simply goes away. Put it in
+    ///     <see cref="MemberNames"/> and the live value would win on every import — a re-shipped
+    ///     type would stay marked retired forever, and the bake gate reads a stamped type's compile
+    ///     failure as <c>Retired</c>, i.e. as a verdict that must NOT hold a rollout. But it is
+    ///     still runtime state, so a FILE must never carry it: the export strips it like everything
+    ///     else the mesh owns, and an authored value never lands.</item>
+    /// </list>
+    /// </summary>
+    public static readonly IReadOnlySet<string> StrippedButNotPreserved =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "pendingRetirement");
+
+    /// <summary>
+    /// Everything a repo FILE must not carry — <see cref="MemberNames"/> plus
+    /// <see cref="StrippedButNotPreserved"/>. This is the set the strip paths and the
+    /// change-detection token use; the PRESERVE half uses <see cref="MemberNames"/> alone, and that
+    /// asymmetry IS the third bucket.
+    /// </summary>
+    private static readonly IReadOnlySet<string> FileExcludedMembers =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
+            MemberNames.Concat(StrippedButNotPreserved).ToArray());
 
     /// <summary>
     /// The node with the operational members REMOVED from its content — the shape a repo file (and
@@ -120,7 +207,7 @@ public static class NodeTypeOperationalContent
         if (!IsNodeTypeNode(node) || ContentObject(node, options) is not { } content)
             return node;
         var removed = false;
-        foreach (var key in content.Select(member => member.Key).Where(MemberNames.Contains).ToArray())
+        foreach (var key in content.Select(member => member.Key).Where(FileExcludedMembers.Contains).ToArray())
             removed |= content.Remove(key);
         return removed ? node with { Content = content } : node;
     }
@@ -162,9 +249,12 @@ public static class NodeTypeOperationalContent
     /// The typed half of <see cref="WithoutOperational"/>: a record clone with every operational
     /// property reset to its default (null, false, zero) and any extension-data entry of an
     /// operational name dropped. Reflection, because this assembly cannot name the definition type;
-    /// the member list is the same <see cref="MemberNames"/>, matched case-insensitively against
-    /// the property names. Content that is not a record (no <c>&lt;Clone&gt;$</c>) falls back to the
-    /// JSON shape.
+    /// the member list is the SAME UNION the JSON strip uses — <see cref="MemberNames"/> plus
+    /// <see cref="StrippedButNotPreserved"/> — matched case-insensitively against the property
+    /// names. 🚨 The union, not the mask: this is a STRIP, and narrowing it to
+    /// <see cref="MemberNames"/> would let a typed file keep a member the JSON path removes, which
+    /// is a difference no caller can see. Content that is not a record (no <c>&lt;Clone&gt;$</c>)
+    /// falls back to the JSON shape.
     /// </summary>
     private static MeshNode WithTypedMembersReset(MeshNode node, JsonSerializerOptions options)
     {
@@ -185,7 +275,7 @@ public static class NodeTypeOperationalContent
         {
             if (!property.CanRead || property.SetMethod is null)
                 continue;
-            if (MemberNames.Contains(property.Name))
+            if (FileExcludedMembers.Contains(property.Name))
             {
                 var current = property.GetValue(typed);
                 var blank = property.PropertyType.IsValueType
@@ -198,10 +288,10 @@ public static class NodeTypeOperationalContent
             }
             else if (property.GetCustomAttribute<JsonExtensionDataAttribute>() is not null
                      && property.GetValue(typed) is IDictionary<string, JsonElement> extra
-                     && extra.Keys.Any(MemberNames.Contains))
+                     && extra.Keys.Any(FileExcludedMembers.Contains))
             {
                 copy ??= clone.Invoke(typed, null);
-                var kept = extra.Where(kv => !MemberNames.Contains(kv.Key))
+                var kept = extra.Where(kv => !FileExcludedMembers.Contains(kv.Key))
                     .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
                 property.SetValue(copy, kept.Count == 0 ? null : kept);
             }
@@ -215,6 +305,13 @@ public static class NodeTypeOperationalContent
     /// as the mesh last wrote it: the live value when the live node has one, ABSENT when it does not
     /// (a stale value embedded in the file never survives, in either direction). Returns the same
     /// instance when nothing would change, so an authored-identical import stays a no-op upsert.
+    ///
+    /// <para>🚨 <b>Exception, by design: <see cref="StrippedButNotPreserved"/>.</b> Those members are
+    /// removed from the incoming node like every other mesh-owned one — a file may not forge one —
+    /// but they are NOT copied back from the live node, so they end up ABSENT whatever the live node
+    /// holds. That is what clears them: an upsert replaces the content wholesale, and nothing in
+    /// <c>src/</c> ever writes null back to a retirement stamp. Read the promise above as "every
+    /// member of <see cref="MemberNames"/>", never "every member the mesh writes".</para>
     ///
     /// <para>🚨 <b>A CREATE is an import too.</b> With no live node (<paramref name="live"/> null)
     /// the mesh has written nothing yet, so every operational member must be ABSENT — the file's
@@ -246,7 +343,7 @@ public static class NodeTypeOperationalContent
             return incoming;
         var liveContent = ContentObject(live, options);
         var merged = (JsonObject)original.DeepClone();
-        foreach (var key in merged.Select(member => member.Key).Where(MemberNames.Contains).ToArray())
+        foreach (var key in merged.Select(member => member.Key).Where(FileExcludedMembers.Contains).ToArray())
             merged.Remove(key);
         if (liveContent is not null)
             foreach (var (key, value) in liveContent.Where(member => MemberNames.Contains(member.Key)))

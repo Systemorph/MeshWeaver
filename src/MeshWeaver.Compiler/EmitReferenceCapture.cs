@@ -113,7 +113,9 @@ internal static class EmitReferenceCapture
             var temporary = Path.Combine(directory, "manifest.tmp");
             using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 JsonSerializer.Serialize(output, manifest);
-            File.Move(temporary, Path.Combine(directory, "manifest.json"));
+            // A rename, never File.Move: its failed rename COPIES, publishing the manifest incomplete.
+            if (!MeshWeaver.Utils.NoReplaceMove.TryMove(temporary, Path.Combine(directory, "manifest.json")))
+                return "incomplete";
             return complete ? "captured" : "incomplete";
         }
         catch { return "incomplete"; }

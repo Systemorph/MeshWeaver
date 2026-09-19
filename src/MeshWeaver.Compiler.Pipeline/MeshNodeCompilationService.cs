@@ -2078,7 +2078,10 @@ internal class MeshNodeCompilationService(
                     GeneratedInputDigestFile.Write(stagingDir, nodeName, generatedInputDigest);
                     return emitted;
                 });
-            warnings = emitted.Warnings;
+            // Rendered for the ACTIVITY here — capped, one line each. The artifact carries the
+            // structured, uncapped set because the BUILD lane ratchets on diagnostic ids; the
+            // activity a human opens keeps the cap it has always had.
+            warnings = EmitPipeline.Report(emitted.Warnings);
         }
         else
         {

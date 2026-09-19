@@ -545,22 +545,22 @@ public static class BuildProtocolDriver
             .Select(r => r!)
             .ToImmutableList();
 
-        return mesh.UpdateBuildAsHolder(
+        // 🚨 The chunk's close-out is a TERMINAL transition, so it states its outcome exactly as the
+        // root's does and lets the chunk's own hub apply it (#4708). It used to clear the claim
+        // fields itself through UpdateBuildAsHolder, whose "am I still the holder?" guard runs on a
+        // copy this hub does not own: a stale copy made the whole write a silent no-op, leaving the
+        // chunk locked to a builder that had finished with it and its release paths unrecorded.
+        return mesh.ReportBuildOutcome(
                 holder,
-                s => s with
-                {
-                    Status = failed.Count > 0 ? BuildStatus.Failed : BuildStatus.Ready,
-                    Error = failed.Count > 0
-                        ? string.Join("; ", failed.Select(f => $"{f.TypePath}: {f.Detail}"))
-                        : null,
-                    WrittenPaths = written,
-                    ClaimedBy = null, ClaimedAt = null, HeartbeatAt = null,
-                },
+                failed.Count > 0
+                    ? BuildOutcome.Failed(
+                        DateTime.UtcNow,
+                        string.Join("; ", failed.Select(f => $"{f.TypePath}: {f.Detail}")),
+                        written)
+                    // A chunk publishes no GO — the per-fingerprint Ready map is root-only — so it
+                    // reports a completion that carries only its release paths.
+                    : BuildOutcome.Completed(DateTime.UtcNow, go: null, writtenPaths: written),
                 chunk.Path)
-            // This close-out clears the claim fields itself instead of going through
-            // CompleteBuild/FailBuild, so it has to drop the chunk's LOCK explicitly — clearing
-            // ClaimedBy on the node alone would free the chunk in this cluster only.
-            .SelectMany(node => mesh.ReleaseBuildClaim(holder, chunk.Path).Select(_ => node))
             .SelectMany(_ => FinishActivity(
                 mesh, chunk.ActivityPath,
                 failed.Count > 0 ? ActivityStatus.Failed : ActivityStatus.Succeeded))
@@ -766,15 +766,27 @@ public static class BuildProtocolDriver
     /// <see cref="IsGatingFailure"/> — because a probe is not a compile and this process has no
     /// verdict about that type, which is different from a verdict against it.
     /// </summary>
-    private static IEnumerable<PreWarmOutcome> OutcomesOf(
+    /// <remarks>
+    /// 🚨 <c>internal</c> rather than <c>private</c> so the STAMP itself is testable. Both gating
+    /// fields are set here, and a test that hand-builds a <see cref="PreWarmOutcome"/> cannot tell
+    /// whether this projection still sets them — both default to the strict value, so deleting an
+    /// assignment here reverts the first-bake leniency while every such test stays green. That is
+    /// the shape #4496 arrived by, one field earlier.
+    /// </remarks>
+    internal static IEnumerable<PreWarmOutcome> OutcomesOf(
         NodeTypeBakeReport fresh, string bakedDetail, string pendingDetail)
-        => fresh.Entries.Select(e => new PreWarmOutcome(
+    {
+        // Both gating facts, off the SAME report and through the SAME projection the sweep uses.
+        // This used to derive WasHealthyBeforeBake itself, straight off the entry, while the sweep
+        // derived it from a set — two copies of one rule, which is how they came to disagree about
+        // a never-built type (#4496). Deriving it here again, however faithfully, would rebuild the
+        // fork; the stamp is shared on purpose.
+        var stampBaseline = DynamicTypePreWarmer.BaselineStamp(fresh);
+        return fresh.Entries.Select(e => stampBaseline(new PreWarmOutcome(
             e.TypePath,
             e.NeedsBake ? PreWarmStatus.TimedOut : PreWarmStatus.AlreadyBaked,
-            e.NeedsBake ? pendingDetail : bakedDetail)
-        {
-            WasHealthyBeforeBake = e.WasHealthy,
-        });
+            e.NeedsBake ? pendingDetail : bakedDetail)));
+    }
 
     // ── shared ──────────────────────────────────────────────────────────────────────────────────
 
@@ -902,6 +914,10 @@ public static class BuildProtocolDriver
     internal static bool IsGatingFailure(PreWarmOutcome outcome) =>
         !outcome.ReachedUsableBuild
         && outcome.WasHealthyBeforeBake
+        // The first bake of a brand-new instance has nothing to regress from, so nothing here may
+        // hold the GO — the same rule NodeTypeBakeGateState.MarkOutcome applies, read from the same
+        // pair of fields so the two cannot drift apart again (#4496).
+        && outcome.HasRegressionBaseline
         && outcome.Status is not (PreWarmStatus.TimedOut
             or PreWarmStatus.UpstreamUnevaluated
             or PreWarmStatus.NoSources

@@ -7,9 +7,10 @@
 # them. Without it those branches render on no combination in this repo and a regression in any
 # of them is invisible until a real Provision fails in a namespace nobody can see.
 #
-# The three things a consumer sets, and nothing else (the mirror INSTANCE sets containerImages,
-# which is exercised by the values it lives on — memex-cloud — and is asserted here only in the
-# sense that a consumer renders NO ContainerImages__ key):
+# The three things a consumer sets, and nothing else. The registry it consumes is
+# cr.meshweaver.cloud — the separate distribution + docker_auth service rendered by
+# templates/registry/, not a portal; the in-portal /v2 mirror this fixture was first written
+# against was deleted unwired (MeshWeaver#4066):
 selfUpdate:
   registry: "mirror.example.test"
 portal:

@@ -27,9 +27,22 @@ public interface IPublicationSyncReconciler
     /// <param name="identity">This process's framework identity.</param>
     /// <param name="sealedForThisIdentity">What the registry sealed under it.</param>
     /// <param name="declinedTypePaths">NodeType paths whose bundle entry was declined because its
-    /// source fingerprint disagrees with the live sources.</param>
+    /// source fingerprint disagrees with the live sources — or <see langword="null"/> when this
+    /// caller did NOT measure that.
+    ///
+    /// <para>🚨 <b><see langword="null"/> and EMPTY are different facts and must never be folded
+    /// (MeshWeaver#4620).</b> Empty means "I compared, and nothing had drifted"; null means "I did
+    /// not compare". The reconciler treats an at-the-seal source with an empty set as its STEADY
+    /// STATE and moves nothing — so a caller that passes empty without looking makes the drift
+    /// detector report a clean partition it never read. That is exactly what happened: the boot
+    /// sweep passes what its adoption walk measured, and
+    /// <c>PublicationSealArrivalService</c> — the only post-boot trigger — passed <c>[]</c>, so
+    /// after boot the branch could only ever take the "nothing was declined" exit. Measured on
+    /// memex.systemorph.com on 2026-09-17: two of nineteen GitSync partitions were holding one file
+    /// from each of two trees, both with their sync recording success. Pass null and the reconciler
+    /// measures for itself, where the bundle inventory already is.</para></param>
     IObservable<int> Reconcile(
         string identity,
         IReadOnlyList<SealedSource> sealedForThisIdentity,
-        IReadOnlyCollection<string> declinedTypePaths);
+        IReadOnlyCollection<string>? declinedTypePaths);
 }

@@ -1113,6 +1113,14 @@ public class IoPoolTest
             SpinWait.SpinUntil(() => source.HasObservers, Timeout5)
                 .Should().BeTrue("the pooled subscribe must have completed before disposal");
 
+            // 🚨 Asserted HERE, before the disposal this test measures: the thread that will deliver
+            // the terminal already exists, so nothing below is waiting on an OS thread being created
+            // (#4448). If this line passes and the terminal below still misses its bound, the
+            // remaining suspect is the OS WAKING an existing thread — a different claim, and the
+            // failure report now distinguishes them instead of leaving both open.
+            pool.CancellerIsAlive.Should().BeTrue(
+                "the canceller is started with the pool, not at teardown");
+
             var sw = Stopwatch.StartNew();
             pool.Dispose();
             sw.Stop();
@@ -1128,6 +1136,34 @@ public class IoPoolTest
         {
             Volatile.Write(ref releaseTeardown, 1);
         }
+    }
+
+    /// <summary>
+    /// 🚨 TEARDOWN NEVER MINTS AN OS THREAD — issue #4448.
+    ///
+    /// <para>A pooled subscription's terminal is delivered by whoever runs <c>_poolCts.Cancel()</c>,
+    /// and that must not be the caller (#2394). <see cref="IoPool.Drain"/> and
+    /// <see cref="IoPool.Dispose"/> used to create a <c>new Thread</c> for it on every call, which
+    /// put OS thread creation on the critical path of every terminal: <c>Thread.Start()</c> takes the
+    /// runtime's thread store lock and can queue behind a GC suspension — a blocking call inside the
+    /// one method whose contract is that it must not block — and the freshly created thread then has
+    /// to be scheduled before a single callback runs. <c>Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown</c>
+    /// failed once in the merge queue with the terminal simply absent after 5 s while every
+    /// in-process instrument read healthy (run 35003438933, shard 3, 2026-09-15).</para>
+    ///
+    /// <para>So the thread is started WITH the pool and parked. This asserts the property directly
+    /// rather than timing it: a latency assertion on thread creation would be a bound to widen the
+    /// next time it is missed, which is exactly the move that issue rules out.</para>
+    /// </summary>
+    [Fact]
+    public void TheCancellerThreadIsStartedWithThePool_NotAtTeardown()
+    {
+        using var pool = new IoPool(2);
+
+        pool.CancellerIsAlive.Should().BeTrue(
+            "the thread that runs every pooled subscription's downstream teardown must already exist "
+            + "before Drain()/Dispose() is called — minting one there leaves OS thread creation on the "
+            + "critical path of every terminal, inside a method contractually forbidden to block");
     }
 
     /// <summary>

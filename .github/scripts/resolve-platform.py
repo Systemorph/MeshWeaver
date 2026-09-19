@@ -72,6 +72,18 @@ A freeze is exempt (it names one set, and an incident is when it must keep worki
 freshness check keeps its baseline on this refusal like on any other. The resolver does not
 re-read: the red is the harmless answer, and a re-run of the job reads the listing again.
 
+🚨 THE CEILING READS A SECOND LISTING — the CALLING repository's own main runs — and it is NOT
+guarded that way, by design: there is no fact its page can be checked against (a repository's main
+may genuinely be quiet for days, so age proves nothing, and the ceiling IS the thing being
+established, so it cannot check itself). What it does instead is REPORT: when no ceiling can be
+established, `ceiling_refusal` prints what was read — how many rows, the newest one's id, date, age
+and URL, and why each was skipped — and orders its remedies by that evidence, leading with the
+one-click test that decides whether the listing or `main` is at fault. Three times a stale page
+produced that refusal (2026-09-14, 2026-09-17 twice over) and twice the reader went and looked at a
+`main` that was fine, because the old text closed on "Fix main" (MeshWeaver#4664). The refusal's
+strictness is unchanged: a stale listing still refuses rather than resolving, and still does not
+retry.
+
 FRESHNESS — A RE-RUN MUST NOT TEST A STALE SET
 ----------------------------------------------
 With `PLATFORM_BASELINE` set (JSON: the outputs of the job that resolved first — `plan` in the gate,
@@ -329,6 +341,26 @@ def run_jobs_of(fetch: Fetch, repo: str, run_id: int) -> list[dict]:
         page += 1
 
 
+def run_jobs_of_attempt(fetch: Fetch, repo: str, run_id: int, attempt: int) -> list[dict]:
+    """Every job record of ONE attempt of a run.
+
+    🚨 `/actions/runs/{id}/jobs` answers with the LATEST attempt's records, and a partial re-run
+    (`rerun-failed-jobs`) re-creates a record for every job of the new attempt — including the ones
+    it did not re-run — carrying NONE of the earlier attempt's annotations (#4491). An annotation
+    therefore belongs to an ATTEMPT, not to a run, and a reader that wants one has to say which.
+    """
+    jobs: list[dict] = []
+    page = 1
+    while True:
+        data = fetch(f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs"
+                     f"?per_page=100&page={page}")
+        rows = list(data.get("jobs") or [])
+        jobs += rows
+        if len(rows) < 100 or len(jobs) >= int(data.get("total_count") or 0):
+            return jobs
+        page += 1
+
+
 def run_jobs(fetch: Fetch, run_id: int) -> list[dict]:
     return run_jobs_of(fetch, CORE_REPO, run_id)
 
@@ -468,11 +500,10 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
 # annotation survives with its check run. So the ceiling is read back from the newest SUCCESSFUL
 # push runs of this repo's ci.yml on main. A run whose annotation cannot be read is SKIPPED and
 # said so — never treated as "main passed nothing".
-SATELLITE_CD_WORKFLOW = "ci.yml"
-MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a red patch on main
-PLATFORM_REF_JOB = "Resolve the released platform"
-NOTICE_TITLE = "Platform for this run"
-NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+)[.-]ci\.(\d+)")
+# 🚨 The constants live with the ceiling reader below, and ONLY there. This block used to repeat
+# them here, where the later definitions silently overrode it — including a NARROWER `NOTICE_SET`
+# that would not have matched a prerelease set name had the order ever flipped. An edit made to a
+# definition that never runs is the trap; there is one definition now.
 
 
 # ───── OPTIONAL: what the CALLING repo's own `main` has already passed on (#3842, #4171) ─────
@@ -498,6 +529,15 @@ NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+)[.-]ci\.(\d+)")
 # said so — never read as "main passed nothing", which would silently take the newest set again.
 SATELLITE_CD_WORKFLOW = "ci.yml"
 MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a red patch on main
+# 🚨 EVERY main run that goes through the FULL gate set vouches, not `push` alone. The daily poll,
+# the release dispatch and a manual dispatch never NARROW what they build (node-repo invariant #9:
+# a publishing or release-follow trigger builds EVERYTHING), and each publishes the same verdict
+# annotation this reader parses — so a green one of them IS "main has passed on this set". Filtering
+# to `push` made the ceiling only as fresh as the last MERGE: a repository whose main is quiet for a
+# day kept every pull request on a day-old set, even though its own daily poll had passed on a newer
+# one. It does NOT rescue a RED main, and must not: a red main is exactly when the ceiling has to
+# hold (MeshWeaver.Plugins#1947).
+MAIN_EVENTS_THAT_VOUCH = ("push", "repository_dispatch", "schedule", "workflow_dispatch")
 PLATFORM_REF_JOB = "Resolve the released platform"
 NOTICE_TITLE = "Platform for this run"
 NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+[0-9A-Za-z.\-]*)[.-]ci\.(\d+)")
@@ -598,9 +638,204 @@ def floor_refusal(floor: tuple[int | None, str], set_name: str, run_number: int)
             f"{PLATFORM_FLOOR_FILE} in the SAME commit.")
 
 
+class Ceiling(NamedTuple):
+    """What the ceiling reader established, and what to print when it established nothing.
+
+    `refusal` is EMPTY whenever the caller may proceed — a ceiling was read, or a freeze skipped the
+    ceiling entirely. A non-empty `refusal` is the WHOLE red text, remedy-ordered (`ceiling_refusal`
+    below); it is the only thing the annotation carries, because the per-run `notes` belong in the
+    log above it and not in the sentence a reader acts on."""
+    number: int | None
+    notes: list[str]
+    refusal: str = ""
+
+
+class CeilingEvidence(NamedTuple):
+    """Everything the reader SAW while failing to establish a ceiling.
+
+    Every field comes from the ONE listing call and the job reads that followed it. Nothing here is
+    re-read to write a message: the refusal explains the read it already made, and the test that
+    would falsify it is handed to the READER, never performed by the resolver (a gate that decides
+    its own input must be wrong and asks again is a gate testing its own inputs)."""
+    repo: str
+    listed: int                  # rows the listing returned, before the vouching-event filter
+    total: int | None            # the listing's own `total_count`, when it sent one
+    examined: int                # rows left after that filter — the runs actually read
+    newest_created: str          # `created_at` of the NEWEST row examined ("" when there is none)
+    newest_id: int | None
+    newest_url: str
+    age_hours: float | None      # of `newest_created`, at the moment of the refusal
+    predating: int               # examined rows carrying no `Resolve the released platform` job
+    unreadable: int              # examined rows whose annotations GitHub would not serve
+    silent: int                  # rows that carried the job and published no set
+    ambiguous: int               # rows that published two different sets under the notice title
+
+
+def _ago(hours: float | None) -> str:
+    if hours is None:
+        return "age unknown"
+    if hours < 48:
+        return f"{hours:.0f} h ago"
+    return f"{hours / 24:.0f} days ago"
+
+
+REMEDY_MARK = re.compile(r"^ *(\d+) · ", re.MULTILINE)
+
+
+def remedy_blocks(text: str) -> list[str]:
+    """The refusal's numbered remedies, in the order a reader meets them."""
+    marks = list(REMEDY_MARK.finditer(text))
+    return [text[mark.start():(marks[index + 1].start() if index + 1 < len(marks) else len(text))]
+            for index, mark in enumerate(marks)]
+
+
+def misdirects_to_main(text: str) -> bool:
+    """True when a refusal tells the reader to FIX MAIN without the evidence that implicates main.
+
+    🚨 This is the defect MeshWeaver#4664 measured, not a style rule. The refusal below has TWO
+    causes with different remedies — GitHub served this call a stale run listing, or main really
+    published no passing run — and the old text put `Fix main` LAST, as the closing instruction,
+    with the stale-listing sentence buried mid-paragraph behind twelve skip notes. Three readers
+    met it; two spent their time on main; the third reported that no pull request in the repository
+    could resolve a set while four were resolving one in the same minutes.
+
+    So a "fix main" instruction is only ever legitimate INSIDE a remedy that carries what makes
+    main the suspect: `ONLY IF` (the listing test came first and could still fall the other way) or
+    `DID carry` (runs that really do carry the reporting job and still named no set). A refusal with
+    no numbered remedies at all is the old paragraph shape and is rejected outright. The control
+    that proves this predicate bites is `MEASURED_MISDIRECTION` in the self-test: the literal text
+    this file produced on 2026-09-17, which it must reject."""
+    blocks = remedy_blocks(text)
+    if not blocks:
+        # No ordered remedies at all — the paragraph shape. Any "fix main" in it is unguarded.
+        return "fix main" in text.lower()
+    first = REMEDY_MARK.search(text)
+    if "fix main" in text[:first.start() if first else 0].lower():
+        return True          # said before ANY remedy, so before any test that could falsify it
+    blaming = [block for block in blocks if "fix main" in block.lower()]
+    return not all(_cites_why_main(block) for block in blaming)
+
+
+def _cites_why_main(block: str) -> bool:
+    """Does this remedy carry what makes `main` the suspect?
+
+    🚨 A `DID carry` claim over ZERO runs is not evidence, it is the same misdirection wearing the
+    marker (Copilot review on #4681): a mixed page can leave every row unread and still produce the
+    sentence. So the count is read, not just the phrase."""
+    low = block.lower()
+    if "only if" in low:
+        return True
+    return "did carry" in low and not re.search(r"\b0 of the\b", low)
+
+
+def ceiling_refusal(evidence: CeilingEvidence) -> str:
+    """The RED text for a ceiling that could not be established — evidence first, remedies ordered.
+
+    🚨 THE ORDER IS THE FIX (MeshWeaver#4664). Two conditions produce this refusal and they have
+    different remedies, so the message leads with the one the evidence points at and marks the other
+    conditional. The discriminator is STRUCTURAL and carries no clock: a page whose every row
+    predates the job that publishes the verdict cannot have been read for its content at all, while
+    a page whose rows DO carry that job is main answering for itself. No threshold was added for
+    this — a bound picked to sort two messages would be a bound nobody could ever tune, and it
+    would eventually flip the wording on a quiet-but-healthy repository."""
+    ev = evidence
+    runs_url = (f"https://github.com/{ev.repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}"
+                "?query=branch%3Amain+is%3Asuccess")
+    counted = [f"{ev.examined} successful `{SATELLITE_CD_WORKFLOW}` run(s) on {ev.repo} main "
+               f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) examined, from {ev.listed} row(s) listed"
+               + (f" of {ev.total} the listing declares" if ev.total is not None else "")]
+    if ev.newest_created:
+        counted.append(f"newest examined: run {ev.newest_id}, created {ev.newest_created} "
+                       f"({_ago(ev.age_hours)}) — {ev.newest_url}")
+    if ev.predating:
+        counted.append(f"{ev.predating} carried no `{PLATFORM_REF_JOB}` job at all — they predate "
+                       "it, so not one of them COULD name a set")
+    if ev.silent:
+        counted.append(f"{ev.silent} DID carry that job and published no `{NOTICE_TITLE}` notice")
+    if ev.ambiguous:
+        counted.append(f"{ev.ambiguous} DID carry it and published two different sets under "
+                       f"`{NOTICE_TITLE}` — unreadable, skipped")
+    if ev.unreadable:
+        counted.append(f"{ev.unreadable} had annotations GitHub would not serve")
+    if ev.listed == 0 and (ev.total or 0) > 0:
+        counted.append(f"🚨 the page returned NO rows while declaring total_count={ev.total} — it "
+                       "contradicts itself, which is a bad read and not an empty history")
+
+    probe = (f"If ANY successful run there is NEWER than {ev.newest_created}"
+             if ev.newest_created else "If ANY successful run is listed there at all")
+    listing_test = (
+        f"TEST THE LISTING — one click, and it is the cause measured three times.\n"
+        f"    Open {runs_url}\n"
+        f"    {probe}, GitHub served THIS CALL a stale page:\n"
+        f"    main is fine, and nothing about main needs fixing. Measured 2026-09-14 "
+        f"(MeshWeaver.Plugins\n"
+        f"    run 34822109263, a page 26 days old) and 2026-09-17 (MeshWeaver.Plugins PR #2038, a "
+        f"page\n"
+        f"    five weeks old, while four other pull requests resolved a set in the same minutes).\n"
+        f"    REMEDY: make it read again — `Re-run all jobs` on this run, or push an empty commit.\n"
+        f"    Re-run the WHOLE run, not just the failed jobs: a failed-jobs re-run can hand a later "
+        f"job\n"
+        f"    the earlier attempt's artefacts (MeshWeaver#4303). The resolver does NOT re-read by "
+        f"itself —\n"
+        f"    a run listing is its INPUT, and a gate never tests its own inputs.")
+    # 🚨 THE TEST IS "WAS ANY EVIDENCE ABOUT MAIN READ AT ALL", not "which single skip reason
+    # covered the whole page" (Copilot review on #4681). Counting `predating == examined` and
+    # `unreadable == examined` separately left a MIXED page — 6 rows predating the job, 6 whose
+    # annotations GitHub refused — leading with `main` while naming ZERO runs that could implicate
+    # it. Only a row that CARRIED the reporting job and still named no set says anything about
+    # main; where there is none, the listing leads.
+    listing_first = (ev.silent + ev.ambiguous) == 0
+    if listing_first:
+        remedies = [
+            listing_test,
+            (f"ONLY IF that is really main's newest success — nothing newer is listed — has main "
+             f"published\n"
+             f"    nothing that names a set. Then it IS main: main is red, or this repository has "
+             f"not yet\n"
+             f"    merged the `{PLATFORM_REF_JOB}` job that publishes the verdict. Fix main."),
+        ]
+    else:
+        remedies = [
+            (f"MAIN'S OWN ANSWER — {ev.silent + ev.ambiguous} of the {ev.examined} run(s) examined "
+             f"DID carry the\n"
+             f"    `{PLATFORM_REF_JOB}` job and still named no set this reader can use. That is "
+             f"main's own\n"
+             f"    answer and not a reading fault: open the newest ({ev.newest_url}) and read what "
+             f"its\n"
+             f"    `{NOTICE_TITLE}` notice says. Fix main."),
+            (f"IF THAT LOOKS WRONG, test the listing too: open {runs_url}\n"
+             f"    If a successful run there is NEWER than {ev.newest_created}, this call was "
+             f"served a stale page\n"
+             f"    instead — `Re-run all jobs`, or push an empty commit (measured three times, "
+             f"MeshWeaver#4664).\n"
+             f"    The resolver does not re-read by itself: a gate never tests its own inputs."),
+        ]
+    remedies.append(
+        "TO PROCEED WITHOUT EITHER: set the repository VARIABLE MW_PLATFORM_REF to one set "
+        "(`X.Y.Z-ci.N`\n"
+        "    or a core sha). A freeze overrides the ceiling — it is an instruction for an incident, "
+        "not a\n"
+        "    way around a red main.")
+    ordered = "\n".join(f"  {index} · {block}" for index, block in enumerate(remedies, start=1))
+    return (
+        f"this run follows `main` (--passed-on-main): it resolves the newest sealed platform set "
+        f"that\n{ev.repo} `main` has ALREADY PASSED on, and no run naming one could be READ.\n"
+        f"\n"
+        f"🚨 TWO DIFFERENT THINGS PRODUCE THIS RED and they have different remedies — GitHub served "
+        f"this\ncall a stale run listing (per call, measured three times), or main really has passed "
+        f"nothing\nthat names a set. The evidence decides which; the remedies are ordered by what it "
+        f"says.\n"
+        f"\n"
+        f"WHAT WAS READ (one call, no re-read):\n"
+        + "".join(f"  · {line}\n" for line in counted)
+        + f"\n{ordered}\n"
+        f"\nNOT AN OPTION: falling back to the newest sealed set. That is what reddened every open "
+        f"pull\nrequest at once, and it is the reason this rule exists.")
+
+
 def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
-                log: Callable[[str], None] = print) -> tuple[int | None, list[str], bool]:
-    """`(ceiling, notes, fatal)` for a run that asked to follow its own main.
+                log: Callable[[str], None] = print) -> Ceiling:
+    """The ceiling for a run that asked to follow its own main, or the red text that says why not.
 
     🚨 A FREEZE OVERRIDES THE CEILING, INCLUDING AN UNREADABLE ONE. `MW_PLATFORM_REF` is an
     instruction for an incident — a bisect, an upstream outage — and the likeliest moment to need
@@ -609,41 +844,144 @@ def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
     entirely rather than being checked against it.
     """
     if freeze:
-        return None, [f"freeze {freeze} overrides the main ceiling — not consulted"], False
-    ceiling, notes = main_passed_ceiling(fetch, repo, log=log)
-    return ceiling, notes, ceiling is None
+        return Ceiling(None, [f"freeze {freeze} overrides the main ceiling — not consulted"], "")
+    return main_passed_ceiling(fetch, repo, log=log)
 
 
 def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED,
-                        log: Callable[[str], None] = print) -> tuple[int | None, list[str]]:
-    """`(highest core-CD run number this repo's main has PASSED on, one note per run examined)`.
+                        log: Callable[[str], None] = print,
+                        now: Callable[[], float] = time.time) -> Ceiling:
+    """The highest core-CD run number this repo's main has PASSED on, one note per run examined.
 
-    `None` means it could not be established from the newest `limit` successful main runs — which
-    is a RED verdict for the caller, never a licence to take the newest sealed set: that silent
-    fallback would put every pull request back on an unvouched set, which is exactly what this
-    rule exists to prevent.
+    `Ceiling.number is None` means it could not be established from the newest `limit` successful
+    main runs — which is a RED verdict for the caller, never a licence to take the newest sealed
+    set: that silent fallback would put every pull request back on an unvouched set, which is
+    exactly what this rule exists to prevent. The red text itself is `Ceiling.refusal`.
     """
     notes: list[str] = []
     best: int | None = None
+    predating = unreadable_runs = silent = ambiguous = 0
     data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
-                 f"?branch=main&event=push&status=success&per_page={limit}")
-    runs = list(data.get("workflow_runs") or [])
+                 f"?branch=main&status=success&per_page={limit}")
+    # The event filter is applied HERE, not in the query: the API takes ONE event, and every event
+    # in MAIN_EVENTS_THAT_VOUCH counts. `branch=main` already excludes pull-request and merge-queue
+    # runs; the filter says so anyway, because a run that did not go through the full gate set must
+    # never vouch for a platform set.
+    listed = list(data.get("workflow_runs") or [])
+    total = data.get("total_count")
+    runs = [run for run in listed
+            if str(run.get("event") or "push") in MAIN_EVENTS_THAT_VOUCH]
+
+    def evidence() -> CeilingEvidence:
+        """The refusal's inputs — computed from what was ALREADY read, never from a second call."""
+        stamped = [(stamp, run) for run in runs for stamp in [_created(run)] if stamp is not None]
+        newest = max(stamped, key=lambda pair: pair[0])[1] if stamped else None
+        created = str(newest.get("created_at") or "") if newest else ""
+        run_id = int(newest["id"]) if newest and newest.get("id") is not None else None
+        return CeilingEvidence(
+            repo=repo, listed=len(listed),
+            total=int(total) if isinstance(total, int) else None,
+            examined=len(runs), newest_created=created, newest_id=run_id,
+            newest_url=(str(newest.get("html_url") or "") if newest else "")
+            or (f"https://github.com/{repo}/actions/runs/{run_id}" if run_id else ""),
+            age_hours=((now() - _created(newest)) / 3600
+                       if newest and _created(newest) is not None else None),
+            predating=predating, unreadable=unreadable_runs, silent=silent,
+            ambiguous=ambiguous)
+
     if not runs:
-        notes.append(f"no successful push run of {SATELLITE_CD_WORKFLOW} on {repo} main in the "
-                     f"newest {limit} — main has published no passing run to follow")
-        return None, notes
+        notes.append(f"no successful run of {SATELLITE_CD_WORKFLOW} on {repo} main "
+                     f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) in the newest {limit} — nothing to "
+                     "read a passed set from")
+        return Ceiling(None, notes, ceiling_refusal(evidence()))
+    # 🚨 THE BOUND COUNTS RUNS, NOT NOTES (Copilot review, #4493). It used to read
+    # `len(notes) >= limit`, which was a proxy for "runs examined" only while every run emitted
+    # exactly one note. The attempt fallback below emits a SECOND note for the run it rescues, so
+    # the proxy would stop the walk after as few as six runs of twelve — dropping up to half the
+    # evidence and, because `best` is a max over the runs examined, answering with a LOWER ceiling
+    # or a false RED. That is the very failure this function exists to prevent, so the counter is
+    # now the thing it claims to be.
+    examined = 0
     for run in runs:
         run_id = int(run["id"])
-        jobs = [j for j in run_jobs_of(fetch, repo, run_id) if j.get("name") == PLATFORM_REF_JOB]
-        if not jobs:
+        examined += 1
+        # 🚨 NEWEST ATTEMPT FIRST, then older ones (#4491). `/runs/{id}/jobs` serves the latest
+        # attempt, and after a partial re-run every job of that attempt has a FRESH record — the
+        # carried-over `Resolve the released platform` among them — with none of the annotations
+        # the attempt that actually ran it published. Reading only the latest attempt therefore
+        # loses the run's contribution to the ceiling while the run still reads `success`, and the
+        # satellite then holds every pull request on an older set and says `main` has not passed on
+        # the newer one, which is FALSE. Measured 2026-09-16 on MeshWeaver.Plugins: run 35073843357
+        # resolved 3.0.0-ci.8721, died on an artifact-service 403, was re-run to success — attempt
+        # 1's job carried the annotation, attempt 2's record for the same job carried zero.
+        #
+        # The NEWEST attempt that carries one wins, so a genuine re-resolution (a full re-run, or a
+        # re-run OF this job) still decides; an older attempt is consulted only where the newer
+        # record is silent, which is exactly the carried-over case.
+        #
+        # 🚨 AN UNREADABLE ATTEMPT IS NOT A SILENT ONE (Copilot review, #4493). Only a response
+        # that came back and carried no matching annotation licenses the walk to an older attempt.
+        # A read that FAILED proves nothing about what that attempt published — and the newer
+        # attempt is exactly the one that may hold a genuine RE-RESOLUTION — so falling back on it
+        # would publish an older attempt's stale verdict under a note asserting the newer one
+        # carried none. That note would be false in the same way #4491's "main has not passed on
+        # it yet" was false. So any unreadable attempt STOPS the walk and SKIPS the run, which is
+        # this module's standing discipline: a run whose annotation cannot be read is skipped and
+        # said so, never guessed at. `best` is a max over the other runs, so one unreadable run
+        # costs a data point, never a wrong ceiling.
+        attempt_rows: list[dict] | None = None
+        searched = 0
+        unreadable: str | None = None
+        latest_attempt = max(1, int(run.get("run_attempt") or 1))
+        for attempt in range(latest_attempt, 0, -1):
+            try:
+                jobs_of = (run_jobs_of(fetch, repo, run_id) if attempt == latest_attempt
+                           else run_jobs_of_attempt(fetch, repo, run_id, attempt))
+            except ResolutionError as error:
+                unreadable = f"attempt {attempt} jobs unreadable ({error})"
+                break
+            jobs = [j for j in jobs_of if j.get("name") == PLATFORM_REF_JOB]
+            if not jobs:
+                # 🚨 THE FALLBACK IS LICENSED BY A LOST ANNOTATION, NOT BY A MISSING JOB (Copilot
+                # review, #4493). #4491's case is narrow and specific: the job IS present in the
+                # latest attempt's records and its annotation list is EMPTY, because a partial
+                # re-run re-created the record without it. A latest attempt that does not carry
+                # the job at all is a different thing entirely — nothing establishes that this run
+                # resolved a platform set, and an older attempt's annotation would be asserted on
+                # its behalf. Skipping the run is what this reader did before #4491 and is still
+                # right; only the empty-annotation case may walk backwards.
+                if attempt == latest_attempt:
+                    break
+                continue
+            searched += 1
+            try:
+                annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
+            except ResolutionError as error:
+                unreadable = f"attempt {attempt} annotations unreadable ({error})"
+                break
+            candidate = (annotations if isinstance(annotations, list)
+                         else annotations.get("annotations") or [])
+            if any(NOTICE_TITLE in str(row.get("title") or "") for row in candidate):
+                attempt_rows = candidate
+                if attempt != latest_attempt:
+                    notes.append(
+                        f"main run {run_id}: attempt {latest_attempt} carries no "
+                        f"`{NOTICE_TITLE}` annotation (a partial re-run re-creates the record "
+                        f"without it) — read from attempt {attempt}, which published one (#4491)")
+                break
+        # The unreadable branch is FIRST: with the walk stopping on the error, an unreadable latest
+        # attempt also leaves `searched == 0`, and "no `Resolve the released platform` job" would
+        # then be the wrong sentence for it — the job may well be there, we could not look.
+        if unreadable is not None:
+            unreadable_runs += 1
+            notes.append(f"main run {run_id}: {unreadable} — skipped. An unreadable attempt is not "
+                         "a silent one, so no older attempt is consulted for this run")
+            continue
+        if attempt_rows is None and searched == 0:
+            predating += 1
             notes.append(f"main run {run_id}: no `{PLATFORM_REF_JOB}` job — skipped")
             continue
-        try:
-            annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
-        except ResolutionError as error:
-            notes.append(f"main run {run_id}: annotations unreadable ({error}) — skipped")
-            continue
-        rows = annotations if isinstance(annotations, list) else annotations.get("annotations") or []
+        rows = attempt_rows or []
         # 🚨 EVERY matching annotation is read, and DISAGREEMENT is a refusal (#1826). This used to
         # take the FIRST match and break — and the list it reads is one the job's own self-test
         # steps write into: `test-platform-resolution.py` went through `emit`, so its FIXTURE set
@@ -658,6 +996,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                  for match in [NOTICE_SET.search(str(row.get("message") or ""))] if match]
         distinct = sorted(set(named))
         if len(distinct) > 1:
+            ambiguous += 1
             notes.append(
                 f"main run {run_id}: {len(distinct)} DIFFERENT sets published under "
                 f"`{NOTICE_TITLE}` ({', '.join(f'#{n}' for n in distinct)}) — a run's own verdict "
@@ -667,32 +1006,47 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             continue
         found = distinct[0] if distinct else None
         if found is None:
-            notes.append(f"main run {run_id}: no `{NOTICE_TITLE}` annotation — skipped")
+            silent += 1
+            # 🚨 "PRESENT BUT UNPARSEABLE" IS NOT "ABSENT" (Copilot review, #4493). `named` filters
+            # on the title AND the set pattern, so an annotation carrying the production title
+            # whose message names no set lands here too — and reported as "no annotation" it hides
+            # exactly the case worth seeing: a malformed notice, or a schema change that moved the
+            # set out of the message. `rows` is non-empty only when some attempt DID carry a
+            # title-matching annotation, so the two branches separate cleanly.
+            titled = [row for row in rows if NOTICE_TITLE in str(row.get("title") or "")]
+            if titled:
+                first = str(titled[0].get("message") or "")
+                notes.append(
+                    f"main run {run_id}: {len(titled)} `{NOTICE_TITLE}` annotation(s) are PRESENT "
+                    f"but none names a set matching `{NOTICE_SET.pattern}` (first message: "
+                    f"{first[:120]!r}) — skipped. An annotation that does not PARSE is not an "
+                    "absent one, and only this sentence tells them apart")
+            else:
+                notes.append(
+                    f"main run {run_id}: no `{NOTICE_TITLE}` annotation on any of its "
+                    f"{searched} attempt(s) carrying a `{PLATFORM_REF_JOB}` job — skipped")
             continue
         notes.append(f"main run {run_id} passed on core CD #{found}")
         best = found if best is None else max(best, found)
-        if len(notes) >= limit:
+        if examined >= limit:
             break
     if best is None:
-        # 🚨 Say WHEN the runs examined are from, because the one cause of this refusal that is not
-        # the caller's fault is invisible without it. Measured 2026-09-14 on MeshWeaver.Plugins
-        # (run 34822109263): GitHub's `status=success` listing served a page from 2026-08-19 for
-        # ONE call — twelve runs that all predate this job's existence — while the same query
-        # issued seconds later returned the real newest runs. Every one of the twelve was
-        # correctly skipped ("no `Resolve the released platform` job"), the refusal was right, and
-        # the reader still spent five minutes establishing that the listing was stale rather than
-        # main being broken. This is NOT a retry: a resolver that decides its own input must be
-        # wrong and asks again is a gate testing its own inputs. It is one line so the next
-        # reader knows which of the two things the red means, and re-runs the job.
-        newest = max((str(r.get("created_at") or "") for r in runs), default="")
-        notes.append(
-            f"none of the {len(runs)} successful main run(s) named the set it resolved "
-            f"(newest run examined was created {newest or 'at an unknown time'}). If a "
-            f"successful `{SATELLITE_CD_WORKFLOW}` push run on main exists that is NEWER than that, GitHub's "
-            "run listing served a stale page for this call — re-run this job; the resolver does "
-            "not retry on its own, because a run listing is its input and a gate never tests its "
-            "own inputs.")
-    return best, notes
+        # 🚨 THE REFUSAL NAMES WHAT IT READ, AND ORDERS ITS REMEDIES BY IT (#4664). Three times now
+        # GitHub's `status=success` listing has served a page weeks old for ONE call — measured
+        # 2026-09-14 (MeshWeaver.Plugins run 34822109263, a page from 08-19) and 2026-09-17
+        # (Plugins PR #2038, a page from 08-13 while four sibling pull requests resolved a set in
+        # the same minutes). Every row was correctly skipped ("no `Resolve the released platform`
+        # job" — they predate the job), the refusal was right, and its wording sent two of the
+        # three readers at `main`, which was fine: the old text closed on "Fix main, or set …" and
+        # buried the stale-listing sentence mid-paragraph behind twelve skip notes.
+        #
+        # This is still NOT a retry, and deliberately so: a resolver that decides its own input
+        # must be wrong and asks again is a gate testing its own inputs. What changed is that the
+        # reader is handed the FALSIFIABLE TEST first, with the evidence it rests on.
+        notes.append(f"none of the {len(runs)} successful main run(s) named the set it resolved — "
+                     "refusing; the ordered remedies are in the error below")
+        return Ceiling(None, notes, ceiling_refusal(evidence()))
+    return Ceiling(best, notes, "")
 
 
 # ───────────────────────────────── the seal verdict ──────────────────────────────────────
@@ -1827,23 +2181,32 @@ def self_test() -> int:
         return fetch
 
     def _ceiling_case(name: str, fetch: Fetch, expect: int | None, says: str = "") -> None:
+        """`says` is looked for in the per-run notes AND in the refusal — one is the log a reader
+        scrolls, the other the sentence they act on, and a case may pin either."""
         nonlocal total
         total += 1
-        got, notes = main_passed_ceiling(fetch, SATELLITE, log=logs.append)
-        if got != expect:
-            failures.append(f"{name}: ceiling {got}, expected {expect}")
-        elif says and not any(says in n for n in notes):
-            failures.append(f"{name}: no note saying {says!r} — notes={notes}")
+        result = main_passed_ceiling(fetch, SATELLITE, log=logs.append)
+        spoken = result.notes + ([result.refusal] if result.refusal else [])
+        if result.number != expect:
+            failures.append(f"{name}: ceiling {result.number}, expected {expect}")
+        elif says and not any(says in line for line in spoken):
+            failures.append(f"{name}: nothing said {says!r} — notes={result.notes}, "
+                            f"refusal={result.refusal!r}")
+
+    def _refusal_of(fetch: Fetch) -> str:
+        return main_passed_ceiling(fetch, SATELLITE, log=logs.append).refusal
 
     def _freeze_case(name: str, freeze: str | None, fetch: Fetch, expect_fatal: bool,
                      says: str = "") -> None:
         nonlocal total
         total += 1
-        _, notes, fatal = ceiling_for(fetch, SATELLITE, freeze, log=logs.append)
+        result = ceiling_for(fetch, SATELLITE, freeze, log=logs.append)
+        fatal = bool(result.refusal)
+        spoken = result.notes + ([result.refusal] if result.refusal else [])
         if fatal != expect_fatal:
             failures.append(f"{name}: fatal={fatal}, expected {expect_fatal}")
-        elif says and not any(says in n for n in notes):
-            failures.append(f"{name}: no note saying {says!r} — notes={notes}")
+        elif says and not any(says in line for line in spoken):
+            failures.append(f"{name}: nothing said {says!r} — {spoken}")
 
     def _refuses(_path: str) -> dict:
         raise AssertionError("a freeze must not consult main at all")
@@ -1853,14 +2216,14 @@ def self_test() -> int:
     _freeze_case("…so an unreadable ceiling under a freeze is NOT fatal",
                  "3.0.0-ci.8207", _fetch_main(None, has_run=False), False)
     _freeze_case("…while without a freeze it IS fatal",
-                 None, _fetch_main(None, has_run=False), True, "no successful push run")
+                 None, _fetch_main(None, has_run=False), True, "no successful run")
 
     _ceiling_case("main's newest passed set is read back from its own run notice",
                   _fetch_main("3.0.0-ci.8203"), 8203, "8203")
     _ceiling_case("a prerelease set name in the notice is read too",
                   _fetch_main("3.0.0-rc.1-ci.8203"), 8203, "8203")
     _ceiling_case("no successful main run ⇒ no ceiling (the caller must go RED)",
-                  _fetch_main(None, has_run=False), None, "no successful push run")
+                  _fetch_main(None, has_run=False), None, "no successful run")
     _ceiling_case("a main run that named no set ⇒ no ceiling, and the reason is recorded",
                   _fetch_main(None), None, "annotation")
     _ceiling_case("a main run without the platform-ref job ⇒ skipped, named",
@@ -1873,7 +2236,325 @@ def self_test() -> int:
                   "listing is legible",
                   _fetch_main("3.0.0-ci.8203", job=False), None, "created 2026-09-14T08:00:00Z")
     _ceiling_case("…and tells the reader a newer run means the listing was stale, not main",
-                  _fetch_main("3.0.0-ci.8203", job=False), None, "served a stale page")
+                  _fetch_main("3.0.0-ci.8203", job=False), None, "stale page")
+
+    # ── 🚨 THE REFUSAL MUST NOT SEND A READER AT `main` WHEN THE LISTING IS WHAT FAILED (#4664) ──
+    # Measured 2026-09-17 on MeshWeaver.Plugins PR #2038 (job 105367690432): GitHub served a page
+    # from 2026-08-13 — every row predating this very job — and the message closed on "Fix main, or
+    # set the repo VARIABLE MW_PLATFORM_REF". The reader concluded main was broken and that NO pull
+    # request in the repository could resolve a platform set, while four were resolving one in the
+    # same minutes; a second agent then spent an investigation overturning it. The stale-listing
+    # sentence was present and buried: mid-paragraph, behind twelve identical skip notes, ahead of
+    # the remedy that closed the message. Third occurrence, second reader misdirected.
+    #
+    # `MEASURED_MISDIRECTION` is that message, from the job log, and it is the CONTROL: the guard
+    # must reject it, or every ordering case under it checks nothing.
+    MEASURED_MISDIRECTION = (
+        "this run asked to follow `main` (--passed-on-main), so it resolves the newest sealed set "
+        "main has already passed, and none could be established. main run 31741597338: no "
+        "`Resolve the released platform` job — skipped main run 31738246252: no `Resolve the "
+        "released platform` job — skipped none of the 12 successful main run(s) named the set it "
+        "resolved (newest run examined was created 2026-08-13T20:35:15Z). If a successful `ci.yml` "
+        "push run on main exists that is NEWER than that, GitHub's run listing served a stale page "
+        "for this call — re-run this job; the resolver does not retry on its own, because a run "
+        "listing is its input and a gate never tests its own inputs. Fix main, or set the repo "
+        "VARIABLE MW_PLATFORM_REF to select one set explicitly. Refusing to fall back to the "
+        "newest sealed set: that is what reddened every open pull request at once.")
+    total += 1
+    if not misdirects_to_main(MEASURED_MISDIRECTION):
+        failures.append("the ordering guard PASSES the message measured on 2026-09-17 (Plugins job "
+                        "105367690432) — it checks nothing, and every case below it is decorative")
+    total += 1
+    if misdirects_to_main("  1 · TEST THE LISTING — re-run.\n  2 · ONLY IF … then fix main."):
+        failures.append("the ordering guard rejects a CONDITIONAL fix-main remedy — it would "
+                        "forbid the very wording it exists to require")
+    total += 1
+    if misdirects_to_main("  1 · nothing implicates anything here."):
+        failures.append("a refusal that never mentions main must not be read as misdirection")
+    total += 1
+    if not misdirects_to_main("Fix main.\n  1 · TEST THE LISTING — re-run.\n  2 · ONLY IF … fix main."):
+        failures.append("a `fix main` in the HEADER escapes the guard — the reader meets it before "
+                        "any remedy, which is before any test that could falsify it")
+
+    _STALE = _fetch_main("3.0.0-ci.8203", job=False)   # every row examined predates the job
+    total += 1
+    if misdirects_to_main(_refusal_of(_STALE)):
+        failures.append("a listing whose every row predates the job still sends the reader at "
+                        f"main:\n{_refusal_of(_STALE)}")
+    total += 1
+    _first = (remedy_blocks(_refusal_of(_STALE)) or [""])[0]
+    if "TEST THE LISTING" not in _first or "Re-run all jobs" not in _first:
+        failures.append("remedy 1 must be the falsifiable listing test and the re-run that fixes "
+                        f"it — got {_first!r}")
+    total += 1
+    if "#4303" not in _refusal_of(_STALE):
+        failures.append("the remedy must say why the WHOLE run and not the failed jobs alone "
+                        "(a failed-jobs re-run can read the earlier attempt's artefacts, #4303)")
+    total += 1
+    if "MW_PLATFORM_REF" not in (remedy_blocks(_refusal_of(_STALE)) or [""])[-1]:
+        failures.append("MW_PLATFORM_REF is the escape hatch and stays LAST — it is an incident "
+                        "instruction, never the lead")
+    # 🚨 Asserted on the REFUSAL, not on the notes: the old paragraph carried these ids too, in
+    # twelve skip lines nobody read. The id has to stand in the sentence the reader acts on.
+    total += 1
+    if "run 556" not in _refusal_of(_STALE):
+        failures.append("the refusal must name the newest run it examined, by id — the month-old "
+                        "ids were the tell someone had to go digging for (#4664)")
+    total += 1
+    if "actions/runs/556" not in _refusal_of(_STALE):
+        failures.append("the refusal must carry a link that falsifies the listing in one click")
+    total += 1
+    _pinned = main_passed_ceiling(_STALE, SATELLITE, log=logs.append,
+                                  now=lambda: _created({"created_at": "2026-09-18T08:00:00Z"}))
+    if "(4 days ago)" not in _pinned.refusal:
+        failures.append("the refusal must say how OLD the newest run it examined is — the tell "
+                        f"that unlocked #4664 was a month-old run id; got {_pinned.refusal!r}")
+
+    # 🚨 THE OTHER BRANCH IS NOT THE SAME MESSAGE. Runs that DID carry the job and still named no
+    # set are main answering for itself, so that refusal leads with main and puts the listing test
+    # second — the ordering follows the evidence rather than a preference, and both orderings must
+    # cite what implicates main before asking anyone to fix it.
+    _SILENT = _fetch_main(None)                        # the job ran; it published no notice
+    total += 1
+    _lead = (remedy_blocks(_refusal_of(_SILENT)) or [""])[0]
+    if "MAIN'S OWN ANSWER" not in _lead or "DID carry" not in _lead:
+        failures.append("runs that carried the job and named no set must lead with MAIN, citing "
+                        f"the runs that implicate it — got {_lead!r}")
+    total += 1
+    if misdirects_to_main(_refusal_of(_SILENT)):
+        failures.append("the main-first refusal blames main without citing what implicates it")
+    total += 1
+    if "stale page" not in _refusal_of(_SILENT):
+        failures.append("even the main-first refusal must keep the listing test — a stale page "
+                        "can produce this shape too, and the reader must be able to falsify it")
+
+    # 🚨 A MIXED page reads as no evidence at all, and must lead with the listing (Copilot, #4681).
+    # One row predates the job, one row's annotations GitHub refuses: neither skip reason covers the
+    # whole page, yet not one row was read for content. Counting the reasons separately put this on
+    # the MAIN'S OWN ANSWER branch, naming ZERO runs that carried the job while saying "Fix main".
+    def _fetch_main_mixed(path: str):
+        core = _fetch_for(two, sealed_two)
+        if f"/repos/{SATELLITE}/" not in path:
+            return core(path)
+        if "/actions/workflows/" in path:
+            return {"total_count": 2, "workflow_runs": [
+                {"id": 555, "created_at": "2026-08-19T06:00:00Z"},
+                {"id": 556, "created_at": "2026-09-14T08:00:00Z"}]}
+        if "/actions/runs/555/jobs" in path:
+            return {"total_count": 0, "jobs": []}
+        if "/actions/runs/556/jobs" in path:
+            return {"total_count": 1, "jobs": [{"id": 778, "name": PLATFORM_REF_JOB}]}
+        if "/check-runs/778/annotations" in path:
+            raise ResolutionError("HTTP 500 (GitHub server error)")
+        raise AssertionError(path)
+
+    total += 1
+    _mixed = _refusal_of(_fetch_main_mixed)
+    if misdirects_to_main(_mixed) or "TEST THE LISTING" not in (remedy_blocks(_mixed) or [""])[0]:
+        failures.append("a MIXED page — one row predating the job, one with unreadable "
+                        "annotations, neither reason covering it alone — must still lead with the "
+                        f"LISTING: no row that could implicate main was read\n{_mixed}")
+    total += 1
+    if not misdirects_to_main("  1 · MAIN'S OWN ANSWER — 0 of the 12 run(s) examined DID carry the "
+                              "job and named no set. Fix main."):
+        failures.append("a `DID carry` claim over ZERO runs is not evidence about main — the guard "
+                        "must reject it, or the marker becomes a way to say `Fix main` for free")
+
+    def _contradicting(path: str):
+        if f"/repos/{SATELLITE}/" in path and "/actions/workflows/" in path:
+            return {"total_count": 9, "workflow_runs": []}
+        return _fetch_main(None, has_run=False)(path)
+
+    _ceiling_case("a page returning NO rows while declaring total_count>0 is named a bad READ, "
+                  "not an empty history",
+                  _contradicting, None, "contradicts itself")
+
+    # ── 🚨 AN ANNOTATION BELONGS TO AN ATTEMPT, NOT TO A RUN (#4491) ────────────────────────────
+    # `/runs/{id}/jobs` serves the LATEST attempt. After `rerun-failed-jobs`, GitHub re-creates a
+    # record for every job of the new attempt — including the ones it did not re-run — carrying
+    # none of the earlier attempt's annotations. The run still reads `success`, so its contribution
+    # to the ceiling vanishes silently and the satellite pins every pull request to an older set
+    # while stating, falsely, that `main` has not passed on the newer one.
+    #
+    # Measured 2026-09-16 on MeshWeaver.Plugins: run 35073843357 resolved 3.0.0-ci.8721, died on an
+    # artifact-service 403 (`FinalizeArtifact`, tests failed: 0), was re-run and concluded success.
+    # Attempt 1's `Resolve the released platform` job carried the annotation; attempt 2's record
+    # for the same, NOT-re-run job carried zero. Every open PR then resolved 8716 — including the
+    # one adopting a core capability that only exists from 8721 on.
+    def _fetch_attempts(latest: str | None, earlier: str | None, attempts: int = 2) -> Fetch:
+        """A run re-run `attempts` times: the latest attempt's record and attempt 1's disagree."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 556, "created_at": "2026-09-14T08:00:00Z", "run_attempt": attempts},
+                ]}
+            # The ATTEMPT-scoped endpoint must be asked for by path — a reader that keeps using
+            # `/runs/{id}/jobs` never reaches this branch and sees only the latest attempt.
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 701, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 702, "name": PLATFORM_REF_JOB}]}
+            for job_id, named in ((701, earlier), (702, latest)):
+                if f"/check-runs/{job_id}/annotations" in path:
+                    return {"annotations": [] if named is None else [
+                        {"title": NOTICE_TITLE, "message": f"{named} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a partial re-run erases the annotation from the latest attempt — the earlier "
+                  "attempt that published it is read instead (#4491)",
+                  _fetch_attempts(latest=None, earlier="3.0.0-ci.8721"), 8721, "8721")
+    _ceiling_case("…and the note SAYS it fell back, naming the attempt, so the log is not silent "
+                  "about where the number came from",
+                  _fetch_attempts(latest=None, earlier="3.0.0-ci.8721"), 8721,
+                  "read from attempt 1")
+    _ceiling_case("a genuine RE-RESOLUTION still decides — the NEWEST attempt carrying an "
+                  "annotation wins, never the oldest",
+                  _fetch_attempts(latest="3.0.0-ci.8730", earlier="3.0.0-ci.8721"), 8730, "8730")
+    _ceiling_case("…and that case does NOT claim a fallback happened",
+                  _fetch_attempts(latest="3.0.0-ci.8730", earlier="3.0.0-ci.8721"), 8730,
+                  "main run 556 passed on core CD #8730")
+    _ceiling_case("no attempt carrying the job published one ⇒ still skipped, and the note counts "
+                  "the attempts searched rather than implying one was never looked at",
+                  _fetch_attempts(latest=None, earlier=None), None, "2 attempt(s)")
+
+    # ── 🚨 AN UNREADABLE ATTEMPT IS NOT A SILENT ONE (Copilot review, #4493) ────────────────────
+    # The fallback above is licensed by a response that came back and carried no matching
+    # annotation. A read that FAILED licenses nothing: the newer attempt is the one that may hold a
+    # genuine re-resolution, so consulting an older one would publish a stale verdict under a note
+    # asserting the newer attempt carried none — false in exactly the way #4491's own sentence was
+    # false. The three cases below are the guard; the two #4491 cases above are the control that
+    # shows the fallback itself is still live and was not simply disabled.
+    def _fetch_attempt_unreadable(where: str, earlier: str = "3.0.0-ci.8203") -> Fetch:
+        """The LATEST attempt cannot be read; attempt 1 carries an OLDER annotation."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 557, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 711, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:
+                if where == "jobs":
+                    raise ResolutionError("GET /jobs: HTTP 500 (GitHub server error) (a fixture)")
+                return {"total_count": 1, "jobs": [{"id": 712, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/712/annotations" in path:
+                raise ResolutionError("GET /annotations: HTTP 500 (GitHub server error) (a fixture)")
+            if "/check-runs/711/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earlier} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("the latest attempt's JOB LISTING is unreadable ⇒ the run is SKIPPED, never "
+                  "answered from an older attempt's stale verdict",
+                  _fetch_attempt_unreadable("jobs"), None, "jobs unreadable")
+    _ceiling_case("the latest attempt's ANNOTATIONS are unreadable ⇒ the run is SKIPPED too",
+                  _fetch_attempt_unreadable("annotations"), None, "annotations unreadable")
+    _ceiling_case("…and the note says an unreadable attempt is not a silent one, so nobody reads "
+                  "the skip as `this attempt published nothing`",
+                  _fetch_attempt_unreadable("annotations"), None,
+                  "An unreadable attempt is not a silent one")
+
+    # ── 🚨 THE BOUND COUNTS RUNS, NOT NOTES (Copilot review, #4493) ─────────────────────────────
+    # `len(notes) >= limit` was a proxy for "runs examined" only while every run emitted exactly
+    # one note. The attempt fallback emits a SECOND note for each run it rescues, so twelve such
+    # runs reach the bound after SIX — and `best` being a max over the runs examined, the answer is
+    # the highest set among the first half. Here the newest set is on the LAST of twelve runs, so a
+    # note-counting bound answers 8203 where the true ceiling is 8250.
+    def _fetch_many_fallback_runs(count: int, base: int, last: int) -> Fetch:
+        """`count` runs, each re-run once so its latest attempt lost the annotation."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 600 + i, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}
+                    for i in range(count)]}
+            for i in range(count):
+                if f"/runs/{600 + i}/attempts/1/jobs" in path:
+                    return {"total_count": 1,
+                            "jobs": [{"id": 6000 + i * 10 + 1, "name": PLATFORM_REF_JOB}]}
+                if f"/runs/{600 + i}/jobs" in path:
+                    return {"total_count": 1,
+                            "jobs": [{"id": 6000 + i * 10 + 2, "name": PLATFORM_REF_JOB}]}
+                if f"/check-runs/{6000 + i * 10 + 1}/annotations" in path:
+                    named = last if i == count - 1 else base
+                    return {"annotations": [{"title": NOTICE_TITLE,
+                                             "message": f"3.0.0-ci.{named} — core {B[:9]}"}]}
+                if f"/check-runs/{6000 + i * 10 + 2}/annotations" in path:
+                    return {"annotations": []}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("twelve runs that each fell back emit two notes apiece — every one is still "
+                  "examined, so the newest set on the LAST of them is the ceiling",
+                  _fetch_many_fallback_runs(MAIN_RUNS_EXAMINED, 8203, 8250), 8250, "8250")
+
+    # ── 🚨 THE FALLBACK IS LICENSED BY A LOST ANNOTATION, NOT A MISSING JOB (review, #4493) ─────
+    # #4491's case is the job being PRESENT with an EMPTY annotation list. A latest attempt that
+    # does not carry the job at all establishes nothing about what this run resolved, and reviving
+    # an older attempt's annotation would assert a set on its behalf. That run is skipped, as it
+    # was before #4491 — the two cases must not share a branch.
+    def _fetch_attempt_without_job(earlier: str = "3.0.0-ci.8203") -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 558, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 721, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:                       # the LATEST attempt carries some other job
+                return {"total_count": 1, "jobs": [{"id": 722, "name": "Something else"}]}
+            if "/check-runs/721/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earlier} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a latest attempt that does not carry the platform-ref job at all ⇒ the run is "
+                  "SKIPPED, not answered from an older attempt that did",
+                  _fetch_attempt_without_job(), None, f"no `{PLATFORM_REF_JOB}` job")
+
+    # ── 🚨 PRESENT-BUT-UNPARSEABLE IS NOT ABSENT (review, #4493) ────────────────────────────────
+    # An annotation carrying the production title whose message names no set reaches the same dead
+    # end as no annotation at all. Reported as "no annotation" it hides a malformed notice or a
+    # schema change — the one case where the reader most needs to know something WAS published.
+    def _fetch_unparseable(message: str) -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [{"id": 559, "created_at": "2026-09-14T08:00:00Z"}]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 731, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/731/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE, "message": message}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a `Platform for this run` annotation whose message names no set ⇒ still no "
+                  "ceiling, but the note says PRESENT and unparseable, never absent",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  "are PRESENT but none names a set")
+    _ceiling_case("…and it quotes the message, so a schema change is diagnosable from the log "
+                  "alone",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  "the platform set is now reported elsewhere")
 
     # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
     # `Resolve the released platform` runs `resolve-platform.py --self-test` and
@@ -1910,6 +2591,48 @@ def self_test() -> int:
                               before=[{"title": "Platform for this SELF-TEST",
                                        "message": "3.0.0-ci.8207 — core aaaaaaaaa (a fixture)"}]),
                   8203, "8203")
+
+    # ── 🚨 EVERY FULL MAIN RUN VOUCHES, NOT `push` ALONE ───────────────────────────────────────
+    # The reader used to ask the API for `event=push`, so the ceiling was only as fresh as the last
+    # MERGE. A repository whose main is quiet still runs the daily poll, which resolves the newest
+    # sealed set and rebuilds everything against it — passing evidence that was thrown away. The
+    # last case is the load-bearing one: it fails if the QUERY ever pins an event again, which the
+    # reader's own filter would otherwise hide.
+    def _fetch_main_events(*events: str, seen: list[str] | None = None) -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                if seen is not None:
+                    seen.append(path)
+                return {"workflow_runs": [
+                    {"id": 900 + index, "created_at": "2026-09-16T08:00:00Z", "event": event}
+                    for index, event in enumerate(events)]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 777, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/777/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"3.0.0-ci.8203 — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("the daily poll vouches — a schedule run on main is a FULL run",
+                  _fetch_main_events("schedule"), 8203, "8203")
+    _ceiling_case("…so does the release dispatch, which fires minutes after a seal",
+                  _fetch_main_events("repository_dispatch"), 8203, "8203")
+    _ceiling_case("…and a manual dispatch, which narrows nothing either",
+                  _fetch_main_events("workflow_dispatch"), 8203, "8203")
+    _ceiling_case("a pull-request run never vouches, however it came to be listed on main",
+                  _fetch_main_events("pull_request"), None, "no successful run")
+    _seen_paths: list[str] = []
+    _ceiling_case("…and a push still vouches, listed beside a poll",
+                  _fetch_main_events("schedule", "push", seen=_seen_paths), 8203, "8203")
+    total += 1
+    if any("event=" in path for path in _seen_paths):
+        failures.append("the ceiling query pins an `event=` again — the reader's filter would hide "
+                        "that, and every poll and dispatch run would vanish from the listing")
 
     # ── 🚨 THE FLOOR: A SET OLDER THAN ONE THIS TREE HAS ALREADY ADOPTED (#1826) ────────────────
     # The resolver had a CEILING (the newest set main passed) and a FREEZE, and nothing that stops
@@ -1978,7 +2701,7 @@ def self_test() -> int:
         return rows["annotations"] if "/annotations" in path else rows
 
     try:
-        got, _ = main_passed_ceiling(_bare_array, SATELLITE, log=logs.append)
+        got = main_passed_ceiling(_bare_array, SATELLITE, log=logs.append).number
     except Exception as error:                       # noqa: BLE001 — a crash here IS the failure
         got, error_text = None, f" ({type(error).__name__}: {error})"
     else:
@@ -2207,8 +2930,11 @@ def self_test() -> int:
           "its own and reported beside it, a set still sealing its plugins is passed over (bounded), "
           "an unsealed or purged newer set is passed over and SAID, a sealing set is waited for on "
           "request, a freeze never substitutes, a re-run takes a newer set and keeps its baseline "
-          "otherwise, the OPTIONAL main ceiling changes nothing unless asked for and refuses "
-          "rather than falling back when main has passed nothing, the OPTIONAL source verification "
+          "otherwise, the OPTIONAL main ceiling counts EVERY full main run and not `push` "
+          "alone, changes nothing unless asked for and refuses "
+          "rather than falling back when main has passed nothing — naming what it read and leading "
+          "with the remedy the evidence points at, never at `main` when the LISTING is what failed, "
+          "the OPTIONAL source verification "
           "reads no job log unless asked for and passes over a set it cannot attribute, a main run "
           "whose annotations name two DIFFERENT sets is SKIPPED rather than guessed at, a set below "
           "this repository's declared FLOOR is refused on every path including under a freeze, a transient "
@@ -2294,18 +3020,23 @@ def main() -> int:
         ceiling = int(arguments.passed_ceiling)
         print(f"following main: ceiling core CD #{ceiling} (from the run's baseline)")
     elif arguments.passed_on_main:
-        ceiling, notes, fatal = ceiling_for(fetch, arguments.passed_on_main,
-                                            arguments.freeze or None)
-        for note in notes:
+        followed = ceiling_for(fetch, arguments.passed_on_main, arguments.freeze or None)
+        ceiling = followed.number
+        for note in followed.notes:
             print(f"  {note}")
-        if fatal:
-            detail = " ".join(notes)
-            print("::error title=No set this repo's main has passed::this run asked to follow "
-                  "`main` (--passed-on-main), so it resolves the newest sealed set main has "
-                  f"already passed, and none could be established. {detail} Fix main, or set the "
-                  "repo VARIABLE MW_PLATFORM_REF to select one set explicitly. Refusing to fall "
-                  "back to the newest sealed set: that is what reddened every open pull request "
-                  "at once.")
+        if followed.refusal:
+            # 🚨 The per-run notes stay in the LOG (printed just above) and OUT of the annotation.
+            # Jamming them in put twelve identical skip lines between the reader and the remedy,
+            # and the remedy that mattered came last (#4664). The plain copy is printed first so
+            # the raw log carries a readable form whatever the annotation renderer does with %0A.
+            print(followed.refusal)
+            print("::error title=Which set this repo's main has passed could not be read::"
+                  + followed.refusal.replace("\n", "%0A"))
+            summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary:
+                with open(summary, "a", encoding="utf-8") as handle:
+                    handle.write("### ❌ Which set this repo's `main` has passed could not be "
+                                 f"read\n\n```\n{followed.refusal}\n```\n")
             return 1
         if ceiling is not None:
             print(f"following main: the newest set main has passed is core CD #{ceiling}")

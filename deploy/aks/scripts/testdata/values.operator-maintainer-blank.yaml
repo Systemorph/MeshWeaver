@@ -1,0 +1,9 @@
+# FIXTURE for check-chart-invariants.sh — a whitespace-only operator maintainer (Plugins#1738).
+#
+# "Renders only when set" is only observable where the value is present and blank. The chart must
+# trim it and render NO Hosting__Operator__Maintainer key; a blank key would read as "nobody may
+# self-approve" wearing a value. The evidence check in the driver asserts the key is absent.
+hostingOperator:
+  enabled: false
+  executor: "Job"
+  maintainer: "   "

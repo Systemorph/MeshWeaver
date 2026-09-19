@@ -110,6 +110,16 @@ public static class DeploymentRecordExtensions
     public static DeploymentContent WithUpdatePolicy(this DeploymentContent d, string policy) => d with { UpdatePolicy = policy };
 
     /// <summary>
+    /// The version pattern the Continuous self-update follows (<c>3.0.0-ci*</c> on the fleet's
+    /// line). Together with <see cref="WithUpdatePolicy"/> this is what a NEW instance starts with:
+    /// both render into the portal's config (<c>SelfUpdate__DefaultPolicy</c> /
+    /// <c>SelfUpdate__DefaultPattern</c>) and seed its <c>Admin/UpdatePolicy</c> on first creation.
+    /// Null or blank clears it. See <see cref="DeploymentContent.UpdatePattern"/>.
+    /// </summary>
+    public static DeploymentContent WithUpdatePattern(this DeploymentContent d, string? pattern) =>
+        d with { UpdatePattern = string.IsNullOrWhiteSpace(pattern) ? null : pattern.Trim() };
+
+    /// <summary>
     /// The default update policy every package installed on this instance is SEEDED with —
     /// <c>Auto</c>, <c>Notify</c> or <c>None</c> (<c>PluginCatalog:DefaultUpdatePolicy</c>); a package
     /// re-stamped later keeps its own. Independent of <see cref="WithUpdatePolicy"/>, which moves the
@@ -166,7 +176,9 @@ public static class DeploymentRecordExtensions
 
     /// <summary>
     /// Boot modules the image MUST load (assembly file names; <c>.dll</c> appended when omitted).
-    /// 🚨 A non-empty list overrides the image's own list BY INDEX — it is the complete set.
+    /// 🚨 A non-empty list overrides the image's own list BY INDEX, entry for entry — it is NOT the
+    /// complete set on its own, and the image's tail past it stays required. Say "these and only
+    /// these" with <see cref="WithRequiredModulesAuthoritative"/>.
     /// </summary>
     public static DeploymentContent WithRequiredModules(this DeploymentContent d, params string[] assemblies) =>
         d with { RequiredModules = d.RequiredModules.AddRange(assemblies) };
@@ -181,6 +193,14 @@ public static class DeploymentRecordExtensions
     /// <summary>A boot module at an explicit slot (a by-index override of the image's list).</summary>
     public static DeploymentContent WithRequiredModuleSlot(this DeploymentContent d, int slot, string assembly) =>
         d with { RequiredModuleSlots = d.RequiredModuleSlots.SetItem(slot, assembly) };
+
+    /// <summary>
+    /// States that this record's required modules are the COMPLETE set — the image's own
+    /// <c>Modules:Required</c> list does not apply, including when the record names none. Renders
+    /// <c>Modules:RequiredIsAuthoritative=true</c>, the one thing an index-merged array cannot say.
+    /// </summary>
+    public static DeploymentContent WithRequiredModulesAuthoritative(this DeploymentContent d, bool authoritative = true) =>
+        d with { RequiredModulesAuthoritative = authoritative };
 
     // ── shape ───────────────────────────────────────────────────────────────────────────────────
 
@@ -520,6 +540,24 @@ public static class DeploymentRecordExtensions
         var env = o.Environment;
         foreach (var (k, v) in environment ?? Enumerable.Empty<KeyValuePair<string, string>>()) env = env.SetItem(k, v);
         return d with { Operator = o with { Enabled = enabled, Namespace = ns ?? o.Namespace, ServiceAccount = serviceAccount ?? o.ServiceAccount, Image = image ?? o.Image, Environment = env } };
+    }
+
+    /// <summary>
+    /// Which executor runs this instance's lifecycle actions, <c>Job</c> (the in-cluster operator
+    /// Job that <see cref="WithOperator"/> arms) or <c>Actions</c> (<c>aks-ops.yml</c> through the
+    /// GitHub App, which runs with the operator disabled), and the one user id that may approve its
+    /// own request. Leaves <see cref="HostingOperatorSpec.Enabled"/> as it is. Anything but Job or
+    /// Actions throws: the portal reads every other value as Job, so a misspelling would silently
+    /// keep the path this switch exists to leave. The maintainer is trimmed: null keeps the current
+    /// one, blank clears it.
+    /// </summary>
+    public static DeploymentContent WithOperatorExecutor(this DeploymentContent d, string executor, string? maintainer = null)
+    {
+        if (!HostingOperatorSpec.TryCanonicalExecutor(executor, out var canonical) || canonical is null)
+            throw new ArgumentException($"operator executor '{executor}' is neither Job nor Actions", nameof(executor));
+        var o = d.Operator ?? new HostingOperatorSpec();
+        var who = maintainer is null ? o.Maintainer : string.IsNullOrWhiteSpace(maintainer) ? null : maintainer.Trim();
+        return d with { Operator = o with { Executor = canonical, Maintainer = who } };
     }
 
     /// <summary>The container registry this instance HOSTS (the public instance only).</summary>

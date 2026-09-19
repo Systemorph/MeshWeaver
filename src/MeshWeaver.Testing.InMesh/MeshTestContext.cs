@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -46,6 +47,16 @@ public sealed class MeshTestContext
     /// <summary>Per-case deadline; a case past it fails naming the deadline.</summary>
     public TimeSpan Deadline { get; }
 
+    /// <summary>
+    /// The token of the case running right now — cancelled the moment the case's bound elapses, so a
+    /// wait that observes it ends WITH the verdict instead of outliving it. The in-mesh counterpart of
+    /// xunit's <c>TestContext.Current.CancellationToken</c> (xUnit1069): a timed case that never
+    /// observes it is reported by <see cref="MeshTestRunner"/> as having IGNORED its cancellation,
+    /// because the runner cannot stop what the case started — it can only name it. Set by the runner
+    /// before each case; <see cref="System.Threading.CancellationToken.None"/> outside a case.
+    /// </summary>
+    public CancellationToken CancellationToken { get; internal set; }
+
     internal MeshTestContext(LayoutAreaHost host, string partition, Action<string> output, TimeSpan deadline)
     {
         Host = host; Hub = host.Hub; Partition = partition; Output = output; Deadline = deadline;
@@ -77,9 +88,35 @@ public sealed class MeshTestContext
             .Select(change => change.Items.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
             .Timeout(Deadline);
 
-    /// <summary>Awaits an observable's first value under the case deadline (Rx's own awaiter — no task bridge).</summary>
-    public async Task<T> First<T>(IObservable<T> source) =>
-        await source.Take(1).Timeout(Deadline);
+    /// <summary>
+    /// Waits for an observable's first value under the case deadline, through the sanctioned bridge
+    /// (<see cref="ObservableAwait.Await{T}"/>) and observing <see cref="CancellationToken"/>.
+    ///
+    /// <para>🚨 <b>Rx's OWN awaiter is not a safe alternative to a task bridge, and this method's
+    /// remark used to say it was</b> (<i>"Rx's own awaiter — no task bridge"</i>). Awaiting an
+    /// observable DIRECTLY is the same defect as <c>.ToTask()</c> wearing a shorter spelling: Rx's
+    /// awaiter is an <see cref="System.Reactive.Subjects.AsyncSubject{T}"/> that completes its
+    /// continuation from inside <c>OnCompleted</c>, so the rest of the caller resumes INLINE on
+    /// whichever thread signalled, and — because <c>await</c> captures
+    /// <see cref="System.Threading.Tasks.TaskScheduler.Current"/> when there is no synchronization
+    /// context — every later <c>await</c> in the same method inherits it.
+    /// <c>InlineResumptionMechanismTest</c> measures both sides rather than asserting them.</para>
+    ///
+    /// <para>🚨 <b>Why that matters more here than in an ordinary test helper.</b> This is the
+    /// IN-MESH harness: a <c>[MeshFact]</c> case executes at runtime inside the portal, not in a CI
+    /// test host. The thread that signals is therefore a mesh thread — a hub's action block, a
+    /// grain's turn scheduler — and the remainder of every case that called this method continued
+    /// on it, holding a scheduler the work it went on to await may itself need (#2301, #2377).</para>
+    ///
+    /// <para><b>LAST ≡ FIRST here.</b> <see cref="ObservableAwait.Await{T}"/> is a faithful
+    /// <c>ToTask</c>: it yields the source's LAST value and faults on an empty sequence. The
+    /// <c>Take(1)</c> below reduces the source to at most one element, so its last value IS its
+    /// first, and an empty source faulted before this change too (Rx's awaiter throws
+    /// <see cref="InvalidOperationException"/> on an empty sequence for the same reason). Only the
+    /// continuation scheduling changes.</para>
+    /// </summary>
+    public Task<T> First<T>(IObservable<T> source) =>
+        source.Take(1).Timeout(Deadline).Await(CancellationToken);
 
     private static string Parent(string path)
     {

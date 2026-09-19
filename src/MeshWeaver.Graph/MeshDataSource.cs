@@ -1129,7 +1129,10 @@ public static class MeshDataSourceExtensions
                         // RunLevel flipped between our check above and the post. An accepted
                         // delivery is FIFO-ordered ahead of the phase-advance ShutdownRequests,
                         // so its handler runs and the storage write lands on the IO pool.
-                        if (posted is not null && posted.State != MessageDeliveryState.Failed)
+                        // 🚨 WasAcceptedForDelivery, not `!= Failed` (MeshWeaver#1174): a post the
+                        // intake DROPPED comes back Ignored, and marking the save as requested then
+                        // records a write that was never enqueued.
+                        if (posted is { WasAcceptedForDelivery: true })
                             pending.MarkRequested(node);
                     });
                 return sub;

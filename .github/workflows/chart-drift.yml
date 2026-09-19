@@ -80,11 +80,51 @@ name: Chart Drift
 # name, in `deployments/aks/envs.json` in $DEPLOY_REPO, and `discover` reads the matrix from there.
 # Adding or retiring an environment is a one-line change THERE and needs no change here.
 #
-# ⚠️ EXPECT THIS TO BE RED, legitimately. A local run of check-chart-drift.sh against ns memex on
-# 2026-08-17 compared 149 fields and found 121 divergences — the accumulated backlog of
-# `kubectl patch`-applied config the chart has never heard of. That backlog is the finding, not a
-# defect in the gate; it is triaged, by class, in MeshWeaver#2355 and in
-# src/MeshWeaver.Documentation/Data/Architecture/ChartDriftSemantics.md.
+# 🚨 THE WORKFLOW WAS NOT AT FAULT AND IT STILL PRODUCED NOTHING FOR 34 DAYS (MeshWeaver#4640).
+# 39 runs from 2026-08-15 to 2026-09-17, 39 failures, ZERO verdicts. #1709 fixed the first cause (a
+# stored PAT that authenticated as nothing) and was closed; the NEXT cause took over silently, and
+# with the ticket closed nothing pointed at it. Twelve more days of red went unread. That is the
+# real lesson here and it is not about helm: A PERMANENTLY-RED CHECK CARRIES NO INFORMATION, and
+# the artefact that made the state visible had been retired. The `report` job at the bottom of this
+# file is the answer — one tracking issue, updated in place, closed when the fleet is in sync.
+#
+# The second cause was structural, not a bug. A record-driven deploy renders from THREE value
+# sources; this check may hold TWO (the third is the Key Vault half — secrets), and from that
+# subset the chart correctly REFUSES to render (#3780). The render therefore moved to
+# deploy/aks/scripts/chart-drift-render.py, which supplies a render-only placeholder for exactly
+# that input and PROVES on every run that no compared object depends on it. Read that file's
+# header before changing anything about the render; its negative controls run on every pull request
+# through chart-gate.yml, so it can no longer go quietly blind.
+#
+# ⚠️ EXPECT THIS TO BE RED, legitimately — and now for the right reason. First verdict ever
+# produced, 2026-09-18, running this workflow's exact command line against both namespaces:
+#
+#     memex        19 divergence(s) across 209 compared fields: 15 SHADOWS, 1 CHART-ONLY, 3 DIFFERS
+#     memex-cloud  29 divergence(s) across 233 compared fields: 29 SHADOWS
+#
+# (For scale: a local run against ns memex on 2026-08-17 compared 149 fields and found 121
+# divergences. The backlog has largely been cleared since; what is left is triaged by class in
+# MeshWeaver#2355 and in src/MeshWeaver.Documentation/Data/Architecture/ChartDriftSemantics.md.)
+#
+# 🚨 AND THE FIRST VERDICT IMMEDIATELY FOUND SOMETHING NOBODY KNEW: on BOTH production namespaces
+# the NodeType bake readiness gate — the one instrument AGENTS.md names as what stops a bad roll —
+# is not in force, for two DIFFERENT reasons, neither visible in any committed source.
+#   * memex-cloud: ConfigMap `PreWarm__GateReadiness=true`, inline env `false`. An inline env
+#     overrides envFrom, so the gate is OFF on the pod while every committed source says ON.
+#   * memex: the gate is armed on both sides, and the live startupProbe was hand-moved to `/ready`
+#     while the chart and the record say `/health`. `/ready` does not run the `nodetype_bake`
+#     check, so the gate is armed and has no reader.
+# Both are recorded in MeshWeaver#4640; do not let a later reader take this comment as the current
+# state — it is the reading that made the case, not a standing claim.
+#
+# 🔒 WHAT A COMPLETED RUN PUBLISHES, since this repository is PUBLIC and its Actions logs are too.
+# The comparator never prints an inline-env or Secret value (see its header). It DOES print the two
+# sides of a ConfigMap finding, and a ConfigMap is non-secret by definition — measured on the first
+# real run, the whole disclosure was one value, `'Job'`. It is nonetheless a larger surface than
+# this file's "do NOT move the overlays into this public repo — that would publish the deployment
+# inventory" implies, and it is a live property now that runs complete. Whether ConfigMap values
+# should be withheld like inline-env values is an open call recorded in MeshWeaver#4640; the
+# `report` job below deliberately carries COUNTS ONLY for the same reason.
 #
 # 🚨 A WARNING THAT USED TO SIT HERE WAS WRONG, AND IT IS THE REASON THIS PARAGRAPH IS DATED. It
 # read: "ConfigMap Authentication__Microsoft__ClientId is still `CHANGE_ME_aad_application_client_id`
@@ -392,7 +432,148 @@ jobs:
           fi
           PATCH_ARG=""
           [ -f "$ENV_DIR/portal-patch.json" ] && PATCH_ARG="--expect-patch $ENV_DIR/portal-patch.json"
+          # `tee` keeps the log exactly as it was while giving the reporter below something to read.
+          #
+          # 🚨 TWO traps in three lines, and they pull in opposite directions.
+          #   * PIPESTATUS, not `$?`: piping into tee makes the exit status tee's, so a drifted
+          #     namespace would report SUCCESS — the exact false-pass AGENTS.md lists by name.
+          #   * `set -e` (the default for a `run:` step) combined with `set -o pipefail` would be
+          #     WORSE than no fix: the step would die ON the pipe, before the verdict is extracted,
+          #     so the run that FOUND drift would be the one that published no verdict. errexit is
+          #     therefore lifted across the pipeline only, and the status is carried by hand.
+          set +e
           deploy/aks/scripts/check-chart-drift.sh \
             -n "${{ matrix.env.ns }}" -r "${{ matrix.env.release }}" \
             --via aks-invoke -g "$AKS_RESOURCE_GROUP" --aks "$AKS_CLUSTER" \
-            -f deploy/helm/values.yaml -f "$VALUES" $PATCH_ARG
+            -f deploy/helm/values.yaml -f "$VALUES" $PATCH_ARG 2>&1 | tee "$RUNNER_TEMP/drift.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          # 🔒 COUNTS ONLY. This file is in a PUBLIC repository and the tracking issue this feeds is
+          # public too, so the artifact carries the comparator's one-line tally and NOTHING else —
+          # no key names, no values. The detail stays in the run log, where it already is.
+          {
+            grep -m1 -E '^[0-9]+ divergence\(s\) across [0-9]+ compared fields' "$RUNNER_TEMP/drift.log" \
+              || grep -m1 -E '^No drift: [0-9]+ fields compared' "$RUNNER_TEMP/drift.log" \
+              || echo "no verdict — the check did not get far enough to compare anything"
+          } > "$RUNNER_TEMP/verdict.txt"
+          exit "$rc"
+
+      # `!cancelled()`: the verdict is wanted precisely when the step above went red, which is every
+      # run that finds drift. It is not an input-shaped `if:` — it makes this step run MORE often,
+      # never less, and it cannot render a tick without executing.
+      - name: Keep the one-line verdict for the tracking issue
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: chart-drift-verdict-${{ matrix.env.ns }}
+          path: ${{ runner.temp }}/verdict.txt
+          if-no-files-found: ignore
+
+  # 📌 WHY A TRACKING ISSUE and not just a red run — the lesson of MeshWeaver#4640, and the same
+  # answer Systemorph/Memex#95 already reached for `deploy-drift.yml`, whose header points at THIS
+  # workflow for the cluster-vs-chart half. A scheduled workflow's failure is visible only to
+  # whoever opens the Actions tab. "There is drift" and "drift detection is not running" are both
+  # STANDING STATES, not events, and a standing state needs an artefact that survives somebody
+  # closing a ticket: this one ran red 39 times in 34 days with nobody reading it, and the artefact
+  # that would have said so had been retired with #1709.
+  #
+  # 🚨 THIS IS A REPORTER, NOT A GATE, and the distinction is load-bearing. The verdict is the
+  # `drift` job; this job publishes it. So it carries an `if:` (it must run when `drift` FAILED) and
+  # it must never be able to turn a red run green — it cannot, because the drift jobs have already
+  # failed by the time it starts and nothing here touches their conclusion. `!cancelled()` rather
+  # than `always()`: a cancelled run measured nothing, and writing a report for it would publish a
+  # state nobody established.
+  report:
+    name: Publish the standing state
+    needs: [preflight, discover, drift]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: chart-drift-verdict-*
+          path: verdicts
+        # ⚠️ The ONE `continue-on-error:` in this file, and the test is the usual one: what does a
+        # failure here hide? Nothing. The artifacts are absent exactly when `drift` never produced
+        # them — and THAT case is detected below from the job RESULTS, not from the files. The gate
+        # never reads its own input from an optional artifact; this is not the gate.
+        continue-on-error: true
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RESULT_PRE: ${{ needs.preflight.result }}
+          RESULT_DISCOVER: ${{ needs.discover.result }}
+          RESULT_DRIFT: ${{ needs.drift.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MARKER: "<!-- chart-drift-sentinel -->"
+        run: |
+          set -euo pipefail
+
+          # Counts only — see the 🔒 note in the drift job. Each file is one line; the directory
+          # name carries the namespace, which is already public in this job matrix's own job names.
+          DETAIL=""
+          for f in verdicts/chart-drift-verdict-*/verdict.txt; do
+            [ -f "$f" ] || continue
+            ns="$(basename "$(dirname "$f")")"; ns="${ns#chart-drift-verdict-}"
+            DETAIL="${DETAIL}${ns}: $(head -1 "$f")"$'\n'
+          done
+          [ -n "$DETAIL" ] || DETAIL="(no verdict produced by any environment)"$'\n'
+
+          if [ "$RESULT_PRE" = "success" ] && [ "$RESULT_DISCOVER" = "success" ] \
+             && [ "$RESULT_DRIFT" = "success" ]; then
+            STATE=green
+            TITLE="Chart drift: every environment matches the rendered chart"
+          elif [ "$RESULT_PRE" = "success" ] && [ "$RESULT_DISCOVER" = "success" ] \
+               && [ "$RESULT_DRIFT" = "failure" ]; then
+            STATE=drift
+            TITLE="Chart drift: the cluster does not match the chart"
+          else
+            # 🚨 "The detector did not run" must be as loud as "there is drift" — an unrun detector
+            # reporting nothing is the original bug, and it is the state this workflow was actually
+            # in for 34 days. A skipped dependency does not fail an `if: !cancelled()` job by
+            # itself, so it is detected here from the RESULTS rather than assumed away.
+            STATE=unknown
+            TITLE="Chart drift: the detector could not run — drift state is UNKNOWN"
+            DETAIL="job results: preflight=${RESULT_PRE} discover=${RESULT_DISCOVER} drift=${RESULT_DRIFT}"$'\n'"${DETAIL}"
+          fi
+
+          # shellcheck disable=SC2016  # the backticks are literal markdown for the issue body, not
+          # a command substitution; single quotes are what keeps them literal. Suppressed narrowly.
+          BODY=$(printf '%s\n\n**State: %s** — last checked %s ([run](%s)).\n\n```\n%s```\n\nCounts only, deliberately: this repository is public, so the per-key detail stays in the run log rather than in an issue body (MeshWeaver#4640).\n\n---\nMaintained automatically by `.github/workflows/chart-drift.yml`. Updated in place on every run and closed automatically when every environment matches; it reopens on the next divergence. Do not edit the body — edit the workflow.\n' \
+            "$MARKER" "$STATE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_URL" "$DETAIL")
+
+          # ONE issue, ever — found by the marker in its body, across BOTH states so a returning
+          # divergence reopens the original rather than minting a new one each night. Deliberately
+          # not `--search`: GitHub's issue search index lags a freshly-created issue by seconds to
+          # minutes, so a search-based lookup would miss its own issue on the next run and open a
+          # duplicate every day. A plain listing is exact and immediate.
+          FOUND=$(gh issue list --repo "$REPO" --state all --limit 200 \
+                    --json number,state,body \
+                    --jq "map(select(.body != null and (.body | contains(\"$MARKER\")))) | .[0] // empty")
+          NUM=$(printf '%s' "$FOUND" | jq -r '.number // empty')
+          ISSUE_STATE=$(printf '%s' "$FOUND" | jq -r '.state // empty')
+
+          if [ "$STATE" = "green" ]; then
+            if [ -n "$NUM" ] && [ "$ISSUE_STATE" = "OPEN" ]; then
+              gh issue edit "$NUM" --repo "$REPO" --title "$TITLE" --body "$BODY"
+              gh issue close "$NUM" --repo "$REPO" \
+                --comment "Every environment matches the rendered chart as of $RUN_URL — closing. It reopens automatically on the next divergence."
+              echo "closed #$NUM"
+            else
+              echo "In sync, and no tracking issue open. Nothing to do."
+            fi
+            exit 0
+          fi
+
+          if [ -n "$NUM" ]; then
+            gh issue edit "$NUM" --repo "$REPO" --title "$TITLE" --body "$BODY"
+            [ "$ISSUE_STATE" = "OPEN" ] || gh issue reopen "$NUM" --repo "$REPO"
+            echo "updated #$NUM (was $ISSUE_STATE)"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
+          fi

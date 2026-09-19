@@ -90,14 +90,45 @@ on:
 jobs:
   validate:
     name: Validate node repos
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0          # tags are the version history — --check-versions needs them
+          fetch-depth: 1
+      # 🚨 `fetch-depth: 0` writes ONE LOG LINE PER REF, and a content repo's refs are mostly TAGS:
+      # MeshWeaver.Plugins has 181 branches + 2,027 module-release tags, so this checkout alone printed
+      # ~2,208 `* [new branch]`/`* [new tag]` lines — measured 28.7% of every line that repo's CI wrote
+      # in a 73-job run. `actions/checkout` cannot be made quiet (`show-progress: false` drops
+      # `--progress`, which is the progress METER, not the ref-update TABLE; only `--quiet` drops that,
+      # and no input passes it). So: shallow checkout, then fetch exactly what `fetch-depth: 0` would
+      # have, quietly.
+      #
+      # 🚨 A NO-OP for every consumer, and that is the whole point — same objects, same branches, same
+      # tags, not shallow — so a tag read, a publication baseline and a merge-base all still resolve.
+      # Dropping `fetch-depth: 0` would NOT be a no-op; a verbosity change must not change a verdict.
+      # 🚨 `$HEAD_SHA` is in the refspec because on a pull request `actions/checkout` checks out
+      # `refs/pull/<n>/merge`, which `+refs/heads/*` does not name. Reachability makes it arrive
+      # anyway in every case measured — a same-repo PR's merge ref, and even a MERGED PR whose
+      # branch was deleted, both completed to 6,729+ commits — but that is an invariant nobody
+      # wrote down, and an unmerged fork head would not be reachable. Naming the commit costs one
+      # argument and removes the reasoning.
+      # The shallow re-check afterwards is not ceremony: a quiet success and a fetch that quietly did
+      # nothing would otherwise read the same, and every selector here narrows silently when it cannot
+      # see history.
+      - name: Full history and tags, quietly
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --quiet --tags --prune --no-recurse-submodules --unshallow origin '+refs/heads/*:refs/remotes/origin/*' "$HEAD_SHA"
+          else
+            git fetch --quiet --tags --prune --no-recurse-submodules origin '+refs/heads/*:refs/remotes/origin/*' "$HEAD_SHA"
+          fi
+          [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "::error::the repository is still SHALLOW after the history fetch — every selector that reads a tag, a publication baseline or a merge-base would now narrow silently. Refusing to continue."; exit 1; }
+          echo "full history: $(git rev-list --count HEAD) commit(s), $(git tag | wc -l | tr -d ' ') tag(s)"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"

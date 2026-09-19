@@ -80,6 +80,21 @@ public static class IconRasterizer
     /// <exception cref="ArgumentOutOfRangeException">The size is not positive.</exception>
     public static byte[]? Render(string svg, int size)
     {
+        using var image = RenderImage(svg, size);
+        if (image is null)
+            return null;
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    /// <summary>
+    /// The svg drawn into a transparent <paramref name="size"/>-pixel square, as an image the
+    /// caller composes onto its own canvas — the share card draws the node's mark this way. Null
+    /// for markup that does not parse, has no extent, or paints NOTHING (see <see cref="Render"/>),
+    /// so a caller can fall back to a picture of its own rather than draw an invisible one.
+    /// </summary>
+    internal static SKImage? RenderImage(string svg, int size)
+    {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(size);
         if (string.IsNullOrWhiteSpace(svg))
             return null;
@@ -114,12 +129,9 @@ public static class IconRasterizer
         if (IsFullyTransparent(surface))
             return null;
 
-        using var image = surface.Snapshot();
-        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        return data.ToArray();
+        return surface.Snapshot();
     }
 
-    /// <summary>Whether every pixel drawn is fully transparent — i.e. the mark painted nothing.</summary>
     private static bool IsFullyTransparent(SKSurface surface)
     {
         using var pixels = surface.PeekPixels();

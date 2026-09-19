@@ -64,14 +64,22 @@ public static class PublishedSettingsTab
 
     /// <summary>
     /// The published surface, resolved once per render. Cold and bounded by the enumeration's own
-    /// timeout; fails open to an explanatory line rather than an empty tab.
+    /// timeout; fails to an explanatory line rather than an empty tab.
+    ///
+    /// <para>🚨 An empty grid is an ASSERTION here — "nothing on this deployment is public" — so it
+    /// is shown only when the enumeration actually established that. The same rule the sitemap
+    /// route applies for the same reason (#4751), and the reason
+    /// <see cref="SeoEndpoints.EnumeratePublished"/> hands out
+    /// <see cref="PublishedSurface.Undecided"/> instead of a bare list.</para>
     /// </summary>
     private static IObservable<UiControl?> LivePublishedList(LayoutAreaHost host) =>
         SeoEndpoints.EnumeratePublished(host.Hub)
-            .Select(pages => (UiControl?)BuildGrid(host, pages))
+            .Select(surface => (UiControl?)(surface.AssertsWhatItDidNotCheck
+                ? Controls.Markdown(host.Localize("published.surfaceUnreadable", surface.Undecided!))
+                : BuildGrid(host, surface.Pages)))
             .Catch<UiControl?, Exception>(ex => Observable.Return<UiControl?>(
-                Controls.Markdown($"The published surface could not be read: {ex.Message}")))
-            .StartWith(Controls.Markdown("Reading the published surface…"));
+                Controls.Markdown(host.Localize("published.surfaceUnreadable", ex.Message))))
+            .StartWith(Controls.Markdown(host.Localize("published.reading")));
 
     /// <summary>The published surface as grid rows, ordered by URL so it reads as a site map.</summary>
     public static PublishedRow[] RowsFor(IReadOnlyList<PublishedPage> pages) =>

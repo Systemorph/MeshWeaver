@@ -18,9 +18,10 @@ Tags:
 > **The rule: if a report ends by telling the reader to go and find something, the reporting code
 > must first check whether it is already holding it — and if a report carries a field for
 > outstanding work, every producer of that report fills it, because an unfilled one does not
-> abstain, it asserts the opposite.**
+> abstain, it asserts the opposite. A fact about a PAST event is read from what was RECORDED then,
+> never re-derived now from a structure that has moved since.**
 
-Both halves were measured on live portals in September 2026, one day apart, in two subsystems that
+All three shapes were measured on live portals in September 2026, within a week, in subsystems that
 share no code. They are the same defect.
 
 Related: [Reading a Disposal Stall Verdict](../DisposalStallVerdicts) — what a snapshot field actually
@@ -173,6 +174,77 @@ Two details that are not incidental:
 
 ---
 
+## Shape 3 — a report that re-derives a fact from a structure that has since moved
+
+This is the shape the `[]` in the very first log excerpt on this page came from, and it is worth
+separating because the other two are about a fact that was never *reached*, while this one is about
+a fact that was reached and then **overwritten by the passage of time**.
+
+A hub holds its closed initialization gates in one dictionary, and `OpenGate` **removes** a gate
+from it. So `gates` does not record what held a delivery; it answers *"which gates are shut right
+now"*. Every report about a PARKED delivery that read that dictionary at report time was therefore
+describing the hub at report time and not the delivery at park time — and the two disagree in
+exactly the case a reader most needs the answer:
+
+| when the report is written | what the live read says | what it means to the reader |
+|---|---|---|
+| during `Dispose()`, which opens every gate first to release the buffers | `[]` | *nothing was holding it* — the opposite of the truth |
+| after the gate opened but before the restored turn ran | `[]` | the same, with no teardown anywhere near it |
+| after ONE of two gates opened | the other one | the gate that held it for most of its wait is never named |
+
+The empty case is the damaging one, because an empty list does not read as "not measured". It reads
+as a measurement: **nothing was holding it.** That is what 364 production Errors said, for six days
+across 13 pods, while alleging in the same sentence that the delivery was *"still deferred behind
+its initialization gates"*.
+
+The fix is a field, not a measurement: the deferral tracker records the gate set at the moment it
+parks the delivery, under the same lock that made the deferral decision, and every report reads it
+from there:
+
+```csharp
+// Called under gateStateLock at the deferral decision. Teardown opens the gates before
+// draining these trackers, so reading gates.Keys during Dispose loses the cause (#3712).
+var gatesAtDeferral = string.Join(",", gates.Keys.OrderBy(x => x, StringComparer.Ordinal));
+```
+
+### Two facts, separately labelled — not one replacing the other
+
+The live read is not wrong; it is a **different fact**, and the pair is the diagnosis:
+
+- *gates still shut* ⇒ the gate is stuck. Look at the dependency that never initialised.
+- *all of them since opened* ⇒ the hub **did** initialise and the delivery's turn still never ran.
+  Look at what is holding the turn loop. That is a different investigation, and before this change
+  it was indistinguishable from the first — it rendered as the same empty list.
+
+So the recorded set is the subject of the sentence and the live read is stated beside it, each
+labelled as what it is. Where a hub-level line already exists (the startup-timeout Error names the
+hub's own still-shut gates) it stays exactly as it was, and the per-delivery answer is ADDED — a
+rewrite that swapped one fact for the other would read as a fix.
+
+### Why the last of the three readers went unfixed for a week
+
+The discard at disposal was fixed the day after it was filed. The other two readers of the same
+drain — the startup-timeout answer and the 30-second per-message deferral timeout — kept the live
+read, and the deferral one could not be reached by any test at all, because its budget was a
+hard-coded `static readonly TimeSpan`. **A path no test can reach is a path whose wording nobody
+checks**, which is why that bound is now per-hub configuration (`WithDeferralTimeout`) with the
+default untouched, and why a regression now parks a hub's turn loop across the gate open on
+purpose:
+
+```text
+Hub late-gate/1 deferred GatedRequest (id=…) for >4s; initialization gates closed at deferral:
+[gate-the-test-opens] — every gate it was parked behind has SINCE OPENED, so this hub did
+initialise and the delivery's turn still never ran — look at what is holding the turn loop,
+not at the gates.
+```
+
+Read that report while the loop is still parked — it is logged one line before it is posted, which
+is the only way to see it, since the `DeliveryFailure` it produces cannot be routed until the loop
+is released. That asymmetry is itself worth knowing: **a hub can tell the log something it cannot
+yet tell the caller.**
+
+---
+
 ## What this rule is not
 
 It is **not** a licence to downgrade or silence a report. Both changes here leave every level,
@@ -198,3 +270,9 @@ stops reporting is a silenced fault, not a classification.
    itself an answer and has to be spelled as one.
 5. Does the party who cannot read this log — a caller in another process — get the same fact in its
    NACK or response?
+6. Is any fact in it about something that happened EARLIER? Then it is read from what was recorded
+   then, not re-derived now — and ask what the re-derived value renders as when the structure has
+   emptied, because an empty collection reads as a measurement, never as an abstention.
+7. Can a test reach this line at all? A report behind a hard-coded bound is a report whose wording
+   nobody ever checks — three readers shared one drain here, and the two nobody could reach are the
+   two that stayed wrong.

@@ -87,6 +87,15 @@ public static class IoPoolNames
     public const string Process = "Process";
 
     /// <summary>
+    /// The cases of a NodeType's <c>Tests</c> area (<c>MeshWeaver.Testing.InMesh.MeshTestRunner</c>).
+    /// A case runs as ONE leaf on this pool so that the runner's bound cancels it through the pool's
+    /// linked token rather than abandoning it. The pool does NOT order the cases (the runner does);
+    /// its cap (<see cref="IoPoolOptions.Tests"/>) bounds how many cases that ignored their
+    /// cancellation may still be running.
+    /// </summary>
+    public const string Tests = "Tests";
+
+    /// <summary>
     /// Prefix for per-Postgres-storage-<b>provider</b> pools (<c>pg:{providerName}</c>). Capped at
     /// ONE in-flight WRITE. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     ///
@@ -107,9 +116,23 @@ public static class IoPoolNames
     /// this correctly and is the reference; the sentence here asserted the opposite and made a
     /// live question look settled, which is why #1198's third item sat unmeasured for a month.
     /// 🚨 It follows that the cap is a PROCESS-WIDE write serializer: a recursive delete's next
-    /// leaf removal queues behind unrelated writes from every other partition. Changing the number
-    /// needs the queue-wait distribution under portal load, which is not instrumented — it is not a
-    /// knob to turn on a hunch.</para>
+    /// leaf removal queues behind unrelated writes from every other partition.</para>
+    ///
+    /// <para>🚨 <b>That distribution has now been READ, and it does not indict this cap.</b>
+    /// Measured 2026-09-16 on memex.systemorph.com over 828 minutes of uptime: <c>pg:Postgres</c>
+    /// granted 2,786 admissions, mean 6.5 ms, <b>max 205 ms</b>, and <b>zero</b> in either tail
+    /// bucket — against a 30 s operation budget. Meanwhile <c>pg-read:Postgres</c> (cap 16) granted
+    /// <b>31,897,169</b> at a MEAN of 342 ms with 48,122 over a second. The write gate is not the
+    /// contended one; the read gate is, by four orders of magnitude in traffic. Denominator: ONE
+    /// portal, ONE pod, ONE process lifetime — and NOT memex-cloud, which produced every logged
+    /// occurrence of MeshWeaver#1198 and runs an image predating the instrument.</para>
+    ///
+    /// <para>So the number still is not a knob to turn on a hunch — now for the opposite reason.
+    /// There is nothing on this pool to relieve, and a high mean on the READ pool is not by itself
+    /// a cap that is too small (<c>InvokeStream</c> holds one slot for a whole enumeration, so
+    /// long-held slots and too-few slots produce the same mean and are different problems).
+    /// <c>Doc/Architecture/RecursiveDeleteDrain</c> carries the reading and what it does not
+    /// settle.</para>
     /// </summary>
     public const string PostgresAdapterPrefix = "pg:";
 
@@ -240,6 +263,15 @@ public sealed record IoPoolOptions
     public int Process { get; init; } = 4;
 
     /// <summary>
+    /// Slots of the <see cref="IoPoolNames.Tests"/> pool. NOT the serializer — the in-mesh runner
+    /// already runs cases one after another — so this is the number of cases that may IGNORE their
+    /// cancellation and keep running before the pool is full. A cap of one made a single such case
+    /// block every later case of every suite on the mesh (MeshWeaver#4719 review); the runner names
+    /// a pool its own leaked cases have filled rather than timing out behind it.
+    /// </summary>
+    public int Tests { get; init; } = 32;
+
+    /// <summary>
     /// Concurrent READS per Postgres storage adapter (the <c>pg-read:{adapter}</c> pool). Kept
     /// comfortably below the shared base connection pool's <c>MaxPoolSize</c> so a synced-query
     /// read fan-out storm cannot drain the pool and starve writes (prod 2026-06-04: "connection
@@ -284,6 +316,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Ai => Ai,
             IoPoolNames.Query => Query,
             IoPoolNames.Layout => Layout,
+            IoPoolNames.Tests => Tests,
             IoPoolNames.AgentStore => AgentStore,
             IoPoolNames.Routing => Routing,
             IoPoolNames.Compile => Compile,
