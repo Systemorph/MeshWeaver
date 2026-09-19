@@ -295,6 +295,14 @@ public sealed class IoPoolRegistry : IDisposable
     }
 
     /// <summary>
+    /// The budget a host's terminal drain holds shutdown for while waiting on <see cref="Disposed"/>
+    /// — see <see cref="IoPoolOptions.SiloJoinBudget"/>. Read from the registry so the waiter needs
+    /// no DI resolution of its own: <c>IoPoolSiloTeardown</c> captures this registry while the
+    /// container is provably alive and its stop must resolve NOTHING (#1898/#1899).
+    /// </summary>
+    public TimeSpan SiloJoinBudget => _options.SiloJoinBudget;
+
+    /// <summary>
     /// The pools that <see cref="Dispose"/> asked to unwind and which have NOT reported yet — name,
     /// how many leaves are still in flight, and WHERE those leaves are — readable at ANY moment
     /// after disposal began, without waiting for anything.
@@ -315,14 +323,6 @@ public sealed class IoPoolRegistry : IDisposable
     /// Reads lock-free counters and a <see cref="ConcurrentDictionary{TKey,TValue}"/> only: a
     /// diagnostic must never be the reason a teardown blocks.</para>
     /// </summary>
-    /// <summary>
-    /// The budget a host's terminal drain holds shutdown for while waiting on <see cref="Disposed"/>
-    /// — see <see cref="IoPoolOptions.SiloJoinBudget"/>. Read from the registry so the waiter needs
-    /// no DI resolution of its own: <c>IoPoolSiloTeardown</c> captures this registry while the
-    /// container is provably alive and its stop must resolve NOTHING (#1898/#1899).
-    /// </summary>
-    public TimeSpan SiloJoinBudget => _options.SiloJoinBudget;
-
     public IReadOnlyList<PoolResidual> UnreportedResiduals() =>
         _draining
             .Where(kvp => !_reported.ContainsKey(kvp.Key))
