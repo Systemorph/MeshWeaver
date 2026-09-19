@@ -67,8 +67,28 @@ public static class GitHubWebhookEndpoints
             //
             // 25 MiB is GitHub's own documented maximum payload, so this can never refuse a genuine
             // delivery — it is strictly a ceiling on what a forged one can cost.
-            var body = await BoundedBody.ReadBytesAsync(
-                http.Request.Body, MaxWebhookBodyBytes, http.RequestAborted);
+            //
+            // 🚨 A DELIVERY THAT STOPS SHORT IS A 400, NOT AN UNHANDLED FAULT (#4860). GitHub's
+            // delivery can time out, and an abandoned probe or a reset connection does the same:
+            // Kestrel raises "Unexpected end of request content" from the body read. That escaped to
+            // ExceptionHandlerMiddleware and was logged at `fail` with a stack trace — six times in
+            // 19 days across five pods — for an ordinary network condition nobody can act on.
+            // Caught as its own outcome, never folded into the `null` below: that one means OVER
+            // THE CAP and answers 413, and a dropped connection is not that.
+            byte[]? body;
+            try
+            {
+                body = await BoundedBody.ReadBytesAsync(
+                    http.Request.Body, MaxWebhookBodyBytes, http.RequestAborted);
+            }
+            catch (BadHttpRequestException ex)
+            {
+                logger.LogDebug(ex,
+                    "GitHub webhook delivery ended before the declared body arrived — nothing to "
+                    + "verify. GitHub retries its own failed deliveries.");
+                return Results.StatusCode(StatusCodes.Status400BadRequest);
+            }
+
             if (body is null)
             {
                 logger.LogWarning(
