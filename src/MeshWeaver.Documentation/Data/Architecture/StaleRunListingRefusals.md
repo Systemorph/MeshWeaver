@@ -1,7 +1,7 @@
 ---
 Name: A Stale Run Listing Is Not a Broken Main
 Category: Architecture
-Description: GitHub serves the platform resolver a weeks-old page of workflow runs, per call, with no error — six measured occurrences, one of which left `main` without a verdict. The refusal that results is correct; twice its wording sent the reader at a `main` that was fine, and until MeshWeaver#4750 it cost a whole CI cycle every time. What each of the two listings can and cannot check, which single branch is re-read and why only that one, and how the refusal orders its remedies by the evidence it actually read.
+Description: GitHub serves the platform resolver a weeks-old page of workflow runs, per call, with no error — seven measured occurrences (five on the core CD listing, two on the satellite ceiling listing), one of which left `main` without a verdict. The refusal that results is correct; twice its wording sent the reader at a `main` that was fine, and until MeshWeaver#4750 it cost a whole CI cycle every time. What each of the two listings can and cannot check, which single branch is re-read and why only that one, and how the refusal orders its remedies by the evidence it actually read.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/><path d="M3 4l18 16"/></svg>
 ---
 
@@ -15,7 +15,15 @@ The refusals that follow are right, and they stay. Two things about them were no
 about both. **The wording of one of them named the wrong cause** — a refusal that does that spends
 the reader's time in the wrong place, and they trust it while doing so. And **one of them refused
 on the first read** where a second read, minutes later, would have answered correctly — which cost
-a whole CI cycle each of the six times it was measured, once on `main` itself.
+a whole CI cycle every time.
+
+**Seven occurrences are measured below, and they are not all the same measurement.** Counting the
+table's `×N` rows: **five** are the **core CD** listing (2026-09-15 ×2 and 2026-09-18 ×3) — the
+only one MeshWeaver#4750 re-reads, and one of the three on 09-18 left `main` itself without a
+verdict. The other **two** (2026-09-14, 2026-09-17) are the **satellite's own ceiling** listing,
+which still refuses on the first read, deliberately, for the reason the next section gives.
+(`ceiling_refusal`'s own text says *"measured three times"* for that second listing: it counts the
+2026-09-17 refusal as two, which the table records as one row.)
 
 ## The two listings, what each can be checked against, and which one is re-read
 

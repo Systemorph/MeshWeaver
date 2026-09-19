@@ -392,8 +392,15 @@ STALE_REREAD_BACKOFF_SECONDS = 20.0   # 20 s, 40 s, 60 s — 2 minutes inside th
 
 def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, *,
                     now: Callable[[], float], sleep: Callable[[float], None],
-                    log: Callable[[str], None]) -> tuple[list[dict], str | None, int]:
-    """Page 1, why it still cannot be the newest page (or None), and how many times it was RE-READ.
+                    log: Callable[[str], None]) -> tuple[list[dict], str | None, int, int]:
+    """Page 1, why it still cannot be the newest page (or None), how many times it was RE-READ, and
+    how many of those re-reads came back EMPTY.
+
+    🚨 THE EMPTY COUNT IS RETURNED SEPARATELY because an attempt has THREE outcomes, not two:
+    settled, still stale, and empty — and an empty page is not a staleness finding at all, it is a
+    page that was not adopted. Collapsing the last two let the refusal claim page 1 "was still
+    stale every time" over evidence that said `came back EMPTY`, which is the same class of defect
+    as the refusal this function exists to soften: a summary stronger than what was measured.
 
     🚨 IT PROVES IT RE-READ. One line per re-read, naming how many runs page 1 held and its newest
     main run — because a function that logs only its verdict leaves "re-read twice and it cleared"
@@ -401,8 +408,8 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
     this exists to remove."""
     why_stale = stale_listing(runs, passed_ceiling, now())
     if why_stale is None or ceiling_shortfall(runs, passed_ceiling) is None:
-        return runs, why_stale, 0
-    rereads = 0
+        return runs, why_stale, 0, 0
+    rereads = empties = 0
     for attempt in range(1, STALE_REREADS + 1):
         wait = STALE_REREAD_BACKOFF_SECONDS * attempt
         log(f"  page 1 is PROVABLY stale — {why_stale}. Re-reading it in {wait:.0f}s "
@@ -415,6 +422,7 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
             # 🚨 An EMPTY page says NOTHING about staleness — `stale_listing` has no main rows to
             # judge, so adopting it would turn a refusal into a resolution off a page holding no
             # candidates at all. Keep the page that at least had rows, and the refusal it earned.
+            empties += 1
             log(f"  re-read {attempt} of {STALE_REREADS}: page 1 came back EMPTY — not adopted; "
                 "the previous page and its refusal stand")
             continue
@@ -425,16 +433,21 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
             f"main-cd #{newest if newest is not None else '?'} — "
             + ("SETTLED, resolving from it" if why_stale is None else f"still stale ({why_stale})"))
         if why_stale is None:
-            return runs, None, rereads
+            return runs, None, rereads, empties
         if ceiling_shortfall(runs, passed_ceiling) is None:
             # The ceiling cleared and the AGE branch tripped instead. That one has no crisp
             # condition to re-read FOR, so it is refused here rather than burning the budget.
             break
-    return runs, why_stale, rereads
+    return runs, why_stale, rereads, empties
 
 
-def reread_note(rereads: int) -> str:
+def reread_note(rereads: int, empties: int = 0) -> str:
     """What is APPENDED to the #4433 refusal when page 1 was re-read before it.
+
+    🚨 It says what the re-reads ACTUALLY SAW, and an EMPTY re-read is not a stale one. Claiming
+    page 1 "was still stale every time" over a log that says `came back EMPTY` is a summary
+    stronger than the evidence under it — the same defect the refusal itself had — and the two
+    have different next steps, so they are counted and worded apart.
 
     🚨 The sentence this follows is kept BYTE-FOR-BYTE, including the clause that is no longer
     true of the ceiling branch ("the resolver refuses rather than re-reading"). A transient-retry
@@ -445,10 +458,19 @@ def reread_note(rereads: int) -> str:
     if rereads <= 0:
         return ""
     seconds = sum(STALE_REREAD_BACKOFF_SECONDS * n for n in range(1, rereads + 1))
+    stale = rereads - empties
+    if empties <= 0:
+        saw = "and was still stale every time"
+    elif stale <= 0:
+        saw = (f"and every one of the {empties} came back EMPTY — an empty page is never adopted, "
+               "so the refusal stands on the page that had rows")
+    else:
+        saw = (f"— {stale} came back still stale and {empties} came back EMPTY (an empty page is "
+               "never adopted, so the refusal stands on the page that had rows)")
     return (f" [MeshWeaver#4750: page 1 WAS re-read {rereads} time(s) over ~{seconds:.0f}s before "
-            "this refusal and was still stale every time — what each re-read held is logged line "
-            "by line above. The sentence before this one predates the re-reads and is kept "
-            "verbatim because a transient-retry signature keys on it.]")
+            f"this refusal {saw}; what each re-read held is logged line by line above. The "
+            "sentence before this one predates the re-reads and is kept verbatim because a "
+            "transient-retry signature keys on it.]")
 
 
 def run_jobs_of(fetch: Fetch, repo: str, run_id: int) -> list[dict]:
@@ -1567,9 +1589,9 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             break
         # 🚨 PAGE 1 IS WHERE "NEWEST" IS DECIDED, so it is the page checked (#4433). A freeze names
         # one set and must keep working in an incident, so it is neither re-read nor refused here.
-        why_stale, rereads = None, 0
+        why_stale, rereads, empties = None, 0, 0
         if page == 1 and not freeze_kind:
-            runs, why_stale, rereads = settle_page_one(
+            runs, why_stale, rereads, empties = settle_page_one(
                 fetch, runs, passed_ceiling, now=now, sleep=sleep, log=log)
         if why_stale:
             raise ResolutionError(
@@ -1578,7 +1600,8 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 "from it would take an old set and report it as the newest (measured 2026-09-15: "
                 "page 1 began ~260 runs behind, twice, and a re-read minutes later was correct). "
                 "Re-run this job; the resolver refuses rather than re-reading, because this red is "
-                "the harmless answer and a silently old platform is not." + reread_note(rereads))
+                "the harmless answer and a silently old platform is not."
+                + reread_note(rereads, empties))
         for run in runs:
             if run.get("head_branch") not in (None, CORE_BRANCH):
                 continue
@@ -2581,13 +2604,25 @@ def self_test() -> int:
          and frozen["slept"] == [])
 
     fetch_empty, empty = _flipping_page_one([aged, []])
+    # 🚨 …and the refusal must SAY empty, never "still stale every time". An empty re-read is not
+    # a staleness finding, and a summary stronger than the evidence under it is the very defect
+    # this change exists to remove (found by the automatic review on this PR).
     case("#4750: an EMPTY re-read is not ADOPTED — a page with no rows proves no freshness", False,
          lambda: choose(fetch_empty, _registry(full), tester, portal, log=logs.append,
                         now=lambda: made_at + 3600, passed_ceiling=8676,
                         sleep=empty["slept"].append),
          lambda message: "STALE" in message and "#8676" in message and "#8207" in message
          and empty["page1"] == 1 + STALE_REREADS
-         and any("came back EMPTY" in l for l in logs))
+         and any("came back EMPTY" in l for l in logs)
+         and "came back EMPTY" in message and "still stale every time" not in message)
+    # …and the MIXED case words BOTH counts, rather than rounding to whichever came last.
+    fetch_mixed, mixed = _flipping_page_one([aged, [], aged])
+    case("#4750: a MIXED run of re-reads reports the stale and the empty counts separately", False,
+         lambda: choose(fetch_mixed, _registry(full), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=mixed["slept"].append),
+         lambda message: "2 came back still stale and 1 came back EMPTY" in message
+         and "still stale every time" not in message and mixed["page1"] == 1 + STALE_REREADS)
 
     total += 1
     stale_rows, stale_override = refresh(
