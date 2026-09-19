@@ -903,6 +903,81 @@ each produced a steady ticket stream:
 `HubCreationDuringTeardownIsNotAFaultTest` and `HubConstructionOutcomeReportingTest` pin the
 hub-creation ones, including the configuration-throw that must stay red.
 
+## Before you CLOSE one: two things the fingerprint does not assert
+
+Measured 2026-09-19 while consolidating the 53 bot-filed issues then open on this repository — 34 of
+them were duplicates of 9 roots. Both traps below produce a closure that *reads* like a pass.
+
+### 1. An empty `normalizedDetail` makes the fingerprint SITE-ONLY, so "the titled fault is fixed" licenses nothing
+
+The identity's third term is the normalized **detail** — the exception's own message when there is one,
+else the logged message. It is the parser property `NormalizedDetail`, and it lands on the incident node
+as the JSON field `normalizedDetail`; the JSON spelling is used from here on, because everything this
+section tells you to read is read off the node with `get @Admin/_LogIncident/<fingerprint>`. A burst that
+carries no exception type *and* whose parse leaves that field empty contributes nothing to the third
+term, and the identity collapses to the log **site**. Every `Error` from that category then folds onto
+one incident, with `variants: 1` — so nothing on the ticket says it happened.
+
+[#4597](https://github.com/Systemorph/MeshWeaver/issues/4597) is the worked example.
+`Admin/_LogIncident/253b5feaa9ed755e` carries `normalizedDetail: ""`, a title naming a content-cast
+failure, and five samples of which **four are a different fault**:
+
+```
+normalizedMessage:  As<MarkdownContent> for {path}: value is EmailContent (…), not convertible
+ 2026-09-05 12:26:06Z  As<MarkdownContent> … not convertible                      <- the titled fault
+ 2026-09-17 08:57:24Z  As<InstanceActionContent> could not recover value: JsonException
+ 2026-09-17 13:05:50Z  As<MarkdownContent>       could not recover value: JsonException
+ 2026-09-17 15:22:21Z  As<MarkdownContent>       could not recover value: JsonException
+ 2026-09-18 12:39:09Z  As<MarkdownContent>       could not recover value: JsonException
+```
+
+The titled fault *is* fixed: `NodeUpdatePipeline.WithExistingContentTyped` now asks
+`ContentDiscriminator.Admits` first and logs at `Warning` instead of reporting a failed `As<T>`
+recovery at `Error` (`3c36d05ade`, 2026-09-18 07:19 +0200) — and that commit is an ancestor of the
+commit each production portal reports at `/api/version`. A closure reading *"fixed, and live, proved by
+`merge-base --is-ancestor`"* would therefore have passed every check a careful reader applies, while
+closing a fault that fired at **12:39Z that same day** from `ObjectAsExtensions.LogRecoveryFailure` —
+a different call site, still `LogError`, untouched by that commit.
+
+🚨 **The discriminator costs one read: the incident node's `samples`, not its title.** When the samples
+disagree with `normalizedMessage`, the fingerprint is site-only and the ticket covers more than it
+says — so a fix for the titled fault is a comment, never a close.
+
+### 2. A `MeshWeaver.`-prefixed category can belong to a Plugins assembly, and a transfer does not stop the re-file
+
+Routing is by category prefix (above), and **a prefix does not name an assembly**.
+`MeshWeaver.SelfUpdate.Aks.*` and `Memex.Portal.Distributed.*` are MeshWeaver.Plugins projects; a
+framework category such as `Microsoft.Extensions.Diagnostics.HealthChecks.DefaultHealthCheckService`
+carries no hint of who registered the failing check at all. Each of those files onto core.
+
+When a human then transfers the ticket the redirect keeps working —
+`repos/Systemorph/MeshWeaver/issues/1897` resolves to `MeshWeaver.Plugins#2154` — but the same
+fingerprint was measured open **twice, in two repositories**, three times over:
+
+| fingerprint | open in MeshWeaver.Plugins | open again on MeshWeaver (core) |
+|---|---|---|
+| `93710ed097873d0b` | [Plugins#2132](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2132) | [core#4767](https://github.com/Systemorph/MeshWeaver/issues/4767) |
+| `34928a1851aa5217` | [Plugins#2153](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2153) | [core#4794](https://github.com/Systemorph/MeshWeaver/issues/4794) |
+| `cd48b16db4d9809b` | [Plugins#2154](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2154) | [core#4795](https://github.com/Systemorph/MeshWeaver/issues/4795) |
+
+`Admin/_LogIncident/93710ed097873d0b` shows the shape: `"issueNumber": 4767` alongside
+`"supersededIssueUrl": ".../issues/4611"` and `"status": "Superseded"` — the incident was superseded and
+filed a fresh ticket, into the repository the route still points at. So **"one fault, one ticket" holds
+per incident node, not per fault**, across a supersession or a transfer.
+
+🚨 Before opening *or* closing one, search the owning repository by **fingerprint** as well as by title;
+and when the code is not in this repository's `src/`, the ticket wants a transfer rather than an
+analysis.
+
+### And a fan-out is read from the log line, not the title
+
+Two clusters in that sweep were one condition each, reported once per shard and once per grain
+activation. The discriminators were already in the evidence: the memory-stream tickets differ only in
+the per-queue log **category** (`…Memory.memory-0` … `memory-7`, 8 registered queues, one provider),
+and the `[ROUTE] Routing back-pressure` tickets are split by a field the line itself explains —
+`deepest per-destination queue` ≥ 1 is head-of-line blocking, `0` is load. Consolidating on the title
+instead would have merged the two readings and lost the only thing that tells them apart.
+
 ## What this is not
 
 - **Not an alerting system.** A provisioned Grafana rule covers the "tell a human now" case
