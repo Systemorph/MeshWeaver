@@ -97,23 +97,44 @@ empirical proof the transient claim was false. So a departed-silo condition that
 costs a bounded, backing-off retry — against the old answer's cost, which was every live mirror on
 that path torn down permanently by a roll.
 
-## The signal is Orleans' prose, and that is a managed weakness
+## Two arms, and only one of them is prose
 
-Neither shape has an exception type this assembly can name: Orleans rejects with
-`OrleansMessageRejectionException`, which carries *every* refusal kind, so accepting the type alone
-would classify genuine refusals as transient — the one direction this classifier must not fail in.
-The predicate is therefore two narrow phrases behind an `OrleansException` type guard, and both
-halves are pinned by `DepartedSiloClassificationTest`:
+**Arm 1 is a TYPE, with no wording in it at all.** `Orleans.Runtime.Messaging.ConnectionFailedException`
+is public, and it is thrown only by `ConnectionManager.GetConnectionAsync(SiloAddress)` — so it is only
+ever about a *cluster* endpoint. That makes the type strictly stronger than any phrase and immune to an
+Orleans re-wording. It is also the arm that catches Orleans' *carried exception wins* resolution
+(`rejection?.Exception ?? new OrleansMessageRejectionException(…)`), where the caller receives the
+connect failure **bare**, with no rejection wrapper in the graph at all — the mechanism `IsDirectoryUnstable`
+exists for (#1742 / #2357).
+
+**Arm 2 is the phrase, guarded by the CONCRETE rejection type.** The superseded-generation shape needs
+it: Orleans rejects that one with no carried exception, so the caller does get
+`OrleansMessageRejectionException` and its detail exists only as text. The connect shape is covered
+twice over, because production's wrapper embeds the inner's text.
+
+🚨 **The guard is the concrete rejection and deliberately NOT the `OrleansException` base.** The first
+revision of this used the base, mirroring `IsDirectoryUnstable`, and review caught that it is broader
+than the signal: a clustering or storage provider that cannot reach *its* endpoint throws a bare
+`OrleansException` saying exactly *"Unable to connect to …"*, and that is a genuine defect — reporting
+it as transient would arm a resubscribe against a misconfiguration. Prose is only a signal on Orleans'
+own transport types.
+
+Both arms are pinned by `DepartedSiloClassificationTest`, in both directions:
 
 - the phrases are asserted against the **shipped** Orleans assemblies' own string literals —
   `Unable to connect to` is a literal of **Orleans.Core** (where `ConnectionManager` lives),
   `The target silo is no longer active` of **Orleans.Runtime**. If an Orleans upgrade re-words either,
   the pin goes red. **Repair the marker; never delete the pin** — a classifier that stops matching
-  fails *open* into the silence it removes.
-- the refusing direction is pinned too, and mutation-measured in three directions: unwiring the
-  predicate reds the four production shapes; dropping the phrase reds an ordinary Orleans fault and a
-  rejection carrying no departed-silo phrase; dropping the type guard reds an application-level
-  connect failure that happens to use the same words.
+  fails *open* into the silence it removes. (Arm 1 cannot go inert this way, which is why it exists.)
+- the refusing direction is mutation-measured, five ways:
+
+| mutation | red |
+|---|---|
+| predicate not wired in (**the pre-fix answer**) | **6** — the 4 production shapes, the by-type fact, the aggregate fact |
+| arm 2 (the phrase) dropped | **5** — the 4 production shapes and the aggregate fact |
+| arm 1 (the type) dropped | **1** — `AConnectionFailure_IsAcceptedByTypeWithoutAnyPhrase` |
+| arm 2's guard widened back to `OrleansException` | **1** — `ABareOrleansExceptionCarryingThePhrase_StaysTerminal` |
+| both guards dropped, phrase matched on any exception | **3** — adds an application-level connect failure |
 
 If Orleans re-words a phrase this returns to the previous answer rather than misclassifying anything —
 the safe direction to fail in.

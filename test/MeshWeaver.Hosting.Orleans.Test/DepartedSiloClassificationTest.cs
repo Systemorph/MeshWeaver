@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using MeshWeaver.Messaging;
 using Orleans.Runtime;
@@ -36,6 +37,39 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class DepartedSiloClassificationTest
 {
+    /// <summary>
+    /// The exception the caller actually receives — a real <see cref="OrleansMessageRejectionException"/>
+    /// carrying a real message. <b>Not</b> a bare <see cref="OrleansException"/>, because the whole
+    /// point of the narrowed guard is that the CONCRETE rejection type is part of the signal, and
+    /// every sample in both incidents names this type.
+    ///
+    /// <para>🚨 Orleans keeps that type's constructors INTERNAL, so this reaches the
+    /// <c>(string message)</c> one by reflection rather than substituting a base-class stand-in — a
+    /// stand-in would make every fact below a statement about <see cref="OrleansException"/> instead,
+    /// which is precisely the width this predicate stopped accepting. <c>GetUninitializedObject</c>
+    /// is no good either: these facts turn on the MESSAGE.</para>
+    ///
+    /// <para>The construction cannot fail silently: if Orleans removes that constructor
+    /// <c>CreateInstance</c> throws <see cref="MissingMethodException"/>, and the self-check below
+    /// fails loudly if the instance does not carry the message — so no fact here can pass having
+    /// classified something other than what it names.</para>
+    /// </summary>
+    private static Exception Rejection(string message)
+    {
+        var rejection = (Exception)Activator.CreateInstance(
+            typeof(OrleansMessageRejectionException),
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+            binder: null,
+            args: [message],
+            culture: null)!;
+
+        rejection.Message.Should().Be(message,
+            "every fact in this class turns on the rejection's MESSAGE, so a construction that "
+            + "silently dropped it would let them pass having classified something else");
+
+        return rejection;
+    }
+
     /// <summary>
     /// Verbatim from <c>Admin/_LogIncident/e849e4a7795e0c92</c> (#2299 body, 2026-08-23 19:51:58Z) —
     /// the pending-retry form, in which Orleans' own transport states that it considers the condition
@@ -96,7 +130,7 @@ public class DepartedSiloClassificationTest
     [InlineData(SupersededGenerationText)]
     public void ADepartedSilo_IsNackedAsTransient(string rejectionText)
     {
-        RoutingGrain.ClassifyDeliveryException(new OrleansException(rejectionText))
+        RoutingGrain.ClassifyDeliveryException(Rejection(rejectionText))
             .Should().Be(ErrorType.ShuttingDown,
                 "the silo incarnation the message was addressed to is gone — every roll produces "
                 + "this window and the target answers again on another pod moments later. Told "
@@ -105,34 +139,62 @@ public class DepartedSiloClassificationTest
     }
 
     /// <summary>
-    /// 🚨 <b>The type guard's PREMISE, pinned rather than assumed.</b> The predicate tests
-    /// <c>e is OrleansException</c>, and production delivers these as
-    /// <see cref="OrleansMessageRejectionException"/>. If Orleans ever re-parented that type the
-    /// guard would stop matching and the fix would go silently inert — the same failure mode the
-    /// marker pins below exist for.
+    /// 🚨 <b>Arm 1: the connect failure is accepted by TYPE, with no phrase at all.</b>
+    /// <c>ConnectionFailedException</c> is thrown only by
+    /// <c>ConnectionManager.GetConnectionAsync(SiloAddress)</c>, so it is only ever about a cluster
+    /// endpoint — a strictly stronger signal than prose, and the arm that keeps working if Orleans
+    /// re-words its message. It is also the arm that catches Orleans' <i>carried exception wins</i>
+    /// resolution (<c>rejection?.Exception ?? new OrleansMessageRejectionException(…)</c>), where the
+    /// caller receives this bare with no rejection wrapper in the graph at all — the mechanism behind
+    /// #1742 / #2357.
+    ///
+    /// <para>The message here is deliberately NOT one of the production texts: that is what makes this
+    /// fact about the TYPE. Dropping the type arm turns it red.</para>
     /// </summary>
     [Fact]
-    public void TheProductionRejection_IsAnOrleansException()
+    public void AConnectionFailure_IsAcceptedByTypeWithoutAnyPhrase()
     {
-        typeof(OrleansMessageRejectionException).IsSubclassOf(typeof(OrleansException))
-            .Should().BeTrue(
-                "every sample in both incidents names Orleans.Runtime.OrleansMessageRejectionException "
-                + "as the exception type, and RoutingGrain.IsDepartedSiloRejection narrows on the "
-                + "OrleansException base it derives from");
+        var connectFailed = new global::Orleans.Runtime.Messaging.ConnectionFailedException(
+            "a wording Orleans has not used yet");
+
+        RoutingGrain.ClassifyDeliveryException(connectFailed).Should().Be(ErrorType.ShuttingDown,
+            "this exception exists only for a cluster endpoint that could not be reached, so the "
+            + "type alone is the statement — and it is the shape the caller receives when Orleans' "
+            + "rejection resolution hands over the CARRIED exception instead of the wrapper");
     }
 
     /// <summary>
-    /// 🚨 <b>The rejection TYPE is deliberately not enough</b> — the mutation that matters. An
-    /// <see cref="OrleansMessageRejectionException"/> carries EVERY kind of refusal, including
-    /// genuinely terminal ones, so accepting the type alone would report real defects as transient
-    /// and arm a resubscribe against them. Dropping the phrase test from the predicate turns this
+    /// 🚨 <b>Arm 2 must stay on the CONCRETE rejection, not the <c>OrleansException</c> base — review
+    /// on #4923.</b> An earlier revision guarded the phrases on the base type, mirroring
+    /// <c>IsDirectoryUnstable</c>. That is broader than the signal: a clustering or storage provider
+    /// that cannot reach ITS endpoint throws a bare <see cref="OrleansException"/> saying exactly
+    /// these words, and that is a genuine defect — reporting it as transient would arm a resubscribe
+    /// against a misconfiguration.
+    ///
+    /// <para>Widening the guard back to <see cref="OrleansException"/> turns this fact red, which is
+    /// what makes the narrowing load-bearing rather than cosmetic.</para>
+    /// </summary>
+    [Fact]
+    public void ABareOrleansExceptionCarryingThePhrase_StaysTerminal()
+    {
+        RoutingGrain.ClassifyDeliveryException(new OrleansException(ConnectPendingRetryText))
+            .Should().Be(ErrorType.Failed,
+                "the words alone are not the signal — only Orleans' own transport types are. A bare "
+                + "OrleansException quoting them can be an application-level connect failure, and "
+                + "'anything this does not recognise stays terminal' is what keeps that a defect");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The rejection TYPE is deliberately not enough either</b> — the mutation that matters
+    /// most. An <see cref="OrleansMessageRejectionException"/> carries EVERY kind of refusal,
+    /// including genuinely terminal ones, so accepting the type alone would report real defects as
+    /// transient and arm a resubscribe against them. Dropping the phrase test from arm 2 turns this
     /// fact red, which is what shows the phrase is load-bearing rather than decoration.
     /// </summary>
     [Fact]
     public void ARejectionWithoutADepartedSiloPhrase_StaysTerminal()
     {
-        var rejection = (Exception)System.Runtime.CompilerServices.RuntimeHelpers
-            .GetUninitializedObject(typeof(OrleansMessageRejectionException));
+        var rejection = Rejection("Grain extension not installed on target grain.");
 
         RoutingGrain.ClassifyDeliveryException(rejection).Should().Be(ErrorType.Failed,
             "the rejection type says nothing about WHY Orleans refused — only the phrase does, and "
@@ -141,10 +203,9 @@ public class DepartedSiloClassificationTest
     }
 
     /// <summary>
-    /// 🚨 <b>The OTHER mutation: dropping the <c>is OrleansException</c> guard.</b> "Unable to
-    /// connect to" is a phrase an application-level connect failure can carry too, and one of those
-    /// is a genuine defect. The guard is what makes the phrase a statement about a CLUSTER endpoint:
-    /// <c>ConnectionManager</c> addresses silos and gateways, nothing else.
+    /// The same narrowness from the other side: a fault that is not Orleans' at all cannot be demoted
+    /// by carrying the words. Dropping BOTH guards — matching the phrase on any exception — turns this
+    /// fact red.
     /// </summary>
     [Fact]
     public void AnApplicationConnectFailureCarryingTheSamePhrase_StaysTerminal()
@@ -153,9 +214,8 @@ public class DepartedSiloClassificationTest
             "Unable to connect to https://example.invalid — the configured endpoint refused");
 
         RoutingGrain.ClassifyDeliveryException(notACluster).Should().Be(ErrorType.Failed,
-            "without the OrleansException guard the phrase would demote ordinary connect defects "
-            + "anywhere in the delivery path, which is the one direction this classifier must not "
-            + "fail in");
+            "without a type guard the phrase would demote ordinary connect defects anywhere in the "
+            + "delivery path, which is the one direction this classifier must not fail in");
     }
 
     /// <summary>
@@ -170,7 +230,8 @@ public class DepartedSiloClassificationTest
         RoutingGrain.ClassifyDeliveryException(
                 new OrleansException("Grain extension not installed on target grain."))
             .Should().Be(ErrorType.Failed,
-                "the rule is the departed-silo phrase, not the exception's base class");
+                "the rule is a departed-silo phrase on Orleans' own rejection type, not the "
+                + "exception's base class");
     }
 
     /// <summary>
@@ -187,7 +248,7 @@ public class DepartedSiloClassificationTest
     {
         var twoTransports = new AggregateException(
             new InvalidOperationException("the NACK's other transport also failed"),
-            new OrleansException(ConnectionRefusedText));
+            Rejection(ConnectionRefusedText));
 
         RoutingGrain.ClassifyDeliveryException(twoTransports).Should().Be(ErrorType.ShuttingDown,
             "which fault sits at index 0 of PostFailure's two-transport aggregate is a race, so a "

@@ -1903,8 +1903,7 @@ internal class RoutingGrain(
     /// walk).
     ///
     /// <para><b>The two production shapes.</b> Both arrive as
-    /// <c>OrleansMessageRejectionException</c> — an <see cref="global::Orleans.Runtime.OrleansException"/>
-    /// subclass, which is the type guard below — and neither is a
+    /// <c>OrleansMessageRejectionException</c>, and neither is a
     /// <see cref="global::Orleans.Runtime.SiloUnavailableException"/>, so the rule this predicate
     /// joins matched neither and the sender was told <see cref="ErrorType.Failed"/>, terminally:</para>
     /// <list type="number">
@@ -1938,16 +1937,39 @@ internal class RoutingGrain(
     /// condition costs a bounded, backing-off retry — against the old answer's cost, which was every
     /// live mirror on that path torn down permanently for a roll.</para>
     ///
-    /// <para>🚨 <b>Matched on Orleans' message text, and that is a known weakness of the same kind
-    /// <see cref="OrleansRoutingService.IsDirectoryUnstable"/> already carries.</b> There is no typed
-    /// rejection reason to read: <c>OrleansMessageRejectionException</c> carries EVERY refusal kind,
-    /// so accepting the type alone would classify genuine refusals as transient — the one direction
-    /// this file says must not happen. The phrases are therefore the narrowest ones that mean "that
-    /// silo incarnation is gone", and they are pinned against the shipped Orleans build by
-    /// <c>DepartedSiloClassificationTest</c>: <b>if that test fails after an Orleans upgrade this
-    /// predicate has gone INERT — repair the phrase, never delete the test.</b> If Orleans re-words
-    /// them this quietly returns to the pre-fix answer rather than misclassifying anything, which is
-    /// the safe direction to fail in.</para>
+    /// <para>🚨 <b>TWO ARMS, and neither of them is the <c>OrleansException</c> BASE.</b> An earlier
+    /// revision guarded both phrases on that base, mirroring
+    /// <see cref="OrleansRoutingService.IsDirectoryUnstable"/>, and review on #4923 was right that it
+    /// is broader than the signal: an application-level <c>OrleansException</c> quoting the same
+    /// words — a clustering provider that cannot reach its table, say — is a genuine defect, and
+    /// demoting it is the one direction this file says must not happen.</para>
+    /// <list type="bullet">
+    ///   <item><b>Arm 1 — a TYPE, with no prose at all.</b>
+    ///     <c>Orleans.Runtime.Messaging.ConnectionFailedException</c> is thrown only by
+    ///     <c>ConnectionManager.GetConnectionAsync(SiloAddress)</c>, so it is only ever about a
+    ///     CLUSTER endpoint. That makes the type strictly stronger than the phrase and immune to an
+    ///     Orleans re-wording. It is also what covers the mechanism
+    ///     <see cref="OrleansRoutingService.IsDirectoryUnstable"/> exists for: Orleans resolves a
+    ///     rejection as <c>rejection?.Exception ?? new OrleansMessageRejectionException(…)</c> —
+    ///     <b>the CARRIED exception WINS</b> — so the caller can receive this bare, with no rejection
+    ///     wrapper anywhere in the graph. Narrowing to the rejection type and stopping there would
+    ///     have re-opened #1742/#2357 for this shape.</item>
+    ///   <item><b>Arm 2 — the phrase, guarded by the CONCRETE rejection.</b> The
+    ///     superseded-generation shape needs it: Orleans rejects that one with NO carried exception,
+    ///     so the caller does get <c>OrleansMessageRejectionException</c> and its detail exists only
+    ///     as text. The connect shape is covered twice over, because production's wrapper embeds the
+    ///     inner's text.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>Arm 2 is prose, which is weaker than a type and known to be</b> — the same shape
+    /// <see cref="OrleansRoutingService.IsDirectoryUnstable"/> already carries. There is no typed
+    /// rejection reason to read, and <c>OrleansMessageRejectionException</c> carries EVERY refusal
+    /// kind, so accepting even that type alone would classify genuine refusals as transient. The
+    /// phrases are therefore the narrowest ones that mean "that silo incarnation is gone", and they
+    /// are pinned against the shipped Orleans build by <c>DepartedSiloClassificationTest</c>: <b>if
+    /// that test fails after an Orleans upgrade this arm has gone INERT — repair the phrase, never
+    /// delete the test.</b> If Orleans re-words them this quietly returns to the pre-fix answer
+    /// rather than misclassifying anything, which is the safe direction to fail in.</para>
     ///
     /// <para><b>The RETRY half needs nothing here</b> — <see cref="IsTransientFailure"/>'s
     /// <c>OrleansMessageRejectionException</c> type test already matches both shapes, so
@@ -1957,17 +1979,20 @@ internal class RoutingGrain(
     /// <param name="e">One exception from the graph.</param>
     /// <returns><c>true</c> when Orleans refused the send because the target silo incarnation is gone.</returns>
     internal static bool IsDepartedSiloRejection(Exception e) =>
-        e is global::Orleans.Runtime.OrleansException
-        && (e.Message.Contains(SiloEndpointUnreachableMarker, StringComparison.OrdinalIgnoreCase)
-            || e.Message.Contains(SupersededSiloGenerationMarker, StringComparison.OrdinalIgnoreCase));
+        e is global::Orleans.Runtime.Messaging.ConnectionFailedException
+        || (e is global::Orleans.Runtime.OrleansMessageRejectionException
+            && (e.Message.Contains(SiloEndpointUnreachableMarker, StringComparison.OrdinalIgnoreCase)
+                || e.Message.Contains(SupersededSiloGenerationMarker, StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>
     /// Orleans' own wording from <c>ConnectionManager</c>: <c>"Unable to connect to {endpoint}, will
     /// retry after {delay}"</c> and <c>"Unable to connect to endpoint {endpoint}. See
     /// InnerException"</c>. The endpoint is always a <c>SiloAddress</c> — <c>ConnectionManager</c>
-    /// addresses cluster members and gateways, nothing else — so an
-    /// <see cref="global::Orleans.Runtime.OrleansException"/> carrying this phrase is always a host
-    /// that could not be reached, never an application-level connect failure.
+    /// addresses cluster members and gateways, nothing else — so a
+    /// <c>OrleansMessageRejectionException</c> carrying this phrase is always a host that could not be
+    /// reached. Read ONLY off that concrete rejection type: on a bare
+    /// <see cref="global::Orleans.Runtime.OrleansException"/> these same words can be an
+    /// application-level connect failure, which is a genuine defect.
     ///
     /// <para>A literal of <b>Orleans.Core</b>, where <c>ConnectionManager</c> lives — not of
     /// Orleans.Runtime, which is where the other markers in this codebase come from.</para>
