@@ -218,6 +218,11 @@ re-fingerprints **future** occurrences only; existing `Admin/_LogIncident/*` nod
 they were minted under, and nothing recomputes them. So after an identity fix, folded traffic keeps
 arriving on the same old threads until that backlog is migrated — which is its own change.
 
+> **That change has since landed** (MeshWeaver.Plugins#1796, 2026-09-18) and the backlog is being
+> re-addressed on every fold. The paragraph above is the pre-migration world; read
+> *The corpus RE-ADDRESSES itself now* below before acting on it, because whether a node has been
+> migrated yet decides whether closing its issue holds.
+
 Re-measured 2026-09-11T09:1xZ, same incident, and the spread had widened rather than settled:
 `occurrences: 62`, **26** entries in `pods[]`, `firstSeen` 2026-09-10T02:26:49Z,
 `lastSeen` 2026-09-11T05:22:40Z. All **ten** retained `samples[]` are one of three node paths —
@@ -286,6 +291,69 @@ node keeps the identity it was minted under), and it does not merge the two hist
 issue keeps its own evidence table and its own close. Say what you did on **both** threads: the
 incident node is the only place the link lives, and a reader who finds the new ticket reopening from
 a fingerprint filed under an old title has no other way to know why.
+
+### 🚨 The corpus RE-ADDRESSES itself now — so read `status` before deciding a close will hold
+
+The paragraph above ("Fixing the identity function does not clear this") described the state of the
+world until 2026-09-18. It no longer holds, and the difference decides whether closing a folded
+bucket is durable or theatre. **MeshWeaver.Plugins#1795** narrowed the identity function and
+**#1796** — *"existing `Admin/_LogIncident/*` nodes carry a fingerprint from an older identity
+function, so a corrected identity cannot close the issues it fixes"* — added the migration that
+carries the history across. Both are closed (#1795 on 09-13, #1796 `completed` on 09-18), and the
+re-addressing starts as soon as a portal runs an identity newer than the deployed watcher's.
+
+**It is keyed on the reporter's own fingerprint, never on a recomputed one.** The watcher's report
+says which id *its* generation computed (`reporterFingerprint`); the portal computes its own; when
+they differ, `LogIncidentCorpusMigration.Fold` carries the legacy node's counts, window, pods,
+evidence and shape ledger onto the successor and `Supersede` marks the legacy
+`Status = Superseded`, `SupersededBy = <successor>`. Recomputing a legacy node's identity from its
+stored fields was rejected deliberately: mint-time masking and the retained fields have drifted
+apart, so the stored fields no longer reproduce what was hashed. **The migration therefore runs on a
+FOLD** — it needs a live burst to carry the exact id — so a bucket that has gone quiet keeps its old
+identity until it fires again.
+
+🚨 **A superseded node is INERT, and that is what makes a hand-close stick.**
+`LogIncidentIngestService.NextRequest` answers `{ Status: Superseded } => LogIncidentRequest.None`
+before every other rule: no triage, no comment, and **no `ReopenOnRecurrence`**, ever again. So the
+three-month "closed on evidence → reopened by the watcher → closed again" cycle that #1134, #1840 and
+#2387 each ran is ended by the supersede, not by a better closing argument.
+
+**Two outcomes, and they mean opposite things for the old issue.** The ticket moves **only into an
+empty seat** (`target.IssueNumber is null`), and it brings the link, the comment budget, the draft
+and the triage thread with it:
+
+| After the fold | The legacy issue | What a later reopen means |
+|---|---|---|
+| successor had **no** issue ⇒ it **inherits** the legacy's | still the fault's one ticket, now addressed by a NARROW identity | genuinely actionable — one shape, not bucket traffic |
+| successor **already** had one (it filed its own, or a second bucket split onto it) | **orphaned but inert** — it keeps `issueNumber` and will never speak again | impossible; the issue must be closed BY HAND |
+
+The second row is the one that reads wrong. `Admin/_LogIncident/c0b1424c7beb28e0` (2733
+occurrences, the bucket behind [#3883](https://github.com/Systemorph/MeshWeaver/issues/3883)) was
+superseded by `e60160b647aa00b4` at 2026-09-19T13:02:25Z; the successor had already filed
+[#4876](https://github.com/Systemorph/MeshWeaver/issues/4876), so #3883 kept its link and went
+silent. Nothing announces that on the thread — the issue simply stops being reopened — and a reader
+who takes continued silence for "the watcher agrees it is fixed" has it backwards: the watcher is no
+longer looking at that node at all.
+
+**So before closing an auto-filed issue, read the incident's `status`:**
+
+- `Filed` and still folding ⇒ the close WILL be reverted on the next recurrence. Either wait for the
+  supersede, or repoint the link by hand as the section above prescribes.
+- `Superseded` ⇒ the close holds. Say so on the thread and name `supersededBy`, because the
+  successor is where the traffic now lives.
+
+The wave is not hypothetical and it is not slow: measured on the control instance 2026-09-19,
+`search 'namespace:Admin/_LogIncident scope:children nodeType:LogIncident content.status:Superseded'`
+returned **48**, `truncated: false`, every one re-addressed that day between 11:41Z and 18:48Z —
+including `9ca334c1e8dad9ca`, the Polly bucket the redirect section above is written about.
+
+🚨 **And `shapes[]` is now the instrument `samples[]` could never be.** `RecordShape` keeps a
+per-defect ledger — what the CURRENT identity computes for each burst alone, with its own
+`firstSeen`, `lastSeen` and `occurrences`, the `MaxShapes` (12) most recent kept and the rest counted
+in `ShapesEvicted`. That answers the question a bucketed incident previously could not: *has THIS
+shape been seen since the fix?* `samples[]` is a rolling evidence window and can only say what the
+last few bursts carried; a shape row says when that particular fault was last seen. Read `shapes[]`
+first and fall back to `samples[]` only for a node minted before the ledger existed.
 
 ### The two cases this has to get right
 
