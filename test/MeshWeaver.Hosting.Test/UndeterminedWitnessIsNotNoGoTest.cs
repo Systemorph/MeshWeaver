@@ -31,15 +31,16 @@ namespace MeshWeaver.Hosting.Test;
 /// negative: <i>"the durable witness carries no GO for framework X"</i>. The pod refused a build it
 /// had not asked about, and told the operator the build had not been approved.</para>
 ///
-/// <para>🚨 <b>Why that is the live case and not a corner.</b> The second door is NOT in a different
-/// failure domain from the first. In the fleet's portal wiring <c>AddPartitionStorageHubs</c>
-/// replaces <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c>, which serves the durable
-/// read as <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> — the SAME hub transport a
-/// <c>SubscribeRequest</c> travels on, with the same 60 s request budget. Three of the five
-/// candidates for #3404's silence (a routing loss, the deferred-queue ordering defect #3408, and a
-/// root that stops emitting) take both doors down together, and the durable read then fails with
-/// the SAME <see cref="TimeoutException"/> the subscription did. That is what these cases stage.
-/// </para>
+/// <para><b>Why a failed read is the case worth staging.</b> These cases stage the durable read
+/// failing with a <see cref="TimeoutException"/> while the subscription is also unanswered, and the
+/// assertion is about the VERDICT: <c>Undetermined</c>, never <c>NoGo</c>. 🚨 This comment used to
+/// justify that by saying the two doors share a failure domain, because the fleet's portal wiring
+/// replaces <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c> via
+/// <c>AddPartitionStorageHubs</c>. Measured 2026-09-19, that wiring has no caller anywhere — this
+/// repository or <c>MeshWeaver.Plugins</c> — so the durable read is <c>PersistenceService</c> over
+/// its backend and the shared-domain argument needs re-measuring
+/// (<c>Doc/Architecture/UndeterminedIsNotNo</c>). What these cases pin does not depend on it: a read
+/// that did not answer must not be rendered as an answer, whichever transport it used.</para>
 ///
 /// <para><b>The third state, and what the rollout does with it.</b> <c>BuildGoWitness</c> now has
 /// three values and the door has three branches. On <c>Undetermined</c> the process does not guess

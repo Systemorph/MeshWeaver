@@ -611,6 +611,13 @@ below, the first, fourth and fifth take **both** doors down together, and the du
 fails with the same `TimeoutException`. On the very fault this door exists for, the expected
 reading is *undetermined*, not *no GO*.
 
+🚨 **The wiring claim in the paragraph above is measurably wrong as of 2026-09-19**, and with it the
+"same failure domain" conclusion — `AddPartitionStorageHubs` has no caller in this repository or in
+`MeshWeaver.Plugins`, so the durable read is `PersistenceService` over its backend rather than a hub
+request. The three-state reading below is unaffected (`Undetermined` must not be narrated as *no GO*
+whatever the domain), but the domain argument itself has to be re-measured before it is cited. Full
+account: [Undetermined Is Not No](../UndeterminedIsNotNo).
+
 So the reading is now a three-state `BuildGoReading` (`Go` / `NoGo` / `Undetermined`, always with a
 `Detail` and, when there was a fault, its `Error`), read through `ReadBuildGoReading`; `ReadBuildGo`
 keeps its fold for the callers whose negative branch is *bake*, and its contract now says a caller
