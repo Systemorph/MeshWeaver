@@ -458,6 +458,22 @@ public record DeploymentContent
     [Description("GitHub App")]
     public GitHubAppIdentity? GitHubApp { get; init; }
 
+    /// <summary>
+    /// The App that OPERATES this deployment — the identity a CONTROL instance dispatches this
+    /// deployment's pipelines as (infra deploy, helm release, cluster operations). A client estate
+    /// gets its OWN App, installed on that client's config repository only, so one client's
+    /// pipelines can never be started with another client's credential and revoking a client is
+    /// one uninstall (the maintainer's decision, 2026-09-15).
+    ///
+    /// <para><b>Unset means the control instance's own App</b> — how <c>memex</c>,
+    /// <c>memex-cloud</c> and <c>build</c> keep working: the dispatcher falls back to the App the
+    /// portal is configured with (<c>GitHub:App:*</c>). This block is read by the CONTROL instance
+    /// about ANOTHER deployment; it is never rendered into this deployment's own portal
+    /// configuration, and a portal that reads its own <see cref="GitHubApp"/> is unaffected.</para>
+    /// </summary>
+    [Description("The App the control instance dispatches this deployment's pipelines as")]
+    public GitHubAppIdentity? OpsGitHubApp { get; init; }
+
     /// <summary>The lifecycle operator — the control instance only.</summary>
     [Description("Hosting operator")]
     public HostingOperatorSpec? Operator { get; init; }

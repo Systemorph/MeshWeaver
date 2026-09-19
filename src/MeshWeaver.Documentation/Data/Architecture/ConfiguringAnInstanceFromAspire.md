@@ -198,6 +198,7 @@ configures no container.
 | `WithSignIn(provider, microsoftClientId, microsoftTenantId, googleClientId, linkedInClientId, appleClientId, enableDevLogin)` | `SignIn.Provider`, `SignIn.MicrosoftClientId`, `SignIn.MicrosoftTenantId`, `SignIn.GoogleClientId`, `SignIn.LinkedInClientId`, `SignIn.AppleClientId`, `SignIn.EnableDevLogin` | `config.memex_portal.Authentication__*` | `Authentication__Provider`, `Authentication__EnableDevLogin`, `Authentication__Microsoft__ClientId`, `Authentication__Microsoft__TenantId`, `Authentication__Google__ClientId`, `Authentication__LinkedIn__ClientId`, `Authentication__Apple__ClientId` |
 | `WithEmail(enabled, mailboxAddress, clientId, tenantId, useManagedIdentity, inboundEnabled, webhookBaseUrl, inboundForwardAddress)` | `Email.Enabled`, `Email.MailboxAddress`, `Email.ClientId`, `Email.TenantId`, `Email.UseManagedIdentity`, `Email.InboundEnabled`, `Email.WebhookBaseUrl`, `Email.InboundForwardAddress` | `config.memex_portal.Email__*` | `Email__Enabled`, `Email__MailboxAddress`, `Email__ClientId`, `Email__TenantId`, `Email__UseManagedIdentity`, `Email__InboundEnabled`, `Email__WebhookBaseUrl`, `Email__Inbound__ForwardAddress` |
 | `WithGitHubApp(clientId, installationId, installationOwner)` | `GitHubApp.ClientId`, `GitHubApp.InstallationId`, `GitHubApp.InstallationOwner` | `config.memex_portal.GitHub__App__*` | `GitHub__App__ClientId`, `GitHub__App__InstallationId`, `GitHub__App__InstallationOwner` |
+| `WithOpsGitHubApp(clientId, installationId, installationOwner, privateKeySecret, privateKeyConfigKey)` | `OpsGitHubApp.ClientId`, `OpsGitHubApp.InstallationId`, `OpsGitHubApp.InstallationOwner`, `OpsGitHubApp.PrivateKeySecret`, `OpsGitHubApp.PrivateKeyConfigKey` | — (never rendered into this deployment's own portal) | — (the CONTROL instance reads it ABOUT this deployment) |
 | `WithSocialLinkedIn(clientId)` | `SocialLinkedInClientId` | `config.memex_portal.Social__LinkedIn__ClientId` | `Social__LinkedIn__ClientId` |
 | `WithAi(configure)` | `Ai.OpenRouter`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light`, `Ai.Tiers.Utility` | `config.memex_portal.<Provider>__*`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
 | `WithOperator(enabled, ns, serviceAccount, image, environment)` | `Operator.Enabled`, `Operator.Namespace`, `Operator.ServiceAccount`, `Operator.Image`, `Operator.Environment` | `hostingOperator` | `Hosting__Operator__Enabled` |
@@ -292,6 +293,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `SignIn` | Sign-in | Anmeldung |
 | `DeploymentContent` | `Email` | Email | E-Mail |
 | `DeploymentContent` | `GitHubApp` | GitHub App | GitHub-App |
+| `DeploymentContent` | `OpsGitHubApp` | The App the control instance dispatches this deployment's pipelines as | Die App, als die die Kontrollinstanz die Pipelines dieses Deployments startet |
 | `DeploymentContent` | `Operator` | Hosting operator | Hosting-Operator |
 | `DeploymentContent` | `Registry` | Container registry this instance hosts (the public instance only) | Container-Registry, die diese Instanz betreibt (nur die öffentliche Instanz) |
 | `DeploymentContent` | `Telemetry` | Telemetry | Telemetrie |
@@ -402,6 +404,8 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `GitHubAppIdentity` | `ClientId` | GitHub App client id | GitHub-App-Client-ID |
 | `GitHubAppIdentity` | `InstallationId` | Installation id | Installations-ID |
 | `GitHubAppIdentity` | `InstallationOwner` | Installation owner | Inhaber der Installation |
+| `GitHubAppIdentity` | `PrivateKeySecret` | Key Vault object holding the PEM (ops identity only) | Key-Vault-Objekt mit dem PEM (nur Ops-Identität) |
+| `GitHubAppIdentity` | `PrivateKeyConfigKey` | Configuration key the control instance reads the PEM from (ops identity only) | Konfigurationsschlüssel, aus dem die Kontrollinstanz das PEM liest (nur Ops-Identität) |
 | `HostingOperatorSpec` | `Enabled` | Run the hosting operator here (the control instance only) | Hosting-Operator hier ausführen (nur die Kontrollinstanz) |
 | `HostingOperatorSpec` | `Namespace` | Operator namespace | Operator-Namespace |
 | `HostingOperatorSpec` | `ServiceAccount` | Operator service account | Operator-Dienstkonto |
