@@ -3861,7 +3861,9 @@ public sealed class MessageHub : IMessageHub
     {
         try
         {
-            Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+            RequirePhaseAccepted(
+                Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version)),
+                MessageHubRunLevel.DisposeHostedHubs);
         }
         catch (Exception postEx)
         {
@@ -3875,6 +3877,35 @@ public sealed class MessageHub : IMessageHub
     }
 
     /// <summary>
+    /// 🚨 <b>A phase request can be REFUSED without throwing, and a discarded return is the same
+    /// silent park as an uncaught throw</b> (Copilot review, #4931). <c>MessageService.Post</c> has
+    /// three paths that hand back a non-accepted delivery rather than raising: the shutting-down arm
+    /// (<c>Failed(…, ErrorType.ShuttingDown)</c> / <c>FailedAndNacked</c>), the storm
+    /// circuit-breaker and the aggregate shedder (both <c>Ignored()</c>). All three exempt
+    /// lifecycle traffic today, so this is a guard rather than a live bug — but "it cannot happen"
+    /// is exactly the reasoning that left the Post unwrapped to begin with.
+    ///
+    /// <para>Throwing here is deliberate: the caller already force-faults disposal on a throw, so
+    /// the refusal joins the path that RELEASES the waiters instead of inventing a second one.</para>
+    /// </summary>
+    /// <param name="posted">What <c>Post</c> handed back.</param>
+    /// <param name="phase">The phase that was being requested, for the message.</param>
+    private void RequirePhaseAccepted(IMessageDelivery? posted, MessageHubRunLevel phase)
+    {
+        // Submitted is the accepted outcome for a self-posted phase request; Processed/Forwarded are
+        // accepted too. Everything else means nothing is queued and nobody will advance the phase.
+        if (posted is null
+            || posted.State is MessageDeliveryState.Submitted
+                or MessageDeliveryState.Processed
+                or MessageDeliveryState.Forwarded)
+            return;
+        throw new InvalidOperationException(
+            $"Hub {Address}: the {phase} phase request was not accepted — Post returned "
+            + $"State={posted.State}. Nothing is queued, so no turn will advance the disposal state "
+            + "machine; disposal is force-faulted rather than parked at this phase forever.");
+    }
+
+    /// <summary>
     /// Posts the ShutDown phase once the hosted hubs have drained. Wrapped so that a failed
     /// Post (hub in an unexpected state) still force-faults disposal rather than wedging the
     /// state machine — subscribers to <see cref="DisposalCompleted"/> never hang.
@@ -3885,7 +3916,12 @@ public sealed class MessageHub : IMessageHub
         {
             TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
                 Address, Version);
-            Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
+            // Same refusal check as the sibling above: this one caught a THROW and discarded the
+            // returned state, so a refused ShutDown request parked the hub at DisposeHostedHubs
+            // exactly as a refused DisposeHostedHubs request parked it at Quiescing (#4931).
+            RequirePhaseAccepted(
+                Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version)),
+                MessageHubRunLevel.ShutDown);
         }
         catch (Exception postEx)
         {

@@ -2445,24 +2445,58 @@ public class MessageService : IMessageService
     /// </summary>
     private IDisposable StampExecutingTurn(IMessageDelivery delivery)
     {
+        var generation = Interlocked.Increment(ref currentlyExecutingStampSeq);
+        // Ownership is published BEFORE the values, so a clear that sees a generation it does not
+        // own cannot be looking at a half-written stamp it might erase.
+        Interlocked.Exchange(ref currentlyExecutingStampOwner, generation);
         currentlyExecutingMessageType = delivery.Message.GetType().Name;
         Interlocked.Exchange(ref currentlyExecutingStartedTicks, Stopwatch.GetTimestamp());
-        return new ExecutingTurnStamp(this);
+        return new ExecutingTurnStamp(this, generation);
     }
 
-    /// <summary>
-    /// Clears the executing-turn tracker on dispose. A named type rather than a closure so the
-    /// clear allocates nothing beyond this one object per turn and shows up by name in a heap dump.
-    /// </summary>
-    private sealed class ExecutingTurnStamp(MessageService owner) : IDisposable
-    {
-        private int disposed;
+    // Per-turn stamp identity: `Seq` mints them, `Owner` says whose stamp is on the fields right
+    // now. A clear must OWN the stamp to erase it — see ExecutingTurnStamp.Dispose.
+    private long currentlyExecutingStampSeq;
+    private long currentlyExecutingStampOwner;
 
+    /// <summary>
+    /// Clears the executing-turn tracker on dispose, but ONLY while the fields still belong to this
+    /// turn. A named type rather than a closure so the clear allocates nothing beyond this one object
+    /// per turn and shows up by name in a heap dump.
+    ///
+    /// <para>🚨 <b>The generation check is load-bearing, and an idempotency flag cannot replace it</b>
+    /// (Copilot review, #4931). Rx disposes a <c>Using</c> resource only AFTER <c>OnCompleted</c>
+    /// returns, and for an ASYNCHRONOUS turn <c>DrainLoop</c>'s <c>Terminal()</c> calls
+    /// <c>ScheduleDrainOne()</c> from inside that callback. So the next turn can stamp these fields
+    /// before this resource is disposed, and an unconditional clear would erase the LIVE turn's
+    /// type and timestamp — reporting <c>CurrentMessage == null</c> while a turn is genuinely on the
+    /// block. That is the mirror of the stale-stamp defect this pairing exists to remove: it sends
+    /// <c>OnDisposalStall</c> down the pump branch to report "no turn is executing" about a hub that
+    /// has one, the same class of false reading as the old <c>exec=0</c> literal.</para>
+    ///
+    /// <para>The window is NOT new — the predecessor <c>.Finally</c> also ran on subscription
+    /// disposal, so the same interleaving existed before the stamp and clear were paired. Pairing
+    /// them is simply where the guard now belongs.</para>
+    ///
+    /// <para>🚨 <b>What this does and does not guarantee.</b> It removes the systematic case: a clear
+    /// from an older turn can no longer erase a newer turn's stamp, because it does not own it. It
+    /// does NOT make stamp-and-clear one atomic operation — a stamp landing between the winning CAS
+    /// and the two field writes below would still be erased. That residue is deliberately left: the
+    /// fields are a DIAGNOSTIC, the next turn re-stamps within microseconds, and closing it properly
+    /// means a lock on the per-message path, which is a far worse trade than a diagnostic that can be
+    /// momentarily blank. Stated rather than glossed, because "the ordering makes this safe" is the
+    /// reasoning that was wrong here in the first place.</para>
+    /// </summary>
+    private sealed class ExecutingTurnStamp(MessageService owner, long generation) : IDisposable
+    {
         public void Dispose()
         {
-            // Idempotent: Rx may dispose a resource more than once, and clearing twice must not
-            // wipe the stamp of a LATER turn that has already started on this block.
-            if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0)
+            // CLAIM the clear: only the turn that currently OWNS the stamp may erase it, and winning
+            // relinquishes ownership in the same atomic step. A later turn has already written its
+            // own generation, so this fails and leaves the live reading intact — and it makes the
+            // dispose idempotent for free, since a second call no longer owns anything either.
+            if (Interlocked.CompareExchange(ref owner.currentlyExecutingStampOwner, 0, generation)
+                != generation)
                 return;
             owner.currentlyExecutingMessageType = null;
             Interlocked.Exchange(ref owner.currentlyExecutingStartedTicks, 0);
