@@ -323,13 +323,18 @@ The cost was a full investigation: on 2026-09-19 a hub reported `RunLevel=Quiesc
 reachable at that phase — before the phase in the report's own text settled it.
 
 7318 states what IS true below ShutDown: no registrant has run, so the finding is the phase
-**transition**. It also states the ceiling the elapsed should be read against — `QuiesceTimeout`
-(default 2 s) × `MaxQuiesceRearms` (20) ≈ 42 s — and names the two readings that separate the causes:
+**transition**. Its guidance is **per phase**, because the two phases below ShutDown are bounded by
+different things and a verdict citing the wrong one would be this page's own subject in miniature:
 
-- `[QUIESCE-START]` with **no** `[QUIESCE-OK]` / `[QUIESCE-WAIT]` / `[QUIESCE-TIMEOUT]` ⇒ the quiesce
-  wait never completed.
-- a `[QUIESCE-OK]` or `[QUIESCE-TIMEOUT]` ⇒ it did, and the phase-advancing `Post` is what did not
-  land — which is why that `Post` is now wrapped (below).
+- **at `Quiescing`** — bounded by `QuiesceTimeout` (default 2 s) × `MaxQuiesceRearms` (20) ≈ 42 s,
+  each re-arm logging `[QUIESCE-WAIT]`. An elapsed far past that with an idle pump means the
+  transition was never made, and the `[QUIESCE-*]` lines say which half:
+  - `[QUIESCE-START]` with **none** of `[QUIESCE-OK]` / `[QUIESCE-WAIT]` / `[QUIESCE-TIMEOUT]` ⇒ the
+    quiesce wait never completed.
+  - a `[QUIESCE-OK]` or `[QUIESCE-TIMEOUT]` ⇒ it did, and the phase-advancing `Post` is what did not
+    land — which is why that `Post` is now wrapped (below).
+- **at `DisposeHostedHubs`** — no such ceiling: the phase waits on the children, so the reading is the
+  recursive snapshot, and the child that has not reached `Dead` is the finding.
 
 ### The Quiescing→DisposeHostedHubs advance is now as fault-tolerant as its sibling
 

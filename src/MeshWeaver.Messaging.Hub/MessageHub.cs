@@ -2802,25 +2802,35 @@ public sealed class MessageHub : IMessageHub
                 }
 
                 // Below ShutDown. No registrant has run, so the only work this turn does is the
-                // phase transition itself — and the phase is BOUNDED: QuiesceTimeout (default 2 s)
-                // × MaxQuiesceRearms (20) ≈ 42 s, every re-arm logging [QUIESCE-WAIT]. An elapsed
-                // far past that ceiling with an idle pump is therefore not a slow quiesce; it means
-                // the transition was never made. The two readings that separate the causes are the
-                // [QUIESCE-*] lines named below, and the snapshot's own self-consistency, which the
-                // wedge dump now reports rather than leaving the reader to assume.
+                // phase transition itself.
+                //
+                // 🚨 The guidance is PER PHASE, because the two phases below ShutDown are bounded by
+                // different things and a verdict that cites the wrong one is this issue's own defect
+                // in miniature. Quiescing is bounded by QuiesceTimeout (default 2 s) ×
+                // MaxQuiesceRearms (20) ≈ 42 s with every re-arm logging [QUIESCE-WAIT], so an
+                // elapsed far past that with an idle pump means the transition was never made — and
+                // the [QUIESCE-*] lines say which half. DisposeHostedHubs has no such ceiling: it
+                // waits on the children, so the reading there is the recursive snapshot below.
+                var belowShutDownGuidance = RunLevel == MessageHubRunLevel.Quiescing
+                    ? $"Quiescing is bounded by QuiesceTimeout x {MaxQuiesceRearms} re-arms (~42s at the "
+                      + "default), each logging [QUIESCE-WAIT], so an elapsed far past that with an idle "
+                      + "pump means the transition was never made. Read this hub's [QUIESCE-START] / "
+                      + "[QUIESCE-OK] / [QUIESCE-WAIT] / [QUIESCE-TIMEOUT] lines: a [QUIESCE-START] with "
+                      + "none of the others means the quiesce wait never completed, while a [QUIESCE-OK] "
+                      + "or [QUIESCE-TIMEOUT] means it did and the phase-advancing Post is what did not land"
+                    : "this phase waits on the hosted hubs rather than on a budget, so the reading is the "
+                      + "recursive snapshot below — the child that has not reached Dead is the finding, and "
+                      + "its own detector carries the turn-level verdict";
+
                 logger.LogError(DisposalPhaseBelowShutDownBlocked,
                     "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
                     + "(last progress: {LastProgress}). RunLevel={RunLevel} — BELOW ShutDown, so NO registered "
                     + "cleanup has run and none can be blocking: DisposeImpl and messageService.Dispose are "
                     + "reached only in the ShutDown phase. The ShutdownRequest turn has been on the block for "
-                    + "{ElapsedMs}ms, against a Quiescing ceiling of QuiesceTimeout x {Rearms} re-arms. The "
-                    + "finding is the phase TRANSITION, not a registrant: read this hub's [QUIESCE-START] / "
-                    + "[QUIESCE-OK] / [QUIESCE-WAIT] / [QUIESCE-TIMEOUT] lines — a [QUIESCE-START] with none of "
-                    + "the others means the quiesce wait never completed, while a [QUIESCE-OK] or "
-                    + "[QUIESCE-TIMEOUT] means it did and the phase-advancing Post is what did not land. "
+                    + "{ElapsedMs}ms. The finding is the phase TRANSITION, not a registrant: {Guidance}. "
                     + "Disposal is NOT forced.\n{Diagnostics}",
                     Address, DisposalWatchdogTimeout, lastProgress, RunLevel,
-                    snapshot.Value.CurrentMessageElapsedMs, MaxQuiesceRearms, DescribeWedge());
+                    snapshot.Value.CurrentMessageElapsedMs, belowShutDownGuidance, DescribeWedge());
                 return;
             }
             if (!wedgedTurnCancelled)
