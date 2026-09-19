@@ -354,6 +354,24 @@ into a shell string. Two consequences worth stating plainly:
   were refused at 09:11Z with `/rate_limit` reporting `core: 5000/5000`. Neither one predicts the
   other, and the read meter reports neither.
 
+🚨 **And the refusal wears a DIFFERENT SHAPE per endpoint, so never key a retry or a watcher on its
+text.** Measured 2026-09-19, one limiter with three faces:
+
+| what you called | how it refuses |
+|---|---|
+| `POST …/issues` over REST | `403`, and the body names the secondary limit |
+| `POST …/pulls/{n}/comments/{id}/replies` | **`422 {"resource":"PullRequestReview","code":"abuse","field":"base"}`** — not a 403, and it names no rate limit at all |
+| `gh issue create` (GraphQL porcelain) | exit 0, both streams empty, nothing created |
+
+A review reply was refused four times over 43 minutes that way and landed on the fifth attempt. A
+watcher grepping for *"secondary rate limit"* sees nothing in that case, and a watcher checking only for
+`403` sees nothing either. **Key the decision on the absence of what you asked for**: no `id` or
+`number` came back, so it did not happen, whatever the wrapper said.
+
+The read limit is independent of the creation one and can land immediately after a successful write — it
+did, six seconds after that reply finally posted, delaying its verification by eight minutes. So budget
+for the verification read as well as the write, and do not treat a failed read-back as a failed write.
+
 **Verify every creation by reading it back — and note that this is TWO questions, not one.**
 
 - **Did THIS write create a comment?** Only the `id` (or `number`) in the write's own REST response
