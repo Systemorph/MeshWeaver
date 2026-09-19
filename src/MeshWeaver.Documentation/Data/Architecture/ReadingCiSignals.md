@@ -354,11 +354,19 @@ into a shell string. Two consequences worth stating plainly:
   were refused at 09:11Z with `/rate_limit` reporting `core: 5000/5000`. Neither one predicts the
   other, and the read meter reports neither.
 
-**Verify every creation by reading it back, keyed on something only the NEW content has.** An
-existence check such as `select(.in_reply_to_id == <ID>)` passes on a pre-existing reply and on a stub,
-and a retrier keyed that way reported success while a wrong reply sat there untouched. Byte-compare the
-fetched body against the file that was posted, or at minimum assert its exact length. An existence
-check is sound only against a baseline measured *before* the write.
+**Verify every creation by reading it back — and note that this is TWO questions, not one.**
+
+- **Did THIS write create a comment?** Only the `id` (or `number`) in the write's own REST response
+  answers it, re-fetched by that id. Nothing derived from the body can: a stub, or an earlier session's
+  reply, matches a length as easily as it matches an `in_reply_to_id`.
+- **Does that comment carry the content intended?** A byte-compare of the fetched body against the file
+  that was posted.
+
+So an existence predicate such as `select(.in_reply_to_id == <ID>)` proves neither — it passes on a
+stub, and a retrier keyed that way reported success while a wrong reply sat there untouched. A length
+check proves neither either. Where no response id is available, for instance when auditing somebody
+else's earlier posts, an existence check is sound **only** against a baseline measured *before* the
+write; that baseline is what makes it proof, not the read-back.
 
 ### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
 
