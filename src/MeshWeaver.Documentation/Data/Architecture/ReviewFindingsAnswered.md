@@ -409,7 +409,7 @@ the record *more* than the acceptances do: *real* (fix it), *real but cosmetic*,
 against the current file and quote the evidence), *wrong* (say so, with the measurement). A merged
 finding nobody answered and nobody declined is indistinguishable from one nobody read.
 
-### 🚨 Fix the canonical — and do NOT re-copy in the same breath
+### 🚨 One defect, five copies — fix the canonical, then RE-COPY IMMEDIATELY
 
 Findings cluster hard on vendored files, because the reviewer reads each repository's copy
 independently. Alongside the `gen-manifests.py` collapse above, the 2026-09-19 sweep found **25 of
@@ -418,19 +418,55 @@ distinct defects** in core's canonical — one of them reported three times over
 one deferred as needing a design decision is #4780). Patching a vendored copy alone is how this
 fleet reached five vintages of one script (#1426).
 
-**But the re-copy does not follow immediately, and doing it eagerly reds five repositories.**
-`node-repo-validate.yml` fetches the canonical at the *caller's* `scripts-ref`/`platform-ref`, and
-every satellite pins that to a fixed core sha — so `check-resolver-copy.py` compares each copy
-against the canonical **as of its own pin**. Two consequences, and both are the opposite of the
-intuition:
+🚨 **A canonical fix REDS EVERY SATELLITE THE MOMENT IT MERGES, so the re-copy is part of the same
+piece of work — not a follow-up.** `node-repo-validate.yml` declares `platform-ref` with
+**`default: main`**, and `scripts-ref` falls back to it. A satellite whose `validate:` job passes no
+inputs — which is every one of them — therefore has the canonical fetched at core **`main`, live**,
+and `check-resolver-copy.py` has been hard-red since `RED_FROM 2026-09-15`. Measured 2026-09-19:
+core #4773 merged at 08:02:23Z and by 08:16Z every satellite's `validate / Validate node repos` — a
+**required** context in all of them — was failing with
 
-- A canonical fix **reds nobody**. It is invisible to the satellites until each next moves its pin,
-  which is where the re-copy belongs — the same change, as the existing "re-copy the canonical" pull
-  requests do it.
-- Re-copying *first* puts five copies **ahead** of their own pinned canonical. A drift guard reports
-  **distance, not direction**, so that reads as drift and goes red exactly as if the copies were
-  stale. (Measured on five satellites in a separate incident, where copies cut from an unmerged core
-  draft reddened and "re-copy the canonical" would have reverted the newer code.)
+```
+scripts/resolve-platform.py has DRIFTED from the platform's canonical: 32 code line(s) differ
+(76 raw), RED since 2026-09-15T00:00:00Z
+```
+
+**Do not reason about this from a `platform-ref:` literal in a satellite's `ci.yml`.** Those literals
+pin *other* jobs (`compile-check`, `tag-modules`, the pack lanes); the `validate:` job passes nothing
+and takes the default. Reading the wrong job's input produces the confident and wrong conclusion that
+a canonical fix is invisible to the satellites — it is the opposite, and the guard's own docstring
+says so ("a canonical fetched at `@main` is live on merge for every caller", MeshWeaver#4027). Read
+the **run**: the job log prints `SCRIPTS_REF: main`.
+
+So the shape of the work is: fix the canonical, merge it, and re-copy into every satellite in the
+same sitting —
+
+```bash
+gh api repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py --jq .content \
+  | base64 -d > scripts/resolve-platform.py
+```
+
+— verifying the guard then reports `CODE-IDENTICAL` (exit 0). A re-run does not help an open pull
+request, because the guard reads the **branch's** copy: that branch needs `git merge origin/main`
+after the re-copy lands on the satellite's `main`.
+
+### 🚨 And while the copy is behind, the rest of the lane is silently ungated
+
+This is the more expensive half, and it is a **skip-trapdoor made by step ordering rather than by an
+`if:`**. The drift check sits mid-job, so its failure skipped **16 subsequent steps** of the same job
+(measured on MeshWeaver.SocialMedia#210, job 105867277548) — among them:
+
+- `Every PR-reachable secret in this repo is asserted by a preflight`
+- `Every manifest.lock is current (and carries a version)`
+- `Every module's version matches its content`
+- `No mapping in this repo's workflows writes a key twice`
+- `No pin comment names a commit this repo no longer pins`
+
+Each reported `skipped`, which under both protection mechanisms counts as satisfied. So for as long
+as a satellite's vendored resolver is behind, every pull request in it is **unchecked by all of
+those**, and the only visible symptom is one red about an unrelated file. Filed as #4784; the durable
+fix is `if: ${{ !cancelled() }}` on each independent guard, or one job per guard family, so that a
+single red reports rather than masks.
 
 ## Controls
 
