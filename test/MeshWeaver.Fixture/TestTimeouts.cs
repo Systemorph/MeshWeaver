@@ -174,4 +174,38 @@ public static class TestTimeouts
     /// timeout (60 s) is the thing being waited on rather than a local settle.
     /// </summary>
     public static TimeSpan CrossSilo => Convergence * 2;
+
+    /// <summary>
+    /// 🚨 THE OUTER BOUND FOR A TEST THAT DECLARES NONE — the runner-wide <c>methodTimeout</c> and
+    /// <c>HubFactAttribute</c> (#4740).
+    ///
+    /// <para><see cref="TestMilliseconds"/> is the outer bound for a test that writes
+    /// <c>[Fact(Timeout = …)]</c>. The ~5,200 that write a plain <c>[Fact]</c> are bounded by the
+    /// runner instead, and that was a literal <b>30 000</b> — below every budget here. A wait that
+    /// elapsed was killed before it could report, so the failure read
+    /// <c>Test execution timed out after 30000 milliseconds</c> and named nothing.</para>
+    ///
+    /// <para>🚨 It is <see cref="CrossSilo"/> and NOT <see cref="TestMilliseconds"/> that this has
+    /// to clear, and they are numerically EQUAL — both are <c>Convergence × 2</c>. Setting the cap
+    /// to <see cref="TestMilliseconds"/> would leave a plain <c>[Fact]</c> waiting
+    /// <see cref="CrossSilo"/> killed at exactly the instant its wait expired: the equal case this
+    /// file already calls anonymous by construction, reintroduced one level up.</para>
+    ///
+    /// <para>The margin is ADDITIVE, for the reason <see cref="LocalConvergence"/> gives: what has
+    /// to be covered is one terminal PROPAGATING to the assertion, and that cost does not scale
+    /// with the bound. A ratio would put this past nine minutes on CI and every wedged test would
+    /// pay it.</para>
+    ///
+    /// <para><b>Not a ceiling for every wait.</b> <see cref="WriteConvergence"/> is larger still
+    /// (a re-enqueue legitimately costs more), and a test using it carries its own literal bounded
+    /// by <see cref="WriteTestMilliseconds"/> — see that property. This bound governs the tests
+    /// that declare nothing, which is what the runner's default is for.</para>
+    /// </summary>
+    public static TimeSpan DefaultOuterBound => CrossSilo + LocalConvergence;
+
+    /// <summary>
+    /// <see cref="DefaultOuterBound"/> in milliseconds — the value the runner configs and
+    /// <c>HubFactAttribute</c> take.
+    /// </summary>
+    public static int DefaultOuterBoundMilliseconds => (int)DefaultOuterBound.TotalMilliseconds;
 }

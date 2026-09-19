@@ -21,15 +21,26 @@ public class HubFactAttribute : FactAttribute;
 /// night ("Test execution timed out after 5000 milliseconds", passing locally where no budget is
 /// enforced).</para>
 ///
-/// <para>30s matches the runner-wide <c>methodTimeout</c> and still fails a genuine wedge well
-/// before the run hangs — a wedged read surfaces its own <c>GetMeshNode … timed out after 60.0s</c>
-/// first, so nothing is masked by the larger budget.</para>
+/// <para>🚨 <b>It is DERIVED from <see cref="TestTimeouts.DefaultOuterBound"/>, not restated as a
+/// literal (#4740).</b> It used to read <c>Timeout = 30000</c> under a comment saying "30s matches
+/// the runner-wide <c>methodTimeout</c>" — a number kept in step by a sentence. Both were below
+/// every shared budget a test actually waits on (<c>Convergence</c> is 36 s locally and 108 s on
+/// CI), so a <c>[HubFact]</c> whose wait elapsed was killed by its own attribute BEFORE the wait
+/// could report what it was waiting for. Every such failure read
+/// <c>Test execution timed out after 30000 milliseconds</c> and named nothing — three different
+/// bugs wearing one message.</para>
+///
+/// <para>This is the invariant <see cref="TestTimeouts.TestMilliseconds"/> already states for an
+/// explicit <c>[Fact(Timeout = …)]</c> — the outer bound must DOMINATE the inner wait — applied to
+/// the place that never had it. An attribute ARGUMENT must be a compile-time constant, but this is
+/// set in the constructor BODY, so it can take the scaled value: 108 s locally, 252 s on CI.</para>
 /// </summary>
 public sealed class HubFactAttribute : FactAttribute
 {
     /// <summary>
-    /// Initializes a new instance and sets the test timeout to 30000 milliseconds — above the
-    /// measured CI fixture cost, in line with the runner-wide <c>methodTimeout</c>.
+    /// Initializes a new instance and sets the test timeout to
+    /// <see cref="TestTimeouts.DefaultOuterBound"/> — the bound for a test that declares none, so
+    /// it dominates every budget a plain <c>[Fact]</c> can wait on, at every scale.
     /// </summary>
     /// <param name="sourceFilePath">Supplied by the compiler; xunit v3 records it on the test case.</param>
     /// <param name="sourceLineNumber">Supplied by the compiler; xunit v3 records it on the test case.</param>
@@ -38,7 +49,7 @@ public sealed class HubFactAttribute : FactAttribute
         [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = -1)
         : base(sourceFilePath, sourceLineNumber)
     {
-        Timeout = 30000;
+        Timeout = TestTimeouts.DefaultOuterBoundMilliseconds;
     }
 };
 #endif

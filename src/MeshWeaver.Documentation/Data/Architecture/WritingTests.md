@@ -721,6 +721,53 @@ The [/code skill](/Skill/code) sets the bar for NodeTypes and data models: **a t
 
 ---
 
+## 🚨 The Outer Bound Must Lose to the Inner Wait
+
+Two numbers bound a test. The **inner** one is the budget it waits on — `TestTimeouts.Convergence`
+and friends — and it fails with a sentence: *"the owner-side sub-hub must actually be gone before a
+click can miss it"*. The **outer** one is xUnit's kill, and it fails with
+*"Test execution timed out after N milliseconds"* and nothing else.
+
+**If the outer bound does not strictly exceed the inner one, only the useless message can ever be
+printed.** `TestTimeouts.TestMilliseconds` has said so for a while, for tests that write
+`[Fact(Timeout = …)]`. The ~5,200 that write a plain `[Fact]` had no such rule, and both of their
+outer bounds were a literal **30 000**:
+
+| | was | now |
+|---|---|---|
+| `test/xunit.runner.json` → `methodTimeout` | 30 000 | **252 000** |
+| `test/MeshWeaver.Hosting.Orleans.Test/xunit.runner.json` | 30 000 | **252 000** |
+| `HubFactAttribute.Timeout` (Release) | 30 000, restated | **`TestTimeouts.DefaultOuterBoundMilliseconds`** |
+
+Against inner budgets of 36 s local / **108 s** on CI (`Convergence`) and up to **216 s**
+(`CrossSilo`). So every plain `[Fact]` whose wait elapsed was killed roughly a minute and a half
+before it could speak, and the failure named none of the three things that could have gone wrong.
+
+**`HubFactAttribute` is the half that makes this worth reading.** It carried its own
+`Timeout = 30000` under a comment saying *"30s matches the runner-wide `methodTimeout`"* — a number
+kept in step by a sentence. Raising only the config files would have left every `[HubFact]` exactly
+as it was, which is a fix that looks complete and changes nothing for the test that prompted it.
+
+**Why `CrossSilo + LocalConvergence` and not `TestMilliseconds`.** They are numerically equal —
+both are `Convergence × 2` — and a cap EQUAL to a budget kills the wait at the instant it expires,
+which is the same anonymous failure one level up. The margin is additive for the reason
+`LocalConvergence` gives: what it covers is one terminal *propagating* to the assertion, and that
+cost does not scale with the bound. A ratio would put the cap past nine minutes on CI and every
+wedged test would pay it.
+
+**The cost, stated:** a genuinely wedged test now fails in ~4 min rather than 30 s. That is the
+trade — the 30 s cap was not detecting wedges that the inner budgets do not detect, it was only
+deleting their diagnosis.
+
+**What still declares its own bound.** `WriteConvergence` (a write that can legitimately re-enqueue)
+is larger than this cap by design, and such tests carry an explicit literal guarded against
+`WriteTestMilliseconds`. That is unchanged.
+
+`TestTimeoutsTest.EveryRunnerConfigBoundsAWaitThatCanActuallyReport` sweeps **every**
+`xunit.runner.json` under `test/` — a project shipping its own takes `methodTimeout` from that copy,
+so a guard reading only the shared default would pass while an opted-in project stayed at 30 s — and
+fails if it finds none, rather than passing having checked nothing.
+
 ## Intra-Project Parallelism — How a Project Opts In
 
 The suite runs single-threaded by default: `test/xunit.runner.json` sets `parallelizeTestCollections: false`, `maxParallelThreads: 1`. Parallel safety is a property of the tests, not of the runner, so a project opts in **individually** by shipping its own `xunit.runner.json` next to its `.csproj`:
@@ -730,9 +777,12 @@ The suite runs single-threaded by default: `test/xunit.runner.json` sets `parall
   "parallelizeAssembly": false,
   "parallelizeTestCollections": true,
   "maxParallelThreads": 4,
-  "methodTimeout": 30000
+  "methodTimeout": 252000
 }
 ```
+
+🚨 **`methodTimeout` is not a free number — it is the outer bound for every test that declares
+none, and it has one job: to lose to the wait inside the test.** See the section below.
 
 `test/Directory.Build.props` picks the project-local file over the shared default on an `Exists()` condition, and `VerifyXunitRunnerConfigCopied` **fails the build** if neither branch lands a config in `$(TargetDir)` — because with no config at all xUnit falls back to *its* defaults, which is unbounded parallelism nobody asked for. Live opt-ins today: `MeshWeaver.Content.Test`, `MeshWeaver.Hosting.Orleans.Test`, `MeshWeaver.AI.Test`.
 

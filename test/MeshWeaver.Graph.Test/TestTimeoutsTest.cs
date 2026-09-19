@@ -1,5 +1,6 @@
 #pragma warning disable CS1591
 
+using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -231,5 +232,128 @@ public class TestTimeoutsTest
         }
 
         public void Dispose() => Environment.SetEnvironmentVariable(name, previous);
+    }
+
+    /// <summary>
+    /// 🚨 THE SAME INVARIANT, FOR THE TESTS THAT DECLARE NO BOUND OF THEIR OWN (#4740).
+    ///
+    /// <para><see cref="TheOuterBoundAlwaysExceedsTheInner"/> pins it for a test that writes
+    /// <c>[Fact(Timeout = …)]</c>. The other 5,202 write a plain <c>[Fact]</c> and are bounded by
+    /// the runner-wide <c>methodTimeout</c> — which was a literal <b>30 000</b> in both config
+    /// files, BELOW every shared budget: <c>Convergence</c> is 36 s locally and 108 s on CI. So a
+    /// wait that elapsed was killed by the runner before it could report what it was waiting for,
+    /// and every such failure read <c>Test execution timed out after 30000 milliseconds</c> with
+    /// no other line. Three different bugs — the disposal never completed, the refusal never
+    /// arrived, the fixture wedged — wearing one message.</para>
+    ///
+    /// <para><b>Why the literal is pinned to the DEFAULT CI factor and not to whatever
+    /// <c>MW_TEST_TIMEOUT_FACTOR</c> says.</b> A JSON literal cannot scale; the scaled value is
+    /// what <see cref="TestTimeouts.TestMilliseconds"/> already computes. So the config is checked
+    /// against the factor CI actually runs with, and raising <c>MW_TEST_TIMEOUT_FACTOR</c> above
+    /// it is a change that has to move these files too — which is what this assertion says when it
+    /// fails, rather than leaving the pair to drift the way the comment in
+    /// <c>HubFactAttribute</c> did.</para>
+    ///
+    /// <para>EVERY config in the tree is checked, not just this assembly's: a project shipping its
+    /// own <c>xunit.runner.json</c> to opt into parallelism (see <c>test/Directory.Build.props</c>)
+    /// takes its <c>methodTimeout</c> from that copy, so a guard reading only the shared default
+    /// would pass while a project with its own file stayed at 30 s.</para>
+    /// </summary>
+    [Fact]
+    public void EveryRunnerConfigBoundsAWaitThatCanActuallyReport()
+    {
+        using var _ = new EnvironmentVariable("GITHUB_ACTIONS", "true");
+        using var __ = new EnvironmentVariable("MW_TEST_TIMEOUT_FACTOR", null);
+        var required = TestTimeouts.DefaultOuterBoundMilliseconds;
+
+        // 🚨 The bound this has to clear is CrossSilo, and CrossSilo == TestMilliseconds exactly
+        // (both are Convergence × 2). Asserting it here keeps the two from silently converging
+        // again: a cap EQUAL to a budget kills the wait at the instant it expires, which is the
+        // anonymous case this file exists to prevent, one level up.
+        foreach (var (name, budget) in new (string, TimeSpan)[]
+                 {
+                     (nameof(TestTimeouts.Quick), TestTimeouts.Quick),
+                     (nameof(TestTimeouts.Convergence), TestTimeouts.Convergence),
+                     (nameof(TestTimeouts.CrossSilo), TestTimeouts.CrossSilo),
+                 })
+            Assert.True(TestTimeouts.DefaultOuterBound > budget,
+                $"{name} ({budget}) is not STRICTLY dominated by the default outer bound "
+                + $"({TestTimeouts.DefaultOuterBound}) — a cap equal to a budget kills the wait at "
+                + "the instant it expires, which reports nothing.");
+
+        var root = RepoRoot();
+        var configs = Directory
+            .GetFiles(Path.Combine(root, "test"), "xunit.runner.json", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                        && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+
+        // The denominator, stated: a sweep that found no config would otherwise pass having
+        // checked nothing — the shape this whole file exists to stop.
+        Assert.True(configs.Count > 0, $"no xunit.runner.json found under {root}/test — this guard "
+                                       + "would pass having checked nothing.");
+
+        foreach (var config in configs)
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(config));
+            Assert.True(
+                doc.RootElement.TryGetProperty("methodTimeout", out var declared),
+                $"{config} declares no methodTimeout, so xUnit's own default governs it and this "
+                + "guard cannot say what bounds those tests.");
+            Assert.True(
+                declared.GetInt32() >= required,
+                $"{config} caps a test at {declared.GetInt32()} ms while the largest budget a "
+                + $"plain [Fact] waits on is {required} ms on CI — so the wait is killed before it "
+                + "can name what it was waiting for, and the failure is anonymous by construction.");
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <c>HubFactAttribute</c> carries its OWN <c>Timeout</c>, so raising the runner-wide
+    /// <c>methodTimeout</c> alone would have changed nothing for a <c>[HubFact]</c> — which is
+    /// exactly the test #4741 is about. It used to restate <c>30000</c> under a comment reading
+    /// "30s matches the runner-wide <c>methodTimeout</c>": a number kept in step by a sentence,
+    /// which is the thing this file exists to replace.
+    ///
+    /// <para>In DEBUG the attribute deliberately applies NO timeout (unattended breakpoint
+    /// debugging), and that is asserted here too rather than compiled away — a <c>#if</c> that
+    /// skipped the case would leave the guard vacuous in exactly the configuration a developer
+    /// runs locally.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(null)]      // local
+    [InlineData("1")]
+    [InlineData("3")]
+    [InlineData("10")]
+    public void HubFactTakesItsOuterBoundFromTheSameSource(string? factor)
+    {
+        using var _ = new EnvironmentVariable("GITHUB_ACTIONS", factor is null ? null : "true");
+        using var __ = new EnvironmentVariable("MW_TEST_TIMEOUT_FACTOR", factor);
+
+#if DEBUG
+        Assert.True(new HubFactAttribute().Timeout == 0,
+            "in DEBUG the attribute must apply no timeout at all, so a breakpoint can be held.");
+#else
+        Assert.Equal(TestTimeouts.DefaultOuterBoundMilliseconds, new HubFactAttribute().Timeout);
+        Assert.True(new HubFactAttribute().Timeout > TestTimeouts.Convergence.TotalMilliseconds,
+            "a [HubFact] whose own Timeout is at or below the convergence wait can only ever fail "
+            + "anonymously — the attribute kills the method before the wait reports.");
+#endif
+    }
+
+    /// <summary>
+    /// Locates the repository root by its solution file. Fails rather than skips: a guard that
+    /// cannot find its subject has checked nothing, and saying so is the whole point.
+    /// </summary>
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        Assert.True(dir is not null,
+            $"walked up from {AppContext.BaseDirectory} and found no MeshWeaver.slnx — this guard "
+            + "cannot locate the configs it exists to check.");
+        return dir!.FullName;
     }
 }
