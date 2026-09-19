@@ -1877,11 +1877,110 @@ internal class RoutingGrain(
     /// never a defect. Kept beside <see cref="IsTransientFailure"/> because the two answer different
     /// questions: that one decides whether to try AGAIN, this one decides what to TELL the sender
     /// once trying again has run out.
+    ///
+    /// <para>🚨 <b>The two TYPE tests were the whole rule, and prod's departed-silo rejections carry
+    /// neither of them — issue #2299 / #2307.</b> See <see cref="IsDepartedSiloRejection"/> for the
+    /// two shapes and why they belong here rather than in a wider predicate.</para>
+    ///
+    /// <para>The walk is <see cref="ExceptionChain"/>'s, not <c>InnerException</c>'s, for the reason
+    /// <see cref="IsScopeTeardown"/> already gives: this arrives through Rx <c>Catch</c> arms and
+    /// <c>PostFailure</c>'s two-transport <see cref="AggregateException"/>, where
+    /// <c>AggregateException.InnerException</c> yields index 0 ONLY — so a fault carrying the
+    /// rejection at any other index was invisible to the old line-walk. That narrowness applied to
+    /// the two type tests below as well; widening the walk fixes both at once.</para>
     /// </summary>
     /// <param name="ex">The exception the delivery attempt faulted with.</param>
     /// <returns><c>true</c> when the failure is a silo/host shutdown.</returns>
     internal static bool IsShutdownShaped(Exception ex) =>
-        ex is global::Orleans.Runtime.SiloUnavailableException
-            or global::Orleans.Runtime.OrleansLifecycleCanceledException
-        || (ex.InnerException != null && IsShutdownShaped(ex.InnerException));
+        ExceptionChain.Contains(ex, static e =>
+            e is global::Orleans.Runtime.SiloUnavailableException
+                or global::Orleans.Runtime.OrleansLifecycleCanceledException
+            || IsDepartedSiloRejection(e));
+
+    /// <summary>
+    /// 🚨 <b>The silo this message was addressed to is GONE — issues #2299 and #2307, which are one
+    /// root seen from two logs.</b> A SINGLE-node test (<see cref="IsShutdownShaped"/> owns the
+    /// walk).
+    ///
+    /// <para><b>The two production shapes.</b> Both arrive as
+    /// <c>OrleansMessageRejectionException</c> — an <see cref="global::Orleans.Runtime.OrleansException"/>
+    /// subclass, which is the type guard below — and neither is a
+    /// <see cref="global::Orleans.Runtime.SiloUnavailableException"/>, so the rule this predicate
+    /// joins matched neither and the sender was told <see cref="ErrorType.Failed"/>, terminally:</para>
+    /// <list type="number">
+    ///   <item><b>The endpoint is not listening.</b> <c>Exception while sending message:
+    ///     …ConnectionFailedException: Unable to connect to S10.244.4.87:11111:146498551, will retry
+    ///     after 585.8766ms</c>, and the socket-level form <c>Unable to connect to endpoint
+    ///     S10.244.3.122:11111:147265510. See InnerException ---> SocketConnectionException: …
+    ///     Error: HostUnreachable</c> (equally <c>ConnectionRefused</c>). Four of the ten samples
+    ///     carried by <c>Admin/_LogIncident/e849e4a7795e0c92</c> (#2299, 191 occurrences) and all
+    ///     three newest samples of <c>f367c5512327cc57</c> (#2307, 3959 occurrences, last
+    ///     2026-09-19 09:03:41Z).</item>
+    ///   <item><b>The generation was superseded.</b> <c>The target silo is no longer active: target
+    ///     was S10.244.4.183:11111:146524552, but this silo is S10.244.4.183:11111:146534005</c> —
+    ///     the SAME pod address with a NEW generation, named verbatim in #2307's body.</item>
+    /// </list>
+    ///
+    /// <para><b>Why these are a lifecycle transition BY CONSTRUCTION</b> — the bar this classifier
+    /// sets, and the reason a bare <see cref="TimeoutException"/> deliberately fails it. A
+    /// <c>SiloAddress</c> is GENERATION-STAMPED (<c>S&lt;ip&gt;:&lt;port&gt;:&lt;generation&gt;</c>),
+    /// so both shapes are statements about one specific silo INCARNATION, and an incarnation that
+    /// refuses connections or has been superseded never answers at that address again. A timeout is
+    /// the opposite statement: the silo ACCEPTED the connection and did not answer, i.e. plausibly
+    /// wedged, and demoting that would arm a resubscribe against a hub that never comes back.</para>
+    ///
+    /// <para><b>And the sender's recovery is BOUNDED, which is what makes
+    /// <see cref="ErrorType.ShuttingDown"/> safe to say here.</b> The objection this file raises
+    /// against a generous rule is that the verdict arms something unbounded on the other side. It
+    /// does not: <c>MeshNodeStreamCache</c>'s transient-fault breaker gives a transient claim three
+    /// grace failures and then backs re-probes off exponentially (1 s → 60 s cap) precisely because
+    /// a STREAK is empirical proof the transient claim was false. So a persistent departed-silo
+    /// condition costs a bounded, backing-off retry — against the old answer's cost, which was every
+    /// live mirror on that path torn down permanently for a roll.</para>
+    ///
+    /// <para>🚨 <b>Matched on Orleans' message text, and that is a known weakness of the same kind
+    /// <see cref="OrleansRoutingService.IsDirectoryUnstable"/> already carries.</b> There is no typed
+    /// rejection reason to read: <c>OrleansMessageRejectionException</c> carries EVERY refusal kind,
+    /// so accepting the type alone would classify genuine refusals as transient — the one direction
+    /// this file says must not happen. The phrases are therefore the narrowest ones that mean "that
+    /// silo incarnation is gone", and they are pinned against the shipped Orleans build by
+    /// <c>DepartedSiloClassificationTest</c>: <b>if that test fails after an Orleans upgrade this
+    /// predicate has gone INERT — repair the phrase, never delete the test.</b> If Orleans re-words
+    /// them this quietly returns to the pre-fix answer rather than misclassifying anything, which is
+    /// the safe direction to fail in.</para>
+    ///
+    /// <para><b>The RETRY half needs nothing here</b> — <see cref="IsTransientFailure"/>'s
+    /// <c>OrleansMessageRejectionException</c> type test already matches both shapes, so
+    /// <see cref="DeliverToGrainObservable"/> has been re-resolving them six times since #2314. This
+    /// is only about what the sender is told once that budget is spent.</para>
+    /// </summary>
+    /// <param name="e">One exception from the graph.</param>
+    /// <returns><c>true</c> when Orleans refused the send because the target silo incarnation is gone.</returns>
+    internal static bool IsDepartedSiloRejection(Exception e) =>
+        e is global::Orleans.Runtime.OrleansException
+        && (e.Message.Contains(SiloEndpointUnreachableMarker, StringComparison.OrdinalIgnoreCase)
+            || e.Message.Contains(SupersededSiloGenerationMarker, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Orleans' own wording from <c>ConnectionManager</c>: <c>"Unable to connect to {endpoint}, will
+    /// retry after {delay}"</c> and <c>"Unable to connect to endpoint {endpoint}. See
+    /// InnerException"</c>. The endpoint is always a <c>SiloAddress</c> — <c>ConnectionManager</c>
+    /// addresses cluster members and gateways, nothing else — so an
+    /// <see cref="global::Orleans.Runtime.OrleansException"/> carrying this phrase is always a host
+    /// that could not be reached, never an application-level connect failure.
+    ///
+    /// <para>A literal of <b>Orleans.Core</b>, where <c>ConnectionManager</c> lives — not of
+    /// Orleans.Runtime, which is where the other markers in this codebase come from.</para>
+    /// </summary>
+    internal const string SiloEndpointUnreachableMarker = "Unable to connect to";
+
+    /// <summary>
+    /// Orleans' own wording when a silo has restarted and reclaimed its address: <c>"The target silo
+    /// is no longer active: target was {0}, but this silo is {1}"</c>. Kept in its verbatim, longest
+    /// form deliberately — the bare <c>"is no longer active"</c> would also match prose about other
+    /// subjects.
+    ///
+    /// <para>A literal of <b>Orleans.Runtime</b>.</para>
+    /// </summary>
+    internal const string SupersededSiloGenerationMarker = "The target silo is no longer active";
 }
