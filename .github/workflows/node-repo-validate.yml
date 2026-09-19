@@ -132,12 +132,27 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      # 🚨 THE PREREQUISITE LINE, AND THE ONLY THING ALLOWED TO MASK A GUARD (#4784). The checkout,
+      # the history fetch it needs and Python are what every guard below reads; a guard's own input
+      # is not. So this step publishes one output, every guard carries
+      # `!cancelled() && steps.ready.outputs.ok == 'true'`, and the two failure modes stay separate:
+      #   * a PREREQUISITE fails  ⇒ `ready` is skipped, its output is empty, every guard is skipped,
+      #     and the prerequisite's own red is the verdict. Nothing runs against an empty workspace.
+      #   * a GUARD fails         ⇒ `ready` is untouched, so every other guard still reports. That is
+      #     the trapdoor this closes: 16 steps once reported `skipped` behind one drift red, and a
+      #     skipped required context counts as SATISFIED.
+      # `check-guard-step-masking.py` asserts this shape, and refuses a job whose guard list is empty
+      # so it cannot pass by having nothing to check.
+      - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+        id: ready
+        run: echo "ok=true" >> "$GITHUB_OUTPUT"
       # GitSync accepts a BuildCompletion only from this exact repository-level path (#3978).
       # If a maintainer renames content CI, the renamed workflow still runs this reusable lane;
       # this gate then fails RED instead of letting every installation silently freeze on its
       # previous imported commit. The guard is fetched at the lane's own scripts ref for the same
       # reason as the other centralized policy below: a caller cannot silently retain an old rule.
       - name: Fetch the content-CI publish-path guard at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -148,10 +163,13 @@ jobs:
             || { echo "::error::could not fetch .github/scripts/check-content-ci-path.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-content-ci-path.py" | grep -q "check-content-ci-path" || { echo "::error::the fetched check-content-ci-path.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
       - name: "The content-CI publish path is enforced — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-content-ci-path.py" --self-test
       - name: "Content CI remains at GitSync's publish-signal path"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-content-ci-path.py" --root . --expected .github/workflows/ci.yml
       - name: Validate every node JSON (+ NodeType Source)
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 scripts/validate-repos.py
       # ── NO COVER IS A WALL OF TEXT, AND EVERY heroCta PILL IS LEGIBLE ──
       # 🚨 ONE copy of the cover gate, fetched here (MeshWeaver#4027). It used to be hand-copied into
@@ -169,6 +187,7 @@ jobs:
       # green. Every caller measured 2026-09-13 has at least one cover (Crm and Manufacturing: 1;
       # SocialMedia 5; Education 9; Reinsurance 17; Plugins 69).
       - name: Fetch the platform's cover gate at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -179,8 +198,10 @@ jobs:
             || { echo "::error::could not fetch .github/scripts/check-covers.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-covers.py" | grep -q "check-covers" || { echo "::error::the fetched check-covers.py at ${SCRIPTS_REF} does not look like the cover gate"; exit 1; }
       - name: "No cover is a wall of text — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-covers.py" --self-test
       - name: "No cover is a wall of text, and every heroCta pill is legible on the page"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-covers.py" --root .
       # 🚨 THE 45-MINUTE CAP, fleet-wide (maintainer, 2026-09-02: "hard cut CI runs after 45min — we pay all
       # this"). GitHub's default job timeout is 360 minutes; an uncapped job that hangs bills a runner for six
@@ -198,7 +219,7 @@ jobs:
       # Plugins#1566). `github.job_workflow_sha` is empty inside a cross-repo reusable, so the lane's
       # own ref is the `scripts-ref` input.
       - name: The cancellation rule holds — nothing on main cancels, a person's PR push supersedes, the bot's never
-        if: ${{ inputs.enforce-cancel-rule }}
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' && inputs.enforce-cancel-rule }}   # reports; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -211,6 +232,7 @@ jobs:
           python3 "$RUNNER_TEMP/check-main-runs-not-cancelled.py"
 
       - name: Fetch the platform's workflow-timeout guard at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -269,6 +291,7 @@ jobs:
       # pass against hand-written dicts while the real tree is broken. With them the controls mutate
       # THIS repo's real callers and the real lane files, in both directions.
       - name: "A caller grants what its lane demands — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --self-test --root . --platform-root "$RUNNER_TEMP/platform" --fleet "$RUNNER_TEMP/lane-caller-grants.yml"
       # 🚨 MeshWeaver#3933 added `id-token: write` to three jobs of the module-pack lane and paired
       # only core's own caller. Every satellite run became `startup_failure` with ZERO jobs — no
@@ -284,6 +307,7 @@ jobs:
       # recurrence is core's `--fleet` run against .github/lane-caller-grants.yml, before the lane
       # change merges. This step covers the OTHER direction: a change made on THIS side of the pair.
       - name: "This repo's callers grant every permission their platform lanes demand"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --root . --platform-root "$RUNNER_TEMP/platform"
       # 🚨 THE ANTI-STALENESS HALF. The platform's fleet roster is what core's own pull request
       # checks a lane change against, and it can only be trusted while every row is re-derived from
@@ -293,6 +317,7 @@ jobs:
       # mismatch is not a permission escalation, so the run graph is accepted and the red is
       # visible). Re-measure with `--emit-fleet-row` and land the printed block in core.
       - name: "This repo's callers still match the platform's fleet roster"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --root . --fleet "$RUNNER_TEMP/lane-caller-grants.yml" --assert-fleet-row "${{ github.repository }}"
       # 🚨 MeshWeaver#3878: A MODULE REGISTRY HAND-OVER WAITS FOR THE WHOLE VALIDATION VERDICT, and the
       # wiring that makes it wait is checked HERE, before merge. `node-repo-module-publish.yml` runs
@@ -303,12 +328,16 @@ jobs:
       # has exactly one publisher on its `lane`, `selected` and `declared` outputs, and that publisher
       # runs on exactly the events the pack call stages on. A repo that calls neither lane prints so.
       - name: "The module publication gate can refuse (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/module-publication.py" --self-test
       - name: "A module registry hand-over waits for this repo's whole validation verdict"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/module-publication.py" check-callers --root .
       - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --self-test
       - name: "Every job in this repo's workflows is capped at 45 minutes"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --root .
 
       # 🚨 A VENDORED RESOLVER MUST NOT DRIFT (MeshWeaver.Plugins#1565; the shape of MeshWeaver#4027).
@@ -323,6 +352,7 @@ jobs:
       # fleet must see the finding before it can fail on it. A repository with no copy passes: that
       # is the end state (the lanes fetch the canonical themselves), not a gap.
       - name: Fetch the platform's resolver-copy guard and the canonical resolver at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -336,8 +366,10 @@ jobs:
             || { echo "::error::could not fetch .github/scripts/resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the canonical the copy is compared against is unreadable, and a guard that cannot read its subject must not pass"; exit 1; }
           head -c 400 "$RUNNER_TEMP/resolve-platform.canonical.py" | grep -q "resolve-platform" || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} does not look like the resolver"; exit 1; }
       - name: "A vendored resolver that drifted is named — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-resolver-copy.py" --self-test
       - name: "This repo's vendored resolve-platform.py matches the platform's canonical (advisory until the guard's flip date, red after)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-resolver-copy.py" --root . --canonical "$RUNNER_TEMP/resolve-platform.canonical.py"
 
       # 🚨 A 40-HEX SUBSTITUTION CANNOT SEE AN ABBREVIATED SHA, and the pin-move procedure in every
@@ -355,8 +387,10 @@ jobs:
       # records having had the same class before — "the previous pin's comment said ci.6353 while
       # the pin was ci.6469" — which is what makes it a guard rather than a fourth catch.
       - name: "An abbreviated sha resolves in its own file — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-abbreviated-shas.py" --self-test
       - name: "No pin comment names a commit this repo no longer pins"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-abbreviated-shas.py" --root .
 
       # 🚨 A DUPLICATE MAPPING KEY IS ACCEPTED SILENTLY AND THE LAST ONE WINS (Systemorph/MeshWeaver#3579).
@@ -379,6 +413,7 @@ jobs:
       # any duplicate key, any mapping, at the first job. It needs NO credential, so it runs on forks
       # and on Dependabot pull requests too.
       - name: Fetch the platform's duplicate-key guard at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -392,8 +427,10 @@ jobs:
           # break this step with an ImportError instead of a verdict.
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
       - name: "No workflow mapping writes a key twice — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-workflow-yaml-keys.py" --self-test
       - name: "No mapping in this repo's workflows writes a key twice"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-workflow-yaml-keys.py" --root .
 
       # 🚨 A DEPENDABOT RUN READS A DIFFERENT SECRET STORE (Systemorph/MeshWeaver#3399, a recurrence
@@ -413,6 +450,7 @@ jobs:
       # this repo only CALLS, which the guard cannot see through — is declared once, with a reason,
       # in the caller's `.github/pr-secret-preflight-allow.txt`. A stale entry there fails too.
       - name: Fetch the platform's PR-secret preflight guard at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -426,8 +464,10 @@ jobs:
           # break this step with an ImportError instead of a verdict.
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
       - name: "Every PR-reachable secret is asserted by a preflight — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-pr-secret-preflight.py" --self-test
       - name: "Every PR-reachable secret in this repo is asserted by a preflight"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-pr-secret-preflight.py" --root .
       # ── THE NO-OP SET THIS REPO OWNS STILL AGREES WITH THE PLATFORM'S ──
       # 🚨 `node-repo-scope.py` decides which module bundles a pull request rebuilds and which
@@ -443,6 +483,7 @@ jobs:
       # three: none of them has an `app/`.)
       # Static, two files and a directory listing — no credential, so it runs on forks too.
       - name: Fetch the platform's no-op parity guard at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -455,14 +496,17 @@ jobs:
             head -c 400 "$RUNNER_TEMP/${script}" | grep -q "${script%.py}" || { echo "::error::the fetched ${script} at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           done
       - name: "This repo's no-op set is comparable and agrees — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-noop-scope-parity.py" --self-test
       - name: "This repo's no-op set agrees with the platform's"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-noop-scope-parity.py" --root .
       # 🚨 ONE implementation of the version derivation, every repo. Fetched exactly like the two
       # guards above and like compile-check.py: asserted RED when unavailable, never fallen back to
       # a drifted per-repo copy. The fetch and the self-test run on EVERY call, whichever copy is
       # believed below, so "the platform's checker is intact" is never a thing a run can skip.
       - name: Fetch the platform's manifest checker at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
@@ -473,18 +517,19 @@ jobs:
             || { echo "::error::could not fetch .github/scripts/gen-manifests.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/gen-manifests.py" | grep -q "manifest.lock" || { echo "::error::the fetched gen-manifests.py at ${SCRIPTS_REF} does not look like the manifest generator"; exit 1; }
       - name: "The manifest checker can fail — --resolve, the trunk baseline and the config contract (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/gen-manifests.py" --self-test
 
       # manifest.lock calls itself CI-verified; this is what verifies it. A stale lock means a
       # module's recorded content hash — and the version derived from it — describes a tree that
       # no longer exists, which is exactly what a dependent's pin would be trusting.
       - name: Every manifest.lock is current (and carries a version)
-        if: ${{ inputs.centralized-gen-manifests }}
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' && inputs.centralized-gen-manifests }}   # reports; only a PREREQUISITE masks it (#4784)
         env:
           MW_REPO_ROOT: ${{ github.workspace }}
         run: python3 "$RUNNER_TEMP/gen-manifests.py" --check
       - name: "Every manifest.lock is current — this repo's VENDORED copy, not yet centralized"
-        if: ${{ !inputs.centralized-gen-manifests }}
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' && !inputs.centralized-gen-manifests }}   # reports; only a PREREQUISITE masks it (#4784)
         run: python3 scripts/gen-manifests.py --check
       # 🚨 …and the version is the RIGHT one — but ONLY on main, and that restriction is the
       # point. The patch is derived from a baseline that MOVES (the highest published tag plus
@@ -495,13 +540,13 @@ jobs:
       # number, so this runs as that step's POST-condition rather than as a gate.
       - name: Every module's version matches its content
         if: >
-          inputs.centralized-gen-manifests && (inputs.check-versions-always ||
+          !cancelled() && steps.ready.outputs.ok == 'true' && inputs.centralized-gen-manifests && (inputs.check-versions-always ||
           (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         env:
           MW_REPO_ROOT: ${{ github.workspace }}
         run: python3 "$RUNNER_TEMP/gen-manifests.py" --check-versions
       - name: "Every module's version matches its content — this repo's VENDORED copy, not yet centralized"
         if: >
-          !inputs.centralized-gen-manifests && (inputs.check-versions-always ||
+          !cancelled() && steps.ready.outputs.ok == 'true' && !inputs.centralized-gen-manifests && (inputs.check-versions-always ||
           (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         run: python3 scripts/gen-manifests.py --check-versions
