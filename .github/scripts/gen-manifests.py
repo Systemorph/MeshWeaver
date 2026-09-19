@@ -876,21 +876,80 @@ def generate(root: Path, fetch: bool = True) -> int:
     written = 0
     commit = git_head(root)
     modules = plugin_dirs(root)
+    # 🚨 TWO PHASES, and the split is the whole fix for #4781. Deriving is cheap to redo and a
+    # write is not: a module whose derived number is BELOW its committed one is evidence that this
+    # checkout cannot see every release, and that has to stop the run BEFORE anything is rewritten.
+    # Writing as we go would leave the earlier modules downgraded and only then refuse.
+    plans: list[tuple[Path, dict[str, str], str, str, dict | None]] = []
     for plugin in modules:
-        lock = plugin / "manifest.lock"
         files = hash_files(plugin, root)
         version = module_version(files)
-        existing = read_existing(lock)
+        existing = read_existing(plugin / "manifest.lock")
         # The SemVer is recomputed here, not just shape-checked, because a REVERT needs it: the
         # restored tree hashes to an already-published one, so `files`/`moduleVersion` match and the
         # old skip left `version` pointing at a number that describes a DIFFERENT (later) tree. A
         # published version describes exactly one tree forever, so a revert must move FORWARD.
-        #
+        plans.append((plugin, files, version, release_version(root, plugin, version, trunk), existing))
+
+    # 🚨 NEVER REWRITE A VERSION DOWNWARD — refuse, naming the missing evidence (#4781).
+    #
+    # The old guard only compared direction for a manifest that was OTHERWISE up to date, so a
+    # tagless checkout left an unchanged module alone. It did not cover the case that actually
+    # corrupts: a CONTENT change. Then `files`/`moduleVersion` move, the manifest must be rewritten,
+    # and `version` went out with whatever the incomplete tag set derived. Measured on a fixture
+    # with NO git remote: a committed v1.2.1 was rewritten to v1.2.0, silently, at exit 0 — the
+    # exact defect `--check-versions`' own hint warns about, done by the generator itself.
+    #
+    # A derived number BELOW the committed one can only mean the derivation did not see every
+    # release: with a remote, `derivation_inputs` has already proven the tag set current, so it is a
+    # hand-edited or orphaned number; with NO remote, nothing proved anything and a release
+    # published elsewhere is invisible by construction. Both want a human, and neither wants a
+    # silent rewrite — a published version describes exactly one tree forever, so re-issuing a
+    # lower number hands an already-published number to a different tree.
+    remote_for_hint = _remote_name(root)
+    downgrades = [
+        f"{plugin.name}: manifest.lock records version {existing.get('version')!r}, and this "
+        f"checkout derives {expected!r} — LOWER. Refusing to rewrite it down."
+        for plugin, _files, _version, expected, existing in plans
+        if existing is not None
+        and VERSION_RE.fullmatch(str(existing.get("version", "")))
+        and _is_behind(expected, str(existing.get("version")))
+    ]
+    if downgrades:
+        print("✗ refusing to rewrite a committed version DOWNWARD — a published version describes "
+              "exactly one tree forever:")
+        for d in downgrades:
+            print(f"  - {d}")
+        # 🚨 THE TWO CASES HAVE OPPOSITE REMEDIES, and saying both would send the reader to the
+        # wrong one (Copilot's review of #4917). `check_versions` already draws this distinction on
+        # the same comparison; the refusal here must not contradict it.
+        if remote_for_hint:
+            # `derivation_inputs` has ALREADY proven the tag set and the trunk baseline current
+            # against this remote — that is its whole job, and it refuses before reaching here if it
+            # could not. So nothing is missing: the committed number is one neither the published
+            # tags nor the trunk's committed manifest justify. Fetching again cannot change it.
+            print(f"  The tag set and the trunk baseline were verified against "
+                  f"'{remote_for_hint}' before this comparison, so NOTHING is missing — the "
+                  f"committed number is one neither the published tags nor the trunk's committed "
+                  f"manifest justify. A hand-edited or orphaned version, not absent evidence.")
+            print("  Fix: correct the `version` in that manifest.lock deliberately (the derived "
+                  "number above is the one CI computes), then re-run. Re-fetching tags cannot "
+                  "change this result.")
+        else:
+            print("  This checkout has NO git remote, so nothing could be verified and a release "
+                  "published elsewhere is invisible to it by construction — the committed number "
+                  "being higher is exactly the evidence that such a release exists.")
+            print("  Fix: run the generator where the published tags are. Do NOT correct the "
+                  "committed version from here; from inside this checkout a real release and a "
+                  "hand-edited number are indistinguishable.")
+        return 1
+
+    for plugin, files, version, expected_semver, existing in plans:
+        lock = plugin / "manifest.lock"
         # 🚨 Only ever rewrite the version FORWARD. On a tagless/shallow checkout release_version
         # computes `major.minor.0` for everything, and blindly writing that would rewrite correct
         # versions DOWN — the very thing `--check-versions`' hint warns about. Comparing direction
         # (rather than equality) makes the tagless case a no-op instead of a corruption.
-        expected_semver = release_version(root, plugin, version, trunk)
         semver_stale = VERSION_RE.fullmatch(str(existing.get("version", ""))) is not None \
             and _is_behind(existing.get("version"), expected_semver) if existing else False
         if existing is not None and existing.get("files") == files \
@@ -1590,6 +1649,133 @@ def self_test() -> int:
         if rc != 0:
             failures.append(f"a clean tree should be a no-op, got exit {rc}")
 
+        # 6. 🚨 #4781: a CONTENT change in a checkout that cannot account for the committed version
+        #    must REFUSE, never rewrite the number down. The fixture is the one the old guard did
+        #    not cover — NO git remote at all, so nothing can be verified and a release published
+        #    elsewhere is invisible by construction — and a committed version ABOVE anything
+        #    derivable here. Measured on the code before this case: `v1.2.1` became `v1.2.0`, at
+        #    exit 0, with no line saying so.
+        repo6 = tmp / "no-remote-ahead"
+        (repo6 / "Mod").mkdir(parents=True)
+        g(tmp, "init", "-q", "-b", "main", str(repo6))
+        g(repo6, "config", "user.email", "t@example.com")
+        g(repo6, "config", "user.name", "t")
+        declare(repo6)
+        (repo6 / "Mod" / "index.json").write_text('{"content": {"version": "1.2"}}\n')
+
+        def commit6(src: str, version: str, tag: str | None = None) -> None:
+            (repo6 / "Mod" / "src.cs").write_text(src)
+            files = hash_files(repo6 / "Mod", repo6)
+            (repo6 / "Mod" / "manifest.lock").write_text(serialize({
+                "schema": SCHEMA, "module": "Mod", "moduleVersion": module_version(files),
+                "version": version, "sourceCommit": None, "files": files}))
+            g(repo6, "add", "-A")
+            g(repo6, "commit", "-qm", version)
+            if tag:
+                g(repo6, "tag", tag)
+
+        def committed_version() -> str | None:
+            return (read_existing(repo6 / "Mod" / "manifest.lock") or {}).get("version")
+
+        # 1.2.0 is released and tagged, so the highest derivable patch here is 1.2.1…
+        commit6("one\n", "1.2.0", "Mod/v1.2.0")
+        if g(repo6, "remote").strip():
+            failures.append("the no-remote fixture has a remote — it would not exercise #4781")
+        # …and the committed number is 1.2.5, ABOVE anything this checkout can account for. With no
+        # remote nothing proved the tag set complete, so 1.2.1–1.2.5 may well be published elsewhere.
+        commit6("one\n", "1.2.5")
+        def run_generate(root: Path) -> tuple[int, str]:
+            """`generate` plus everything it printed — the refusal's WORDS are the deliverable here,
+            and the two cases below must not be able to speak each other's remedy."""
+            import contextlib
+            import io as _io
+            buffer = _io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = generate(root, fetch=False)
+            printed = buffer.getvalue()
+            print(printed, end="")
+            return code, printed
+
+        # The defect arm: a content change makes the lock stale, so it MUST be rewritten — and the
+        # version is the field that must not move backwards while it is.
+        (repo6 / "Mod" / "src.cs").write_text("two\n")
+        rc6, said6 = run_generate(repo6)
+        if "NO git remote" not in said6:
+            failures.append("the no-remote refusal must say the checkout has NO git remote and send "
+                            "the reader to where the tags are — it must NOT tell them to correct the "
+                            f"committed version from here; said: {said6!r}")
+        if "Re-fetching tags cannot change this result" in said6:
+            failures.append("the no-remote refusal spoke the REMOTE arm's remedy — there is no "
+                            "remote to have verified anything against")
+        if rc6 == 0:
+            failures.append("a content change whose derived version is BELOW the committed one must "
+                            "REFUSE (exit 1), not report success (#4781)")
+        if committed_version() != "1.2.5":
+            failures.append(f"#4781: the committed version was rewritten DOWN to "
+                            f"{committed_version()!r} — a published version describes exactly one "
+                            f"tree forever, so the generator must never re-issue a lower number")
+        # The control — without it this case would pass on a generator that refuses everything. Same
+        # fixture, same shape of content change, with the committed number no longer above what is
+        # derivable: the rewrite must go through and the version must move FORWARD to 1.2.1.
+        g(repo6, "checkout", "-q", "--", "Mod/src.cs")
+        commit6("one\n", "1.2.0")
+        (repo6 / "Mod" / "src.cs").write_text("three\n")
+        rc6b, _ = run_generate(repo6)
+        if rc6b != 0:
+            failures.append(f"a content change with nothing committed above the derivable set must "
+                            f"be written, got exit {rc6b} — the refusal above would then be "
+                            f"unconditional and prove nothing")
+        elif committed_version() != "1.2.1":
+            failures.append(f"the control arm must move the version FORWARD to 1.2.1, got "
+                            f"{committed_version()!r}")
+
+        # 7. 🚨 …AND THE SAME REFUSAL WITH A REMOTE SAYS THE OPPOSITE THING (Copilot's review of
+        #    #4917). `derivation_inputs` has already PROVEN the tag set and the trunk baseline
+        #    current against the remote — it refuses before reaching the comparison if it could not —
+        #    so nothing is missing and "fetch the tags" is a remedy that cannot change the result.
+        #    The committed number is one no witness justifies: hand-edited or orphaned. Two arms of
+        #    one comparison with opposite remedies, which is why the message is split and asserted.
+        origin7 = tmp / "origin7.git"
+        g(tmp, "init", "-q", "--bare", "-b", "main", str(origin7))
+        repo7 = tmp / "remote-ahead"
+        (repo7 / "Mod").mkdir(parents=True)
+        g(tmp, "init", "-q", "-b", "main", str(repo7))
+        g(repo7, "config", "user.email", "t@example.com")
+        g(repo7, "config", "user.name", "t")
+        g(repo7, "remote", "add", "origin", str(origin7))
+        declare(repo7)
+        (repo7 / "Mod" / "index.json").write_text('{"content": {"version": "1.0"}}\n')
+
+        def commit7(src: str, version: str, tag: str | None = None) -> None:
+            (repo7 / "Mod" / "src.cs").write_text(src)
+            files = hash_files(repo7 / "Mod", repo7)
+            (repo7 / "Mod" / "manifest.lock").write_text(serialize({
+                "schema": SCHEMA, "module": "Mod", "moduleVersion": module_version(files),
+                "version": version, "sourceCommit": None, "files": files}))
+            g(repo7, "add", "-A")
+            g(repo7, "commit", "-qm", version)
+            if tag:
+                g(repo7, "tag", tag)
+
+        commit7("one\n", "1.0.0", "Mod/v1.0.0")
+        commit7("two\n", "1.0.1", "Mod/v1.0.1")
+        g(repo7, "push", "-q", "origin", "main", "--tags")
+        # Everything published and verifiable; the committed number is nonetheless 1.0.9.
+        commit7("two\n", "1.0.9")
+        (repo7 / "Mod" / "src.cs").write_text("three\n")
+        rc7, said7 = run_generate(repo7)
+        if rc7 == 0:
+            failures.append("a committed version above every VERIFIED witness must refuse, not be "
+                            "rewritten down (#4917 review)")
+        if "NOTHING is missing" not in said7 or "hand-edited or orphaned" not in said7:
+            failures.append("the remote refusal must say the witnesses were VERIFIED and nothing is "
+                            f"missing — a hand-edited or orphaned number; said: {said7!r}")
+        if "run the generator where the published tags are" in said7:
+            failures.append("the remote refusal spoke the NO-REMOTE arm's remedy — the tags are "
+                            "right here and were verified, so sending the reader elsewhere is wrong")
+        if (read_existing(repo7 / "Mod" / "manifest.lock") or {}).get("version") != "1.0.9":
+            failures.append("the remote arm rewrote the committed version — refusing means refusing")
+
     if failures:
         print("✗ gen-manifests self-test:")
         for f in failures:
@@ -1597,9 +1783,13 @@ def self_test() -> int:
         return 1
     print("✓ gen-manifests self-test: --resolve regenerates a lock-only conflict, ALSO stages a "
           "non-conflicted lock the regeneration moved, REFUSES a half-merged tree and an unstaged "
-          "edit, no-ops on a clean one, an older trunk commit derives against ITSELF (#1426), and "
-          "the per-repo config is REQUIRED — a missing one, a typo'd key and an unusable "
-          "project-closure.py each fail rather than defaulting")
+          "edit, no-ops on a clean one, an older trunk commit derives against ITSELF (#1426), a "
+          "content change whose derived version is BELOW the committed one REFUSES rather than "
+          "downgrading it while the same change with nothing committed above the derivable set "
+          "still moves FORWARD (#4781) — with the remedy split, since a VERIFIED remote means the "
+          "committed number is hand-edited and NO remote means a release is invisible, and each "
+          "arm is asserted not to speak the other's, and the per-repo config is REQUIRED — a missing one, a "
+          "typo'd key and an unusable project-closure.py each fail rather than defaulting")
     return 0
 
 
