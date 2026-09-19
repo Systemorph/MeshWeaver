@@ -512,6 +512,39 @@ So the baseline measurement is not a caveat on the result, it is **half the inst
 halves or neither. The same applies to any "N of N done" claim built by re-reading a store you also
 wrote to.
 
+#### 🚨 A watcher's polarity decides whether a failed read waits or FIRES
+
+The twin of *"a broken query reports not-yet forever"*, and worse, because this one **triggers an
+action**. Measured 2026-09-19 at 09:08:35Z on MeshWeaver.Plugins: a blob watcher armed as
+
+```bash
+until [ "$(gh api "$PATH" --jq '.sha' 2>/dev/null || true)" != "$BASELINE" ]; do sleep 60; done
+echo "ACT NOW — the file moved"
+```
+
+fired a **false ACT NOW**. GitHub answered the secondary-limit 403, `--jq '.sha'` returned the error
+body, and `!=` against the baseline was true. Nothing had moved. `|| true` plus `!=` on an
+unvalidated value compose into *any failed read is a positive result* — and the announcement named a
+remedy (merge and push), which had it been trusted would have merged a stale canonical and burned a CI
+run during the very limit that caused it.
+
+**The polarity is the whole difference, and it is easy to get right by accident and wrong by accident:**
+
+| form | what a 403 does |
+|---|---|
+| `until [ "$(read)" = "true" ]` | predicate **false** → keeps waiting. Annoying, **safe** |
+| `until [ "$(read)" != "$baseline" ]` | predicate **true** → **fires**. Unsafe |
+
+So: **write the condition so a failed read is FALSE, never TRUE** — wait for the value you expect,
+never for *difference* from a value you remember. Where difference is genuinely what you need,
+**shape-guard first** (a sha must be 40 hex characters; a size must be digits) and make *"could not
+read"* its own printed outcome that backs off, rather than a silent third state folded into one of the
+other two.
+
+The question to ask before arming any watcher is one line: **what does this print on a 403?** Ask it
+of the whole expression, including the `|| true` you added so a transient failure would not kill the
+loop — that fallback is usually where the defect enters.
+
 #### The safe form for posting
 
 Build the payload as JSON and hand it to `--input`, which reads a file for every field and never
