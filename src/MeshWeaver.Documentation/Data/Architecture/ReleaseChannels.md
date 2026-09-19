@@ -141,11 +141,23 @@ leaves the two naming different releases with nothing to notice it. The contract
 ordered and one-sided:
 
 - **The Git tag is authoritative.** It is what CI resolves and what the promotion record describes.
-- **The image pointer is published only after the tag update is confirmed**, never before and never
-  in parallel — so the window can only ever hold an image pointer that lags, not one that leads.
-- **Divergence is reconciled, not assumed away.** The promoter compares the two on every run and
-  re-publishes the image pointer from the authoritative tag, which is idempotent and is also the
-  correct behaviour under retry.
+- **Everything else is published only after the tag update is CONFIRMED** — the image pointer and
+  the promotion record both — never before it and never in parallel. So the window can only hold
+  followers that lag, never one that leads, and a crash before the tag lands leaves no trace of a
+  promotion that did not happen.
+- **The record is inside the protocol, not beside it.** Writing it first would let it describe a
+  promotion whose tag never landed; leaving it out of the failure path would let `stable` advance
+  with no durable evidence. It is written after the tag, and a tag with no record is a repairable
+  state the reconciler fills in — the tag is what happened, the record is the account of it.
+- **Convergence needs a TRIGGER, not just a comparison.** Reconciling "on every promoter run" is
+  only safe while promotions keep coming: a tag that lands and a registry push that then fails, on
+  the *last* promotion before a quiet week, leaves the image pointer behind indefinitely. So the
+  reconciler runs **on a schedule of its own**, independent of whether anything was promoted, and it
+  is the same idempotent operation — re-derive the followers from the authoritative tag. A
+  divergence it cannot repair is **alerted**, not retried silently.
+
+Each follower write is idempotent, which is what makes retry and scheduled repair the same code
+path rather than two.
 
 ## What a channel is NOT
 
