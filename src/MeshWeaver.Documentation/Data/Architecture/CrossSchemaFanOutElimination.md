@@ -60,7 +60,7 @@ schema(s)".
 | 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | was `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE | `notifications` | **DONE** — [Addressed Notifications](/Doc/Architecture/AddressedNotifications) (#3156/#3216/#3238). Two pinned legs, `namespace:{viewer}/_Notification` and (global admins only) `namespace:Admin/_Notification`; the grace-list line is deleted |
 | 2 | **Security fold globals** — `SecurityQueries.Roles` / `.Memberships` / `.GatedNodes(type)` (per gated type!) via `PermissionEvaluator` | `nodeType:Role scope:subtree … complete`, `nodeType:GroupMembership …`, `nodeType:{gated} …` | `mesh_nodes` | **To eliminate** — see plan 2 |
 | 3 | **Root-scope grants/policies** — `SecurityQueries.RootAssignments` / `.RootPolicy` | `namespace:_Access nodeType:AccessAssignment …` / `path:_Policy nodeType:PartitionAccessPolicy …` | `system_access.access` / — | **Done** 2026-09-02 (#2194) — the grants leg never fanned out (the router pins `_Access` to its registered schema); the policy leg was `namespace: id:_Policy`, path-less, and DID fan out 179×/5 min for a row that cannot exist on Postgres — now read by path, see below |
-| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too. **Package delivered** (measured 2026-09-16): memex-cloud's `Plugins/SocialMedia` package reads `1.1.13` / `moduleVersion 74a3ad3c14fa15da` — the lock at `MeshWeaver.SocialMedia@5d0be6e` (2026-09-12), a descendant of the anchoring commit, whose own lock was `1.1.8` / `18e38b37eb61779d`. Whether every pod LOADED that module build is a `[ModuleLoad]` log read, not taken here |
+| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too. **Package delivered** (measured 2026-09-16): memex-cloud's `Plugins/SocialMedia` package reads `1.1.13` / `moduleVersion 74a3ad3c14fa15da` — the lock at `MeshWeaver.SocialMedia@5d0be6e` (2026-09-12), a descendant of the anchoring commit, whose own lock was `1.1.8` / `18e38b37eb61779d`. Whether every pod LOADED that module build is a `[ModuleLoad]` log read, not taken here. **Closed 2026-09-19**: the shape was not reported once in 12 days (0 of 114 quoted samples) and the whole log site went quiet at 05:15:30Z — see the resolution note below |
 | 5 | `Admin/Menu/{X}` per-render route misses | point probes | `mesh_nodes` | **Fixed** 2026-08-29 (`83b1892be`, anchored existence query) |
 | 6 | **Hosting fleet pages + build broadcaster** (MeshWeaver.Plugins) — `HostingAdminLayoutAreas.Snapshot` (nine call sites on the Fleet and Fleet Console pages), `FleetConsoleLogic.*Query`, `PlatformBuildInboxWatcher.DeploymentsQuery` | was `nodeType:Hosting/Deployment[ scope:subtree]` and four siblings, bare | `mesh_nodes` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — a deployment record lives wherever its owner lives, so the set of partitions IS the answer: `MeshWideQuery.Declare`/`OfType`. On a refusing host the bare form faulted and the snapshot rendered an EMPTY fleet |
 | 7 | **Portal search box** (MeshWeaver.Plugins) — Blazor `MeshSearch`, the unbound `SearchBoxView`, portal-next `SearchBar` | was `source:accessed scope:descendants … context:search limit:N` and `*{text}* scope:descendants context:search is:main limit:50`, bare, per debounced keystroke | `mesh_nodes` + `user_activities` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — it searches everything the viewer can read; RLS still narrows the union. Cheaper still: narrow the accessed leg to the partitions the viewer's UserActivity rows name |
@@ -102,6 +102,26 @@ one:
 1. Check whether the old id still advances. While it does, the per-caller incidents cannot exist.
 2. Read the query quoted in the newest sample on the incident node. Do not go by the issue title or
    the lines in a reopen comment. Name the caller that sends that query.
+
+**Resolved 2026-09-19 — the site went quiet, and #3545 closed on that.** Final tally over the issue's
+whole life: **114** query strings quoted across every fold and reopen comment since 2026-09-12 — 96
+the FleetWatch roster query, 10 a bare `nodeType:Hosting/Deployment`, 8 others, and **0** containing
+`Post`. `Admin/_LogIncident/d4c8f6f74ecfa422` stopped at `lastSeen 2026-09-19T05:15:30Z` on
+`occurrences: 6415`, and the stop is real rather than an addressing artefact: before ~11:41Z (when the
+portal began re-addressing reports) a burst would have advanced that node, after it a successor node
+with this category would exist, and `content.category:*PartitionedMeshQuery*` finds none —
+`count: 2`, `truncated: false`, `coverage.partitions: ["admin"]`, this node plus the site's bodyless
+twin. Ingest liveness over the same window is evidenced by memex-cloud lines *captured* at 06:30:42Z
+and 08:54:16Z. So zero unanchored fan-out lines of any shape on that portal for ~14 h.
+
+🚨 **And the prediction this page recorded — "once the watcher rolls, per-caller ids appear" — is
+still unmet; do not read #4443 as evidence that it shipped.** That ticket is the SAME log site's
+second bucket: the 2026-08-09 discriminator switches on `(exceptionType, topFrame)`, so the
+exception-bearing lines hash to `d4c8f6f74ecfa422` (#3545) and the bodyless ones to
+`SHA256("{category}\n0\n")[..8] = 5d52ad4396af9a59` (#4443, titled after the `nodeType:Skill` sample it
+happened to be filed from). Two catch-alls, one site, neither per-caller. Mechanics, instruments and
+the traps in using them: [Log-watch triage](/Doc/Architecture/LogWatchTriage) → *"One log SITE holds
+TWO buckets"* and *"The portal RE-ADDRESSES a reported fingerprint"*.
 
 Each of these small sets is **tiny and rarely changing** — the fold's global reads return under
 ~50 rows; the bell's thousands of rows are its own defect — fetched the most expensive way the
