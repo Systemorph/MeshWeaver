@@ -45,8 +45,8 @@ namespace MeshWeaver.Graph.Test;
 ///
 /// <para>🚨 <b>The negative control, watched red before this was committed:</b> collapse
 /// <see cref="NodeTypeRecompileExtensions.LogReleaseRefusal"/> to the single pre-change template and
-/// <see cref="EveryFailureClass_GetsATemplateOfItsOwn"/> fails with 1 distinct template for 14
-/// classes, while <see cref="TwoUnrelatedCauses_ProduceTwoDifferentTemplates"/> fails on the
+/// <see cref="EveryFailureClass_GetsATemplateOfItsOwn"/> fails with 1 distinct template for every
+/// class, while <see cref="TwoUnrelatedCauses_ProduceTwoDifferentTemplates"/> fails on the
 /// equality it exists to refuse. That is the state production was in.</para>
 /// </summary>
 public class ReleaseFailureClassIsInTheTemplateTest
@@ -163,8 +163,12 @@ public class ReleaseFailureClassIsInTheTemplateTest
             + "(remainder='OperationRequest').")
         { ErrorType = ErrorType.NotFound });
 
+        // The production sighting came from a pod whose host was going away, so the probe the
+        // classifier is handed in production answers true there — see
+        // ADisposedDependency_IsTeardownOnlyWhileTheScopeIsGone for the other side of that.
         var classified = new[] { baseState, ownerUnreachable, teardown, (Exception)nodeMissing }
-            .Select(NodeTypeReleaseFailureClassifier.ClassifyTriggerWriteFault)
+            .Select(ex => NodeTypeReleaseFailureClassifier
+                .ClassifyTriggerWriteFault(ex, scopeDisposed: () => true))
             .ToArray();
 
         classified.Should().Equal(
@@ -204,6 +208,38 @@ public class ReleaseFailureClassIsInTheTemplateTest
                 "the wrapper site carries the ORIGINAL as inner exactly so this stays answerable "
                 + "(#2387): an owner that missed the REQUEST budget is described by the same "
                 + "sentence and is not the base read running out");
+    }
+
+    /// <summary>
+    /// 🚨 The OTHER case on each side, and the one that keeps this taxonomy honest about itself: a
+    /// bare <see cref="ObjectDisposedException"/> is a teardown race only while the host's own scope
+    /// is provably gone. With a LIVE scope the same exception is a genuine disposal defect and must
+    /// NOT be labelled <see cref="NodeTypeReleaseFailure.HostTearingDown"/> — that would fold a real
+    /// bug onto the teardown family's incident, which is precisely the mistake this change exists to
+    /// end, reintroduced inside the fix for it. It reaches the named fallback instead: loud, and on
+    /// nobody else's ticket. Same contract as
+    /// <c>AreaErrorClassifier.IsHubDisposalRace(ex, scopeDisposed)</c> and <c>ScopeTeardown</c>.
+    /// </summary>
+    [Fact]
+    public void ADisposedDependency_IsTeardownOnlyWhileTheScopeIsGone()
+    {
+        var disposed = new ObjectDisposedException("MeshNodeStreamCache");
+
+        NodeTypeReleaseFailureClassifier
+            .ClassifyTriggerWriteFault(disposed, scopeDisposed: () => true)
+            .Should().Be(NodeTypeReleaseFailure.HostTearingDown,
+                "the host is going away under an in-flight write — a lifecycle event");
+
+        NodeTypeReleaseFailureClassifier
+            .ClassifyTriggerWriteFault(disposed, scopeDisposed: () => false)
+            .Should().Be(NodeTypeReleaseFailure.Unclassified,
+                "a disposed dependency while the host is ALIVE is a defect; naming it a teardown "
+                + "would hide it under an incident somebody else owns");
+
+        NodeTypeReleaseFailureClassifier.ClassifyTriggerWriteFault(disposed)
+            .Should().Be(NodeTypeReleaseFailure.Unclassified,
+                "no probe means the question was not answered, and an unanswered question must not "
+                + "become a yes — the typed-only answer stands");
     }
 
     /// <summary>

@@ -80,7 +80,7 @@ which defect — is on the second line. A diagnosis that arrives one line too la
 
 **The failure CLASS goes in the template. The subject and the reason stay structured parameters.**
 
-`NodeTypeReleaseFailure` names fourteen classes, and
+`NodeTypeReleaseFailure` names fifteen classes, and
 `NodeTypeRecompileExtensions.LogReleaseRefusal` has one literal template per class, each keeping
 `{Path}` and `{Message}`:
 
@@ -125,15 +125,48 @@ folded into the nearest-looking class is how a ticket comes to carry a cause it 
 it puts the bucket straight back, just under a specific name. Traffic on the `UNCLASSIFIED` template
 is a finding about the classifier, and it is expected to shrink to zero.
 
-### An additive sink, because the callers are not all in this repo
+One more ordering is load-bearing, and for the same reason as the whole page. A bare
+`ObjectDisposedException` says only *something was disposed*. It is a teardown race when the host is
+actually tearing down, and a **genuine disposal defect** when the scope is alive — so the teardown
+rule is gated on the existing probe (`AreaErrorClassifier.IsHubDisposalRace(ex, scopeDisposed)`,
+`hub.IsServiceScopeDisposed`), never on the exception type alone. Claiming every disposed dependency
+as `HostTearingDown` would fold real disposal bugs onto the teardown family's incident: the exact
+mistake this taxonomy exists to end, reintroduced inside the fix for it. With a live scope such a
+fault lands in `Unclassified` — loud, and on nobody else's ticket.
 
-`Action<string>? onError` stays exactly as it was. The class rides a second, optional
-`Action<NodeTypeReleaseRefusal>? onRefused`, which fires **alongside** `onError`. `onError` has
-callers in this repository and in `MeshWeaver.Plugins` — its release wave, its provisioning flow and
-six of its tests — and one of those is **in-mesh C#** that no compiler in either repository ever
-sees ([NodeTypeCompilation](../NodeTypeCompilation)). A caller that only surfaces a refusal to a user
-keeps using `onError`; a caller that LOGS one should take `onRefused`, so the class reaches the
-template.
+### Every terminal answers, and says why
+
+A refusal with **no** cause is the same defect one step further along. The composed leg's closing
+`DefaultIfEmpty(false)` answered the caller and told the refusal sinks nothing at all: an empty
+permission terminal skips the arm that reports, so a release that did not happen produced no line
+anywhere. That terminal now has its own class, `PermissionCheckNoVerdict`.
+
+🚨 It is **not** reported as a denial. Defaulting the check to `false` *above* the decision would send
+an unanswered check into the "you lack Compile" branch and render a no-verdict as an access denial —
+which is what #974 forbids, because nothing was decided about the caller's rights. Three classes cover
+the three honest outcomes: granted-and-refused (`CompileDenied`), the check **faulted**
+(`PermissionCheckFailed`, with an exception to look at), and the check **ended** (this one, with none).
+
+### An additive OVERLOAD, because the callers are not all in this repo
+
+`Action<string>? onError` stays exactly as it was, and so does the **metadata signature** of the
+methods that take it. The class rides a second, optional `Action<NodeTypeReleaseRefusal>? onRefused`,
+which fires **alongside** `onError`.
+
+🚨 **An overload, not an appended optional parameter.** Appending a parameter — even a defaulted one —
+REPLACES a method's metadata signature: source-compatible, binary-**breaking**. A module assembly
+compiled earlier holds a MethodRef to the five-parameter method, and after the platform advances that
+call raises `MissingMethodException` at the point of use. It is the same break
+`scripts/check-record-signatures.py` refuses for a record's primary constructor, for
+the same reason, and no repo-local build can see it. So the five-parameter methods keep their metadata
+and forward to six-parameter overloads that carry no defaults of their own (two all-optional overloads
+would make every short call ambiguous).
+
+`onError` has callers in this repository and in `MeshWeaver.Plugins` — its release wave, its
+provisioning flow and six of its tests — and one of those is **in-mesh C#** that no compiler in either
+repository ever sees ([NodeTypeCompilation](../NodeTypeCompilation)). A caller that only surfaces a
+refusal to a user keeps using `onError`; a caller that LOGS one should take `onRefused`, so the class
+reaches the template.
 
 ## What this does not claim
 
@@ -145,7 +178,7 @@ template.
   core cannot reference, so the control in `ReleaseFailureClassIsInTheTemplateTest` pins **distinct
   templates** — a guard that copied the identity rule into core would keep passing while its subject
   moved.
-- **No log level moves.** Three of the fourteen classes are provably not defects
+- **No log level moves.** Three of the fifteen classes are provably not defects
   (`NodeMissing`, `CompileDenied`, `OwnerRecycling`) and every class still logs at `Error`. Whether
   any of them deserves a lower level is a real question with a per-class cost argument, and it is a
   separate change — naming them is what makes it answerable at all. Until now there was one line to

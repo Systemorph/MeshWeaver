@@ -22,7 +22,7 @@ namespace MeshWeaver.Graph;
 /// <para>🚨 <b>The class is decided where the exception is, never recovered from the text.</b> A
 /// consumer that pattern-matched the reason string would re-derive, badly, what the producing arm
 /// already knew — and would silently mis-file the day a message is reworded. Every arm of
-/// <see cref="NodeTypeReleaseExtensions.ObserveNodeTypeRelease"/> states its own class, and the
+/// <see cref="NodeTypeReleaseExtensions.ObserveNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/> states its own class, and the
 /// trigger-write arm — the only one whose shape varies — asks
 /// <see cref="NodeTypeReleaseFailureClassifier"/>, which reads the TYPED
 /// <see cref="MeshNodeErrorCode"/> first and the shared <see cref="AreaErrorClassifier"/>
@@ -55,6 +55,15 @@ public enum NodeTypeReleaseFailure
     /// could not RUN, whatever shape the fault took.
     /// </summary>
     PermissionCheckFailed,
+
+    /// <summary>
+    /// The permission check ENDED without answering — it neither granted, nor denied, nor faulted.
+    /// 🚨 Distinct from <see cref="CompileDenied"/> on purpose: rendering a no-verdict as a denial is
+    /// what #974 forbids, because nothing was decided about the caller's rights. Distinct from
+    /// <see cref="PermissionCheckFailed"/> too — there is no exception to look at, which is a
+    /// different investigation.
+    /// </summary>
+    PermissionCheckNoVerdict,
 
     /// <summary>
     /// There is no node at the path — routing answered <c>NotFound</c>, or the owner did. NOT a
@@ -150,7 +159,21 @@ internal static class NodeTypeReleaseFailureClassifier
     /// broad ones that would otherwise swallow it.
     /// </summary>
     /// <param name="ex">The fault the write arm caught; may be null.</param>
-    internal static NodeTypeReleaseFailure ClassifyTriggerWriteFault(Exception? ex)
+    /// <param name="scopeDisposed">🚨 Probe — has the CALLING host's own DI scope gone? A bare
+    /// <see cref="ObjectDisposedException"/> means "something was disposed", which is a teardown race
+    /// only when the host is actually tearing down; while the scope is ALIVE it is a genuine disposal
+    /// defect and must keep reporting as one. That is the existing contract on
+    /// <see cref="AreaErrorClassifier.IsHubDisposalRace(Exception?, Func{bool}?)"/> and
+    /// <c>ScopeTeardown.IsScopeTeardown</c>, and it matters more here than anywhere: labelling
+    /// a real disposal bug <see cref="NodeTypeReleaseFailure.HostTearingDown"/> would fold it under
+    /// the teardown family's incident, which is the exact mistake this taxonomy exists to end. A null
+    /// probe keeps the typed-only answer, so an unrecognised
+    /// <see cref="ObjectDisposedException"/> lands in <see cref="NodeTypeReleaseFailure.Unclassified"/>
+    /// — loud, and on nobody else's ticket. Callers that hold a hub pass
+    /// <c>hub.IsServiceScopeDisposed</c>.</param>
+    internal static NodeTypeReleaseFailure ClassifyTriggerWriteFault(
+        Exception? ex,
+        Func<bool>? scopeDisposed = null)
     {
         if (ex is null)
             return NodeTypeReleaseFailure.Unclassified;
@@ -184,10 +207,11 @@ internal static class NodeTypeReleaseFailureClassifier
             }
         }
 
-        // 2. Teardown, before anything else untyped. A bare ObjectDisposedException from the stream
-        //    cache is the shape #1549 last reopened on, and it is not retry-worthy — the same
-        //    judgement AreaErrorClassifier.ShouldRetryArea already makes about it.
-        if (AreaErrorClassifier.IsHubDisposalRace(ex) || Carries<ObjectDisposedException>(ex))
+        // 2. Teardown, before anything else untyped — the typed HubDisposingException, OR a bare
+        //    ObjectDisposedException while the host's own scope is PROVABLY gone. The shape #1549
+        //    last reopened on (a disposed MeshNodeStreamCache during a roll) is the second form; a
+        //    disposed dependency while the scope is alive is deliberately NOT this class.
+        if (AreaErrorClassifier.IsHubDisposalRace(ex, scopeDisposed))
             return NodeTypeReleaseFailure.HostTearingDown;
 
         // 3. "The node is gone" before "access" and before "transient": a routing NotFound is a
@@ -218,13 +242,5 @@ internal static class NodeTypeReleaseFailureClassifier
             return NodeTypeReleaseFailure.TransientHubFailure;
 
         return NodeTypeReleaseFailure.Unclassified;
-    }
-
-    private static bool Carries<T>(Exception ex) where T : Exception
-    {
-        for (Exception? e = ex; e is not null; e = e.InnerException)
-            if (e is T)
-                return true;
-        return false;
     }
 }

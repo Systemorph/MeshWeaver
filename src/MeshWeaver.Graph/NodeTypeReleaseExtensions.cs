@@ -14,12 +14,12 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// The canonical, permission-gated entry point for the user-facing "Create Release"
 /// operation. Every caller — the GUI button on the NodeType Configuration pane, MCP
-/// agents, tests — goes through <see cref="RequestNodeTypeRelease"/>; there is no other
+/// agents, tests — goes through <see cref="RequestNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/>; there is no other
 /// surface for a user to author a release.
 ///
-/// <para>Two forms, ONE implementation: <see cref="ObserveNodeTypeRelease"/> returns the cold
+/// <para>Two forms, ONE implementation: <see cref="ObserveNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/> returns the cold
 /// <c>IObservable&lt;bool&gt;</c> and is what a caller composes against when it must ORDER other
-/// work around the flip landing; <see cref="RequestNodeTypeRelease"/> is that observable plus a
+/// work around the flip landing; <see cref="RequestNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/> is that observable plus a
 /// Subscribe, for the click handlers that have nothing to sequence.</para>
 ///
 /// <para><b>The credential split this entry point enforces:</b></para>
@@ -53,7 +53,7 @@ public static class NodeTypeReleaseExtensions
     /// <summary>
     /// 🚨 The ORDERED inner bound on ONE release request — issue #3510.
     ///
-    /// <para><b>What it is for.</b> <see cref="ObserveNodeTypeRelease"/> promises, in its own
+    /// <para><b>What it is for.</b> <see cref="ObserveNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/> promises, in its own
     /// remarks and in its closing <c>DefaultIfEmpty(false)</c>, that it produces EXACTLY ONE
     /// emission, always. That promise covered three of Rx's four outcomes — it emits, or it faults,
     /// or it completes empty. The fourth is the one that bites: a source that NEITHER emits NOR faults
@@ -87,7 +87,7 @@ public static class NodeTypeReleaseExtensions
     /// The release leg's totality, as a PURE composition — no hub, no mesh, no wall clock — so the
     /// property it guarantees is drivable from a <c>TestScheduler</c>
     /// (<c>ReleaseWaveLegIsTotalTest</c>). <paramref name="leg"/> is the permission check and the
-    /// trigger write composed exactly as <see cref="ObserveNodeTypeRelease"/> composes them; this
+    /// trigger write composed exactly as <see cref="ObserveNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/> composes them; this
     /// adds the one thing that composition cannot express about itself: an answer when the leg
     /// produces none.
     ///
@@ -150,23 +150,52 @@ public static class NodeTypeReleaseExtensions
     /// <see cref="NodeTypeDefinition.ReleaseNotes"/> is used.</param>
     /// <param name="onError">Invoked (with a human-readable reason) when the caller lacks
     /// <c>Compile</c> or the trigger write fails — the clean refusal path.</param>
-    /// <param name="onRefused">🚨 The same refusal, CLASSIFIED — see
-    /// <see cref="NodeTypeReleaseFailure"/>. Additive: it fires alongside
-    /// <paramref name="onError"/>, never instead of it, and every existing caller keeps behaving
-    /// exactly as it did. A caller that LOGS a refusal should use this one, so the class reaches the
-    /// message TEMPLATE instead of a structured parameter (#1549).</param>
     public static void RequestNodeTypeRelease(
         this IMessageHub hub,
         string nodeTypePath,
         bool force = false,
         string? releaseNotes = null,
-        Action<string>? onError = null,
-        Action<NodeTypeReleaseRefusal>? onRefused = null)
+        Action<string>? onError = null)
+        => hub.RequestNodeTypeRelease(nodeTypePath, force, releaseNotes, onError, onRefused: null);
+
+    /// <summary>
+    /// <see cref="RequestNodeTypeRelease(IMessageHub,string,bool,string?,Action{string}?)"/> plus the
+    /// CLASSIFIED refusal sink.
+    ///
+    /// <para>🚨 <b>A SEPARATE OVERLOAD, not an optional parameter on the old one.</b> Appending a
+    /// parameter — even a defaulted one — REPLACES the method's metadata signature: it is
+    /// source-compatible and binary-BREAKING. A module assembly compiled earlier holds a MethodRef to
+    /// the five-parameter method, and after the platform advances that call raises
+    /// <c>MissingMethodException</c> at the point of use — the exact class of break
+    /// <c>scripts/check-record-signatures.py</c> exists to refuse for records, for exactly the same
+    /// reason. The five-parameter method therefore keeps its metadata and forwards here, so a bundle
+    /// built against either shape resolves.</para>
+    ///
+    /// <para>Its own parameters carry NO defaults, deliberately: two all-optional overloads would make
+    /// every short call ambiguous. A caller that wants the class states every argument.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose AccessContext identifies the caller.</param>
+    /// <param name="nodeTypePath">Path of the NodeType to release.</param>
+    /// <param name="force">When <c>true</c>, bypass the "sources unchanged since last compile"
+    /// short-circuit and always run a fresh compile.</param>
+    /// <param name="releaseNotes">Optional markdown release notes to stamp alongside the trigger.</param>
+    /// <param name="onError">Invoked (with a human-readable reason) on the clean refusal path.</param>
+    /// <param name="onRefused">🚨 The same refusal, CLASSIFIED — see
+    /// <see cref="NodeTypeReleaseFailure"/>. It fires alongside <paramref name="onError"/>, never
+    /// instead of it. A caller that LOGS a refusal should use this one, so the class reaches the
+    /// message TEMPLATE instead of a structured parameter (#1549).</param>
+    public static void RequestNodeTypeRelease(
+        this IMessageHub hub,
+        string nodeTypePath,
+        bool force,
+        string? releaseNotes,
+        Action<string>? onError,
+        Action<NodeTypeReleaseRefusal>? onRefused)
         => hub.ObserveNodeTypeRelease(nodeTypePath, force, releaseNotes, onError, onRefused)
             .Subscribe(_ => { });
 
     /// <summary>
-    /// The OBSERVABLE form of <see cref="RequestNodeTypeRelease"/>: identical semantics, but the
+    /// The OBSERVABLE form of <see cref="RequestNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/>: identical semantics, but the
     /// caller learns when the trigger has actually LANDED and can therefore ORDER other work
     /// against it. Emits <c>true</c> once the <see cref="NodeTypeDefinition.RequestedReleaseAt"/>
     /// flip has been written, <c>false</c> when the caller was refused
@@ -191,18 +220,40 @@ public static class NodeTypeReleaseExtensions
     /// <see cref="NodeTypeDefinition.ReleaseNotes"/> is used.</param>
     /// <param name="onError">Invoked (with a human-readable reason) when the caller lacks
     /// <c>Compile</c> or the trigger write fails — the clean refusal path.</param>
-    /// <param name="onRefused">🚨 The same refusal, CLASSIFIED — see
-    /// <see cref="NodeTypeReleaseFailure"/>. Every arm below states its own class; the class is
-    /// never recovered from <paramref name="onError"/>'s text. Additive, so no existing caller
-    /// changes behaviour.</param>
     /// <returns>A COLD observable; Subscribe to request the release.</returns>
     public static IObservable<bool> ObserveNodeTypeRelease(
         this IMessageHub hub,
         string nodeTypePath,
         bool force = false,
         string? releaseNotes = null,
-        Action<string>? onError = null,
-        Action<NodeTypeReleaseRefusal>? onRefused = null)
+        Action<string>? onError = null)
+        => hub.ObserveNodeTypeRelease(nodeTypePath, force, releaseNotes, onError, onRefused: null);
+
+    /// <summary>
+    /// <see cref="ObserveNodeTypeRelease(IMessageHub,string,bool,string?,Action{string}?)"/> plus the
+    /// CLASSIFIED refusal sink. Every arm below states its own class; the class is never recovered
+    /// from <paramref name="onError"/>'s text.
+    ///
+    /// <para>🚨 A SEPARATE OVERLOAD for the binary-compatibility reason spelled out on
+    /// <see cref="RequestNodeTypeRelease(IMessageHub,string,bool,string?,Action{string}?,Action{NodeTypeReleaseRefusal}?)"/>,
+    /// and with no defaults of its own so no short call becomes ambiguous.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose AccessContext identifies the caller.</param>
+    /// <param name="nodeTypePath">Path of the NodeType to release.</param>
+    /// <param name="force">When <c>true</c>, bypass the "sources unchanged since last compile"
+    /// short-circuit and always run a fresh compile.</param>
+    /// <param name="releaseNotes">Optional markdown release notes to stamp alongside the trigger.</param>
+    /// <param name="onError">Invoked (with a human-readable reason) on the clean refusal path.</param>
+    /// <param name="onRefused">The same refusal, CLASSIFIED — see
+    /// <see cref="NodeTypeReleaseFailure"/>.</param>
+    /// <returns>A COLD observable; Subscribe to request the release.</returns>
+    public static IObservable<bool> ObserveNodeTypeRelease(
+        this IMessageHub hub,
+        string nodeTypePath,
+        bool force,
+        string? releaseNotes,
+        Action<string>? onError,
+        Action<NodeTypeReleaseRefusal>? onRefused)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (string.IsNullOrEmpty(nodeTypePath))
@@ -294,7 +345,14 @@ public static class NodeTypeReleaseExtensions
                             // class is decided from it — never re-derived downstream from `reason`.
                             onRefused?.Invoke(new NodeTypeReleaseRefusal(
                                 nodeTypePath,
-                                NodeTypeReleaseFailureClassifier.ClassifyTriggerWriteFault(ex),
+                                // 🚨 The scope PROBE is handed in, not skipped. Without it a bare
+                                // ObjectDisposedException from an unrelated disposed dependency —
+                                // a genuine defect — would be labelled HostTearingDown and folded
+                                // under the teardown family, which is the very mistake this change
+                                // exists to stop. The probe is the same one AreaErrorClassifier and
+                                // ScopeTeardown already document for a caller that holds the hub.
+                                NodeTypeReleaseFailureClassifier.ClassifyTriggerWriteFault(
+                                    ex, hub.IsServiceScopeDisposed),
                                 reason));
                             return Observable.Return(false);
                         });
@@ -312,7 +370,38 @@ public static class NodeTypeReleaseExtensions
                 // EXACTLY one emission, always — a permission source that completes without
                 // answering must not turn into a sequence that completes without answering, or a
                 // caller composing `.FirstAsync()` on it faults instead of learning "no release".
-                .DefaultIfEmpty(false);
+                //
+                // 🚨 …AND the emission must carry a REASON. A bare `DefaultIfEmpty(false)` answered
+                // the caller and told the refusal sinks nothing at all: the empty terminal skips the
+                // SelectMany, so neither onError nor onRefused ever fired and a release that did not
+                // happen produced NO line anywhere. That is the same defect this change is about,
+                // one step further along — a refusal with no cause instead of a cause nobody can
+                // tell apart. The nullable lift makes "nothing was emitted" observable without a
+                // flag, and the arm names the condition.
+                //
+                // 🚨 It is NOT reported as a denial. Moving the default ABOVE the SelectMany would
+                // send an unanswered check into the `!granted` branch and render a NO-VERDICT as
+                // "you need the Compile permission" — precisely what #974 forbids: nothing was
+                // decided about the caller's rights, so the honest class is its own.
+                .Select(granted => (bool?)granted)
+                .DefaultIfEmpty(null)
+                .Select(answer =>
+                {
+                    if (answer is { } decided)
+                        return decided;
+                    const string noVerdict =
+                        "The Compile permission check for this NodeType ended without a verdict — "
+                        + "nothing was decided about your rights and no release was requested. This "
+                        + "is neither a grant nor a denial; retry, and if it persists the permission "
+                        + "source is not answering.";
+                    logger?.LogWarning(
+                        "[RequestNodeTypeRelease] Permission check ended without a verdict for {Path}",
+                        nodeTypePath);
+                    onError?.Invoke(noVerdict);
+                    onRefused?.Invoke(new NodeTypeReleaseRefusal(
+                        nodeTypePath, NodeTypeReleaseFailure.PermissionCheckNoVerdict, noVerdict));
+                    return false;
+                });
             }),
             nodeTypePath,
             ReleaseRequestBound,

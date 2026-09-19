@@ -58,7 +58,7 @@ public static class NodeTypeRecompileExtensions
     ///
     /// <para>🚨 <b>Why a switch of LITERAL templates and not a selected format string.</b> The class
     /// has to be in the template as written text — that is the part a reader greps, a fingerprint
-    /// keys on and a ticket title carries. Fourteen literal calls make every one of them visible in
+    /// keys on and a ticket title carries. Fifteen literal calls make every one of them visible in
     /// one place and impossible to assemble at runtime by accident; a helper returning a chosen
     /// string would read as one template to every tool that inspects call sites. <c>{Path}</c> and
     /// <c>{Message}</c> stay structured parameters in all of them, so nothing a query filters on
@@ -76,7 +76,7 @@ public static class NodeTypeRecompileExtensions
     /// <param name="logger">The channel's logger; a null logger writes nothing, as everywhere else
     /// in this file.</param>
     /// <param name="refusal">The classified refusal, exactly as
-    /// <see cref="NodeTypeReleaseExtensions.ObserveNodeTypeRelease"/>'s arm produced it.</param>
+    /// <see cref="NodeTypeReleaseExtensions.ObserveNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/>'s arm produced it.</param>
     internal static void LogReleaseRefusal(ILogger? logger, NodeTypeReleaseRefusal refusal)
     {
         ArgumentNullException.ThrowIfNull(refusal);
@@ -99,6 +99,11 @@ public static class NodeTypeRecompileExtensions
             case NodeTypeReleaseFailure.PermissionCheckFailed:
                 logger.LogError(
                     "[Recompile] Release request for {Path} failed — the COMPILE PERMISSION CHECK COULD NOT RUN, so nothing was decided: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.PermissionCheckNoVerdict:
+                logger.LogError(
+                    "[Recompile] Release request for {Path} failed — the COMPILE PERMISSION CHECK ENDED WITHOUT A VERDICT, neither granting nor denying: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.NodeMissing:
@@ -360,7 +365,12 @@ public static class NodeTypeRecompileExtensions
                     // current builds, and this stays the one place that guarantees a request lands.
                     using (accessService?.ImpersonateAsSystem())
                         foreach (var path in ordered)
+                            // Every argument stated: the classified overload carries no defaults, so
+                            // that two all-optional overloads cannot make a short call ambiguous.
+                            // force/releaseNotes are exactly the old defaults.
                             hub.RequestNodeTypeRelease(path,
+                                force: false,
+                                releaseNotes: null,
                                 onError: msg => progress?.Invoke(
                                     $"Recompile of {path} could not be requested: {msg} — its assembly is STALE until compiled manually.",
                                     LogLevel.Error),
