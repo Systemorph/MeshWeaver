@@ -307,6 +307,75 @@ maintainer's waiver from an agent's. The label event in the pull request's timel
   Read that file's diff yourself.
 - **Pull requests into other branches.** The ruleset reviews only the default branch, so a pull
   request into another branch reads red; the check is not required there.
+- **🚨 Every other repository in the fleet.** See below — this is the largest gap by a wide margin.
+
+## 🚨 The check exists only here, and the fleet is the measurement of that
+
+Every repository in the fleet *requests* the automatic review. Only `Systemorph/MeshWeaver`
+*requires* it to be answered. So everywhere else a finding against code that then merged is not
+merely sometimes missed — it is structurally never read, because nothing ever asks.
+
+**Measured 2026-09-19**, the 30 most recently updated merged pull requests in each of eight
+repositories — 240 merged, 325 findings:
+
+| repository | merged swept | carried findings | ≥1 unanswered | findings | unanswered |
+|---|---:|---:|---:|---:|---:|
+| MeshWeaver | 30 | 25 | **0** | 59 | **0** |
+| MeshWeaver.Plugins | 30 | 17 | 7 | 56 | 23 |
+| MeshWeaver.Education | 30 | 17 | 13 | 31 | 23 |
+| MeshWeaver.Crm | 30 | 21 | 16 | 39 | 26 |
+| MeshWeaver.Manufacturing | 30 | 17 | 15 | 28 | 25 |
+| MeshWeaver.SocialMedia | 30 | 15 | 14 | 29 | 26 |
+| MeshWeaver.Reinsurance | 30 | 14 | 10 | 30 | 21 |
+| Memex | 30 | 22 | 18 | 53 | 38 |
+| **total** | **240** | **148** | **93** | **325** | **182** |
+
+Core is **0 of 59**. That is the check working, and it is also the control that makes the other rows
+readable: the same instrument finds both states, so a zero is a measurement and not a broken query.
+In the repositories without the gate the usual ratio is **N of N** — where a pull request carried
+findings at all, *none* of them was answered.
+
+Closing the gap is a protection edit in six repositories and is tracked separately (#4776). Five of
+them use classic protection, where an **absent** required context blocks every pull request forever,
+so the shim-job route in [Renaming a Required Check](../RenamingARequiredCheck) applies.
+
+### Treating the backlog: bound it, and state the bound
+
+The backlog is ~5,700 merged pull requests fleet-wide, so a sweep is always partial. Report the
+denominator you actually swept and what is left, or the next session cannot tell a treated repository
+from an untreated one. Per repository:
+
+```bash
+gh api "repos/Systemorph/<repo>/pulls?state=closed&per_page=100&sort=updated&direction=desc" \
+  --jq '.[]|select(.merged_at!=null)|.number'
+gh api "repos/Systemorph/<repo>/pulls/<n>/comments?per_page=100" \
+  --jq '{findings:[.[]|select(.user.login=="Copilot" and .in_reply_to_id==null)]|length,
+         replies:[.[]|select(.in_reply_to_id!=null)]|length}'
+```
+
+A finding counts as answered only when some comment's `in_reply_to_id` is that root's `id`. A
+PR-level comment answers nothing, and neither does resolving the thread.
+
+**Reply on every thread whatever the verdict.** Four verdicts, and the declines need their reason on
+the record more than the acceptances do: *real* (fix it), *real but cosmetic*, *obsolete* (verify
+against the current file and quote the evidence), *wrong* (say so, with the measurement). A merged
+finding nobody answered and nobody declined is indistinguishable from one nobody read.
+
+### 🚨 One defect, five copies — fix the canonical, and do NOT re-copy yet
+
+Findings cluster hard on vendored files, because the reviewer reads each repository's copy
+independently. In the 2026-09-19 sweep, 25 of the 182 were against five satellites' copies of
+`scripts/resolve-platform.py` and collapsed to **five distinct defects** in core's canonical
+`.github/scripts/resolve-platform.py` — one of them reported three times over. Fix the canonical;
+a patch to a vendored copy alone is how this fleet reached five vintages of one script (#1426).
+
+**But do not re-copy in the same breath.** `node-repo-validate.yml` fetches the canonical at the
+*caller's* `scripts-ref`/`platform-ref`, and every satellite pins that to a fixed core sha — so
+`check-resolver-copy.py` compares each copy against the canonical **as of its own pin**. A canonical
+fix is therefore invisible to the satellites and reds none of them; each copy picks it up when that
+repository next moves its pin, which is where the re-copy belongs. Re-copying first would put five
+copies *ahead* of their own pinned canonical, and a drift guard reports **distance, not direction** —
+so it would read as drift and go red exactly as if the copies were stale.
 
 ## Controls
 
