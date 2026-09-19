@@ -85,8 +85,9 @@ decides to.
 
 All three hold, or the check is RED:
 
-1. **The automatic review has landed** — a review by the reviewer account whose body is recognisably
-   a review.
+1. **The automatic review has landed** — a review by the reviewer account, at a non-`PENDING` state,
+   whose body is not a refusal. What makes it a review is *who posted it*, not how it is worded — see
+   **"Provenance, not presentation"** below for why, and what requiring a recognisable shape cost.
 2. **Every thread the reviewer started has a person's reply** — for every comment by the reviewer
    with no `in_reply_to_id`, at least one comment in that thread by an account of `type: User`
    (following `in_reply_to_id` to the root, so a reply to a reply counts).
@@ -128,12 +129,41 @@ classifies the body:
 | Body | Reading |
 |---|---|
 | names a refusal (`Copilot was unable to review …`, or `**Files reviewed:** 0/…`) | **refused** — not landed |
-| carries the heading `Pull request overview` (July: `## Pull request overview`; September: inside `<summary>`) | **landed** |
-| anything else, including an empty body | **unrecognised** — not landed, and the first line is printed |
+| any other text | **landed** |
+| no text at all | **unrecognised** — not landed |
 
-A refusal marker wins over the review marker. An unrecognised body is red rather than green because
-the check cannot tell, and cannot-tell is never a pass. If the reviewer changes its format, every pull
-request reads red naming the new first line, and the fix is one marker in the script.
+A refusal wins. Everything else the reviewer says is the review.
+
+### Provenance, not presentation — and what the other way cost
+
+**The body is read for one purpose: to separate a review from a refusal to review.** What makes a
+review a review is that the *reviewer account* posted it at a non-`PENDING` state. That is
+`is_reviewer` plus the state check, and the body has no part in it.
+
+Until 2026-09-18 `landed` additionally required the literal string `Pull request overview`, and this
+page said so, adding: *"If the reviewer changes its format, every pull request reads red naming the
+new first line, and the fix is one marker in the script."* The failure was therefore **foreseen and
+accepted** — sound reasoning for an *advisory* check, where a false red costs a reader a glance.
+
+Two things then happened within a day of each other. The check became a **required context**
+(ruleset `2128472`, 2026-09-17T21:15Z), and the reviewer dropped its overview block, posting a short
+verdict body instead — `### 🟢 Approval recommended`, `### 🟡 Changes recommended`,
+`### 🔵 Needs a closer look`, plus a sentence or two. The marker matched nothing. Six core pull
+requests were genuinely reviewed and every one read *"the automatic review has not landed"*.
+
+Promotion changed the cost of "cannot-tell is never a pass" from a glance to a **hard stop on every
+open pull request**, with no exit but a maintainer waiver — and answering the findings could not
+clear it, because the unanswered-threads check is a *second* reason and the review-landed reason
+stood regardless. A whole lane was blocked while the reviewer had in fact reviewed everything.
+
+**So the marker was removed rather than updated.** Chasing the format would have re-armed the same
+trap on the reviewer's next revision. A decorative substring is the reviewer's choice and can change
+without notice; the account id cannot.
+
+🚨 **The self-test could not have caught it.** All three review fixtures carried the marker, so the
+suite proved the rule only on the side of the change where it held — a control with no case on the
+other side. The fixtures now include the three bodies measured on 2026-09-18, and each is verified
+to go **red** if the marker rule is restored.
 
 ## When it is evaluated
 
@@ -191,6 +221,54 @@ Every read is REST — `pulls/{n}`, `pulls/{n}/reviews`, `pulls/{n}/comments`, `
 is taken on every run for the pull request's author (when that is a person), so a token that cannot verify a waiver is
 discovered on an ordinary pull request rather than when a maintainer needs the waiver.
 
+## 🚨 Three ways to be red, and only one of them is something you can do anything about
+
+The check has one red and three causes, and until 2026-09-18 it printed **one sentence for all
+three** — *"the automatic review must land. It usually arrives minutes after the pull request
+opens…"*. That sentence is correct for exactly one of them.
+
+| the state | what the reader is told now | what actually clears it |
+|---|---|---|
+| the reviewer has not posted yet | "the automatic review must land … usually arrives minutes after the pull request opens" | time |
+| the reviewer posted a **refusal** | "**unreviewable right now** … nothing on this pull request can answer this" | the reviewer becoming able to review, then a maintainer's re-request — or the waiver |
+| the reviewer posted **findings** nobody answered | "reply to each unanswered thread (fixed, or why not)" | a reply ON each thread |
+
+**The middle row is the one that cost something** (#4730). On 2026-09-18 the reviewer refused for
+quota from 11:39Z, and six pull requests — every one green on `Consolidate test results`, every one
+with auto-merge armed — sat blocked for over four hours reading *"it usually arrives minutes after
+the pull request opens"*. Nothing was arriving. There were no findings to answer, and no push,
+re-run or new commit could change the answer, because the refusal is about the reviewer and not
+about the pull request.
+
+So a refusal now names itself in all three places a reader looks — the run's headline
+(`RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)`), the step summary's
+heading, and the *To go green* line, which for a refusal says explicitly that pushing, re-running
+and replying all leave it exactly where it is.
+
+🚨 **And the run no longer WAITS for it.** `waiting_would_help` existed for a real case — the
+reviewer's own event cannot start an evaluation here, so a review that raises no findings needs a
+bounded wait to be seen at all — but it asked *"does the reason contain `has not landed`?"*, and the
+refusal reason is spelled *"the automatic review has not landed — the reviewer posted, but not a
+review: …"*. So `--wait-for-review 15` slept a quarter of an hour printing *"waiting for the
+automatic review"* at a reviewer that had already answered: **it said no.** Nothing arrives in that
+window by construction, the run then contradicts its own summary, and it spends a runner doing it.
+That is the same defect as the guidance line, one layer down, and it is why the discriminator has to
+be the field rather than the prose.
+
+🚨 **The VERDICT did not change and is not meant to.** A refusal was red before and is red now; the
+check still fails in the safe direction, and the remedy is still a maintainer's. `refused` is a
+field on the verdict rather than a substring of the reason text, for the reason this page's own
+header gives about presentation-keyed reading — and the self-test asserts what the reader is *told*
+(`says` / `never_says`, over the guidance, the summary **and the run headline**), not only what the
+verdict *is*, because that is precisely the half that was wrong while the verdict was right. Each
+half has a negative control: remove the wait's `not verdict.refused` and the refusal-only wait case
+goes red; delete the headline and the refusal case goes red.
+
+**Still open, and deliberately not decided here:** what a structurally unavailable reviewer should
+do to the merge gate — hold as today, retry on a schedule once quota resets, or a time-boxed
+maintainer waiver. That is a policy call (#4730's second ask), and naming the state does not make
+it.
+
 ## The waiver
 
 A pull request the reviewer cannot review — a quota refusal, an outage, a change with no reviewable
@@ -229,6 +307,58 @@ maintainer's waiver from an agent's. The label event in the pull request's timel
   Read that file's diff yourself.
 - **Pull requests into other branches.** The ruleset reviews only the default branch, so a pull
   request into another branch reads red; the check is not required there.
+- 🚨 **Every other repository in the fleet.** This check exists here and nowhere else. See below.
+
+## 🚨 This is a CORE-ONLY gate, and the rest of the fleet shows what that costs
+
+Measured 2026-09-19, from `branches/main/protection` and every active ruleset:
+
+| repo | mechanism | requires `Automatic review answered`? | carries `review-answered.yml`? |
+|---|---|---|---|
+| MeshWeaver | ruleset `2128472` | **yes** | yes |
+| MeshWeaver.Plugins | classic, 8 contexts | no | **no** |
+| MeshWeaver.Reinsurance | classic, 6 contexts | no | no |
+| MeshWeaver.Crm | classic, 6 contexts | no | no |
+| MeshWeaver.SocialMedia | classic, 7 contexts | no | no |
+| MeshWeaver.Manufacturing | classic, 6 contexts | no | no |
+| MeshWeaver.Education | ruleset, 4 contexts | no | no |
+
+🚨 **MeshWeaver.Plugins is NOT covered**, against the common assumption that it is. Every satellite
+carries a `Copilot review for default branch` ruleset, so the review is *requested* everywhere —
+nothing outside core requires it to be *answered*.
+
+What that produces, over the last 20 merged pull requests of each of six repositories:
+
+| repo | merged sampled | carried findings | merged with ≥1 unanswered |
+|---|---|---|---|
+| MeshWeaver.Reinsurance | 20 | 11 | 7 |
+| MeshWeaver.Crm | 20 | 13 | 11 |
+| MeshWeaver.SocialMedia | 20 | 11 | 10 |
+| MeshWeaver.Manufacturing | 20 | 11 | 9 |
+| MeshWeaver.Education | 20 | 11 | 11 |
+| MeshWeaver.Plugins | 20 | 15 | 7 |
+| **total** | **120** | **72** | **55** |
+
+**In all 55 the ratio is N of N** — not one finding answered on any of them, never a partial. So
+outside core, findings are not *occasionally* missed, they are *structurally not read*: about twice
+the rate this repository measured before the gate landed (32 of 60, above).
+
+It is not cosmetic. On 2026-09-18, five satellite pull requests merged with 13 unanswered findings
+between them. Assessed on the code: **11 of the 13 were real**, and only two could be declined — one
+whose premise `git` itself rules out, one whose failure branch is unreachable. Those 11 reduce to
+**6 distinct defects**, because three were raised twice (independently, on two repositories' copies
+of one file) and three were three sites of one root. **Three of the six are in the platform's own
+canonical `gen-manifests.py`**, replicated byte-identically into four repositories — including a
+`--resolve` that reported `✓ … the merge can be committed` whenever git could not answer. Answered
+and fixed in #4775 after the merges; the remaining vintages in #4777.
+
+**Porting it is a workflow_call lane, never six copies** — the predicate is ~900 lines with its own
+self-test, the settle wait and the event-class concurrency split derived from #4649. Six hand-copies
+is how `gen-manifests.py` reached five vintages (#1426). 🚨 And the rollout order is not optional:
+five of the six use CLASSIC protection, where an *absent* required context blocks every pull request
+in the repository forever (measured on Plugins#1453), so the lane lands observe-only, is watched
+publishing its context on live pull requests in that repo, and only then is the context added.
+Proposed with the full measurement in #4776.
 
 ## Controls
 

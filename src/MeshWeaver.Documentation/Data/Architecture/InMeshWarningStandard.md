@@ -55,7 +55,7 @@ The maintainer chose two over one combined gate, and the split is by diagnostic 
 
 - **`warnings`** — everything except `CS1591`. `CS0219` (an assigned-but-unused local), `CS1574` /
   `CS1584` (a `cref` that resolves to nothing), `CS1570` (badly formed XML in a doc comment),
-  `CS1573` (a `<param>` tag naming a parameter that does not exist). These are latent bugs, or doc
+  `CS1572` (a `<param>` tag naming a parameter that does not exist). These are latent bugs, or doc
   comments that EXIST and are WRONG — the exact breakage a cross-repo move causes.
 - **`doc-comments`** — `CS1591` alone. Documentation debt: nothing is broken, the member simply is
   not described.
@@ -64,9 +64,21 @@ They are evaluated, reported and failed **independently**, so paying down (or ca
 never in the same verdict as a latent bug, and a missing doc comment can never be the reason an
 unrelated change cannot merge.
 
-> 🚨 Only `CS1591` is documentation debt. `CS1574` and `CS1573` look like doc diagnostics and are
+> 🚨 Only `CS1591` is documentation debt. `CS1574` and `CS1572` look like doc diagnostics and are
 > not — a `cref` pointing at a type that moved is a broken link in shipped API documentation, and it
 > belongs with the bugs.
+>
+> 🚨 **`CS1572` and `CS1573` are opposites, and this page said the second where it meant the
+> first.** `CS1572` is a `<param>` tag naming a parameter that **does not exist** — a tag that is
+> WRONG, so it belongs with the bugs and does reach the `warnings` ratchet. `CS1573` is a parameter
+> with **no** `<param>` tag — doc COMPLETENESS, suppressed for `src/` by `Directory.Build.props`
+> and therefore in `CompileWarning.NotReported`, where `EmitPipeline.Collect` filters it out before
+> the inventory is built. **A `CS1573` Roslyn emits can never enter the inventory, so it can never be
+> a NEW warning against either ratchet** — which is what the *Doc COMPLETENESS* row of the parity
+> table below records. (The guarantee is that filter, not the classifier: `WarningClasses.Of` is not
+> an enumerated list, so a `CS1573` written into a baseline BY HAND classifies as `Real` and fails as
+> a STALE entry.) Naming it here sent a reader after a code that is structurally unable to appear,
+> and never named the one that actually matters (#4737).
 
 ## The baseline, and why it can only shrink
 
@@ -147,10 +159,27 @@ families in it were never the content's to fix, because **a raw `CSharpCompilati
 families. `CompileWarning.NotReported`, applied at `EmitPipeline.Collect`, is the in-mesh compile's
 `NoWarn`:
 
-| Family | Codes | Suppressed for `src/` by | Entries this retired in MeshWeaver.Plugins |
+| Family | Codes | Not reported for CORE's `src/` because | Entries this retired in MeshWeaver.Plugins |
 |---|---|---|---|
-| **Reference-set skew** | `CS1701`, `CS1702` | the .NET SDK itself — `Microsoft.NET.Sdk.CSharp.props`: `<NoWarn Condition=" '$(NoWarn)' == '' ">1701;1702</NoWarn>` | **95** |
-| **Doc COMPLETENESS** | `CS1591`, `CS1573`, `CS1712` | core's own `Directory.Build.props`, mirrored in `MeshWeaver.Plugins/src/` and `MeshWeaver.SocialMedia/src/` | **115** |
+| **Reference-set skew** | `CS1701`, `CS1702` | a project build's reference set is coherent — measured, not assumed (below) | **95** |
+| **Doc COMPLETENESS** | `CS1591`, `CS1573`, `CS1712` | core's own `Directory.Build.props` `NoWarn`, mirrored in `MeshWeaver.Plugins/src/` and `MeshWeaver.SocialMedia/src/` | **115** |
+
+> 🚨 **The `CS1701` half of that parity is a MEASUREMENT, not core's `NoWarn` — and mistaking one
+> for the other is the trap.** The .NET SDK does ship the default
+> (`Microsoft.NET.Sdk.CSharp.props`: `<NoWarn Condition=" '$(NoWarn)' == '' ">1701;1702</NoWarn>`),
+> but the condition is `'$(NoWarn)' == ''` and core's `Directory.Build.props` **sets** `NoWarn`
+> before it evaluates, so the default never applies here. Measured 2026-09-18, core's effective
+> `$(NoWarn)`: `649;CA2255;NU5104;NU1510;CS1591;CS1573;CS1712;;NU1608` — no 1701, no 1702. What
+> makes `src/` clean anyway is that MSBuild's reference resolution hands `csc` a **coherent** set:
+> a 28-project `-c Release -warnaserror` build over CORE's Rx-referencing assemblies emits
+> `0 Warning(s)` and zero `CS1701`. 🚨 That measurement is core's and the claim goes no wider —
+> MeshWeaver.Plugins and the satellites were not built for it, and whether each reports `CS1701`
+> turns on whether its own `Directory.Build.props` SETS `$(NoWarn)` (killing the SDK default) or
+> appends to it. The in-mesh compile assembles its reference set by hand (the
+> host's `TRUSTED_PLATFORM_ASSEMBLIES`) and is therefore shown a skew a project build never
+> presents. The SDK line *does* govern `compile-check.py`'s synthesized projects, which carry no
+> `Directory.Build.props` and append to `$(NoWarn)` rather than setting it — which is why
+> `PARITY_NOWARN` there is `CS1591;CS1573;CS1712` and deliberately omits 1701/1702.
 
 `CS1701` is *"assuming assembly reference 'System.Linq.Expressions, Version=8.0.0.0' used by
 'System.Reactive' matches identity '…Version=10.0.0.0'"* — `System.Reactive` is built against .NET 8
@@ -159,8 +188,9 @@ SET, not of the content: no author could fix it, no `#pragma` belonged in their 
 platform bump could add or remove 95 baseline lines with no content change at all. **This codebase
 had already made exactly this call one lane over** — `ProjectFile` seeds `NoWarn = 1701;1702` for the
 `build-project` verb, because omitting it *"turned five otherwise-clean projects red on warnings the
-SDK does not report"*. The in-mesh compile was simply the last compiler in the fleet still reporting
-them.
+SDK does not report"*. The in-mesh compile was reporting a family core's own project build does not
+— which is the measured statement; "the last compiler in the fleet still reporting them" is the
+unmeasured one, and the satellites were never built to check it.
 
 > 🚨 **This is a PARITY list, not an escape hatch.** A code that is NOT suppressed for `src/` must
 > never be added to it; it gets fixed, or it is recorded as debt in a baseline. In particular the doc
@@ -191,6 +221,46 @@ produce them.
 > costs one log line and leaves the door open for a tree that chooses to enforce doc completeness;
 > removing it would be a separate change across six repos' lane inputs.
 
+### Core's two baselines are now EMPTY — and that is the strictest setting, not the weakest
+
+*2026-09-18.* Trimming the inert lines is the second half of the parity change, and core's two
+files were the last place in this repo still carrying any. Measured at `e8fce8130d`, before the
+trim, with `MW_LOG_LEVEL=Information`:
+
+| tree | compiled types | warning occurrences | INERT entries | `warnings` enforced against | `doc-comments` enforced against |
+|---|---|---|---|---|---|
+| `Doc` (`.github/doc-gate-warnings.allow`) | 4 of 4 | **0** | 7 | **0** | **0** |
+| `samples/Graph/Data` (`.github/samples-gate-warnings.allow`) | 27 of 28 | **0** | 30 | **0** | **0** |
+
+All **37** entries were `CS1591` or `CS1701`, so `WarningBaseline.For` had already excluded every
+one of them: both ratchets were enforcing against **zero** entries *before* the trim, and nothing
+either file said was being relied on by anything. What the trim changes is the log — the run no
+longer prints an `INERT … Delete the lines.` line it printed on every bake — and the files now say
+what is true.
+
+🚨 **An empty baseline is not a disarmed one.** Omitting `--warning-baseline` is OBSERVE-ONLY; an
+empty FILE tolerates nothing, so any in-mesh warning of any non-suppressed code fails the bake
+immediately. `bake-then-gate.sh` still asserts both `ENFORCED` lines. Core's in-mesh C# is now at
+**zero tolerated warnings over zero warnings REACHING THE RATCHETS** — the state
+`plugin-gate-warnings.allow` reached from the other direction, by fixing 87 sites.
+
+🚨 **"Reaching the ratchets" is not "produced", and the two numbers differ by exactly the parity
+list.** Roslyn still emits `CS1591`/`CS1573`/`CS1712` and `CS1701`/`CS1702` on both trees;
+`CompileWarning.NotReported` drops them in `EmitPipeline.Collect` — the single point every consumer
+reads warnings through — so they never enter the `WarningInventory` the ratchets judge, and the
+zeroes above are counts of REPORTED warnings. The paragraph below is that difference in numbers:
+362 `CS1591` occurrences, emitted and unmeasured.
+`TheRuntimeCompileStaysLenientTest.ACentrallySuppressedCode_IsNotReported` asserts both halves on
+one run — the compiler DID produce the diagnostic, and `Collect` did NOT carry it — and
+`ACodeThatIsNotSuppressed_StillReachesTheGate` is its control, so "nothing was reported" can never
+quietly become "nothing is reported".
+
+🚨 **And the emptiness is not a claim that the doc comments were written.** The 362 `CS1591`
+occurrences over 271 members in 17 sample types are still undocumented; `CS1591` is simply no
+longer measured. Writing them remains worth doing and would change no verdict — which is exactly
+why the trimmed files say so in their own headers, rather than letting a future reader infer that
+a count fell because debt was paid.
+
 ## Quietening the log
 
 The second half of the report. Raw, the samples bake carries 375 warning occurrences; the runtime's
@@ -205,13 +275,24 @@ per-compile cap (`EmitPipeline.MaxReportedWarnings` = 50) would still let a 150-
 3. **Print the shape, not the transcript** — totals, one line per diagnostic id, then only the sites
    a reader has to ACT on (the ones behind a NEW pair).
 
-A green enforced bake is four lines:
+A green enforced bake is four lines. This is the samples tree as it read BEFORE the parity list —
+the shape a repo still carrying debt sees:
 
 ```
 warnings: 375 raw occurrence(s) folded to 272 distinct site(s), over 18 of 27 compiled type(s)
 warnings: by code — CS1591 362× / 271 site(s) / 17 type(s) · CS1701 13× / 1 site(s) / 13 type(s)
 warnings: warnings ratchet — ENFORCED against 13 baseline entr(ies): 0 NEW, 0 stale, 13 known debt, 0 unverifiable
 warnings: doc-comments ratchet — ENFORCED against 17 baseline entr(ies): 0 NEW, 0 stale, 17 known debt, 0 unverifiable
+```
+
+…and the same tree today, with both families retired and the baseline trimmed to nothing. The
+`by code` line is gone because there is nothing to break down, and a zero is still PRINTED — "I
+measured, and it was clean" and "I measured nothing" stay two different sentences:
+
+```
+warnings: 0 raw occurrence(s) folded to 0 distinct site(s), over 0 of 27 compiled type(s)
+warnings: warnings ratchet — ENFORCED against 0 baseline entr(ies): 0 NEW, 0 stale, 0 known debt, 0 unverifiable
+warnings: doc-comments ratchet — ENFORCED against 0 baseline entr(ies): 0 NEW, 0 stale, 0 known debt, 0 unverifiable
 ```
 
 `MW_LOG_LEVEL=Information` restores every distinct site, exactly as it restores every other

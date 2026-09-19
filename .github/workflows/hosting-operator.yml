@@ -65,8 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 28 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 28 (25 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 29 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 29 (26 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -112,6 +112,7 @@ jobs:
           hosting-kv-ensure
           hosting-kv-purge
           hosting-kv-rotate
+          hosting-kv-set
           hosting-pull-secret
           hosting-pv-purge
           hosting-pv-resize
@@ -155,7 +156,29 @@ jobs:
           not_wired=$(mktemp)
           cat > "$not_wired" <<'EOF'
           # command                  why it ships without a plan entry
-          # (none — hosting-kv-rotate moved to the plan list: InstanceActionPlan.RotateRegistryKeySteps emits it)
+          #
+          # (hosting-kv-rotate stood here until it moved up into the plan list:
+          #  InstanceActionPlan.RotateRegistryKeySteps emits it.)
+          #
+          # 🚨 An entry here is NOT the transitional shape of scripts/*.allow — it does not expire
+          # with the pull request that adds it. It stands until the command becomes REACHABLE, and
+          # the change that makes it reachable is the one that moves the line up into the plan list.
+          #
+          # hosting-db-release ships from MeshWeaver#4436 (the operator image carries bin/ whole) and
+          # is EXERCISED: the behaviour suite drives it against test/stubs/db-release, so deleting
+          # the script still reds this gate rather than passing unnoticed. What it is not yet is
+          # REACHABLE — no step in MeshWeaver.Plugins' InstanceActionPlan.cs emits it, so no
+          # InstanceAction can run it on a cluster. Naming it in the plan list above would assert a
+          # wiring that does not exist and make that list's "keep in step with InstanceActionPlan.cs"
+          # false in the direction the list cannot check.
+          #
+          # BEFORE IT IS WIRED, both must be true: MeshWeaver.Plugins#1937 ("Deploy database
+          # release") merges, which is the change that adds the step emitting this command — it is
+          # held as a draft until #4436 merges and seals; and the widened ClusterRole its
+          # platform-layer preflight reads (nodes + customresourcedefinitions, MeshWeaver#4722) has
+          # reached the cluster through Systemorph/Memex's helm-release lane, since a Job never
+          # widens its own RBAC. The line moves into the plan list above in that same change.
+          hosting-db-release         #4436 — ships and is behaviour-tested, but no plan step emits it yet: the plan half is draft Plugins#1937
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
@@ -196,7 +219,7 @@ jobs:
         # through to a REAL az/kubectl on a runner that has one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done

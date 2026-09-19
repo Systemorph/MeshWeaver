@@ -1,0 +1,19 @@
+# The zonal Premium SSD v2 class every per-instance database release (deploy/helm-db) names.
+# Cluster-scoped, so installed ONCE per cluster by the platform, never by an instance release.
+# Premium SSD v2 has no host caching and is zonal: the disk lives in the zone of the node that
+# first mounts it (WaitForFirstConsumer), which is why the chart spreads a database's instances
+# across zones instead of letting both land in one.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: memex-db-premiumv2
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: PremiumV2_LRS
+  cachingMode: None
+  # Baseline for a 32 GiB disk is 3,000 IOPS / 125 MB/s; raise per class if a database needs it.
+  DiskIOPSReadWrite: "3000"
+  DiskMBpsReadWrite: "125"
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

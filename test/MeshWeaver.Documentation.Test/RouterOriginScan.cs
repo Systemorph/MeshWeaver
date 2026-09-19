@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -33,12 +34,44 @@ internal static class RouterOriginScan
     internal static readonly Regex CallMarker =
         new(@"\.\s*(?:(Post)|Observe)\s*(?:<([^<>()]*)>\s*)?\(", RegexOptions.Compiled);
 
-    /// <summary>A call to ANY of the three seams. All count: a site that hops for reads, for node
+    /// <summary>
+    /// 🚨 <b>THE seam vocabulary — written ONCE here and nowhere else.</b> Every matcher below is
+    /// built from it, and so is the guard that holds the runtime <c>ROUTER_TRAFFIC ORIGIN</c> line
+    /// to it (<c>RouterOriginAdviceNamesEverySeamGuard</c>).
+    ///
+    /// <para>It was three separate alternations until
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4697">#4697</see>, and the log
+    /// line that TELLS a violating caller which seam to use was a fourth list, in another project,
+    /// that nothing compared against the other three. It spent the #4614 release naming two of the
+    /// three — and a reader who followed it for a SUBSCRIPTION would have hopped onto
+    /// <c>ReadIssuingHub()</c>, which registers no handlers, killing the data along with the
+    /// reports. One list cannot drift from itself.</para>
+    ///
+    /// <para><b>What this does NOT make impossible, stated rather than implied.</b> A fourth seam
+    /// that is never added here is invisible to every consumer of this file — the two ratchets would
+    /// not read it as a declaration and the ORIGIN guard would not require the line to name it. What
+    /// the single list buys is that a seam registered for the ratchets CANNOT be missing from the
+    /// advice: the guard reds until the line names it.</para>
+    /// </summary>
+    /// <remarks>
+    /// 🚨 <c>ImmutableArray</c>, not <c>string[]</c>, and that is not style. <see cref="Seams"/> is
+    /// computed ONCE from this list at type-init while the guards enumerate it later, so a mutable
+    /// array would let an in-process write leave the matchers and the printed advice disagreeing
+    /// about what a seam is — the single vocabulary would be single in name only. It is also the
+    /// repo's collections policy (Copilot on #4712).
+    /// </remarks>
+    internal static readonly ImmutableArray<string> SeamNames =
+        ["NodeOperationIssuingHub", "ReadIssuingHub", "StreamSubscribingHub"];
+
+    /// <summary>The seam names as a regex alternation — the one substring every matcher below shares.</summary>
+    private static readonly string Seams = string.Join("|", SeamNames);
+
+    /// <summary>A call to ANY of the seams. All count: a site that hops for reads, for node
     /// lifecycle or for a stream SUBSCRIPTION is off the router either way — each returns the hub
     /// unchanged unless its address type is the mesh type, so writing one is the author's statement
     /// that the receiver can be the router (#4614 added the third).</summary>
     internal static readonly Regex SeamCall =
-        new(@"(?:NodeOperationIssuingHub|ReadIssuingHub|StreamSubscribingHub)\s*\(\s*\)", RegexOptions.Compiled);
+        new($@"(?:{Seams})\s*\(\s*\)", RegexOptions.Compiled);
 
     /// <summary>
     /// A seam call, matched so that the RECEIVER it is called on can be read off the text before it.
@@ -56,7 +89,7 @@ internal static class RouterOriginScan
     /// closed for the sibling guard, and it was found the same way here (Copilot on #4487).</para>
     /// </summary>
     internal static readonly Regex SeamCallMarker =
-        new(@"\.\s*(?:NodeOperationIssuingHub|ReadIssuingHub|StreamSubscribingHub)\s*\(\s*\)", RegexOptions.Compiled);
+        new($@"\.\s*(?:{Seams})\s*\(\s*\)", RegexOptions.Compiled);
 
     /// <summary>A name bound to a seam call — <c>var issuingHub = hub.NodeOperationIssuingHub();</c>
     /// and the lazily-cached property spelling both land here.</summary>
@@ -66,7 +99,7 @@ internal static class RouterOriginScan
     /// </remarks>
     internal static readonly Regex SeamAlias =
         new(@"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=>|\?\?=|=)\s*[^;{}()]*?"
-            + @"(?:NodeOperationIssuingHub|ReadIssuingHub|StreamSubscribingHub)\s*\(\s*\)", RegexOptions.Compiled);
+            + $@"(?:{Seams})\s*\(\s*\)", RegexOptions.Compiled);
 
     internal static readonly Regex BareIdentifier =
         new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);

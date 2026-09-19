@@ -1730,6 +1730,96 @@ else
 fi
 rm -rf "$_pf_dir"
 
+echo
+echo "── hosting-kv-set: pasted values reach the vault through --file, never argv, never a log ──"
+# The onboarding secret step (MeshWeaver.Plugins): a person pastes a value on the control instance,
+# the mesh hands it to the Job as HOSTING_SECRETS (base64 JSON), and this step writes it. The stubs
+# record every argv (az) and answer a synced Secret (kubectl), so the decisions — write through
+# --file, every named object or nothing, never print, wait by hash — are asserted here.
+KVS_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-set" && pwd)"
+kvs() {  # kvs [env…] -- <args…> — runs against a fresh state dir; sets $_kvs_out $_kvs_rc $_kvs_log $_kvs_state
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _kvs_state="$(mktemp -d)"
+  _kvs_out="$(env "${envs[@]}" PATH="$KVS_STUBS:$PATH" HOSTING_KVS_STATE="$_kvs_state" HOSTING_KV_SYNC_ATTEMPTS=2 HOSTING_KV_SYNC_INTERVAL=0 hosting-kv-set "$@" 2>&1)"; _kvs_rc=$?
+  _kvs_log="$(cat "$_kvs_state/az.log" 2>/dev/null || true)"
+}
+KVS_SECRET="pasted-client-secret-NEVER-PRINTED"
+KVS_JSON="$(printf '{"acme-Authentication-Microsoft-ClientSecret":"%s","acme-Email-ClientSecret":"second-value-NEVER-PRINTED"}' "$KVS_SECRET" | base64 | tr -d '\n')"
+
+# Two objects, both values present → both written through --file, read back, reported by name.
+kvs HOSTING_SECRETS="$KVS_JSON" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --object acme-Email-ClientSecret
+[ "$_kvs_rc" -eq 0 ] && ok "kv-set writes every named object" || bad "kv-set writes" "exited ${_kvs_rc}: ${_kvs_out}"
+[ "$(cat "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" 2>/dev/null)" = "$KVS_SECRET" ] && ok "…byte-for-byte, no trailing newline" || bad "value stored" "vault got: '$(cat "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" 2>/dev/null)'"
+[ "$(cat "$_kvs_state/set.acme-Email-ClientSecret" 2>/dev/null)" = "second-value-NEVER-PRINTED" ] && ok "…the second object too" || bad "second value" "vault got: '$(cat "$_kvs_state/set.acme-Email-ClientSecret" 2>/dev/null)'"
+case "$_kvs_out" in *NEVER-PRINTED*) bad "kv-set never prints a value" "it did: ${_kvs_out}" ;; *) ok "kv-set never prints a value" ;; esac
+case "$_kvs_log" in *NEVER-PRINTED*) bad "…and never puts one on an az command line" "az saw: ${_kvs_log}" ;; *) ok "…and never puts one on an az command line" ;; esac
+case "$_kvs_log" in *"--file"*) ok "…the write goes through --file" ;; *) bad "through --file" "az saw: ${_kvs_log}" ;; esac
+case "$_kvs_out" in *"::hosting:: kv_set=acme-Authentication-Microsoft-ClientSecret:"*"::hosting:: kv_set=acme-Email-ClientSecret:"*"::hosting:: kv_set_count=2"*) ok "…reported by NAME with a hash prefix, and the count" ;; *) bad "kv_set facts" "said: ${_kvs_out}" ;; esac
+rm -rf "$_kvs_state"
+
+# A named object with NO value → nothing written at all, the missing one named.
+kvs HOSTING_SECRETS="$KVS_JSON" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --object acme-Missing
+[ "$_kvs_rc" -ne 0 ] && ok "an object the request carries no value for refuses" || bad "missing value refuses" "exited 0: ${_kvs_out}"
+case "$_kvs_out" in *"acme-Missing"*"Nothing was written"*) ok "…naming it, and stating nothing was written" ;; *) bad "missing message" "said: ${_kvs_out}" ;; esac
+[ ! -f "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" ] && ok "…and the present one was NOT written either (all or nothing)" || bad "all or nothing" "it wrote the present one"
+rm -rf "$_kvs_state"
+
+# An empty value is a missing value.
+kvs HOSTING_SECRETS="$(printf '{"acme-X":""}' | base64 | tr -d '\n')" -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "an EMPTY value refuses like a missing one" || bad "empty refuses" "exited 0"
+rm -rf "$_kvs_state"
+
+# No HOSTING_SECRETS at all → refuse, naming the contract.
+kvs -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "no HOSTING_SECRETS is a refusal, not a no-op" || bad "no env refuses" "exited 0"
+case "$_kvs_out" in *"HOSTING_SECRETS is empty"*) ok "…naming the variable" ;; *) bad "env message" "said: ${_kvs_out}" ;; esac
+rm -rf "$_kvs_state"
+
+# Not base64 / not an object → refuse.
+kvs HOSTING_SECRETS='not base64!' -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "garbage HOSTING_SECRETS refuses" || bad "garbage refuses" "exited 0"
+rm -rf "$_kvs_state"
+kvs HOSTING_SECRETS="$(printf '["a"]' | base64 | tr -d '\n')" -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "a JSON array (not an object) refuses" || bad "array refuses" "exited 0"
+rm -rf "$_kvs_state"
+
+# The vault refuses the write → RED, names the object and the role, prints nothing.
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SET_FAIL=acme-Authentication-Microsoft-ClientSecret -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret
+[ "$_kvs_rc" -ne 0 ] && ok "a vault that refuses the write fails the step" || bad "set fail" "exited 0"
+case "$_kvs_out" in *"Key Vault Secrets Officer"*) ok "…naming the role the operator identity needs" ;; *) bad "role named" "said: ${_kvs_out}" ;; esac
+case "$_kvs_out" in *NEVER-PRINTED*) bad "…without printing the value on the failure path" "it did: ${_kvs_out}" ;; *) ok "…without printing the value on the failure path" ;; esac
+rm -rf "$_kvs_state"
+
+# --wait: the synced Secret carries the new value → done; carries a stale one → RED after the attempts.
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SYNCED="$KVS_SECRET" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --namespace acme --wait acme-Authentication-Microsoft-ClientSecret=acme-portal-keyvault/Authentication__Microsoft__ClientSecret
+[ "$_kvs_rc" -eq 0 ] && ok "kv-set waits for the synced Secret and returns when it carries the value" || bad "wait ok" "exited ${_kvs_rc}: ${_kvs_out}"
+case "$_kvs_out" in *"::hosting:: kv_synced=acme-Authentication-Microsoft-ClientSecret"*) ok "…reporting the sync" ;; *) bad "kv_synced fact" "said: ${_kvs_out}" ;; esac
+case "$(cat "$_kvs_state/kubectl.log")" in *"-n acme get secret acme-portal-keyvault"*) ok "…by reading the named Secret in the namespace" ;; *) bad "kubectl read" "kubectl saw: $(cat "$_kvs_state/kubectl.log")" ;; esac
+rm -rf "$_kvs_state"
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SYNCED="stale" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --namespace acme --wait acme-Authentication-Microsoft-ClientSecret=acme-portal-keyvault/Authentication__Microsoft__ClientSecret
+[ "$_kvs_rc" -ne 0 ] && ok "a Secret that never picks the value up is a RED step (the vault holds it, the pods do not)" || bad "wait stale" "exited 0"
+case "$_kvs_out" in *"The vault HOLDS the new value"*) ok "…saying exactly what state that leaves" ;; *) bad "stale message" "said: ${_kvs_out}" ;; esac
+[ -f "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" ] && ok "…and the value WAS written before the wait" || bad "written before wait" "it was not"
+rm -rf "$_kvs_state"
+
+# Dry run: narrates, writes nothing, needs no HOSTING_SECRETS.
+kvs HOSTING_DRY_RUN=true -- --vault Systemorph --object acme-X --namespace acme --wait acme-X=s/k
+[ "$_kvs_rc" -eq 0 ] && ok "a dry run needs no values and succeeds" || bad "dry run" "exited ${_kvs_rc}: ${_kvs_out}"
+case "$_kvs_out" in *"would set acme-X"*"::hosting:: kv_set_count=1"*) ok "…narrating the object and the count" ;; *) bad "dry facts" "said: ${_kvs_out}" ;; esac
+[ -z "$_kvs_log" ] && ok "…and az saw nothing" || bad "dry az" "az saw: ${_kvs_log}"
+rm -rf "$_kvs_state"
+
+refuses_hard "kv-set needs --vault"                       "missing required flag --vault"  hosting-kv-set --object o
+refuses_hard "kv-set needs --object"                      "missing required flag --object" hosting-kv-set --vault V
+refuses_hard "kv-set refuses an object with a metacharacter" "is not a plain name"        hosting-kv-set --vault V --object 'o;id'
+refuses_hard "kv-set refuses a vault with a metacharacter"   "is not a plain name"        hosting-kv-set --vault 'V`id`' --object o
+refuses_hard "kv-set refuses a malformed --wait"          "is not <object>=<syncedSecret>/<configKey>" hosting-kv-set --vault V --object o --namespace n --wait 'o=broken'
+refuses_hard "kv-set refuses --wait without --namespace"  "--wait needs --namespace"       hosting-kv-set --vault V --object o --wait o=s/k
+refuses_hard "kv-set refuses a --wait for an object it does not set" "which no --object writes" hosting-kv-set --vault V --object o --namespace n --wait other=s/k
+refuses_hard "kv-set rejects unknown flags"               "unknown argument"               hosting-kv-set --vault V --object o --nope 1
+unset _kvs_out _kvs_rc _kvs_log _kvs_state KVS_JSON KVS_SECRET
+
 # ── every kind the CHART renders is writable by the operator's ClusterRole ─────────────────────
 # core #3774 rendered a PodDisruptionBudget; the role could only read them; the next Reconcile of
 # memex failed inside helm. A chart change that renders a new kind lands with its grant, or this
@@ -1740,6 +1830,59 @@ if [ "$ck_rc" -eq 0 ]; then
 else
   bad "every kind the chart renders is writable by operator-rbac.yaml" "$ck_out"
 fi
+
+# ── hosting-db-release: DENIED and ABSENT are different answers (MeshWeaver#4722) ────────────────
+#
+# 🚨 The defect these pin. The platform-layer preflight reads two CLUSTER-SCOPED things — the CNPG
+# CRD and whether a `workload=db` node pool exists. The probes were written `2>/dev/null`, which
+# discards the reason, so a Forbidden (the operator's ClusterRole lacking the grant) came out as
+# "a node pool labelled workload=db" being MISSING: the operator announcing a platform layer is
+# ABSENT when it was merely NOT PERMITTED TO LOOK, sending the reader off to provision a pool that
+# already exists. Same shape as the `Not found` that closed #1391 and was re-filed as #3883.
+#
+# The grant exists now, so these do not guard today's cluster — they guard the FUTURE one. An RBAC
+# change that takes the permission away must make the script say "refused", never "absent".
+DBR_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/db-release" && pwd)"
+DBR_CHART="$(mktemp -d)"
+
+# <forbid> <absent> — run the command with the stub in front of PATH, in a subshell so the exported
+# knobs cannot leak into any later test.
+dbr() {
+  ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
+           HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
+    hosting-db-release --namespace pearl --release pearl-db --database pearl )
+}
+
+refuses_hard "a Forbidden on nodes is REFUSED, not an absent node pool" \
+  "REFUSED, not absent" dbr "nodes" ""
+refuses_hard "a Forbidden on the CNPG CRD is REFUSED, not an absent operator" \
+  "REFUSED, not absent" dbr "crd" ""
+refuses_hard "an EMPTY node list is still ABSENT — the discrimination cuts both ways" \
+  "lacks the database platform layer" dbr "" "nodes"
+refuses_hard "an absent CRD is still ABSENT" \
+  "lacks the database platform layer" dbr "" "crd"
+
+# 🚨 THE CONTROL THAT MATTERS, and the one the phrase checks above cannot make: a refusal must not
+# ALSO claim the layer is absent. Reporting both would restore the very confusion — the reader still
+# goes and provisions a node pool — while every "does it say REFUSED" assertion stayed green.
+_dbr_out="$(dbr "nodes" "" 2>&1)"
+case "$_dbr_out" in
+  *"lacks the database platform layer"*)
+    bad "a Forbidden never also claims the platform layer is absent" "it said BOTH: ${_dbr_out}" ;;
+  *"REFUSED, not absent"*)
+    ok  "a Forbidden never also claims the platform layer is absent" ;;
+  *)
+    bad "a Forbidden never also claims the platform layer is absent" "said neither: ${_dbr_out}" ;;
+esac
+
+# And the happy path reaches PAST the preflight — otherwise every assertion above would pass on a
+# command that refuses unconditionally, which is the "guard that checked nothing" shape.
+_dbr_ok="$(dbr "" "" 2>&1)"
+case "$_dbr_ok" in
+  *"REFUSED, not absent"*|*"lacks the database platform layer"*)
+    bad "a healthy platform layer passes the preflight" "it refused: ${_dbr_ok}" ;;
+  *) ok "a healthy platform layer passes the preflight" ;;
+esac
 
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
 # The manifest lives three directories away from the scripts and is reviewed separately; twice a

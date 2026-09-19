@@ -157,9 +157,11 @@ configures no container.
 | `WithGrafana(baseUrl)` | `GrafanaBaseUrl` | — | — |
 | `WithDatabase(database, server, username, host, port, connectionSecret)` | `Database`, `DatabaseServer`, `DatabaseUsername`, `DatabaseHost`, `DatabasePort`, `DatabaseConnectionSecret` | `config.memex_migration.MEMEX_*`, `config.memex_portal.MEMEX_*` | `MEMEX_DATABASENAME`, `MEMEX_HOST`, `MEMEX_PORT`, `MEMEX_USERNAME`, `MEMEX_JDBCCONNECTIONSTRING` (Helm only) |
 | `WithInClusterPostgres(enabled)` | `InClusterPostgres` | `postgres.enabled` | — |
+| `WithInClusterDatabase(release, instances, size, storageClass)` | `InClusterDatabase` | `database.release`, `database.name` — the database itself is a second release, see [InClusterDatabases](/Doc/Architecture/InClusterDatabases) | `MEMEX_HOST`, `MEMEX_USERNAME` — the release primary and its owner |
 | `WithImage(repository, tag, pullSecret, migrationRepository)` | `ImageRepository`, `PinnedImageTag`, `ImagePullSecret`, `MigrationImageRepository` | `portal.image`, `portal.imagePullSecret`, `migration.image`, `selfUpdate.registry` | — |
 | `WithPinnedImageTag(tag)` | `PinnedImageTag` | `portal.image` (the tag; the pin IS the roll) | — |
-| `WithUpdatePolicy(policy)` | `UpdatePolicy` | — (the self-updater reads the record) | — |
+| `WithUpdatePolicy(policy)` | `UpdatePolicy` | `config.memex_portal.SelfUpdate__DefaultPolicy` (seeds a NEW install's `Admin/UpdatePolicy`; the self-updater reads the record thereafter) | `SelfUpdate__DefaultPolicy` |
+| `WithUpdatePattern(pattern)` | `UpdatePattern` | `config.memex_portal.SelfUpdate__DefaultPattern` (seeds a NEW install's pattern under Continuous, e.g. `3.0.0-ci*`) | `SelfUpdate__DefaultPattern` |
 | `WithModuleUpdatePolicy(policy)` | `ModuleUpdatePolicy` | — (rendered into the portal's config) | `PluginCatalog__DefaultUpdatePolicy` |
 | `WithMinRollInterval(interval)` | `MinRollInterval` | `config.memex_portal.SelfUpdate__MinRollInterval` | `SelfUpdate__MinRollInterval` |
 | `WithAutoRecycleOnStaleBuild(enabled)` | `AutoRecycleOnStaleBuild` | `config.memex_portal.Modules__AutoRecycleOnStaleBuild` | `Modules__AutoRecycleOnStaleBuild` |
@@ -274,6 +276,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `DatabasePort` | Database port | Datenbank-Port |
 | `DeploymentContent` | `DatabaseUsername` | Database user | Datenbank-Benutzer |
 | `DeploymentContent` | `InClusterPostgres` | Run an in-cluster Postgres (self-host only) | In-Cluster-Postgres betreiben (nur Selbst-Hosting) |
+| `DeploymentContent` | `InClusterDatabase` | The instance's own database release (in-cluster, CloudNativePG) | Eigenes Datenbank-Release der Instanz (im Cluster, CloudNativePG) |
 | `DeploymentContent` | `MigrationImageRepository` | Migration image repository — blank derives it from the portal's | Repository des Migrations-Images — leer leitet es vom Portal ab |
 | `DeploymentContent` | `HttpPort` | HTTP port | HTTP-Port |
 | `DeploymentContent` | `Resources` | Resources (RAM / CPU) | Ressourcen (RAM / CPU) |
@@ -408,6 +411,10 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `HostingOperatorSpec` | `Environment` | Job environment (KEY=VALUE) | Job-Umgebung (KEY=VALUE) |
 | `HostingOperatorSpec` | `Executor` | Executor: Job (in-cluster operator Job) or Actions (aks-ops.yml through the GitHub App) | Ausführung: Job (Operator-Job im Cluster) oder Actions (aks-ops.yml über die GitHub-App) |
 | `HostingOperatorSpec` | `Maintainer` | Maintainer: the one user id that may approve its own request | Maintainer: die eine Benutzer-ID, die den eigenen Antrag genehmigen darf |
+| `InClusterDatabaseSpec` | `Release` | Database release name — blank derives {namespace}-db | Name des Datenbank-Releases — leer leitet {namespace}-db ab |
+| `InClusterDatabaseSpec` | `Instances` | Instances (primary + standbys, one per zone) | Instanzen (Primär + Standby, eine pro Zone) |
+| `InClusterDatabaseSpec` | `Size` | Volume size per instance | Volume-Größe pro Instanz |
+| `InClusterDatabaseSpec` | `StorageClass` | Storage class — blank uses the platform's zonal Premium SSD v2 class | Storage-Klasse — leer nutzt die zonale Premium-SSD-v2-Klasse der Plattform |
 | `TelemetrySpec` | `OtlpEndpoint` | OTLP endpoint | OTLP-Endpunkt |
 | `TelemetrySpec` | `OtlpProtocol` | OTLP protocol | OTLP-Protokoll |
 | `DrainSpec` | `DrainSeconds` | Drain ceiling in seconds (termination grace) | Drain-Obergrenze in Sekunden (Beendigungsfrist) |

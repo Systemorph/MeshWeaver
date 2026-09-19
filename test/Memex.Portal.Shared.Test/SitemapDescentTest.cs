@@ -54,9 +54,12 @@ public class SitemapDescentTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task EveryAdmittedPageBelowAPublicRoot_IsPublished_AndNothingElse()
     {
-        var pages = await SeoEndpoints.EnumeratePublished(Mesh)
+        var surface = await SeoEndpoints.EnumeratePublished(Mesh)
             .Timeout(TestTimeouts.Convergence);
-        var paths = pages.Select(p => p.Path).OrderBy(p => p, StringComparer.Ordinal).ToList();
+        // The list means nothing without this: an enumeration that decided nothing produces an
+        // empty one that looks identical to "this portal publishes nothing" (#4751).
+        Assert.Null(surface.Undecided);
+        var paths = surface.Pages.Select(p => p.Path).OrderBy(p => p, StringComparer.Ordinal).ToList();
 
         Assert.Equal(
             ["PublicSpace", "PublicSpace/Guide", "PublicSpace/Guide/Deep", "PublicSpace/Lesson1"],

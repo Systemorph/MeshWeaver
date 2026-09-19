@@ -160,13 +160,24 @@ public sealed class FrameworkReleaseBroadcaster
                     }))
             // A failure BEFORE the per-repo isolation (token mint) is still reporter-class: log it
             // and report every subscriber as un-notified rather than throwing to the caller.
+            //
+            // 🚨 The catch stays broad — every pre-dispatch fault is reporter-class — but the
+            // SENTENCE no longer asserts a mint. It used to say "could not mint a GitHub App token"
+            // for anything that faulted here, which is the same misdirection #4736 is about, one
+            // layer up: a reader sent to the App installation by a message that was only guessing.
+            // The stage now comes from the exception's TYPE, so the label is true by construction.
             .Catch((Exception ex) =>
             {
+                var cause = ex is GitHubAppTokenMintException mint
+                    ? $"the GitHub App installation token could not be minted ({mint.Stage})"
+                    : $"it failed before dispatching ({ex.GetType().Name})";
                 logger?.LogWarning(ex,
-                    "Framework-release broadcast could not mint a GitHub App token — {Count} subscriber(s) "
-                    + "not notified; they will rebake on their own schedule.", repos.Length);
+                    "Framework-release broadcast did not reach its subscribers: {Cause} — {Count} "
+                    + "subscriber(s) not notified; they will rebake on their own schedule.",
+                    cause, repos.Length);
+                var reason = ex is GitHubAppTokenMintException ? "token" : "pre-dispatch";
                 return Observable.Return(new BroadcastOutcome(
-                    [.. repos.Select(r => new RepoDispatch(r, false, $"token: {ex.Message}"))]));
+                    [.. repos.Select(r => new RepoDispatch(r, false, $"{reason}: {ex.Message}"))]));
             });
     }
 

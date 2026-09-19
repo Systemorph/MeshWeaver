@@ -96,18 +96,52 @@ public static class DeploymentPortalConfig
 
     // ───────────────────────────────── database + ports ────────────────────────────────────────
 
-    /// <summary>Database host: the explicit FQDN, else the Azure server's FQDN, else the in-cluster service.</summary>
+    /// <summary>The StorageClass a database release uses when the record names none — installed once per cluster by the platform.</summary>
+    public const string DefaultDatabaseStorageClass = "memex-db-premiumv2";
+
+    /// <summary>The owner role a database release bootstraps when the record names no user.</summary>
+    public const string DatabaseReleaseOwner = "memex";
+
+    /// <summary>
+    /// The instance's own database release name (<see cref="DeploymentContent.InClusterDatabase"/>),
+    /// or null when the record has none: the stated name, else <c>{namespace}-db</c>, else null
+    /// (a release with no name and no namespace is a <see cref="SpecProblems"/> entry, never a guess).
+    /// </summary>
+    public static string? DatabaseRelease(DeploymentContent d) =>
+        d.InClusterDatabase is not { } db ? null
+        : !string.IsNullOrWhiteSpace(db.Release) ? db.Release!.Trim()
+        : !string.IsNullOrWhiteSpace(d.Namespace) ? d.Namespace!.Trim() + "-db"
+        : null;
+
+    /// <summary>The database release's instances (primary + standbys), 2 unless stated.</summary>
+    public static int DatabaseReleaseInstances(DeploymentContent d) => d.InClusterDatabase?.Instances ?? 2;
+
+    /// <summary>The database release's volume size per instance, <c>32Gi</c> unless stated.</summary>
+    public static string DatabaseReleaseSize(DeploymentContent d) =>
+        string.IsNullOrWhiteSpace(d.InClusterDatabase?.Size) ? "32Gi" : d.InClusterDatabase!.Size!.Trim();
+
+    /// <summary>The database release's StorageClass, the platform's unless stated.</summary>
+    public static string DatabaseReleaseStorageClass(DeploymentContent d) =>
+        string.IsNullOrWhiteSpace(d.InClusterDatabase?.StorageClass) ? DefaultDatabaseStorageClass : d.InClusterDatabase!.StorageClass!.Trim();
+
+    /// <summary>
+    /// Database host: the instance's own database release's primary Service (<c>{release}-rw</c>),
+    /// else the explicit FQDN, else the Azure server's FQDN, else the chart's bundled in-cluster service.
+    /// </summary>
     public static string DatabaseHost(DeploymentContent d) =>
-        !string.IsNullOrWhiteSpace(d.DatabaseHost) ? d.DatabaseHost!.Trim()
+        DatabaseRelease(d) is { } release ? release + "-rw"
+        : !string.IsNullOrWhiteSpace(d.DatabaseHost) ? d.DatabaseHost!.Trim()
         : !string.IsNullOrWhiteSpace(d.DatabaseServer) ? d.DatabaseServer!.Trim() + AzurePostgresDomain
         : InClusterPostgresService;
 
     /// <summary>Database port, 5432 unless stated.</summary>
     public static int DatabasePort(DeploymentContent d) => d.DatabasePort ?? 5432;
 
-    /// <summary>Database user, <c>postgres</c> unless stated.</summary>
+    /// <summary>Database user: the stated one, else the database release's owner (<c>memex</c>), else <c>postgres</c>.</summary>
     public static string DatabaseUsername(DeploymentContent d) =>
-        string.IsNullOrWhiteSpace(d.DatabaseUsername) ? "postgres" : d.DatabaseUsername!.Trim();
+        !string.IsNullOrWhiteSpace(d.DatabaseUsername) ? d.DatabaseUsername!.Trim()
+        : d.InClusterDatabase is not null ? DatabaseReleaseOwner
+        : "postgres";
 
     /// <summary>Database name, trimmed ("" when unset).</summary>
     public static string DatabaseName(DeploymentContent d) => (d.Database ?? "").Trim();
@@ -553,6 +587,17 @@ public static class DeploymentPortalConfig
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
+        // 🚨 What a NEW instance STARTS with (maintainer 2026-09-19: "need to put this to the config
+        // where we start"). The record's platform policy and pattern render as the self-updater's
+        // SEED keys: the first creation of Admin/UpdatePolicy copies them, an existing node is never
+        // touched. Absent renders nothing, and nothing is the chart's own default (Stable, no
+        // pattern) — a record that says nothing must not narrow or widen what the image ships.
+        // The value binds to an ENUM on the pod (SelfUpdateOptions.DefaultPolicy): a misspelling that
+        // reached the ConfigMap would abort the host in the configuration binder, on the new
+        // ReplicaSet, while the old pods keep serving — the #2210 shape. So the renderer refuses
+        // anything but the three names, and emits them in their canonical casing.
+        Set("SelfUpdate__DefaultPolicy", UpdatePolicyName(d.UpdatePolicy));
+        Set("SelfUpdate__DefaultPattern", string.IsNullOrWhiteSpace(d.UpdatePattern) ? null : d.UpdatePattern!.Trim());
         // The per-PACKAGE default update policy (Auto | Notify | None) the instance seeds onto every
         // install record — separate from the platform's own image policy (Admin/UpdatePolicy) since
         // 2026-09-14. Absent renders nothing: the chart's default keeps the legacy AutoUpdateByDefault
@@ -664,6 +709,27 @@ public static class DeploymentPortalConfig
         if (p.Order is int order) c[$"{section}__Order"] = order.ToString();
         if (flagKey is not null && p.Enabled is bool enabled) c[flagKey] = enabled ? "true" : "false";
     }
+
+    /// <summary>The platform self-update policies the portal binds (<c>UpdatePolicyKind</c>), in the casing the binder reads.</summary>
+    public static readonly IReadOnlyList<string> UpdatePolicyNames = ["Continuous", "Stable", "None"];
+
+    /// <summary>
+    /// The canonical spelling of a record's <see cref="DeploymentContent.UpdatePolicy"/>, or
+    /// <c>null</c> for blank. Any other value throws: it would render into a key the pod binds to an
+    /// enum and abort the new replica's host in the configuration binder.
+    /// </summary>
+    public static string? UpdatePolicyName(string? policy)
+    {
+        if (string.IsNullOrWhiteSpace(policy))
+            return null;
+        var wanted = policy.Trim();
+        return UpdatePolicyNames.FirstOrDefault(n => string.Equals(n, wanted, StringComparison.OrdinalIgnoreCase))
+               ?? throw new InvalidOperationException(
+                   $"updatePolicy '{wanted}' is not a platform update policy — one of {string.Join(", ", UpdatePolicyNames)}. "
+                   + "It renders as SelfUpdate__DefaultPolicy, which the portal binds to an enum: a misspelling would "
+                   + "abort the new replica's host in the configuration binder while the old pods keep serving.");
+    }
+
 }
 
 /// <summary>

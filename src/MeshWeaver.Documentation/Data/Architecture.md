@@ -230,6 +230,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [User Interface](UserInterface)
 - [Blazor Data Binding](BlazorDataBinding)
+- [Editor Field Keys](EditorFieldKeys) — the node-content editor binds by JSON key, so a rename behind `[JsonPropertyName]` or a value the serializer drops discards what an admin set, silently and permanently
 - [Per-Tab Session State](PerTabSessionState) — a node is shared by every tab of one account, so "which page is this viewer on" and "navigate ME there" can never live on one
 - [Blazor Async](BlazorAsync)
 - [Available Controls](UserInterface/AvailableControls)
@@ -247,6 +248,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Catalog Action Identity](CatalogActionIdentity) — a retained click keeps its package when the catalog refreshes
 - [Link Previews](LinkPreviews)
 - [Public Web Presence](PublicWebPresence) — one public host, a body in the first response, a sitemap that descends to every page a stranger may open
+- [A Zero-Root Sitemap Is an Assertion](AZeroRootSitemapIsAnAssertion) — the sitemap projected the tri-state anonymous gate onto a bool because omitting ONE undecidable page states nothing; omitting every root produces a 200 that says the deployment publishes nothing, so an empty surface nothing decided is now 503 and a partial one is still published
 - [Local-First Client & Bootstrap](LocalFirstClient)
 - [PDF Export — one browser, two fidelities](PixelFaithfulExport)
 - [UI Extensibility](UiExtensibility)
@@ -265,6 +267,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
 - [Toolchain Re-evaluation Lane](ToolchainReevaluationLane) — why a toolchain change stopped rebaking the world
 - [The Dependency Record Floor](DependencyRecordFloor) — a record's module entry says "I need at least X", not "I need exactly this build"; the MVID pin that could not converge because Roslyn hashes absolute source paths, the two-replica recompile ping-pong it produced, and the four things the floor deliberately does not relax
+- [Reading a Module's Stamp](ReadingAModuleStamp) — reading ONE assembly-level attribute through reflection resolves the type of ALL of them, so a module with a private dependency killed the version read with a nine-frame reflection stack naming nothing; the metadata read that fixes it, and the measurement (23 of 24 declared modules carry a module attribute — `MeshWeaver.Maps` carries none) that says module-ness is a deployment fact, not a property of the bytes
 - [An Unloadable Build Is Never A Silent Default](AnUnloadableBuildIsNeverASilentDefault) — a recorded build that does not LOAD in this process used to bind the mesh default configuration for the grain's whole life; the always-activated Hosting/PlatformBuilds hub that ran twenty hours without its inbox, fleet watch and build queue while its record read Ok, and the two hypotheses (a missing module, "a restart activates it") the measurements refuted
 - [Producer Determinism of the Dependency Record](ProducerDeterminismOfTheDependencyRecord) — the same content must stamp the same record however the producer reached its bytes; the disk-cache hit that shipped a weaker guard, and why the digest is persisted beside the bytes rather than recomputed
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes
@@ -310,6 +313,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [One Partition, One Bookkeeping](OnePartitionOneBookkeeping) — a partition written by BOTH a GitSync source and the registry installer keeps two independent records of one mesh; the seal reconcile rewrites the content and the next registry delta is computed against a record that stopped describing it, so `Store` on memex became a mix of 1.10.3 and 1.11.1 and `Store/Catalog` parked on `CS1061`. The invariant, why resetting the record or diffing the mesh both produce a ping-pong, and the two gates
 - [CI Content Bake](CiContentBake)
 - [The In-Mesh Warning Standard](InMeshWarningStandard) — in-mesh C# is the only C# no `-warnaserror` build ever sees, and the bake was discarding its warnings too; the two shrink-only ratchets (real warnings, and CS1591 on its own), why the RUNTIME compile must stay lenient — a parked NodeType refuses readiness and stalls a rollout — the three codes the platform itself was emitting into content it does not own (850 raw occurrences → 375), and the observe-only default that lets a repo adopt without going red
+- [A Gate Must Compile the Same Program](AGateMustCompileTheSameProgram) — the pre-push NodeType gate compiled each source file on its own while the mesh concatenates them into one unit, so a nullable-context directive in the first file (in force in the last) reached nothing and the gate was blind to diagnostics the bake then filed under the NodeType's name with no file and no line; what the unit boundary decides, the culture-sensitive `StartsWith` that a naive reproduction gets wrong, and the parity test that caught it
 - [Bundle Delivery Stages](BundleDeliveryStages) — the four independent stages between a merge and a portal serving prebuilt bytes (write · compose · select · deliver), which of #3461 / #3732 / #3768 / #3583 owns each, the instrument that answers for each — and why a reading taken at one stage is not evidence about another
 - [Framework Identity Churn](FrameworkIdentityChurn) — the identity moves on every core COMMIT, not on every content change (43 merges, 5 touching the full-MVID set, ≥18 identities in 24h); the commit sha compiled into `AssemblyInformationalVersion` is why, the falsification test that refuted the local fix (0 of 22 control, 22 of 22 and 21 of 21), and the four costed options with every runner-hour labelled as arithmetic
 - [Prebuilt Bundle Retention](PrebuiltBundleRetention) — the sweep that prunes what CI bakes: where it is registered (and why "zero callers" was measured twice and wrong both times), the deletion default that is `true` in code and `false` in the chart, the report that names its denominator, and the pinned satellite gate the protected set cannot see
@@ -409,16 +413,19 @@ Each theme starts with its introductory page, followed by related architecture t
 - [AKS](DeploymentAKS)
 - [Database Migration Procedure](DatabaseMigrationProcedure) — the schema moves before the image, every roll; the 2026-09-03 wedge behind a 200, the recovery, and why a migration deadlocks under load
 - [Container Apps](DeploymentContainerApps)
+- [In-cluster databases](InClusterDatabases) — each instance's PostgreSQL as its own Helm release: a CloudNativePG Cluster on a dedicated `db` node pool, primary and standby in two zones; why neither the chart's bundled Postgres nor the shared Flexible Server serves a client instance
 - [Local Dev Workflow](LocalDevWorkflow)
 - [Onboarding a New Environment](OnboardingNewEnvironment)
 - [Unclaimed Control-Plane Requests](UnclaimedControlPlaneRequests) — an InstanceAction at version 1 with an empty log means "queued", "nobody is listening" and "the operator died holding it" in the same bytes; the 2026-09-10 measurement, the `Ops/Status` staleness that DOES discriminate, and the acceptance signal that does not exist
 - [Release & Self-Update Strategy](ReleaseStrategy)
+- [Release Channels](ReleaseChannels) — a channel is a named, moving pointer to an immutable release; `latest` is derived and only `stable` is promoted, and a channel names what to SELECT while the selection always resolves to an immutable id that is what gets pinned, recorded and run
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
 - [The Self-Update Registry Credential](SelfUpdateRegistryCredential) — which plugin-registry key may be presented to a container registry: a DECLARED pairing, never host equality or name resemblance; an absent declaration refuses
 - [Self-Update on the Control Lane](SelfUpdateControlLane) — detection stays on the instance, the apply is one signed event to the control instance, the chart's one declaration binds the self-patch Role to the poller's intent; no portal holds a credential that changes the cluster
 - [The Continuous Delivery Contract](ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick
+- [Why the Fleet Stopped Rolling Itself](SelfUpdateFreeze) — the September 2026 measurement: a frozen `heldReason` is history, not a hold; a policy record that lost its own policy; "waiting for an approval" is not a freeze; and the seal that a cross-repo pair skipped
 - [Reading a Bake Publication Receipt](BakePublicationReceipt) — the four target outcomes and what each licenses; the one that had no word rendered "already everywhere" as "reached nothing", and two readers acted on it
 - [CD Reconciles the Plugins Seal](CdReconcilesThePluginsSeal) — a set seals on its trio alone, so it can seal with no `plugins` publication for its framework identity; why the reconciler REPAIRS that rather than the seal forbidding it, and the three probe answers of which only one licenses a re-attempt
 - [The Self-Update Schema Wall](SelfUpdateSchemaWall) — every schema-bumping release is un-takeable by self-update, the stall is invisible, and a promoted tag is not a deployable tag

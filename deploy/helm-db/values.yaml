@@ -1,0 +1,80 @@
+# The per-instance database release (Doc/Architecture/InClusterDatabases).
+#
+# 🚨 A SEPARATE RELEASE ON PURPOSE. The portal chart (deploy/helm) can render its own single-pod
+# Postgres (`postgres.enabled`), bundled INSIDE the portal release — so a portal `helm uninstall`,
+# a failed `--atomic` rollback or a re-render that flips the flag takes the data with it, and a
+# portal roll and a database change are one transaction. This chart is the database alone; the
+# portal release points at it with `database.release: <this release's name>` and reads the
+# credentials CloudNativePG writes into the Secret `<release>-app`.
+#
+# REQUIRES, once per cluster (deploy/aks/manifests/db-platform/README.md): the CloudNativePG
+# operator, the Barman Cloud plugin when backups are on, the `memex-db-premiumv2` StorageClass, and
+# a node pool labelled `workload=db` and tainted `workload=db:NoSchedule`.
+
+# REQUIRED — the database name (the Hosting/Deployment record's `database`). A plain identifier.
+database: ""
+
+# The application role CloudNativePG creates and makes the database OWNER. Its generated password
+# lands in the Secret `<release>-app` (keys: username, password, dbname, host, port, uri, jdbc-uri).
+owner: "memex"
+
+# Primary + standby. With `placement.zoneAntiAffinity: required` each instance needs its OWN zone,
+# so `instances` must not exceed the zones the `db` pool spans (2 in the fleet shape).
+instances: 2
+
+# A CloudNativePG operand image. The `standard` flavour carries pgvector (the `minimal` one does
+# not); Barman Cloud is a PLUGIN since the `system` flavour's deprecation, not part of the image.
+# 🚨 Pin a full `MM.mm-TS-standard-bookworm` tag (or a digest) in an environment overlay — the
+# rolling major tag here moves under a running cluster on the next pod restart.
+image: "ghcr.io/cloudnative-pg/postgresql:17-standard-bookworm"
+
+postgresql:
+  parameters:
+    max_connections: "200"
+    shared_buffers: "1GB"
+
+# Extensions created in the application database right after initdb, as superuser. `vector` is the
+# one the platform needs (embeddings); add others per environment.
+extensions:
+  - vector
+
+storage:
+  size: "32Gi"
+  # Cluster-scoped, installed ONCE by the platform (not by this per-instance release: N releases
+  # cannot all own one cluster-scoped object). Zonal Premium SSD v2 — the disk follows its zone,
+  # which is why the two instances are spread across zones rather than sharing one.
+  storageClass: "memex-db-premiumv2"
+
+# Guaranteed memory (request = limit) — a Postgres that is OOM-killed under a node's memory
+# pressure fails over; one that is merely throttled on CPU does not. Several instances' databases
+# share the `db` pool, so these are per-database, not per-node.
+resources:
+  requests:
+    cpu: "500m"
+    memory: "4Gi"
+  limits:
+    memory: "4Gi"
+
+placement:
+  nodeSelector:
+    workload: db
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: db
+      effect: NoSchedule
+  # required | preferred. `required` = never two instances of THIS database in one zone.
+  zoneAntiAffinity: required
+
+# Continuous WAL archiving + a daily base backup to Azure Blob, through the Barman Cloud plugin,
+# authenticating as the pods' workload identity (no storage key in the cluster).
+backup:
+  enabled: false
+  # https://<account>.blob.core.windows.net/<container> — the release's namespace is appended.
+  destinationPath: ""
+  # The user-assigned identity's CLIENT id, federated for system:serviceaccount:<ns>:<release>
+  # and granted Storage Blob Data Contributor on the container.
+  workloadIdentityClientId: ""
+  retention: "14d"
+  # CloudNativePG cron: SIX fields, seconds first.
+  schedule: "0 0 2 * * *"

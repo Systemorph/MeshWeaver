@@ -247,6 +247,7 @@ public sealed class OciTagLister(
                           + "(SelfUpdate:RegistryValidationUrl), is not configured as one either, so there "
                           + "is no key to present. Add that host to PluginCatalog:Registries with the "
                           + "instance key issued for it. ")
+                    + WhatThisInstallationHolds(ConfiguredHosts(registries), registry, declaredValidator)
                     + "Or set SelfUpdate:Registry back to the upstream Azure Container Registry."));
             }
 
@@ -281,6 +282,79 @@ public sealed class OciTagLister(
                     + "PluginCatalog:Registries:N:Token (or the legacy PluginCatalog:RegistryToken), or "
                     + "through auto-registration with PluginCatalog:BootstrapKey."));
         });
+
+    /// <summary>
+    /// How many plugin-registry hosts a refusal will name before it summarises the rest. A refusal
+    /// is read in a log line and on <c>Admin/UpdatePolicy</c>, so a pathological configuration must
+    /// not be able to grow it without bound.
+    /// </summary>
+    private const int MaxNamedHosts = 8;
+
+    /// <summary>
+    /// 🚨 The sentence that turns "declare the pairing" into a value the operator can WRITE: the
+    /// plugin-registry hosts this installation is configured for, named in the refusal.
+    ///
+    /// <para><b>It names, it never grants.</b> Every branch above has already decided to refuse and
+    /// this only describes what is configured — so an installation with exactly one mount is told
+    /// which host a declaration would name and still refuses until one is declared. That is the
+    /// whole point: the rule the maintainer rejected for #4093 was "one mount carries a key, so
+    /// present it", and naming the host while still requiring the declaration is what a refusal owes
+    /// an operator without becoming that rule. <c>OciTagListerTest</c> pins both halves — the
+    /// host is named AND the key does not leave.</para>
+    ///
+    /// <para>For a declaration that resolved to a host holding no registry this is the
+    /// spot-the-typo line: the operator sees what they declared beside what they actually hold, which
+    /// is the difference between "add a registry" and "fix one character". #4093's own shape — a
+    /// validator declared as <c>https://memex.meshweaver.cloud/api/instances/token</c> against a
+    /// mount at <c>https://memex.meshweaver.cloud</c> — resolves to the same host, so a mismatch
+    /// here is always a real one.</para>
+    /// </summary>
+    private static string WhatThisInstallationHolds(
+        IReadOnlyList<string> hosts, string registry, string? declaredValidator) =>
+        hosts.Count switch
+        {
+            0 => "This installation is configured for no plugin registry whose URL names a host, so "
+                 + "nothing could be declared yet: configure PluginCatalog:Registries with the instance "
+                 + "key issued for the validating portal first. ",
+            _ when declaredValidator is not null =>
+                $"The plugin registr{(hosts.Count == 1 ? "y this installation is" : "ies this installation is")} "
+                + $"configured for {(hosts.Count == 1 ? "is" : "are")} {Name(hosts)} — if the declaration was "
+                + $"meant to name {(hosts.Count == 1 ? "that host" : "one of those")}, correct "
+                + "SelfUpdate:RegistryValidationUrl instead. ",
+            1 => $"This installation is configured for exactly one plugin registry, at {hosts[0]}. If that "
+                 + $"is the portal '{registry}' validates this installation's key at, {hosts[0]} is the host "
+                 + "to declare — holding the key is not itself the declaration, and the check stays refused "
+                 + "until SelfUpdate:RegistryValidationUrl names it. ",
+            _ => $"This installation is configured for plugin registries at {Name(hosts)} — the declaration "
+                 + $"must name whichever of them '{registry}' validates this installation's key at. ",
+        };
+
+    /// <summary>The named hosts, with the overflow counted rather than dropped, so the list can never
+    /// read as complete when it is not. Pure.</summary>
+    private static string Name(IReadOnlyList<string> hosts) =>
+        hosts.Count <= MaxNamedHosts
+            ? string.Join(", ", hosts)
+            : string.Join(", ", hosts.Take(MaxNamedHosts)) + $" (and {hosts.Count - MaxNamedHosts} more)";
+
+    /// <summary>
+    /// The plugin-registry HOSTS this installation is configured for, as a refusal may name them:
+    /// read through <see cref="SelfUpdateOptions.HostOf"/>, deduplicated case-insensitively and
+    /// ordered so the message is deterministic.
+    ///
+    /// <para>🚨 <c>HostOf</c> is what makes this safe to print: it refuses userinfo, so a registry
+    /// configured as <c>https://instance:mwi_…@host</c> contributes NOTHING here rather than being
+    /// echoed — the credential is in that URL, and this string reaches Loki and the policy node. The
+    /// <c>credentialInUrl</c> branch above is what diagnoses such a registry, by name and without the
+    /// URL. Serves the DIAGNOSIS only: nothing is matched, selected or presented through this reader.
+    /// Pure.</para>
+    /// </summary>
+    private static IReadOnlyList<string> ConfiguredHosts(IEnumerable<PluginRegistryReference> registries) =>
+        registries
+            .Select(r => SelfUpdateOptions.HostOf(r.Url))
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(h => h, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     /// <summary>
     /// Whether a configured plugin-registry URL names <paramref name="host"/> BUT carries

@@ -137,6 +137,12 @@ COMBOS=(
   # opt-out shape is here too, because "no issuer" must be a statement, never an omission.
   "a public host issued by cert-manager (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-issuer.yaml"
   "a host whose TLS Secret is pre-provisioned (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-preprovisioned.yaml"
+  # 🚨 The instance's OWN database release (Doc/Architecture/InClusterDatabases): a CloudNativePG
+  # Cluster beside the portal release, named by database.release. The only combination whose
+  # connection strings are COMPOSED in the containers' env from a Secret the chart does not render.
+  # Invariant 19 asserts the credentials are defined before the strings that expand them, and that
+  # the gate probes the host those strings name.
+  "the instance's own database release (the pearl shape after 2026-09-15, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.incluster-db-release.yaml"
   # 🚨 The control instance on the ACTIONS executor (Plugins#1738): the operator Job OFF and the
   # executor switched to aks-ops.yml through the GitHub App. The only combination that sets
   # `hostingOperator.executor`, so without it the one render that must carry
@@ -259,6 +265,7 @@ REFUSALS=(
   "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
   "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
   "a TLS secret with no issuer reaching the ingress (the pearl certificate refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-no-issuer.yaml|NO issuer reaches the ingress"
+  "a database release AND the bundled Postgres (two answers to which database)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.db-release-with-bundled-postgres.yaml|exclusive with postgres.enabled"
   # Plugins#1738: an executor the portal would silently read as Job must fail the render.
   "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
 )
@@ -295,6 +302,39 @@ for entry in "${REFUSALS[@]}"; do
 done
 if [ "$refused" -lt "${#REFUSALS[@]}" ]; then
   report "only $refused of ${#REFUSALS[@]} refusal controls held — treating as FAILURE"
+fi
+
+# ---------------------------------------------------------------------------
+# THE DATABASE RELEASE CHART (deploy/helm-db, Doc/Architecture/InClusterDatabases) — a second chart,
+# installed per instance beside the portal release. It must render its CloudNativePG Cluster where
+# the platform layer puts it (the `db` pool, one instance per zone), and refuse a release with no
+# database name rather than bootstrap one called ''.
+# ---------------------------------------------------------------------------
+DB_CHART="$REPO/deploy/helm-db"
+if [ -d "$DB_CHART" ]; then
+  db_out="$WORK/db-release.yaml"
+  if helm template pearl-db "$DB_CHART" --namespace pearl --set database=pearl > "$db_out" 2> "$db_out.err"; then
+    db_ok=1
+    for want in 'kind: Cluster' 'instances: 2' 'podAntiAffinityType: "required"' 'topologyKey: topology.kubernetes.io/zone' \
+                'workload: db' 'effect: NoSchedule' 'CREATE EXTENSION IF NOT EXISTS vector' 'storageClass: "memex-db-premiumv2"'; do
+      if ! grep -qF -- "$want" "$db_out"; then
+        report "the database release chart does not render '$want' — the Cluster would not land one instance per zone on the db pool"
+        db_ok=0
+      fi
+    done
+    [ "$db_ok" -eq 1 ] && ok "the database release chart — a two-zone Cluster on the db pool with the vector extension"
+  else
+    report "the database release chart does not render at all:"
+    sed 's/^/    /' "$db_out.err"
+  fi
+  if helm template pearl-db "$DB_CHART" --namespace pearl > "$db_out" 2> "$db_out.err"; then
+    report "the database release chart RENDERED with no database name — it must refuse instead"
+  elif grep -q "must be a plain lower-case PostgreSQL identifier" "$db_out.err"; then
+    ok "the database release chart — refuses a release with no database name"
+  else
+    report "the database release chart refused, but not for the stated reason:"
+    sed 's/^/    /' "$db_out.err"
+  fi
 fi
 
 if [ "$fail" -eq 0 ]; then

@@ -936,6 +936,14 @@ jobs:
       # Where this call's DURABLE module-bundle copy lives — `gha` (today's artifact) or an object
       # store spec. Resolved once here; every pack leg reads this rather than deciding again.
       artifact-store: ${{ steps.store.outputs.store }}
+      # 🚨 WHICH store that spec turned out to be, on THIS runner — the mount source, not the path
+      # (#4761). A `file:` spec is a directory name, and the two runner pools mount two different
+      # Azure Files shares at the same one, so a producer on `MW_RUNNER_DOCKER` wrote a 1.46 GB
+      # workspace build that the eight consumers on `MW_RUNNER` could never see. Every job below
+      # hands this back to `put`/`get` as --expect-store-id, so a runner on a different share is
+      # RED at the FIRST store operation of the run, naming the mechanism, instead of producing a
+      # handoff that reads as an absence eight jobs later.
+      artifact-store-id: ${{ steps.store.outputs.store-id }}
       # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
       # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
       declared: ${{ inputs.modules }}
@@ -1408,6 +1416,9 @@ jobs:
       # store the two `if:`s below pick the GitHub artifact exactly as they always have.
       ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # The identity `select` resolved (#4761). Every put and get below asserts it, so this job
+      # refuses to move bytes when its runner is standing on a different share than the run's.
+      ARTIFACT_STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
       # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
       # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
       # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
@@ -1457,6 +1468,7 @@ jobs:
           set -euo pipefail
           tar -C "$RUNNER_TEMP/pack-tool" -cf "$RUNNER_TEMP/module-pack-tool.tar" .
           python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --expect-store-id "$ARTIFACT_STORE_ID" \
             --key "$STORE_RUN_PREFIX/module-pack-tool.tar" --file "$RUNNER_TEMP/module-pack-tool.tar"
       - name: Restore the platform image tarball (per-digest cache)
         if: inputs.platform-image-digest != ''
@@ -1614,10 +1626,13 @@ jobs:
         run: |
           set -euo pipefail
           tar -C "$RUNNER_TEMP/platform-refs-artifact" -cf "$RUNNER_TEMP/platform-refs.tar" .
+          # The tar is deliberately UNCOMPRESSED (`-cf`, no `z`): the entry that carries the
+          # bytes, platform-refs.tar.gz, is already gzipped, so a second deflate pass buys nothing
+          # and costs upload minutes — and digest.txt beside it is a few dozen bytes. The object
+          # store applies no compression of its own.
           python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --expect-store-id "$ARTIFACT_STORE_ID" \
             --key "$STORE_RUN_PREFIX/platform-refs.tar" --file "$RUNNER_TEMP/platform-refs.tar"
-          # Already gzipped — a second deflate pass buys nothing and costs the upload minutes.
-          compression-level: 0
       # ───────── THE PLATFORM'S OWN VERSION — the denominator of the module FLOOR gate (#3554) ─────────
       # 🚨 A declared `content.minMeshVersion` was never checked against a platform build that
       # EXISTS. SemVer §11.4 ranks pre-release identifiers as TEXT, so `ci` < `rc` and
@@ -1726,6 +1741,9 @@ jobs:
       # store the two `if:`s below pick the GitHub artifact exactly as they always have.
       ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # The identity `select` resolved (#4761). Every put and get below asserts it, so this job
+      # refuses to move bytes when its runner is standing on a different share than the run's.
+      ARTIFACT_STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
       # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
       # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
       # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
@@ -2038,6 +2056,7 @@ jobs:
           set -euo pipefail
           tar -C "$RUNNER_TEMP/module-build" -cf "$RUNNER_TEMP/workspace-build.tar" .
           python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --expect-store-id "$ARTIFACT_STORE_ID" \
             --key "$STORE_RUN_PREFIX/workspace-build.tar" --file "$RUNNER_TEMP/workspace-build.tar"
 
   # ═══════════ THE PACK LEGS — N MODULES PER RUNNER, ONE VERDICT PER MODULE (2026-09-12) ═══════════
@@ -2081,6 +2100,9 @@ jobs:
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
       ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # The identity `select` resolved (#4761). Every put and get below asserts it, so this job
+      # refuses to move bytes when its runner is standing on a different share than the run's.
+      ARTIFACT_STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
       # The same deterministic handoff prefix `prepare` and `build-workspace` wrote under — run id
       # AND attempt, so a re-run never reads the previous attempt's bytes.
       STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
@@ -2532,6 +2554,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/platform-refs-artifact"
           python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --expect-store-id "$ARTIFACT_STORE_ID" \
             --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/platform-refs.tar" --out "$RUNNER_TEMP/platform-refs.tar"
           tar -C "$RUNNER_TEMP/platform-refs-artifact" -xf "$RUNNER_TEMP/platform-refs.tar"
       - name: The platform reference set — which source, verified
@@ -2681,6 +2704,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/workspace-build"
           python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --expect-store-id "$ARTIFACT_STORE_ID" \
             --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/workspace-build.tar" --out "$RUNNER_TEMP/workspace-build.tar"
           tar -C "$RUNNER_TEMP/workspace-build" -xf "$RUNNER_TEMP/workspace-build.tar"
       # 🚨 `decision == build` on the build/pack/inspect trio is a MODE SWITCH on the ledger's
@@ -2958,7 +2982,8 @@ jobs:
               # that has started losing objects. `get` verifies the sha256 in the locator itself.
               if [ -n "${STORE_LOC:-}" ] && [ -n "${ARTIFACT_STORE:-}" ] && [ "$ARTIFACT_STORE" != gha ]; then
                 echo "reuse: fetching $MODULE from the object store — ${STORE_LOC%%#*}"
-                python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" --locator "$STORE_LOC" --out "$bundle"
+                python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+                  --expect-store-id "$ARTIFACT_STORE_ID" --locator "$STORE_LOC" --out "$bundle"
               else
                 gh run download "$ART_RUN" -R "$GITHUB_REPOSITORY" -n "$ART_NAME" -D "$RUNNER_TEMP/bundles/$MODULE"
               fi
@@ -3001,6 +3026,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/pack-tool"
           python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --expect-store-id "$ARTIFACT_STORE_ID" \
             --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/module-pack-tool.tar" --out "$RUNNER_TEMP/module-pack-tool.tar"
           tar -C "$RUNNER_TEMP/pack-tool" -xf "$RUNNER_TEMP/module-pack-tool.tar"
 
@@ -3415,6 +3441,7 @@ jobs:
             ( set -euo pipefail
               out="$RUNNER_TEMP/store-put-$MODULE.txt"
               python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+                --expect-store-id "$ARTIFACT_STORE_ID" \
                 --key "modules/${GITHUB_REPOSITORY//\//_}/$MODULE/$KEY/$(basename "$BUNDLE")" \
                 --file "$BUNDLE" | tee "$out"
               loc=$(sed -n 's/^locator=//p' "$out" | tail -1)

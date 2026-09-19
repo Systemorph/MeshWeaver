@@ -22,6 +22,36 @@ For the second row the lambda's output is diffed against the caller's base — `
 
 That is exactly what makes concurrent writers safe: two candidates each removing *their own* key from a map produce two disjoint patches, and both land. It is also what makes the failure below possible.
 
+## 🚨 …and the strongest form: an absent PATCH
+
+The failure below is about one member missing from the patch. The same mechanic has a louder
+version — **no patch at all** — and it is worth naming separately because it is the one that reads
+as a clean success:
+
+```csharp
+// ❌ a GUARD: the whole write is conditional on state read from THIS hub's mirror
+stream.Update(node =>
+{
+    var state = node.ContentAs<MyState>(options);
+    if (state?.ClaimedBy != me) return node;    // 🚨 unchanged ⇒ nothing is posted
+    return node with { Content = change(state) };
+});
+```
+
+A lambda that returns the node it was given trips `MeshNodeStreamHandle.IsRecordNoOp`. The write
+path posts no `PatchDataRequest`, **completes the caller as a SUCCESS**, and logs the decision at
+`Debug`. So the caller's observable emits and terminates normally for a write that is nowhere: no
+exception, nothing above `Debug`, and nothing to grep. The symptom surfaces wherever someone was
+waiting for the effect, which is usually several layers away.
+
+The base the guard reads is not only the mirror. The stream cache's per-path write queue hands each
+write **the state its predecessor computed locally** (`PatchBaseSource`), which is right for a
+diff — it is this mirror's freshest knowledge — and is exactly as unsound for a condition. So a
+guard can be refused by a value *this same hub* wrote a moment ago.
+
+The rule below covers this case too; it is the same rule with the condition covering every field
+instead of one.
+
 ## 🚨 The failure: an absent member is not "leave it as I found it"
 
 Under RFC 7396 a member the patch does not carry is **left untouched on the owner**. From the writer's side that looks identical to "I decided not to change it" — but the two mean different things the moment anyone else writes that member.
@@ -89,7 +119,8 @@ Reach for this only when a condition genuinely must hold at apply time. Most wri
 
 ## Where this has actually happened
 
-**Build-claim arbitration**, twice, and the second time is the clearer statement of the shape.
+**Build-claim arbitration**, three times: twice on a candidate standing DOWN, and once on a holder
+FINISHING. The second is the clearer statement of the shape; the third is the loudest consequence.
 
 A follower that has seen the build's GO stands down by calling `WithdrawBuildClaim`. Its second half — hand back a claim we were granted but never started — is conditional on `ClaimedBy` naming us. The arbiter grants on the node it owns.
 
@@ -97,6 +128,21 @@ A follower that has seen the build's GO stands down by calling `WithdrawBuildCla
 - The second — the stand-down *decided* before the grant and *applied* after it — could not be closed there, because the publication was legitimate when it happened. The patch simply carried no `claimedBy`, and the build stayed locked to a process whose driver had already completed. The takeover rule then defended that holder **by design**, because the process really was alive: no builder, no bake, no pod reaching ready.
 
 The measured residue was a single terminal state — a holder at `Planning` with nobody queued and the GO already published — differing from the healthy state in exactly one field. It is worth remembering how *quiet* that is: no exception, no log, no failed write, and a symptom (a rollout that never becomes ready) several layers away from the cause.
+
+**Then, at the other end of the same protocol (#4708): a build FINISHING.** `CompleteBuild` /
+`FailBuild` guarded the whole write on `ClaimedBy == me`, read off the writer's copy — so this is the
+absent-PATCH case above, not the absent-member one. The base that refused it was usually not even
+the mirror: the per-path write queue hands each write its predecessor's locally computed state, and
+a completion's predecessor is very often *another completion*, whose locally computed state carries
+`ClaimedBy = null`. So the SECOND holder to finish wrote nothing, was told it had succeeded, and its
+fingerprint never got a GO — six measured occurrences across five branches including `main`, each
+one visible only as a fifteen-second wait for an effect that was never coming.
+
+The fix is the recipe above, verbatim: `BuildState.ReportedOutcomes` is written unconditionally
+under the reporter's key and `BuildNodeType.FoldReportedOutcomes` — on the owning hub — publishes
+the GO, records a failure, or refuses a superseded builder. Note the third property doing real work
+there: the fold **consumes** every report it sees, applied or refused, so a refusal can never be
+re-judged against a claim it has nothing to do with.
 
 ## Related
 

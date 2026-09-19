@@ -953,6 +953,28 @@ secrets:
 postgres:
   enabled: true
 
+# ---- The instance's OWN database release (Doc/Architecture/InClusterDatabases) ---------------------
+# Set `release` to the name of the memex-db release (deploy/helm-db — a CloudNativePG Cluster) in
+# THIS namespace, and the portal and the migration connect to its primary, `<release>-rw`, as the
+# owner whose credentials CloudNativePG generated into the Secret `<release>-app`. The credentials
+# are composed into ConnectionStrings__memex (and, under AdoNet with no explicit orleans string,
+# ConnectionStrings__orleans) in the containers' `env`, which OUTRANKS every envFrom source — so a
+# Key Vault class that still maps the key cannot silently point the pod elsewhere.
+#
+# The chart's own Secret then carries a credential-free string naming the SAME host, so the
+# wait-for-postgres gate is derived from it exactly as for every other shape (MeshWeaver#4173): the
+# gate and the connection cannot name different hosts.
+#
+# 🚨 Exclusive with `postgres.enabled` (the bundled single-pod Postgres inside THIS release) and
+# with a values `secrets.<half>.ConnectionStrings__memex`: either together with `release` is two
+# answers to "which database", and the render is refused naming both.
+database:
+  release: ""
+  # The database name; blank → config.memex_portal.MEMEX_DATABASENAME.
+  name: ""
+  # The Secret holding `username` and `password`; blank → `<release>-app` (CloudNativePG's name).
+  appSecret: ""
+
 config:
   memex_postgres:
     POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
