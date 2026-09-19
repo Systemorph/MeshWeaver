@@ -41,9 +41,22 @@ Every one of those checks now reports its own verdict independently: a failure i
 prevents the others from running, and the change is still refused if any of them fails. The result
 is that a red now tells you *everything* that is wrong, instead of the first thing.
 
-A new check keeps it that way. It reads the shared list and refuses any newly added check that would
-go back to inheriting the previous one's outcome, and it also refuses moving one of the three genuine
-prerequisites — getting the repository's files and the tools to read them — out of the front of the
-list, because a prerequisite in the middle silences everything after it for exactly the same reason.
-Its own self-test was confirmed to fail on the arrangement as it stood before this change, on all
-thirty-six checks, and to pass after it.
+There is a genuine exception, and keeping it is the other half of the fix. A few steps at the very
+front are real prerequisites — fetching the repository's files, and the tools to read them. If one of
+those fails, the later checks have nothing to read, and letting them run would produce a page of
+misleading errors and, for any check that happens to pass over an empty folder, a *false* pass. So
+those front steps now announce that they succeeded, and every check asks for that announcement.
+A prerequisite failing still stops everything, with its own error as the answer; a check failing stops
+nothing but itself.
+
+The same arrangement was found in the platform's own equivalent list — sixty checks behind two
+prerequisites, covering the release pipeline and every script the other repositories fetch — and it got
+the same treatment.
+
+A new check keeps both lists that way. It refuses a newly added check that would go back to inheriting
+the previous one's outcome, or that forgets to ask whether the prerequisites succeeded; it refuses
+moving a prerequisite out of the front of the list, because one in the middle silences everything after
+it for the same reason; it refuses a list with no checks left in it, so it cannot pass by having nothing
+to look at; and it refuses a front step that has stopped announcing its success, which would silence
+everything. Nineteen cases, each confirmed to fail on the defect it describes and to pass on the fix —
+including on the arrangement as it stood before this change, where it reported all ninety-six checks.

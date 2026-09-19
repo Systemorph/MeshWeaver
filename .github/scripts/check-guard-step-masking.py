@@ -69,14 +69,38 @@ except ImportError:  # pragma: no cover - CI installs PyYAML; locally `pip insta
 # where an earlier guard failed AND this one would have passed.
 SURVIVES_A_FAILURE = ("!cancelled()", "! cancelled()", "always()")
 
+# 🚨 …AND THE OTHER HALF, which `!cancelled()` alone gets wrong (Copilot on #4915). Dropping the
+# implicit `success()` also stops the PREREQUISITES from masking — so a failed checkout would let all
+# 36 guards run against an empty workspace, producing a wall of secondary reds and, for any guard that
+# happens to pass on an empty tree, a vacuous pass. The last prerequisite therefore publishes one
+# output and every guard requires it, which restores masking for exactly the steps that should mask
+# and for no others. A guard's own FETCH is not a prerequisite: its consumers still run and fail
+# naming the file they could not open, which is a second red rather than a silent skip.
+READINESS = "steps.ready.outputs.ok == 'true'"
+READINESS_STEP = "The workspace and the tools are present — the ONE prerequisite every guard shares"
+
 # (workflow file) -> (job id) -> the ordered PREFIX of steps allowed to mask what follows them.
-# A step is matched by an exact `name:`, or by `uses:<prefix>` for a nameless action step.
+# The LAST entry of each prefix must be the readiness step, since that is what every guard requires.
+# A step is matched by its exact `name:`, or by `uses:<action>` (ref stripped) for a nameless action
+# step — exactly, never by prefix, so `actions/checkout-foo` cannot satisfy `uses:actions/checkout`
+# and a renamed prerequisite is reported stale rather than quietly accepted.
 SUBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
     "node-repo-validate.yml": {
         "validate": (
             "uses:actions/checkout",
             "Full history and tags, quietly",
             "uses:actions/setup-python",
+            READINESS_STEP,
+        ),
+    },
+    # Core's own guard job — 60 independent guards behind two prerequisites, and the job that gates
+    # `main-cd.yml`, the module lanes and every script a satellite fetches. One red here used to
+    # withdraw the rest of CI's self-enforcement for that run, silently.
+    "dotnet-test.yml": {
+        "workflow-shell": (
+            "uses:actions/checkout",
+            "Assert the tools this gate needs",
+            READINESS_STEP,
         ),
     },
 }
@@ -93,8 +117,9 @@ def _step_id(step: dict) -> str:
 
 
 def _matches(step_id: str, declared: str) -> bool:
-    if declared.startswith("uses:"):
-        return step_id.startswith(declared)
+    """Exact, both shapes. `_step_id` already strips an action's `@ref`, so a PREFIX comparison would
+    let `actions/checkout-foo` satisfy a declared `uses:actions/checkout` — a renamed prerequisite
+    passing the structural check instead of being reported stale."""
     return step_id == declared
 
 
@@ -134,6 +159,28 @@ def check_tree(root: Path) -> tuple[list[str], int, int]:
                 continue
             jobs_checked += 1
             ids = [_step_id(s) for s in steps]
+            # 🚨 A JOB WITH NOTHING AFTER THE PREFIX PASSES HAVING CHECKED NOTHING (Copilot on #4915).
+            # `range(len(prerequisites), len(steps))` is empty then, so every assertion below is
+            # skipped and the gate exits 0 over a job whose 36 guards have been deleted. The whole
+            # point of this file is that a check which cannot fail is not a check.
+            if len(steps) <= len(prerequisites):
+                violations.append(
+                    f"::error file=.github/workflows/{wf_name}::job '{job_id}' has {len(steps)} step(s) and "
+                    f"{len(prerequisites)} declared prerequisite(s), so it carries NO independent guard — this "
+                    f"gate would pass having checked nothing. Either the guards were removed (which is the "
+                    f"finding) or they moved, and this declaration is stale"
+                )
+                continue
+            # The readiness step is the LAST prerequisite and must actually publish what the guards
+            # read: a step that stopped writing `ok=true` would skip every guard, silently and green.
+            readiness_step = steps[len(prerequisites) - 1] if prerequisites else None
+            if readiness_step is not None and "ok=true" not in str(readiness_step.get("run", "")):
+                violations.append(
+                    f"::error file=.github/workflows/{wf_name}::job '{job_id}' step "
+                    f"{len(prerequisites) - 1} ('{ids[len(prerequisites) - 1]}') is the readiness step every "
+                    f"guard requires through `{READINESS}`, but it does not publish `ok=true` — every guard "
+                    f"would be SKIPPED, and a skipped required context counts as satisfied"
+                )
             # The prerequisites must be the PREFIX, in order, and each must exist.
             for offset, declared in enumerate(prerequisites):
                 if offset >= len(ids):
@@ -154,6 +201,14 @@ def check_tree(root: Path) -> tuple[list[str], int, int]:
                 steps_checked += 1
                 condition = steps[index].get("if")
                 text = "" if condition is None else str(condition)
+                if READINESS not in text.replace('"', "'"):
+                    violations.append(
+                        f"::error file=.github/workflows/{wf_name}::job '{job_id}' step {index} "
+                        f"('{ids[index]}') does not require `{READINESS}` — with the implicit `success()` "
+                        f"dropped, a failed checkout or tool assertion would let this guard run against an "
+                        f"empty workspace, which is a wall of secondary reds and, for a guard that passes on "
+                        f"an empty tree, a vacuous pass. `&&` it onto the condition"
+                    )
                 if not any(token in text for token in SURVIVES_A_FAILURE):
                     violations.append(
                         f"::error file=.github/workflows/{wf_name}::job '{job_id}' step {index} "
@@ -164,6 +219,12 @@ def check_tree(root: Path) -> tuple[list[str], int, int]:
                     )
     return violations, steps_checked, jobs_checked
 
+
+_READY = (
+    f"      - name: {READINESS_STEP}\n"
+    "        id: ready\n"
+    '        run: echo "ok=true" >> "$GITHUB_OUTPUT"\n'
+)
 
 _PREFIX = (
     "on: {workflow_call: {}}\n"
@@ -176,35 +237,90 @@ _PREFIX = (
     "      - name: Full history and tags, quietly\n"
     "        run: echo\n"
     "      - uses: actions/setup-python@v7\n"
+) + _READY
+
+# The second subject has to exist in every fixture too, or every case would fire on its absence and
+# say nothing about the property under test. One minimal, correct `workflow-shell` job, reused.
+_SHELL_OK = (
+    "on: {push: {}}\n"
+    "jobs:\n"
+    "  workflow-shell:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    timeout-minutes: 10\n"
+    "    steps:\n"
+    "    - uses: actions/checkout@v7\n"
+    "    - name: Assert the tools this gate needs\n"
+    "      run: echo\n"
+    f"    - name: {READINESS_STEP}\n"
+    "      id: ready\n"
+    '      run: echo "ok=true" >> "$GITHUB_OUTPUT"\n'
+    "    - name: shell guard\n"
+    "      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}\n"
+    "      run: echo\n"
 )
+
+_GATED = "${{ !cancelled() && steps.ready.outputs.ok == 'true' }}"
 
 
 def self_test() -> int:
     """Every check must FIRE on its defect and stay SILENT on its fix, or the gate is vacuous."""
-    guarded = "      - name: guard A\n        if: ${{ !cancelled() }}\n        run: echo\n"
-    guarded_b = "      - name: guard B\n        if: ${{ !cancelled() && inputs.x }}\n        run: echo\n"
+    guarded = f"      - name: guard A\n        if: {_GATED}\n        run: echo\n"
+    guarded_b = ("      - name: guard B\n"
+                 "        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' && inputs.x }}\n"
+                 "        run: echo\n")
     cases: list[tuple[str, str, bool]] = [
         ("every-guard-reports", _PREFIX + guarded + guarded_b, False),
-        ("always-is-accepted", _PREFIX + "      - name: guard A\n        if: always()\n        run: echo\n", False),
-        ("folded-scalar-accepted", _PREFIX + "      - name: guard A\n        if: >\n          !cancelled() && inputs.x\n        run: echo\n", False),
-        # the defect itself, in each of the three shapes it arrives in
+        ("always-is-accepted", _PREFIX
+         + "      - name: guard A\n        if: always() && steps.ready.outputs.ok == 'true'\n        run: echo\n", False),
+        ("folded-scalar-accepted", _PREFIX
+         + "      - name: guard A\n        if: >\n          !cancelled() && steps.ready.outputs.ok == 'true'\n"
+           "          && inputs.x\n        run: echo\n", False),
+        ("double-quoted-readiness-accepted", _PREFIX
+         + '      - name: guard A\n        if: ${{ !cancelled() && steps.ready.outputs.ok == "true" }}\n        run: echo\n', False),
+        # the defect itself, in each of the shapes it arrives in
         ("bare-guard-masks", _PREFIX + guarded + "      - name: guard B\n        run: echo\n", True),
-        ("condition-without-cancelled", _PREFIX + guarded + "      - name: guard B\n        if: ${{ inputs.x }}\n        run: echo\n", True),
-        ("success-only-is-not-enough", _PREFIX + guarded + "      - name: guard B\n        if: ${{ success() }}\n        run: echo\n", True),
-        ("failure-only-is-not-enough", _PREFIX + guarded + "      - name: guard B\n        if: ${{ failure() }}\n        run: echo\n", True),
+        ("condition-without-cancelled", _PREFIX + guarded
+         + "      - name: guard B\n        if: ${{ steps.ready.outputs.ok == 'true' && inputs.x }}\n        run: echo\n", True),
+        ("success-only-is-not-enough", _PREFIX + guarded
+         + "      - name: guard B\n        if: ${{ success() && steps.ready.outputs.ok == 'true' }}\n        run: echo\n", True),
+        ("failure-only-is-not-enough", _PREFIX + guarded
+         + "      - name: guard B\n        if: ${{ failure() && steps.ready.outputs.ok == 'true' }}\n        run: echo\n", True),
+        # 🚨 …and `!cancelled()` WITHOUT the readiness gate is the other half: the prerequisites stop
+        # masking too, so the guard runs against an empty workspace (Copilot on #4915).
+        ("cancelled-without-readiness", _PREFIX + guarded
+         + "      - name: guard B\n        if: ${{ !cancelled() }}\n        run: echo\n", True),
+        # 🚨 THE VACUOUS PASS: nothing after the prefix, so every per-step assertion is skipped and
+        # the gate exits 0 over a job whose guards have been deleted (Copilot on #4915).
+        ("prefix-only-is-not-a-pass", _PREFIX, True),
+        # …and the readiness step that stopped publishing what the guards read
+        ("readiness-publishes-nothing", (
+            "on: {workflow_call: {}}\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: actions/checkout@v7\n"
+            "      - name: Full history and tags, quietly\n        run: echo\n"
+            "      - uses: actions/setup-python@v7\n"
+            f"      - name: {READINESS_STEP}\n        id: ready\n        run: echo nothing\n"
+        ) + guarded, True),
         # a prerequisite that drifted out of the prefix, which is the same defect wearing a name
         ("prerequisite-not-at-front", (
             "on: {workflow_call: {}}\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps:\n"
             "      - uses: actions/checkout@v7\n"
             "      - uses: actions/setup-python@v7\n"
             "      - name: Full history and tags, quietly\n        run: echo\n"
-        ), True),
+        ) + _READY + guarded, True),
         ("prerequisite-renamed", (
             "on: {workflow_call: {}}\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps:\n"
             "      - uses: actions/checkout@v7\n"
             "      - name: Full history and tags\n        run: echo\n"
             "      - uses: actions/setup-python@v7\n"
-        ), True),
+        ) + _READY + guarded, True),
+        # 🚨 A LOOK-ALIKE ACTION must not satisfy a declared prerequisite (Copilot on #4915): with a
+        # prefix comparison, `actions/checkout-foo` passed the structural check.
+        ("look-alike-action-is-not-the-prerequisite", (
+            "on: {workflow_call: {}}\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: actions/checkout-foo@v7\n"
+            "      - name: Full history and tags, quietly\n        run: echo\n"
+            "      - uses: actions/setup-python@v7\n"
+        ) + _READY + guarded, True),
         ("job-renamed", "on: {workflow_call: {}}\njobs:\n  validate-repos:\n    runs-on: ubuntu-latest\n    steps: [{run: echo}]\n", True),
         ("no-steps", "on: {workflow_call: {}}\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps: []\n", True),
         ("not-yaml", "jobs: [unclosed\n  - ::\n", True),
@@ -215,12 +331,30 @@ def self_test() -> int:
             root = Path(tmp)
             (root / ".github" / "workflows").mkdir(parents=True)
             (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(body, encoding="utf-8")
+            (root / ".github" / "workflows" / "dotnet-test.yml").write_text(_SHELL_OK, encoding="utf-8")
             violations, _, _ = check_tree(root)
             fired = bool(violations)
             if fired != expect:
                 failures += 1
             print(f"self-test {'ok' if fired == expect else 'FAIL':4} {name:30} "
                   f"expected={'fire' if expect else 'silent'} got={'fire' if fired else 'silent'}")
+    # 🚨 THE SECOND SUBJECT ON ITS OWN. Every case above keeps `dotnet-test.yml` correct, so none of
+    # them would notice if `workflow-shell` stopped being checked. This one leaves the validate lane
+    # correct and breaks only the shell job — the control for the other direction.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(
+            _PREFIX + guarded, encoding="utf-8")
+        (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
+            _SHELL_OK.replace("      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}\n", ""),
+            encoding="utf-8")
+        violations, _, _ = check_tree(root)
+        fired = bool(violations)
+        print(f"self-test {'ok' if fired else 'FAIL':4} {'shell-job-checked-too':30} expected=fire "
+              f"got={'fire' if fired else 'silent'}")
+        failures += 0 if fired else 1
+
     with tempfile.TemporaryDirectory() as tmp:  # the subject absent must FIRE, never pass vacuously
         violations, _, _ = check_tree(Path(tmp))
         fired = bool(violations)
