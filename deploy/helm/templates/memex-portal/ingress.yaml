@@ -1,4 +1,10 @@
 {{- if .Values.ingress.enabled }}
+{{- $tls := .Values.ingress.tlsSecret | default "" }}
+{{- $issuer := .Values.ingress.clusterIssuer | default "" }}
+{{- $handWritten := hasKey (.Values.ingress.annotations | default dict) "cert-manager.io/cluster-issuer" }}
+{{- if and $tls (not $issuer) (not $handWritten) }}
+{{- fail (printf "ingress.tlsSecret is %q but NO issuer reaches the ingress. Set ingress.clusterIssuer (the fleet's is letsencrypt-prod), or ingress.clusterIssuer=none when that Secret is created by other means. An ingress naming a TLS secret nobody issues serves ANOTHER host's certificate: pearl.meshweaver.cloud served CN=memex.meshweaver.cloud for nine hours on 2026-09-15." $tls) }}
+{{- end }}
 # ---- Portal Ingress (TLS termination at the ingress controller) ------------
 # A standard k8s Ingress fronting memex-portal-service. The controller (e.g.
 # ingress-nginx) terminates TLS for `host` using `tlsSecret` and proxies HTTP to
@@ -15,7 +21,23 @@ metadata:
     app.kubernetes.io/component: "memex-portal"
     app.kubernetes.io/instance: "{{ .Release.Name }}"
   annotations:
-    {{- with .Values.ingress.annotations }}
+    # ---- Which certificate this host is served with ---------------------------
+    # 🚨 The issuer is a VALUE, not something an overlay has to remember to write as an annotation.
+    # A Provision renders these values from the deployment RECORD; pearl's record carried only
+    # nginx annotations while the checked-in overlay carried the issuer, so the rendered ingress
+    # asked cert-manager for nothing and the controller served its fallback certificate.
+    # A hand-written `cert-manager.io/cluster-issuer` in `annotations` still wins, so a record that
+    # names its own issuer renders byte-identically to before.
+    {{- $ann := .Values.ingress.annotations | default dict }}
+    {{- if and $issuer (ne $issuer "none") (not $handWritten) }}
+    cert-manager.io/cluster-issuer: {{ $issuer | quote }}
+    {{- end }}
+    {{- if eq $issuer "none" }}
+    # Deliberate: this Secret is created by other means. Written down so a reader of the live
+    # object can tell an opt-out from a forgotten issuer.
+    meshweaver.io/tls-secret: "pre-provisioned"
+    {{- end }}
+    {{- with $ann }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:

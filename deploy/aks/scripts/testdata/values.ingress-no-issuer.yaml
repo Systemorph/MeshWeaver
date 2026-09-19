@@ -1,0 +1,9 @@
+# THE REGRESSION CONTROL for pearl's nine hours on the wrong certificate (2026-09-15): an ingress
+# that names a TLS Secret and nothing that issues it. The chart must REFUSE to render this — the
+# rendered object would look perfectly healthy and be served the ingress controller's fallback
+# certificate, which every browser rejects.
+ingress:
+  enabled: true
+  className: "webapprouting.kubernetes.azure.com"
+  host: "forgotten.example.com"
+  tlsSecret: "forgotten-tls"

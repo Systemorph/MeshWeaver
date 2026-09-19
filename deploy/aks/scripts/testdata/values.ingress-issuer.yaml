@@ -1,0 +1,10 @@
+# A public host with its own certificate — the shape every fleet instance has, and the one the
+# record renders (MeshWeaver.Plugins HelmValues → ingress.clusterIssuer). The rendered Ingress must
+# carry cert-manager.io/cluster-issuer, or cert-manager issues nothing and the controller serves
+# another host's certificate (pearl.meshweaver.cloud, 2026-09-15).
+ingress:
+  enabled: true
+  className: "webapprouting.kubernetes.azure.com"
+  host: "instance.example.com"
+  tlsSecret: "instance-tls"
+  clusterIssuer: "letsencrypt-prod"

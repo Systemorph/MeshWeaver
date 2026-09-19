@@ -127,6 +127,36 @@ refuses "redirect needs a mode"            "must be 'suspend' or 'restore'"     
 refuses "deploy needs --release"           "missing required flag --release"    hosting-deploy --namespace n --database d
 refuses "verify needs --host"              "missing required flag --host"       hosting-verify
 refuses "unknown flags are not ignored"    "unknown argument"                   hosting-verify --host h --nope 1
+# ---------------------------------------------------------------------------
+# THE CERTIFICATE, end to end. A new instance is not provisioned until its own host answers over
+# its OWN certificate: an ingress without one is served the controller's fallback — another
+# instance's certificate — and pearl.meshweaver.cloud spent nine hours in exactly that state on
+# 2026-09-15 while its portal was healthy. These assert the two halves that were missing: the TLS
+# step refuses a record that asks cert-manager for nothing, and the verify step tells a wrong
+# certificate apart from a dead application instead of blaming the pods for both.
+# ---------------------------------------------------------------------------
+refuses "tls refuses an issuer of 'none'" "asks cert-manager for nothing" \
+  hosting-tls --namespace n --host h.example.com --issuer none
+refuses "tls needs --namespace"            "missing required flag --namespace" hosting-tls --host h.example.com
+refuses "tls rejects unknown flags"        "unknown argument"                  hosting-tls --namespace n --host h.example.com --nope 1
+
+VERIFY_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/verify" && pwd)"
+_verify() { env PATH="$VERIFY_STUBS:$PATH" HOSTING_VERIFY_ATTEMPTS=1 "$@" hosting-verify --host instance.example.com; }
+
+# The fallback-certificate shape: the host answers nothing over TLS and serves a certificate for
+# ANOTHER host. The refusal must name the certificate and send the reader to the certificate.
+refuses "verify names a WRONG certificate rather than blaming the pods" "served the WRONG certificate" \
+  _verify HOSTING_VERIFY_STUB_CN=memex.meshweaver.cloud HOSTING_VERIFY_STUB_SANS=memex.meshweaver.cloud
+# No certificate at all — DNS or the TLS step, not the application.
+refuses "verify says when NO certificate is served" "served NO certificate at all" \
+  _verify HOSTING_VERIFY_STUB_NOCERT=1
+# TLS is correct and the app is not: the one case where the pods ARE the answer.
+refuses "verify blames the application only when TLS is correct" "the APPLICATION did not answer" \
+  _verify HOSTING_VERIFY_STUB_CN=instance.example.com HOSTING_VERIFY_STUB_SANS=instance.example.com
+# A wildcard covers one label: *.example.com is this host's certificate, not a wrong one.
+refuses "verify accepts a wildcard certificate as this host's" "the APPLICATION did not answer" \
+  _verify HOSTING_VERIFY_STUB_CN='*.example.com' HOSTING_VERIFY_STUB_SANS='*.example.com'
+
 refuses "pull-secret needs --namespace"    "missing required flag --namespace"  hosting-pull-secret --registry r.example.test --vault V --secret S
 refuses "pull-secret needs --registry"     "missing required flag --registry"   hosting-pull-secret --namespace n --vault V --secret S
 refuses "pull-secret needs --vault"        "missing required flag --vault"      hosting-pull-secret --namespace n --registry r.example.test --secret S
