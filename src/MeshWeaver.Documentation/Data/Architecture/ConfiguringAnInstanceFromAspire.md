@@ -147,11 +147,11 @@ configures no container.
 🚨 **The Method column names a `DeploymentRecordExtensions` transform, NOT an Aspire builder method,
 and the two surfaces are not the same size.** `MemexHostingExtensions` forwards the transforms an
 AppHost reaches by name — a majority of the table, not all of it: `WithRegistry`, `WithSecretMount`,
-`WithInlineEnv`, `WithDrain`, `WithHttpPort`, `WithStorageAccount`, `WithOpsGitHubApp` and a dozen
-more have a row here and no named method there. **That is not a gap in what an AppHost can set.**
+`WithInlineEnv`, `WithDrain`, `WithHttpPort`, `WithStorageAccount` and a dozen more have a row here
+and no named method there. **That is not a gap in what an AppHost can set.**
 Every named facade method *is* `Configure(record => transform(record))` with one transform, and
 `Configure` — like the `AddMemex(name, configure)` overload — is public, so any row of this table is
-set as `.Configure(r => r.WithOpsGitHubApp("ops-client"))` whether or not a short spelling exists.
+set as `.Configure(r => r.WithInlineEnv("LOG_LEVEL", "Information"))` whether or not a short spelling exists.
 A missing forwarder costs a caller the spelling, never the field, and `RendererParityTest` deliberately
 resolves this column against `DeploymentRecordExtensions` alone — it asserts nothing about the facade.
 
