@@ -344,10 +344,13 @@ outside core, findings are not *occasionally* missed, they are *structurally not
 the rate this repository measured before the gate landed (32 of 60, above).
 
 It is not cosmetic. On 2026-09-18, five satellite pull requests merged with 13 unanswered findings
-between them; **8 were real**, and three of those were defects in the platform's own canonical
-`gen-manifests.py`, replicated byte-identically into four repositories — including a `--resolve`
-that reported `✓ … the merge can be committed` whenever git could not answer. Answered and fixed in
-#4775 after the merges; the remaining vintages in #4777.
+between them. Assessed on the code: **11 of the 13 were real**, and only two could be declined — one
+whose premise `git` itself rules out, one whose failure branch is unreachable. Those 11 reduce to
+**6 distinct defects**, because three were raised twice (independently, on two repositories' copies
+of one file) and three were three sites of one root. **Three of the six are in the platform's own
+canonical `gen-manifests.py`**, replicated byte-identically into four repositories — including a
+`--resolve` that reported `✓ … the merge can be committed` whenever git could not answer. Answered
+and fixed in #4775 after the merges; the remaining vintages in #4777.
 
 **Porting it is a workflow_call lane, never six copies** — the predicate is ~900 lines with its own
 self-test, the settle wait and the event-class concurrency split derived from #4649. Six hand-copies
