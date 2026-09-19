@@ -58,11 +58,24 @@ running*, and a moving name cannot answer it.
 ## Two families
 
 **Platform channels** — `3.0.0-latest`, `3.0.0-stable` — resolve to a sealed platform **set**
-(`3.0.0-ci.NNNN`), which already carries its core commit, its tester and portal image digests, and
-its sealed plugins publication.
+(`3.0.0-ci.NNNN`), which carries its core commit and its tester and portal image digests.
 
-**Plugin channels** — `<Package>@latest`, `<Package>@stable` — resolve to an exact published package
-version.
+🚨 **A sealed set does NOT imply a `plugins` publication for its identity.** The seal is the trio —
+promote, verify, platform bake — and nothing else, so a set can seal while the publication baked
+against its framework identity does not exist yet; the resolver finds that publication separately
+and may legitimately pair a set with an *older* one. A platform channel therefore resolves to a
+**pair** — the set, and the publication resolved under its identity — and must say which of the two
+it is asserting. A channel that named only the set would promise something the seal does not.
+
+**Plugin channels** — `<Package>@latest`, `<Package>@stable` — resolve to a published package
+**generation**, identified by content, not to a bare version string.
+
+🚨 **A package version is not by itself an immutable identity.** An equal-version republish MOVES
+the head: a rebuild of unchanged source against a newer platform republishes under the same version.
+So `Store@1.2.3` can name different bytes on two different days, and a channel that resolved only to
+a version would break this page's own rule — two runs following one channel could take different
+bytes and both be "correct". The channel resolves to the version *and* the content-addressed
+generation, and records the generation.
 
 Channel names are scoped to a release line, so a `3.1.0` line gets its own channels and a deployment
 on `3.0` is never dragged across a minor by a name it did not change.
@@ -101,12 +114,24 @@ Evidence, not time. A set is promoted when all three hold:
 Promotion is **monotonic**: `stable` never moves backwards. A set is never un-promoted, because a
 consumer that already took it cannot un-take it.
 
+🚨 **Monotonic is a property of the WRITER, not a hope about the write.** Two promotion runs can each
+observe a qualifying set and update the same pointer out of order, and an ordinary tag update is a
+blind overwrite with no comparison against the release ordinal — so the later write can move `stable`
+backwards while every individual step looks correct. The promoter must therefore be **serialised**,
+and the write itself a **compare-and-swap** that reads the current target and refuses one whose
+ordinal is not strictly greater. Stating the invariant without enforcing it is how it gets violated.
+
 ### Where the pointer lives
 
-A moving **git tag in core**, `channel/3.0.0-stable`, at the promoted set's core commit. Its
-annotated message records the evidence, so the tag's own history is the audit trail. CI resolves it
-with one call, and a commit sha is exactly the shape the resolver already knows how to turn into a
+A moving **git tag in core**, `channel/3.0.0-stable`, at the promoted set's core commit. CI resolves
+it with one call, and a commit sha is exactly the shape the resolver already knows how to turn into a
 set.
+
+🚨 **The tag is the POINTER, and it is not the audit trail.** Force-updating a remote tag replaces
+the ref; there is no durable remote reflog, and an annotated message can only ever describe the
+target the tag has *now*. So each promotion is additionally written to an **append-only record** —
+the set, the evidence that qualified it, and when — which survives the next promotion. The pointer
+answers "what is stable"; the record answers "why, and what was stable before".
 
 CD publishes the mirrored image pointer `3.0.0-stable` in the same step that moves the tag, beside
 the `3.0.0-latest` it already publishes — one writer, one step, so the two cannot drift apart.
@@ -162,10 +187,17 @@ make an instance hold, never roll. A channel must inherit that asymmetry rather 
 own repository, and may deliberately run a slower policy with an explicit pin. A channel is offered
 to such an estate, never imposed on it.
 
-**Plugins.** The registry labels the head of each package `latest` in the index it already computes;
-a promoted release additionally carries `stable`. A consumer that follows a channel filters the index
-on the name and is otherwise unchanged — the adoption decision already means "take the newest
-served, never roll back", which *is* channel-following once the channel decides what is served.
+**Plugins.** `latest` is a label over a fact the registry already computes: the index orders each
+package's entries newest-first, so naming the head costs a field on the projection and no new state.
+
+`stable` is not that, and the difference should not be glossed. The index carries no channel
+metadata today and there is **no promotion writer for a package** — so a plugin `stable` needs a
+durable field on the registry's own record, a publisher that sets it, and resolution on the consumer
+side; it cannot be an otherwise-unchanged filter over the existing ordering. That is why the two
+channels are separate pieces of work rather than one, and why `latest` can ship long before `stable`.
+
+What does carry over unchanged is the adoption decision: "take the newest served, never roll back"
+*is* channel-following, once the channel decides what is served.
 
 ## What a channel needs from the system around it
 
