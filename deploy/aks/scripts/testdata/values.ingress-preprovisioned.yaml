@@ -1,0 +1,9 @@
+# The opt-out: a TLS Secret created by other means (a self-signed local install, a certificate
+# uploaded by hand). Named, not implied — `none` is what tells the chart to ask cert-manager for
+# nothing, and it renders the meshweaver.io/tls-secret marker so a live object says which it is.
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "portal.localtest.me"
+  tlsSecret: "portal-local-tls"
+  clusterIssuer: "none"

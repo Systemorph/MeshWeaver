@@ -727,6 +727,12 @@ ingress:
   className: "nginx"
   host: ""          # e.g. memex.localtest.me (resolves to 127.0.0.1)
   tlsSecret: ""     # name of a kubernetes.io/tls secret in this namespace
+  # Which cert-manager ClusterIssuer issues that Secret. Blank here (neutral chart: a self-host
+  # install may pre-create the Secret); the fleet's records render `letsencrypt-prod` into it, and
+  # `none` says "this Secret is created by other means, ask cert-manager for nothing". A host with
+  # a tlsSecret and neither an issuer nor a hand-written cert-manager annotation is refused by
+  # deploy/aks/scripts/check-chart-invariants.sh — that shape serves another host's certificate.
+  clusterIssuer: ""
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
