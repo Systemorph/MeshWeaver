@@ -1458,6 +1458,80 @@ def _self_test() -> int:
             failures.append(f"  the generated csproj names System.Reactive (impl_frameworks={impl}) "
                             "— a guessed Rx version is back")
 
+    # 🚨 BOTH WARNING MODES, PROPERTY BY PROPERTY. `--warnings-as-errors` is a global flipped in
+    # main(), so until this block the self-test only ever saw the LENIENT project: a regression
+    # could leave TreatWarningsAsErrors false, keep `Nullable=enable`, leave the analyzers on, or
+    # drop the documentation file — and the canonical gate self-test would stay green while the
+    # opt-in silently measured nothing. Two contracts are pinned here, and they pull in opposite
+    # directions: strict must actually BE strict, and the default must stay byte-for-byte what it
+    # was before the flag existed. The global is saved and restored the way `ROOT` is above, so
+    # the checks after this one see the mode they were written for.
+    global WARNINGS_AS_ERRORS
+    saved_warnings_as_errors = WARNINGS_AS_ERRORS
+    try:
+        WARNINGS_AS_ERRORS = True
+        strict = build_csproj(Path("/tmp"), "")
+        WARNINGS_AS_ERRORS = False
+        lenient = build_csproj(Path("/tmp"), "")
+    finally:
+        WARNINGS_AS_ERRORS = saved_warnings_as_errors
+    # 🚨 THE EXPECTED VALUES ARE LITERALS, never `PARITY_NOWARN`/`LENIENT_NOWARN` interpolated
+    # back in. An assertion built from the constant it is checking is self-referential: adding
+    # `CS0618` to PARITY_NOWARN would move the constant AND the expectation together and stay
+    # green, while the strict gate silently stopped matching the documented parity contract. The
+    # two constants are therefore pinned by VALUE first, and the projects compared against spelled-
+    # out property strings. Changing the contract means changing these literals, in this commit,
+    # which is the whole point of the check.
+    if PARITY_NOWARN != "CS1591;CS1573;CS1712":
+        failures.append(f"  PARITY_NOWARN is {PARITY_NOWARN!r}, not the documented parity list "
+                        "'CS1591;CS1573;CS1712' (core's Directory.Build.props NoWarn minus the "
+                        "SDK's own CS1701;CS1702) — this is a POLICY change, not a refactor: "
+                        "update Doc/Architecture/InMeshWarningStandard and CompileWarning."
+                        "NotReported in the same commit, then this literal")
+    if LENIENT_NOWARN != "$(NoWarn);CS1591;CS1998;CS8618;CS8602;CS8604;CS0618":
+        failures.append(f"  LENIENT_NOWARN is {LENIENT_NOWARN!r} — the default mode must stay "
+                        "byte-for-byte what it was before --warnings-as-errors existed")
+    # The full property set of each mode, spelled out. `EXACT` is compared as a whole property
+    # element, so a value that merely CONTAINS the expected one cannot pass.
+    strict_props = [
+        "<Nullable>annotations</Nullable>",
+        "<TreatWarningsAsErrors>true</TreatWarningsAsErrors>",
+        "<NoWarn>$(NoWarn);CS1591;CS1573;CS1712</NoWarn>",
+        "<GenerateDocumentationFile>true</GenerateDocumentationFile>",
+        "<EnableNETAnalyzers>false</EnableNETAnalyzers>",
+        "<AnalysisLevel>none</AnalysisLevel>",
+        "<RunAnalyzers>false</RunAnalyzers>",
+    ]
+    lenient_props = [
+        "<Nullable>enable</Nullable>",
+        "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>",
+        "<NoWarn>$(NoWarn);CS1591;CS1998;CS8618;CS8602;CS8604;CS0618</NoWarn>",
+        "<GenerateDocumentationFile>false</GenerateDocumentationFile>",
+    ]
+    for label, proj, wanted, unwanted in (
+        # Strict = how the MESH compiles: warnings are errors, the NoWarn narrows to the parity
+        # list, `annotations` (never `enable` — that would switch the whole CS86xx family on across
+        # the fleet at once), analyzers off (the mesh runs none), and the documentation file ON,
+        # without which the doc diagnostics are not PRODUCED and the standard is a tick over
+        # nothing.
+        ("strict", strict, strict_props,
+         lenient_props + ["<EnableNETAnalyzers>true</EnableNETAnalyzers>"]),
+        # Lenient = the pre-flag behaviour, unchanged — and it must carry NONE of the strict
+        # properties, the analyzers-off block included.
+        ("lenient", lenient, lenient_props, strict_props),
+    ):
+        for needle in wanted:
+            if needle not in proj:
+                failures.append(f"  the {label} csproj does not carry {needle} — "
+                                "the warning mode no longer selects the properties it documents")
+        for needle in unwanted:
+            if needle in proj:
+                failures.append(f"  the {label} csproj carries {needle}, which belongs to the "
+                                "other mode — the two modes have bled into each other")
+    if WARNINGS_AS_ERRORS != saved_warnings_as_errors:
+        failures.append("  the self-test left WARNINGS_AS_ERRORS changed — every check after it "
+                        "would run in the wrong mode")
+
     # 🚨 THE MODULE-REFS GUARD MUST BE ABLE TO FIRE. Its whole job is to refuse a run whose
     # reference set is short, so a guard that silently finds nothing to complain about reads
     # exactly like a complete reference set — the failure this gate exists to stop being
@@ -1627,6 +1701,10 @@ def _self_test() -> int:
     print("✓ short-reference-set refusal: fires on an image set with no shared frameworks and on any "
           "set with no System.Reactive, names the refill, stays silent on a complete image cache and "
           "on a core source build — and the generated csproj restores no Rx version (#4404)")
+    print("✓ --warnings-as-errors: the strict project carries TreatWarningsAsErrors, the parity "
+          f"NoWarn ({PARITY_NOWARN}), `annotations`, the documentation file and the analyzers-off "
+          "block; the default project carries none of them and keeps the pre-flag property set; "
+          "and the global is restored (#4596)")
     print(f"✓ module-refs guard: detects a short reference set, collects exactly "
           f"{len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assemblies, absolutized")
     print("✓ --modules scope: a subset selects only its packages, an unknown id and an empty list "
