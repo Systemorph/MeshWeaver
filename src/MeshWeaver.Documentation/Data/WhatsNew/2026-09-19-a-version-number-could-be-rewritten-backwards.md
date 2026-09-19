@@ -42,10 +42,12 @@ about it: fetch the missing release history, or run the tool where that history 
 The check happens before the first file is written, so a repository with several modules cannot end
 up with the first few downgraded and only then be refused.
 
-If the recorded number really is wrong — typed in by hand, or left behind by a module that moved — the
-message says so too, and asks for a deliberate correction. The tool will not make that one for you,
-because it cannot tell the difference between a number that is wrong and a release it simply cannot
-see.
+The two situations get **opposite** advice, and that is the point of separating them. When the release
+history *was* available and verified, nothing is missing, and the recorded number is simply one that no
+release justifies — typed in by hand, or left behind by a module that moved. Then the message says so,
+and asks for a deliberate correction; fetching again cannot change the answer. When there is no release
+history to consult, the message says the opposite: do **not** correct the number from here, because from
+inside such a copy a real release and a mistake look identical. Run the tool where the history is.
 
 ## Proving it
 
