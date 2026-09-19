@@ -495,7 +495,16 @@ def unit_for(cc, sources):
     The configuration LAMBDA is deliberately not appended (`lambda_src=None`): a source SET can be
     shared by several NodeTypes with different lambdas — the harness compiles the set once and
     attributes the result to all of them — and the gate already compiles every type's lambda with
-    its own sources. Nothing here runs a lambda, so its absence cannot hide a test failure."""
+    its own sources. Nothing here runs a lambda, so its absence cannot hide a test failure.
+
+    🚨 "IDENTICAL TEXT" IS A CLAIM ABOUT THIS FUNCTION, NOT ABOUT THE SET IT IS GIVEN. `run_set`
+    hands it `collisions_within`'s output, which collapses byte-identical copies, while the gate
+    hands `build_unit` the resolved frozenset of PATHS. Two DISTINCT paths with identical content
+    therefore compile once here and twice there — CS0101 on the gate and on the mesh, silent here.
+    Measured 2026-09-19 over every NodeType with resolved sources in MeshWeaver.Reinsurance,
+    MeshWeaver.Crm and MeshWeaver.Plugins: **0 of 243** exercise it, so it is latent, and left as it
+    is rather than changed with no subject to measure the change against. If you ever see the gate
+    report a CS0101 this harness does not, that is where to look first."""
     text, origins, _imports = cc.build_unit(sources, None)
     return text, origins
 
@@ -623,6 +632,12 @@ def hoist_self_test(cc, case) -> None:
             (d / "B.cs").write_text(user, encoding="utf-8")
             text, _origins = unit_for(cc, [str(d / "A.cs"), str(d / "B.cs")])
             marker = "// User-defined types"
+            # 🚨 The split has to HAPPEN, or every "…is not in the body" case below passes against an
+            # empty body and every "…is in the head" case against the whole file — the controls would
+            # go vacuous without going red, which is the exact defect this whole file is about.
+            # `build_unit` omits the marker when the code half is blank, so assert it is there.
+            case("the unit separates its import block from the code (the split below is real)",
+                 marker in text, text[:200])
             head, _, body = text.partition(marker)
             return text, head, body
 
