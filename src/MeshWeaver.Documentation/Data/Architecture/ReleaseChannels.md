@@ -159,8 +159,19 @@ ordered and one-sided:
   promotion that did not happen.
 - **The record is inside the protocol, not beside it.** Writing it first would let it describe a
   promotion whose tag never landed; leaving it out of the failure path would let `stable` advance
-  with no durable evidence. It is written after the tag, and a tag with no record is a repairable
-  state the reconciler fills in — the tag is what happened, the record is the account of it.
+  with no durable evidence. It is written after the tag.
+- **The record is KEYED by the promoted set, not appended blindly.** Append-only and retry are in
+  tension otherwise: a record write that times out after the tag landed would, on retry, append a
+  second entry for one promotion. Keyed, the retry writes the same entry and the operation is
+  idempotent like the other follower. Append-only then means what it should — entries are never
+  mutated or removed — rather than "every write appends".
+- 🚨 **Reconciliation cannot INVENT evidence.** The pointer-derived half of a missing record — which
+  set, and that it was promoted — follows from the authoritative tag. The evidence and the moment of
+  the decision do not: they are facts about an evaluation that happened, and no amount of reading the
+  tag reconstructs them. So a tag with no record is an **incomplete promotion**, reported as such,
+  and it is closed either by re-evaluating the evidence now and saying that is what happened, or by
+  recording the gap honestly as unknown. It is never filled in with a plausible reconstruction,
+  because an audit record that can be fabricated is not one.
 - **Convergence needs a TRIGGER, not just a comparison.** Reconciling "on every promoter run" is
   only safe while promotions keep coming: a tag that lands and a registry push that then fails, on
   the *last* promotion before a quiet week, leaves the image pointer behind indefinitely. So the
