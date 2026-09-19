@@ -284,6 +284,82 @@ Two bugs that make a monitor lie, both hit in one session:
   takes the first line. The failure grows with the repository's check volume, so a reader that
   works today starts lying later, silently.
 
+### 🚨 A comparison against an UNVALIDATED read turns a refusal into "ACT NOW"
+
+The watcher bugs above withhold an action. This one **manufactures** one, which makes it strictly
+worse: it arrives wearing urgency and a ready-made remedy.
+
+A watcher polled a file's sha and compared it to a baseline:
+
+```bash
+gh api "repos/.../contents/scripts/resolve-platform.py?ref=main" --jq '.sha' || true
+```
+
+Measured 2026-09-19 09:08:35Z, under a secondary rate limit, `--jq '.sha'` yielded the **refusal
+body**, `!=` against the 40-hex baseline was therefore true, and the watcher announced:
+
+```
+ACT NOW: main's resolve-platform.py MOVED (3361378ce5e2… -> {"message":"API rate limit exceeded
+for user ID …","status":"403"}) — merge origin/main into <branch> and push
+```
+
+Nothing had moved; the file was byte-for-byte unchanged, confirmed locally with no network. Acting on
+it would have merged `main` without the awaited fix and spent a CI run during the limit.
+
+Two individually-correct decisions compose into it. `|| true`, so one transient refusal cannot kill a
+long watch — right. `!=` against the previous value as the change test — right. Together they mean
+**any failed read is a positive result.**
+
+**The question to ask before arming any watcher: what does this print on a 403? If that is its success
+branch, it is not a watcher.** Three guards, and the first is the one that matters:
+
+- **Validate the value's SHAPE before comparing it.** A sha must match `^[0-9a-f]{40}$`, an md5
+  `^[0-9a-f]{32}$`, a count must be all digits. Anything else is not a value.
+- **Make "could not read" its own printed outcome**, distinct from both *changed* and *unchanged*, and
+  back off after it. Three states, never two.
+- **Dry-run it against a forced failure** — unset the token, or point it at a 404 path — and read what
+  it says. A watcher whose failure branch has never been exercised is a guess.
+
+The same hole is easy to leave in an equality test rather than an inequality one: a monitor comparing
+two digests and announcing agreement on equality would, under a total refusal, digest two error bodies
+and declare them identical. On this occasion they differed only because each 403 carries a distinct
+request id. That is luck, not a design.
+
+### 🚨 The CREATION limit is a second secondary limit, and `gh` porcelain exits 0 under it
+
+The primary/secondary table above concerns reads. There is a **separate** secondary limit on content
+creation — issues, pull requests, comments, and review-thread replies — and it is reached
+independently. Measured 2026-09-19 08:51:44Z:
+
+```
+$ gh issue create --repo … --title … --body-file …  > out.txt 2> err.txt
+exit=0        out.txt: empty        err.txt: empty        issue: DOES NOT EXIST
+```
+
+**Exit 0, both streams empty, nothing created.** The same request over REST named it at once:
+
+```
+$ gh api --method POST repos/…/issues --input payload.json
+{"message":"You have exceeded a secondary rate limit and have been temporarily blocked from
+content creation. …","status":"403"}
+```
+
+So create over REST, and build the JSON with `python3 json.dumps` rather than interpolating a body
+into a shell string. Two consequences worth stating plainly:
+
+- **A lost review-thread reply is invisible in exactly the way that matters.** The review gate stays
+  red, `mergeable_state` stays `blocked`, and the agent that "replied" has no signal it did not. Then
+  re-running the gate looks like the gate is broken when the thread is genuinely unanswered.
+- **The two limits are not ordered.** Creation was refused at 08:51Z while reads still worked; reads
+  were refused at 09:11Z with `/rate_limit` reporting `core: 5000/5000`. Neither one predicts the
+  other, and the read meter reports neither.
+
+**Verify every creation by reading it back, keyed on something only the NEW content has.** An
+existence check such as `select(.in_reply_to_id == <ID>)` passes on a pre-existing reply and on a stub,
+and a retrier keyed that way reported success while a wrong reply sat there untouched. Byte-compare the
+fetched body against the file that was posted, or at minimum assert its exact length. An existence
+check is sound only against a baseline measured *before* the write.
+
 ### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
 
 The other direction of the same defect: the gate runs, its input is a constant, and the constant is
