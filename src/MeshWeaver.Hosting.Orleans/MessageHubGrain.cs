@@ -378,7 +378,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     node => CompleteActivation(streamId, address, grainScheduler, node),
                     ex =>
                     {
-                        logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
+                        // 🚨 The SIBLING reporter of the same fault (#3243, second half). The
+                        // missing-hub line below classifies HostShuttingDown down to Debug; this arm
+                        // did not, and reported EVERY activation fault at fail level — including the
+                        // teardown race that line exists to excuse. Because the incident fingerprint
+                        // identifies the fault and NOT the reporter (Doc/Architecture/LogWatchTriage:
+                        // the category is not in the identity when a frame is present, and the
+                        // discriminating text is the EXCEPTION's message, never the reporter's prose),
+                        // a teardown-race ObjectDisposedException logged here lands on the very
+                        // incident the first half was closing — so the ticket kept reopening through
+                        // the unclassified sibling. Classifying the level is what stops that; the
+                        // wording is for the human and cannot split anything.
+                        logger.Log(ActivationFaultLevel(ex), ex,
+                            "[ACTIVATE] Grain {StreamId}: {Reason}", streamId,
+                            ActivationFaultReason(addressPath, ex));
                         // Defect 3: stash the REAL cause so a caller whose delivery only ever sees the
                         // raw Orleans rejection (grain mid-deactivation) still gets the actionable error.
                         activationFailures?.Record(streamId, ex.Message);
@@ -788,6 +801,62 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <returns>The log level to report it at.</returns>
     internal static LogLevel HubConstructionFailureLevel(HostedHubOutcome outcome) =>
         outcome == HostedHubOutcome.HostShuttingDown ? LogLevel.Debug : LogLevel.Error;
+
+    /// <summary>
+    /// True when an activation fault is the host/scope teardown race rather than a defect —
+    /// the ACTIVATION-chain counterpart of <see cref="HubConstructionFailureLevel"/> (#3243).
+    ///
+    /// <para>Both classifiers already exist and are deliberately shared rather than re-derived
+    /// here: <see cref="HubDisposingException.IsHubDisposal"/> covers the case where the hub
+    /// announced its own disposal, and <see cref="HubDisposingException.IsDisposedContainer"/>
+    /// the case a scope was closed underneath live work — an
+    /// <see cref="ObjectDisposedException"/> naming a disposed Autofac <c>LifetimeScope</c>, which
+    /// is exactly the signature #3243 was filed on. Both walk the exception CHAIN, because the
+    /// fault reaches this arm wrapped.</para>
+    /// </summary>
+    /// <param name="ex">The activation fault; may be null.</param>
+    /// <returns><c>true</c> when the fault is a teardown race.</returns>
+    internal static bool IsActivationTeardownRace(Exception? ex) =>
+        HubDisposingException.IsHubDisposal(ex) || HubDisposingException.IsDisposedContainer(ex);
+
+    /// <summary>
+    /// The level the activation-fault line is logged at — a TICKETING decision, not a verbosity
+    /// knob, for the same reason <see cref="HubConstructionFailureLevel"/> is one (#3243).
+    /// Everything a portal reports as red becomes an incident and a GitHub issue
+    /// (<c>Doc/Architecture/LogWatchTriage</c>), so an expected teardown race logged at
+    /// <c>fail:</c> is indistinguishable from an activation that genuinely cannot resolve.
+    ///
+    /// <para>🚨 Only the teardown race is benign. Anything else — a node that never resolved, a
+    /// configuration that threw, an unknown — stays at <see cref="LogLevel.Error"/>, and nothing
+    /// about the arm's BEHAVIOUR changes either way: the fault is still recorded on
+    /// <c>activationFailures</c>, still pushed to <c>_hubReadyRaw.OnError</c>, and the grain still
+    /// deactivates so the next access re-runs resolution.</para>
+    /// </summary>
+    /// <param name="ex">The activation fault; may be null.</param>
+    /// <returns>The log level to report it at.</returns>
+    internal static LogLevel ActivationFaultLevel(Exception? ex) =>
+        IsActivationTeardownRace(ex) ? LogLevel.Debug : LogLevel.Error;
+
+    /// <summary>
+    /// What the activation-fault line says. Two sentences rather than one union, so a reader is
+    /// told WHICH condition fired instead of being handed both and left to guess — the same
+    /// correction <see cref="HubConstructionFailureReason"/> made for the sibling line.
+    ///
+    /// <para>🚨 This wording splits no incident and is not trying to: when a burst carries an
+    /// exception, the fingerprint's discriminating text is the EXCEPTION's message and the
+    /// reporter's prose is excluded by design, so that two catch sites printing one fault stay one
+    /// ticket. The level above is what changes whether this is ticketed at all.</para>
+    /// </summary>
+    /// <param name="path">The address being activated.</param>
+    /// <param name="ex">The activation fault; may be null.</param>
+    /// <returns>The sentence to log.</returns>
+    internal static string ActivationFaultReason(string path, Exception? ex) =>
+        IsActivationTeardownRace(ex)
+            ? $"activation of {path} was abandoned because the host (or its DI scope) is tearing "
+              + "down — an expected teardown race, not a fault. Nothing was written; the next "
+              + "access re-activates this node on a live host."
+            : $"activation faulted for {path}";
+
 
     /// <summary>
     /// Composes the per-emission "enrich with HubConfiguration" step as an
