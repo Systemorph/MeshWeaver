@@ -755,6 +755,81 @@ gh api -X POST "repos/Systemorph/MeshWeaver/pulls/<PR>/comments/<comment id>/rep
 
 Never hand-request the review to turn the check green, and never apply `review-waived` yourself.
 
+### 🚨 Posting a reply from a file needs `-F` **and** `@` — miss either and you post the PATH
+
+Reading a body from a file takes **both** the typed flag and the `@` prefix: `-F body=@reply.md`.
+**Two independent near-misses each post the path itself as the whole reply**, and they are
+distinguishable by the body's first character:
+
+| what was passed | what is posted | tell |
+|---|---|---|
+| `-F body=/Users/roland/.mwgate/reply1.md` — right flag, **no `@`** | `/Users/roland/.mwgate/reply1.md` | body starts with `/` |
+| `-f body=@/private/tmp/…/reply-census.md` — **wrong flag**, `@` present | `@/private/tmp/…/reply-census.md` | body starts with `@` |
+
+Each row posts its own value verbatim, which is what makes the near-miss reproducible as written.
+🚨 **In the wild it does not look that obvious, because the path arrives in a variable** — the shape
+that hid the missing `@` from its author:
+
+```bash
+reply() { gh api graphql -f query='…' -f id="$1" -F body="$2"; }   # ← "$2" needs @, and has none
+reply "PRRT_kwDOTQ2qnM6XczkO" /Users/roland/.mwgate/reply1.md
+```
+
+`-f` sends its value literally and never interprets `@`; `-F` interprets `@value` as a file but
+passes a bare value through unchanged. Both apply to `gh api graphql` variables as well as REST
+fields. Either way the call SUCCEEDS, `in_reply_to_id` is set, the thread renders as answered, this
+check goes GREEN, and the finding is never read by anybody. **It is strictly worse than not replying
+at all**, because it consumes the one signal — "this thread is unanswered" — that would otherwise
+bring somebody back to it. Worse still when the same loop goes on to resolve the thread, as
+MeshWeaver.Plugins#370's did: the finding then looks deliberately closed rather than merely answered.
+
+Measured 2026-09-19: **100 stub posts across four sessions**. On MeshWeaver.Plugins#370 four Copilot
+findings sat that way for six weeks, one of them a privilege-escalation shape in an admin-invokable
+action. The answers had been *written* — the files were still on disk — and only the posting failed.
+
+🚨 **Never key detection on the stub's shape.** The body is whatever string the caller passed, and
+three shapes have already been observed: a bare absolute path, `@` followed by an absolute path,
+and a single `x`. Two predicates that do not depend on shape, used together over every **reply**:
+
+```bash
+# SUSPECTS, not proof — a body with no whitespace at all
+jq -r '.[] | select(.in_reply_to_id != null and (.body | test("\\s") | not)) | "\(.id) \(.body)"' comments.json
+# every short reply — the backstop for a stub that DOES contain whitespace
+jq -r '.[] | select(.in_reply_to_id != null and (.body|length) < 200) | "\(.id) \(.body)"' comments.json
+```
+
+🚨 **Neither predicate is a gate, and the first is a high-signal SUSPECT list rather than proof.** It
+has false positives — a bare commit SHA, or a lone `#1234`, is a legitimate whitespace-free reply —
+and false negatives, because a placeholder containing a space passes it, which is why the second
+predicate is the backstop and not a refinement. Both are scoped to `in_reply_to_id != null`: a
+top-level review comment is not a reply, and counting one as a stub is how a census overstates.
+**Read every hit.** The discriminator is what the body NAMES: a real answer names a commit or a
+finding, a stub names a file. The only thing here safe to automate is the *repair* verification
+below, where a byte-compare against the posted file is exact.
+
+**Repair with `PATCH`, never a second POST** — a new reply leaves the stub standing beside it:
+
+```bash
+gh api -X PATCH repos/<owner>/<repo>/pulls/comments/<stub id> -F body=@reply.md   # -F, never -f
+```
+
+🚨 **Verify by BYTE-COMPARING the fetched body against the file**, not by the exit status, not by the
+reply existing, and not by its length. "A comment exists whose `in_reply_to_id` is the thread root"
+**passes on the very stub it is meant to catch**, and length cannot separate two paths of similar
+length. Fetch `pulls/comments/<id>` afterwards and assert equality with the file's contents.
+
+Two traps when sweeping a repo for stubs, both of which produce a confident undercount:
+
+- **Page to exhaustion, and get the denominator from the `Link` header** (`rel="last"`), not from a
+  fixed page budget. A 25-page sweep of `pulls/comments?per_page=100` caps at 2500 comments;
+  MeshWeaver.Plugins has 46 pages, so such a sweep silently misses the oldest ~45% — which is
+  exactly why #370's August replies were invisible to it while a newer pair was not.
+- **A secondary-limit `403` lands INSIDE `--slurp` output as a JSON object among the arrays.** Its
+  final element is then an error, not a short last page, so "the last page held 3 rows, therefore
+  pagination was exhausted" is a false pass. Type-check every page (`select(type=="array")`) and
+  count what you actually read. And note that `/rate_limit` answering `5000/5000 remaining` while
+  calls are refused **is** the secondary limit — the primary quota is not the signal.
+
 ### 🚨 The check's log says GREEN and the pull request is still BLOCKED
 
 **The remedy first, because this is found under pressure. Re-run the check's `pull_request` run:**
