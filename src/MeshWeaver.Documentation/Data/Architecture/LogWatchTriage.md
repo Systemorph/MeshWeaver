@@ -911,10 +911,12 @@ them were duplicates of 9 roots. Both traps below produce a closure that *reads*
 ### 1. An empty `normalizedDetail` makes the fingerprint SITE-ONLY, so "the titled fault is fixed" licenses nothing
 
 The identity's third term is the normalized **detail** — the exception's own message when there is one,
-else the logged message. A burst that carries no exception type *and* whose parse leaves
-`NormalizedDetail` empty contributes nothing there, and the identity collapses to the log **site**.
-Every `Error` from that category then folds onto one incident, with `variants: 1` — so nothing on the
-ticket says it happened.
+else the logged message. It is the parser property `NormalizedDetail`, and it lands on the incident node
+as the JSON field `normalizedDetail`; the JSON spelling is used from here on, because everything this
+section tells you to read is read off the node with `get @Admin/_LogIncident/<fingerprint>`. A burst that
+carries no exception type *and* whose parse leaves that field empty contributes nothing to the third
+term, and the identity collapses to the log **site**. Every `Error` from that category then folds onto
+one incident, with `variants: 1` — so nothing on the ticket says it happened.
 
 [#4597](https://github.com/Systemorph/MeshWeaver/issues/4597) is the worked example.
 `Admin/_LogIncident/253b5feaa9ed755e` carries `normalizedDetail: ""`, a title naming a content-cast
@@ -952,11 +954,11 @@ When a human then transfers the ticket the redirect keeps working —
 `repos/Systemorph/MeshWeaver/issues/1897` resolves to `MeshWeaver.Plugins#2154` — but the same
 fingerprint was measured open **twice, in two repositories**, three times over:
 
-| fingerprint | open in Plugins | open again on core |
+| fingerprint | open in MeshWeaver.Plugins | open again on MeshWeaver (core) |
 |---|---|---|
-| `93710ed097873d0b` | #2132 | #4767 |
-| `34928a1851aa5217` | #2153 | #4794 |
-| `cd48b16db4d9809b` | #2154 | #4795 |
+| `93710ed097873d0b` | [Plugins#2132](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2132) | [core#4767](https://github.com/Systemorph/MeshWeaver/issues/4767) |
+| `34928a1851aa5217` | [Plugins#2153](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2153) | [core#4794](https://github.com/Systemorph/MeshWeaver/issues/4794) |
+| `cd48b16db4d9809b` | [Plugins#2154](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2154) | [core#4795](https://github.com/Systemorph/MeshWeaver/issues/4795) |
 
 `Admin/_LogIncident/93710ed097873d0b` shows the shape: `"issueNumber": 4767` alongside
 `"supersededIssueUrl": ".../issues/4611"` and `"status": "Superseded"` — the incident was superseded and
