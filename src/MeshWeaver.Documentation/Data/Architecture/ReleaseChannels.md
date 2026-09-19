@@ -81,6 +81,11 @@ arrive"*. Naming `latest` names a fact the system already produces.
 **`stable` is a promoted pointer**, and it is the only piece that needs a writer. A broken promoter
 therefore degrades to "stable stops advancing" — never to "nothing resolves".
 
+🚨 **`stable` is a channel over the CI line, not a synonym for an official release.** The two are
+different questions and must not be conflated: the official release lane has never run, and the
+newest release tag is a release candidate. `3.0.0-stable` means *the newest `3.0.0-ci` set that
+passed the evidence below*; it makes no claim about `3.0.0` the product version.
+
 ### What promotes a set to `stable`
 
 Evidence, not time. A set is promoted when all three hold:
@@ -136,18 +141,62 @@ This **replaces** the per-repo ceiling: the ceiling's rule becomes the promotion
 computed once for the fleet instead of re-derived by every pull-request run. The `platform:newest`
 label generalises to naming a channel.
 
-**Deployments.** Platform config declares a channel instead of a pinned tag. The layer that already
-selects — the instance's own update policy, with its pattern and its `requireCiGreen` — admits the
-channel by resolving the pointer to a digest and pinning the immutable tag that carries it.
+**Deployments.** The layer that already selects is the instance's own update policy — its declared
+policy, its pattern and its `requireCiGreen` — and a channel is admitted there. That layer is the
+channel's direct ancestor: a pattern like `3.0.0-ci*` already says "the 3.0.0 continuous line", and
+the fleet's records already carry a policy and a pattern rather than a version.
 
-Two properties of that layer must survive contact with a channel field, because both were bought
-with incidents: **absent stays fail-closed** (an undeclared policy is `None`, and a null pattern
-admits nothing), and a new field must not put its safe value where the serializer will omit it.
+🚨 **The resolved id is NOT written back onto the deployment record.** The fleet has moved to no
+record-level pins at all — a machine check refuses any value, with no allow-list, and the overlay
+image is a floor rather than a pin. So the immutable id a channel resolves to is recorded on the
+instance's own side, or as that floor; a design that "resolves the pointer and pins it on the
+record" would be refused by the gate that already guards this.
+
+Three properties of that layer must survive contact with a channel, because each was bought with an
+incident: **absent stays fail-closed** (an undeclared policy is `None`, and a null pattern admits
+nothing); a new field must not put its safe value where the serializer will omit it; and where a
+cache or a denominator is involved, **it may only fail in the holding direction** — a stale read may
+make an instance hold, never roll. A channel must inherit that asymmetry rather than relax it.
+
+**Not every estate follows the fleet line.** A stand-alone client estate keeps its own records in its
+own repository, and may deliberately run a slower policy with an explicit pin. A channel is offered
+to such an estate, never imposed on it.
 
 **Plugins.** The registry labels the head of each package `latest` in the index it already computes;
 a promoted release additionally carries `stable`. A consumer that follows a channel filters the index
 on the name and is otherwise unchanged — the adoption decision already means "take the newest
 served, never roll back", which *is* channel-following once the channel decides what is served.
+
+## What a channel needs from the system around it
+
+A pointer is only as good as the things it points at, and two of those are not automatic.
+
+**The set a channel names must be RETAINED for as long as anything may still resolve it.** This is
+the invariant most easily missed, and it has already been measured the hard way: when the CI platform
+volume kept only the three newest sets while core cut one every 20–45 minutes, its window became
+shorter than the CI queue. A pull request resolved a set, waited an hour behind a saturated runner
+pool, and then failed because that set was **below the oldest set kept** — thirteen of twenty-seven
+open pull requests at once, on unrelated diffs. A moving pointer plus a short retention window is a
+race, and an id being immutable does not save you if the artifact behind it is gone. So promotion
+must also mean **retention**: the set `stable` names is kept while it is named, and for as long
+afterwards as any consumer may still be holding it.
+
+Note that retention is by digest, and record-level pins used to supply some of its anchors. A fleet
+that drops its pins and a lane that stops locking moving tags are each correct on their own; together
+they must not add up to "nothing anchors what we still need".
+
+**An instance too far behind cannot re-enter a channel on its own.** The availability gate an
+instance runs is the gate in the image it is *currently* running, so an installation several months
+old can judge a newer publication unreadable and hold — while a newer instance, reading the same
+registry, rolls the same set happily. Following a channel does not repair that; it takes one
+deliberate roll to bring such an instance forward, after which the channel governs again. A channel
+design should say this rather than let it surface as "the pointer resolves correctly and the instance
+ignores it".
+
+**A gate that never answers is not evidence.** The per-instance combo verification is the thing that
+would justify the word "trust", and where it has not been provisioned it returns *unverified* rather
+than a verdict. `stable`'s promotion rule must lean only on evidence that actually answers, and say
+which evidence it used.
 
 ## Naming
 
