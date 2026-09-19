@@ -58,6 +58,13 @@ public class TheRuntimeCompileStaysLenientTest
     [InlineData("CS1573", "/// <summary>S.</summary>\n/// <param name=\"a\">A.</param>\n"
                           + "public class P { /// <summary>M.</summary>\n"
                           + "/// <param name=\"a\">A.</param>\npublic void M(int a, int b) { } }")]
+    // 🚨 CS1712 was keyed into the policy by #4591 and exercised by nothing until this line. Its
+    // shape is exactly CS1573's one level up and is easy to get wrong: the compiler says "…but
+    // other type parameters do", so ONE documented <typeparam> beside an undocumented one is
+    // required. A type with no <typeparam> at all produces CS1591 instead — measured, as an empty
+    // diagnostic set on the first attempt at this case.
+    [InlineData("CS1712", "/// <summary>S.</summary>\n/// <typeparam name=\"T\">T.</typeparam>\n"
+                          + "public class P<T, U> { }")]
     public void ACentrallySuppressedCode_IsNotReported(string code, string source)
     {
         var result = Emit(source);
@@ -65,6 +72,39 @@ public class TheRuntimeCompileStaysLenientTest
         Assert.True(result.Success);
         Assert.Contains(result.Diagnostics, d => d.Id == code);          // the compiler produced it
         Assert.DoesNotContain(EmitPipelineAccess.Collect(result.Diagnostics), w => w.Id == code);
+    }
+
+    /// <summary>
+    /// 🚨 THE SET ITSELF, member by member — the one assertion a compiler probe cannot make.
+    ///
+    /// <para>The cases above prove the FILTER for every id that a one-reference
+    /// <see cref="CSharpCompilation"/> can actually produce. <c>CS1701</c>/<c>CS1702</c> are
+    /// reference-set SKEW: they need two assemblies disagreeing about a third's version, which is
+    /// precisely what a hand-assembled reference set presents and a probe here cannot. So they were
+    /// keyed into <see cref="CompileWarning.NotReported"/> and reachable by no test — a typo
+    /// (<c>CS17O2</c>), a dropped entry or a sixth id added by mistake would all have been silent,
+    /// and CS1701 was the 95-entry root cause the whole change existed to retire.</para>
+    ///
+    /// <para>This pins the membership literally, in both directions, and goes through
+    /// <see cref="CompileWarning.IsNotReported"/> rather than the collection so the accessor the
+    /// pipeline actually calls (<c>EmitPipeline.Collect</c>) is the one under test. Changing the
+    /// policy means changing this list in the same commit — which is the point.</para>
+    /// </summary>
+    [Fact]
+    public void TheNotReportedSet_IsExactlyTheParityList()
+    {
+        Assert.Equal(
+            ["CS1573", "CS1591", "CS1701", "CS1702", "CS1712"],
+            CompileWarning.NotReported.OrderBy(id => id, System.StringComparer.Ordinal));
+
+        foreach (var id in new[] { "CS1573", "CS1591", "CS1701", "CS1702", "CS1712" })
+            Assert.True(CompileWarning.IsNotReported(id), $"{id} must stay centrally suppressed");
+
+        // The control: everything the ratchets measure must NOT be on the list, or the standard
+        // would be a tick over nothing. CS1572/CS1574 in particular are one character from the
+        // suppressed CS1573/CS1712 and mean the opposite — a tag that is WRONG, not one missing.
+        foreach (var id in new[] { "CS0219", "CS1570", "CS1571", "CS1572", "CS1574", "CS1584", "CS1587", "CS0419" })
+            Assert.False(CompileWarning.IsNotReported(id), $"{id} must keep reaching the gate");
     }
 
     /// <summary>The control for the case above: a code NOT on the parity list still reaches the
