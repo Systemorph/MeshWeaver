@@ -249,10 +249,20 @@ module version or an `installedAtUtc`.
 A close review at 2026-09-19T10:35Z could not establish *"not seen since the roll"* for twelve
 issues, because no incident anywhere in the readable population had folded a sighting since
 07:28:51Z — a reading indistinguishable from a stopped watcher, and correctly refused as evidence.
-By 15:41Z the same instrument had folded sightings from memex-cloud's three CURRENT replicas (pods
-started 08:34:53 / 08:39:58 / 08:39:59Z on `3.0.0-ci.8969`): `465a6677047a571b` at 08:57:30Z and
-08:59:06Z from `…-gx6z6`, `c93238020fe2f0b5` at 09:09:51Z from `…-g6bbb`, `4ff70ec1124b1b3c` at
-09:40:44Z.
+By 15:41Z the same instrument had folded sightings from pods in
+`Ops/Status/memex-cloud`'s own roster. 🚨 **What qualifies each row below is the POD, never the
+incident node's `namespace`** — for the reason in the section just above, two of these three nodes
+carry `namespace: memex` while the pod they name is in memex-cloud's roster:
+
+| incident node | sighting | pod | in memex-cloud's roster? |
+|---|---|---|---|
+| `465a6677047a571b` | 08:57:30Z, 08:59:06Z | `…-69956b6dbc-gx6z6` | yes — **currently running**, started 08:39:58Z |
+| `4ff70ec1124b1b3c` | 09:08:04Z, 09:09:45Z, 09:14:38Z | `…-69956b6dbc-s246c` | yes — **currently running**, started 08:34:53Z |
+| `c93238020fe2f0b5` | 09:09:51Z | `…-69956b6dbc-g6bbb` | same generation, since replaced |
+
+(`Ops/Status/memex-cloud` sampled 18:53:13Z lists exactly `…-69956b6dbc-{gx6z6,ndnxt,s246c}` on
+`3.0.0-ci.8969`; `Ops/Status/memex` lists `…-6cd5d8f887-{2kcwk,lvmpf}` on `3.0.0-ci.8968`. That is
+what makes the pod decisive and the namespace field not.)
 
 🚨 **The control does not have to be the fingerprint you are judging.** Any fold naming a pod from
 the current generation establishes that ingestion is alive for that generation, which is exactly

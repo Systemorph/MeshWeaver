@@ -387,13 +387,19 @@ public static class BuildCoordinationExtensions
     /// <see cref="BuildGoWitness.Undetermined"/> is refusing on a read that never happened, and
     /// SAYING it refused because there is no GO is a claim the process is not entitled to make.</para>
     ///
-    /// <para>🚨 <b>The witness is not necessarily in a different failure domain from the
-    /// subscription.</b> In the fleet's portal wiring <see cref="IStorageAdapter"/> is
-    /// <c>RoutingProxyAdapter</c>, which serves this read as
-    /// <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> over the same hub transport a
-    /// <c>SubscribeRequest</c> travels on. So the fault that shuts the subscription door can shut
-    /// this one too, and it arrives here as the SAME <see cref="TimeoutException"/> — which is
-    /// exactly why it must not be laundered into "no GO recorded".</para>
+    /// <para>🚨 <b>Whether the witness is in a different failure domain from the subscription is
+    /// OPEN, and the wiring this used to assert is measurably absent.</b> It said that in the
+    /// fleet's portal wiring <see cref="IStorageAdapter"/> IS <c>RoutingProxyAdapter</c>, so this
+    /// read would travel the same hub transport a <c>SubscribeRequest</c> does and arrive as the
+    /// same <see cref="TimeoutException"/>. Measured 2026-09-19: <c>AddPartitionStorageHubs</c>,
+    /// the only thing that installs that proxy, has no caller anywhere — not in this repository's
+    /// <c>src/</c> or <c>test/</c>, not in any <c>.cs</c> source of <c>MeshWeaver.Plugins</c> — and
+    /// <c>PartitionStorageRouter</c> says so about itself ("Stage 1 stub … currently dead code on
+    /// the main message path"). So this read is <c>PersistenceService</c> over its backend, a store
+    /// round-trip, and the shared-domain claim needs re-measuring against THAT path before it is
+    /// relied on (<c>Doc/Architecture/UndeterminedIsNotNo</c>). What does NOT depend on the answer,
+    /// and is this method's whole reason to exist: a read that never happened must not be laundered
+    /// into "no GO recorded", whichever transport it used.</para>
     ///
     /// <para>Emits exactly once and completes. Never throws: a failed read becomes
     /// <see cref="BuildGoWitness.Undetermined"/> carrying its exception, and is still logged here at

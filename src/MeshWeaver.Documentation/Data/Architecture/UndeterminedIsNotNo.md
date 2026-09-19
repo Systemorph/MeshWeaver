@@ -94,13 +94,23 @@ before it is cited again, and #3404's five candidates have to be re-argued again
 🚨 **And the seam would break this page's own rule the day it IS wired.** `ReadNodeResponse` has no
 `Error` member, and `PartitionStorageHubExtensions.HandleReadNode` answers a FAULTED adapter read
 with `new ReadNodeResponse(null)` — discarding the exception — which `RoutingProxyAdapter.ReadMany`
-then drops as "this path is absent". `ExistsResponse` is the same shape (`false` on a fault) and
-`RoutingProxyAdapter.Delete` reports a path as deleted when `DeleteBatchResponse.Error` is set,
-while the three siblings in the same file — `WriteMany`, `Delete`'s own batch response and
-`ListDescendantPaths` — all carry an `Error` and re-throw it. That is #4200's defect (a half-
-provisioned partition spelled exactly like an absent node, turning `InstallCompleteness` from
-`NotObserved` into an ABSENT name) recreated one layer deeper. It is latent only because the seam is
-unwired, and `PersistenceServiceReadManyBatchTest` pins the facade, not this.
+then drops as "this path is absent". Three of the seam's paths do it, in two different ways
+(Copilot review):
+
+| path | how a fault comes back |
+|---|---|
+| `ReadNodeResponse` | no `Error` member at all; `HandleReadNode` posts `ReadNodeResponse(null)` — spelled exactly like "no such node" |
+| `ExistsResponse` | no `Error` member; `HandleExists` posts `ExistsResponse(false)` — spelled exactly like "does not exist" |
+| `DeleteBatchResponse` | carries an `Error`, and `RoutingProxyAdapter.Delete` DISCARDS it: `d.Message.Error != null ? path : …` emits the path and completes, i.e. a failed delete reported as a deleted one |
+
+Only `WriteMany` and `ListDescendantPaths` re-throw a reported `Error`, and `ListDescendantPaths`
+carries a comment saying exactly why ("an empty answer here would falsely verify a drained
+subtree").
+
+All three are #4200's defect — a half-provisioned partition spelled exactly like an absent node,
+turning `InstallCompleteness` from `NotObserved` into an ABSENT name — recreated one layer deeper.
+It is latent only because the seam is unwired, and `PersistenceServiceReadManyBatchTest` pins the
+facade, not this.
 
 ## What the third state does at a gate
 
