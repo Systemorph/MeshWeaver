@@ -2140,6 +2140,17 @@ jobs:
       run: python3 .github/scripts/check-workflow-timeouts.py --self-test
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 🚨 A FAILING GUARD MUST NOT SKIP THE GUARDS AFTER IT (#4784). `node-repo-validate.yml`'s
+    # `validate` job is ~36 independent guards in one step list, and GitHub's implicit step condition
+    # is `success()` — so measured on MeshWeaver.SocialMedia#210, one drift red skipped 16 later
+    # guards including `check-pr-secret-preflight.py` and the manifest-lock currency check. A skipped
+    # step publishes no failure and a skipped required context counts as SATISFIED, so every pull
+    # request in that repository was silently unguarded by all six. The trapdoor is made by step
+    # ORDERING, not by a `continue-on-error:` or an `if:`, which is why it needs a gate.
+    - name: "An independent guard reports rather than being masked by an earlier one — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-guard-step-masking.py --self-test
+    - name: "No guard in the shared validate lane is masked by the guard before it"
+      run: python3 .github/scripts/check-guard-step-masking.py --root .
     # 💸 GitHub Actions cost is zero (maintainer, 2026-09-17: "we still incur cost for github actions.
     # wtf? please see that it goes to 0"). A `workflow_call` lane's hosted minutes bill the CALLER, and
     # every caller of these lanes but core itself is private — so no job inside one may name a literal
