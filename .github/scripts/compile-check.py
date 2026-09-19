@@ -1475,43 +1475,58 @@ def _self_test() -> int:
         lenient = build_csproj(Path("/tmp"), "")
     finally:
         WARNINGS_AS_ERRORS = saved_warnings_as_errors
+    # 🚨 THE EXPECTED VALUES ARE LITERALS, never `PARITY_NOWARN`/`LENIENT_NOWARN` interpolated
+    # back in. An assertion built from the constant it is checking is self-referential: adding
+    # `CS0618` to PARITY_NOWARN would move the constant AND the expectation together and stay
+    # green, while the strict gate silently stopped matching the documented parity contract. The
+    # two constants are therefore pinned by VALUE first, and the projects compared against spelled-
+    # out property strings. Changing the contract means changing these literals, in this commit,
+    # which is the whole point of the check.
+    if PARITY_NOWARN != "CS1591;CS1573;CS1712":
+        failures.append(f"  PARITY_NOWARN is {PARITY_NOWARN!r}, not the documented parity list "
+                        "'CS1591;CS1573;CS1712' (core's Directory.Build.props NoWarn minus the "
+                        "SDK's own CS1701;CS1702) — this is a POLICY change, not a refactor: "
+                        "update Doc/Architecture/InMeshWarningStandard and CompileWarning."
+                        "NotReported in the same commit, then this literal")
+    if LENIENT_NOWARN != "$(NoWarn);CS1591;CS1998;CS8618;CS8602;CS8604;CS0618":
+        failures.append(f"  LENIENT_NOWARN is {LENIENT_NOWARN!r} — the default mode must stay "
+                        "byte-for-byte what it was before --warnings-as-errors existed")
+    # The full property set of each mode, spelled out. `EXACT` is compared as a whole property
+    # element, so a value that merely CONTAINS the expected one cannot pass.
+    strict_props = [
+        "<Nullable>annotations</Nullable>",
+        "<TreatWarningsAsErrors>true</TreatWarningsAsErrors>",
+        "<NoWarn>$(NoWarn);CS1591;CS1573;CS1712</NoWarn>",
+        "<GenerateDocumentationFile>true</GenerateDocumentationFile>",
+        "<EnableNETAnalyzers>false</EnableNETAnalyzers>",
+        "<AnalysisLevel>none</AnalysisLevel>",
+        "<RunAnalyzers>false</RunAnalyzers>",
+    ]
+    lenient_props = [
+        "<Nullable>enable</Nullable>",
+        "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>",
+        "<NoWarn>$(NoWarn);CS1591;CS1998;CS8618;CS8602;CS8604;CS0618</NoWarn>",
+        "<GenerateDocumentationFile>false</GenerateDocumentationFile>",
+    ]
     for label, proj, wanted, unwanted in (
         # Strict = how the MESH compiles: warnings are errors, the NoWarn narrows to the parity
         # list, `annotations` (never `enable` — that would switch the whole CS86xx family on across
         # the fleet at once), analyzers off (the mesh runs none), and the documentation file ON,
         # without which the doc diagnostics are not PRODUCED and the standard is a tick over
         # nothing.
-        ("strict", strict,
-         ["<TreatWarningsAsErrors>true</TreatWarningsAsErrors>",
-          "<Nullable>annotations</Nullable>",
-          f"<NoWarn>$(NoWarn);{PARITY_NOWARN}</NoWarn>",
-          "<GenerateDocumentationFile>true</GenerateDocumentationFile>",
-          "<EnableNETAnalyzers>false</EnableNETAnalyzers>",
-          "<AnalysisLevel>none</AnalysisLevel>",
-          "<RunAnalyzers>false</RunAnalyzers>"],
-         ["<TreatWarningsAsErrors>false</TreatWarningsAsErrors>",
-          "<Nullable>enable</Nullable>",
-          "CS1998", "CS8618"]),
-        # Lenient = the pre-flag behaviour, unchanged. CS1998/CS8618 in the NoWarn is the tell that
-        # it is the OLD list and not the parity one.
-        ("lenient", lenient,
-         ["<TreatWarningsAsErrors>false</TreatWarningsAsErrors>",
-          "<Nullable>enable</Nullable>",
-          f"<NoWarn>{LENIENT_NOWARN}</NoWarn>",
-          "<GenerateDocumentationFile>false</GenerateDocumentationFile>"],
-         ["<TreatWarningsAsErrors>true</TreatWarningsAsErrors>",
-          "<Nullable>annotations</Nullable>",
-          "<EnableNETAnalyzers>false</EnableNETAnalyzers>",
-          "<AnalysisLevel>none</AnalysisLevel>",
-          "<RunAnalyzers>false</RunAnalyzers>"]),
+        ("strict", strict, strict_props,
+         lenient_props + ["<EnableNETAnalyzers>true</EnableNETAnalyzers>"]),
+        # Lenient = the pre-flag behaviour, unchanged — and it must carry NONE of the strict
+        # properties, the analyzers-off block included.
+        ("lenient", lenient, lenient_props, strict_props),
     ):
         for needle in wanted:
             if needle not in proj:
-                failures.append(f"  the {label} csproj does not carry {needle!r} — "
+                failures.append(f"  the {label} csproj does not carry {needle} — "
                                 "the warning mode no longer selects the properties it documents")
         for needle in unwanted:
             if needle in proj:
-                failures.append(f"  the {label} csproj carries {needle!r}, which belongs to the "
+                failures.append(f"  the {label} csproj carries {needle}, which belongs to the "
                                 "other mode — the two modes have bled into each other")
     if WARNINGS_AS_ERRORS != saved_warnings_as_errors:
         failures.append("  the self-test left WARNINGS_AS_ERRORS changed — every check after it "

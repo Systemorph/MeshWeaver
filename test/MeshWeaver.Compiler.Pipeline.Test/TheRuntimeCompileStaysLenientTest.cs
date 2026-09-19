@@ -100,10 +100,21 @@ public class TheRuntimeCompileStaysLenientTest
         foreach (var id in new[] { "CS1573", "CS1591", "CS1701", "CS1702", "CS1712" })
             Assert.True(CompileWarning.IsNotReported(id), $"{id} must stay centrally suppressed");
 
-        // The control: everything the ratchets measure must NOT be on the list, or the standard
-        // would be a tick over nothing. CS1572/CS1574 in particular are one character from the
-        // suppressed CS1573/CS1712 and mean the opposite — a tag that is WRONG, not one missing.
-        foreach (var id in new[] { "CS0219", "CS1570", "CS1571", "CS1572", "CS1574", "CS1584", "CS1587", "CS0419" })
+        // The control: EVERY code the ratchets measure must NOT be on the list, or the standard
+        // would be a tick over nothing. This is the full roster the policy's own doc comment and
+        // Doc/Architecture/InMeshWarningStandard name as "doc comments that EXIST and are WRONG",
+        // plus CS0219 — and it is complete on purpose: a code missing from HERE is a code that
+        // could be added to NotReported without anything failing.
+        // 🚨 CS1572/CS1734 and CS1574 are one character from the suppressed CS1573 and CS1712 and
+        // mean the OPPOSITE — a tag that is wrong, not one that is missing.
+        foreach (var id in new[]
+                 {
+                     "CS0219",                                  // an assigned-but-unused local
+                     "CS1570", "CS1571",                         // malformed XML; a duplicated <param>
+                     "CS1572", "CS1734",                         // a tag naming a parameter that is not there
+                     "CS1574", "CS1584", "CS0419",               // a cref resolving to nothing, or to two things
+                     "CS1587",                                   // a doc comment on something that cannot carry one
+                 })
             Assert.False(CompileWarning.IsNotReported(id), $"{id} must keep reaching the gate");
     }
 
