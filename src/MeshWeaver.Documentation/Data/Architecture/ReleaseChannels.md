@@ -111,6 +111,18 @@ Evidence, not time. A set is promoted when all three hold:
 3. **The canary is clean** — the canary lane reports today and gates nothing; here it becomes a
    signal.
 
+🚨 **The promoter's verdict must distinguish "computed and empty" from "NOT COMPUTED".** These are
+opposite facts that look identical in a count, and the fleet has now been bitten by that twice in the
+same job: a ten-minute lane that keeps the set each satellite's main last passed reported `pinned=0`
+— indistinguishable from "nothing needed pinning" — while the rule it names had in fact raised and
+run for **zero** repositories, every ten minutes, for a day. Both times the number that meant
+*crashed* was read as *nothing to do*.
+
+So `stable`'s promotion answers with a verdict, not a tally: *promoted to N*, *evaluated and nothing
+qualified*, or *could not evaluate* — and the third is a failure that is reported as one. A rule that
+cannot read its input is RED, which is the same principle the platform resolver already applies when
+it refuses rather than falling back.
+
 Promotion is **monotonic**: `stable` never moves backwards. A set is never un-promoted, because a
 consumer that already took it cannot un-take it.
 
@@ -133,8 +145,42 @@ target the tag has *now*. So each promotion is additionally written to an **appe
 the set, the evidence that qualified it, and when — which survives the next promotion. The pointer
 answers "what is stable"; the record answers "why, and what was stable before".
 
-CD publishes the mirrored image pointer `3.0.0-stable` in the same step that moves the tag, beside
-the `3.0.0-latest` it already publishes — one writer, one step, so the two cannot drift apart.
+CD publishes a mirrored image pointer `3.0.0-stable` beside the `3.0.0-latest` it already publishes.
+
+🚨 **These are TWO writes and they are not atomic**, so "one writer, one step" is not a guarantee: a
+Git ref update and a registry tag push succeed independently, and a failure or a retry between them
+leaves the two naming different releases with nothing to notice it. The contract is therefore
+ordered and one-sided:
+
+- **The Git tag is authoritative.** It is what CI resolves and what the promotion record describes.
+- **Everything else is published only after the tag update is CONFIRMED** — the image pointer and
+  the promotion record both — never before it and never in parallel. So the window can only hold
+  followers that lag, never one that leads, and a crash before the tag lands leaves no trace of a
+  promotion that did not happen.
+- **The record is inside the protocol, not beside it.** Writing it first would let it describe a
+  promotion whose tag never landed; leaving it out of the failure path would let `stable` advance
+  with no durable evidence. It is written after the tag.
+- **The record is KEYED by the promoted set, not appended blindly.** Append-only and retry are in
+  tension otherwise: a record write that times out after the tag landed would, on retry, append a
+  second entry for one promotion. Keyed, the retry writes the same entry and the operation is
+  idempotent like the other follower. Append-only then means what it should — entries are never
+  mutated or removed — rather than "every write appends".
+- 🚨 **Reconciliation cannot INVENT evidence.** The pointer-derived half of a missing record — which
+  set, and that it was promoted — follows from the authoritative tag. The evidence and the moment of
+  the decision do not: they are facts about an evaluation that happened, and no amount of reading the
+  tag reconstructs them. So a tag with no record is an **incomplete promotion**, reported as such,
+  and it is closed either by re-evaluating the evidence now and saying that is what happened, or by
+  recording the gap honestly as unknown. It is never filled in with a plausible reconstruction,
+  because an audit record that can be fabricated is not one.
+- **Convergence needs a TRIGGER, not just a comparison.** Reconciling "on every promoter run" is
+  only safe while promotions keep coming: a tag that lands and a registry push that then fails, on
+  the *last* promotion before a quiet week, leaves the image pointer behind indefinitely. So the
+  reconciler runs **on a schedule of its own**, independent of whether anything was promoted, and it
+  is the same idempotent operation — re-derive the followers from the authoritative tag. A
+  divergence it cannot repair is **alerted**, not retried silently.
+
+Each follower write is idempotent, which is what makes retry and scheduled repair the same code
+path rather than two.
 
 ## What a channel is NOT
 
@@ -156,11 +202,18 @@ opposite of what it is for.
 
 ## How each consumer reads a channel
 
-**CI.** The resolver takes a channel name, resolves the pointer to a set, and then behaves as it
-always did — including "newest sealed **at or below** that set", which degrades gracefully when the
-pointed-at set's images have been purged, where a hard freeze would go red. Pull requests follow
+**CI.** The resolver takes a channel name and resolves the pointer to a set. Pull requests follow
 `stable`; `main`, the release dispatch and the daily poll follow `latest` — which is what makes
 `main` the place a regression shows up first, and keeps pull requests off it until it is proven.
+
+🚨 **A `stable` target that cannot be resolved FAILS CLOSED.** An earlier draft of this page said
+resolution would fall back to "newest sealed **at or below** that set" and called it graceful
+degradation. It is not: if the set `stable` names has been purged, quietly taking an older one makes
+`stable` denote a release that never earned the channel's evidence — which contradicts the channel
+contract, and contradicts the retention rule below in the same page. A promoted channel that cannot
+find its target is a **refusal**, and it is an incident about retention rather than a resolution
+outcome. At-or-below remains what best-effort resolution does; it is not what a promoted channel
+does.
 
 This **replaces** the per-repo ceiling: the ceiling's rule becomes the promotion rule for `stable`,
 computed once for the fleet instead of re-derived by every pull-request run. The `platform:newest`
