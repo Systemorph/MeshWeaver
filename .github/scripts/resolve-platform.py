@@ -1088,8 +1088,14 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                 # The truncation is SAID. A bounded search reported as an exhausted one is a
                 # gate that passes having checked less than it claims, and `best` is a max over
                 # the runs examined — so this run costs a data point, never a wrong ceiling.
+                # 🚨 IT COUNTS WHAT IT READ, NOT THE RANGE IT WALKED (Copilot review on this PR).
+                # An intermediate attempt carrying no matching job `continue`s WITHOUT touching
+                # `searched`, so "attempts N..M all carry an EMPTY annotation list" could assert
+                # emptiness for attempts that were never looked into. Saying more than was read is
+                # the whole defect class this change exists to fix.
                 notes.append(
-                    f"main run {run_id}: attempts {latest_attempt}..{floor_attempt} all carry an "
+                    f"main run {run_id}: the {searched} attempt(s) between {latest_attempt} and "
+                    f"{floor_attempt} that carried a `{PLATFORM_REF_JOB}` job each returned an "
                     f"EMPTY annotation list — the walk back stopped after "
                     f"{CEILING_ATTEMPTS_WALKED} attempt(s) and this run is SKIPPED rather than "
                     f"read from an attempt {CEILING_ATTEMPTS_WALKED} re-runs old")
@@ -1260,9 +1266,23 @@ def registry_blame(code: int, phase: str) -> str:
     if code == 404 and phase == "token endpoint":
         return ("A 404 from the TOKEN endpoint is the endpoint, not the tag: this registry does "
                 "not serve the OAuth2 token path this resolver asked for.")
+    # 🚨 THE COUNT AND THE CAUSE ARE BOTH TOLD BY THE STATUS (Copilot review on this PR). The loop
+    # is `range(3)` retrying while `attempt < 2`, so a final refusal was retried TWICE across three
+    # attempts — "3 times" overstated it, and in a message whose purpose is to stop a reader chasing
+    # the wrong cause an inflated count invites the opposite error. And a 408 is the request not
+    # completing, not the registry declining to serve it: one sentence over statuses that do not
+    # share a cause is a smaller version of the fault this function was written to fix.
+    if code == 408:
+        return ("HTTP 408 is a TIMEOUT — the request did not complete in time. It was retried twice "
+                "(3 attempts) before this; the credential is not implicated. Re-run.")
+    if code == 429:
+        return ("HTTP 429 is RATE LIMITING — the registry is throttling this caller, not refusing "
+                "it. Retried twice (3 attempts) before this; the credential is not implicated. "
+                "Re-run.")
     if code in REGISTRY_TRANSIENT:
-        return (f"HTTP {code} is TRANSIENT and was retried 3 times before this. The registry is "
-                "refusing or rate-limiting right now; the credential is not implicated. Re-run.")
+        return (f"HTTP {code} is a SERVER ERROR from the registry, retried twice (3 attempts) "
+                "before this. The registry answered badly just now; the credential is not "
+                "implicated. Re-run.")
     return (f"HTTP {code} at the {phase} is not a status this resolver can attribute — read it "
             "against the registry's own docs before assuming either the credential or the tag.")
 
@@ -2309,6 +2329,15 @@ def self_test() -> int:
              [None, 404], "absent", 2, None, None),
             ("a 500 is RED naming HTTP 500, and does NOT blame a credential it cannot implicate",
              [500, 500, 500, 500, 500, 500], None, 3, "HTTP 500", "ACR_USERNAME"),
+            # 🚨 The retry COUNT is what the loop does — two retries over three attempts, not three
+            # (Copilot review on this PR). An inflated count invites the opposite wrong conclusion.
+            ("…and states the retries the loop actually made",
+             [500, 500, 500, 500, 500, 500], None, 3, "retried twice (3 attempts)", "retried 3 times"),
+            # 🚨 A 408 is the request not completing, not the registry declining to serve it.
+            ("a 408 is retried like the rest but described as a TIMEOUT, not as a refusal",
+             [408, 408, 408, 408, 408, 408], None, 3, "TIMEOUT", "refusing or rate-limiting"),
+            ("…and a 429 says rate limiting, which is a third distinct cause",
+             [429, 429, 429, 429, 429, 429], None, 3, "RATE LIMITING", "SERVER ERROR"),
         ):
             total += 1
             opener, calls = registry_scripted(codes)
@@ -2847,6 +2876,15 @@ def self_test() -> int:
                   "and says it was bounded, rather than spending a call per attempt",
                   _fetch_attempt_deep(CEILING_ATTEMPTS_WALKED + 6), None,
                   f"stopped after {CEILING_ATTEMPTS_WALKED} attempt(s)")
+    # 🚨 …counting the attempts it READ, not the range it walked (Copilot review on this PR): an
+    # intermediate attempt with no matching job is skipped without being looked into, so a note
+    # asserting every attempt in the range was EMPTY would say more than was read.
+    _ceiling_case("…and the truncation note counts the attempts that RETURNED empty annotations",
+                  _fetch_attempt_deep(CEILING_ATTEMPTS_WALKED + 6), None,
+                  f"that carried a `{PLATFORM_REF_JOB}` job each returned an EMPTY annotation list")
+    _ceiling_case("…never asserting emptiness over attempts it never looked into",
+                  _fetch_attempt_deep(CEILING_ATTEMPTS_WALKED + 6), None,
+                  absent="all carry an EMPTY annotation list")
     _ceiling_case("…and a run within the bound still reaches the attempt that published a set",
                   _fetch_attempt_deep(CEILING_ATTEMPTS_WALKED), 8203, "8203")
 
