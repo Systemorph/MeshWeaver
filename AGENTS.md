@@ -182,8 +182,16 @@ in it** — you will never be as close to this again — so it carries the instr
 identifiers, how you got there, and **what you did NOT establish**; an issue that overstates its
 certainty sends the next person down a branch you had already excluded. Never file one you have not
 checked is real against the DEPLOYED artifact: a stale checkout or a truncated query produces a
-confident finding about a defect that does not exist, and someone else pays to disprove it. Full
-rule, the two failure modes and where the issue goes: [Incidental Findings](https://memex.meshweaver.cloud/Doc/Architecture/IncidentalFindings) (`get Doc/Architecture/IncidentalFindings`).<!-- shared-rule:end file-it-and-move-on -->
+confident finding about a defect that does not exist, and someone else pays to disprove it.
+🚨 **An agent does NOT open a plain ticket — it files into BUG TRIAGE**, fleet-wide: a
+`Feedback/Feedback` node on the control instance (memex.systemorph.com), which reaches the triage
+agent and may become a GitHub issue *from there*. Triage decides the repo, the priority, and whether
+it becomes a ticket at all — you do not, and a ticket you open yourself bypasses the pool and lands
+in nobody's queue. The pooling is the whole point: ONE inbox per portal, never one queue per repo.
+**File it SUBMITTED (`status: New`), never as a `Draft`** — the draft-and-preview stage exists so a
+person can vet words written in their name, and an agent reporting its own finding has nothing to
+preview and usually no chat to preview it in. Full rule, the two failure modes,
+triage and where the finding goes: [Incidental Findings](https://memex.meshweaver.cloud/Doc/Architecture/IncidentalFindings) (`get Doc/Architecture/IncidentalFindings`).<!-- shared-rule:end file-it-and-move-on -->
 
 <!-- shared-rule:begin conserve-work-products -->
 **🗂️ ALWAYS conserve work products — a design, an architecture decision, an investigation finding, a manual produced while working gets COMMITTED to this repo in the same change set, every time.** The durable form is <!--slot:doc-home-->a doc page under `src/MeshWeaver.Documentation/Data/` (Architecture for platform designs; follow AuthoringDocumentation.md; add a What's New entry when user-facing)<!--/slot--> — issue comments, PR bodies, chat replies and rendered artifact pages are *pointers* to the committed page, never a substitute for it. A finding that lives only in an issue thread or a terminal is invisible to the next session<!--slot:reach--> and to the portal; the doc tree ships with the platform<!--/slot-->. Maintainer directive, 2026-08-30<!-- shared-rule:end conserve-work-products -->. This rule holds in EVERY repo of the fleet — satellites commit theirs to their own doc home.

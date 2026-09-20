@@ -71,7 +71,44 @@ from cold. A finding that lives only in a terminal is a finding nobody made — 
 argument as [conserving work products](../DocsFollowTheFunctionality), applied to defects rather than
 designs.
 
+## 🚨 An agent files into BUG TRIAGE, never a plain ticket
+
+**Fleet-wide rule.** Do not open a GitHub issue yourself. File the finding as a `Feedback/Feedback`
+node on the **control instance** (memex.systemorph.com); it reaches the **triage agent** and may
+become a GitHub issue *from there*, in the owning repository.
+
+**Why it is not merely a different button.** Triage decides the repository, the priority, and whether
+the finding becomes a ticket at all. You are not placed to decide any of those — you have seen one
+defect, not the queue it belongs in. A ticket an agent opens directly bypasses the pool and lands in
+nobody's flow, which looks discharged and behaves exactly like swallowing it. The pooling is the
+design: **one inbox per portal, never one queue per repository** (maintainer, 2026-09-12: *"we must
+start pooling such connections, e.g. by portal"*).
+
+**Agents skip the Draft stage.** The `/feedback` flow files a `Draft` and shows the author a preview
+with a Submit button, because a human must be able to vet words being sent in their name. An agent
+reporting its own finding has nothing to preview and usually no chat to preview it in, so it files
+**`status: New`** — submitted, not yet triaged — and says so plainly rather than claiming a human
+sent it.
+
+## It feeds TRIAGE, not a pile
+
+**Filing is not the end of the obligation — the finding has to enter the same queue as everything
+else.** An issue that exists but is in nobody's flow is the quiet failure mode wearing a ticket
+number: it looks discharged and behaves exactly like swallowing it.
+
+The estate already pools this per portal rather than per repository: signed `ci-failure`, `ci-green`
+and `feedback` events land in the control instance's one inbox and become a `Hosting/TriageItem`
+under `Hosting/Triage/{kind}/{id}` plus ONE thread with the **triage** agent. Maintainer, 2026-09-12:
+*"triaging has to be done by systemorph-com ⇒ communicate via mcp, open thread with triage agent. we
+must start pooling such connections, e.g. by portal."*
+
+So: **route the finding into triage**, and let triage decide priority and owner. What you must not do
+is hold it as a private judgement about what matters — the whole reason you file rather than chase is
+that *you are not the one placing it against the other work*.
+
 ## Where the issue goes
+
+
 
 The repo that OWNS the code, not the repo you happen to be standing in. If you cannot tell, file it
 where you found it and say what you are unsure about — a triager moving a ticket is cheap; a ticket
