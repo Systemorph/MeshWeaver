@@ -125,8 +125,19 @@ public static class ActivityRunner
         // partition / per-node hub to route to, so every poster/subscriber NotFound-storms the router.
         // Fail fast here rather than relying solely on the create-before-execute order (STEP 1 below)
         // + the create-boundary ownerless guard to reject it downstream; both are the backstop, but the
-        // precondition belongs at the entry point. A not-yet-provisioned (but non-empty) partition is
-        // fine — EnsurePartitionBootstrap on the CreateNode path provisions + roots it.
+        // precondition belongs at the entry point.
+        //
+        // 🚨 A non-empty partitionPath is NOT thereby a provisioned one, and nothing on the create
+        // path makes it so. This comment used to say "EnsurePartitionBootstrap on the CreateNode
+        // path provisions + roots it"; that stopped being true with #3451 (a REPAIR must never be
+        // able to create a partition — the heal writes at most a root ROW and provisions nothing),
+        // and a first segment can name something that is no partition at all: a root-level built-in
+        // NodeType declaration (`WhatsNew`, `Redirect`, …) is a perfectly readable path with no
+        // backing store behind it. A caller that runs as a real user is stopped by
+        // PartitionWriteGuardValidator's "no partition, no write"; a caller that elevates to System
+        // is exempt from it, so IT owns establishing that the target is a real partition BEFORE
+        // calling here — see GitHubActivityExtensions.TriggerAuthorizedAsSystem, which did not, and
+        // put `WhatsNew/_Activity/<id>` in front of Postgres as a 42P01 (#4933).
         ArgumentException.ThrowIfNullOrWhiteSpace(partitionPath);
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();

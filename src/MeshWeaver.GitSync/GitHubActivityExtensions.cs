@@ -100,10 +100,35 @@ public static class GitHubActivityExtensions
     /// Append/Finish re-stamp of that owner runs as System too. An ambient System caller (the
     /// webhook's push-triggered update, provisioning flows) short-circuits — it already carries
     /// the executing identity.</para>
+    ///
+    /// <para>🚨 <b>The elevation rests on a PREMISE — the target IS a GitSynced Space — and the
+    /// premise is checked before anything runs as System (#4933).</b> It never used to be. The
+    /// trigger takes whatever first path segment its caller hands it (the MCP tool and
+    /// <c>GitHubActionArea</c> both pass <c>path.Split('/')[0]</c>), <c>check</c>/<c>update</c> ask
+    /// only for Read, and the System identity is exempt from
+    /// <c>PartitionWriteGuardValidator</c>'s "no partition, no write" rule — so ANY readable first
+    /// segment became a System-owned <c>{segment}/_Activity/{id}</c> create. Measured on
+    /// memex.meshweaver.cloud 2026-09-18 15:35:29Z: <c>git_hub_sync space:WhatsNew op:check</c>,
+    /// where <c>WhatsNew</c> is the root-level declaration of a built-in NodeType and no partition
+    /// at all. Nothing on the create path provisions a partition (since #3451 the bootstrap's heal
+    /// writes at most a root row), so the create died in the store as
+    /// <c>42P01: relation "whatsnew.activities" does not exist</c> — one millisecond before the
+    /// tool logged <c>MCP github_sync check failed for WhatsNew</c>. The store refusing it was the
+    /// platform behaving as designed; the write should never have been attempted. On a REAL Space
+    /// with no sync config the same hole is quieter and worse: a reader plants a System-owned node
+    /// in somebody else's partition.</para>
+    ///
+    /// <para>So the sync config for the requested source is read FIRST, after authorization (an
+    /// unauthorized caller learns nothing about what is configured) and as System (the identity
+    /// every read inside the activity uses, so the two cannot disagree about what exists). Absent ⇒
+    /// the trigger faults naming the path, and no Activity is created. The read is the keyed exact-path
+    /// query — empty-on-absent, never a point read of a node that may not exist.</para>
     /// </summary>
     private static IObservable<string> TriggerAuthorizedAsSystem(
         IMessageHub hub,
+        GitHubSyncService sync,
         string spacePath,
+        string? sourceId,
         string operation,
         bool requiresCommitAuthority,
         Func<IObservable<string>> runActivity)
@@ -120,7 +145,22 @@ public static class GitHubActivityExtensions
         if (string.IsNullOrEmpty(userId) || caller?.IsVirtual == true)
             userId = WellKnownUsers.Anonymous;
 
-        IObservable<string> AsSystem() => accessService.RunAsSystem(runActivity);
+        // 🚨 Premise first, elevation second (#4933) — see the summary. TWO sealed System scopes
+        // rather than one around both: RunActivity captures its identity EAGERLY at the call, and
+        // by the time the config read has answered the AsyncLocal of a single outer scope is gone,
+        // so the activity would be created as whoever happened to be ambient on the emitting thread.
+        var locale = caller?.Locale;
+        IObservable<string> AsSystem() => accessService
+            .RunAsSystem(() => sync.WatchConfigNode(spacePath, sourceId).Take(1))
+            // Fail CLOSED, loudly, on a wedged read — the same rule as the authorization probe
+            // below. Silence here would leave the caller on "Starting…" with nothing running.
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Catch<MeshNode?, TimeoutException>(ex => Observable.Throw<MeshNode?>(new TimeoutException(
+                $"GitHub {operation} on '{spacePath}': reading its sync config did not answer.", ex)))
+            .SelectMany(config => config is null
+                ? Observable.Throw<string>(new InvalidOperationException(
+                    NotASyncedSpace(spacePath, sourceId, operation, locale)))
+                : accessService.RunAsSystem(runActivity));
 
         if (string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
             return AsSystem();
@@ -163,6 +203,23 @@ public static class GitHubActivityExtensions
                       "the Space (or a platform admin), which the caller does not hold.")));
     }
 
+    /// <summary>
+    /// The refusal for a trigger aimed at something that is no GitSynced Space (#4933), worded in
+    /// the CALLER's language — it is the text the GitHub action page and the MCP tool hand back.
+    /// It names the path, because the production log line this replaces named only the operation,
+    /// and it says what would make the call valid rather than only that it is not.
+    /// </summary>
+    /// <param name="spacePath">The first path segment the trigger was handed.</param>
+    /// <param name="sourceId">The requested sync source, or null for the primary.</param>
+    /// <param name="operation">The wire name of the operation (<c>check</c>, <c>update</c>, <c>commit</c>).</param>
+    /// <param name="locale">The caller's language tag, read off their <see cref="AccessContext"/>.</param>
+    private static string NotASyncedSpace(string spacePath, string? sourceId, string operation, string? locale)
+        => string.IsNullOrEmpty(sourceId)
+            ? LocalizationCatalog.Get("gitsync.trigger.notASyncedSpace", locale,
+                operation, spacePath, GitHubSyncService.ConfigPath(spacePath))
+            : LocalizationCatalog.Get("gitsync.trigger.noSuchSyncSource", locale,
+                operation, spacePath, sourceId, GitHubSyncService.ConfigPath(spacePath, sourceId));
+
     /// <summary>Commit ("Sync now") — mirror the Space into the repo as one commit on the branch HEAD.
     /// <paramref name="sourceId"/> selects the sync source (null = the primary). The caller's click
     /// authorizes (Update on the Space, or platform admin); the activity and the sync execute as
@@ -173,7 +230,7 @@ public static class GitHubActivityExtensions
         string? sourceId = null)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
-        return TriggerAuthorizedAsSystem(hub, spacePath, "commit", requiresCommitAuthority: true,
+        return TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "commit", requiresCommitAuthority: true,
             () => hub.RunActivity(spacePath, ActivityCategory.DataUpdate,
                 new LogMessage($"Commit {spacePath} to GitHub", LogLevel.Information)
                     .WithKey("activity.gitsync.commit.title", ("space", spacePath)),
@@ -229,7 +286,7 @@ public static class GitHubActivityExtensions
         // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: an import is writing '{spacePath}' from the branch HEAD",
-            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+            TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         force ? $"Force-update {spacePath} to latest" : $"Update {spacePath} to latest",
@@ -433,7 +490,7 @@ public static class GitHubActivityExtensions
         // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: an unattended import is writing '{spacePath}' at the built commit {shortSha}",
-            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+            TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Update {spacePath} to the built commit {shortSha}", LogLevel.Information)
@@ -500,7 +557,7 @@ public static class GitHubActivityExtensions
         // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: an unattended import is writing '{spacePath}' at the sealed commit {shortSha}",
-            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+            TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Update {spacePath} to the sealed commit {shortSha}", LogLevel.Information)
@@ -553,7 +610,7 @@ public static class GitHubActivityExtensions
         // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: a reconciling import is writing '{spacePath}' at the sealed commit {shortSha}",
-            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+            TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Reconcile {spacePath} with the sealed commit {shortSha}", LogLevel.Information)
@@ -878,7 +935,7 @@ public static class GitHubActivityExtensions
         string? sourceId = null)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
-        return TriggerAuthorizedAsSystem(hub, spacePath, "check", requiresCommitAuthority: false,
+        return TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "check", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Unknown,
                 new LogMessage($"Check branch of {spacePath}", LogLevel.Information)
                     .WithKey("activity.gitsync.check.title", ("space", spacePath)),
