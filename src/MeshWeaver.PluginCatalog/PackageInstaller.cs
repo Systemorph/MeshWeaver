@@ -1067,11 +1067,33 @@ public static class PackageInstaller
     /// is "no current code produces this", the survey has to cover the MESH, not the compiler's
     /// view of one repository.</para>
     ///
-    /// <para><b>Order matters: denies first, policy last.</b> The denies are what actually hide the
-    /// content (an explicit deny beats <c>PublicRead</c>), and the policy node is the marker that
-    /// says "this partition is already in the declared shape". Writing the marker first would strand
-    /// a half-swept partition permanently, so the sweep runs BEFORE the policy write and a failure
+    /// <para><b>Order matters: denies first, policy last.</b> While the policy still withholds public
+    /// read the denies are what hides the content, and the policy node is the marker that says "this
+    /// partition is already in the declared shape". Writing the marker first would strand a
+    /// half-swept partition permanently, so the sweep runs BEFORE the policy write and a failure
     /// simply leaves the old policy in place for the next boot to retry.</para>
+    ///
+    /// <para>🚨 <b>This paragraph used to add "an explicit deny beats <c>PublicRead</c>" as a general
+    /// rule. It is the INTENT, and the C# read path does not implement it (MeshWeaver#4716).</b> The
+    /// Postgres projection does: it emits the policy as allow-<c>Read</c> rows at this prefix and
+    /// records that <i>"a deny at a LONGER prefix still wins the per-subject longest-prefix query fold;
+    /// that is the store-gating shape and it is intentional"</i>. But
+    /// <c>PermissionEvaluator.ComputeRoleState</c> subtracts denied roles from <c>roleIds</c> and ORs
+    /// the public grant in SEPARATELY and afterwards — a deny removes a ROLE, <c>PublicRead</c> is not
+    /// a role, so under this policy every Public/Anonymous deny is INERT on that path. Measured on a
+    /// monolith mesh and pinned by <c>PublicReadIsNotSuppressedByADenyTest</c>; the only thing that
+    /// does withhold it there is a deeper <c>Read = false</c> cap, which is ANDed into every
+    /// role-derived permission too — a blackout, not a gate.</para>
+    ///
+    /// <para>🚨 <b>So the two read paths disagree, which is the paywall-bypass shape</b> (this
+    /// evaluator carries its own account of the last one: 79,650 characters of paid course content
+    /// served by exact path while <c>search</c> correctly denied it). A partition gated this way is
+    /// hidden from every listing and readable by exact path. It is load-bearing here: #4716's triage
+    /// cited this very sentence to conclude a per-path deny would protect a submission inbox, and the
+    /// Store's <c>PluginGate</c> pre-installed arm implements exactly that for a manifest's
+    /// <c>ProtectedSegments</c> — so the protection it applies is, on this path, none. Full
+    /// measurement and what each candidate remedy costs:
+    /// <c>Doc/Architecture/PublicReadAndDenies</c>.</para>
     /// </summary>
     private static IObservable<Unit> EnsurePartitionPublicRead(
         IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger)
@@ -1280,7 +1302,19 @@ public static class PackageInstaller
     /// <para>The child walk follows the <c>PluginGate</c> conventions — underscore satellites are
     /// never gated here (their protection is the plugin machinery's <c>ProtectedSegments</c>
     /// concern) and the well-known <c>Public</c> segment is always public — so the installer's
-    /// shape and the Store's reconcile converge on the same nodes instead of fighting. Segments
+    /// shape and the Store's reconcile converge on the same nodes instead of fighting.</para>
+    ///
+    /// <para>🚨 <b>That delegation is sound for THIS shape and a real gap for the other one</b>
+    /// (MeshWeaver#4716). The <c>ProtectedSegments</c> machinery it hands off to writes
+    /// Public/Anonymous DENIES, which work here — the read is a root role GRANT, and a deny removes a
+    /// role — and which the C# read path does NOT honour under the fully-public shape's
+    /// <c>PublicRead</c> policy, though the SQL path does; see the remarks on
+    /// <see cref="EnsurePartitionPublicRead"/>. A pre-installed partition takes that other shape, so a
+    /// satellite it declares protected is published to that path anyway and no component reports it.
+    /// Do not "fix" it by gating satellites from the <c>_</c> prefix: a package is entitled to publish
+    /// one, and the declaration is what distinguishes them.</para>
+    ///
+    /// <para>Segments
     /// come from the paths this install wrote UNIONED with the partition's current children (read
     /// as System); every node is create-only and the writes run SEQUENTIALLY (the access table
     /// deadlocks under parallel writers, 40P01).</para>
