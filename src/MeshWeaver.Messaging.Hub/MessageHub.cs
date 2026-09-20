@@ -212,7 +212,7 @@ public sealed class MessageHub : IMessageHub
     /// hub down and no owner claimed the cascade — host teardown or a <c>using</c>. Spelled once so
     /// a log reader and a log QUERY agree on the token.
     /// </summary>
-    internal const string DirectDisposeSource = "a direct Dispose() (no routed DisposeRequest)";
+    public const string DirectDisposeSource = "a direct Dispose() (no routed DisposeRequest)";
 
     /// <summary>WHO — the first half of the <c>[QUIESCE-START]</c> attribution.</summary>
     private string DisposalRequestedBy =>
@@ -248,7 +248,7 @@ public sealed class MessageHub : IMessageHub
     /// having stated nothing, and a hub nobody asked about over the bus is reported as
     /// <see cref="DirectDisposeSource"/>. Both are answers.</para>
     /// </summary>
-    internal string DisposalAttribution =>
+    public string DisposalAttribution =>
         $"requested by {DisposalRequestedBy}; why: {DisposalReason}";
 
     /// <summary>
@@ -283,6 +283,37 @@ public sealed class MessageHub : IMessageHub
             return;
         cascadeOrigin = originatingCause;
         cascadeOwner = owner.ToString();
+    }
+
+    /// <summary>
+    /// Records WHO tore this hub down and WHY when the teardown does NOT come over the bus (#4888).
+    /// Called by the external disposer immediately before <see cref="Dispose"/>, exactly as
+    /// <see cref="NoteCascadeFrom"/> is called by the owning collection.
+    ///
+    /// <para><b>Why it is needed.</b> A direct <c>Dispose()</c> could say nothing about itself, so
+    /// every such teardown rendered as <see cref="DirectDisposeSource"/> — literally "nobody asked
+    /// over the bus". That is honest but useless to a reader of a <c>[DISPOSE-DISCARD]</c>, which
+    /// is the Error that becomes an ISSUE: it names the discarded message, its sender and the gates
+    /// it sat behind, and then cannot say which teardown threw it away. The largest single source of
+    /// direct disposes is an Orleans grain deactivation, which KNOWS its reason — it logs the reason
+    /// code one line before disposing — and simply had nowhere to put it.</para>
+    ///
+    /// <para>FIRST CAUSE WINS, through the same claim as the cascade path: a hub already asked to
+    /// recycle by name keeps that attribution, because that request is what actually started its
+    /// teardown. Idempotent and safe from any thread.</para>
+    /// </summary>
+    /// <param name="requestedBy">WHO — a short phrase naming the disposer, e.g. the grain and its
+    /// deactivation.</param>
+    /// <param name="reason">WHY, or <c>null</c>/blank when the disposer genuinely has none, which
+    /// renders as <see cref="DisposeRequest.ReasonNotStated"/> rather than as an empty clause.</param>
+    public void NoteDirectDisposalBy(string requestedBy, string? reason)
+    {
+        if (!TryClaimTeardownCause())
+            return;
+        disposeRequestedBy = requestedBy;
+        // Normalised here for the same reason HandleDispose normalises: a blank is an UNSTATED
+        // reason, not a reason that renders as nothing.
+        disposeReason = string.IsNullOrWhiteSpace(reason) ? null : reason;
     }
 
     /// <summary>

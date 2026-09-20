@@ -1073,6 +1073,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             try
             {
+                // 🚨 SAY WHO AND WHY BEFORE DISPOSING (#4888). Orleans deactivation is the
+                // largest single source of direct Dispose() in the mesh, and until this the hub
+                // could only report itself as "a direct Dispose() (no routed DisposeRequest)" —
+                // honest, and useless to the reader of a [DISPOSE-DISCARD], which is the Error
+                // that becomes an ISSUE. That report names the discarded message, its sender and
+                // the gates it was parked behind, and then could not say which teardown threw it
+                // away; the answer was one line above, in the deactivation log, and went nowhere.
+                //
+                // FIRST CAUSE WINS inside the claim: a hub already asked to recycle by name keeps
+                // that attribution, so this never overwrites a routed DisposeRequest that started
+                // the teardown before Orleans caught up.
+                (hub as MessageHub)?.NoteDirectDisposalBy(
+                    $"Orleans deactivating grain {grainId}",
+                    $"{reason.ReasonCode}{(string.IsNullOrWhiteSpace(reason.Description) ? "" : $" — {reason.Description}")}");
                 hub.CancelCurrentExecution();
                 hub.Dispose();
 
