@@ -13,7 +13,8 @@ type at best, so the two questions that actually drive work — *what is still o
 and *what is still open for this feature?* — could only be answered by reading every title. And the
 question that gates a release — *is anything blocking?* — could not be answered at all.
 
-Every issue now carries up to four labels. Three are routing. One is a gate.
+Every **open** issue now carries up to four labels (closed issues are out of scope — policy
+[`issue-taxonomy-scope`](../PolicyNotProse), see the last section). Three are routing. One is a gate.
 
 ---
 
@@ -72,8 +73,9 @@ across the **seven repositories** that carry the taxonomy: `MeshWeaver`, `MeshWe
 > the estate repo belongs in a product release gate is an open decision, and leaving it ambiguous is
 > how the first false green happened.
 
-That is the whole release-readiness predicate. See [Release Process](../ReleaseProcess) for what a
-release then is.
+That is the whole release-readiness predicate — policy [`release-blocker-gate`](../PolicyNotProse),
+registered as `proposed` for the reason the next callout gives. See
+[Release Process](../ReleaseProcess) for what a release then is.
 
 > 🚨 **Today it is remembered, not enforced — read that plainly.** Nothing refuses a release for an
 > open `sev:B`. A release is cut by an annotated tag push, and core's `release.yml` refuses an
