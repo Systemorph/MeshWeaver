@@ -3649,7 +3649,23 @@ public class MeshOperations
     /// Returns a JSON <c>{status, path}</c> envelope. The caller should wait ~100ms
     /// before re-accessing so the grain teardown completes.
     /// </summary>
-    public IObservable<string> Recycle(string path)
+    public IObservable<string> Recycle(string path) => Recycle(path, reason: null);
+
+    /// <summary>
+    /// Recycles the hub at <paramref name="path"/>, carrying the operator's own
+    /// <paramref name="reason"/> into the target's <c>DisposeRequest</c>.
+    ///
+    /// <para>🚨 An OVERLOAD, not a defaulted parameter, for the reason this file states elsewhere:
+    /// a defaulted parameter REPLACES the signature a previously-built module calls. The one-argument
+    /// form stays and forwards.</para>
+    ///
+    /// <para><paramref name="reason"/> is the half a reader of a <c>[QUIESCE-START]</c> cannot
+    /// reconstruct. #3712 stopped this verb posting an anonymous teardown, so the line already names
+    /// WHO tore the hub down and by which surface; what no framework string can supply is WHAT the
+    /// operator was trying to fix. Null keeps exactly the #3712 sentence — the fallback is never
+    /// replaced by a blank (#3510).</para>
+    /// </summary>
+    public IObservable<string> Recycle(string path, string? reason)
     {
         logger.LogInformation("Recycle called with path={Path}", path);
 
@@ -3733,7 +3749,7 @@ public class MeshOperations
                 // ONE implementation in HubRecycleExtensions, never a second copy of the rule.
                 if (outcome.IsGranted)
                     return hub.WhenNoInstallHoldsRoot(resolvedPath)
-                        .SelectMany(_ => RecycleCore(resolvedPath));
+                        .SelectMany(_ => RecycleCore(resolvedPath, reason));
 
                 if (outcome.IsUndetermined)
                 {
@@ -3753,7 +3769,7 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Re-decides a DENIED <see cref="Recycle"/> pre-flight through the target node's own
+    /// Re-decides a DENIED <see cref="Recycle(string)"/> pre-flight through the target node's own
     /// <c>INodeTypeAccessRule</c> — the same second opinion <c>AccessControlPipeline</c> takes since
     /// #3061, built from the same <c>NodeTypeAccessRuleGate</c> helpers so the two seams cannot
     /// drift into asking different questions.
@@ -3808,7 +3824,7 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// The one sentence <see cref="Recycle"/> says when access was EVALUATED and the answer is "no"
+    /// The one sentence <see cref="Recycle(string)"/> says when access was EVALUATED and the answer is "no"
     /// — whoever reached it, the caller's own pre-flight or the owning hub's delivery gate.
     ///
     /// <para>ONE constant, deliberately: those are two different evaluators at two different
@@ -3851,7 +3867,7 @@ public class MeshOperations
         + "admin) to do it.";
 
     /// <summary>
-    /// What <see cref="Recycle"/> says when the permission check reached NO verdict. Says the
+    /// What <see cref="Recycle(string)"/> says when the permission check reached NO verdict. Says the
     /// opposite thing to <see cref="RecycleDeniedMessage"/> on purpose: retry, do not go asking
     /// for rights you may already hold (#974).
     /// </summary>
@@ -3900,7 +3916,63 @@ public class MeshOperations
         return false;
     }
 
-    private IObservable<string> RecycleCore(string resolvedPath)
+    /// <summary>
+    /// The <c>DisposeRequest.Reason</c> an operator recycle carries — the framework's own sentence
+    /// (#3712), plus the operator's <paramref name="operatorReason"/> when they gave one.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 Pure and named so both directions are testable without driving the permission fold, the
+    /// lease gate and the change feed: that a supplied reason SURVIVES, and that an absent one still
+    /// produces the #3712 sentence rather than a blank. A blank is the exact failure #3510 measured
+    /// at six occurrences and four bake seals, so "the fallback is not silently replaced" is the
+    /// half that most needs a test.
+    /// </remarks>
+    internal static string RecycleReason(string resolvedPath, string? operatorReason)
+    {
+        var framework =
+            $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
+            + "to be recycled (the Recycle tool / Compile button), which "
+            + "stamps a release request and then tears the hub down so the "
+            + "next access reactivates it";
+        return string.IsNullOrWhiteSpace(operatorReason)
+            ? framework
+            : $"{framework}. The operator's reason: {SanitizeReason(operatorReason)}";
+    }
+
+    /// <summary>Longest operator reason carried onto the line. Generous for a sentence, short
+    /// enough that one caller cannot push the framework's own text out of a reader's view.</summary>
+    private const int MaxOperatorReasonLength = 300;
+
+    /// <summary>
+    /// Flattens an operator-supplied reason to something that can only ever contribute to the ONE
+    /// log line it belongs on.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 A LOG-FORGERY PRIMITIVE, not a formatting nicety. This string is rendered into the
+    /// target's <c>[QUIESCE-START]</c> line, and the log-incident filer fingerprints on the RENDERED
+    /// line — so a reason of <c>"routine\nfail: MeshWeaver.Something[0] …"</c> appends a second
+    /// entry that reads exactly like a real one from another component, and can mint an incident.
+    /// Anything able to reach a recycle surface could write arbitrary lines into the log.
+    /// <c>Trim()</c> alone does not touch embedded breaks, which is what made it insufficient.
+    ///
+    /// <para>Every line break AND every other control character collapses to a single space:
+    /// a lone <c>\r</c>, a vertical tab and <c>\u0085</c> all start a new line in one renderer or
+    /// another, so enumerating the ones that do would be a list to get wrong. Length is bounded for
+    /// the same reason the masking exists — one caller must not be able to push the framework's own
+    /// sentence out of view.</para>
+    /// </remarks>
+    internal static string SanitizeReason(string reason)
+    {
+        var flattened = new string(reason.Select(c => char.IsControl(c) ? ' ' : c).ToArray());
+        // Collapse the runs the substitution just created, so a pasted block does not arrive as a
+        // corridor of spaces.
+        flattened = string.Join(' ', flattened.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return flattened.Length <= MaxOperatorReasonLength
+            ? flattened
+            : flattened[..MaxOperatorReasonLength] + "… (truncated)";
+    }
+
+    private IObservable<string> RecycleCore(string resolvedPath, string? reason)
     {
         try
         {
@@ -4038,10 +4110,7 @@ public class MeshOperations
                     .Post(
                         new DisposeRequest
                         {
-                            Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
-                                     + "to be recycled (the Recycle tool / Compile button), which "
-                                     + "stamps a release request and then tears the hub down so the "
-                                     + "next access reactivates it",
+                            Reason = RecycleReason(resolvedPath, reason),
                         },
                         o => o.WithTarget(new Address(resolvedPath)));
                 return JsonSerializer.Serialize(

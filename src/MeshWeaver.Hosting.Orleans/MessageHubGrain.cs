@@ -158,6 +158,26 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
     /// <summary>
+    /// Orleans' deactivation reason as ONE clause for the hub's teardown attribution — the code
+    /// always, plus the description when there is one.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 Named and pure so the string handed to <see cref="MessageHub.NoteDirectDisposalBy"/> is
+    /// pinned by a test. Raised in review on #4960: the attribution tests exercise the HUB's side,
+    /// and the handoff — this formatting and the call itself — could regress with every one of
+    /// them green. This closes the formatting half; the call site is named as still uncovered
+    /// rather than papered over.
+    ///
+    /// <para>A blank description must not leave a trailing separator: a human reading a
+    /// <c>[DISPOSE-DISCARD]</c> sees "ActivationIdle — " as a TRUNCATED sentence rather than an
+    /// absent one — the same "renders as nothing, reads as something missing" failure the
+    /// blank-reason normalisation on the hub side exists to prevent. Orleans supplies no
+    /// description for several reason codes, so this is the ordinary case, not an edge one.</para>
+    /// </remarks>
+    internal static string FormatDeactivationReason(string reasonCode, string? description) =>
+        string.IsNullOrWhiteSpace(description) ? reasonCode : $"{reasonCode} — {description}";
+
+    /// <summary>
     /// <see cref="Grain.DeactivateOnIdle"/> guarded for the mesh↔Orleans lifetime boundary —
     /// same rationale as <see cref="TryDelayDeactivation"/>. Callers request deactivation from
     /// reactive continuations (activation-source terminal handlers, the NACK-fallback branch,
@@ -1073,6 +1093,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             try
             {
+                // 🚨 SAY WHO AND WHY BEFORE DISPOSING (#4888). Orleans deactivation is the
+                // largest single source of direct Dispose() in the mesh, and until this the hub
+                // could only report itself as "a direct Dispose() (no routed DisposeRequest)" —
+                // honest, and useless to the reader of a [DISPOSE-DISCARD], which is the Error
+                // that becomes an ISSUE. That report names the discarded message, its sender and
+                // the gates it was parked behind, and then could not say which teardown threw it
+                // away; the answer was one line above, in the deactivation log, and went nowhere.
+                //
+                // FIRST CAUSE WINS inside the claim: a hub already asked to recycle by name keeps
+                // that attribution, so this never overwrites a routed DisposeRequest that started
+                // the teardown before Orleans caught up.
+                (hub as MessageHub)?.NoteDirectDisposalBy(
+                    $"Orleans deactivating grain {grainId}",
+                    FormatDeactivationReason(reason.ReasonCode.ToString(), reason.Description));
                 hub.CancelCurrentExecution();
                 hub.Dispose();
 

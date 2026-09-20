@@ -516,6 +516,8 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Glossary](/Doc/Glossary)
 - [Developing from within MeshWeaver](DevelopingFromMeshWeaver)
 - [Shared Rule Blocks](SharedRuleBlocks)
+- [Incidental Findings](IncidentalFindings) — the defect you did not come for: the three tests that decide, what a filed issue owes, and why turning aside costs twice
+- [Governed Autonomy](GovernedAutonomy) — do, file, govern or ask: the four responses to an instruction, and why the test is reversibility rather than importance
 
 ### Licensing
 

@@ -7,6 +7,8 @@ Description: >-
   separate defects — and none of them the reason the policy nodes appear to state. Plus the separate,
   four-hour break in the producing half, and the availability read whose cost grew with the artifact
   store until it timed out on every candidate — both since resolved.
+  Re-measured 2026-09-20: the deliberate pin was cleared and the instance still did not roll — the
+  apply half had stopped after a failed roll on the 14th while the detect half kept announcing daily.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M4.5 4.5l15 15"/></svg>
 ---
 
@@ -458,11 +460,97 @@ skipped. Neither conclusion tells you whether a set exists.
 | the seal | ✅ done — `MeshWeaver.Plugins#2059` merged 10:15:38Z; confirm on run 8916's seal JOB | **an action**, taken |
 | memex-cloud | `policy: Continuous` + `pattern: 3.0.0-ci*` restored on its own `Admin/UpdatePolicy` | **a decision**, and a repair with a known half-life |
 | every instance | a bookkeeping write must never replace a record it could not materialize — refuse and log instead | **a code fix** |
-| memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately |
+| memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately. 🚨 **Superseded for memex on 2026-09-19**: the pin was cleared and it still did not roll — see [the 2026-09-20 re-measurement](#2026-09-20-the-apply-half-stopped-and-the-detect-half-kept-announcing-into-it) |
 | every instance | `PreWarm__PrebuiltBundleRetention__Delete` | **an operations decision**, from a ledger line, after confirming the protected set covers every instance and every CI gate pinning an older platform build |
 | the availability gate | answer inside its budget over a store that only grows | ✅ **done** — `SealedBundleFloorCache` (#4742) remembers each SOURCE publication's declaration, so a tick lists but no longer re-opens them; `SelfUpdate__AvailabilityAnswerBudget` is the secondary knob, never the fix |
 | a timeout hold | record `heldIndeterminate: true` | **a code fix**, one call site |
 | build, pearl | MeshWeaver#4093 — `SelfUpdate__RegistryValidationUrl` on the record, then a roll onto an image carrying `830c8c402` or later | **a config change and a roll** — NOT a code fix; the platform half merged 2026-09-12 |
+
+## 2026-09-20: the apply half stopped, and the detect half kept announcing into it
+
+**Six days after this page was written, memex.systemorph.com had still not rolled — and the reason had
+changed.** This section is the re-measurement, because the remedy table above ("memex … a newer tag
+than `pinnedImageTag` waits for an approval") is no longer what the instruments say.
+
+| instrument | reading, 2026-09-20 | what it means |
+|---|---|---|
+| `GET /api/version` | `3.0.0+96f88406` | what is actually running |
+| `Admin/UpdatePolicy` → `policy` / `pattern` | `Continuous` / `3.0.0-ci*` | behaviour is intact |
+| → `latestAvailableTag` | `3.0.0-ci.9014` | listing works |
+| → `handedOverTag` / `handedOverAt` | `3.0.0-ci.9014` / `06:12:52Z` **today** | **the hand-over webhook fires, daily** |
+| → `comboVerifications` | `[]` | no verdict for the candidate ⇒ any roll is taken UNVERIFIED |
+| `Deployments/memex` → `pinnedImageTag` | **absent** (record modified 2026-09-19T19:41Z) | 🚨 the `3.0.0-ci.8710` pin named above is GONE |
+| `Ops/Actions/*` newest `Hosting/InstanceAction` | **2026-09-14** | **no Roll opened for six days**, across ≥3 candidates (8886, 8996, 9014) |
+
+**So the deliberate-pin explanation has expired.** The pin was cleared on 2026-09-19 and the instance
+still did not roll, which rules out "waiting for an approval because the candidate is newer than the
+pin" as the current cause. Anyone reading the remedy table without re-reading `Deployments/memex`
+will fix a pin that is not there.
+
+**What the 14th actually left behind.** `reconcile-memex-20260914-nav-rail` rolled onto
+`3.0.0-ci.8612`; `sample-memex-20260914-nav-rail` records that the replica **never became Ready**; and
+`sample-memex-20260914-rollback` records the roll back to `3.0.0-ci.8411`, 30 minutes at 1/2 updated.
+Nothing has been opened since. **The apply half stopped after a failed roll and the detect half has
+gone on announcing into it every day** — so the daily "update available … handed to the control lane"
+line is evidence that detection works, and no evidence at all that anything consumes it.
+
+**The cause: an action orphaned in `Running`.** `Ops/Actions/selfupdate-roll-memex-3-0-0-ci-8968-e9878173`
+reads `state: Running`, `phase: Verify one generation` (step 6/8), `startedAt 2026-09-19T08:10:32Z`,
+`observedUntil 2026-09-19T14:41:12Z` — and `lastModified` still 08:10:28Z. **The roll itself worked**:
+the image was set to `3.0.0-ci.8968`, `rollout_generation=779`, and the pods came up (the instance's
+`Hosting/Deployment` recompiled at 08:13Z under identity `s091d69f…`). Step 6/8 then never completed,
+the observation window lapsed, and nothing wrote a terminal state.
+
+`SelfUpdateRouting.Decide` is idempotent on purpose — *"a re-announcement must be a no-op, not a
+second roll… A run that ended `Failed`/`Refused` is RE-OPENED by a later announcement"*. A run still
+`Running` is neither, so it counts as in-flight **forever**, and every announcement since has been
+correctly suppressed against a roll that will never finish. **The mechanism that makes hourly
+re-delivery safe is what makes a lapsed run permanent** (MeshWeaver.Plugins#2178).
+
+🚨 **A `Running` action past its own `observedUntil` is a FAILED action that nobody wrote down.**
+Read `observedUntil` against the clock before believing `state`.
+
+### How this page got it wrong first, which is the instrument lesson
+
+The first version of this section said *"no Roll has been opened for six days"* and offered two causes.
+**Both were wrong**, and the mistake is worth more than the finding.
+
+`search nodeType:Hosting/InstanceAction limit:25` and a second filtered query both returned
+`truncated: true` **and unordered by date**. The newest row in each page was 2026-09-14, so the
+conclusion looked solid. Re-run at `limit:200` (175 results, `truncated: false`) and sorted, the same
+query showed actions right through **2026-09-19** — including the routed rolls whose existence had
+just been denied.
+
+**A truncated result set that is ordered is a partial answer; a truncated result set that is UNORDERED
+is a misleading one** — it reads as a complete recent history and is not. `truncated: true` is in the
+response and does not save you. Raise the limit until `truncated` is false, sort by `lastModified`
+yourself, and never date a "nothing happened since X" claim from a capped page (MeshWeaver#4950 asks
+for newest-first as the default).
+
+The same session also blamed `PlatformBuildInboxWatcher` for deleting `self-update-available` events —
+read from a **stale checkout**, where that was true before MeshWeaver.Plugins#1845 wired
+`DeliveryRoute.SelfUpdate`. Verify against the deployed type's `compiledSources`, not a working copy.
+
+### What the moving-label design does and does not fix
+
+The obvious reading of this — "pin it to a label, move the label, roll on the move" — is
+[Release Channels](/Doc/Architecture/ReleaseChannels) (core #4769): a channel is a named moving pointer
+whose selection always resolves to an **immutable id**, so nothing downstream runs a moving name. On
+this instance the selecting half of that already exists (`pattern: 3.0.0-ci*` resolving to
+`latestAvailableTag`), and it is not where the stall is. **A channel that moves is only as good as the
+consumer that acts on the move**, so a decision table for "the pointer moved and no action was opened"
+has to be loud rather than silent — otherwise the channel work lands on top of this exact failure and
+inherits it.
+
+### Downstream cost, so the next reader knows what it blocks
+
+A portal that does not roll does not advance its plugin sources either: its GitSync holds every package
+at the commit sealed for the framework identity it RUNS. On 2026-09-20 `Crm/_GitSync` read *"sealed at
+2c4cfa10 for this instance (identity s091d69fee9df4e5dabee742024122f71) … the registry has since sealed
+3.0.0-ci.9014 under se67137088031dee4af0f30c7d5edcf4c, which this instance does not run — so this source
+advances when this instance IMAGE does (a roll), NOT when another publication lands"* — 15 commits
+behind, holding a CRM data migration and an unrelated invoice feature. **"Merged, green and verified on
+`origin/main`" says nothing about a portal having it**; check the seal before promising a date.
 
 ## How to read these instruments
 
@@ -473,6 +561,18 @@ skipped. Neither conclusion tells you whether a set exists.
   `None` policy is the absence of a listing, not a failed one.
 - **"handed to the control lane … waits for an approval" is not a hold.** It is the pull mechanism
   succeeding and stopping where a person was meant to decide.
+- 🚨 **`handedOverAt` is the ANNOUNCING half's liveness, never the acting half's.** A working detector
+  in front of a dead consumer refreshes it daily, which reads exactly like a healthy pipeline. Pair it
+  with the age of the newest `Hosting/InstanceAction` on the target: **a hand-over with no younger
+  action is the diagnosis** (2026-09-20 — six days of daily hand-overs, no action since the 14th).
+- 🚨 **Never date a "nothing since X" claim from a capped search.** Raise `limit` until
+  `truncated` is false and sort by `lastModified` yourself — an unordered truncated page reads
+  exactly like a complete recent history (2026-09-20: 25 rows said "nothing since the 14th";
+  200 rows showed rolls through the 19th).
+- **A `Running` action past its `observedUntil` is a failed action nobody wrote down.** Check the
+  window against the clock before believing `state`.
+- **Re-read `Deployments/<id>` before acting on any pin advice on this page.** The `pinnedImageTag`
+  it documented for memex was gone by 2026-09-19 and the standstill outlived it.
 - **The record's `updatePolicy` is intent; the instance's `Admin/UpdatePolicy` is behaviour.** Setting
   the first alone changes nothing an instance runs.
 - **Read the seal JOB, never the CD run's conclusion** — run 8896 concluded `failure` and sealed; runs
