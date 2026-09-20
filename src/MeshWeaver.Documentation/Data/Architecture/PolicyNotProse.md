@@ -133,10 +133,12 @@ written.
 | `release-blocker-gate` | A release may not be cut while any `sev:B` or `sev:H` bug is open in the seven repositories that carry the taxonomy; `sev:M` and `sev:L` never gate a cut. Enforced by the `release.cut` standard in the Governance package. | in force | 2026-09-20 | maintainer |
 | `data-sync-approval` | Adding or widening the synchronisation of data needs a global admin's approval. | in force | 2026-09-20 | maintainer |
 | `version-shapes` | Exactly two version shapes: `X.Y.Z-ci.<n>` and clean `X.Y.Z`. No rc, preview or labelled line is ever minted. | in force | 2026-09-07 | maintainer |
+| `thread-graceful-error` | Wherever user code is executed, innermost in a thread, it must gracefully error: every failure path ends in a stamped terminal state on the node. A failure the thread's own hub cannot stamp — because it is the hub that died — is observed, cleaned up and relaunched under a bound, and what a relaunch cannot fix is filed into bug triage. The relaunch/dispatch side is bounded by a configurable pool cap (`maxConcurrentAgents`, default 50) whose queue is a page, not a log. | in force | 2026-09-20 | maintainer |
 
 Cited by: [Release Process](../ReleaseProcess) ·
 [Issue Taxonomy and the Release Readiness Gate](../IssueTaxonomy) ·
-[Adding a Data Sync Needs a Global Admin](../DataSyncApproval).
+[Adding a Data Sync Needs a Global Admin](../DataSyncApproval) ·
+[Thread Supervision](../ThreadSupervision).
 
 > 🚨 **A `proposed` row is not a weaker `in force` — it is an honest one.** The first draft of this
 > register listed `release-blocker-gate` as `in force` while the standard that enforces it was still
