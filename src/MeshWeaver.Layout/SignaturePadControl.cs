@@ -37,7 +37,13 @@ public record SignaturePadControl(object Data) : FormControlBase<SignaturePadCon
     public SignaturePadControl WithPenColor(object penColor) => this with { PenColor = penColor };
 
     /// <summary>Offers or hides the <b>Clear</b> button.</summary>
-    /// <param name="clearButton">Whether the button is offered.</param>
+    /// <param name="clearButton">Whether the button is offered, or a binding expression resolving to
+    /// a boolean — the property is data-bindable, so the parameter is <see cref="object"/> for the
+    /// same reason <see cref="WithPenColor"/>'s is.</param>
     /// <returns>A new <see cref="SignaturePadControl"/> with the setting applied.</returns>
-    public SignaturePadControl WithClearButton(bool clearButton = true) => this with { ClearButton = clearButton };
+    public SignaturePadControl WithClearButton(object clearButton) => this with { ClearButton = clearButton };
+
+    /// <summary>Offers the <b>Clear</b> button — the default.</summary>
+    /// <returns>A new <see cref="SignaturePadControl"/> offering the button.</returns>
+    public SignaturePadControl WithClearButton() => this with { ClearButton = true };
 }

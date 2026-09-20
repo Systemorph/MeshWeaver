@@ -69,4 +69,24 @@ public class SignaturePadControlTest(ITestOutputHelper output) : HubTestBase(out
         pad2.AriaLabel.Should().Be("Signature pad");
         pad2.Should().Be(pad, "records compare by value, so a lossless round trip is equality");
     }
+
+    [Fact]
+    public void ClearButton_CarriesABinding_ThroughTheFluentApi_AndSurvivesTheRoundTrip()
+    {
+        // The property is declared object? so it can hold a JsonPointerReference; the fluent
+        // setter must not narrow that to bool, or a binding is unreachable through the API
+        // (Copilot review, MeshWeaver#4982).
+        var bound = Controls.SignaturePad("/data/signature").WithClearButton(new JsonPointerReference("/data/offerClear"));
+        bound.ClearButton.Should().BeOfType<JsonPointerReference>()
+            .Which.Pointer.Should().Be("/data/offerClear");
+
+        var host = GetHost();
+        var json = JsonSerializer.Serialize<UiControl>(bound, host.JsonSerializerOptions);
+        var back = JsonSerializer.Deserialize<UiControl>(json, host.JsonSerializerOptions)
+            .Should().BeOfType<SignaturePadControl>().Subject;
+        back.ClearButton.Should().BeOfType<JsonPointerReference>()
+            .Which.Pointer.Should().Be("/data/offerClear");
+
+        Controls.SignaturePad("").WithClearButton().ClearButton.Should().Be(true);
+    }
 }

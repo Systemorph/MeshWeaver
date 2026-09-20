@@ -159,7 +159,7 @@ Controls.Stack
 | `WithWidth(int)` / `WithHeight(int)` | Drawing size in CSS pixels | 480 × 160 |
 | `WithPenColor(string)` | Pen colour (any CSS colour) | `#1a237e` |
 | `WithPlaceholder(object)` | The hint under the signature line | localized *Sign here* |
-| `WithClearButton(bool)` | Offer the Clear button | `true` |
+| `WithClearButton(object)` · `WithClearButton()` | Offer the Clear button (bindable, like `WithPenColor`) | `true` |
 
 The two buttons, the hint and the canvas's accessible name are catalog keys (`signaturePad.*`), so a
 German reader is handed *Hier unterschreiben*, *Löschen*, *Fertig*.
