@@ -8,13 +8,16 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 # PublicRead and Denies
 
 **A `Public`/`Anonymous` Viewer DENY under a `PartitionAccessPolicy` that grants `PublicRead` is
-honoured by the PostgreSQL read path and IGNORED by the C# `PermissionEvaluator`. The two read paths
-disagree — which is the paywall-bypass shape, and the reason a submission inbox cannot currently be
-closed.**
+IGNORED by the C# `PermissionEvaluator` — measured. The PostgreSQL projection's own comment says its
+path honours the same deny; if that holds, the two read paths disagree, which is the paywall-bypass
+shape. Either way the submission inbox that prompted this is not closed by the deny.**
 
-Three components assert that the deny protects the segment. One of them ships a protection built on
-it. On the C# path it protects nothing, and on the SQL path it hides the content from every listing
-while leaving it readable by exact path.
+Three components assert that the deny protects the segment, and one of them ships a protection built
+on it. On the C# path it protects nothing. 🚨 **The SQL half of that sentence is a CLAIM, not a
+reading** — it comes from the projection's source comment and no Postgres portal was exercised for
+this page. Treat "hidden from every listing, readable by exact path" as the shape to go and confirm,
+never as an established contract: a remedy built on an unverified half is how this defect was created
+in the first place.
 
 Confidence, stated separately because it differs:
 
@@ -56,9 +59,13 @@ spells out the consequence:
 > public grant wins — matching the live override order. (A deny at a **LONGER** prefix still wins the
 > per-subject longest-prefix query fold; that is the store-gating shape and it is intentional.)
 
-So the intended rule is *"a deeper deny beats an inherited public grant"*, the SQL path implements
-it, and the C# path does not. Neither is a rounding error: the store/course paywall gating rests on
-exactly this shape.
+So the intended rule is *"a deeper deny beats an inherited public grant"*, the comment says the SQL
+path implements it, and the C# path measurably does not. 🚨 That comment is the author's statement of
+intent, not a test result, and this page did not execute it — **the same "a stated convention is not a
+measured population" trap this whole issue is an instance of.** Verify it against a live Postgres
+portal before treating the divergence as established, and before building any remedy on it. What is
+not in doubt either way: the paywall gating rests on this shape, so whichever path is wrong, being
+wrong about it is expensive.
 
 ## Why the belief looked true
 

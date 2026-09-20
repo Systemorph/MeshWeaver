@@ -1074,26 +1074,30 @@ public static class PackageInstaller
     /// simply leaves the old policy in place for the next boot to retry.</para>
     ///
     /// <para>🚨 <b>This paragraph used to add "an explicit deny beats <c>PublicRead</c>" as a general
-    /// rule. It is the INTENT, and the C# read path does not implement it (MeshWeaver#4716).</b> The
-    /// Postgres projection does: it emits the policy as allow-<c>Read</c> rows at this prefix and
-    /// records that <i>"a deny at a LONGER prefix still wins the per-subject longest-prefix query fold;
-    /// that is the store-gating shape and it is intentional"</i>. But
+    /// rule, and on the C# read path that is FALSE — measured (MeshWeaver#4716).</b>
     /// <c>PermissionEvaluator.ComputeRoleState</c> subtracts denied roles from <c>roleIds</c> and ORs
     /// the public grant in SEPARATELY and afterwards — a deny removes a ROLE, <c>PublicRead</c> is not
-    /// a role, so under this policy every Public/Anonymous deny is INERT on that path. Measured on a
-    /// monolith mesh and pinned by <c>PublicReadIsNotSuppressedByADenyTest</c>; the only thing that
-    /// does withhold it there is a deeper <c>Read = false</c> cap, which is ANDed into every
-    /// role-derived permission too — a blackout, not a gate.</para>
+    /// a role, so once the policy below is written every Public/Anonymous deny under it is INERT
+    /// there. Measured on a monolith mesh and pinned by
+    /// <c>PublicReadIsNotSuppressedByADenyTest</c>; the only thing that does withhold it on that path
+    /// is a deeper <c>Read = false</c> cap, which is ANDed into every role-derived permission too — a
+    /// blackout, not a gate.</para>
     ///
-    /// <para>🚨 <b>So the two read paths disagree, which is the paywall-bypass shape</b> (this
-    /// evaluator carries its own account of the last one: 79,650 characters of paid course content
-    /// served by exact path while <c>search</c> correctly denied it). A partition gated this way is
-    /// hidden from every listing and readable by exact path. It is load-bearing here: #4716's triage
-    /// cited this very sentence to conclude a per-path deny would protect a submission inbox, and the
-    /// Store's <c>PluginGate</c> pre-installed arm implements exactly that for a manifest's
-    /// <c>ProtectedSegments</c> — so the protection it applies is, on this path, none. Full
-    /// measurement and what each candidate remedy costs:
-    /// <c>Doc/Architecture/PublicReadAndDenies</c>.</para>
+    /// <para>🚨 <b>The rule is still the stated INTENT, and the Postgres projection CLAIMS to
+    /// implement it</b> — it emits this policy as allow-<c>Read</c> rows at this prefix and records
+    /// that <i>"a deny at a LONGER prefix still wins the per-subject longest-prefix query fold; that is
+    /// the store-gating shape and it is intentional"</i>. 🚨 That is its author's comment, NOT a test
+    /// result: no Postgres path was executed for #4716, so "the two read paths disagree" is the thing
+    /// to go and confirm, not an established contract — and confirming it is the first step of any fix,
+    /// because a remedy built on an unverified half is how this defect arose. If it holds, the split is
+    /// the paywall-bypass shape this evaluator carries its own account of (79,650 characters of paid
+    /// course content served by exact path while <c>search</c> correctly denied it).</para>
+    ///
+    /// <para>Either way the sentence was load-bearing HERE: #4716's triage cited it to conclude a
+    /// per-path deny would protect a submission inbox, and the Store's <c>PluginGate</c> pre-installed
+    /// arm implements exactly that for a manifest's <c>ProtectedSegments</c> — so on this path the
+    /// protection it applies is none. Full measurement, the confidence on each half, and what each
+    /// candidate remedy costs: <c>Doc/Architecture/PublicReadAndDenies</c>.</para>
     /// </summary>
     private static IObservable<Unit> EnsurePartitionPublicRead(
         IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger)

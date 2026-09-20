@@ -12,8 +12,9 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// 🚨 <b>In THIS fold, a Public/Anonymous DENY does not suppress an inherited
-/// <c>PartitionAccessPolicy.PublicRead</c> — and the SQL fold's own comment says it does.</b> A
-/// two-executor divergence on the read path, measured (Systemorph/MeshWeaver#4716).
+/// <c>PartitionAccessPolicy.PublicRead</c> — and the SQL fold's own comment says it does.</b> The C#
+/// half is measured here; the divergence that follows from it is a CLAIM about a path this file does
+/// not execute (Systemorph/MeshWeaver#4716).
 ///
 /// <para><b>What this file pins, and what it does not.</b> Every assertion below is a MEASUREMENT of
 /// the C# <c>PermissionEvaluator</c> against a real monolith mesh. The Postgres half is NOT executed
