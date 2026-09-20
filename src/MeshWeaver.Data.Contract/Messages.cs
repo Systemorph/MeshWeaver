@@ -316,9 +316,16 @@ public record SubscribeAck;
 /// sender is correlation state, not an incidental origin: where that workspace belongs to the root
 /// mesh hub, a <c>mesh/{id}</c> sender here is correct rather than router traffic to be hopped off
 /// (MeshWeaver#4489, split from #1140).</para>
+///
+/// <para>🚨 <see cref="IReleasesRemoteState"/>: this is the ONLY thing that ends the owner's
+/// per-subscriber stream and its <c>sync/{id}</c> sub-hub — nothing else disposes a server-side
+/// stream. Losing it does not lose a notification, it leaks a <c>Started</c> hub (its Autofac
+/// lifetime scope and its TypeRegistry) for the life of the owner's process, which is why it must
+/// leave a subscribing hub that is itself tearing down (MeshWeaver#3432).</para>
 /// </summary>
 [SystemMessage]
-public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId), ICorrelatedBySender;
+public record UnsubscribeRequest(string StreamId)
+    : StreamMessage(StreamId), ICorrelatedBySender, IReleasesRemoteState;
 
 /// <summary>
 /// Server-initiated stream error: routed through <c>RouteStreamMessage</c> to the
