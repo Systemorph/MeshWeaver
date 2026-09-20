@@ -105,6 +105,23 @@ public class ASyncTriggerNeedsASyncedSpaceTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task Update_OnASpaceWhoseSyncConfigNamesNoRepository_IsRefused_AndWritesNoActivity()
+    {
+        // A config NODE is not a configured Space: opening the GitHub Sync settings tab mints
+        // `{space}/_GitSync` with an empty RepositoryUrl (EnsureConfigNode) before a repository is
+        // chosen. Existence of the node alone must not satisfy the premise.
+        var space = await CreateSpace("EmptyConfig", TestContext.Current.CancellationToken);
+        await Sync.EnsureConfigNode(space)
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+        var outcome = await Trigger(
+            onCreated => Mesh.UpdateToLatestFromGitHub(space, UserId, onCreated),
+            TestContext.Current.CancellationToken);
+
+        await AssertRefusedAndNothingWritten(outcome, space);
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task Update_OfASyncSourceTheSpaceDoesNotHave_IsRefused_AndWritesNoActivity()
     {
         var space = await SyncedSpace("OneSource", TestContext.Current.CancellationToken);

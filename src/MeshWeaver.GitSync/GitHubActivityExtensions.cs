@@ -151,13 +151,20 @@ public static class GitHubActivityExtensions
         // so the activity would be created as whoever happened to be ambient on the emitting thread.
         var locale = caller?.Locale;
         IObservable<string> AsSystem() => accessService
-            .RunAsSystem(() => sync.WatchConfigNode(spacePath, sourceId).Take(1))
+            // The MATERIALIZED config, through the one read every operation inside the activity
+            // decides on — so the gate and the work cannot disagree about what is configured.
+            .RunAsSystem(() => sync.ReadConfig(spacePath, sourceId))
             // Fail CLOSED, loudly, on a wedged read — the same rule as the authorization probe
             // below. Silence here would leave the caller on "Starting…" with nothing running.
             .Timeout(TimeSpan.FromSeconds(15))
-            .Catch<MeshNode?, TimeoutException>(ex => Observable.Throw<MeshNode?>(new TimeoutException(
-                $"GitHub {operation} on '{spacePath}': reading its sync config did not answer.", ex)))
-            .SelectMany(config => config is null
+            .Catch<GitHubSyncConfig?, TimeoutException>(ex => Observable.Throw<GitHubSyncConfig?>(
+                new TimeoutException(
+                    LocalizationCatalog.Get("gitsync.trigger.configReadTimedOut", locale, operation, spacePath),
+                    ex)))
+            // A config NODE is not a configured Space: EnsureConfigNode mints `_GitSync` with an
+            // empty RepositoryUrl the moment the settings tab opens, and the sync-source provider
+            // treats that as untracked. The predicate is the one the operations themselves apply.
+            .SelectMany(config => config?.RepositoryUrl is not { Length: > 0 }
                 ? Observable.Throw<string>(new InvalidOperationException(
                     NotASyncedSpace(spacePath, sourceId, operation, locale)))
                 : accessService.RunAsSystem(runActivity));

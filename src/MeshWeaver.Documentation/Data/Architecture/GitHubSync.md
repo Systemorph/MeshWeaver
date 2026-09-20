@@ -309,11 +309,18 @@ Under the hood this is the platform's standard **[Activity Control Plane](/Doc/A
 System executes — because a GitSynced Space is system-owned and no real user holds Create in it.
 That elevation rests on a premise: **the target IS a GitSynced Space.** The trigger now checks it
 before anything runs: it reads the sync config for the requested source
-(`{space}/_GitSync`, or `{space}/_GitSync/{sourceId}`), after authorization and as System, and when
-there is none it **faults, names the path, and creates no activity**:
+(`{space}/_GitSync`, or `{space}/_GitSync/{sourceId}`) — after authorization, as System, through the
+same `ReadConfig` every operation inside the activity decides on — and unless that config **names a
+repository** it **faults, names the path, and creates no activity**:
 
-> Cannot run the GitHub check on 'WhatsNew': it has no GitHub sync configured
-> ('WhatsNew/_GitSync' does not exist), so it is not a GitHub-synced Space and nothing was started.
+> Cannot run the GitHub check on 'WhatsNew': it has no GitHub repository configured
+> ('WhatsNew/_GitSync' is absent or names no repository), so it is not a GitHub-synced Space and
+> nothing was started.
+
+A config *node* is not a configured Space: opening the GitHub Sync settings tab mints `_GitSync`
+with an empty repository (`EnsureConfigNode`) before one is chosen, and the sync-source provider
+treats that as untracked, so the predicate is the repository URL, not the node's existence. A read
+that does not answer within 15 s faults too (localized), never falls through to either branch.
 
 **Why this is a rule and not a nicety ([#4933](https://github.com/Systemorph/MeshWeaver/issues/4933)).**
 The trigger is handed *the first path segment of whatever it was called on* — the MCP
