@@ -3649,7 +3649,23 @@ public class MeshOperations
     /// Returns a JSON <c>{status, path}</c> envelope. The caller should wait ~100ms
     /// before re-accessing so the grain teardown completes.
     /// </summary>
-    public IObservable<string> Recycle(string path)
+    public IObservable<string> Recycle(string path) => Recycle(path, reason: null);
+
+    /// <summary>
+    /// Recycles the hub at <paramref name="path"/>, carrying the operator's own
+    /// <paramref name="reason"/> into the target's <c>DisposeRequest</c>.
+    ///
+    /// <para>🚨 An OVERLOAD, not a defaulted parameter, for the reason this file states elsewhere:
+    /// a defaulted parameter REPLACES the signature a previously-built module calls. The one-argument
+    /// form stays and forwards.</para>
+    ///
+    /// <para><paramref name="reason"/> is the half a reader of a <c>[QUIESCE-START]</c> cannot
+    /// reconstruct. #3712 stopped this verb posting an anonymous teardown, so the line already names
+    /// WHO tore the hub down and by which surface; what no framework string can supply is WHAT the
+    /// operator was trying to fix. Null keeps exactly the #3712 sentence — the fallback is never
+    /// replaced by a blank (#3510).</para>
+    /// </summary>
+    public IObservable<string> Recycle(string path, string? reason)
     {
         logger.LogInformation("Recycle called with path={Path}", path);
 
@@ -3733,7 +3749,7 @@ public class MeshOperations
                 // ONE implementation in HubRecycleExtensions, never a second copy of the rule.
                 if (outcome.IsGranted)
                     return hub.WhenNoInstallHoldsRoot(resolvedPath)
-                        .SelectMany(_ => RecycleCore(resolvedPath));
+                        .SelectMany(_ => RecycleCore(resolvedPath, reason));
 
                 if (outcome.IsUndetermined)
                 {
@@ -3753,7 +3769,7 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Re-decides a DENIED <see cref="Recycle"/> pre-flight through the target node's own
+    /// Re-decides a DENIED <see cref="Recycle(string)"/> pre-flight through the target node's own
     /// <c>INodeTypeAccessRule</c> — the same second opinion <c>AccessControlPipeline</c> takes since
     /// #3061, built from the same <c>NodeTypeAccessRuleGate</c> helpers so the two seams cannot
     /// drift into asking different questions.
@@ -3808,7 +3824,7 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// The one sentence <see cref="Recycle"/> says when access was EVALUATED and the answer is "no"
+    /// The one sentence <see cref="Recycle(string)"/> says when access was EVALUATED and the answer is "no"
     /// — whoever reached it, the caller's own pre-flight or the owning hub's delivery gate.
     ///
     /// <para>ONE constant, deliberately: those are two different evaluators at two different
@@ -3851,7 +3867,7 @@ public class MeshOperations
         + "admin) to do it.";
 
     /// <summary>
-    /// What <see cref="Recycle"/> says when the permission check reached NO verdict. Says the
+    /// What <see cref="Recycle(string)"/> says when the permission check reached NO verdict. Says the
     /// opposite thing to <see cref="RecycleDeniedMessage"/> on purpose: retry, do not go asking
     /// for rights you may already hold (#974).
     /// </summary>
@@ -3900,7 +3916,30 @@ public class MeshOperations
         return false;
     }
 
-    private IObservable<string> RecycleCore(string resolvedPath)
+    /// <summary>
+    /// The <c>DisposeRequest.Reason</c> an operator recycle carries — the framework's own sentence
+    /// (#3712), plus the operator's <paramref name="operatorReason"/> when they gave one.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 Pure and named so both directions are testable without driving the permission fold, the
+    /// lease gate and the change feed: that a supplied reason SURVIVES, and that an absent one still
+    /// produces the #3712 sentence rather than a blank. A blank is the exact failure #3510 measured
+    /// at six occurrences and four bake seals, so "the fallback is not silently replaced" is the
+    /// half that most needs a test.
+    /// </remarks>
+    internal static string RecycleReason(string resolvedPath, string? operatorReason)
+    {
+        var framework =
+            $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
+            + "to be recycled (the Recycle tool / Compile button), which "
+            + "stamps a release request and then tears the hub down so the "
+            + "next access reactivates it";
+        return string.IsNullOrWhiteSpace(operatorReason)
+            ? framework
+            : $"{framework}. The operator's reason: {operatorReason.Trim()}";
+    }
+
+    private IObservable<string> RecycleCore(string resolvedPath, string? reason)
     {
         try
         {
@@ -4038,10 +4077,7 @@ public class MeshOperations
                     .Post(
                         new DisposeRequest
                         {
-                            Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
-                                     + "to be recycled (the Recycle tool / Compile button), which "
-                                     + "stamps a release request and then tears the hub down so the "
-                                     + "next access reactivates it",
+                            Reason = RecycleReason(resolvedPath, reason),
                         },
                         o => o.WithTarget(new Address(resolvedPath)));
                 return JsonSerializer.Serialize(
