@@ -85,8 +85,12 @@ Four steps, each a few lines of pure Python over the core (no debugger, no elfut
    the minimum start for `libcoreclr.so` is the load base you subtract to get an RVA.
 3. **The faulting `ucontext`** — *not* `NT_PRSTATUS`, which `createdump` records from inside its own
    signal handler (its `rip` is `waitpid` in libc). Scan the `PT_LOAD` segments on 8-byte alignment
-   for a `gregs[23]` block whose `TRAPNO` (index 20) is `14` (page fault) and whose `RIP` (index 16)
-   lands inside `libcoreclr`; `ERR` (19) and `CR2` (22) then decode the access — `ERR == 0x4` is a
+   for a `gregs[23]` block whose `TRAPNO` (index 20) is `14` (page fault) — 🚨 **and whose `CR2`
+   (index 22) EQUALS the `NT_SIGINFO` `si_addr`, and whose `ERR` (index 19) decodes the access
+   (`0x4` = a user-mode read of a non-present page). Those two conditions are not optional trimmings:
+   a stack carries many stale register blocks that satisfy `TRAPNO == 14` and hold a plausible
+   `libcoreclr` RIP, and sighting #17 was first published from one of them.** The surviving block
+   also lies on the crashing thread's own stack, which is the cross-check that costs nothing; `ERR` (19) and `CR2` (22) then decode the access — `ERR == 0x4` is a
    user-mode **read** of a non-present page. Read the bytes at `RIP` straight out of the core through
    the same `PT_LOAD` table: that is the faulting instruction, and with the register values it names
    the exact dereference.
@@ -1350,42 +1354,49 @@ that build-id.
 upstream GC-hole fix, the family has now reproduced twice, and the second time on its most common frame,
 on a thread that runs no application code. The dump expires with its artifact on 2026-09-18.
 
-### 2026-09-20: sighting #17 — `10.0.12` again, in `gc_heap::make_unused_array+0xb2`, 0.2 s into the NEXT instance after a teardown the trace calls clean
+### 2026-09-20: sighting #17 — `10.0.12` again, `mark_object_simple1+0x2d7`, in the FIRST SECOND of the next instance after a teardown the trace calls clean
 
 `MeshWeaver.Futu-1786.dmp` (MeshWeaver.Plugins run
 [`35521820182`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35521820182), job
 `106108380439`, `portal-hosts (network-133 · leg 2/8)`, on **`main`** at `62749d6a` — a push; the run
-that turned main red as Plugins #1785). Read on a Mac with the four-step ELF walk above; the minidump
-carries no `libcoreclr` text, so the instruction bytes are not in the core and the frame is named from
-the RVA alone.
+that turned main red as Plugins#1785). Read on a Mac with the four-step ELF walk above.
 
 | | **#17** `MeshWeaver.Futu-1786.dmp` (pid 1786) |
 |---|---|
-| death | between 16:24:44.248Z (`TEST_START EuropeRe_KeyMetrics_ShouldHaveNonZeroData`, the first record of the new instance) and the createdump at ~16:24:45Z; a 1.17 GB core |
+| death | between 16:24:44.248Z (`TEST_START EuropeRe_KeyMetrics_ShouldHaveNonZeroData`, the first record of a new instance) and the createdump ~1 s later; a 1.17 GB core |
 | `si_signo` / `si_code` / `si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** |
-| **runtime / build-id** | **`10.0.12` / `79945f51fb2612f13b7667a10a8fd29122664791`** — the same binary as #15 and #16, read from the mapped `libcoreclr`'s own ELF note |
-| candidate `ucontext` (the one on the crashing thread's alternate stack, `TRAPNO=14`) | `RIP` = `libcoreclr+0x5b4a72` → **`WKS::gc_heap::make_unused_array(unsigned char*, unsigned long, int, int)+0xb2`**; `CR2 = 0xb`, `ERR = 0x0`; `RDX = 0`, `R13 = 0`, `RAX = 0x2020`, `RBX = 0x7fb6064ed6e8` (a heap address) |
-| crashing thread | tid 1876 (`createdump` prints `0754`, hex) — its `NT_PRSTATUS` `RIP` is in libc (the handler), as always |
+| `TRAPNO` / `ERR` / `CR2` | 14 / **`0x4`** / **`0x0`** — `CR2 == si_addr`, as the rule requires |
+| **runtime / build-id** | **`10.0.12` / `79945f51fb2612f13b7667a10a8fd29122664791`** — read from the `libcoreclr` mapped in the crashed process, and **verified equal** to the stock `10.0.12` binary's |
+| faulting RVA | `0x5d69b7` |
+| frame | **`WKS::gc_heap::mark_object_simple1(unsigned char*, unsigned char*)+0x2d7`** — a MARK-phase sibling of #7's `background_mark_simple1` |
+| instruction | **`44 8b 09` = `mov r9d,(%rcx)` with `RCX = 0`** — the read of `MT->m_dwFlags`; the next instruction, `44 8b 79 04` = `mov r15d,0x4(%rcx)`, is the `m_BaseSize` read |
+| ucontext location | `0x7fc97d4f2328` — on the **crashing thread's own stack** (its `NT_PRSTATUS` `rsp` is `0x7fc97d4f2140`), tid 1876 (`createdump` prints `0754`, hex) |
 | `Unwind: exception type` | **zero** occurrences in the job log |
-| trace log | complete (**no** `FAULT-BUDGET` line); the previous instance's teardown reads `DISPOSE_DONE … teardown clean`, `DISPOSE_UNLOADS_COLLECTED … after 2 round(s)`, `alc=1`, 16:24:44.011Z — 237 ms before the new instance's first record |
+| trace log | complete (**no** `FAULT-BUDGET` line); the previous instance's teardown reads `DISPOSE_DONE … teardown clean`, `DISPOSE_UNLOADS_COLLECTED … after 2 round(s)`, `alc=1` at 16:24:44.011Z — 237 ms before the new instance's first record |
 
-Two other `TRAPNO=14` blocks were found on the scan (`libcoreclr+0x68ffc8`, no containing function;
-`JIT_GetDynamicGCStaticBaseNoCtor_Portable+0x0`), both with garbage `ERR` values — stale frames, not
-the fault. **`make_unused_array` is the GC writing a free-object header over a dead range** — a new
-member of the family's frame set (`background_sweep`, `plan_phase`, `find_first_object`,
-`background_mark_simple1`, `GetCodeInfo`), and, as every time, it is the frame that TRIPS over a zeroed
-MethodTable word rather than the one that produced it. `CR2 = 0xb` is a byte-field offset off a zero
-base, the same shape as `0x0` (`m_dwFlags`) and `0x4` (`m_BaseSize`).
+**So it is the family's canonical fingerprint, through a different register pair.** #4–#8/#12/#13/#16 read `8b 08`
+= `mov ecx,(%rax)` with `RAX = 0`; this one reads the same `MethodTable` word as `mov r9d,(%rcx)` with
+`RCX = 0`. Register allocation and mark-vs-sweep phase move; *a MethodTable word that reads exactly zero*
+does not.
 
-**What the mesh's own accounting says about the maintainer's question ("something not part of the
-proper disposal stream?"):** by its counters, nothing — every pooled leaf joined, the async dispose
-queue drained, every retired context collected in two rounds, one ALC left. The crash lands in the
-FIRST second of the NEXT instance, which is exactly where the managed view of #11–#16 put the
-garbage of a disposed hub. So the question is not answered by the trace and cannot be answered by the
-native frame; it needs the managed census of this dump (ClrMD, in a container) — which objects in the
-`make_unused_array` range belonged to which hub, and whether any collectible context was still
-`Unloading` at 16:24:44.2Z despite `alc=1` (`AssemblyLoadContext.All` drops a context the moment
-`Unload()` is called, so `alc=1` does not exclude one). Not done in this sighting.
+🚨 **This entry was first published naming `gc_heap::make_unused_array+0xb2`, and that was wrong —
+the correction is the reusable lesson.** The first scan filtered only on `TRAPNO == 14` plus "RIP inside
+`libcoreclr`" and matched three blocks: `make_unused_array+0xb2` (`CR2 = 0xb`, `ERR = 0x0`), an
+unresolvable RVA, and `JIT_GetDynamicGCStaticBaseNoCtor_Portable+0x0` (garbage `ERR`). All three are
+**stale register blocks lying on a stack**, not fault contexts, and the first was published. Re-scanned
+with the full rule — `TRAPNO == 14` **and** `ERR == 0x4` **and** `CR2 == si_addr` — exactly one block
+matches, on the crashing thread's stack. **A `ucontext` candidate is only a candidate when `CR2` equals
+the `NT_SIGINFO` `si_addr` and `ERR` decodes the access**; step 3 of the recipe above now says so in those
+terms.
+
+**What the mesh's own accounting says about "something outside the disposal stream?":** by its counters,
+nothing — every pooled leaf joined, the async dispose queue drained, every retired context collected in two
+rounds, one ALC left. The crash lands in the FIRST second of the NEXT instance, exactly where the managed
+view of #11–#16 put *the garbage of a disposed hub*. The trace cannot settle it and the native frame
+cannot either: it needs this dump's managed census (ClrMD, in a container) — which objects in the marked
+range belonged to which hub, and whether any collectible context was still `Unloading` at 16:24:44.2Z
+despite `alc=1` (`AssemblyLoadContext.All` drops a context the moment `Unload()` is called, so `alc=1`
+excludes nothing). Not done in this sighting.
 
 Runtime tally: `10.0.12` is now **3** of the family's sightings (#15, #16, #17).
 
