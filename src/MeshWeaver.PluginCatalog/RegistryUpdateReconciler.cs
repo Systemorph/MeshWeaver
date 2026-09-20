@@ -926,10 +926,27 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         public int Attempts { get; } = attempts;
     }
 
-    /// <summary>The most one package's module adopt may take before the reconcile moves on —
-    /// generous for a large bundle download, small against a boot; the point is only that it is
-    /// FINITE (see the Timeout note below, Plugins#959).</summary>
-    internal static readonly TimeSpan PerPackageAdoptBudget = TimeSpan.FromMinutes(3);
+    /// <summary>
+    /// The most one package's module adopt may take before the reconcile moves on — the point is
+    /// that it is FINITE (see the Timeout note below, Plugins#959), and it is DERIVED, never a
+    /// second number authored beside the client's own (#4528).
+    ///
+    /// <para>🚨 The client bounds every stage of a transfer on SILENCE, each stage getting
+    /// <see cref="PluginBundleClient.TransferStallBudget"/> — the response start, and every gap
+    /// between chunks — and refuses with a <see cref="BundleTransferException"/> that names the
+    /// stage. This outer bound exists for what those bounds cannot see: a transfer that keeps
+    /// trickling, a landing write that never answers. So it is one stall budget — the longest any
+    /// single stage may stay silent — plus a minute for the index read, the decision and the
+    /// landing. It therefore always fires AFTER the client's own refusal for a stalled stage, which
+    /// is what keeps the cause in the log: the 09-15/16 failures reached this bound first and left
+    /// "The operation has timed out" as their only sentence, because the transport pipeline's
+    /// retry (three attempts inside a five-minute total) was structurally unable to finish inside
+    /// it, and the client itself measured nothing. Neither number was raised; the client's clock
+    /// now runs first, and the pipeline's retry of a stall — which could never complete here —
+    /// is cancelled by it.</para>
+    /// </summary>
+    internal static readonly TimeSpan PerPackageAdoptBudget =
+        PluginBundleClient.TransferStallBudget + TimeSpan.FromMinutes(1);
 
     /// <summary>
     /// The module half of the boot reconcile (#1664 Slice C): for each of the registry's packages
