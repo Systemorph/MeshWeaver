@@ -171,6 +171,20 @@ All docs are embedded in `src/MeshWeaver.Documentation/` and served under `Doc/`
 <!-- shared-rule:begin rest-not-graphql -->
 🚨 **Read GitHub through REST, not GraphQL.** GraphQL exhausts first, and the limit that bites is the **SECONDARY** one — `gh api /rate_limit` keeps reporting `5000/5000 remaining, 0 used` while every GraphQL call is refused with *"API rate limit already exceeded"*. The primary quota is therefore NOT the signal; that pairing IS the secondary limit. `gh pr view --json …`, `gh pr checks` and `gh run watch` all issue GraphQL, so a watcher built on them takes the whole session's GitHub access down with it, for every concurrent agent. REST does everything a PR watcher needs: `gh api "repos/{o}/{r}/actions/runs?head_sha={sha}"` filtered on `.name` for one workflow's `status`/`conclusion`; `.../commits/{sha}/check-runs` and `.../commits/{sha}/check-suites` for the checks; `.../pulls/{n}` for `state`, `merged` and `mergeable_state`. Reserve GraphQL for what REST cannot express — merge-queue entries and `dequeuePullRequest` — and never put one in a loop. 🚨 **Fast retries EXTEND a secondary limit**: on a refusal STOP for at least 5 minutes, do not retry, and do not switch to a different GraphQL query hoping it is cheaper. Poll no faster than 60 s and run ONE watcher, not several. Two REST caveats, both measured: `pulls/{n}` answers `mergeable: null` / `mergeable_state: "unknown"` until GitHub recomputes after a push — re-read, never read that as a verdict; and a check SUITE an installed App never posts runs to stays `queued` forever, so wait on the ONE workflow you care about by name, never on all suites.<!-- shared-rule:end rest-not-graphql -->
 
+<!-- shared-rule:begin file-it-and-move-on -->
+🚨 **The defect you did not come for: FILE AN ISSUE AND MOVE ON.** Debugging one thing exposes
+another — an error swallowed, a gate never armed, a log line that lies. Ask in order: does it
+**block** the task in hand (then fix it, and say so); is it **actively harmful** right now (then stop
+and tell a person); otherwise it is **incidental** — file an issue and return to what you were doing.
+You are not blocked by it, and turning aside costs twice: the task is abandoned mid-air and the
+defect is investigated without the context of whoever owns it. **The issue is worth only the evidence
+in it** — you will never be as close to this again — so it carries the instrument readings with exact
+identifiers, how you got there, and **what you did NOT establish**; an issue that overstates its
+certainty sends the next person down a branch you had already excluded. Never file one you have not
+checked is real against the DEPLOYED artifact: a stale checkout or a truncated query produces a
+confident finding about a defect that does not exist, and someone else pays to disprove it. Full
+rule, the two failure modes and where the issue goes: [Incidental Findings](https://memex.meshweaver.cloud/Doc/Architecture/IncidentalFindings) (`get Doc/Architecture/IncidentalFindings`).<!-- shared-rule:end file-it-and-move-on -->
+
 <!-- shared-rule:begin conserve-work-products -->
 **🗂️ ALWAYS conserve work products — a design, an architecture decision, an investigation finding, a manual produced while working gets COMMITTED to this repo in the same change set, every time.** The durable form is <!--slot:doc-home-->a doc page under `src/MeshWeaver.Documentation/Data/` (Architecture for platform designs; follow AuthoringDocumentation.md; add a What's New entry when user-facing)<!--/slot--> — issue comments, PR bodies, chat replies and rendered artifact pages are *pointers* to the committed page, never a substitute for it. A finding that lives only in an issue thread or a terminal is invisible to the next session<!--slot:reach--> and to the portal; the doc tree ships with the platform<!--/slot-->. Maintainer directive, 2026-08-30<!-- shared-rule:end conserve-work-products -->. This rule holds in EVERY repo of the fleet — satellites commit theirs to their own doc home.
 
