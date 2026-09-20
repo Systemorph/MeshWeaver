@@ -393,16 +393,21 @@ changes about this procedure:
 - **The step-3 poll still applies to the PR's own run**, and after the queue lands it, to `main`'s.
   The queue is not a reason to stop watching; it is the reason the merge is no longer yours to press.
 
-## What's New entry (step 0.5) — one doc node per user-facing PR
+## What's New entry — the MECHANICS, for when you are cutting a release
+
+> 🚨 **This section is NOT a per-PR step. A merge mints no What's New file** — see step 0.5 above,
+> and policy `whatsnew-cadence`. What follows is the file format, which you need only when you are
+> writing the entry for a **release**. Everything below is about *how* to write one, never *whether*
+> to. (This heading used to read "one doc node per user-facing PR"; that rule is retired.)
 
 The platform's **What's New** feed is not a hand-maintained changelog: it's the set of per-entry
 markdown nodes under `src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition,
 so every self-updating deployment shows the same feed). The **What's New** settings tab lists them
 newest-first; each entry is a normal doc node you can open.
 
-- **One file per PR** (`<YYYY-MM-DD>-<slug>.md`) — the date prefix drives newest-first ordering, and
-  a distinct filename per PR means two concurrent PRs never conflict on the feed (the reason we do
-  NOT prepend to a single rolling file).
+- **The filename MUST start with the ISO date** (`<YYYY-MM-DD>-<slug>.md`) — `WhatsNewEntryIntegrityTest`
+  enforces `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES `Order` from it, so a version-prefixed name
+  is rejected from the feed. The version belongs in `Name`/`Description`, never in the filename.
 - **Front-matter**: `Name` (title shown in the list), `Category` — **`Feature` or `Fix`, nothing else**
   (`feat/ perf/ chore/ docs/` → `Feature`, rendered in full; `fix/` → `Fix`, bundled into the day's
   one-line summary) — `Description` (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`), and

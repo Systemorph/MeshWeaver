@@ -8,7 +8,7 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # Issue Taxonomy and the Release Readiness Gate
 
-A queue you cannot route is a queue you cannot finish. Until 2026-09-20 an open issue carried a
+A queue you cannot route is a queue you cannot finish. Before this taxonomy an open issue carried a
 type at best, so the two questions that actually drive work — *what is still open for this plugin?*
 and *what is still open for this feature?* — could only be answered by reading every title. And the
 question that gates a release — *is anything blocking?* — could not be answered at all.
@@ -57,14 +57,30 @@ answer. Everything else is a priority conversation.
 ## The gate
 
 ```
-label:bug  label:sev:B  state:open   →   must be ZERO, in every repo of the product
+label:bug  label:sev:B  state:open   →   must be ZERO
 ```
 
-That is the whole release-readiness predicate, and it is enforced rather than remembered: the
-`release.cut` standard in the Governance package requires `Gate.NoOpenIssues(repo, "sev:B")` for
-each repository, so a release proposal cannot reach `Ready` while one is open. The pattern it uses
-is the long-running check (`get Governance/Skill/long-running-check`); see
-[Release Process](../ReleaseProcess) for what a release then is.
+across the **seven repositories** that carry the taxonomy: `MeshWeaver`, `MeshWeaver.Plugins`,
+`MeshWeaver.Crm`, `MeshWeaver.SocialMedia`, `MeshWeaver.Reinsurance`, `MeshWeaver.Manufacturing`,
+`MeshWeaver.Education`.
+
+> 🚨 **Name the repositories; never write "every repo of the product".** A repo that is not on the
+> list is not gated, and — worse — a repo on the list that has never had the `sev:B` label *created*
+> answers a label query with an empty array, which folds to "no open issues" and is **green
+> forever**. That was live: the gate named seven repositories and the label existed in five.
+> **`Systemorph/Memex` is a known gap** — 18 open issues, no `sev:` labels, not on the list. Whether
+> the estate repo belongs in a product release gate is an open decision, and leaving it ambiguous is
+> how the first false green happened.
+
+That is the whole release-readiness predicate. See [Release Process](../ReleaseProcess) for what a
+release then is.
+
+> 🚨 **Today it is remembered, not enforced — read that plainly.** Nothing refuses a release for an
+> open `sev:B`. A release is cut by an annotated tag push, and core's `release.yml` refuses an
+> unsealed set, an unpromoted commit, a mismatched `PlatformVersion` and missing notes — but it
+> issues no issue query and has no governance hook. The `release.cut` standard that would enforce
+> this is **owed, not shipped** (MeshWeaver.Plugins#2182). Until it lands, the query above is a
+> checklist item a human runs, and it carries exactly the weight of a human remembering to run it.
 
 ### Two rules that keep the gate honest
 
@@ -94,26 +110,46 @@ the lane is a second source of truth that will drift.
 
 ## Where the tracking lives
 
-**GitHub is the ledger. The mesh holds the working state. Neither mirrors the other.**
+**GitHub is the ledger — the one place an issue is WRITTEN. The mesh reads it, and adds what GitHub
+cannot hold.**
 
 | | holds | written by |
 |---|---|---|
 | **GitHub issues** | *what must be done* — the labelled queue, and the gate query | people and triage |
+| **`GitHubIssue`** at `{space}/_Issue/{number}` | a **one-way mirror** of the ledger, refreshed by sync and by webhook | `system-security` |
 | **`Feedback/Feedback`** | *intake* — a finding as it arrives, before it is a work item | agents, users |
-| **`Governance/Activity`** | *what is being done* — which label a thread is working, what it claimed, when it last looked | the control plane |
+| **`Hosting/TriageItem`** | *what is being done* — the thread a defect is worked in, and what came of it (`threadPath`, `status`, `issueUrl`) | the triage agent |
 
-A mirror of the ledger would mean two writers over one set of rows, which imports every problem of
-bi-directional synchronisation for no benefit: PRs already close GitHub issues natively, and
-`Gate.NoOpenIssues` already reads GitHub directly, so the gate needs no copy. The one bridge runs
-**one way** — a `Feedback` finding becomes a GitHub issue and records the reference — and the mesh
-tracks the workers rather than the work, because an agent thread is not a GitHub user and cannot be
-an assignee.
+🚨 **The mirror already exists and is one-way by design.** `MeshWeaver.GitSync`'s `IssueService`
+materialises every issue as a `GitHubIssue` node under the space's `_Issue` satellite, refreshed by
+an explicit sync and by a live webhook. **The node is never edited directly**: a mutation runs
+against GitHub and the mirror re-syncs. So there is exactly one writer, and none of the
+bi-directional problems a two-way mirror would bring.
+
+That one-way direction is the load-bearing part. Making the mirror writable would put two writers
+over one set of rows for no gain — PRs close GitHub issues natively, and a `NoOpenIssues` gate reads
+GitHub directly, so nothing downstream needs the copy to be authoritative.
 
 > ⚠️ `Hosting/Issue` is **not** part of this. It is fleet health — "no replicas ready", "not
-> observed" — machine-written, self-resolving, one node per deployment × condition. It is not a
-> work item and it carries no severity.
+> observed" — machine-written, self-resolving, one node per deployment × condition. It carries its
+> own `Severity` (`Warning`/`Critical`, set by the detector), which is unrelated to the `sev:` scale
+> here: that one grades a live deployment symptom, this one grades a defect in the product.
 
 ---
+
+## Scope: the OPEN set, and only the open set
+
+**Closed issues are out of scope.** They are not classified, not counted, and no query on this page
+looks at them — policy [`issue-taxonomy-scope`](../PolicyNotProse). Every query here carries
+`state:open`, including the gate.
+
+That is affordable because the open set is **hundreds, not thousands** — 127 across five
+repositories on the day this was written, which is why the whole of it could be classified in a
+single pass and kept classified since. A taxonomy is worth maintaining at a scale where every open
+row can carry it; a backlog that outgrew that would be a backlog problem, not a labelling one.
+
+The corollary for an agent: do not go back over history. Classify what is open, keep it classified
+as triage files new work, and let closure — not labelling — dispose of what is dead.
 
 ## The first classification pass — 2026-09-20
 
