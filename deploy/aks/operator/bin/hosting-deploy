@@ -138,7 +138,12 @@ if [ -n "$vault" ]; then
   # shellcheck disable=SC2064  # expand the path NOW: the trap must name this file, not a later $vault_values
   trap "rm -f '$vault_values'" EXIT
   hosting::log "vault     ${vault}: reading the values half helm-values-${release}"
-  kv_err="$(hosting::read az keyvault secret download --vault-name "$vault" --name "helm-values-${release}" --file "$vault_values" --output none 2>&1 >/dev/null)" \
+  # 🚨 `--overwrite`: the file above is PRE-CREATED (mktemp, 0600) so the secret never lands with
+  # the default umask, and `az keyvault secret download` REFUSES an existing --file without it —
+  # "File '/tmp/tmp.…' already exists. Use --overwrite" — which this step then reported as "holds no
+  # values half", and every record-driven Reconcile of memex died at step 4/7 on 2026-09-20 with the
+  # half sitting in the vault. The test stub used to overwrite silently; it now refuses like the CLI.
+  kv_err="$(hosting::read az keyvault secret download --vault-name "$vault" --name "helm-values-${release}" --file "$vault_values" --overwrite --output none 2>&1 >/dev/null)" \
     || hosting::die "Key Vault ${vault} holds no values half for release ${release} (helm-values-${release}): ${kv_err}. The record declares vaultValuesKeys — keys the chart's own Secret must carry — and nothing in the record renders them, so an upgrade without this file would re-render memex-portal-secrets from the chart's in-cluster defaults and every new pod would fail at silo start (MeshWeaver#3780). Run the config repo's helm-release workflow with action=capture for this release first, or clear vaultValuesKeys on the record if the chart's Secret genuinely carries nothing."
   [ -s "$vault_values" ] \
     || hosting::die "the values half helm-values-${release} in Key Vault ${vault} is EMPTY — an empty vault half is not 'no secrets', it is a capture that wrote nothing. Re-run helm-release capture for this release (MeshWeaver#3780)."
