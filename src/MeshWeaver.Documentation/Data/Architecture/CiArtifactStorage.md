@@ -341,15 +341,19 @@ run `35534037490` (2026-09-20T19:58Z) ran the same topology, producer `aks-silos
 
 Three facts about it that are not in the variable's value:
 
-- **The organisation variable is untouched**: `file:/ci-artifacts`, created 2026-09-18T21:04:23Z,
-  never modified. Deleting a repository override puts that repository straight back on the two-share
-  path, where it is RED at the run's first `put` — not silently broken, but not working either.
-- **Its reach is two repositories, not eight.** The organisation variable is `visibility: selected`,
-  and the selection is `MeshWeaver.Plugins` and `MeshWeaver.SocialMedia` (measured 2026-09-20 over
-  REST). The other six overrides therefore override nothing today; they are there so that widening
-  the selection later cannot re-expose a repository without a change *in that repository*, and the
-  public repository's is correct for a second reason — it must never be pushed onto private
-  infrastructure (the script's header says so).
+- **The organisation variable's reach is two repositories, not eight.** It is untouched —
+  `file:/ci-artifacts`, created 2026-09-18T21:04:23Z, never modified — and it is
+  `visibility: selected`, with the selection `MeshWeaver.Plugins` and `MeshWeaver.SocialMedia`
+  (measured 2026-09-20 over REST). The other six overrides therefore override nothing today; they
+  are there so that widening the selection later cannot re-expose a repository without a change *in
+  that repository*, and the public repository's is correct for a second reason — it must never be
+  pushed onto private infrastructure (the script's header says so).
+- 🚨 **So deleting an override does two different things, and only one of them is a rollback.** On
+  `MeshWeaver.Plugins` or `MeshWeaver.SocialMedia` the organisation value applies again and the
+  repository is back on the two-share path, RED at the run's first `put` — not silently broken, but
+  not working either. On the other six there is then no variable at all, and `resolve` maps
+  `""`/`gha`/`none` to the same branch (*"no object store is declared for this run; artifacts stay on
+  GitHub"*), so nothing changes today. Read the selection before reading an override as protection.
 - **Nothing will go red when the stopgap outlives its cause.** Once `ci-artifacts` is one share the
   organisation value is correct again, and the eight overrides will keep every repository on `gha`
   with nothing to warn — the object store simply never gets used by exactly the repositories whose
@@ -358,15 +362,31 @@ Three facts about it that are not in the variable's value:
 
 So the lift is three steps, in order, and the third is not optional:
 
-1. **Systemorph/Memex#420 closes** — `ci-artifacts` served by one share addressed from both runner
-   namespaces (the `ci-platform` shape: two static `PersistentVolume`s over one `volumeHandle`, one
-   `claimRef` each; a PVC's `volumeName` is immutable, so the claim that moves is recreated), or the
-   move to `azblob:`. The proof that it worked is `resolve` printing **one** `store-id` on both pools
-   (`//<account>.file.core.windows.net/<share>`), where today it prints `pvc-ebde47ec-…` on
-   `aks-silos-dind` and `pvc-42c3b45b-…` on `aks-silos`.
-2. **One run proves the handoff on `file:`** — a run whose `ARTIFACT_STORE` line reads
-   `file:/ci-artifacts` and whose `Module bundle` consumers are green. A green run on `gha` proves
-   nothing about it; that is the control above, on the other side of the variable.
+1. **Systemorph/Memex#420 closes.** It states two routes, and step 1 is a *different act* on each
+   — because only one of them has a mount to compare at all:
+
+   - **A — one share, the `ci-platform` shape.** Two static `PersistentVolume`s over one
+     `volumeHandle`, one `claimRef` per runner namespace; a PVC's `volumeName` is immutable, so the
+     claim that moves is deleted and recreated. The prerequisite is then `resolve` printing the
+     **same** `store-id` on both pools. Mind the shape: `mount_identity` emits
+     `<fstype>:<mount source>:<bind root>`, so a whole share mounted at `/ci-artifacts` reads
+     `cifs://<account>.file.core.windows.net/<share>:` — today the share segment differs,
+     `pvc-ebde47ec-…` on `aks-silos-dind` against `pvc-42c3b45b-…` on `aks-silos`.
+   - **B — `azblob:`.** There is no mount identity to unify: `Store.store_id()` returns the spec and
+     only `FileStore` overrides it, because an account plus a container name the same bytes from
+     every runner, so `azblob:<account>/<container>` is identical on both pools *by construction* and
+     can never discriminate between them. Step 1 here is provisioning plus a variable move — the
+     container, `Storage Blob Data Contributor` for the CI identity, and the `pull_request` federated
+     subject listed under "Where the bytes should live" below, then the organisation variable set to
+     the `azblob:` spec rather than a path.
+
+   🚨 **On neither route is step 1 a handoff proof.** One agreed identity says both pools mean the
+   same store; it says nothing about bytes having crossed it. That is step 2, and it is the same on
+   both routes.
+2. **One run proves the handoff on the store that was chosen** — a run whose `ARTIFACT_STORE` line
+   reads the new spec (`file:/ci-artifacts`, or the `azblob:` one) and whose `Module bundle`
+   consumers are green, the producer having run on the other pool. A green run on `gha` proves
+   nothing about either route; that is the control above, on the other side of the variable.
 3. **Delete the eight overrides in the same change set**, one command per repository
    (`gh variable delete MW_ARTIFACT_STORE --repo Systemorph/<repo>`), and only then close
    [#4761](https://github.com/Systemorph/MeshWeaver/issues/4761).
