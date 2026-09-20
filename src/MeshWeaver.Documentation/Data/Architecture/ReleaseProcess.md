@@ -432,7 +432,8 @@ entry is individually defensible and the aggregate is unusable.
 
 | | |
 |---|---|
-| **One entry per release** | `WhatsNew/<version>-<slug>.md`, written when the release is cut |
+| **One entry per release** | `WhatsNew/<yyyy-MM-dd>-<slug>.md`, written when the release is cut |
+| **Named by the SHIP DATE, not the version** | `WhatsNewEntryIntegrityTest` enforces `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and derives `Order` (`-YYYYMMDD`) from that date, so a version-prefixed filename is rejected from the feed. The version goes in `Name`/`Description`. |
 | **It names what COMPLETED** | features and fixes that landed in that stream — the user-visible outcome, not the pull requests |
 | **It links out** | each item points at the doc page that explains it; that page is the durable form |
 | **It does not explain** | if an item needs more than a sentence, the sentence belongs in the doc and the link belongs here |
