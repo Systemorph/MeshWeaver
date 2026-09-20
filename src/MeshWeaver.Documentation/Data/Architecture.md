@@ -196,6 +196,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
+- [PublicRead and Denies](PublicReadAndDenies) — a Public/Anonymous deny under a `PublicRead` policy is honoured by the SQL read path and ignored by the C# evaluator; what that split exposes, and what each remedy costs
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
 - [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
