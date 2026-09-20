@@ -4,8 +4,8 @@ Category: Architecture
 Description: >-
   What to do with the defect you did not come for. Debugging one thing exposes another; the rule is
   to file an issue with the evidence you already hold and return to the task, because a finding that
-  does not block you is a finding you must not follow. Where it applies, the three tests that decide,
-  what a filed issue owes, and the two failure modes at either end.
+  does not block you is a finding you must not follow. Where it applies, the three tests that decide
+  whether to fix it now or file it, what a filed issue owes, and the two failure modes at either end.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V5a2 2 0 0 1 2-2h9l5 5v13"/><path d="M15 3v5h5"/><path d="M9 13h6M9 17h3"/></svg>
 ---
 
