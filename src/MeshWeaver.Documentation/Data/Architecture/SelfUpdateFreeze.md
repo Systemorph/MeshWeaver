@@ -494,35 +494,42 @@ Nothing has been opened since. **The apply half stopped after a failed roll and 
 gone on announcing into it every day** — so the daily "update available … handed to the control lane"
 line is evidence that detection works, and no evidence at all that anything consumes it.
 
-**Two causes this page does NOT distinguish**, because the reader who can see the inbox should:
+**The cause: an action orphaned in `Running`.** `Ops/Actions/selfupdate-roll-memex-3-0-0-ci-8968-e9878173`
+reads `state: Running`, `phase: Verify one generation` (step 6/8), `startedAt 2026-09-19T08:10:32Z`,
+`observedUntil 2026-09-19T14:41:12Z` — and `lastModified` still 08:10:28Z. **The roll itself worked**:
+the image was set to `3.0.0-ci.8968`, `rollout_generation=779`, and the pods came up (the instance's
+`Hosting/Deployment` recompiled at 08:13Z under identity `s091d69f…`). Step 6/8 then never completed,
+the observation window lapsed, and nothing wrote a terminal state.
 
-1. the control plane opens a `Roll` that waits for an approval nobody gives — the designed shape; or
-2. the delivery is never turned into an action at all — the MeshWeaver#777 shape, where signed build
-   facts sat unconsumed because the watcher was armed on on-demand hubs.
+`SelfUpdateRouting.Decide` is idempotent on purpose — *"a re-announcement must be a no-op, not a
+second roll… A run that ended `Failed`/`Refused` is RE-OPENED by a later announcement"*. A run still
+`Running` is neither, so it counts as in-flight **forever**, and every announcement since has been
+correctly suppressed against a roll that will never finish. **The mechanism that makes hourly
+re-delivery safe is what makes a lapsed run permanent** (MeshWeaver.Plugins#2178).
 
-Today's verdict names `Hosting/PlatformBuilds/_Inbox/dc1fab8d191e466c9b09069140328240` as *stored,
-signature verified*. That node read **Not found** and the inbox listed **empty** to a global admin over
-MCP — which is consistent with both "already consumed" and "not visible to me", so it settles nothing.
-**Check it as System on the control instance before concluding**, and read the inbox area's watcher
-liveness rather than the node list.
+🚨 **A `Running` action past its own `observedUntil` is a FAILED action that nobody wrote down.**
+Read `observedUntil` against the clock before believing `state`.
 
-### The distinguishing question, and the order to ask it in
+### How this page got it wrong first, which is the instrument lesson
 
-1. **Is an action open?** `search path:Ops/Actions nodeType:Hosting/InstanceAction` and sort by date.
-   An action newer than the last `handedOverAt` ⇒ shape 1, and the remedy is an approval.
-   **No action newer than the hand-over ⇒ shape 2, and an approval will never come.**
-2. **Is the inbox draining?** The `Inbox` area of `Hosting/PlatformBuilds` shows watcher liveness and
-   every pending event with its age. A non-empty ageing inbox is the failure; an empty inbox with no
-   action is the watcher consuming and dropping.
-3. **Only then** the combo gate: `comboVerifications` empty means UNVERIFIED, which grants no
-   clearance and takes no refusal ([Combo Gate Wiring](/Doc/Architecture/ComboGateWiring)) — it
-   explains a roll being *taken* unverified, never a roll that never happens.
+The first version of this section said *"no Roll has been opened for six days"* and offered two causes.
+**Both were wrong**, and the mistake is worth more than the finding.
 
-🚨 **The general trap, one level up from the one this page opens with.** A working detector in front of
-a dead consumer produces a *daily fresh timestamp* on `handedOverAt` — the field most likely to be read
-as "the pipeline is alive". Liveness of the announcing half is not liveness of the acting half, and
-here they are in different processes on different instances. **Pair every `handedOverAt` with the age
-of the newest action on the target**; a hand-over with no younger action is the whole diagnosis.
+`search nodeType:Hosting/InstanceAction limit:25` and a second filtered query both returned
+`truncated: true` **and unordered by date**. The newest row in each page was 2026-09-14, so the
+conclusion looked solid. Re-run at `limit:200` (175 results, `truncated: false`) and sorted, the same
+query showed actions right through **2026-09-19** — including the routed rolls whose existence had
+just been denied.
+
+**A truncated result set that is ordered is a partial answer; a truncated result set that is UNORDERED
+is a misleading one** — it reads as a complete recent history and is not. `truncated: true` is in the
+response and does not save you. Raise the limit until `truncated` is false, sort by `lastModified`
+yourself, and never date a "nothing happened since X" claim from a capped page (MeshWeaver#4950 asks
+for newest-first as the default).
+
+The same session also blamed `PlatformBuildInboxWatcher` for deleting `self-update-available` events —
+read from a **stale checkout**, where that was true before MeshWeaver.Plugins#1845 wired
+`DeliveryRoute.SelfUpdate`. Verify against the deployed type's `compiledSources`, not a working copy.
 
 ### What the moving-label design does and does not fix
 
@@ -558,6 +565,12 @@ behind, holding a CRM data migration and an unrelated invoice feature. **"Merged
   in front of a dead consumer refreshes it daily, which reads exactly like a healthy pipeline. Pair it
   with the age of the newest `Hosting/InstanceAction` on the target: **a hand-over with no younger
   action is the diagnosis** (2026-09-20 — six days of daily hand-overs, no action since the 14th).
+- 🚨 **Never date a "nothing since X" claim from a capped search.** Raise `limit` until
+  `truncated` is false and sort by `lastModified` yourself — an unordered truncated page reads
+  exactly like a complete recent history (2026-09-20: 25 rows said "nothing since the 14th";
+  200 rows showed rolls through the 19th).
+- **A `Running` action past its `observedUntil` is a failed action nobody wrote down.** Check the
+  window against the clock before believing `state`.
 - **Re-read `Deployments/<id>` before acting on any pin advice on this page.** The `pinnedImageTag`
   it documented for memex was gone by 2026-09-19 and the standstill outlived it.
 - **The record's `updatePolicy` is intent; the instance's `Admin/UpdatePolicy` is behaviour.** Setting
