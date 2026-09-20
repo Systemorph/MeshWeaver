@@ -7,11 +7,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Thread Supervision
 
-> Maintainer, 2026-09-20: *"generally wherever user code is executed, innermost in thread ⇒ must
-> gracefully error. If it does not gracefully error, the fix agents have to observe, clean up,
-> figure out the problem and relaunch ⇒ robust error handling. If not possible ⇒ error triage."*
-> And: *"the relaunch/dispatch side runs through a POOL with a configurable concurrency cap —
-> default 50 agents in flight — and the queue must be OBSERVABLE: a status node plus a layout area."*
+> **Wherever user code is executed, innermost in a thread, it must gracefully error.** A failure the
+> thread's own hub cannot stamp is observed, cleaned up and relaunched under a bound, and what a
+> relaunch cannot fix is filed into bug triage. The relaunch/dispatch side is bounded by a
+> configurable pool cap, and its queue is a page rather than a log.
+> — policy [`thread-graceful-error`](../PolicyNotProse)
 
 An agent thread is user code running innermost: a model that may refuse, a harness process that
 may die, a tool that may throw, a mesh that may restart underneath it. The rule has three layers,
@@ -55,8 +55,12 @@ construction, and both were measured on the control instance on 2026-09-20:
   ingested, one per red CI run since 2026-09-19 — no error, no status, nothing to grep. A single
   `get` on one of them ran its round within a minute. `StartThread` now owns the activation
   (`HubThreadExtensions.WakeThreadHub`: one subscription to the created thread's own stream, off the
-  router, under the caller's identity, released on the first emission), so the residue is the
-  creator that crashes between the create and the wake, and the hand-assembled node.
+  router, released on the first emission), so the residue is the creator that crashes between the
+  create and the wake, and the hand-assembled node. 🚨 The caller's context rides along as the
+  **subscriber context** only — the identity the cache's per-subscriber `Read` check evaluates, and
+  the reason that check sees a real identity rather than a null one that would fail the read closed.
+  The shared upstream keeps `MeshNodeCacheIdentity`; a wake that stamped a user onto it would be the
+  cache-wide RLS failure, not a fix.
 - **Stale.** A node that says `Executing` with no hub behind it: the pod restarted mid-round. The
   90 s watchdog was on the hub that died. Nothing re-reads the node until something reaches its
   address.
@@ -80,11 +84,14 @@ side of every bound):
 A thread whose active cell carries an unfinished delegation call is left to the heartbeat ticker,
 whatever the clock says: a parent waiting on a child is silent by design.
 
-**Every action is a write routed to the thread's OWNER, and that is the whole mechanism.** A write
-reaching a cold address activates the hub; the hub's init installs the submission watcher (a
-parked thread drains) and runs the activation-time recovery (a stale thread resumes its
-`Streaming` cell or settles a finished one). The supervisor adds no second recovery — it makes the
-existing one run:
+**Every STATE CHANGE is a write routed to the thread's OWNER, and that is the whole mechanism.** A
+write reaching a cold address activates the hub; the hub's init installs the submission watcher (a
+parked thread drains) and runs the activation-time recovery (a stale thread resumes its `Streaming`
+cell or settles a finished one). The supervisor adds no second recovery — it makes the existing one
+run. A recycle is **not** one of those writes: it is a separate dispose-only lifecycle operation
+(`RecycleNode` posts a `DisposeRequest`, a no-op at the router on a cold address), and it precedes
+the write wherever an activation may still be alive and wedged — so the write lands on a hub that
+has to re-read its node rather than on one that is stuck:
 
 1. **Parked, first touch** — a write stamping `supervisorLastActionAt` and `supervisorNote`. This
    is the wake nobody gave it; no retry is counted. Row `Woken`.

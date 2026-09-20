@@ -206,6 +206,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Threads, activities & AI
 
 - **Start here:** [Thread Operations](ThreadOperations)
+- [Thread Supervision](ThreadSupervision) — a round ends stamped, whatever failed; the one death the hub cannot cover is its own, and the supervisor, dispatch pool and `Admin/Threads` queue page that cover it
 - [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
