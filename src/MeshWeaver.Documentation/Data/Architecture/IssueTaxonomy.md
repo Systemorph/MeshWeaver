@@ -150,3 +150,10 @@ person.
 > either way now. It also makes the gate non-vacuous for the first time: on the day the bar moved,
 > `sev:B` was 0 across all nine repositories while `sev:H` stood at **30** (MeshWeaver 18,
 > MeshWeaver.Plugins 12, every other repo 0). A gate that refuses something is a gate.
+>
+> 🚨 **These are a SECOND, later snapshot, not a correction of the table above.** The first-pass
+> table records the classification as it stood when the pass finished (Plugins `sev:H` = 11);
+> this count was read from the live labels at ~12:35Z the same day, when the bar moved, by which
+> time Plugins carried 12. Both are true of their instant. The number that gates a release is
+> never either of them — it is whatever `release.cut`'s `NoOpenIssues` gates read when the cut is
+> proposed.
