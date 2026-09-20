@@ -136,6 +136,36 @@ over node paths.
 
 ---
 
+# Signature Pad
+
+`SignaturePadControl` is the hand-drawn signature of a paper contract: a canvas the viewer signs
+on with a finger, a pen or the mouse, over a signature line. The bound value is the drawn
+signature as a PNG data URL (`data:image/png;base64,…`), empty while nothing has been drawn.
+**Done** pushes the image into the bound stream — never each stroke — and **Clear** empties it.
+A value that is already set renders as the stored image, so a signature that was given shows
+where it was given. Made for a phone or a tablet as much as for a desktop.
+
+```csharp --render InputSignaturePad --show-code
+Controls.Stack
+    .WithView(Controls.SignaturePad("")
+        .WithLabel("Signature")
+        .WithPlaceholder("Sign here")
+        .WithWidth(480).WithHeight(160)
+        .WithPenColor("#1a237e"))
+```
+
+| Method | Purpose | Default |
+|---|---|---|
+| `WithWidth(int)` / `WithHeight(int)` | Drawing size in CSS pixels | 480 × 160 |
+| `WithPenColor(string)` | Pen colour (any CSS colour) | `#1a237e` |
+| `WithPlaceholder(object)` | The hint under the signature line | localized *Sign here* |
+| `WithClearButton(object)` · `WithClearButton()` | Offer the Clear button (bindable, like `WithPenColor`) | `true` |
+
+The two buttons, the hint and the canvas's accessible name are catalog keys (`signaturePad.*`), so a
+German reader is handed *Hier unterschreiben*, *Löschen*, *Fertig*.
+
+---
+
 # See Also
 
 - [Editor](../Editor) — auto-generates a form from a record using these controls
