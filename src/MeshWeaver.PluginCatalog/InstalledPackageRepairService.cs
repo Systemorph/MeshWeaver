@@ -141,48 +141,19 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
         ILogger? logger)
     {
         var byId = records.ToDictionary(r => r.PackageId, StringComparer.Ordinal);
-        var incomplete = verdicts
+        // The SAME predicate the sweep logged by: a shortfall it announced as "being handed to the
+        // install lane" is exactly the set handed over, and one it announced as standing is not.
+        var toReassert = verdicts
             .Where(v => v.Kind is InstallCompletenessKind.Incomplete)
-            .Where(v => byId.ContainsKey(v.PackageId))
-            .ToList();
-        if (incomplete.Count == 0)
+            .Where(v => byId.TryGetValue(v.PackageId, out var record) && RepairRefusal(record, v) is null)
+            .Select(v => new InstanceAutoRegistrationService.ReassertTarget(
+                v.PackageId, byId[v.PackageId].Partition, byId[v.PackageId].Manifest.ModuleVersion!))
+            .OrderBy(t => t.PackageId, StringComparer.Ordinal)
+            .ToImmutableList();
+        if (toReassert.Count == 0)
             return Observable.Return(Unit.Default);
 
-        var repairable = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
-        foreach (var verdict in incomplete)
-        {
-            var record = byId[verdict.PackageId];
-            if (verdict.Present == 0)
-            {
-                logger?.LogWarning(
-                    "[PackageRepair] {Package} → '{Partition}' is NOT re-asserted unattended: none "
-                    + "of its {Declared} declared node(s) is present — not even the root — so the "
-                    + "install left no trace to restore from. That is a deleted partition, a "
-                    + "partition that is gone, or a read that answered nothing; a reinstall from a "
-                    + "boot pass would resurrect what an operator removed. Remove the record "
-                    + "(Catalog → orphaned install records) or install the package again "
-                    + "deliberately (MeshWeaver#4812).",
-                    verdict.PackageId, verdict.Partition, verdict.Declared);
-                continue;
-            }
-            if (string.IsNullOrEmpty(record.Manifest.ModuleVersion))
-            {
-                logger?.LogWarning(
-                    "[PackageRepair] {Package} → '{Partition}' is NOT re-asserted unattended: its "
-                    + "record carries no module content identity, so whether the source still serves "
-                    + "what was installed cannot be established, and a re-fetch would land the "
-                    + "source's current tip — an update nobody asked for. A human's Update click is "
-                    + "the path (MeshWeaver#4812).",
-                    verdict.PackageId, verdict.Partition);
-                continue;
-            }
-            repairable[verdict.PackageId] = record.Manifest.ModuleVersion!;
-        }
-        if (repairable.Count == 0)
-            return Observable.Return(Unit.Default);
-
-        var toReassert = repairable.ToImmutable();
-        var ids = string.Join(", ", toReassert.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        var ids = string.Join(", ", toReassert.Select(t => t.PackageId));
         var installer = hub.ServiceProvider.GetService<InstanceAutoRegistrationService>();
         if (installer is null)
         {
@@ -194,12 +165,21 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             return Observable.Return(Unit.Default);
         }
 
+        // 🚨 Sequenced after BOTH unattended boot writers, not one (review on #4985): the default
+        // install, and the registry reconciler's boot pass — which can APPLY a moved hash into the
+        // same partition, and whose listing of the source may be newer than this pass's. A host
+        // without either service has nothing to be behind.
+        var registry = hub.ServiceProvider.GetService<RegistryUpdateReconciler>();
+        var bootWritersDone = installer.Completed
+            .Take(1)
+            .Select(_ => Unit.Default)
+            .SelectMany(_ => registry?.BootReconciled.Take(1) ?? Observable.Return(Unit.Default));
         logger?.LogInformation(
             "[PackageRepair] {Count} incomplete install(s) will be re-asserted through the install "
-            + "lane once the default install has finished: [{Ids}] (MeshWeaver#4812).",
+            + "lane once the default install and the registry boot reconcile have finished: [{Ids}] "
+            + "(MeshWeaver#4812).",
             toReassert.Count, ids);
-        return installer.Completed
-            .Take(1)
+        return bootWritersDone
             .SelectMany(_ => installer.ReassertInstalled(toReassert))
             .Do(summary => logger?.LogInformation(
                 "[PackageRepair] re-assert finished: {Installed} repaired, {UpToDate} found whole on "
@@ -402,6 +382,29 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     }
 
     /// <summary>
+    /// Why an <see cref="InstallCompletenessKind.Incomplete"/> record is NOT handed to the install
+    /// lane — or <c>null</c> when it is. ONE predicate for the sweep's log line and for
+    /// <see cref="Heal"/>, so the severity the sweep chooses (Warning for a shortfall about to be
+    /// repaired, Error for one that will stand) cannot disagree with what is actually repaired
+    /// (review on #4985).
+    /// </summary>
+    private static string? RepairRefusal(InstalledRecord record, InstallCompletenessVerdict verdict)
+    {
+        if (verdict.Present == 0)
+            return "none of its declared node(s) is present — not even the root — so the install "
+                   + "left no trace to restore from. That is a deleted partition, a partition that is "
+                   + "gone, or a read that answered nothing; a reinstall from a boot pass would "
+                   + "resurrect what an operator removed. Remove the record (Catalog → orphaned "
+                   + "install records) or install the package again deliberately";
+        if (string.IsNullOrEmpty(record.Manifest.ModuleVersion))
+            return "its record carries no module content identity, so whether the source still "
+                   + "serves what was installed cannot be established, and a re-fetch would land the "
+                   + "source's current tip — an update nobody asked for. A human's Update click is "
+                   + "the path";
+        return null;
+    }
+
+    /// <summary>
     /// 🚨 The check that did not exist (MeshWeaver#3485): what each install record DECLARES landed,
     /// compared against what is actually in the mesh — plus the partition roots no record accounts
     /// for at all.
@@ -464,17 +467,41 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             .Select(list => (IReadOnlyCollection<InstallCompletenessVerdict>)list.ToImmutableList())
             .Do(verdicts =>
             {
+                // 🚨 Two severities for one kind, decided by the SAME predicate Heal uses (review on
+                // #4985). A shortfall this pass is about to hand to the install lane is a detection
+                // followed by a repair — the Warning shape CatalogLayoutAreas.SkipOrHeal documents;
+                // logged at Error it would re-open the incident on the very boot that closes it, and
+                // the Error belongs to a FAILED landing (InstallCompleteness.DescribeLanding). A
+                // shortfall nothing here will repair is a standing fault and stays at Error, with
+                // the reason on the line.
+                var byId = records.ToDictionary(r => r.PackageId, StringComparer.Ordinal);
                 foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.Incomplete))
-                    logger?.LogError(
-                        "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
-                        + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
-                        + "{Population}, taken over {Record}. The install record says this package "
-                        + "is up to date; the "
-                        + "mesh disagrees. Reinstalling it now repairs it — the up-to-date gate no "
-                        + "longer skips an incomplete install (MeshWeaver#3485).",
-                        verdict.PackageId, verdict.Partition, verdict.Missing.Count,
-                        verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
-                        verdict.Population, verdict.Provenance);
+                {
+                    var refusal = byId.TryGetValue(verdict.PackageId, out var record)
+                        ? RepairRefusal(record, verdict)
+                        : "no record of this pass carries that package id";
+                    if (refusal is null)
+                        logger?.LogWarning(
+                            "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
+                            + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
+                            + "{Population}, taken over {Record}. The install record says this "
+                            + "package is up to date; the mesh disagrees. It is being handed to the "
+                            + "install lane once the boot writers have finished; whether the repair "
+                            + "landed is reported on its own line (MeshWeaver#4812).",
+                            verdict.PackageId, verdict.Partition, verdict.Missing.Count,
+                            verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
+                            verdict.Population, verdict.Provenance);
+                    else
+                        logger?.LogError(
+                            "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
+                            + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
+                            + "{Population}, taken over {Record}. The install record says this "
+                            + "package is up to date; the mesh disagrees, and this pass will NOT "
+                            + "re-assert it unattended: {Refusal} (MeshWeaver#4812).",
+                            verdict.PackageId, verdict.Partition, verdict.Missing.Count,
+                            verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
+                            verdict.Population, verdict.Provenance, refusal);
+                }
 
                 // 🚨 #3659, the CONTENT half. These are NOT absences and must never be spelled as
                 // ones: the install parsed the file, could not make a node of it, and recorded that

@@ -1066,19 +1066,6 @@ public enum InstallCompletenessKind
     Incomplete,
 
     /// <summary>
-    /// The partition this record's install wrote was DELETED after the install and its root
-    /// re-created afterwards: the root's created stamp is LATER than the record's install stamp and
-    /// none of the other declared nodes is present. That is an UNINSTALLED package whose record
-    /// outlived its partition — not a partial install — and the re-created root is what the boot
-    /// pass's create-only access re-assert leaves on such a record. Never repaired unattended (a
-    /// reinstall would resurrect what an operator deleted); a lane that ASSERTS the package — the
-    /// boot baseline, a human's Install or Update click — heals it like <see cref="Incomplete"/>.
-    /// The remedy is the admin orphan list (remove the record) or a deliberate reinstall
-    /// (MeshWeaver#4812).
-    /// </summary>
-    TornDown,
-
-    /// <summary>
     /// Nothing declares what should be here — no record at all, no file map on the record, or a file
     /// map that does not address this partition. NOT a pass: it was not checked.
     /// </summary>
@@ -1092,6 +1079,21 @@ public enum InstallCompletenessKind
     /// root and stopped.
     /// </summary>
     RootWithoutRecord,
+
+    /// <summary>
+    /// The partition this record's install wrote was DELETED after the install and its root
+    /// re-created afterwards: the root's created stamp is LATER than the record's install stamp and
+    /// none of the other declared nodes is present. That is an UNINSTALLED package whose record
+    /// outlived its partition — not a partial install — and the re-created root is what the boot
+    /// pass's create-only access re-assert leaves on such a record. Never repaired unattended (a
+    /// reinstall would resurrect what an operator deleted); a lane that ASSERTS the package — the
+    /// boot baseline, a human's Install or Update click — heals it like <see cref="Incomplete"/>.
+    /// The remedy is the admin orphan list (remove the record) or a deliberate reinstall
+    /// (MeshWeaver#4812). 🚨 Appended LAST: this enum is public, so a member inserted mid-list
+    /// would renumber every later member for a precompiled dependent or an integer-serialised
+    /// verdict (review on #4985).
+    /// </summary>
+    TornDown,
 }
 
 /// <summary>

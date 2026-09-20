@@ -349,13 +349,20 @@ was visited by nothing, so the sweep's own line — "Reinstalling it now repairs
 click nobody made, at Error, on every boot. Now the pass finishes by handing every `Incomplete`
 record that is repairable to `InstanceAutoRegistrationService.ReassertInstalled`: the boot
 install's own machinery (configured sources at their proven ref, the ownership holds, `RunAsSystem`,
-the declared-access re-assert) over an explicit set of installed packages, **sequenced after the
-default install's `Completed`** so two unattended passes never write one partition at once. It is
-a heal, never an update: a package is re-asserted only where the source still serves the module
-version its record carries, so the funnel can only skip or heal. A moved hash is an update and
+the declared-access re-assert) over an explicit set of installed packages, **sequenced after both
+unattended boot writers** — the default install's `Completed` and the registry reconciler's
+`BootReconciled` — so two unattended passes never write one partition at once. It is a heal, never
+an update: a package is re-asserted only where the source still serves the module version its
+record carries **and still targets the partition the record was installed into**, so the funnel can
+only skip or heal, and only where the sweep looked. A moved hash or a moved target is an update and
 stays with the package's own policy (the reconciler applies `Auto`; a human's click applies the
 rest — both restore absent declared nodes as they go, #4259); a package no source lists any more
 cannot be re-fetched and is named as an orphan for the admin list.
+
+The sweep's own line follows the same predicate: an `Incomplete` it is about to hand over is
+logged at **Warning** (a detection followed by a repair — the shape the install gate already uses),
+and one nothing here will repair stays at **Error** with the reason on the line. The Error for a
+repair that did not land is the post-write landing line, as before.
 
 **Repairable means the install left a trace and part of it is gone.** Two shapes are deliberately
 not repaired by a boot pass, and each is named on its own line:

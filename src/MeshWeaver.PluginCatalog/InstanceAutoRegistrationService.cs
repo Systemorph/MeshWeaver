@@ -2148,15 +2148,19 @@ public sealed class InstanceAutoRegistrationService(
     /// installed package is installed; restoring what it lost is not installing what the operator
     /// excluded.</para>
     /// </summary>
-    /// <param name="recordedModuleVersions">Package id → the module version its install record
-    /// carries. A record with no module identity cannot be re-asserted (the caller says so).</param>
+    /// <param name="targets">The installed packages to re-assert — each with the PARTITION and
+    /// module version its install record carries. A record with no module identity cannot be
+    /// re-asserted (the caller says so).</param>
     /// <returns>A cold observable emitting the pass's summary exactly once.</returns>
-    internal IObservable<DefaultInstallSummary> ReassertInstalled(
-        IReadOnlyDictionary<string, string> recordedModuleVersions)
+    internal IObservable<DefaultInstallSummary> ReassertInstalled(IReadOnlyList<ReassertTarget> targets)
     {
-        ArgumentNullException.ThrowIfNull(recordedModuleVersions);
-        if (recordedModuleVersions.Count == 0)
+        ArgumentNullException.ThrowIfNull(targets);
+        if (targets.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
+        var recordedModuleVersions = targets.ToImmutableDictionary(
+            t => t.PackageId, t => t.ModuleVersion, StringComparer.Ordinal);
+        var recordedPartitions = targets.ToImmutableDictionary(
+            t => t.PackageId, t => t.Partition, StringComparer.Ordinal);
         var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
         return Sources(options).SelectMany(sources =>
         {
@@ -2201,6 +2205,22 @@ public sealed class InstanceAutoRegistrationService(
                                   + "install records (MeshWeaver#4812).", id);
                             continue;
                         }
+                        // 🚨 The repair lands where the SWEEP LOOKED (review on #4985). The
+                        // candidate's targetPartition is what InstallAll writes into; where it has
+                        // moved since the record was stamped, a "repair" would populate a partition
+                        // nobody observed and leave the observed one short. A moved target is an
+                        // update decision, not a repair.
+                        var candidatePartition = PackageInstaller.TargetPartitionOf(id, candidate.Package);
+                        if (!string.Equals(candidatePartition, recordedPartitions[id], StringComparison.Ordinal))
+                        {
+                            logger.LogWarning(
+                                "[PackageRepair] {Id} is NOT re-asserted unattended: its record was "
+                                + "installed into '{Recorded}' but the source now targets "
+                                + "'{Served}', so a repair would write a partition the sweep never "
+                                + "observed. A human's Update click is the path (MeshWeaver#4812).",
+                                id, recordedPartitions[id], candidatePartition);
+                            continue;
+                        }
                         if (!string.Equals(candidate.Package.ModuleVersion, recorded, StringComparison.Ordinal))
                         {
                             logger.LogWarning(
@@ -2239,6 +2259,16 @@ public sealed class InstanceAutoRegistrationService(
                 });
         });
     }
+
+    /// <summary>
+    /// One installed package to re-assert, as its install RECORD describes it
+    /// (<see cref="ReassertInstalled"/>): the partition the sweep observed, and the module version
+    /// the funnel may skip-or-heal at.
+    /// </summary>
+    /// <param name="PackageId">The package id — the record's node id.</param>
+    /// <param name="Partition">The partition the record was installed into.</param>
+    /// <param name="ModuleVersion">The module version the record carries.</param>
+    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion);
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and

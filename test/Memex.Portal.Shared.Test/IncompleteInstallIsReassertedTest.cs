@@ -308,6 +308,20 @@ public class TornDownVerdictTest
             .Kind.Should().Be(InstallCompletenessKind.Incomplete, "no install stamp");
     }
 
+    /// <summary>The enum is public: a member inserted mid-list renumbers every later one for a
+    /// precompiled dependent or an integer-serialised verdict, so the existing values are pinned and
+    /// the new member is last (review on #4985).</summary>
+    [Fact]
+    public void TheNewKindIsAppended_SoExistingValuesKeepTheirNumbers()
+    {
+        ((int)InstallCompletenessKind.Complete).Should().Be(0);
+        ((int)InstallCompletenessKind.Incomplete).Should().Be(1);
+        ((int)InstallCompletenessKind.Undeclared).Should().Be(2);
+        ((int)InstallCompletenessKind.NotObserved).Should().Be(3);
+        ((int)InstallCompletenessKind.RootWithoutRecord).Should().Be(4);
+        ((int)InstallCompletenessKind.TornDown).Should().Be(5);
+    }
+
     [Fact]
     public void TheSummaryCountsTornDownOnItsOwn_AndTheLandingIsAnError()
     {
