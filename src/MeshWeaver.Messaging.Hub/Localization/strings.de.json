@@ -1633,5 +1633,10 @@
   "notification.delivery.heldStale.title": "'{typeName}' liefert seinen letzten Build aus; die Quelle ist weitergezogen",
   "layout.areaNotFound.title": "Dieser Abschnitt konnte nicht angezeigt werden.",
   "layout.areaNotFound.pageUnaffected": "Der Rest dieser Seite ist davon nicht betroffen.",
-  "layout.areaNotFound.details": "Technische Details"
+  "layout.areaNotFound.details": "Technische Details",
+  "signaturePad.signHere": "Hier unterschreiben",
+  "signaturePad.clear": "Löschen",
+  "signaturePad.done": "Fertig",
+  "signaturePad.canvasLabel": "Unterschriftenfeld — Unterschrift zeichnen",
+  "signaturePad.signed": "Unterschrift vorhanden"
 }
