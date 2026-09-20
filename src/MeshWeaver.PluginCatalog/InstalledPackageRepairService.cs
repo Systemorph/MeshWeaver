@@ -59,7 +59,24 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<InstalledPackageRepairService>();
 
-        subscription = PackageInstaller.EnsureRecordsPartitionReadable(hub, logger)
+        subscription = RunRepair(logger)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex, "[PackageRepair] repair pass failed"));
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The whole repair pass, cold — what <see cref="StartAsync"/> subscribes once per boot, and
+    /// what a test runs on demand against a mesh it has shaped. One implementation; the boot
+    /// subscription is the only production caller.
+    /// </summary>
+    internal IObservable<Unit> RunRepair() => RunRepair(
+        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<InstalledPackageRepairService>());
+
+    private IObservable<Unit> RunRepair(ILogger? logger) =>
+        PackageInstaller.EnsureRecordsPartitionReadable(hub, logger)
             .Catch<Unit, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
@@ -81,12 +98,104 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                             + "installed partition(s)", records.Count)))
                 .Do(_ => ReportDeclaredModulesWithNoBinary(records, logger))
                 .SelectMany(_ => VerifyCompleteness(records, logger))
-                .SelectMany(_ => VerifyModules(records, logger)))
-            .Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex, "[PackageRepair] repair pass failed"));
+                // The module half reports before the heal WAITS (on the default install), so a
+                // long boot install cannot delay what the module sweep has to say.
+                .SelectMany(verdicts => VerifyModules(records, logger).Select(_ => verdicts))
+                .SelectMany(verdicts => Heal(records, verdicts, logger)));
 
-        return Task.CompletedTask;
+    /// <summary>
+    /// 🚨 <b>The sweep's verdict gets a consumer that ACTS</b> — MeshWeaver#4812.
+    ///
+    /// <para>#3485 wrote "healing belongs to the install lane, which now refuses to skip an
+    /// incomplete package", and that was true only for a package some lane visits: the platform
+    /// baseline, an environment flag, a seed on its first boot, a human's click, or an update whose
+    /// hash MOVED. A package installed by hand from a source that has not moved since is visited by
+    /// nothing, so the sweep named the same shortfall at Error on every boot, forever, and its own
+    /// log line recommended a reinstall that nothing performed. This hands every
+    /// <see cref="InstallCompletenessKind.Incomplete"/> record that is REPAIRABLE to
+    /// <see cref="InstanceAutoRegistrationService.ReassertInstalled"/> — the boot install's own
+    /// funnel, with its sources, its proven refs and its ownership holds — once the default install
+    /// has finished, so two unattended passes never write one partition at the same time.</para>
+    ///
+    /// <para><b>Repairable means: the install left a trace, and part of it is gone.</b> Two shapes
+    /// are deliberately NOT repaired here, and each is named on its own line:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="InstallCompletenessKind.TornDown"/> — the partition was deleted after
+    ///     the install and its root re-created; an unattended reinstall would resurrect what an
+    ///     operator removed (the ClaimsDeepfield case: a module retired from its repository).</item>
+    ///   <item>An Incomplete verdict with NOTHING declared present — not even the root. The install
+    ///     left no trace: that is a deletion, a partition that is gone (the #3451 residue), or a
+    ///     read that answered nothing, and none of those is a loss to restore from a boot pass. A
+    ///     record with no module identity is not repairable either — without one, "the source
+    ///     still serves what was installed" cannot be established, and the funnel would land the
+    ///     source's current tip, which is an update nobody asked for.</item>
+    /// </list>
+    ///
+    /// <para>The heal is one more batched read per repaired package (the funnel re-observes before
+    /// it writes) and then the same full install a human's Update click runs. Whether each repair
+    /// LANDED is reported by the funnel's own post-write verification, never assumed here.</para>
+    /// </summary>
+    private IObservable<Unit> Heal(
+        IReadOnlyList<InstalledRecord> records,
+        IReadOnlyCollection<InstallCompletenessVerdict> verdicts,
+        ILogger? logger)
+    {
+        var byId = records.ToDictionary(r => r.PackageId, StringComparer.Ordinal);
+        // The SAME predicate the sweep logged by: a shortfall it announced as "being handed to the
+        // install lane" is exactly the set handed over, and one it announced as standing is not.
+        var toReassert = verdicts
+            .Where(v => v.Kind is InstallCompletenessKind.Incomplete)
+            .Where(v => byId.TryGetValue(v.PackageId, out var record) && RepairRefusal(record, v) is null)
+            .Select(v => new InstanceAutoRegistrationService.ReassertTarget(
+                v.PackageId, byId[v.PackageId].Partition, byId[v.PackageId].Manifest.ModuleVersion!))
+            .OrderBy(t => t.PackageId, StringComparer.Ordinal)
+            .ToImmutableList();
+        if (toReassert.Count == 0)
+            return Observable.Return(Unit.Default);
+
+        var ids = string.Join(", ", toReassert.Select(t => t.PackageId));
+        var installer = hub.ServiceProvider.GetService<InstanceAutoRegistrationService>();
+        if (installer is null)
+        {
+            logger?.LogWarning(
+                "[PackageRepair] {Count} incomplete install(s) could be re-asserted but this host "
+                + "registers no install lane (InstanceAutoRegistrationService), so they stay as "
+                + "reported: [{Ids}].",
+                toReassert.Count, ids);
+            return Observable.Return(Unit.Default);
+        }
+
+        // 🚨 Sequenced after BOTH unattended boot writers, not one (review on #4985): the default
+        // install, and the registry reconciler's boot pass — which can APPLY a moved hash into the
+        // same partition, and whose listing of the source may be newer than this pass's. A host
+        // without either service has nothing to be behind.
+        var registry = hub.ServiceProvider.GetService<RegistryUpdateReconciler>();
+        var bootWritersDone = installer.Completed
+            .Take(1)
+            .Select(_ => Unit.Default)
+            .SelectMany(_ => registry?.BootReconciled.Take(1) ?? Observable.Return(Unit.Default));
+        logger?.LogInformation(
+            "[PackageRepair] {Count} incomplete install(s) will be re-asserted through the install "
+            + "lane once the default install and the registry boot reconcile have finished: [{Ids}] "
+            + "(MeshWeaver#4812).",
+            toReassert.Count, ids);
+        return bootWritersDone
+            .SelectMany(_ => installer.ReassertInstalled(toReassert))
+            .Do(summary => logger?.LogInformation(
+                "[PackageRepair] re-assert finished: {Installed} repaired, {UpToDate} found whole on "
+                + "re-observation, {Failed} failed, {Held} held, {Skipped} skipped over [{Ids}]. "
+                + "Whether each repair LANDED is on its own landing line (MeshWeaver#4812).",
+                summary.Installed, summary.UpToDate, summary.Failed, summary.Held.Count,
+                summary.Skipped.Count, ids))
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[PackageRepair] the re-assert of [{Ids}] failed — the incomplete installs "
+                    + "stay as reported; the next boot re-derives and re-attempts them.",
+                    ids);
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>
@@ -273,6 +382,29 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     }
 
     /// <summary>
+    /// Why an <see cref="InstallCompletenessKind.Incomplete"/> record is NOT handed to the install
+    /// lane — or <c>null</c> when it is. ONE predicate for the sweep's log line and for
+    /// <see cref="Heal"/>, so the severity the sweep chooses (Warning for a shortfall about to be
+    /// repaired, Error for one that will stand) cannot disagree with what is actually repaired
+    /// (review on #4985).
+    /// </summary>
+    private static string? RepairRefusal(InstalledRecord record, InstallCompletenessVerdict verdict)
+    {
+        if (verdict.Present == 0)
+            return "none of its declared node(s) is present — not even the root — so the install "
+                   + "left no trace to restore from. That is a deleted partition, a partition that is "
+                   + "gone, or a read that answered nothing; a reinstall from a boot pass would "
+                   + "resurrect what an operator removed. Remove the record (Catalog → orphaned "
+                   + "install records) or install the package again deliberately";
+        if (string.IsNullOrEmpty(record.Manifest.ModuleVersion))
+            return "its record carries no module content identity, so whether the source still "
+                   + "serves what was installed cannot be established, and a re-fetch would land the "
+                   + "source's current tip — an update nobody asked for. A human's Update click is "
+                   + "the path";
+        return null;
+    }
+
+    /// <summary>
     /// 🚨 The check that did not exist (MeshWeaver#3485): what each install record DECLARES landed,
     /// compared against what is actually in the mesh — plus the partition roots no record accounts
     /// for at all.
@@ -285,10 +417,15 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     /// is why a source node lost on 2026-08-26 was still missing, unnamed, eleven days later — and
     /// was the proximate cause of the #3472 outage.</para>
     ///
-    /// <para><b>It reports; it does not repair.</b> Healing belongs to the install lane, which now
-    /// refuses to skip an incomplete package (<see cref="CatalogLayoutAreas"/>). A boot pass that
-    /// silently reinstalled on a heuristic would be a worse failure than the one it names — the same
-    /// discipline this service already applies to a dangling record.</para>
+    /// <para><b>It reports, and hands a REPAIRABLE shortfall to the install lane</b>
+    /// (<see cref="Heal"/>, MeshWeaver#4812). Healing still belongs to the install lane, which
+    /// refuses to skip an incomplete package (<see cref="CatalogLayoutAreas"/>) — this pass only
+    /// makes sure that lane is RUN for the package, through
+    /// <see cref="InstanceAutoRegistrationService.ReassertInstalled"/>, at the module version the
+    /// record carries. It never reinstalls on a heuristic: a partition deleted after its install
+    /// (<see cref="InstallCompletenessKind.TornDown"/>), an install nothing remains of, or a
+    /// record with no module identity is named and left alone — the same discipline this service
+    /// applies to a dangling record.</para>
     ///
     /// <para><b>The denominator is printed</b>, per AGENTS.md: a sweep reporting zero problems must
     /// say how many things it looked at, so "nothing is wrong" and "nothing was checked" cannot
@@ -297,7 +434,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     /// a stale negative would manufacture a shortfall) and never a point read of a path that may
     /// not exist.</para>
     /// </summary>
-    private IObservable<Unit> VerifyCompleteness(
+    private IObservable<IReadOnlyCollection<InstallCompletenessVerdict>> VerifyCompleteness(
         IReadOnlyList<InstalledRecord> records, ILogger? logger)
     {
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
@@ -330,17 +467,41 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             .Select(list => (IReadOnlyCollection<InstallCompletenessVerdict>)list.ToImmutableList())
             .Do(verdicts =>
             {
+                // 🚨 Two severities for one kind, decided by the SAME predicate Heal uses (review on
+                // #4985). A shortfall this pass is about to hand to the install lane is a detection
+                // followed by a repair — the Warning shape CatalogLayoutAreas.SkipOrHeal documents;
+                // logged at Error it would re-open the incident on the very boot that closes it, and
+                // the Error belongs to a FAILED landing (InstallCompleteness.DescribeLanding). A
+                // shortfall nothing here will repair is a standing fault and stays at Error, with
+                // the reason on the line.
+                var byId = records.ToDictionary(r => r.PackageId, StringComparer.Ordinal);
                 foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.Incomplete))
-                    logger?.LogError(
-                        "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
-                        + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
-                        + "{Population}, taken over {Record}. The install record says this package "
-                        + "is up to date; the "
-                        + "mesh disagrees. Reinstalling it now repairs it — the up-to-date gate no "
-                        + "longer skips an incomplete install (MeshWeaver#3485).",
-                        verdict.PackageId, verdict.Partition, verdict.Missing.Count,
-                        verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
-                        verdict.Population, verdict.Provenance);
+                {
+                    var refusal = byId.TryGetValue(verdict.PackageId, out var record)
+                        ? RepairRefusal(record, verdict)
+                        : "no record of this pass carries that package id";
+                    if (refusal is null)
+                        logger?.LogWarning(
+                            "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
+                            + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
+                            + "{Population}, taken over {Record}. The install record says this "
+                            + "package is up to date; the mesh disagrees. It is being handed to the "
+                            + "install lane once the boot writers have finished; whether the repair "
+                            + "landed is reported on its own line (MeshWeaver#4812).",
+                            verdict.PackageId, verdict.Partition, verdict.Missing.Count,
+                            verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
+                            verdict.Population, verdict.Provenance);
+                    else
+                        logger?.LogError(
+                            "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
+                            + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
+                            + "{Population}, taken over {Record}. The install record says this "
+                            + "package is up to date; the mesh disagrees, and this pass will NOT "
+                            + "re-assert it unattended: {Refusal} (MeshWeaver#4812).",
+                            verdict.PackageId, verdict.Partition, verdict.Missing.Count,
+                            verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
+                            verdict.Population, verdict.Provenance, refusal);
+                }
 
                 // 🚨 #3659, the CONTENT half. These are NOT absences and must never be spelled as
                 // ones: the install parsed the file, could not make a node of it, and recorded that
@@ -354,6 +515,20 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                         + "{Record}.",
                         InstallCompleteness.UnreadableSentence(verdict),
                         verdict.Population, verdict.Provenance);
+
+                // 🚨 WARNING, not Error, and NOT the Incomplete line (MeshWeaver#4812): this is the
+                // #3451 dangling-record shape one step on — the partition was deleted after the
+                // install and the record survived it — and it gets that arm's severity and remedy.
+                // Spelled as an incomplete install, the ClaimsDeepfield record folded into a
+                // per-boot Error incident for three weeks recommending the reinstall of a retired
+                // module.
+                foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.TornDown))
+                    logger?.LogWarning(
+                        "[InstallCompleteness] {Package} → '{Partition}': the install record "
+                        + "OUTLIVED its partition — {Because}. Counted over: {Population}, taken "
+                        + "over {Record}.",
+                        verdict.PackageId, verdict.Partition, verdict.Because, verdict.Population,
+                        verdict.Provenance);
 
                 foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.RootWithoutRecord))
                     logger?.LogError(
@@ -380,14 +555,14 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     + "{Adapter})",
                     summary, records.Count, persistence is null ? "NONE" : "present");
             })
-            .Select(_ => Unit.Default)
-            .Catch<Unit, Exception>(ex =>
+            .Catch<IReadOnlyCollection<InstallCompletenessVerdict>, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
                     "[InstallCompleteness] the completeness sweep failed — NOTHING was verified "
                     + "this boot. Absence of a report here is not evidence that the installs are "
                     + "whole.");
-                return Observable.Return(Unit.Default);
+                // An empty verdict set: nothing was verified, so nothing is handed to the heal.
+                return Observable.Return<IReadOnlyCollection<InstallCompletenessVerdict>>([]);
             });
     }
 
