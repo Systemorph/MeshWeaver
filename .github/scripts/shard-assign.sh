@@ -169,7 +169,17 @@ printf '%s\n' "$WEIGHTS" > "$weights_file"
 # packaging and every test shard, so the two assignments stay identical.
 select_projects() {
   case "${TEST_SELECTION:-all}" in
-    none) echo "shard-assign: TEST_SELECTION=none — no project is owed" >&2 ;;
+    none)
+      echo "shard-assign: TEST_SELECTION=none — no project is owed" >&2
+      # 🚨 DRAIN stdin, never just return. A branch that reads nothing closes the pipe while
+      # `find` is still writing into it → `find` takes SIGPIPE and exits 141 ("find: write
+      # error", "Broken pipe"), and `set -o pipefail` above turns that into the whole script
+      # failing. Measured 2026-09-20 on MeshWeaver#4979: `none` is reached only by a change set
+      # no test project reads (a docs- or skill-only pull request), so the REQUIRED
+      # `Build solution (once)` job died with a bare `Process completed with exit code 1`
+      # printed four lines AFTER `Build succeeded. 0 Warning(s) 0 Error(s)` — the one shape
+      # that reads as "the build broke" when the build was fine and nothing was owed.
+      cat > /dev/null ;;
     incremental)
       awk -v keep=",${TEST_PROJECTS:-}," '{ n=$0; sub(/.*\//,"",n); sub(/\.csproj$/,"",n); if (index(keep, "," n ",")) print }' ;;
     *) cat ;;
