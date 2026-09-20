@@ -157,12 +157,13 @@ differs and the full suite runs; there is no way to skip an untested tree.
 git status --porcelain | grep '^??'        # untracked files a committed file might reference
 dotnet build src/<TheProjectYouTouched> -c Release -warnaserror --no-restore   # match the CI flags
 
-# 0.5 RELEASE NOTE — NOT per pull request. A merge mints NO What's New file. It updates the DOC
-#     PAGE its change belongs to (AGENTS.md `conserve-work-products`), and What's New is written
-#     once per RELEASE, when the release is cut — naming what completed and linking to those pages.
-#     See Release Process §6. The old per-merge rule took the folder to 1,292 entries (662 in
-#     August 2026, 590 in September, ~20/day), which is the commit log with nicer titles: every
-#     entry individually defensible, the aggregate unusable.
+# 0.5 RELEASE NOTE — NOT per pull request (policy `whatsnew-cadence`, Doc/Architecture/PolicyNotProse).
+#     A merge mints NO What's New file. It updates the DOC PAGE its change belongs to (AGENTS.md
+#     `conserve-work-products`), and What's New is written once per RELEASE, when the release is
+#     cut — naming what completed and linking to those pages. See Release Process §6. The old
+#     per-merge rule took the folder to 1,292 entries (662 in August 2026, 590 in September,
+#     ~20/day), which is the commit log with nicer titles: every entry individually defensible,
+#     the aggregate unusable.
 #
 #     So there is nothing to mint in this step. Confirm instead that the durable form exists:
 #       • behaviour a user can notice  → the doc page explaining it is in THIS change set
@@ -393,13 +394,12 @@ changes about this procedure:
 - **The step-3 poll still applies to the PR's own run**, and after the queue lands it, to `main`'s.
   The queue is not a reason to stop watching; it is the reason the merge is no longer yours to press.
 
-## What's New entry (step 0.5) — one doc node per RELEASE
+## What's New entry — the MECHANICS, for when you are cutting a release
 
-🚨 **A merge mints NO What's New file** (maintainer, 2026-09-20). This section said "one doc node per
-user-facing PR" until 2026-09-20 and contradicted step 0.5 above; the per-merge rule took the folder
-to 1,292 entries at ~20/day, which is a commit log rather than a changelog. What a merge owes is its
-**doc page** — see `conserve-work-products` in AGENTS.md and
-[Release Process §6](../../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseProcess.md).
+> 🚨 **This section is NOT a per-PR step. A merge mints no What's New file** — see step 0.5 above,
+> and policy `whatsnew-cadence`. What follows is the file format, which you need only when you are
+> writing the entry for a **release**. Everything below is about *how* to write one, never *whether*
+> to. (This heading used to read "one doc node per user-facing PR"; that rule is retired.)
 
 The platform's **What's New** feed is the set of per-entry markdown nodes under
 `src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition, so every
@@ -407,7 +407,9 @@ self-updating deployment shows the same feed). The **What's New** settings tab l
 newest-first; each entry is a normal doc node you can open.
 
 - **One file per RELEASE** (`<YYYY-MM-DD>-<slug>.md`), written when the release is cut, named by the
-  SHIP DATE — it names what COMPLETED and links out to the doc page that explains each item.
+  SHIP DATE — `WhatsNewEntryIntegrityTest` enforces `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES
+  `Order` from it, so a version-prefixed name is rejected from the feed. The version belongs in
+  `Name`/`Description`, never in the filename.
 - **Front-matter**: `Name` (title shown in the list), `Category` — **`Feature` or `Fix`, nothing else**
   (`feat/ perf/ chore/ docs/` → `Feature`, rendered in full; `fix/` → `Fix`, bundled into the day's
   one-line summary) — `Description` (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`), and
@@ -415,8 +417,10 @@ newest-first; each entry is a normal doc node you can open.
   newest-first instead of alphabetically by title. Body is plain-language user-facing prose.
   `WhatsNewEntryIntegrityTest` enforces all five — a wrong `Category` or a missing `Order` turns
   **main** red, not just your PR, because the entry only reaches CI once it has merged.
-- **When to skip**: pure-internal PRs (refactors, tests, CI, dependency bumps) with no user-visible
-  change don't need an entry — note the skip in the PR body so a reviewer knows it was deliberate.
+- **What it names**: what the release COMPLETED — the user-visible outcome of the features and
+  fixes in that stream, each linking to the doc page that explains it. Internal work (refactors,
+  tests, CI, dependency bumps) is not announced; there is no per-PR skip to note, because no PR
+  writes an entry (policy `whatsnew-cadence`).
 
 ## The half-committed-WIP trap (how main went red on a clean CI)
 
