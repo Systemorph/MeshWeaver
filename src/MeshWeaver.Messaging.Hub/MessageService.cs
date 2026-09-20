@@ -3051,6 +3051,53 @@ public class MessageService : IMessageService
                 }
             }
 
+            // 🚨 …AND SO DOES A RELEASE — for the OPPOSITE reason, which is why the clause above
+            // could not cover it (Systemorph/MeshWeaver#3432).
+            //
+            // The reply forward is justified by "somebody is waiting". An IReleasesRemoteState
+            // message is fire-and-forget: nobody is waiting, and that is exactly what makes
+            // dropping it the expensive case. A lost event is recovered by the next snapshot, the
+            // re-subscribe, the change feed or a heartbeat lapse; a lost RELEASE is recovered by
+            // NOTHING — the receiver keeps what it was holding, there is no requester to NACK, no
+            // retry to trigger, and no later probe that ever discovers the loss. So the historical
+            // refusal of fire-and-forget traffic, correct for events, silently leaks here.
+            //
+            // Measured: UnsubscribeRequest is the only thing that ends an owner-side per-subscriber
+            // stream and its sync/{id} sub-hub, and it is posted from the SUBSCRIBING hub by the
+            // release disposable registered on the client-side sync/{id} hub — so on the
+            // HUB-teardown route (a Blazor circuit ending, a DisposeRequest, a recycle) it runs
+            // while this hub is in DisposeHostedHubs BY CONSTRUCTION: that phase is what disposes
+            // the child whose ShutDown runs it. It was refused right here, the owner was never
+            // told, and the portal accumulated one RunLevel=Started hub per subscription — each
+            // holding its own Autofac lifetime scope and TypeRegistry — until the process ended.
+            // (SubscriberTeardownReleasesTheOwnerSyncHubTest pins both directions.)
+            //
+            // The parent is the carrier and ONE hop is the whole rule: on this route the parent is
+            // the hub disposing us, and it cannot reach its own ShutDown until every hosted hub has
+            // signalled DisposalCompleted (see MessageHub.CarriesAcceptedWorkOfAHostedHub), so it
+            // is demonstrably still routing. In a whole-TREE teardown the parent is going too — and
+            // then so is the receiver, which is about to drop everything anyway, so there is
+            // nothing left to leak and nothing to escalate to.
+            if (message is IReleasesRemoteState
+                && ParentHub is { } releaseParent
+                && releaseParent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                try
+                {
+                    releaseParent.Post(message, _ => opt);
+                    postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
+                    return delivery;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "Could not forward the release {MessageType} (ID: {MessageId}) through the "
+                        + "parent of shutting-down hub {Address} — the receiver keeps what it holds",
+                        message!.GetType().Name, delivery.Id, Address);
+                    postFate?.Add($"RELEASE_FORWARD_THREW {ex.GetType().Name}", Address);
+                }
+            }
+
             // 🚨 A NACK gets ONE more carrier, and it is in-process (#4072). The parent route
             // above is the only way out of this hub, and at a whole-tree teardown it is closed for
             // every sibling at once — the parent reaches DisposeHostedHubs BEFORE it disposes its
