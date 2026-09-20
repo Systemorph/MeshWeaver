@@ -147,6 +147,60 @@ public class UpsertContentFoldTest(ITestOutputHelper output) : MonolithMeshTestB
             "the seed states the intended INITIAL value; a create leg that folded would write 1");
     }
 
+    /// <summary>
+    /// 🚨 <b>A FOLD IS NEVER A NO-OP — and the acceptance test above does not prove it.</b>
+    ///
+    /// <para>The upsert short-circuits when the incoming node matches the stored row
+    /// (<c>IsNoOpUpsert</c>), and that comparison cannot see folds: a fold's whole point is that the
+    /// incoming node does NOT carry the value it wants written. So <c>Sum 1</c> on a body that is
+    /// otherwise identical to what is stored compared EQUAL, the update lambda never ran, and the
+    /// counter silently did not move — while the caller was told success.</para>
+    ///
+    /// <para>The acceptance test misses this because its body differs every call (a new
+    /// <c>Label</c>, a newer timestamp), so it never takes the no-op path. This test sends the
+    /// SAME body twice, which is exactly what a real "bump the counter" caller does. Found in
+    /// review of the change that introduced folds, not by the suite.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnIdenticalBodyStillFolds()
+    {
+        var path = NewPath();
+        var at = DateTimeOffset.UtcNow;
+        var body = new Tally { AccessCount = 1, FirstAccessedAt = at, LastAccessedAt = at, Label = "same" };
+
+        await Upsert(path, body, at);
+        await Upsert(path, body, at);   // byte-identical — the no-op short-circuit's exact shape
+
+        (await ReadTally(path)).AccessCount.Should().Be(2,
+            "the second upsert carried the same content as the first, so the no-op comparison says "
+            + "'nothing changed' — but a Sum fold is a change request the comparison cannot see. "
+            + "1 here means the fold was skipped and the caller was told success anyway");
+    }
+
+    /// <summary>
+    /// Two folds naming the SAME member compose, because "applied in order" has to mean the second
+    /// sees the first's result. Reading the live value afresh for each would make two <c>Sum 1</c>
+    /// produce <c>live + 1</c> — a plausible number that is simply wrong.
+    /// </summary>
+    [Fact]
+    public void FoldsOnTheSameMemberCompose()
+    {
+        var live = new MeshNode("n", "TestData") { Content = new JsonObject { ["accessCount"] = 10 } };
+
+        var folded = ContentFolds.Apply(
+            new JsonObject { ["accessCount"] = 10 },
+            live,
+            [
+                new ContentFold("accessCount", FoldRule.Sum) { Operand = Element(1) },
+                new ContentFold("accessCount", FoldRule.Sum) { Operand = Element(1) },
+            ],
+            Options);
+
+        ((JsonObject)folded!)["accessCount"]!.GetValue<decimal>().Should().Be(12,
+            "10 + 1 + 1 — the second fold must build on the first's result, not re-read the live "
+            + "value and overwrite it");
+    }
+
     // ---------------------------------------------------------------- pure semantics
 
     /// <summary>

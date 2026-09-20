@@ -121,13 +121,29 @@ public static class ContentFolds
             return merged;
 
         var liveContent = live is null ? null : AsObject(live.Content, options);
+        var alreadyFolded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var fold in folds)
         {
             var key = MatchingKey(target, fold.MemberName)
                       ?? (liveContent is not null ? MatchingKey(liveContent, fold.MemberName) : null)
                       ?? fold.MemberName;
-            var stored = liveContent is null ? null : Lookup(liveContent, fold.MemberName);
-            target[key] = Combine(fold, stored, target.TryGetPropertyValue(key, out var incoming) ? incoming : null);
+
+            // 🚨 The BASE is the live value for the FIRST fold on a member, and the RUNNING RESULT
+            // for any later one — so declared folds COMPOSE, which is what "applied in order" has
+            // to mean. Reading `liveContent` every time instead makes two `Sum 1` produce
+            // `live + 1` rather than `live + 2`: the second fold silently overwrites the first, and
+            // the caller sees a plausible number that is simply wrong.
+            //
+            // It must never fall back to the INCOMING value for the first fold. That value is the
+            // caller's un-read guess, and preferring it is exactly the staleness a fold exists to
+            // remove.
+            var baseValue = alreadyFolded.Contains(fold.MemberName)
+                ? target.TryGetPropertyValue(key, out var running) ? running : null
+                : liveContent is null ? null : Lookup(liveContent, fold.MemberName);
+
+            target[key] = Combine(
+                fold, baseValue, target.TryGetPropertyValue(key, out var incoming) ? incoming : null);
+            alreadyFolded.Add(fold.MemberName);
         }
 
         return target;
@@ -198,7 +214,25 @@ public static class ContentFolds
         if (node is null) return 0m;
         if (node is JsonValue value)
         {
-            if (value.TryGetValue<decimal>(out var d)) return d;
+            // 🚨 A JsonValue is backed by a CLR type OR by a JsonElement, and `TryGetValue<decimal>`
+            // does NOT bridge between them: a JsonValue<int> (what an object-initializer literal
+            // produces) answers FALSE for decimal, while a parsed one (JsonElement-backed, which is
+            // what content read back from the store is) answers true. Asking only for decimal
+            // therefore worked end-to-end and refused the in-memory case — a split this suite only
+            // caught because a pure test built its live node from a literal.
+            if (value.TryGetValue<decimal>(out var dec)) return dec;
+            if (value.TryGetValue<long>(out var l)) return l;
+            if (value.TryGetValue<int>(out var i)) return i;
+            if (value.TryGetValue<double>(out var dbl)) return (decimal)dbl;
+            if (value.TryGetValue<JsonElement>(out var element))
+            {
+                if (element.ValueKind == JsonValueKind.Number && element.TryGetDecimal(out var ed))
+                    return ed;
+                if (element.ValueKind == JsonValueKind.String
+                    && decimal.TryParse(
+                        element.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var es))
+                    return es;
+            }
             if (value.TryGetValue<string>(out var s)
                 && decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed))
                 return parsed;

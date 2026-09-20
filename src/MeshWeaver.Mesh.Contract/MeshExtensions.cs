@@ -5890,7 +5890,7 @@ public static class MeshExtensions
                     DispatchInnerCreate();
                     return;
                 }
-                if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig))
+                if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig, inboundRequest.Folds))
                 {
                     hub.NoteRequestStage(request.Id, "UPSERT_READ existing → no-op probe");
                     SkipNoOpIfAuthorized(existing);
@@ -6668,8 +6668,22 @@ public static class MeshExtensions
     /// </summary>
     private static bool IsNoOpUpsert(
         MeshNode existing, MeshNode sourceNode, JsonSerializerOptions options,
-        MeshConfiguration? meshConfig)
+        MeshConfiguration? meshConfig, IReadOnlyCollection<ContentFold>? folds = null)
     {
+        // 🚨 A FOLD IS NEVER A NO-OP (#4928). This comparison answers "does the incoming node differ
+        // from the stored row" — and a fold's whole point is that the incoming node does NOT carry
+        // the value it wants written. `Sum 1` on a node whose seed content already equals the stored
+        // content compares EQUAL, so without this the upsert is acknowledged as a skip, the update
+        // lambda never runs, and the counter silently does not move. The caller is told success.
+        //
+        // It cannot be decided more cleverly here: whether a fold changes anything depends on the
+        // LIVE node, which this comparison does not have (it holds the durable row this handler
+        // read). The owner-side lambda is where that is knowable, so the honest answer is to stop
+        // claiming no-op and let the write path decide — the same shape as the stale-MainNode
+        // repair below, which also takes the write path to let the merge settle it.
+        if (folds is { Count: > 0 })
+            return false;
+
         // 🚨 The STORED row may itself need the 1b' repair, and then this write is not a no-op even
         // when every field matches. A stale self-default MainNode cannot be moved by the incoming
         // node — a full instance can express "point elsewhere" but never "point back at myself"
