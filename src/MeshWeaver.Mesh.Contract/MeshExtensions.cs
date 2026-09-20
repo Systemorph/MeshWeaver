@@ -6315,6 +6315,17 @@ public static class MeshExtensions
                 // mechanism anywhere able to restore it. Flooring on the row we JUST read makes
                 // the write forward by construction, so the repair lands on the first attempt.
                 // Content is untouched by this: it still comes from `live`.
+                // The fold step, as a named function so the merge reads in the order it runs:
+                // full-instance merge, then the folds that override the members they name.
+                MeshNode FoldOntoLive(MeshNode mergedNode, MeshNode liveNode) =>
+                    inboundRequest.Folds is { Count: > 0 }
+                        ? mergedNode with
+                        {
+                            Content = ContentFolds.Apply(
+                                mergedNode.Content, liveNode, inboundRequest.Folds, hub.JsonSerializerOptions),
+                        }
+                        : mergedNode;
+
                 var write = hub.GetMeshNodeStream(node.Path)
                     // 1b', on the MERGED node. The create path repairs a stale self-default MainNode
                     // before it is ever stored; the update path has to repair it AFTERWARDS, because
@@ -6323,8 +6334,20 @@ public static class MeshExtensions
                     // what makes a re-import heal the six Skill nodes #2939 measured — a
                     // GetMeshNodeStream patch CAN express it, which is the route MeshNode.MainNode's
                     // remarks name as the only one that restores a main node.
+                    // 🚨 The FOLDS run here and nowhere else (#4928). This lambda is the one place
+                    // in the upsert that holds `live` — the node as its owner currently has it — so
+                    // it is the only place a rule like `Sum 1` can be turned into a value. Applying
+                    // them on `existing` (the durable row this handler read) would reintroduce the
+                    // very staleness the fold exists to remove: that read is a snapshot, `live` is
+                    // the merge target.
+                    //
+                    // Order matters and is not arbitrary: the full-instance merge runs FIRST and
+                    // takes `Content` wholesale, then the folds overwrite exactly the members they
+                    // name. A fold therefore always beats the incoming content for its own member,
+                    // which is what makes `Content = record` plus `Sum(accessCount, 1)` mean "take
+                    // my content, except the counter, which you compute".
                     .Update(live => RepairStaleSelfDefaultMainNode(
-                        UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions) with
+                        FoldOntoLive(UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions), live) with
                         {
                             Version = Math.Max(live.Version, existing.Version),
                             // Identity fields the merge is meant to PRESERVE — recovered from the
