@@ -125,16 +125,76 @@ whose attempt exceeds the budget *every time it runs*, not an unlucky request; t
 inversion is no longer only a shape problem — it is the reason 397 occurrences in one day still
 cannot say which of the two call shapes timed out.
 
-## Two findings this does not fix
+## Every stage is bounded by the CLIENT, on silence, and the refusal names the stage
 
-🚨 **The two budgets are inverted.** `RegistryUpdateReconciler.PerPackageAdoptBudget` is **3
-minutes**; the transfer pipeline's own `TotalRequestTimeout` is **5 minutes**
-(`ServiceDefaults`, `plugin-registry-bundles`). The outer wait therefore expires before the inner
-policy can finish retrying, so the retry is structurally unable to complete and the HTTP layer's
-cause is always discarded in favour of a bare `TimeoutException`. The finite outer bound is
-deliberate and correct — *a hang is worse than a failure* — but two independently authored budgets
-that contradict each other is a shape problem, not a tuning one, and the fix is to derive one from
-the other rather than to raise either.
+The reading above left one question — *which* of the two call shapes was timing out — and one
+structural defect, the inverted budgets. Both are settled by moving the clock to the one place that
+can see every stage: the client's own receive path (`PluginBundleClient.Receive`), which the index
+and the bundle now share.
+
+A transfer can be refused in exactly three ways, and each wants a different remedy, so each is a
+named `BundleTransferStage` on a `BundleTransferException` carrying the registry, the elapsed time,
+the bytes received and the bytes declared:
+
+| stage | what happened | what it accuses |
+|---|---|---|
+| `NoResponse` | the connection was accepted and no status line or header arrived within one stall budget | the **registry** — the request is stuck behind authentication or inside the index assembly |
+| `StalledMidBody` | headers arrived, then the body went quiet for one stall budget; the byte count says how far it got | the **transport** (or the registry, at zero bytes) |
+| `OverSize` | the declared `Content-Length`, or the bytes actually streamed, exceed what the client accepts | the **archive** — a smaller or resumable bundle, never a larger bound |
+
+**The two stall bounds are bounds on silence, never on total duration.** The response start gets
+`TransferStallBudget` (120 s) from the moment the request goes out; every chunk of the body that
+arrives resets a deadline of the same length. A transfer that trickles for longer than the budget
+completes — that is the property #4549 bought, and `BundleTransferFailsOnSilenceTest` proves it
+against a Kestrel socket that streams for two and a half budgets with no gap reaching one. **The
+size bound is the one the buffering read always carried** (`HttpClient.MaxResponseContentBufferSize`),
+re-established explicitly because streaming had removed the only bound a caller had; a declared
+length over it is refused before a byte is read.
+
+**The fallback client's own clock is switched off** (`HttpClient.Timeout = InfiniteTimeSpan`). With
+headers read first that clock bounded only the header stage, at 100 s, under a message that names no
+stage; the standard resilience handler the hosts register already leaves it infinite, which the same
+test pins.
+
+**The index is read once per client.** The `PromiseSlot` used to hold a cold `pool.Invoke(...)`,
+which every subscriber re-subscribes and therefore re-sends — so "one index read per install pass"
+was one per package, and a stalled registry was paid for by every package in turn, which is
+precisely the 180 s per-package period the incident showed. It now holds a `pool.Run(...)`: hot,
+replayed to every package of the pass, evicted on a fault so the next package asks again.
+
+### The inverted budgets, resolved by derivation
+
+`RegistryUpdateReconciler.PerPackageAdoptBudget` is no longer a second number authored beside the
+client's: it is `TransferStallBudget + 1 min` — one silence budget, the longest any single stage may
+stay quiet, plus headroom for the index read, the decision and the landing write. It therefore
+always fires **after** the client's own refusal of a stalled stage, which is what keeps the cause in
+the log. Neither number was raised; the value is the same 180 s.
+
+The transport pipeline's retry — three attempts of 120 s inside a five-minute total — was
+structurally unable to finish inside that bound, and that is why the 09-15/16 failures left "The
+operation has timed out" as their only sentence. It is not reachable for a stall any more: the
+client's clock is armed before the request leaves and cancels the pipeline's retry of a stall it
+could never complete, while a fast transient failure (a 5xx, a refused connection) is retried
+exactly as before. The pipeline's own attempt timer still exists and may win the race with the
+client's by a millisecond; the client's filter reads its **own** stall token rather than the
+exception's type, so the refusal is named `NoResponse` in every ordering, and the pipeline's
+`OnTimeout` event — when it fires — is a duplicate of the client's line, never the discriminator.
+
+### #4963 is a different root, and this change makes it legible rather than fixing it
+
+The stall the fleet is living with since the roll is the registry **never beginning a response** to
+an authenticated `GET /api/plugins/bundles/index.json` — #4963 measured it from outside the mesh
+with a plain `curl`: 180 s, **0 bytes received**, three times in 12.5 hours, while `/api/version`
+and the unauthenticated 401 answer in an eighth of a second. That is a server-side defect on the
+registry, and no client budget can cure it: a bound on bytes cannot fire on a stream that sends none,
+and a bound on silence can only *name* it. This page's change does exactly that — the consumer now
+logs `Bundle index over HTTP from https://… did NOT complete after 120000 ms — 0 of an undeclared
+number of byte(s) had arrived. Cause: Bundle index: the registry at … did not begin a response
+within 120 s` — and the reconciler moves on after one budget per pass instead of one per package.
+The two issues share a symptom surface and nothing else: #4528 is the consumer's instrument, #4963
+is what the instrument is currently reading.
+
+## One finding this does not fix
 
 🚨 **The incident fingerprint masks `Source:`**, so every Polly `OnTimeout` on every pipeline folds
 onto one incident node — the samples on it have also included `Orleans.Placement/(null)/Timeout`.
