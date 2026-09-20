@@ -7,6 +7,8 @@ Description: >-
   separate defects — and none of them the reason the policy nodes appear to state. Plus the separate,
   four-hour break in the producing half, and the availability read whose cost grew with the artifact
   store until it timed out on every candidate — both since resolved.
+  Re-measured 2026-09-20: the deliberate pin was cleared and the instance still did not roll — the
+  apply half had stopped after a failed roll on the 14th while the detect half kept announcing daily.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M4.5 4.5l15 15"/></svg>
 ---
 
@@ -458,11 +460,90 @@ skipped. Neither conclusion tells you whether a set exists.
 | the seal | ✅ done — `MeshWeaver.Plugins#2059` merged 10:15:38Z; confirm on run 8916's seal JOB | **an action**, taken |
 | memex-cloud | `policy: Continuous` + `pattern: 3.0.0-ci*` restored on its own `Admin/UpdatePolicy` | **a decision**, and a repair with a known half-life |
 | every instance | a bookkeeping write must never replace a record it could not materialize — refuse and log instead | **a code fix** |
-| memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately |
+| memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately. 🚨 **Superseded for memex on 2026-09-19**: the pin was cleared and it still did not roll — see [the 2026-09-20 re-measurement](#2026-09-20-the-apply-half-stopped-and-the-detect-half-kept-announcing-into-it) |
 | every instance | `PreWarm__PrebuiltBundleRetention__Delete` | **an operations decision**, from a ledger line, after confirming the protected set covers every instance and every CI gate pinning an older platform build |
 | the availability gate | answer inside its budget over a store that only grows | ✅ **done** — `SealedBundleFloorCache` (#4742) remembers each SOURCE publication's declaration, so a tick lists but no longer re-opens them; `SelfUpdate__AvailabilityAnswerBudget` is the secondary knob, never the fix |
 | a timeout hold | record `heldIndeterminate: true` | **a code fix**, one call site |
 | build, pearl | MeshWeaver#4093 — `SelfUpdate__RegistryValidationUrl` on the record, then a roll onto an image carrying `830c8c402` or later | **a config change and a roll** — NOT a code fix; the platform half merged 2026-09-12 |
+
+## 2026-09-20: the apply half stopped, and the detect half kept announcing into it
+
+**Six days after this page was written, memex.systemorph.com had still not rolled — and the reason had
+changed.** This section is the re-measurement, because the remedy table above ("memex … a newer tag
+than `pinnedImageTag` waits for an approval") is no longer what the instruments say.
+
+| instrument | reading, 2026-09-20 | what it means |
+|---|---|---|
+| `GET /api/version` | `3.0.0+96f88406` | what is actually running |
+| `Admin/UpdatePolicy` → `policy` / `pattern` | `Continuous` / `3.0.0-ci*` | behaviour is intact |
+| → `latestAvailableTag` | `3.0.0-ci.9014` | listing works |
+| → `handedOverTag` / `handedOverAt` | `3.0.0-ci.9014` / `06:12:52Z` **today** | **the hand-over webhook fires, daily** |
+| → `comboVerifications` | `[]` | no verdict for the candidate ⇒ any roll is taken UNVERIFIED |
+| `Deployments/memex` → `pinnedImageTag` | **absent** (record modified 2026-09-19T19:41Z) | 🚨 the `3.0.0-ci.8710` pin named above is GONE |
+| `Ops/Actions/*` newest `Hosting/InstanceAction` | **2026-09-14** | **no Roll opened for six days**, across ≥3 candidates (8886, 8996, 9014) |
+
+**So the deliberate-pin explanation has expired.** The pin was cleared on 2026-09-19 and the instance
+still did not roll, which rules out "waiting for an approval because the candidate is newer than the
+pin" as the current cause. Anyone reading the remedy table without re-reading `Deployments/memex`
+will fix a pin that is not there.
+
+**What the 14th actually left behind.** `reconcile-memex-20260914-nav-rail` rolled onto
+`3.0.0-ci.8612`; `sample-memex-20260914-nav-rail` records that the replica **never became Ready**; and
+`sample-memex-20260914-rollback` records the roll back to `3.0.0-ci.8411`, 30 minutes at 1/2 updated.
+Nothing has been opened since. **The apply half stopped after a failed roll and the detect half has
+gone on announcing into it every day** — so the daily "update available … handed to the control lane"
+line is evidence that detection works, and no evidence at all that anything consumes it.
+
+**Two causes this page does NOT distinguish**, because the reader who can see the inbox should:
+
+1. the control plane opens a `Roll` that waits for an approval nobody gives — the designed shape; or
+2. the delivery is never turned into an action at all — the MeshWeaver#777 shape, where signed build
+   facts sat unconsumed because the watcher was armed on on-demand hubs.
+
+Today's verdict names `Hosting/PlatformBuilds/_Inbox/dc1fab8d191e466c9b09069140328240` as *stored,
+signature verified*. That node read **Not found** and the inbox listed **empty** to a global admin over
+MCP — which is consistent with both "already consumed" and "not visible to me", so it settles nothing.
+**Check it as System on the control instance before concluding**, and read the inbox area's watcher
+liveness rather than the node list.
+
+### The distinguishing question, and the order to ask it in
+
+1. **Is an action open?** `search path:Ops/Actions nodeType:Hosting/InstanceAction` and sort by date.
+   An action newer than the last `handedOverAt` ⇒ shape 1, and the remedy is an approval.
+   **No action newer than the hand-over ⇒ shape 2, and an approval will never come.**
+2. **Is the inbox draining?** The `Inbox` area of `Hosting/PlatformBuilds` shows watcher liveness and
+   every pending event with its age. A non-empty ageing inbox is the failure; an empty inbox with no
+   action is the watcher consuming and dropping.
+3. **Only then** the combo gate: `comboVerifications` empty means UNVERIFIED, which grants no
+   clearance and takes no refusal ([Combo Gate Wiring](/Doc/Architecture/ComboGateWiring)) — it
+   explains a roll being *taken* unverified, never a roll that never happens.
+
+🚨 **The general trap, one level up from the one this page opens with.** A working detector in front of
+a dead consumer produces a *daily fresh timestamp* on `handedOverAt` — the field most likely to be read
+as "the pipeline is alive". Liveness of the announcing half is not liveness of the acting half, and
+here they are in different processes on different instances. **Pair every `handedOverAt` with the age
+of the newest action on the target**; a hand-over with no younger action is the whole diagnosis.
+
+### What the moving-label design does and does not fix
+
+The obvious reading of this — "pin it to a label, move the label, roll on the move" — is
+[Release Channels](/Doc/Architecture/ReleaseChannels) (core #4769): a channel is a named moving pointer
+whose selection always resolves to an **immutable id**, so nothing downstream runs a moving name. On
+this instance the selecting half of that already exists (`pattern: 3.0.0-ci*` resolving to
+`latestAvailableTag`), and it is not where the stall is. **A channel that moves is only as good as the
+consumer that acts on the move**, so a decision table for "the pointer moved and no action was opened"
+has to be loud rather than silent — otherwise the channel work lands on top of this exact failure and
+inherits it.
+
+### Downstream cost, so the next reader knows what it blocks
+
+A portal that does not roll does not advance its plugin sources either: its GitSync holds every package
+at the commit sealed for the framework identity it RUNS. On 2026-09-20 `Crm/_GitSync` read *"sealed at
+2c4cfa10 for this instance (identity s091d69fee9df4e5dabee742024122f71) … the registry has since sealed
+3.0.0-ci.9014 under se67137088031dee4af0f30c7d5edcf4c, which this instance does not run — so this source
+advances when this instance IMAGE does (a roll), NOT when another publication lands"* — 15 commits
+behind, holding a CRM data migration and an unrelated invoice feature. **"Merged, green and verified on
+`origin/main`" says nothing about a portal having it**; check the seal before promising a date.
 
 ## How to read these instruments
 
@@ -473,6 +554,12 @@ skipped. Neither conclusion tells you whether a set exists.
   `None` policy is the absence of a listing, not a failed one.
 - **"handed to the control lane … waits for an approval" is not a hold.** It is the pull mechanism
   succeeding and stopping where a person was meant to decide.
+- 🚨 **`handedOverAt` is the ANNOUNCING half's liveness, never the acting half's.** A working detector
+  in front of a dead consumer refreshes it daily, which reads exactly like a healthy pipeline. Pair it
+  with the age of the newest `Hosting/InstanceAction` on the target: **a hand-over with no younger
+  action is the diagnosis** (2026-09-20 — six days of daily hand-overs, no action since the 14th).
+- **Re-read `Deployments/<id>` before acting on any pin advice on this page.** The `pinnedImageTag`
+  it documented for memex was gone by 2026-09-19 and the standstill outlived it.
 - **The record's `updatePolicy` is intent; the instance's `Admin/UpdatePolicy` is behaviour.** Setting
   the first alone changes nothing an instance runs.
 - **Read the seal JOB, never the CD run's conclusion** — run 8896 concluded `failure` and sealed; runs
