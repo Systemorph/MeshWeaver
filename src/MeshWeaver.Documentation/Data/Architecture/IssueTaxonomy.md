@@ -115,6 +115,20 @@ an assignee.
 
 ---
 
+## Scope: the OPEN set, and only the open set
+
+**Closed issues are out of scope.** They are not classified, not counted, and no query on this page
+looks at them. (Maintainer, 2026-09-20: *"all which is closed does not matter"* · *"we don't need to
+classify old stuff"*.) Every query here carries `state:open`, including the gate.
+
+That is affordable because the open set is **hundreds, not thousands** — 127 across five
+repositories on the day this was written, which is why the whole of it could be classified in a
+single pass and kept classified since. A taxonomy is worth maintaining at a scale where every open
+row can carry it; a backlog that outgrew that would be a backlog problem, not a labelling one.
+
+The corollary for an agent: do not go back over history. Classify what is open, keep it classified
+as triage files new work, and let closure — not labelling — dispose of what is dead.
+
 ## The first classification pass — 2026-09-20
 
 All 127 open issues across the five repositories were classified in one pass.
