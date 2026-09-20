@@ -158,11 +158,15 @@ race, the reactivated hub re-ran its source query against a half-invalidated sta
   *"requested by itself — a rebind or self-heal recycle"* and nothing more: one sentence covering
   three states. The poster always knows why; only the log did not.
 
-A recycle is announced to the subscribers it is about to orphan. `HandleDispose` calls
-`AnnounceRecycle()` on the turn the request is handled, **while the hub is whole**, because the
-teardown itself is silent by construction — a dying owner reaching up the hub tree for a last word
-resurrects the activation it is retiring (#2533 / #2551; the mechanism is in
-[Hub Disposal Model](/Doc/Architecture/HubDisposalModel)).
+A recycle is announced to the subscribers it is about to orphan. `Dispose()` makes that announcement
+as its FIRST statement, **while the hub is whole**, because the teardown itself is silent by
+construction — a dying owner reaching up the hub tree for a last word resurrects the activation it is
+retiring (#2533 / #2551; the mechanism is in
+[Hub Disposal Model](/Doc/Architecture/HubDisposalModel)). 🚨 It hung on `HandleDispose` until
+2026-09-20, which keyed it on "was there a routed request" rather than on "is an ancestor taking me
+with it" — so an **Orleans deactivation**, a direct `Dispose()` of an address that IS coming back,
+told its live subscribers nothing and every click they sent afterwards was discarded (#3986,
+[Refusing a Lost User Action](/Doc/Architecture/RefusingALostUserAction)).
 
 ## 🚨 A dispose makes the activation RE-READ. It does not change what the re-read FINDS
 
