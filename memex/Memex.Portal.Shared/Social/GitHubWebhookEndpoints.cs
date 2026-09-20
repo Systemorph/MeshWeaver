@@ -67,8 +67,36 @@ public static class GitHubWebhookEndpoints
             //
             // 25 MiB is GitHub's own documented maximum payload, so this can never refuse a genuine
             // delivery — it is strictly a ceiling on what a forged one can cost.
-            var body = await BoundedBody.ReadBytesAsync(
-                http.Request.Body, MaxWebhookBodyBytes, http.RequestAborted);
+            //
+            // 🚨 A DELIVERY THAT STOPS SHORT IS A 400, NOT AN UNHANDLED FAULT (#4860). GitHub's
+            // delivery can time out, and an abandoned probe or a reset connection does the same:
+            // Kestrel raises "Unexpected end of request content" from the body read. That escaped to
+            // ExceptionHandlerMiddleware and was logged at `fail` with a stack trace — six times in
+            // 19 days across five pods — for an ordinary network condition nobody can act on.
+            // Caught as its own outcome, never folded into the `null` below: that one means OVER
+            // THE CAP and answers 413, and a dropped connection is not that.
+            byte[]? body;
+            try
+            {
+                body = await BoundedBody.ReadBytesAsync(
+                    http.Request.Body, MaxWebhookBodyBytes, http.RequestAborted);
+            }
+            catch (BadHttpRequestException ex)
+            {
+                // 🚨 ANSWER THE EXCEPTION'S OWN STATUS, never a fixed 400. Kestrel raises this same
+                // type with 413 when its MaxRequestBodySize is exceeded — so hard-coding 400 here
+                // would turn a server-limit breach into a bad-request, and the identical oversized
+                // delivery would then report 413 or 400 depending only on which limit noticed it
+                // first (this endpoint's own cap answers 413 a few lines below). That is precisely
+                // the conflation this change exists to remove, so the catch must not reintroduce it.
+                logger.LogDebug(ex,
+                    "GitHub webhook body read failed with {Status}: {Reason}. At 400 the delivery "
+                    + "ended before the declared body arrived — nothing to verify, and GitHub "
+                    + "retries its own failed deliveries.",
+                    ex.StatusCode, ex.Message);
+                return Results.StatusCode(ex.StatusCode);
+            }
+
             if (body is null)
             {
                 logger.LogWarning(

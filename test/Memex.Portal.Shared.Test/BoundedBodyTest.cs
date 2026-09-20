@@ -1,5 +1,6 @@
 using System.Text;
 using Memex.Portal.Shared.Api;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -91,5 +92,69 @@ public class BoundedBodyTest
         for (var i = 0; i < exact.Length; i++) exact[i] = (byte)i;
         var got = await BoundedBody.ReadBytesAsync(new MemoryStream(exact), 64, TestContext.Current.CancellationToken);
         Assert.Equal(exact, got);
+    }
+
+    /// <summary>
+    /// 🚨 A TRUNCATED body is not an OVERSIZED one (#4860). When a client aborts mid-delivery,
+    /// Kestrel raises "Unexpected end of request content" from the body read. Swallowing that into
+    /// the <c>null</c> that means "over the cap" would answer 413 to a caller whose connection
+    /// dropped, and log a cap breach for a body far under the cap. The two outcomes must stay
+    /// distinguishable, so the exception propagates and the endpoints turn it into a 400.
+    /// </summary>
+    [Fact]
+    public async Task A_client_disconnect_mid_body_is_not_reported_as_over_the_cap()
+    {
+        // 8 bytes arrive, then the connection drops — far below a 1000-byte cap, so if this came
+        // back as null the caller could not tell it from a payload that was genuinely too large.
+        var truncated = new TruncatedStream(deliver: 8);
+
+        await Assert.ThrowsAsync<BadHttpRequestException>(
+            () => BoundedBody.ReadBytesAsync(truncated, maxBytes: 1000, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task The_string_form_keeps_the_same_distinction()
+        => await Assert.ThrowsAsync<BadHttpRequestException>(
+            () => BoundedBody.ReadAsync(new TruncatedStream(deliver: 8), maxBytes: 1000,
+                TestContext.Current.CancellationToken));
+
+    /// <summary>Delivers <paramref name="deliver"/> bytes, then fails the way Kestrel does when the
+    /// peer goes away before the declared Content-Length has arrived.</summary>
+    private sealed class TruncatedStream(int deliver) : Stream
+    {
+        private int _remaining = deliver;
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_remaining <= 0)
+                throw new BadHttpRequestException("Unexpected end of request content.", 400);
+            var n = Math.Min(_remaining, buffer.Length);
+            buffer.Span[..n].Fill((byte)'x');
+            _remaining -= n;
+            return ValueTask.FromResult(n);
+        }
+
+        // Plain synchronous fill — never a blocking bridge over the async form
+        // (BlockingBridgeInTestRatchetGuard holds test/ at zero, and bridging the async form
+        // here would trip it while changing what the test measures).
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_remaining <= 0)
+                throw new BadHttpRequestException("Unexpected end of request content.", 400);
+            var n = Math.Min(_remaining, count);
+            Array.Fill(buffer, (byte)'x', offset, n);
+            _remaining -= n;
+            return n;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
