@@ -2215,9 +2215,16 @@ jobs:
     # AGENTS.md already forbids the CLASS, but names `continue-on-error:` and an input-testing `if:`
     # as its shapes. This one is made by ORDERING alone: nothing in the file looks wrong on
     # inspection, and no other guard can see it.
+    # 🚨 …including THESE two. Caught in review on the pull request that added them: a control that
+    # can itself be skipped behind an earlier failure inspects nothing, silently, which is the exact
+    # shape it exists to refuse. (The neighbouring guards here share the exposure; extending the
+    # rule to them is a separate change, because THIS job also builds and tests, so it has genuine
+    # step dependencies and a blanket sweep would be wrong rather than merely bigger.)
     - name: "A guard behind a failing guard still reports — the gate can fail (self-test)"
+      if: ${{ !cancelled() }}
       run: python3 .github/scripts/check-guard-step-masking.py --self-test
     - name: "No guard step in a required lane is masked by an earlier failure"
+      if: ${{ !cancelled() }}
       run: python3 .github/scripts/check-guard-step-masking.py --root .
 
     # 🚨 The ledger every repository's red `main` is routed onto (node-repo-ci-failure.yml, maintainer

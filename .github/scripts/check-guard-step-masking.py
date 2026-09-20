@@ -40,6 +40,9 @@ GUARDED_JOBS = [("node-repo-validate.yml", "validate")]
 # where "if this failed, the rest cannot mean anything" is true. Named explicitly: a NEW setup step
 # has to be added here deliberately, which is the point of a ratchet.
 PROLOGUE_NAMES = {"full history and tags, quietly"}
+# 🚨 EXACT identity, never a prefix. `startswith` would let a future `actions/checkout-extra@v1`
+# classify itself as prologue and omit the condition — an exemption that widens itself over time,
+# which is the failure mode of every prefix-matched allow-list. Caught in review.
 PROLOGUE_USES = {"actions/checkout", "actions/setup-python"}
 
 
@@ -47,8 +50,8 @@ def _is_prologue(step: dict) -> bool:
     name = str(step.get("name", "")).strip().lower()
     if name in PROLOGUE_NAMES:
         return True
-    uses = str(step.get("uses", ""))
-    return any(uses.startswith(u) for u in PROLOGUE_USES)
+    uses = str(step.get("uses", "")).strip()
+    return uses.split("@", 1)[0] in PROLOGUE_USES
 
 
 def offenders(doc: dict, job_id: str) -> list[str]:
@@ -118,6 +121,21 @@ def self_test() -> int:
         problems.append("a step that DOES carry !cancelled() was named — the guard would red a correct lane")
     if not offenders({"jobs": {}}, "validate"):
         problems.append("a missing job read as a pass — an absent subject is not a clean one")
+    near_miss = yaml.safe_load(
+        "jobs:\n"
+        "  validate:\n"
+        "    steps:\n"
+        "      - uses: actions/checkout-extra@v1\n"
+    )
+    if offenders(near_miss, "validate") != ["actions/checkout-extra@v1"]:
+        problems.append(
+            "an action merely PREFIXED by a prologue name was exempted — the allow-list must "
+            "compare exact identity, or it widens itself every time someone adds an action"
+        )
+    for exact in ("actions/checkout@v4", "actions/setup-python@v7", "actions/checkout"):
+        doc = yaml.safe_load("jobs:\n  validate:\n    steps:\n      - uses: " + exact + "\n")
+        if offenders(doc, "validate"):
+            problems.append(f"the real prologue action {exact} was NOT exempted")
     for p in problems:
         print(f"::error::self-test: {p}")
     print("self-test: OK" if not problems else "self-test: FAILED")
