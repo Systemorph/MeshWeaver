@@ -412,8 +412,8 @@ of into new packages.
 
 ## 6. What's New is per RELEASE, not per change
 
-**Rule change, 2026-09-20 (maintainer).** A What's New entry is written when a **release stream
-completes**, not when a change merges. It says what that release finished, and it **links to the
+Policy [`whatsnew-cadence`](/Doc/Architecture/PolicyNotProse). A What's New entry is written when a
+**release stream completes**, not when a change merges. It says what that release finished, and it **links to the
 doc page** that explains it. The explanation lives in the doc; What's New is the announcement.
 
 ### Why this changed

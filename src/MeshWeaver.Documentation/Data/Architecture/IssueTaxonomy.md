@@ -8,7 +8,7 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # Issue Taxonomy and the Release Readiness Gate
 
-A queue you cannot route is a queue you cannot finish. Until 2026-09-20 an open issue carried a
+A queue you cannot route is a queue you cannot finish. Before this taxonomy an open issue carried a
 type at best, so the two questions that actually drive work — *what is still open for this plugin?*
 and *what is still open for this feature?* — could only be answered by reading every title. And the
 question that gates a release — *is anything blocking?* — could not be answered at all.
@@ -118,8 +118,8 @@ an assignee.
 ## Scope: the OPEN set, and only the open set
 
 **Closed issues are out of scope.** They are not classified, not counted, and no query on this page
-looks at them. (Maintainer, 2026-09-20: *"all which is closed does not matter"* · *"we don't need to
-classify old stuff"*.) Every query here carries `state:open`, including the gate.
+looks at them — policy [`issue-taxonomy-scope`](../PolicyNotProse). Every query here carries
+`state:open`, including the gate.
 
 That is affordable because the open set is **hundreds, not thousands** — 127 across five
 repositories on the day this was written, which is why the whole of it could be classified in a
