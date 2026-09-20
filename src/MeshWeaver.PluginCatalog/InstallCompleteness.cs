@@ -300,7 +300,45 @@ public static class InstallCompleteness
         string partition,
         PackageManifest? record,
         IReadOnlySet<string>? present,
-        FileFormatParserRegistry parsers)
+        FileFormatParserRegistry parsers) =>
+        Compare(packageId, partition, record, present, parsers, rootCreated: null);
+
+    /// <summary>
+    /// <see cref="Compare(string, string, PackageManifest, IReadOnlySet{string}, FileFormatParserRegistry)"/>
+    /// with the one extra observation that tells a DELETED partition from a DAMAGED one
+    /// (MeshWeaver#4812): when the partition root was created, as the mesh reports it.
+    ///
+    /// <para>🚨 A separate overload, not an optional parameter, for the binary-compatibility
+    /// reason the <c>Observe</c> overloads state: an optional parameter rewrites the metadata
+    /// signature an older dependent was compiled against.</para>
+    ///
+    /// <para><b>The discriminator.</b> <c>ClaimsDeepfield</c> on memex.meshweaver.cloud was
+    /// installed 2026-08-27T19:48Z (83 declared nodes), its Space deleted on 2026-09-05T09:03Z
+    /// because the module had been retired from its repository, and its root re-created at
+    /// 09:16:50Z by the boot pass's access re-assert on the record that had outlived the
+    /// partition. From then on every boot counted <i>82 of 83 declared node(s) are ABSENT</i> and
+    /// recommended a reinstall — of a retired module. What separates that shape from a real loss
+    /// is not the count: it is that the ROOT is younger than the install that declared it, and
+    /// nothing else the install wrote is there. A root that pre-dates or dates from its install
+    /// with content missing beside it is a loss; a root born after the install with nothing beside
+    /// it is a deletion the record did not follow.</para>
+    /// </summary>
+    /// <param name="packageId">The package the record belongs to.</param>
+    /// <param name="partition">The partition the package installed into.</param>
+    /// <param name="record">The install record's manifest, or null when no record exists.</param>
+    /// <param name="present">The node paths OBSERVED in the mesh; null means the read did not
+    /// happen.</param>
+    /// <param name="parsers">The install's own parser registry — the file→node rule.</param>
+    /// <param name="rootCreated">When the partition root was CREATED, as read back from the mesh;
+    /// <c>null</c> when the root is absent, was not read, or carries no stamp. Only a value later
+    /// than the record's <see cref="PackageManifest.InstalledAtUtc"/> changes the verdict.</param>
+    public static InstallCompletenessVerdict Compare(
+        string packageId,
+        string partition,
+        PackageManifest? record,
+        IReadOnlySet<string>? present,
+        FileFormatParserRegistry parsers,
+        DateTimeOffset? rootCreated)
     {
         ArgumentNullException.ThrowIfNull(parsers);
         if (record is null)
@@ -361,15 +399,38 @@ public static class InstallCompleteness
             .Where(p => !present.Contains(p))
             .ToImmutableSortedSet(StringComparer.Ordinal);
         var found = declared.Count - missing.Count;
-        return WithPopulation(missing.Count == 0
-            ? new InstallCompletenessVerdict(
+        if (missing.Count == 0)
+            return WithPopulation(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.Complete, declared.Count, found,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                "every declared node is present")
-            : new InstallCompletenessVerdict(
-                packageId, partition, InstallCompletenessKind.Incomplete, declared.Count, found,
+                "every declared node is present"));
+
+        // 🚨 MeshWeaver#4812 — a root YOUNGER than the install that declared it, with nothing the
+        // install wrote beside it, is a partition that was deleted after the install and had its
+        // root re-created. Not a shortfall to repair: an uninstalled package whose record survived.
+        // Both stamps have to be KNOWN — an absent stamp on either side leaves the ordinary
+        // Incomplete verdict, which errs toward reporting a loss, never toward inventing a deletion.
+        var installed = record.InstalledAtUtc;
+        var nothingElsePresent = declared.All(p =>
+            string.Equals(p, partition, StringComparison.Ordinal) || !present.Contains(p));
+        if (rootCreated is { } created && installed is { } installedAt && created > installedAt
+            && nothingElsePresent)
+            return WithPopulation(new InstallCompletenessVerdict(
+                packageId, partition, InstallCompletenessKind.TornDown, declared.Count, found,
                 missing,
-                $"{missing.Count} of {declared.Count} declared node(s) are ABSENT from the mesh"));
+                $"the partition root '{partition}' was created {created:O}, AFTER this record's "
+                + $"install ({installedAt:O}), and none of the other {missing.Count} declared "
+                + "node(s) is present — the partition this install wrote was deleted afterwards "
+                + "and its root re-created (a boot pass re-asserting declared access on a record "
+                + "that outlived its partition does exactly that). This is an UNINSTALLED package "
+                + "whose install record survived, not a partial install: nothing reinstalls it "
+                + "unattended. Remove the record (Catalog → orphaned install records) or install "
+                + "the package again deliberately (MeshWeaver#4812)"));
+
+        return WithPopulation(new InstallCompletenessVerdict(
+            packageId, partition, InstallCompletenessKind.Incomplete, declared.Count, found,
+            missing,
+            $"{missing.Count} of {declared.Count} declared node(s) are ABSENT from the mesh"));
     }
 
     /// <summary>
@@ -460,17 +521,34 @@ public static class InstallCompleteness
             return Observable.Return(Attribute(
                 Compare(packageId, partition, record, ImmutableHashSet<string>.Empty, parsers)));
 
-        return persistence.ReadMany(declared, options)
-            .Select(n => n.Path)
+        // The partition ROOT rides in the same batched read whether or not the record declares it
+        // (a package with no index.json declares none): its created stamp is what tells a deleted
+        // partition from a damaged one (MeshWeaver#4812). Presence is still counted over the
+        // DECLARED set alone, so the denominator does not move.
+        var toRead = declared.Contains(partition) ? declared : declared.Add(partition);
+        return persistence.ReadMany(toRead, options)
             .ToList()
-            .Select(paths => Attribute(Compare(packageId, partition, record,
-                paths.ToImmutableHashSet(StringComparer.Ordinal), parsers)))
+            .Select(nodes => Attribute(Compare(packageId, partition, record,
+                nodes.Select(n => n.Path).Where(declared.Contains)
+                    .ToImmutableHashSet(StringComparer.Ordinal),
+                parsers,
+                RootCreatedStamp(nodes, partition))))
             .Catch<InstallCompletenessVerdict, Exception>(ex => Observable.Return(
                 Attribute(population.Apply(new InstallCompletenessVerdict(
                     packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                     ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
                     $"reading the mesh failed, so completeness was NOT checked — this is not a "
                     + $"pass. Cause: {ex.Message}")))));
+    }
+
+    /// <summary>
+    /// The partition root's created stamp out of a batched read — <c>null</c> when the root did not
+    /// come back or carries no stamp (<c>default</c>), so an unknown never reads as "young".
+    /// </summary>
+    private static DateTimeOffset? RootCreatedStamp(IEnumerable<MeshNode> nodes, string partition)
+    {
+        var root = nodes.FirstOrDefault(n => string.Equals(n.Path, partition, StringComparison.Ordinal));
+        return root is null || root.CreatedDate == default ? null : root.CreatedDate;
     }
 
     /// <summary>
@@ -759,6 +837,14 @@ public static class InstallCompleteness
                 + "install or reconcile will ask again until the module version moves — and a "
                 + "NodeType whose declared source node is among these cannot compile "
                 + "(MeshWeaver#3485)."),
+            // A write that leaves the partition looking torn down is the same fault as Incomplete
+            // from the landing's point of view — the install ran and the mesh holds none of it —
+            // and it carries the verdict's own sentence, which names what the stamps say.
+            InstallCompletenessKind.TornDown => new LandingReport(
+                LogLevel.Error,
+                $"Package {after.PackageId} finished installing (module {module}) and the mesh "
+                + $"still holds none of its {after.Declared} declared node(s) beside the root: "
+                + $"{after.Because}. Counted over: {after.Population} (MeshWeaver#4812)."),
             InstallCompletenessKind.Complete => new LandingReport(
                 LogLevel.Information,
                 $"Package {after.PackageId} landed whole (module {module}): all {after.Declared} "
@@ -915,7 +1001,10 @@ public static class InstallCompleteness
             verdicts.Count(v => v.Kind is InstallCompletenessKind.Incomplete),
             verdicts.Count(v => v.Kind is InstallCompletenessKind.Undeclared),
             verdicts.Count(v => v.Kind is InstallCompletenessKind.NotObserved),
-            verdicts.Count(v => v.Kind is InstallCompletenessKind.RootWithoutRecord));
+            verdicts.Count(v => v.Kind is InstallCompletenessKind.RootWithoutRecord))
+        {
+            TornDown = verdicts.Count(v => v.Kind is InstallCompletenessKind.TornDown),
+        };
 
     private static bool IsUnder(string nodePath, string partition) =>
         string.Equals(nodePath, partition, StringComparison.Ordinal)
@@ -975,6 +1064,19 @@ public enum InstallCompletenessKind
 
     /// <summary>At least one declared node is ABSENT. The install is being served partial.</summary>
     Incomplete,
+
+    /// <summary>
+    /// The partition this record's install wrote was DELETED after the install and its root
+    /// re-created afterwards: the root's created stamp is LATER than the record's install stamp and
+    /// none of the other declared nodes is present. That is an UNINSTALLED package whose record
+    /// outlived its partition — not a partial install — and the re-created root is what the boot
+    /// pass's create-only access re-assert leaves on such a record. Never repaired unattended (a
+    /// reinstall would resurrect what an operator deleted); a lane that ASSERTS the package — the
+    /// boot baseline, a human's Install or Update click — heals it like <see cref="Incomplete"/>.
+    /// The remedy is the admin orphan list (remove the record) or a deliberate reinstall
+    /// (MeshWeaver#4812).
+    /// </summary>
+    TornDown,
 
     /// <summary>
     /// Nothing declares what should be here — no record at all, no file map on the record, or a file
@@ -1193,12 +1295,21 @@ public readonly record struct InstallCompletenessSummary(
     int NotObserved,
     int RootWithoutRecord)
 {
+    /// <summary>
+    /// Installs whose partition was deleted after the install and whose record survived
+    /// (<see cref="InstallCompletenessKind.TornDown"/>, MeshWeaver#4812). An init property rather
+    /// than a positional parameter so the constructor an older dependent was compiled against
+    /// keeps its shape.
+    /// </summary>
+    public int TornDown { get; init; }
+
     /// <summary>Every verdict counted.</summary>
-    public int Total => Complete + Incomplete + Undeclared + NotObserved + RootWithoutRecord;
+    public int Total => Complete + Incomplete + TornDown + Undeclared + NotObserved + RootWithoutRecord;
 
     /// <inheritdoc />
     public override string ToString() =>
         $"{Total} checked · {Complete} complete · {Incomplete} INCOMPLETE · "
+        + $"{TornDown} torn down (record outlived its partition) · "
         + $"{Undeclared} not declared · {NotObserved} not observed · "
         + $"{RootWithoutRecord} root(s) with no record";
 }

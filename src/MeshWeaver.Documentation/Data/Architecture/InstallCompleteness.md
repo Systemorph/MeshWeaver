@@ -318,6 +318,7 @@ the right question about the source), but the skip now requires a **positive obs
 |---|---|
 | `Complete` | skip — logged at Information with `{Present}/{Declared}` |
 | `Incomplete` | **do not skip.** The full install runs and heals it — `DecideAndWrite` writes whenever `current is null` — and the shortfall is named at **Error** with the missing paths |
+| `TornDown` | **do not skip** either — a lane that reaches this exit is *asserting* the package (the boot baseline, an environment flag, a human's Install or Update click), so a partition somebody deleted after the install is reinstalled in full, and the line says that is what happened. Only the boot repair pass treats this verdict differently (below) |
 | `Undeclared` / `NotObserved` | skip, as before, but logged at **Warning** saying completeness was NOT verified and why |
 
 The last row is deliberate and worth stating plainly. Reinstalling every unverifiable package on
@@ -338,13 +339,68 @@ already runs once per boot, fire-and-forget and failure-tolerant. It now finishe
     4 root(s) with no record (records scanned: 63; storage adapter: present)
 ```
 
-**It reports; it does not repair.** Healing belongs to the install lane, which now refuses to skip an
-incomplete package. A boot pass that silently reinstalled on a heuristic would be a worse failure
-than the one it names — the same discipline this service already applies to a
-[dangling install record](../PostgresSchemaArchitecture).
+**It reports, and it hands a *repairable* shortfall to the install lane** (MeshWeaver#4812). Healing
+still belongs to the install lane, which refuses to skip an incomplete package — but until #4812
+nothing made that lane RUN for the package. The funnel only runs for a package some lane visits:
+the platform baseline and the environment's flags on every boot, the operator's seed on its first
+boot, the update reconciler only when the module hash *moved* (an equal hash returns before the
+funnel), and a human's click. A package installed by hand from a source that has not changed since
+was visited by nothing, so the sweep's own line — "Reinstalling it now repairs it" — described a
+click nobody made, at Error, on every boot. Now the pass finishes by handing every `Incomplete`
+record that is repairable to `InstanceAutoRegistrationService.ReassertInstalled`: the boot
+install's own machinery (configured sources at their proven ref, the ownership holds, `RunAsSystem`,
+the declared-access re-assert) over an explicit set of installed packages, **sequenced after the
+default install's `Completed`** so two unattended passes never write one partition at once. It is
+a heal, never an update: a package is re-asserted only where the source still serves the module
+version its record carries, so the funnel can only skip or heal. A moved hash is an update and
+stays with the package's own policy (the reconciler applies `Auto`; a human's click applies the
+rest — both restore absent declared nodes as they go, #4259); a package no source lists any more
+cannot be re-fetched and is named as an orphan for the admin list.
+
+**Repairable means the install left a trace and part of it is gone.** Two shapes are deliberately
+not repaired by a boot pass, and each is named on its own line:
+
+- `TornDown` — see the next section. A reinstall would resurrect what an operator removed.
+- An `Incomplete` verdict with *nothing* declared present, not even the root — the install left no
+  trace: a deletion, a partition that is gone (the #3451 residue), or a read that answered nothing.
+  None of those is a loss to restore from a boot pass. A record with no module identity is not
+  repairable either: without one, "the source still serves what was installed" cannot be
+  established, and a re-fetch would land the source's current tip.
+
+A boot pass that reinstalled on a heuristic would still be a worse failure than the one it names —
+the same discipline this service applies to a
+[dangling install record](../PostgresSchemaArchitecture). What changed is that a positive
+observation of a live install missing part of itself is not a heuristic.
 
 **The denominator is printed.** A sweep that reports zero problems must say how many things it looked
 at, so "nothing is wrong" and "nothing was checked" cannot read the same line.
+
+### A record that outlived its partition — `TornDown`
+
+`Plugins/ClaimsDeepfield` on memex.meshweaver.cloud was installed 2026-08-27T19:48Z (83 declared
+nodes). The module was retired from its repository on 09-04 and the Space deleted on 09-05T09:03Z —
+ten days before the record-follows-partition handler (#3451) existed, so the record survived.
+Thirteen minutes later the boot pass re-asserted the record's declared access; that write is
+create-only and *created* the root and its `_Policy` (`createdBy: system-security`, 09:16:50Z).
+From then on the partition read as present, the #3451 gone-conjunction could never fire, and the
+sweep counted *82 of 83 declared node(s) are ABSENT — reinstalling it now repairs it* at Error on
+every boot: a recommendation to resurrect a retired module, folded into one incident for three
+weeks (MeshWeaver#4812).
+
+The count cannot tell that shape from a real loss. The stamps can: the partition **root is younger
+than the install that declared it**, and **nothing else the install wrote is there**. That is the
+`TornDown` verdict, computed purely in `InstallCompleteness.Compare` from the root's `createdDate`
+(read in the same batched `ReadMany`, whether or not the record declares the root) against the
+record's `installedAtUtc`. Both stamps have to be known; an unknown on either side leaves the
+ordinary `Incomplete`, which errs toward reporting a loss and never toward inventing a deletion. A
+young root with surviving content beside it (#638's lost-root-row shape) is `Incomplete` too — the
+install left a trace, so it is a loss.
+
+The sweep reports `TornDown` at **Warning** — the #3451 dangling-record level, one step on — with
+the remedy: remove the record from *Catalog → orphaned install records*, or install the package
+again deliberately. The boot repair pass never reinstalls it and never deletes the record. A lane
+that asserts the package (the install gate above) reinstalls it in full, because whoever deleted
+the partition, that caller wants the package installed.
 
 ## What this does NOT cover
 
@@ -368,6 +424,14 @@ Stated so nobody reads a green sweep as more than it is.
 - **The install's own postcondition.** The installer still does not read back what it wrote before
   stamping the record; the sweep catches it on the next boot instead. Closing that would move the
   check inside the install transaction and is a separate change.
+- **A package whose source moved since the install.** The boot repair pass heals only at the
+  recorded module version. Where the source now serves a newer build, the shortfall is named and
+  left to the package's update policy or a human's Update click — both of which restore absent
+  declared nodes (#4259). A `Notify` package that also lost nodes therefore stays short until
+  someone clicks, and the pass says so.
+- **Which of a partition's nodes an operator removed on purpose.** A live install missing part of
+  itself is re-asserted; a node deleted by hand inside an installed package comes back on the next
+  boot, exactly as it would for a baseline package. A deleted *partition* is `TornDown` and is not.
 - **A portal with very many partitions.** Every top-level node is a partition, and on a portal with
   many users that set is dominated by user roots this arm cannot be about. Above 2 000 unaccounted
   top-level partitions the abandoned-root arm **declines and says so** — one `NotObserved` line
