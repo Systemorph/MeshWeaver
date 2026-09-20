@@ -165,9 +165,14 @@ no longer entirely dark:
   which is the half a `search` sweep cannot reach.
 - **`bake-report` says whether the replica's bake was even measured**, and `nodetype_bake` (where
   armed) names every non-`Ok` type.
-- **What is still missing** is the per-TYPE, per-REPLICA answer for a type nothing has tried to read
-  yet: `content-types` records a degradation only once a read degrades, so a type nobody has opened on
-  this replica appears in neither list. For that, the boot log is still the only source.
+- **For a type nothing has tried to read yet**, `bake-report`'s `LIVE RECORD CENSUS` sentence
+  (#4632): `content-types` records a degradation only once a read degrades, and the rest of
+  `bake-report` is taken at boot, but this half is refolded from the NodeType catalog on every
+  emission and names — partition and framework identity, never the node — every record keyed to a
+  framework this replica does not run, with the ones **stamped after this replica booted** counted
+  apart (that is the mid-roll cross-stamp, and the only count that degrades the entry). See
+  [Compiled Against Another Platform](/Doc/Architecture/CompiledAgainstAnotherPlatform) → "The live
+  record census". *"NONE taken on this replica"* is its own printed sentence, not a clean one.
 
 ## The incident store: `Admin/_LogIncident`, and the three ways to misread it
 
