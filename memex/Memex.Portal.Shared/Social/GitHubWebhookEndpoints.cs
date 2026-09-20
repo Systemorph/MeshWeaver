@@ -83,10 +83,18 @@ public static class GitHubWebhookEndpoints
             }
             catch (BadHttpRequestException ex)
             {
+                // 🚨 ANSWER THE EXCEPTION'S OWN STATUS, never a fixed 400. Kestrel raises this same
+                // type with 413 when its MaxRequestBodySize is exceeded — so hard-coding 400 here
+                // would turn a server-limit breach into a bad-request, and the identical oversized
+                // delivery would then report 413 or 400 depending only on which limit noticed it
+                // first (this endpoint's own cap answers 413 a few lines below). That is precisely
+                // the conflation this change exists to remove, so the catch must not reintroduce it.
                 logger.LogDebug(ex,
-                    "GitHub webhook delivery ended before the declared body arrived — nothing to "
-                    + "verify. GitHub retries its own failed deliveries.");
-                return Results.StatusCode(StatusCodes.Status400BadRequest);
+                    "GitHub webhook body read failed with {Status}: {Reason}. At 400 the delivery "
+                    + "ended before the declared body arrived — nothing to verify, and GitHub "
+                    + "retries its own failed deliveries.",
+                    ex.StatusCode, ex.Message);
+                return Results.StatusCode(ex.StatusCode);
             }
 
             if (body is null)

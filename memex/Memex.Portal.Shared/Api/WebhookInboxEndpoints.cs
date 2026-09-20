@@ -69,10 +69,13 @@ public static class WebhookInboxEndpoints
         }
         catch (BadHttpRequestException ex)
         {
+            // 🚨 The exception's own status, not a fixed 400 — Kestrel reuses this type with 413 for
+            // its MaxRequestBodySize breach, and this endpoint answers 413 for its OWN cap both
+            // above and below. See the same catch in GitHubWebhookEndpoints.
             logger?.LogDebug(ex,
-                "Webhook delivery for target '{Target}' ended before the declared body arrived.",
-                target);
-            return Results.StatusCode(StatusCodes.Status400BadRequest);
+                "Webhook body read for target '{Target}' failed with {Status}: {Reason}.",
+                target, ex.StatusCode, ex.Message);
+            return Results.StatusCode(ex.StatusCode);
         }
 
         if (body is null)
