@@ -1350,6 +1350,45 @@ that build-id.
 upstream GC-hole fix, the family has now reproduced twice, and the second time on its most common frame,
 on a thread that runs no application code. The dump expires with its artifact on 2026-09-18.
 
+### 2026-09-20: sighting #17 — `10.0.12` again, in `gc_heap::make_unused_array+0xb2`, 0.2 s into the NEXT instance after a teardown the trace calls clean
+
+`MeshWeaver.Futu-1786.dmp` (MeshWeaver.Plugins run
+[`35521820182`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35521820182), job
+`106108380439`, `portal-hosts (network-133 · leg 2/8)`, on **`main`** at `62749d6a` — a push; the run
+that turned main red as Plugins #1785). Read on a Mac with the four-step ELF walk above; the minidump
+carries no `libcoreclr` text, so the instruction bytes are not in the core and the frame is named from
+the RVA alone.
+
+| | **#17** `MeshWeaver.Futu-1786.dmp` (pid 1786) |
+|---|---|
+| death | between 16:24:44.248Z (`TEST_START EuropeRe_KeyMetrics_ShouldHaveNonZeroData`, the first record of the new instance) and the createdump at ~16:24:45Z; a 1.17 GB core |
+| `si_signo` / `si_code` / `si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** |
+| **runtime / build-id** | **`10.0.12` / `79945f51fb2612f13b7667a10a8fd29122664791`** — the same binary as #15 and #16, read from the mapped `libcoreclr`'s own ELF note |
+| candidate `ucontext` (the one on the crashing thread's alternate stack, `TRAPNO=14`) | `RIP` = `libcoreclr+0x5b4a72` → **`WKS::gc_heap::make_unused_array(unsigned char*, unsigned long, int, int)+0xb2`**; `CR2 = 0xb`, `ERR = 0x0`; `RDX = 0`, `R13 = 0`, `RAX = 0x2020`, `RBX = 0x7fb6064ed6e8` (a heap address) |
+| crashing thread | tid 1876 (`createdump` prints `0754`, hex) — its `NT_PRSTATUS` `RIP` is in libc (the handler), as always |
+| `Unwind: exception type` | **zero** occurrences in the job log |
+| trace log | complete (**no** `FAULT-BUDGET` line); the previous instance's teardown reads `DISPOSE_DONE … teardown clean`, `DISPOSE_UNLOADS_COLLECTED … after 2 round(s)`, `alc=1`, 16:24:44.011Z — 237 ms before the new instance's first record |
+
+Two other `TRAPNO=14` blocks were found on the scan (`libcoreclr+0x68ffc8`, no containing function;
+`JIT_GetDynamicGCStaticBaseNoCtor_Portable+0x0`), both with garbage `ERR` values — stale frames, not
+the fault. **`make_unused_array` is the GC writing a free-object header over a dead range** — a new
+member of the family's frame set (`background_sweep`, `plan_phase`, `find_first_object`,
+`background_mark_simple1`, `GetCodeInfo`), and, as every time, it is the frame that TRIPS over a zeroed
+MethodTable word rather than the one that produced it. `CR2 = 0xb` is a byte-field offset off a zero
+base, the same shape as `0x0` (`m_dwFlags`) and `0x4` (`m_BaseSize`).
+
+**What the mesh's own accounting says about the maintainer's question ("something not part of the
+proper disposal stream?"):** by its counters, nothing — every pooled leaf joined, the async dispose
+queue drained, every retired context collected in two rounds, one ALC left. The crash lands in the
+FIRST second of the NEXT instance, which is exactly where the managed view of #11–#16 put the
+garbage of a disposed hub. So the question is not answered by the trace and cannot be answered by the
+native frame; it needs the managed census of this dump (ClrMD, in a container) — which objects in the
+`make_unused_array` range belonged to which hub, and whether any collectible context was still
+`Unloading` at 16:24:44.2Z despite `alc=1` (`AssemblyLoadContext.All` drops a context the moment
+`Unload()` is called, so `alc=1` does not exclude one). Not done in this sighting.
+
+Runtime tally: `10.0.12` is now **3** of the family's sightings (#15, #16, #17).
+
 ### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sightings #15 and #16 crashed ON `10.0.12`
 
 This entry records no new dump. It answers the question every reader of sightings #10/#11 eventually
