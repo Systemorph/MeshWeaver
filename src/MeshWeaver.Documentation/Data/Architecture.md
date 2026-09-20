@@ -111,6 +111,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [MeshNode Stream Cache](MeshNodeStreamCache)
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
+- [Expressing a Write](ExpressingAWrite) — the four shapes a mutation can take (C# lambda, JSON Patch + text splice, full entity, other), which context may use which, and the lowering that keeps the fold owner-side
 - [Data Access Patterns](DataAccessPatterns)
 - [Node Identity and Path Keying](NodeIdentityAndPathKeying) — `(namespace, id)` is the key and `path` is derived, so splitting a path positionally leaves the path identical while re-keying the node into a second row
 - [Workspace References](WorkspaceReferences)
