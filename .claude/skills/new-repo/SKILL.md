@@ -725,6 +725,62 @@ across `ci.yml`, run `scripts/check-platform-pins.py`, and read the digests back
 To re-measure without printing the PEM: vault `meshweaverkeyvault/github-app-privatekey` →
 `openssl dgst -sha256 -sign` → RS256 JWT → `curl -H "Authorization: Bearer …" /app`.
 
+## What a stand-up measured on 2026-09-20 (MeshWeaver.FundReporting) — read before the sections above
+
+The sections above were written from the fleet as it stood in late August; a private content repo
+stood up on 2026-09-20 hit these differences, each measured, none yet folded into the prose above:
+
+- **The lanes are called `@main` now, not by SHA.** Every adopted caller (Crm, SocialMedia,
+  Reinsurance) reads `uses: Systemorph/MeshWeaver/.github/workflows/node-repo-*.yml@main` with
+  `platform-ref: main` / `scripts-ref: main`, and the platform IMAGE is resolved at run time by
+  `preflight` (`resolve-platform.py`, the newest SEALED set) — `Nothing pins the platform` REFUSES a
+  pin coming back. §5's "pin every `uses:` to a 40-char SHA" describes the pre-2026-09-12 shape.
+  **Copy `MeshWeaver.Crm@main`'s `ci.yml`** (the newest content-only caller; SocialMedia's carries a
+  `src/` module lane you do not want).
+- **Core's fleet roster must name the repo, or `validate` is red on the first PR.** `node-repo-validate`
+  asserts a row for the calling repo in core's `.github/lane-caller-grants.yml` (`This repo's callers
+  still match the platform's fleet roster` → *"is not in Systemorph/MeshWeaver's
+  .github/lane-caller-grants.yml"*). Add the row — Crm's ten callers, same grants — in a core PR
+  BEFORE the first push (core #4975 is the shape). 🔒 Core is PUBLIC and the roster names the repo,
+  so **a client's repo gets a neutral name** (what it does, never whose it is); the client is named
+  only inside the repo.
+- **Four org inputs are `selected`-visibility and do NOT reach a new repo:** `CONTROL_WEBHOOK_SECRET`,
+  `CONTROL_WEBHOOK_URL`, `MW_RUNNER_GATE`, `MW_RUNNER_HEAVY`. Add the repo id:
+  `gh api -X PUT orgs/Systemorph/actions/secrets/CONTROL_WEBHOOK_SECRET/repositories/<repo_id>`
+  (and `…/actions/variables/<NAME>/repositories/<repo_id>` for the three variables). Preflight names
+  them, so this is a red, not a hole — but it is a step §10 did not list. The runner group is
+  `visibility: all`; both org Apps (`meshweaver-cloud`, `meshweaver-reader`) are installed on ALL
+  repos, so a new repo needs no install.
+- **The ACR scope map also needs `memex-portal-ai content/read`** (the gate pulls the PORTAL image as
+  the reference set since core #3022): `--repository mw-plugin-test content/read metadata/read
+  --repository memex-portal-ai content/read` — §10a lists only the tester.
+- **`meshweaver-cloud` now holds `workflows: write`** (and `issues: write`) — §13's "no `workflows`
+  permission" is history; verify with the App JWT → `GET /app` as §10a says.
+- **The OIDC identity `github-actions-bake` is at 14 of Azure's 20 federated-credential slots** after
+  this repo (two per repo). Three more repos fill it; plan the identity split before then.
+- **`validate-repos.py` walks EVERY top-level folder**, so a non-package folder (client reference
+  material, a transcription) must be in every script's `SKIP` set AND in
+  `scripts/gen-manifests.config.json` — being package-less (no `index.json`) keeps it out of the
+  manifest, the bake and the registry, but not out of the JSON-shape walk.
+- **The mesh gate reads the `Tests` area's rendered table**, so a CASE NAME containing ❌ counts as a
+  failure (`41/41 passed` and `tests=FAILED`). Never put a verdict glyph in a case name.
+- **Running the in-node tests locally on a Mac:** `run-node-tests.py` builds a console runner against
+  the image's (Linux, arm64) framework and dies at run with exit 134. Build it with `--keep`, then
+  execute the kept `bin/Debug/net10.0` INSIDE the tester image: `docker cp` it into a container of
+  the image, strip the `Microsoft.AspNetCore.App` entry from `NodeTests.runtimeconfig.json`, copy the
+  extracted refs' `Microsoft.AspNetCore.App/10.0.12/*.dll` beside it, delete `NodeTests.deps.json`,
+  `docker start -a`. The compile gate needs the three registry-served module assemblies
+  (`MeshWeaver.AI`, `MeshWeaver.Markdown.Collaboration`, `MeshWeaver.Maps`) beside the image's
+  `/app` — it REFUSES an `/app`-only set by design.
+- **A client-private repo is MOUNTED on the instances that should see it, never registered on the
+  public registry**: registration seeds `<Source>/*` for EVERY configured source to any instance on a
+  plan (`MeshWeaverInstanceService.PlanGrantEntries`), and there is no per-source private flag. The
+  mount is `pluginRepos[] {isRegistrySource: true}` on the instance's Deployment record (App-
+  authenticated, no per-source token; `SecretName` is never rendered), mirrored into the overlay
+  (`Record renders the overlay` reds otherwise), and the Store lists it because
+  `StoreManifestSource.Resolve` folds the deployment's configured GIT sources (Plugins #2192/#2194)
+  — the live Store node is system-synced and is never edited for this.
+
 ## The checklist
 
 Files and settings:
