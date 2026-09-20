@@ -1658,5 +1658,6 @@
   "ui.threadQueueStateQueued": "Queued",
   "ui.threadQueueStateWoken": "Woken",
   "ui.threadQueueStateRetried": "Relaunched",
+  "ui.threadQueueStateActionFailed": "Could not act",
   "ui.threadQueueStateFailed": "Failed"
 }

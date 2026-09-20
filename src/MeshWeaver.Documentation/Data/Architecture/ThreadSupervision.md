@@ -135,7 +135,9 @@ every silo bounds its own activations.
 page — `hub.IsGlobalAdmin()` — because it names threads of every partition): a
 `Controls.DataGrid` of one row per thread the pool is running or holding and one per thread the
 supervisor acted on, newest first, capped at 200 — thread, state (Running · Queued · Woken ·
-Relaunched · Failed), agent, model, started, last activity, retries, and the last failure verbatim
+Relaunched · Failed · **Could not act**, the last being a thread the sweep classified and could not
+write to, which counts no retry and is on the page rather than only in the log), agent, model,
+started, last activity, retries, and the last failure verbatim
 — plus the counts, the cap, when the last sweep ran and how many threads it examined, and the last
 sweep's fault if it had one. The pool's census is written on every change (coalesced to one write
 per two seconds); the supervisor's rows are written per sweep. Pinned end to end by
