@@ -393,16 +393,21 @@ changes about this procedure:
 - **The step-3 poll still applies to the PR's own run**, and after the queue lands it, to `main`'s.
   The queue is not a reason to stop watching; it is the reason the merge is no longer yours to press.
 
-## What's New entry (step 0.5) — one doc node per user-facing PR
+## What's New entry (step 0.5) — one doc node per RELEASE
 
-The platform's **What's New** feed is not a hand-maintained changelog: it's the set of per-entry
-markdown nodes under `src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition,
-so every self-updating deployment shows the same feed). The **What's New** settings tab lists them
+🚨 **A merge mints NO What's New file** (maintainer, 2026-09-20). This section said "one doc node per
+user-facing PR" until 2026-09-20 and contradicted step 0.5 above; the per-merge rule took the folder
+to 1,292 entries at ~20/day, which is a commit log rather than a changelog. What a merge owes is its
+**doc page** — see `conserve-work-products` in AGENTS.md and
+[Release Process §6](../../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseProcess.md).
+
+The platform's **What's New** feed is the set of per-entry markdown nodes under
+`src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition, so every
+self-updating deployment shows the same feed). The **What's New** settings tab lists them
 newest-first; each entry is a normal doc node you can open.
 
-- **One file per PR** (`<YYYY-MM-DD>-<slug>.md`) — the date prefix drives newest-first ordering, and
-  a distinct filename per PR means two concurrent PRs never conflict on the feed (the reason we do
-  NOT prepend to a single rolling file).
+- **One file per RELEASE** (`<YYYY-MM-DD>-<slug>.md`), written when the release is cut, named by the
+  SHIP DATE — it names what COMPLETED and links out to the doc page that explains each item.
 - **Front-matter**: `Name` (title shown in the list), `Category` — **`Feature` or `Fix`, nothing else**
   (`feat/ perf/ chore/ docs/` → `Feature`, rendered in full; `fix/` → `Fix`, bundled into the day's
   one-line summary) — `Description` (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`), and
