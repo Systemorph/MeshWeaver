@@ -130,6 +130,7 @@ written.
 | `whatsnew-cadence` | A What's New entry is written per RELEASE, not per change. A merge updates its doc page and mints no dated file. | in force | 2026-09-20 | maintainer |
 | `issue-taxonomy-scope` | Classification covers OPEN issues only. Closed issues are not classified, not counted, and appear in no query. | in force | 2026-09-20 | maintainer |
 | `release-blocker-gate` | A release may not be cut while any `sev:B` bug is open in any repo of the product. | in force | 2026-09-20 | maintainer |
+| `data-sync-approval` | Adding or widening the synchronisation of data needs a global admin's approval, through a governed activity. | in force | 2026-09-20 | maintainer |
 | `version-shapes` | Exactly two version shapes: `X.Y.Z-ci.<n>` and clean `X.Y.Z`. No rc, preview or labelled line is ever minted. | in force | 2026-09-07 | maintainer |
 
 Cited by: [Release Process](../ReleaseProcess) ·
