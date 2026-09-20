@@ -1,10 +1,11 @@
 namespace MeshWeaver.Messaging;
 
 /// <summary>
-/// 🚨 <b>The seam that lets a RECYCLE say goodbye.</b> A higher layer hangs this on a hub
-/// (<c>hub.Set(new RecycleAnnouncement(...))</c>) to be handed the ONE turn a recycled hub still
-/// has while it is whole: the turn in which its routed <see cref="DisposeRequest"/> is handled,
-/// BEFORE <c>Dispose()</c> begins.
+/// 🚨 <b>The seam that lets a hub whose address is COMING BACK say goodbye.</b> A higher layer
+/// hangs this on a hub (<c>hub.Set(new RecycleAnnouncement(...))</c>) to be handed the ONE moment
+/// a hub still has while it is whole: the first statement of its own <c>Dispose()</c>, before
+/// <c>IsDisposing</c> flips — reached from a routed <see cref="DisposeRequest"/>'s handler AND from
+/// a direct <c>Dispose()</c> such as an Orleans grain deactivation (#3986).
 ///
 /// <para><b>Why the hub cannot do this itself, and why the moment matters.</b> A hub's own
 /// teardown callbacks run in the ShutDown phase, by which time it can no longer speak for itself —
@@ -18,18 +19,25 @@ namespace MeshWeaver.Messaging;
 /// <c>NodeTypeEnrichmentHelpers.WithOverlaySelfHeal</c> recycled the instance hub underneath it).
 /// </para>
 ///
-/// <para><b>The contract.</b> <see cref="Announce"/> is invoked SYNCHRONOUSLY on the hub's own
-/// action block, once, only for a message-routed recycle (never for an ancestor's teardown
-/// cascade, where the address is not coming back), and only while the hub is still
-/// <c>Started</c>. It must not block and must not throw — the hub logs and continues either way,
-/// because a recycle that cannot announce must still recycle. Implementations are expected to
+/// <para><b>The contract.</b> <see cref="Announce"/> is invoked SYNCHRONOUSLY, at most ONCE per
+/// hub, by whichever thread STARTS that hub's own teardown, and never when an ancestor's cascade
+/// has already frozen the subtree (there the address is not coming back). 🚨 <b>That thread is
+/// NOT necessarily the hub's action block</b>: a routed <see cref="DisposeRequest"/> reaches it on
+/// the hub's own turn, but <c>MessageHubGrain.OnDeactivateAsync</c> and a <c>using</c> call
+/// <c>Dispose()</c> from wherever they run. Until #3986 this was keyed on the routed request alone,
+/// which left a DEACTIVATING owner telling its live subscribers nothing. So an implementation must
+/// be THREAD-SAFE and must not assume a hub turn: read only state that is safe to read concurrently
+/// (the one real implementation snapshots a <c>ConcurrentDictionary</c> and resolves a parent hub).
+/// It must not block and must not throw — the hub logs and continues either way, because a
+/// teardown that cannot announce must still tear down. Implementations are expected to
 /// CAPTURE what they need in that turn and defer the actual delivery to a carrier that outlives
 /// the teardown (see <c>Workspace.AnnounceRecycleToClientSubscriptions</c>, which posts through
 /// the parent hub once <c>DisposalCompleted</c> has fired, so the re-ask it triggers lands on a
 /// fresh activation instead of racing the dying one).</para>
 /// </summary>
 /// <param name="Announce">
-/// Invoked on the recycled hub's own turn, before its disposal starts. Fire-and-forget: it may
-/// arrange later work, but must return promptly.
+/// Invoked by the thread that starts the hub's own teardown, before its disposal starts — the
+/// hub's turn for a routed request, the caller's thread for a direct <c>Dispose()</c>.
+/// Fire-and-forget and thread-safe: it may arrange later work, but must return promptly.
 /// </param>
 public sealed record RecycleAnnouncement(Action Announce);
