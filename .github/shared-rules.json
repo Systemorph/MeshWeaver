@@ -17,7 +17,6 @@
     "spokes land their copies; (3) core widens `required-in` to every repo. SharedRuleBlocks.md",
     "says why; never-hand-roll-ui (2026-09-15) is the worked example."
   ],
-
   "marker-syntax": {
     "block": "<!-- shared-rule:begin <id> -->  …  <!-- shared-rule:end <id> -->",
     "slot": "<!--slot:<name>--> … <!--/slot-->",
@@ -41,7 +40,6 @@
       "reader CAN see — wording, punctuation, emphasis, links, emoji — is compared exactly."
     ]
   },
-
   "repos": [
     "Systemorph/MeshWeaver",
     "Systemorph/MeshWeaver.Plugins",
@@ -51,7 +49,6 @@
     "Systemorph/MeshWeaver.Manufacturing",
     "Systemorph/Memex"
   ],
-
   "hubs-note": [
     "There are TWO hubs, and which one is authoritative depends on the KIND of rule. This is not",
     "a proposal — it is what the seven files already say about themselves (measured 2026-08-30):",
@@ -77,7 +74,6 @@
     "home): those need a maintainer decision, and until it is made, 'they must not diverge further'",
     "is a claim the gate can hold and the maintainer has not had to make."
   ],
-
   "blocks": [
     {
       "id": "rest-not-graphql",
@@ -130,7 +126,10 @@
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex"
       ],
-      "slots": ["doc-home", "reach"],
+      "slots": [
+        "doc-home",
+        "reach"
+      ],
       "why": [
         "The maintainer directive of 2026-08-30, hand-carried into all seven repos as core#2732,",
         "Plugins#954, Education#236, Reinsurance#122, SocialMedia#111, Manufacturing#34 and",
@@ -183,7 +182,9 @@
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex"
       ],
-      "slots": ["reference"],
+      "slots": [
+        "reference"
+      ],
       "why": [
         "Maintainer directive, 2026-09-17, verbatim across three messages: 'the grain keeps serving",
         "old state until we send dispose request' / 'write this prominently in all repos' / 'in pull",
@@ -229,7 +230,9 @@
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex"
       ],
-      "slots": ["reference"],
+      "slots": [
+        "reference"
+      ],
       "why": [
         "Maintainer directive, 2026-09-15: 'please refactor to use platform layout. see also in all the",
         "Agents.md that we make clear to always use this and not create own ui frameworks'. The occasion",
@@ -251,6 +254,28 @@
         "",
         "Landed: step 1 core#4412; step 2 Plugins#1916, Education#337, Reinsurance#211,",
         "SocialMedia#190, Manufacturing#91, Memex#363; step 3 this entry's widening."
+      ]
+    },
+    {
+      "id": "file-it-and-move-on",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver"
+      ],
+      "slots": [],
+      "why": [
+        "Maintainer directive, 2026-09-20: 'we want to generally register an issue whenever the task",
+        "at hand is not strictly relevant for what we are doing — file issue and move on.'",
+        "",
+        "Registered with required-in naming the HUB ONLY — step 1 of the three-change-set rollout this",
+        "register's header describes. The spokes land their copies next; required-in widens last.",
+        "",
+        "No slots: the rule reads identically everywhere. Where a finding's issue GOES is repo-specific,",
+        "but that is stated as a principle (the repo that owns the code) rather than as a per-repo",
+        "value, so it needs no slot — unlike conserve-work-products, whose doc-home genuinely differs.",
+        "",
+        "The full rule lives in Doc/Architecture/IncidentalFindings; this block is the imperative half,",
+        "per the AGENTS.md doctrine that the file carries rules and the evidence lives in the docs."
       ]
     }
   ]
