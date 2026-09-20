@@ -25,7 +25,7 @@ it, not before.
 
 ## Git Workflow
 
-**When the task's goal is reached, automatically follow the [`pullrequest` skill](.claude/skills/pullrequest/SKILL.md)** — What's New entry (`Category: Fix` for a bug fix a user can notice, `Category: Feature` otherwise — fixes are the entries that go missing), commit, push, open the PR, wait for green CI, merge. "Goal reached" means implemented, verified, and the touched projects build clean with CI's flags; don't stop to ask permission at that point. Everything short of that stays manual: never commit or push half-done or unverified work, and **never merge with CI red or pending**.
+**When the task's goal is reached, automatically follow the [`pullrequest` skill](.claude/skills/pullrequest/SKILL.md)** — update the DOC PAGE your change belongs to (a merge mints **no** What's New file; that is written per RELEASE — policy `whatsnew-cadence`), commit, push, open the PR, wait for green CI, merge. "Goal reached" means implemented, verified, and the touched projects build clean with CI's flags; don't stop to ask permission at that point. Everything short of that stays manual: never commit or push half-done or unverified work, and **never merge with CI red or pending**.
 
 ### 🚨🚨🚨 ABSOLUTE: NEVER work on the primary checkout — it stays on `main`, untouched. EVERYONE creates a worktree.
 

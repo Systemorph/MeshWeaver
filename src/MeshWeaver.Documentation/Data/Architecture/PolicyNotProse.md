@@ -35,12 +35,13 @@ a grep and a guess. A register answers it in one read.
 
 ## The shape
 
-A policy is a record with four fields and a link:
+A policy is a record with five fields and a link:
 
 | field | what it is |
 |---|---|
 | **id** | a stable slug — what other pages cite |
 | **value** | the decision itself, in as few words as carry it |
+| **status** | `in force`, or `proposed` when it was cited before it existed — the field the self-healing step below turns on |
 | **in force since** | the date it started applying |
 | **set by** | the role or identity that set it — *a role where one exists* |
 
@@ -129,12 +130,19 @@ written.
 |---|---|---|---|---|
 | `whatsnew-cadence` | A What's New entry is written per RELEASE, not per change. A merge updates its doc page and mints no dated file. | in force | 2026-09-20 | maintainer |
 | `issue-taxonomy-scope` | Classification covers OPEN issues only. Closed issues are not classified, not counted, and appear in no query. | in force | 2026-09-20 | maintainer |
-| `release-blocker-gate` | A release may not be cut while any `sev:B` bug is open in any repo of the product. | in force | 2026-09-20 | maintainer |
-| `data-sync-approval` | Adding or widening the synchronisation of data needs a global admin's approval, through a governed activity. | in force | 2026-09-20 | maintainer |
+| `release-blocker-gate` | A release may not be cut while any `sev:B` bug is open in the seven repositories that carry the taxonomy. | **proposed** — nothing enforces it; the `release.cut` standard is owed (MeshWeaver.Plugins#2182) | — | maintainer |
+| `data-sync-approval` | Adding or widening the synchronisation of data needs a global admin's approval. | in force | 2026-09-20 | maintainer |
 | `version-shapes` | Exactly two version shapes: `X.Y.Z-ci.<n>` and clean `X.Y.Z`. No rc, preview or labelled line is ever minted. | in force | 2026-09-07 | maintainer |
 
 Cited by: [Release Process](../ReleaseProcess) ·
-[Issue Taxonomy and the Release Readiness Gate](../IssueTaxonomy).
+[Issue Taxonomy and the Release Readiness Gate](../IssueTaxonomy) ·
+[Adding a Data Sync Needs a Global Admin](../DataSyncApproval).
+
+> 🚨 **A `proposed` row is not a weaker `in force` — it is an honest one.** The first version of this
+> register listed `release-blocker-gate` as `in force` on the day it was written, when nothing
+> enforced it and the standard that would was still in an unmerged pull request. That is the precise
+> failure this page exists to prevent, committed in the page that defines the rule. If a row's
+> mechanism does not exist yet, the row says `proposed` and names what is owed.
 
 > Adding a policy here is cheap and reversing one is cheap. That is the point: a register entry can
 > be changed in one place and every citation follows, which is exactly what a sentence copied into

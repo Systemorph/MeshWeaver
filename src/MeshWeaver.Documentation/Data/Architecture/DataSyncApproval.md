@@ -60,10 +60,25 @@ then it catches nothing.
 
 ## How approval is obtained
 
-Through a governed activity, because that is the mechanism that already carries the properties this
-needs: the approval is **bound to a content hash**, so changing the scope after approval lapses the
-signature; the signer must be a **global admin**; the **proposer may not sign**; and the whole thing
-leaves an auditable trail naming what was approved and when.
+Through a governed activity, because it carries two properties this needs and one it must be told:
+
+- **The approval binds to a content hash.** Change the scope after approval and the signature lapses
+  and the gate returns to `Pending` naming the mismatch. You cannot approve one scope and configure
+  another.
+- **The proposer may not sign their own proposal** — with one coded carve-out: the standard's named
+  `Maintainer` may, which is the single-admin exception. A standard for this must therefore either
+  name no maintainer, or name one deliberately.
+- 🚨 **"Global admin" is NOT a property of the mechanism.** Signing is gated by the standard's own
+  `Authority.Signers` list, which can be anything — including `"*"`, which admits any signed-in
+  identity, agents included. Restricting this to global admins is something the standard must
+  **declare**; nothing in the activity machinery does it for you, and a standard that leaves
+  `signers` open has the audit trail without the control.
+
+> ⚠️ **The standard for this is owed, not shipped.** There is no `sync.add` in `Governance/Standards`
+> today, and the mesh's own `propose-activity` skill is explicit that when no standard fits you do
+> not invent one inline — you file the gap. So until it exists, obtain the global admin's approval by
+> whatever route is auditable and record it on the change; do not block a pull request on a mechanism
+> that cannot yet be walked.
 
 The proposer does not need — and must not be given — the rights to create the sync. That is the
 point of proposing: *"you want something DONE that you are not allowed to do yourself. You do not do
@@ -80,6 +95,10 @@ A diff that configures synchronisation without a referenced approval is a findin
 the few that **does** block — unlike most findings, which are filed and carried past. The reason for
 the difference is the same asymmetry as above: a defect that ships can be fixed afterwards, whereas
 data that has been copied somewhere cannot be un-copied.
+
+What blocks is the **absence of an approval**, not the absence of a governed activity. Until
+`sync.add` exists, a recorded global-admin approval on the change satisfies this; demanding the
+activity would block work on a mechanism nobody can use yet.
 
 See [Policy Not Prose](../PolicyNotProse) for the register, and
 [Access Control Architecture](../AccessControl) for what a grant is and is not.

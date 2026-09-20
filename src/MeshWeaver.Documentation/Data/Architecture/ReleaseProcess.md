@@ -419,8 +419,9 @@ doc page** that explains it. The explanation lives in the doc; What's New is the
 ### Why this changed
 
 Under the previous rule — *add a What's New entry when user-facing* — the folder reached **1,292
-entries**: 662 in August 2026 and 590 in September, about twenty a day. At that rate it is not a
-changelog, it is the commit log with nicer titles. Nobody reads twenty entries a day, so the effort
+entries** in under three months: 40 in July 2026, 662 in August (≈21/day) and 590 over the first 20
+days of September (≈30/day). At that rate it is not a changelog, it is the commit log with nicer
+titles. Nobody reads twenty entries a day, so the effort
 of writing them was wasted twice over: once in the writing, and again because the one entry that
 mattered was buried among nineteen that did not.
 
@@ -440,9 +441,11 @@ entry is individually defensible and the aggregate is unusable.
 
 ### What replaces the per-change note
 
-Nothing is lost, because the durable form never was the What's New entry —
-[conserve work products](/Doc/Architecture/AuthoringDocumentation) already requires the **doc page**
-in the same change set. A merge that changes behaviour updates its doc page, as before. What it no
+Nothing is lost, because the durable form never was the What's New entry — the
+`conserve-work-products` rule in `AGENTS.md` (described in
+[Shared Rule Blocks](/Doc/Architecture/SharedRuleBlocks)) already requires the **doc page** in the
+same change set. For how to write that page, see
+[Authoring Documentation](/Doc/Architecture/AuthoringDocumentation). A merge that changes behaviour updates its doc page, as before. What it no
 longer does is mint a dated file nobody will open.
 
 > The existing 1,292 entries are history and stay where they are. This rule governs what is written
