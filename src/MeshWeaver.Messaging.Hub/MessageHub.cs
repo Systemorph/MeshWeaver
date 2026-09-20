@@ -2570,6 +2570,15 @@ public sealed class MessageHub : IMessageHub
 
     public void Dispose()
     {
+        // 🚨 THE GOODBYE GOES HERE, NOT ON THE ROUTED REQUEST (#3986) — and the difference is an
+        // ORLEANS DEACTIVATION.
+        //
+        // This is the FIRST statement of the teardown, so it runs while the hub is whole: IsDisposing
+        // is still false, the workspace's client-subscription registry is intact, and the carrier that
+        // will deliver after DisposalCompleted is still resolvable. Nothing here posts — see
+        // Workspace.AnnounceRecycleToClientSubscriptions.
+        AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt();
+
         var totalStopwatch = Stopwatch.StartNew();
         lock (locker)
         {
@@ -4239,19 +4248,24 @@ public sealed class MessageHub : IMessageHub
         // its last frame (the compile-progress overlay) until the page was reloaded. On a
         // framework-identity bump that is every instance hub in the fleet at once.
         //
-        // Hence: announce FIRST, on this turn, while the hub is whole — the workspace's client
-        // subscription registry is intact and the parent hub is resolvable. The announcement
-        // implementation captures what it needs now and delivers AFTER DisposalCompleted through a
-        // carrier that outlives this hub, so nothing is posted from a dying hub and no re-ask races
-        // the teardown it is a response to.
+        // Hence: announce FIRST, while the hub is whole — the workspace's client subscription
+        // registry is intact and the parent hub is resolvable. The announcement implementation
+        // captures what it needs now and delivers AFTER DisposalCompleted through a carrier that
+        // outlives this hub, so nothing is posted from a dying hub and no re-ask races the teardown
+        // it is a response to.
         //
-        // NOT for an ancestor's cascade (IsShuttingDown is already true because CloseCreation has
-        // frozen this subtree): there the address is NOT coming back, telling subscribers to re-ask
-        // is exactly the resurrection the suppression above exists to prevent, and the carrier
-        // (our parent) is going down with us.
-        // 🚨 Read ONCE. The same fact answers two questions — may this recycle announce itself, and
-        // is this request the CAUSE of the teardown — and two reads of a flag another thread can
-        // flip would let them disagree.
+        // 🚨 …and the announcement is NOT made here (#3986). It is made at the top of
+        // <see cref="Dispose()"/> — see AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt — because
+        // "a routed DisposeRequest" is the wrong discriminator for "this address is coming back".
+        // Orleans DEACTIVATION is a direct Dispose() of an address that IS coming back, and it is
+        // the largest single source of direct Dispose() in the mesh (MessageHubGrain.OnDeactivateAsync,
+        // #4888): keyed on the routed request, a deactivating owner told its live subscribers
+        // NOTHING. HandleDispose still ends in Dispose(), on this same turn and with the hub still
+        // whole, so the routed recycle announces exactly as before.
+        //
+        // 🚨 Read ONCE. The same fact answers two questions — may this recycle cascade, and is this
+        // request the CAUSE of the teardown — and two reads of a flag another thread can flip would
+        // let them disagree.
         var startsTheTeardown = !IsShuttingDown;
 
         // The dependency network first, while this hub is still whole enough to compute it: the
@@ -4259,9 +4273,6 @@ public sealed class MessageHub : IMessageHub
         // cascade never fans out again (RecycleCascade / DisposeRequest.CascadedFrom).
         if (startsTheTeardown && request.Message.CascadedFrom is null)
             CascadeRecycle(request.Message);
-
-        if (startsTheTeardown)
-            AnnounceRecycle();
 
         // Recorded BEFORE Dispose(), because Dispose() is what logs [QUIESCE-START] (#3510). Set
         // here rather than at the top of the handler so it means what it says: this request was
@@ -4345,6 +4356,63 @@ public sealed class MessageHub : IMessageHub
                 Address);
         }
     }
+
+    /// <summary>
+    /// Gives this hub's live subscribers their ONE goodbye, when this teardown is this hub's OWN —
+    /// the <see cref="RecycleAnnouncement"/> seam, keyed on the fact that actually decides whether
+    /// telling them to re-ask is right (issue #3986).
+    ///
+    /// <para>🚨 <b>"Routed <c>DisposeRequest</c>" was the wrong discriminator, and the route it
+    /// missed is the commonest one there is.</b> The seam was introduced for the automatic recycles
+    /// (#2533 / #2551) and hung on <see cref="HandleDispose"/>, on the stated reasoning that a routed
+    /// request means "the address is coming back" while a direct <c>Dispose()</c> means "the whole
+    /// tree is going down". The second half is false for <c>MessageHubGrain.OnDeactivateAsync</c> —
+    /// which this codebase calls "the largest single source of direct <c>Dispose()</c> in the mesh"
+    /// (#4888) — where the address IS coming back (Orleans reactivates it on the next message) and the
+    /// subscribers are NOT going down with it: they are live mirrors in other hubs, other circuits,
+    /// other pods. So an owner grain that deactivated told nobody, and because
+    /// <c>JsonSynchronizationStream</c>'s per-stream <c>StreamEndedEvent</c> is deliberately
+    /// suppressed once the owning hub is disposing, nothing else spoke either. The subscriber kept
+    /// replaying its last snapshot — the page still rendered — and every user action it sent
+    /// afterwards was refused "NO sync hub for this stream was EVER registered on the current
+    /// activation" and thrown away. Measured in production on memex-cloud 2026-09-18: four clicks on
+    /// <c>Catalog/Categories/Cat-Education</c> from ONE still-live sender over twelve seconds, all
+    /// refused (issue #3986, occurrences 5–8).</para>
+    ///
+    /// <para><b>The fact that actually decides it is whether a CARRIER OUTLIVES US</b>, and it is
+    /// answered in two independent places, neither of them a guess:</para>
+    /// <list type="bullet">
+    ///   <item><description>HERE: <see cref="IsShuttingDown"/> is already true when an ANCESTOR is
+    ///     taking us with it — <c>HostedHubsCollection.CloseCreation</c> freezes the whole subtree
+    ///     the instant the ancestor's own <c>Dispose()</c> starts, strictly before it disposes its
+    ///     children. Then the carrier (our parent) is going down too, the address is NOT coming
+    ///     back, and telling subscribers to re-ask is exactly the resurrection
+    ///     <c>JsonSynchronizationStream</c>'s suppression exists to prevent. Silent, as before.</description></item>
+    ///   <item><description>In the announcement itself: <c>Workspace.AnnounceRecycleToClientSubscriptions</c>
+    ///     resolves a non-router carrier that outlives this hub and returns without posting when
+    ///     there is none — which is what keeps a ROOT hub's host teardown silent (its parent
+    ///     resolves to itself) without this method having to know about hosts at all.</description></item>
+    /// </list>
+    ///
+    /// <para>Exactly ONE goodbye per hub: more than one multiplies the bounded re-ask a subscriber
+    /// answers with (<c>JsonSynchronizationStream</c>'s recycle re-arm), and the routed path reaches
+    /// this through <see cref="HandleDispose"/>'s own call to <see cref="Dispose"/>, on the same turn
+    /// it used to announce from.</para>
+    /// </summary>
+    private void AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt()
+    {
+        if (IsShuttingDown)
+            return;
+        // One-shot against two concurrent Dispose() callers: both can read IsShuttingDown as false
+        // before either sets disposalStarted, and the idempotency guard inside Dispose() is taken
+        // after this point.
+        if (Interlocked.Exchange(ref recycleAnnounced, 1) != 0)
+            return;
+        AnnounceRecycle();
+    }
+
+    /// <summary>0 until this hub's one recycle announcement has been handed its turn.</summary>
+    private int recycleAnnounced;
 
     private void AnnounceRecycle()
     {
