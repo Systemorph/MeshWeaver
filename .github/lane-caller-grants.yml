@@ -349,6 +349,51 @@ repos:
         lane: node-repo-validate.yml
         grants: inherit
 
+  # ── MeshWeaver.FundReporting (private content repo; stood up 2026-09-20 from Crm's caller) ─────
+  Systemorph/MeshWeaver.FundReporting:
+    asserted-by: node-repo-validate
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: compile-check
+        lane: node-repo-compile-check.yml
+        grants: inherit
+      - workflow: ci.yml
+        job: publish-bake
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: supersede
+        lane: node-repo-supersede.yml
+        grants: {actions: write, contents: read}
+      - workflow: ci.yml
+        job: tag-modules
+        lane: node-repo-tag-modules.yml
+        grants: {contents: write}
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write, actions: read}
+      - workflow: resolve-generated-conflicts.yml
+        job: resolve
+        lane: node-repo-resolve-locks.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: ci-failure
+        lane: node-repo-ci-failure.yml
+        grants: {contents: read, issues: write, actions: read}
+      - workflow: ci.yml
+        job: ci-green
+        lane: node-repo-ci-failure.yml
+        grants: {contents: read, issues: write, actions: read}
+      - workflow: ci.yml
+        job: validate
+        lane: node-repo-validate.yml
+        grants: inherit
+
   # ── Systemorph/Memex (the private deployment-config repository) ───────────────────────────────
   # 🚨 THE ONE ROW NOTHING RE-MEASURES, AND IT SAYS SO. Memex calls exactly one platform lane —
   # `auto-arm.yml`, whose demand is WORKFLOW-level — and it does NOT call `node-repo-validate.yml`,
