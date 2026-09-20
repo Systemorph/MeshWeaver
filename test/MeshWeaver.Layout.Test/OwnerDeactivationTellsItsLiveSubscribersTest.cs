@@ -107,10 +107,27 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
                 return Task.CompletedTask;
             }), "Button");
 
+    /// <summary>
+    /// When set, the carrier starts going down the instant AFTER the announcement has chosen it —
+    /// the interleaving in which the "is an ancestor taking us with it?" read at the top of
+    /// <c>Dispose()</c> is already stale by the time the goodbye is due. Instance state, read lazily
+    /// by the carrier lambda, so a test sets it before disposing the owner.
+    /// </summary>
+    private volatile bool carrierGoesDownOnceChosen;
+
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
         => base.ConfigureMesh(conf)
-            .Set(new RouterCarrier(router => router.GetHostedHub(CarrierAddress, c => c)));
+            .Set(new RouterCarrier(router =>
+            {
+                var carrier = router.GetHostedHub(CarrierAddress, c => c);
+                // Dispose() flips IsShuttingDown synchronously, so by construction the carrier is
+                // healthy when it is RESOLVED and shutting down when the goodbye is DELIVERED —
+                // no race, no wait.
+                if (carrierGoesDownOnceChosen)
+                    carrier?.Dispose();
+                return carrier;
+            }));
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -200,6 +217,45 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
             "and an action that RAN must produce no refusal line at all — the owner held it for the "
             + "registration grace and found a live handler, which is the whole difference between a "
             + "recovered mirror and a stranded one");
+    }
+
+    /// <summary>
+    /// 🚨 The interleaving the announce-time guard cannot see (PR #4974 review): the subtree is
+    /// frozen AFTER the owner read <c>IsShuttingDown</c> and BEFORE its goodbye is due. The guard's
+    /// answer is final only at DELIVERY, so <c>Workspace</c> asks the carrier again there — a carrier
+    /// that is itself shutting down means the tree is going, and the goodbye is declined.
+    ///
+    /// <para>Made deterministic rather than raced: the carrier is healthy when the announcement
+    /// RESOLVES it and is disposed in that same call, so it is shutting down by construction when
+    /// the owner's <c>DisposalCompleted</c> fires. The assertion reads the decision itself — the
+    /// line exists only on the declining arm.</para>
+    /// </summary>
+    [HubFact]
+    public async Task AGoodbyeIsDeclinedWhenItsCarrierStartedGoingDownAfterItWasChosen()
+    {
+        var client = GetClient();
+        var owner = GetHost();
+
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), new LayoutAreaReference(Area));
+        await stream.GetControlStream(ButtonArea).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is not null,
+                "there has to be a live client subscription for the owner to have anyone to tell");
+
+        carrierGoesDownOnceChosen = true;
+        owner.Dispose();
+        await owner.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "the goodbye is decided off the owner's own completion signal");
+
+        await logRecords
+            .Where(r => r.Message.Contains("is itself shutting down", StringComparison.Ordinal)
+                        && r.Message.Contains(CarrierAddress.ToString(), StringComparison.Ordinal))
+            .Select(r => r.Message)
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "a carrier that began shutting down between being chosen and the goodbye falling due "
+                + "means the tree is going — announcing then tells a subscriber to re-ask for an "
+                + "address that is not coming back, which is the resurrection the teardown silence "
+                + "exists to prevent");
     }
 
     /// <summary>Every <c>REFUSING …</c> line the owner wrote about <paramref name="streamId"/>.</summary>

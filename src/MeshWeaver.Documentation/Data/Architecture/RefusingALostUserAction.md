@@ -652,6 +652,19 @@ answered in two independent places, neither a guess:
   resolves one and returns without posting when there is none — which is what keeps a ROOT hub's host
   teardown silent (its parent resolves to itself) without `MessageHub` knowing about hosts.
 
+🚨 **The first question is asked TWICE, because its answer is only final at delivery.** The read at
+the top of `Dispose()` is unsynchronized with an ancestor's `CloseCreation` on another thread — a
+window that existed unchanged when the read sat on `HandleDispose`. Closing it with a lock would mean
+holding one across hubs around a callback. It needs none: `Workspace`'s deferred `Announce()` asks the
+CARRIER `IsShuttingDown` when the owner's `DisposalCompleted` fires. A cascade that raced the first
+read has by then frozen the carrier too — it is this hub's parent, or a sibling under the same router
+— so a shutting-down carrier means the tree is going, and the goodbye is declined.
+
+🚨 **The seam's contract changed with it** (`RecycleAnnouncement`): `Announce` is invoked by whichever
+thread STARTS the hub's own teardown — the hub's turn for a routed request, the caller's thread for a
+direct `Dispose()` — so an implementation must be thread-safe and must not assume a hub turn. The one
+real implementation already was: it snapshots a `ConcurrentDictionary` and resolves a parent hub.
+
 Nothing new waits, nothing is timed, nothing polls and nothing retries. The announcement was already
 event-driven off `DisposalCompleted`; only the event it hangs from moved.
 
@@ -663,6 +676,7 @@ event-driven off `DisposalCompleted`; only the event it hangs from moved.
 | `RecycleAnnouncementTest.AnAncestorsCascadeDoesNotAnnounce` | Messaging.Hub.Test | a child an ancestor is disposing stays SILENT — the whole-tree teardown the old expectation was really about |
 | `RecycleAnnouncementTest.RoutedDisposeRequest_Announces_Once_AndBeforeTheTeardownStarts` | Messaging.Hub.Test | unchanged, and now also the control on WHERE the announcement is made: `HandleDispose` ends in `Dispose()`, so two call sites would double every routed recycle's goodbye |
 | `OwnerDeactivationTellsItsLiveSubscribersTest.AClickAfterItsOwnerDeactivatedStillRuns` | Layout.Test | the whole chain — live mirror → owner deactivates → subscriber told → mirror re-hydrates on the NEW activation → the click RUNS, with no refusal line |
+| `OwnerDeactivationTellsItsLiveSubscribersTest.AGoodbyeIsDeclinedWhenItsCarrierStartedGoingDownAfterItWasChosen` | Layout.Test | the stale-read interleaving, made deterministic: the carrier is healthy when RESOLVED and disposed in that same call, so it is shutting down by construction at delivery — the goodbye is declined. Falsified by disabling the delivery-time check: RED, while the click test stays green |
 
 The end-to-end fixture is the production shape rather than a simulation: `host/1` is reached through
 `RouteAddressToHostedHub` with `HostedHubCreation.Always`, so disposing it and then addressing it again
