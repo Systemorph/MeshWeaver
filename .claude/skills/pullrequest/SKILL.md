@@ -401,14 +401,15 @@ changes about this procedure:
 > writing the entry for a **release**. Everything below is about *how* to write one, never *whether*
 > to. (This heading used to read "one doc node per user-facing PR"; that rule is retired.)
 
-The platform's **What's New** feed is not a hand-maintained changelog: it's the set of per-entry
-markdown nodes under `src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition,
-so every self-updating deployment shows the same feed). The **What's New** settings tab lists them
+The platform's **What's New** feed is the set of per-entry markdown nodes under
+`src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition, so every
+self-updating deployment shows the same feed). The **What's New** settings tab lists them
 newest-first; each entry is a normal doc node you can open.
 
-- **The filename MUST start with the ISO date** (`<YYYY-MM-DD>-<slug>.md`) — `WhatsNewEntryIntegrityTest`
-  enforces `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES `Order` from it, so a version-prefixed name
-  is rejected from the feed. The version belongs in `Name`/`Description`, never in the filename.
+- **One file per RELEASE** (`<YYYY-MM-DD>-<slug>.md`), written when the release is cut, named by the
+  SHIP DATE — `WhatsNewEntryIntegrityTest` enforces `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES
+  `Order` from it, so a version-prefixed name is rejected from the feed. The version belongs in
+  `Name`/`Description`, never in the filename.
 - **Front-matter**: `Name` (title shown in the list), `Category` — **`Feature` or `Fix`, nothing else**
   (`feat/ perf/ chore/ docs/` → `Feature`, rendered in full; `fix/` → `Fix`, bundled into the day's
   one-line summary) — `Description` (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`), and

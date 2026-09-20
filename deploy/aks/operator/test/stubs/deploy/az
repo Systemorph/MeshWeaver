@@ -13,14 +13,22 @@ if [ "${1:-} ${2:-} ${3:-}" != "keyvault secret download" ]; then
   echo "az stub: unexpected invocation: $*" >&2; exit 1
 fi
 shift 3
-name="" file=""
+name="" file="" overwrite=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) name="${2:-}"; shift 2 ;;
     --file) file="${2:-}"; shift 2 ;;
+    --overwrite) overwrite=1; shift ;;
     *) shift ;;
   esac
 done
+# Like the real CLI (azure-cli 2.77): an EXISTING --file is refused unless --overwrite is passed.
+# hosting-deploy pre-creates the file (mktemp, 0600) on purpose, so without the flag the real az
+# refused every values-half read while this stub copied over it — the stub was more permissive
+# than the tool it stands in for, and the suite stayed green through a live failure.
+if [ -e "$file" ] && [ -z "$overwrite" ]; then
+  echo "ERROR: File '${file}' already exists. Use --overwrite to overwrite the existing file." >&2; exit 1
+fi
 src="$fixture/vault/$name"
 if [ ! -f "$src" ]; then
   echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault. If you recently deleted this secret you may be able to recover it using the correct recovery command." >&2

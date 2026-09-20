@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Issue Taxonomy and the Release Readiness Gate
 category: Architecture
-description: Four axes on every issue — type, area or plugin, feature, and for bugs a severity — and the one of them that is a release gate. sev:B must be zero to cut a release; everything else is a priority conversation, not a gate.
+description: Four axes on every issue — type, area or plugin, feature, and for bugs a severity — and the one of them that is a release gate. sev:B and sev:H must both be zero to cut a release; sev:M and sev:L are a priority conversation, not a gate.
 icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#b60205'/><path d='M12 6v7' stroke='white' stroke-width='2.2' stroke-linecap='round'/><circle cx='12' cy='17' r='1.4' fill='white'/></svg>"
 ---
 
@@ -42,7 +42,7 @@ separately-filed issues that were one `RoutingGrain` back-pressure defect, one p
 | label | meaning |
 |---|---|
 | **`sev:B`** | **BLOCKING — the release cannot ship while this is open** |
-| `sev:H` | a primary path broken but a workaround exists; an intermittent user-visible failure; or silently WRONG results anywhere |
+| **`sev:H`** | **BLOCKING — a primary path broken but a workaround exists; an intermittent user-visible failure; or silently WRONG results anywhere** |
 | `sev:M` | a secondary path broken, or a clear defect with an easy workaround |
 | `sev:L` | cosmetic, a rare edge case, or developer-only |
 
@@ -50,8 +50,9 @@ separately-filed issues that were one `RoutingGrain` back-pressure defect, one p
 cannot block a release, and letting a feature request carry a blocking flag is how a release gate
 rots into a wish-list.
 
-`sev:B` is deliberately the only class where *"we will do it next sprint"* is not an available
-answer. Everything else is a priority conversation.
+`sev:B` and `sev:H` are the classes where *"we will do it next sprint"* is not an available answer
+— policy [`release-blocker-gate`](../PolicyNotProse). `sev:M` and `sev:L` are a priority conversation and
+never gate a cut.
 
 ---
 
@@ -59,35 +60,36 @@ answer. Everything else is a priority conversation.
 
 ```
 label:bug  label:sev:B  state:open   →   must be ZERO
+label:bug  label:sev:H  state:open   →   must be ZERO
 ```
 
 across the **seven repositories** that carry the taxonomy: `MeshWeaver`, `MeshWeaver.Plugins`,
 `MeshWeaver.Crm`, `MeshWeaver.SocialMedia`, `MeshWeaver.Reinsurance`, `MeshWeaver.Manufacturing`,
-`MeshWeaver.Education`.
+`MeshWeaver.Education`. `Memex` and `MeshWeaver.Feedback` are deliberately not gated: they ship no
+product code.
 
 > 🚨 **Name the repositories; never write "every repo of the product".** A repo that is not on the
 > list is not gated, and — worse — a repo on the list that has never had the `sev:B` label *created*
 > answers a label query with an empty array, which folds to "no open issues" and is **green
-> forever**. That was live: the gate named seven repositories and the label existed in five.
-> **`Systemorph/Memex` is a known gap** — 18 open issues, no `sev:` labels, not on the list. Whether
-> the estate repo belongs in a product release gate is an open decision, and leaving it ambiguous is
-> how the first false green happened.
+> forever**. That was live: the gate named seven repositories and the label existed in five —
+> which is why `NoOpenIssues` now refuses a label that does not exist instead of folding it to
+> Green (MeshWeaver.Plugins#2190).
 
-That is the whole release-readiness predicate — policy [`release-blocker-gate`](../PolicyNotProse),
-registered as `proposed` for the reason the next callout gives. See
+That is the whole release-readiness predicate — policy [`release-blocker-gate`](../PolicyNotProse) —
+and it is enforced rather than remembered: the `release.cut` standard in the Governance package
+requires `Gate.NoOpenIssues(repo, "sev:B")` **and** `Gate.NoOpenIssues(repo, "sev:H")` for each of
+the seven gated repositories — 14 gates — so a release proposal cannot reach `Ready` while one is
+open. The pattern it uses is the long-running check (`get Governance/Skill/long-running-check`); see
 [Release Process](../ReleaseProcess) for what a release then is.
-
-> 🚨 **Today it is remembered, not enforced — read that plainly.** Nothing refuses a release for an
-> open `sev:B`. A release is cut by an annotated tag push, and core's `release.yml` refuses an
-> unsealed set, an unpromoted commit, a mismatched `PlatformVersion` and missing notes — but it
-> issues no issue query and has no governance hook. The `release.cut` standard that would enforce
-> this is **owed, not shipped** (MeshWeaver.Plugins#2182). Until it lands, the query above is a
-> checklist item a human runs, and it carries exactly the weight of a human remembering to run it.
 
 ### Two rules that keep the gate honest
 
-**1. `sev:B` is never assigned by guess.** If you cannot prove from the evidence that a defect
-blocks the release, assign the severity you *can* justify and say why. A gate that fills with
+**1. A blocking severity is never assigned by guess — and never REMOVED to clear the gate.** If you
+cannot prove from the evidence that a defect blocks the release, assign the severity you *can* justify
+and say why. 🚨 Raising the bar to `sev:H` creates a pressure the `sev:B`-only gate never had: the
+cheapest way to a green gate is now to downgrade an `H` to `M`. That is the one move this gate cannot
+survive, so `release.cut`'s acceptance criterion names it — *not relabelled or DOWNGRADED to sev:M to
+clear the gate*. A gate that fills with
 defensive B's stops being a gate — people start shipping past it, and then the one real B ships
 too. Under-calling is recoverable because someone raises it; over-calling destroys the signal.
 
@@ -173,3 +175,16 @@ that gates portal boot, an install whose verify can never succeed, a `publicRead
 publish every future user submission. The rubric says each of those could be `B`; the evidence in
 the issue did not prove it. That is exactly the judgement the first rule above reserves for a
 person.
+
+> **That ruling was made on 2026-09-20: the bar is no `sev:H` left.** It settles the question this
+> paragraph opened without needing a per-issue re-litigation — the three calls above block a release
+> either way now. It also makes the gate non-vacuous for the first time: on the day the bar moved,
+> `sev:B` was 0 across all nine repositories while `sev:H` stood at **30** (MeshWeaver 18,
+> MeshWeaver.Plugins 12, every other repo 0). A gate that refuses something is a gate.
+>
+> 🚨 **These are a SECOND, later snapshot, not a correction of the table above.** The first-pass
+> table records the classification as it stood when the pass finished (Plugins `sev:H` = 11);
+> this count was read from the live labels at ~12:35Z the same day, when the bar moved, by which
+> time Plugins carried 12. Both are true of their instant. The number that gates a release is
+> never either of them — it is whatever `release.cut`'s `NoOpenIssues` gates read when the cut is
+> proposed.

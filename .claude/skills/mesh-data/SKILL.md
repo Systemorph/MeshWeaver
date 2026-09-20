@@ -75,6 +75,43 @@ each other's fields (Mirror A's `{Content: {Field1: X}}` and Mirror B's `{Conten
 both land — never "last write wins on whole node"). Treat your `update` lambda accordingly: touch
 only the fields you intend to change.
 
+### How the change is EXPRESSED — four shapes, and the context picks
+
+`stream.Update` settles *where* the write goes. *How you say what changed* is a second decision with
+four answers, and picking the wrong one is how a write silently reverts a field or loses a count.
+Full design: [ExpressingAWrite.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ExpressingAWrite.md).
+
+| Shape | Use it when | Trap |
+|---|---|---|
+| **1. C# lambda** `live => live with { … }` | in-process, default | can't cross a wire as a delegate |
+| **2. JSON Patch** (+ anchored text splice) | over MCP / CLI / a webhook | can't express a fold |
+| **3. Full entity** | you are the SOLE authority — one-way sync source, or the buffer IS the content | every field you omit is still WRITTEN |
+| **4. Other** | — | not a category; it means shape 1 or 2 has a gap. File it |
+
+**The two rules that actually bite:**
+
+🚨 **A fold must be computed against the LIVE node, inside the lambda — never from a prior read.**
+`count + 1` where `count` came from a read is a lost update the moment a second writer exists. The
+in-process shape is the one that gets this right:
+
+```csharp
+// ✅ the fold happens inside the owner-serialised lambda (RegistrationKeyService.cs:131)
+stream.Update(current => current with { Content = key with { UsageCount = key.UsageCount + 1 } })
+```
+
+🚨 **A text edit inside a long body is a SPLICE, and the splice is ANCHORED, never positional.**
+Re-emitting a whole markdown/code document to change one line costs tokens and truncates; an offset
+or (row, column) is stale the moment anyone inserts a character above it and lands in the **wrong
+place without erroring** — the one silent-corruption shape here. Use the anchored form
+(`MeshOperations.EditContent`: exact `oldText` → `newText`, re-verified against live text). A
+positional splice is legal only carrying a base fingerprint the owner checks.
+
+**Known gap — do not design around it, it is tracked.** `CreateOrUpdateNodeRequest` cannot express a
+fold (full-instance mode takes `Content` wholesale; its `Patch` mode is declared but **refused by the
+handler**, zero callers). So a caller needing *both* create-if-missing *and* a fold has no route, and
+the tempting fallback — decide create-vs-update from a query, then `stream.Update` — is the
+eventually-consistent-positive bug in section 2. That is core#4928, blocking core#1174.
+
 ### The 3 rules this unifies
 
 1. **Writes**: `stream.Update(current => current with { Content = ... })`. The owning hub's action
@@ -285,7 +322,9 @@ hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EX
 The index **trails** the store, so "the index has seen it" implies "the store has it" — the point
 read opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a
 query for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely
-and use `CreateOrUpdateNodeRequest`.
+and use `CreateOrUpdateNodeRequest` — **unless the write is a FOLD** (a counter bump, or anything
+computed off the node's current value), which that verb cannot express today (core#4928). There is
+no correct shape for create-if-missing + fold yet, so say so rather than falling back to the query.
 
 🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
 worked counter-example is a token chip that reads `content` out of a

@@ -613,12 +613,23 @@ public enum NodeDeletionRejectionReason
 /// upserts the supplied <see cref="Node"/> as-is — Create on missing,
 /// Update on existing. Used by node-copy / move / import flows where the
 /// caller has the complete shape.</item>
-/// <item><b>JSON Patch</b>: set <see cref="Patch"/>. The handler applies the
-/// patch to the existing node (or to <see cref="Node"/> as the seed if the
-/// target is missing) and writes the result. Used for incremental edits
-/// where multiple writers may race on the same node — log lines, view-count
-/// bumps, status-flip patterns.</item>
+/// <item><b>JSON Patch</b>: set <see cref="Patch"/>. 🚨 <b>NOT IMPLEMENTED — the handler
+/// REFUSES every patch payload</b> (<c>NodeUpsertRejectionReason.PatchFailed</c>, "Patch-mode
+/// upserts are not yet supported"), and no caller in this repo or MeshWeaver.Plugins sets it.
+/// This entry used to describe the mode as serving "log lines, view-count bumps, status-flip
+/// patterns"; it served none of them, because the mode does not exist. The property is kept as
+/// the declared shape of the designed mode rather than deleted — see below.</item>
 /// </list>
+///
+/// <para>🚨 <b>This verb cannot express a FOLD, and that is the open gap (#4928, blocking #1174).</b>
+/// Full-instance mode merges through <c>UpdateAccordingToSourceNode</c>, which takes
+/// <c>Content = sourceNode.Content ?? state.Content</c> — content wholesale, computed by the caller
+/// from a read that is stale by construction, so any <c>count + 1</c> in it is the OLD count plus one.
+/// A caller needing both create-if-missing AND an owner-side fold therefore has no route today and
+/// falls back to deciding create-vs-update from the eventually-consistent query index, which is the
+/// exact shape this verb exists to retire. The designed repair is to lower a caller-authored lambda
+/// into patch operations the owner applies inside the <c>Update</c> lambda it already runs:
+/// <c>Doc/Architecture/ExpressingAWrite</c>.</para>
 ///
 /// <para>Permission resolution is dynamic: missing target → <see cref="Permission.Create"/>
 /// is checked; existing target → <see cref="Permission.Update"/> is checked.
@@ -639,7 +650,13 @@ public record CreateOrUpdateNodeRequest(MeshNode Node)
     /// the existing node. When null, <see cref="Node"/> is the full instance
     /// to upsert. Typed as <c>object?</c> so the patch type is owned by the
     /// caller's package (Json.Patch.Net) rather than pulling that dependency
-    /// into Mesh.Contract — handlers cast on receipt.</summary>
+    /// into Mesh.Contract — handlers cast on receipt.
+    ///
+    /// <para>🚨 <b>Setting this gets you a refusal, not a patch.</b> The handler rejects every
+    /// non-null payload with <see cref="NodeUpsertRejectionReason.PatchFailed"/>. It is the
+    /// declared shape of the mode designed in <c>Doc/Architecture/ExpressingAWrite</c> — where a
+    /// caller-authored lambda lowers into patch operations the owner applies inside its own
+    /// serialised <c>Update</c> — and stays here so that design has a place to land (#4928).</para></summary>
     public object? Patch { get; init; }
 
     /// <summary>The user or system requesting the upsert.</summary>
