@@ -172,7 +172,9 @@ public class BundleTransferIsStreamedAndMeasuredTest
         var none = BundleTransferException.Describe(
             BundleTransferStage.NoResponse, "Bundle index", "https://r", elapsed, 0, null, 120);
         Assert.Contains("did not begin a response within 120 s", none, StringComparison.Ordinal);
-        Assert.Contains("The registry is stalled, not the transfer", none, StringComparison.Ordinal);
+        // Only what was measured: nothing before the first byte can be told apart by the transport.
+        Assert.Contains("before the first byte", none, StringComparison.Ordinal);
+        Assert.DoesNotContain("The registry is stalled", none, StringComparison.Ordinal);
 
         var stalled = BundleTransferException.Describe(
             BundleTransferStage.StalledMidBody, "Bundle for X@1", "https://r", elapsed, 4096, 8192, 120);

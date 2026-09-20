@@ -6,9 +6,11 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public enum BundleTransferStage
 {
-    /// <summary>The registry accepted the connection and never began a response: no status line,
-    /// no headers, zero bytes within the responsiveness budget. Accuses the REGISTRY (the request
-    /// is stuck behind authentication or inside the index assembly), never the archive.</summary>
+    /// <summary>No response was observed within the responsiveness budget: no status line, no
+    /// headers, zero bytes. Everything BEFORE the first byte is under this one clock — the name
+    /// resolution, the connection, the TLS handshake and the registry's own work — and the
+    /// transport does not say which of them stalled, so the stage claims only what was measured.
+    /// Never the archive: nothing of it had started.</summary>
     NoResponse,
 
     /// <summary>Headers arrived and the body then went quiet for the whole budget. The byte count
@@ -89,7 +91,8 @@ public sealed class BundleTransferException : Exception
             BundleTransferStage.NoResponse =>
                 $"{transfer}: the registry at {registryUrl} did not begin a response within "
                 + $"{bound} s — no status line and no headers arrived in {elapsed.TotalSeconds:0} s. "
-                + "The registry is stalled, not the transfer",
+                + "The stall is before the first byte (name resolution, connection, handshake or the "
+                + "registry's own work), not in the transfer",
             BundleTransferStage.StalledMidBody =>
                 $"{transfer}: the registry at {registryUrl} sent no data for {bound} s; "
                 + $"{received} of {DeclaredText(declared)} byte(s) had arrived after "

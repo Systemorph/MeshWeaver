@@ -753,7 +753,7 @@ public sealed class PluginBundleClient
     ///
     /// <para>A transfer has three ways to fail that want three different remedies, and until this
     /// method existed the fleet could name none of them: the registry <b>never begins a response</b>
-    /// (a stalled registry — #4963 is one; the remedy is on the server), the body <b>goes quiet
+    /// (anything before the first byte — the connection, the handshake or the registry; #4963 is the registry, told apart by its fast `/api/version`), the body <b>goes quiet
     /// mid-transfer</b> (the transport — the byte count says how far it got), or the body is
     /// <b>larger than this client accepts</b> (the archive — the remedy is a smaller or resumable
     /// bundle). Each is refused with a <see cref="BundleTransferException"/> naming its

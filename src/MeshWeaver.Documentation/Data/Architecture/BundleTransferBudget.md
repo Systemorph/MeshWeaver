@@ -138,7 +138,7 @@ the bytes received and the bytes declared:
 
 | stage | what happened | what it accuses |
 |---|---|---|
-| `NoResponse` | the connection was accepted and no status line or header arrived within one stall budget | the **registry** — the request is stuck behind authentication or inside the index assembly |
+| `NoResponse` | no status line or header arrived within one stall budget | everything **before the first byte** — name resolution, the connection, the handshake or the registry's own work; the transport cannot say which, so the stage claims only that. Paired with a fast `/api/version` from the same host it is the registry (#4963) |
 | `StalledMidBody` | headers arrived, then the body went quiet for one stall budget; the byte count says how far it got | the **transport** (or the registry, at zero bytes) |
 | `OverSize` | the declared `Content-Length`, or the bytes actually streamed, exceed what the client accepts | the **archive** — a smaller or resumable bundle, never a larger bound |
 
