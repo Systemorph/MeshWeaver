@@ -3936,7 +3936,40 @@ public class MeshOperations
             + "next access reactivates it";
         return string.IsNullOrWhiteSpace(operatorReason)
             ? framework
-            : $"{framework}. The operator's reason: {operatorReason.Trim()}";
+            : $"{framework}. The operator's reason: {SanitizeReason(operatorReason)}";
+    }
+
+    /// <summary>Longest operator reason carried onto the line. Generous for a sentence, short
+    /// enough that one caller cannot push the framework's own text out of a reader's view.</summary>
+    private const int MaxOperatorReasonLength = 300;
+
+    /// <summary>
+    /// Flattens an operator-supplied reason to something that can only ever contribute to the ONE
+    /// log line it belongs on.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 A LOG-FORGERY PRIMITIVE, not a formatting nicety. This string is rendered into the
+    /// target's <c>[QUIESCE-START]</c> line, and the log-incident filer fingerprints on the RENDERED
+    /// line — so a reason of <c>"routine\nfail: MeshWeaver.Something[0] …"</c> appends a second
+    /// entry that reads exactly like a real one from another component, and can mint an incident.
+    /// Anything able to reach a recycle surface could write arbitrary lines into the log.
+    /// <c>Trim()</c> alone does not touch embedded breaks, which is what made it insufficient.
+    ///
+    /// <para>Every line break AND every other control character collapses to a single space:
+    /// a lone <c>\r</c>, a vertical tab and <c>\u0085</c> all start a new line in one renderer or
+    /// another, so enumerating the ones that do would be a list to get wrong. Length is bounded for
+    /// the same reason the masking exists — one caller must not be able to push the framework's own
+    /// sentence out of view.</para>
+    /// </remarks>
+    internal static string SanitizeReason(string reason)
+    {
+        var flattened = new string(reason.Select(c => char.IsControl(c) ? ' ' : c).ToArray());
+        // Collapse the runs the substitution just created, so a pasted block does not arrive as a
+        // corridor of spaces.
+        flattened = string.Join(' ', flattened.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return flattened.Length <= MaxOperatorReasonLength
+            ? flattened
+            : flattened[..MaxOperatorReasonLength] + "… (truncated)";
     }
 
     private IObservable<string> RecycleCore(string resolvedPath, string? reason)

@@ -56,4 +56,35 @@ public class RecycleReasonTest
     public void TheReasonIsTrimmed_SoATrailingNewlineDoesNotBreakTheLine()
         => MeshOperations.RecycleReason(Path, "  a stale assembly\n")
             .Should().EndWith("The operator's reason: a stale assembly");
+
+    // ── The reason is OPERATOR INPUT, and it lands on a log line (#4952 review) ──────────────
+
+    [Theory]
+    [InlineData("routine\nfail: MeshWeaver.Something[0] forged entry")]
+    [InlineData("routine\r\nfail: forged")]
+    [InlineData("routine\rfail: forged")]
+    [InlineData("routine\u0085fail: forged")]
+    [InlineData("routine\vfail: forged")]
+    public void ALineBreakInTheReason_CannotStartASecondLogLine(string injected)
+    {
+        // 🚨 A FORGERY PRIMITIVE, not a formatting nit. This text is rendered into the target's
+        // [QUIESCE-START] line, and the log-incident filer fingerprints on the RENDERED line — so a
+        // second line here reads exactly like a real entry from another component and can mint an
+        // incident. `Trim()` does not touch embedded breaks, which is what made it insufficient.
+        var reason = MeshOperations.RecycleReason(Path, injected);
+
+        reason.Should().NotContain("\n").And.NotContain("\r").And.NotContain("\u0085").And.NotContain("\v");
+        reason.Should().Contain("forged",
+            "the TEXT is not the problem and must survive — only its ability to break the line is removed");
+    }
+
+    [Fact]
+    public void AVeryLongReason_CannotPushTheFrameworksSentenceOutOfView()
+    {
+        var reason = MeshOperations.RecycleReason(Path, new string('x', 5_000));
+
+        reason.Should().Contain("MeshOperations.Recycle", "the framework's own sentence must survive");
+        reason.Should().Contain("(truncated)");
+        reason.Length.Should().BeLessThan(1_000);
+    }
 }
