@@ -136,6 +136,27 @@ Full reference: <!--slot:reference-->[/gui](.claude/skills/gui/SKILL.md) · [GUI
 
 🚨 **Every CI job is HARD-CUT at 45 minutes** (maintainer, 2026-09-02: *"hard cut ci runs after 45min — we pay all this"*): every job in every workflow of every repo carries a LITERAL `timeout-minutes` ≤ 45 — GitHub's default is 360, and one uncapped job (the module-pack `pack` job, hung on a test host that never started a test) held a runner six hours per run across 19 concurrent Plugins runs and blocked every required check behind it. `check-workflow-timeouts.py` refuses a missing, oversized or expression-valued cap (core runs it on itself; the `node-repo-validate` lane runs it on every satellite). A job that needs more than 45 minutes is STUCK, not slow — find what is not completing, never raise the bound.
 
+## Work by PRIORITY, and the bar a release must clear
+
+**Every bug carries a severity, and two of the four BLOCK a release.** `sev:B` (blocking) and `sev:H`
+(a primary path broken, an intermittent user-visible failure, or silently WRONG results anywhere) must
+both be **zero** to cut a release; `sev:M` and `sev:L` are a priority conversation and never gate one
+(maintainer, 2026-09-20: *"let's set bar of release to no high issues left"* · *"medium / low we don't
+care for release"*). An `enhancement`, `documentation` or `chore` carries no severity at all.
+
+**So work the queue in that order** — `sev:B`, then `sev:H`, and treat `sev:M`/`sev:L` as backlog
+unless asked. Before starting on an issue, check it is actually classified: an unlabelled issue has not
+been triaged, and working it ahead of a labelled `sev:H` is choosing by accident.
+
+**It is enforced, not remembered:** `Governance/Standards/release.cut` (MeshWeaver.Plugins) carries
+`NoOpenIssues` for both labels across the seven gated repositories — 14 gates. 🚨 Two traps, both
+measured: a zero from `search/*` can mean truncated-or-rate-limited rather than none (read a count
+against its coverage, and prefer the REST issues endpoint), and an **unknown label folds the gate to
+GREEN** — so verify a label EXISTS with a *paginated* read, since core carries 112 labels and an
+un-paginated `labels?per_page=100` reports `sev:B`/`sev:H` as absent from it.
+
+Full reference: [Issue Taxonomy and the Release Readiness Gate](src/MeshWeaver.Documentation/Data/Architecture/IssueTaxonomy.md) · [/release](.claude/skills/release/SKILL.md) → *the READINESS gate*.
+
 ## GitHub PR Operations
 
 🚨 **Finishing a change set means MERGED — merge it yourself on green, don't ask for permission.** A PR left open with a link handed back is unfinished work; the safety IS the gate (green CI plus the automatic Copilot review, which you never hand-request and never withdraw). Stop only when CI is red for a reason you cannot fix, when a review asks for a decision that changes what the change set IS, or when the work needs a scope call the user has not made. A change set spanning repos is finished when every part is merged in dependency order: platform first, then what depends on it.
