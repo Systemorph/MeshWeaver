@@ -1633,5 +1633,10 @@
   "notification.delivery.heldStale.title": "'{typeName}' is serving its last build; source moved ahead",
   "layout.areaNotFound.title": "This section could not be displayed.",
   "layout.areaNotFound.pageUnaffected": "The rest of this page is unaffected.",
-  "layout.areaNotFound.details": "Technical details"
+  "layout.areaNotFound.details": "Technical details",
+  "signaturePad.signHere": "Sign here",
+  "signaturePad.clear": "Clear",
+  "signaturePad.done": "Done",
+  "signaturePad.canvasLabel": "Signature pad — draw your signature",
+  "signaturePad.signed": "Signature given"
 }

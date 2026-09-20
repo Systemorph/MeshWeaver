@@ -207,13 +207,27 @@ is exactly the field a fold needs.
 
 ## Status
 
-**This page describes the design. The lowering (1 → 2) is not implemented.** What exists today is the
-right-hand column of the surface table above, plus the two in-process folds quoted earlier.
-`CreateOrUpdateNodeRequest.Patch` exists as a property and is **refused by the handler**
-(`MeshExtensions.cs:5836`, *"Patch-mode upserts are not yet supported"*) with zero callers in either
-repo — so patch-mode upserts are not a limited feature, they are an unbuilt one.
+**The fold half of the lowering is BUILT; the text splice and the general expression lowering are
+not.**
 
-Tracked on **#4928** (the verb gap) and **#1174** (the production fault it blocks).
+| piece | state |
+|---|---|
+| `fold` ops on the upsert (`CreateOrUpdateNodeRequest.Folds`) | ✅ built — `Sum` / `Max` / `Min` / `KeepExisting` |
+| the fluent authoring surface (`WithFolds<T>(… f => f.Sum(r => r.Count, 1))`) | ✅ built — member-access expressions lower to ops |
+| a general `Expression<Func<T,T>>` → ops compiler | ❌ not built; the fluent builder covers the cases that exist |
+| the text-splice extension as a patch op | ❌ not built — `edit_content` remains the anchored surface |
+| patch-mode upserts (`CreateOrUpdateNodeRequest.Patch`) | ❌ still refused by the handler |
+
+🚨 **What the fold does and does not buy, stated because the stronger claim is the tempting one.**
+It makes a counter **caller-read-free**: `Sum 1` is expressible without knowing the count, so one
+upsert both creates the node when absent and folds onto it when present, and no stale caller
+snapshot decides the value. It does **not** make the counter cluster-atomic — the upsert's own write
+still leaves its hub as an RFC 7396 merge patch carrying the folded *result*, so the cross-hub
+lost-update above is untouched. Closing that means making a fold survive the cross-hub hop, which is
+a change to the sync protocol, and it is deliberately not in this change.
+
+Tracked on **#4928** (the verb gap, now closed for folds) and **#1174** (the production fault, which
+additionally needs its caller moved off the query index).
 
 ## Related
 

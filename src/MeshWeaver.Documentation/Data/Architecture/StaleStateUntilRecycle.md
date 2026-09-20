@@ -213,7 +213,14 @@ question none of them answers is *"is there a NodeType this replica cannot **ser
 census built to answer it — per-type outcome, with its denominator stated, and with "no sweep has
 reported here" printed as its own sentence rather than as a clean one — is
 [#4647](https://github.com/Systemorph/MeshWeaver/pull/4647)'s addition to `bake-report`. **Read the
-outcome, not the plan, when a page is blank and the record says `Ok`.**
+outcome, not the plan, when a page is blank and the record says `Ok`.** And since the outcome census
+is itself a sweep-time reading, read `bake-report`'s **`LIVE RECORD CENSUS`** sentence for the
+cross-stamp shape above ([#4632](https://github.com/Systemorph/MeshWeaver/issues/4632)): it is
+refolded from the NodeType catalog on every emission and names, by partition and framework
+identity, every record keyed to a framework this replica does not run — with the ones stamped
+**after this replica booted** counted apart, which is exactly what the 14:33 adoption by the other
+generation was. See [Compiled Against Another Platform](../CompiledAgainstAnotherPlatform) → "The
+live record census".
 
 The remedies there, none of which is another dispose-only recycle:
 

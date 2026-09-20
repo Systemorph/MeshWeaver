@@ -2118,6 +2118,159 @@ public sealed class InstanceAutoRegistrationService(
                 .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }));
 
     /// <summary>
+    /// 🚨 <b>RE-ASSERT already-installed packages through the ONE install funnel</b> —
+    /// MeshWeaver#4812, the half of #3485 that had no caller.
+    ///
+    /// <para>#3485 made <c>CatalogLayoutAreas.InstallOrUpdate</c>'s up-to-date exit OBSERVE the
+    /// mesh and heal an incomplete install, and put the sweep that finds them into the boot repair
+    /// pass — the one complete inventory of what is installed. But the funnel only runs for a
+    /// package some lane VISITS: the platform baseline and the environment's flags on every boot,
+    /// the operator's seed once, the update reconciler only when the module hash MOVED (an equal
+    /// hash returns before the funnel), and a human's click. A package installed by hand from a
+    /// source that has not changed since is visited by nothing, so "reinstalling it now repairs
+    /// it" was true only of a click nobody made — measured on memex.meshweaver.cloud, where the
+    /// sweep named the same shortfall on every boot for three weeks.</para>
+    ///
+    /// <para><b>What this is and is not.</b> It is the boot lane's own machinery — the configured
+    /// sources at their PROVEN ref (the Sync-Ref Contract, #4259), the ownership holds (#4588,
+    /// #4625), <c>RunAsSystem</c>, the declared-access re-assert, the prebuilt adoption — applied to
+    /// an explicit set of installed packages, so the repair lands exactly where and how the boot
+    /// install would. It is NOT an update lane: a named package is re-asserted only where the
+    /// source still serves the module version the record carries, so the funnel can only skip or
+    /// heal, never move the package to a newer build. A moved hash is an UPDATE, and whether an
+    /// update lands unattended is the package's own policy (<see cref="PackageUpdateReconciler"/>)
+    /// or a human's click — both of which restore absent declared nodes as they go (#4259). A
+    /// package no configured source lists any more cannot be re-fetched by anything, and is named
+    /// so: its record is an orphan for the admin list.</para>
+    ///
+    /// <para>The seed ledger is deliberately not written: every package here is already installed,
+    /// so nothing about "seeded once" changes. Feature-flag exclusions are not applied either — an
+    /// installed package is installed; restoring what it lost is not installing what the operator
+    /// excluded.</para>
+    /// </summary>
+    /// <param name="targets">The installed packages to re-assert — each with the PARTITION and
+    /// module version its install record carries. A record with no module identity cannot be
+    /// re-asserted (the caller says so).</param>
+    /// <returns>A cold observable emitting the pass's summary exactly once.</returns>
+    internal IObservable<DefaultInstallSummary> ReassertInstalled(IReadOnlyList<ReassertTarget> targets)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        if (targets.Count == 0)
+            return Observable.Return(DefaultInstallSummary.Empty);
+        var recordedModuleVersions = targets.ToImmutableDictionary(
+            t => t.PackageId, t => t.ModuleVersion, StringComparer.Ordinal);
+        var recordedPartitions = targets.ToImmutableDictionary(
+            t => t.PackageId, t => t.Partition, StringComparer.Ordinal);
+        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
+        return Sources(options).SelectMany(sources =>
+        {
+            if (sources.Count == 0)
+            {
+                logger.LogWarning(
+                    "[PackageRepair] {Count} installed package(s) need re-asserting but this "
+                    + "installation has NO package sources — nothing can re-fetch them: [{Ids}]. "
+                    + "Configure PluginCatalog:Sources or PluginCatalog:RegistryUrl.",
+                    recordedModuleVersions.Count, string.Join(", ", recordedModuleVersions.Keys));
+                return Observable.Return(DefaultInstallSummary.Empty);
+            }
+            return sources
+                .Select(ListAtProvenRef)
+                .ToObservable()
+                .Concat()
+                .ToList()
+                .SelectMany(answers =>
+                {
+                    var listingIncomplete = answers.Any(a => a.Failed);
+                    var catalog = answers
+                        .SelectMany(a => a.Candidates)
+                        .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
+                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+                    var atRecordedHash = ImmutableList.CreateBuilder<InstallCandidate>();
+                    foreach (var (id, recorded) in recordedModuleVersions.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                    {
+                        if (!catalog.TryGetValue(id, out var candidate))
+                        {
+                            // Say WHICH of two things this is: the listing was partial (a held or
+                            // failed source may well be the one that serves it), or every source
+                            // answered and none serves it any more — a retired module, whose
+                            // record is an orphan.
+                            logger.LogWarning(listingIncomplete
+                                ? "[PackageRepair] {Id} cannot be re-asserted this boot: no source "
+                                  + "that answered lists it, and at least one source was held or "
+                                  + "failed to list — re-attempted at the next process start."
+                                : "[PackageRepair] {Id} cannot be re-asserted: no configured source "
+                                  + "lists it any more. If the module was retired, its install "
+                                  + "record is an orphan — remove it from Catalog → orphaned "
+                                  + "install records (MeshWeaver#4812).", id);
+                            continue;
+                        }
+                        // 🚨 The repair lands where the SWEEP LOOKED (review on #4985). The
+                        // candidate's targetPartition is what InstallAll writes into; where it has
+                        // moved since the record was stamped, a "repair" would populate a partition
+                        // nobody observed and leave the observed one short. A moved target is an
+                        // update decision, not a repair.
+                        var candidatePartition = PackageInstaller.TargetPartitionOf(id, candidate.Package);
+                        if (!string.Equals(candidatePartition, recordedPartitions[id], StringComparison.Ordinal))
+                        {
+                            logger.LogWarning(
+                                "[PackageRepair] {Id} is NOT re-asserted unattended: its record was "
+                                + "installed into '{Recorded}' but the source now targets "
+                                + "'{Served}', so a repair would write a partition the sweep never "
+                                + "observed. A human's Update click is the path (MeshWeaver#4812).",
+                                id, recordedPartitions[id], candidatePartition);
+                            continue;
+                        }
+                        if (!string.Equals(candidate.Package.ModuleVersion, recorded, StringComparison.Ordinal))
+                        {
+                            logger.LogWarning(
+                                "[PackageRepair] {Id} is NOT re-asserted unattended: its record "
+                                + "carries module {Recorded} but the source now serves {Served}, so a "
+                                + "repair would be an UPDATE. Whether that lands unattended is the "
+                                + "package's own update policy (the update reconciler applies "
+                                + "'Auto'); a human's Update click applies the rest — and both "
+                                + "restore absent declared nodes as they go (MeshWeaver#4259). "
+                                + "Until then the shortfall stands as reported.",
+                                id, recorded, candidate.Package.ModuleVersion ?? "(none)");
+                            continue;
+                        }
+                        atRecordedHash.Add(candidate with { Reconciled = true });
+                    }
+                    if (atRecordedHash.Count == 0)
+                        return Observable.Return(DefaultInstallSummary.Empty with
+                        {
+                            ListingIncomplete = listingIncomplete,
+                        });
+
+                    logger.LogInformation(
+                        "[PackageRepair] re-asserting {Count} installed package(s) at their recorded "
+                        + "module version through the install lane — [{Ids}]. The funnel observes "
+                        + "the mesh and heals what is short; a package found whole is skipped "
+                        + "(MeshWeaver#4812).",
+                        atRecordedHash.Count, string.Join(", ", atRecordedHash.Select(c => c.Package.Id)));
+                    var byId = atRecordedHash.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
+                    var ordered = PackageDependencyGraph
+                        .InDependencyOrder(atRecordedHash.Select(c => c.Package).ToList(), logger)
+                        .Where(p => byId.ContainsKey(p.Id))
+                        .Select(p => byId[p.Id])
+                        .ToList();
+                    return InstallAll(ordered)
+                        .Select(summary => summary with { ListingIncomplete = listingIncomplete });
+                });
+        });
+    }
+
+    /// <summary>
+    /// One installed package to re-assert, as its install RECORD describes it
+    /// (<see cref="ReassertInstalled"/>): the partition the sweep observed, and the module version
+    /// the funnel may skip-or-heal at.
+    /// </summary>
+    /// <param name="PackageId">The package id — the record's node id.</param>
+    /// <param name="Partition">The partition the record was installed into.</param>
+    /// <param name="ModuleVersion">The module version the record carries.</param>
+    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion);
+
+    /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and
     /// install the boot pass performs, reading this installation's real configuration. Cold: the
     /// work runs on Subscribe. Exists so a test can assert the second boot writes nothing, and so
