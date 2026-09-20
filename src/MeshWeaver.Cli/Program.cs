@@ -73,7 +73,7 @@ async Task<int> Run(
 }
 {
     var fileOpt = new Option<string>("--file", "-f") { Description = "Path to JSON file containing an array of MeshNode objects.", Required = true };
-    var cmd = new Command("update", "Update nodes from a JSON array file (full-replace).") { fileOpt };
+    var cmd = new Command("update", "Update nodes from a JSON array file (FULL-REPLACE \u2014 every field the file omits is still written, reverting it; use `patch` to change some fields and leave the rest alone).") { fileOpt };
     cmd.SetAction((result, ct) => Run(result, ct,
         (c, t) => c.Update(File.ReadAllText(result.GetValue(fileOpt)!), t)));
     root.Subcommands.Add(cmd);
@@ -82,7 +82,7 @@ async Task<int> Run(
     var pathArg = new Argument<string>("path") { Description = "Mesh path of the node to patch." };
     var fieldsOpt = new Option<string?>("--fields") { Description = "Inline JSON object of fields to set." };
     var fileOpt = new Option<string?>("--file", "-f") { Description = "Path to JSON file (alternative to --fields)." };
-    var cmd = new Command("patch", "Partial update of a node's top-level fields.") { pathArg, fieldsOpt, fileOpt };
+    var cmd = new Command("patch", "Partial update of a node's top-level fields (content deep-merged per RFC 7396). Replaces a text field WHOLESALE and cannot express a fold \u2014 `count + 1` must be computed from a read a concurrent writer can invalidate.") { pathArg, fieldsOpt, fileOpt };
     cmd.SetAction((result, ct) => Run(result, ct, (c, t) =>
     {
         var inline = result.GetValue(fieldsOpt);

@@ -1709,6 +1709,15 @@ public class MeshOperations
     /// Full-replacement update of one or more existing nodes from a JSON array. Each node is validated and
     /// written independently (results combine in input order); a read-your-writes barrier ensures a
     /// following read sees the reconciled state.
+    ///
+    /// <para>🚨 This is the FULL-ENTITY shape (pattern 3 of <c>Doc/Architecture/ExpressingAWrite</c>), and
+    /// it is only correct when the caller is the sole authority for the node's content — a one-way sync
+    /// source, or a buffer that IS the new content. Every field the supplied node does not mention is
+    /// still WRITTEN, so a concurrent writer's field is reverted rather than preserved. To change some
+    /// fields and leave the rest alone use <see cref="Patch"/>; to edit text inside a long body use
+    /// <see cref="EditContent"/>. Neither this verb nor <see cref="Patch"/> can express a FOLD
+    /// ("bump this counter") — both require the caller to know the current value, which is a stale read
+    /// the moment a second writer exists (#4928).</para>
     /// </summary>
     /// <param name="nodes">A JSON array of complete MeshNode objects to write.</param>
     /// <returns>A cold observable emitting a newline-joined per-node result/error summary.</returns>
@@ -1831,6 +1840,13 @@ public class MeshOperations
     /// Partial update of a single node: only the keys present in <paramref name="fields"/> change, with
     /// <c>content</c> deep-merged per RFC 7396 (omitted keys preserved, a null member deletes that key).
     /// Merged content is schema-validated before the write.
+    ///
+    /// <para>This is the PATCH shape (pattern 2 of <c>Doc/Architecture/ExpressingAWrite</c>) and it is the
+    /// right default for "change these fields, leave the rest alone". Two limits worth knowing: it replaces
+    /// a text field WHOLESALE (for an edit inside a long markdown body or code source use
+    /// <see cref="EditContent"/>, which splices), and it cannot express a FOLD — <c>count + 1</c> has to be
+    /// computed by the caller from a read that a second writer can invalidate before the patch lands
+    /// (#4928).</para>
     /// </summary>
     /// <param name="path">The exact path of the node to patch.</param>
     /// <param name="fields">A JSON object holding only the fields to change.</param>
@@ -2026,6 +2042,14 @@ public class MeshOperations
     /// re-enqueues the lambda, which re-verifies the anchor against fresh state. The
     /// success string is additionally gated on the edit provably landing in the live
     /// mirror, so an exhausted late-NACK retry surfaces as an error, never "Edited:".</para>
+    ///
+    /// <para>🚨 ANCHORED, not POSITIONAL, and that is the design (pattern 2 of
+    /// <c>Doc/Architecture/ExpressingAWrite</c>). An offset or a (row, column) is meaningless the moment
+    /// another writer inserts a character above it, and a splice aimed at a stale position lands in the
+    /// WRONG PLACE without erroring — the one silent-corruption shape in the write design. An anchor is
+    /// re-verified against live text, so the same race surfaces as
+    /// <see cref="AnchorNotFoundException"/> instead. A positional splice is legal only when it carries a
+    /// base fingerprint the owner checks, which is what the content-only splice path already does.</para>
     /// </summary>
     public IObservable<string> EditContent(string path, string oldText, string newText, bool replaceAll = false)
     {
