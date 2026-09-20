@@ -115,6 +115,14 @@ public sealed class DynamicTypePreWarmerHostedService(
     private IDisposable? _startedRegistration;
 
     /// <summary>
+    /// 🚨 The standing catalog watch behind <c>bake-report</c>'s live half (#4632) — held for the
+    /// process's life, independent of the sweep and of the bundle seeding (it needs neither: a
+    /// stamp the seeding lands is a change event it will see), and disposed with the service. A
+    /// discarded subscription would root the hub.
+    /// </summary>
+    private IDisposable? _liveCensus;
+
+    /// <summary>
     /// One recovery watch per RECORDED REGRESSION (#1214) — each observes its type until it
     /// reaches a usable build on this image and then retracts the regression. They outlive the
     /// sweep by design (the content that tore the compile converges after it), so they are owned
@@ -222,6 +230,28 @@ public sealed class DynamicTypePreWarmerHostedService(
         // of the sweep's verdicts that is neither the readiness gate nor a log line, and it is the
         // only one an operator can reach with `curl` and no credential.
         var census = mesh.ServiceProvider.GetService<NodeTypeBakeReportRegistry>();
+        // 🚨 #4632 — THE LIVE HALF, armed here and never again. Everything the two passes below
+        // publish is a boot-time reading; this watch keeps reading the catalog for the process's
+        // life so a record another replica re-keys to ITS framework after this one booted is on
+        // /health within one emission instead of in nobody's list. Unconditional — like the
+        // adoption and the report — because it is exactly the deployments that pre-compile nothing
+        // (adopt-only, lazy first access) that a mid-roll cross-stamp leaves with no instrument.
+        // It does not wait for the seeding: a stamp the seeding lands is a change event it sees.
+        if (census is not null)
+            _liveCensus = DynamicTypePreWarmer.ObserveLiveRecordCensus(mesh, startedAt, logger)
+                .Subscribe(
+                    census.RecordLiveRecords,
+                    ex =>
+                    {
+                        // The fault is RECORDED, not only logged: log access on this fleet is
+                        // break-glass, and a frozen last reading on /health would read as current.
+                        census.RecordLiveRecordsFault($"{ex.GetType().Name}: {ex.Message}");
+                        logger.LogError(ex,
+                            "DynamicTypePreWarmer: the live NodeType-record census FAULTED — /health's "
+                            + "bake-report now degrades and says so; a record re-keyed to another "
+                            + "framework after this replica booted is no longer being watched for "
+                            + "(#4632)");
+                    });
         if (sweepEnabled)
             gate?.MarkRunning("enumerating dynamic NodeTypes");
         if (gate is { GatesReadiness: true })
@@ -716,6 +746,8 @@ public sealed class DynamicTypePreWarmerHostedService(
         _startedRegistration = null;
         _warmSubscription?.Dispose();
         _warmSubscription = null;
+        _liveCensus?.Dispose();
+        _liveCensus = null;
         _recoveryWatches.Dispose();
     }
 }

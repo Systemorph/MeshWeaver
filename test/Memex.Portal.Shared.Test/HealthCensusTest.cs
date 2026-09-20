@@ -98,6 +98,81 @@ public class HealthCensusTest
     /// The positive control for the case above: with nothing outstanding the body carries no
     /// ownership clause, so that assertion is reading the reading rather than a constant.
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>#4632's acceptance criterion, end to end: a record another replica re-keyed to ITS
+    /// framework AFTER this replica booted reaches <c>/health</c> as a non-Healthy entry, naming the
+    /// partition and both identities — and not the node.</b> This is the reading the two serving
+    /// replicas of 2026-09-17 had no instrument for: <c>content-types</c> records only a degraded
+    /// content READ (an area that never registers is not one), and every other line on
+    /// <c>bake-report</c> was taken at boot, before the stamp landed.
+    /// </summary>
+    [Fact]
+    public async Task ARecordReKeyedAfterBoot_IsDegradedOnHealth_AndNamesThePartitionNotTheNode()
+    {
+        var registry = CleanBakeRegistry();
+        var bootedAt = new DateTimeOffset(2026, 9, 17, 12, 0, 0, TimeSpan.Zero);
+        registry.RecordLiveRecords(NodeTypeLiveRecordCensus.Of(
+            [
+                ("Approvals/Desk", new MeshWeaver.Graph.Configuration.NodeTypeDefinition
+                {
+                    Configuration = "config => config",
+                    CompilationStatus = MeshWeaver.Mesh.Services.CompilationStatus.Ok,
+                    CompiledFrameworkVersion = "saec4a2dc1f075f1fff7cf076055e150e",
+                    LatestAssemblyCollection = "nodetype-cache",
+                    LatestAssemblyPath = "Approvals_Desk/v844-saec4a2d-6ad498520d75.dll",
+                    LastCompiledVersion = 844,
+                    LastCompileSucceededAt = bootedAt.AddHours(2),
+                }),
+            ],
+            liveFrameworkVersion: "s2902ab117d8b351f11b358de1755decd",
+            bootedAt, at: bootedAt.AddHours(5)));
+
+        var body = await HealthBodyAsync(services => services.AddSingleton(registry));
+
+        Assert.True(body.Contains($"{NodeTypeBakeReportRegistry.HealthCheckName}: Degraded", StringComparison.Ordinal),
+            "a NodeType record re-keyed to another framework after this replica booted did not reach "
+            + "/health as a non-Healthy entry. The boot-time reading on the same registry is CLEAN "
+            + "(217 of 218 baked was the incident's own bake-report), so only the live half can say "
+            + $"it — and on 2026-09-17 nothing did. Body was:\n{body}");
+        Assert.True(body.Contains("RE-KEYED to a framework this replica does not run AFTER it booted", StringComparison.Ordinal),
+            $"the verdict's sentence is missing from the body a reader curls. Body was:\n{body}");
+        Assert.True(body.Contains("saec4a2d×1 in Approvals/… (1 since boot)", StringComparison.Ordinal),
+            "the partition and the foreign identity are what route the finding and make it checkable "
+            + $"by hand against the DLL name. Body was:\n{body}");
+        Assert.False(body.Contains("Approvals/Desk", StringComparison.Ordinal),
+            "the NODE's own name must not reach a public, unauthenticated body (#3890, #4258). "
+            + $"Body was:\n{body}");
+    }
+
+    [Fact]
+    public async Task AFaultedLiveWatch_IsDegradedOnHealth_AndNamesTheFault()
+    {
+        var registry = CleanBakeRegistry();
+        registry.RecordLiveRecordsFault("UnanchoredQueryException: the catalog query was refused");
+
+        var body = await HealthBodyAsync(services => services.AddSingleton(registry));
+
+        Assert.True(body.Contains($"{NodeTypeBakeReportRegistry.HealthCheckName}: Degraded", StringComparison.Ordinal),
+            "a standing watch that FAULTED reported clean. It was armed and stopped; reading its "
+            + $"silence as a pass is the missing-instrument defect one level up (#4632). Body was:\n{body}");
+        Assert.True(body.Contains("LIVE RECORD CENSUS WATCH FAULTED (UnanchoredQueryException", StringComparison.Ordinal),
+            $"the fault is not named in the body a reader curls. Body was:\n{body}");
+    }
+
+    [Fact]
+    public async Task NoLiveCensusYet_StaysHealthy_AndStillPrintsThatNothingWasMeasured()
+    {
+        var body = await HealthBodyAsync(services => services.AddSingleton(CleanBakeRegistry()));
+
+        Assert.True(body.Contains($"{NodeTypeBakeReportRegistry.HealthCheckName}: Healthy", StringComparison.Ordinal),
+            "a replica whose standing catalog watch has not emitted yet reported non-Healthy. Every "
+            + "boot passes through that state; degrading on it would teach readers to ignore the "
+            + $"entry. Body was:\n{body}");
+        Assert.True(body.Contains("LIVE RECORD CENSUS: NONE taken on this replica", StringComparison.Ordinal),
+            "'no live reading' and 'a live reading that found nothing' have to be two different "
+            + $"printed sentences, or the absence reads as a pass (#4632). Body was:\n{body}");
+    }
+
     [Fact]
     public async Task ACleanBakeReading_NamesNoPartitionAtAll()
     {
