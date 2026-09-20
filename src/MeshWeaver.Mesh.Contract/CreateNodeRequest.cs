@@ -621,14 +621,17 @@ public enum NodeDeletionRejectionReason
 /// the declared shape of the designed mode rather than deleted — see below.</item>
 /// </list>
 ///
-/// <para>🚨 <b>This verb cannot express a FOLD, and that is the open gap (#4928, blocking #1174).</b>
+/// <para><b>A FOLD is now expressible — see <see cref="Folds"/> (#4928).</b> What follows is why it
+/// had to be, and what is still true of the plain full-instance path.</para>
+///
+/// <para>🚨 <b>Full-instance mode alone cannot express a fold.</b>
 /// Full-instance mode merges through <c>UpdateAccordingToSourceNode</c>, which takes
 /// <c>Content = sourceNode.Content ?? state.Content</c> — content wholesale, computed by the caller
 /// from a read that is stale by construction, so any <c>count + 1</c> in it is the OLD count plus one.
 /// A caller needing both create-if-missing AND an owner-side fold therefore has no route today and
 /// falls back to deciding create-vs-update from the eventually-consistent query index, which is the
-/// exact shape this verb exists to retire. The designed repair is to lower a caller-authored lambda
-/// into patch operations the owner applies inside the <c>Update</c> lambda it already runs:
+/// exact shape this verb exists to retire. <see cref="Folds"/> is the repair: the caller declares the
+/// RULE and the OPERAND, and the owner applies them inside the <c>Update</c> lambda it already runs.
 /// <c>Doc/Architecture/ExpressingAWrite</c>.</para>
 ///
 /// <para>Permission resolution is dynamic: missing target → <see cref="Permission.Create"/>
@@ -661,6 +664,29 @@ public record CreateOrUpdateNodeRequest(MeshNode Node)
 
     /// <summary>The user or system requesting the upsert.</summary>
     public string? RequestedBy { get; init; }
+
+    /// <summary>
+    /// Declarative folds over TOP-LEVEL content members, applied against the node as the OWNER holds
+    /// it rather than against anything the caller read (#4928).
+    ///
+    /// <para>This is what lets one upsert both CREATE a node when it is missing and ADD TO a value it
+    /// already holds — the combination that had no expression before, and whose absence is why
+    /// activity tracking still decides create-vs-update from the eventually-consistent query index
+    /// (#1174). A fold carries the RULE and the OPERAND (<c>Sum 1</c>), never a result
+    /// (<c>accessCount: 6</c>), so the caller does not have to have read the node.</para>
+    ///
+    /// <para>On the CREATE leg they are not applied: there is nothing to fold onto, so
+    /// <see cref="Node"/>'s content is the seed verbatim — state the intended initial value there
+    /// (<c>AccessCount = 1</c>), not a delta.</para>
+    ///
+    /// <para>Build them with <see cref="ContentFoldBuilder{T}"/> so a renamed property is a compile
+    /// error rather than a fold that matches nothing.</para>
+    ///
+    /// <para>🚨 Caller-read-free is NOT the same as cluster-atomic. The upsert's write still leaves
+    /// this hub as an RFC 7396 merge patch carrying the folded RESULT, so two mirrors folding from
+    /// the same base can still lose an increment. See <see cref="ContentFolds"/>.</para>
+    /// </summary>
+    public ImmutableList<ContentFold>? Folds { get; init; }
 
     /// <summary>
     /// 🚨 <b>THE IMPORT ORDERING ESCAPE HATCH, and nothing else.</b> Set this and the update branch
