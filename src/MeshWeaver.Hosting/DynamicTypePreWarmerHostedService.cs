@@ -245,7 +245,11 @@ public sealed class DynamicTypePreWarmerHostedService(
                     {
                         // The fault is RECORDED, not only logged: log access on this fleet is
                         // break-glass, and a frozen last reading on /health would read as current.
-                        census.RecordLiveRecordsFault($"{ex.GetType().Name}: {ex.Message}");
+                        // 🚨 The TYPE only, never ex.Message — this reaches a PUBLIC, unauthenticated
+                        // body, and a storage fault's message can carry connection, schema or
+                        // provider detail. The full exception is in the log line below.
+                        census.RecordLiveRecordsFault(
+                            $"{ex.GetType().Name} terminated the catalog subscription");
                         logger.LogError(ex,
                             "DynamicTypePreWarmer: the live NodeType-record census FAULTED — /health's "
                             + "bake-report now degrades and says so; a record re-keyed to another "

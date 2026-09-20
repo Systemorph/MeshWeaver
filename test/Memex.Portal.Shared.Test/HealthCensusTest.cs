@@ -95,10 +95,6 @@ public class HealthCensusTest
     }
 
     /// <summary>
-    /// The positive control for the case above: with nothing outstanding the body carries no
-    /// ownership clause, so that assertion is reading the reading rather than a constant.
-    /// </summary>
-    /// <summary>
     /// 🚨 <b>#4632's acceptance criterion, end to end: a record another replica re-keyed to ITS
     /// framework AFTER this replica booted reaches <c>/health</c> as a non-Healthy entry, naming the
     /// partition and both identities — and not the node.</b> This is the reading the two serving
@@ -173,6 +169,10 @@ public class HealthCensusTest
             + $"printed sentences, or the absence reads as a pass (#4632). Body was:\n{body}");
     }
 
+    /// <summary>
+    /// The positive control for the case above: with nothing outstanding the body carries no
+    /// ownership clause, so that assertion is reading the reading rather than a constant.
+    /// </summary>
     [Fact]
     public async Task ACleanBakeReading_NamesNoPartitionAtAll()
     {

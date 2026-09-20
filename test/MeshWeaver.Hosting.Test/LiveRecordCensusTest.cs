@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Services;
@@ -124,12 +126,27 @@ public class LiveRecordCensusTest
     }
 
     [Fact]
+    public void AnUntypedRecordWithNothingForeign_IsNotDescribedAsClean()
+    {
+        var census = Census(("Crm/Offer", null));
+
+        census.IsClean.Should().BeTrue("nothing typed is foreign — the STATUS is not the sentence");
+        NodeTypeLiveRecordCensus.Describe(census).Should()
+            .Contain("every one of the 0 typed record(s)")
+            .And.Contain("1 untyped record(s) remain UNDECIDED — neither foreign nor clean",
+                "an untyped record was decided about by nothing; a sentence that folded it into "
+                + "'every record is fine' would be a false clean description for exactly the "
+                + "unmeasured case the denominator exists to expose")
+            .And.NotContain("every record names");
+    }
+
+    [Fact]
     public void TheDetailIsBounded_AndNamesTheSinceBootGroupsFirst()
     {
-        var records = new List<(string, NodeTypeDefinition?)>();
-        for (var i = 0; i < 20; i++)
-            records.Add(($"P{i:00}/Type", Stamped(Other, BootedAt.AddHours(-1))));
-        records.Add(("Zulu/Type", Stamped(Other, BootedAt.AddHours(1))));
+        var records = Enumerable.Range(0, 20)
+            .Select(i => ($"P{i:00}/Type", (NodeTypeDefinition?)Stamped(Other, BootedAt.AddHours(-1))))
+            .Append(("Zulu/Type", Stamped(Other, BootedAt.AddHours(1))))
+            .ToImmutableList();
 
         var census = NodeTypeLiveRecordCensus.Of(records, Live, BootedAt, At);
 
@@ -176,7 +193,7 @@ public class LiveRecordCensusTest
     public void ACleanCensus_AndAnOldForeignOne_AreTwoDifferentSentences()
     {
         NodeTypeLiveRecordCensus.Describe(Census(("Hosting/TriageItem", Stamped(Live, At)))).Should()
-            .Contain("every record names a build for this replica's framework")
+            .Contain("every one of the 1 typed record(s) names a build for this replica's framework")
             .And.NotContain("🚨")
             .And.Contain("Denominator: 1 dynamic NodeType record(s)");
 
@@ -245,7 +262,7 @@ public class LiveRecordCensusTest
             .Should()
             .Contain("LIVE RECORD CENSUS WATCH FAULTED (UnanchoredQueryException: the catalog query was refused)")
             .And.Contain("FROZEN")
-            .And.Contain("every record names a build for this replica's framework",
+            .And.Contain("every one of the 1 typed record(s) names a build for this replica's framework",
                 "the last reading is still printed — it was true when taken — beside the fault that dates it");
     }
 }

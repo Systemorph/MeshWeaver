@@ -673,8 +673,12 @@ public static class DynamicTypePreWarmer
                 // Every NodeType definition — a catalog, mesh-wide by nature (#3202 — fan-out is
                 // opt-in, and this is one of its three legitimate shapes: a process-wide watch).
                 .GetQuery(LiveRecordCensusQueryId, MeshWideQuery.OfType(MeshNode.NodeTypePath)))
+            // 🚨 No logger into the fold: this runs on EVERY catalog emission for the process's
+            // life, so a permanently untyped record would re-log the same conversion failure on
+            // every unrelated NodeType write — a log wave during a bake. The boot-time DynamicTypesOf
+            // already names each untyped path once; here it is COUNTED (Untyped) and printed.
             .Select(nodes => NodeTypeLiveRecordCensus.Of(
-                LiveRecordsOf(nodes, options, logger), liveFramework, bootedAt, DateTimeOffset.UtcNow));
+                LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow));
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using MeshWeaver.Graph.Configuration;
@@ -107,7 +108,7 @@ public sealed record NodeTypeLiveRecordCensus(
 
         var total = 0;
         var untyped = 0;
-        var foreign = new List<(string Partition, string Identity, bool SinceBoot)>();
+        var foreign = ImmutableList.CreateBuilder<(string Partition, string Identity, bool SinceBoot)>();
         foreach (var (path, definition) in records)
         {
             total++;
@@ -173,16 +174,24 @@ public sealed record NodeTypeLiveRecordCensus(
             + $"{census.Untyped} could not be typed on this hub and were decided about by nothing; "
             + $"this replica's framework is {Short(census.FrameworkVersion)}; booted at {bootedAt}.";
 
+        // 🚨 "typed", not "every": an untyped record was decided about by NOTHING, and a sentence
+        // that folded it into the clean case would be a false clean description for exactly the
+        // unmeasured case the denominator exists to expose.
+        var typed = census.Total - census.Untyped;
+        var undecided = census.Untyped == 0
+            ? string.Empty
+            : $" {census.Untyped} untyped record(s) remain UNDECIDED — neither foreign nor clean.";
+
         if (census.Foreign == 0)
-            return $"LIVE RECORD CENSUS at {at}: every record names a build for this replica's "
-                   + "framework, or no build at all — nothing is keyed to a framework this replica does "
-                   + "not run." + denominator;
+            return $"LIVE RECORD CENSUS at {at}: every one of the {typed} typed record(s) names a "
+                   + "build for this replica's framework, or no build at all — nothing typed is keyed "
+                   + "to a framework this replica does not run." + undecided + denominator;
 
         if (census.ForeignSinceBoot == 0)
-            return $"LIVE RECORD CENSUS at {at}: {census.Foreign} record(s) name a build keyed to a "
+            return $"LIVE RECORD CENSUS at {at}: {census.Foreign} of {typed} typed record(s) name a build keyed to a "
                    + $"framework this replica does not run ({census.ForeignDetail}), ALL stamped before "
                    + "this replica booted — the ordinary previous-image state, which the bake or the "
-                   + "first access rebuilds; NONE was re-keyed since boot." + denominator;
+                   + "first access rebuilds; NONE was re-keyed since boot." + undecided + denominator;
 
         return $"🚨 LIVE RECORD CENSUS at {at}: {census.ForeignSinceBoot} NodeType record(s) were "
                + "RE-KEYED to a framework this replica does not run AFTER it booted "
