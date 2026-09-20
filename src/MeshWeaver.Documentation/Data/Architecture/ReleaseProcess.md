@@ -410,7 +410,50 @@ of into new packages.
 
 ---
 
-## 6. See also
+## 6. What's New is per RELEASE, not per change
+
+**Rule change, 2026-09-20 (maintainer).** A What's New entry is written when a **release stream
+completes**, not when a change merges. It says what that release finished, and it **links to the
+doc page** that explains it. The explanation lives in the doc; What's New is the announcement.
+
+### Why this changed
+
+Under the previous rule — *add a What's New entry when user-facing* — the folder reached **1,292
+entries**: 662 in August 2026 and 590 in September, about twenty a day. At that rate it is not a
+changelog, it is the commit log with nicer titles. Nobody reads twenty entries a day, so the effort
+of writing them was wasted twice over: once in the writing, and again because the one entry that
+mattered was buried among nineteen that did not.
+
+The failure is structural rather than editorial. A per-merge changelog has the granularity of the
+thing that produced it (a pull request), not of the thing the reader cares about (a release). Every
+entry is individually defensible and the aggregate is unusable.
+
+### What to write now
+
+| | |
+|---|---|
+| **One entry per release** | `WhatsNew/<version>-<slug>.md`, written when the release is cut |
+| **It names what COMPLETED** | features and fixes that landed in that stream — the user-visible outcome, not the pull requests |
+| **It links out** | each item points at the doc page that explains it; that page is the durable form |
+| **It does not explain** | if an item needs more than a sentence, the sentence belongs in the doc and the link belongs here |
+
+### What replaces the per-change note
+
+Nothing is lost, because the durable form never was the What's New entry —
+[conserve work products](/Doc/Architecture/AuthoringDocumentation) already requires the **doc page**
+in the same change set. A merge that changes behaviour updates its doc page, as before. What it no
+longer does is mint a dated file nobody will open.
+
+> The existing 1,292 entries are history and stay where they are. This rule governs what is written
+> from here on; a sweep that rewrites the archive would cost more than it returns.
+
+Which items a release announces follows from
+[Issue Taxonomy and the Release Readiness Gate](/Doc/Architecture/IssueTaxonomy) — the issues the
+release closes are already labelled by `feature:`, and that grouping is the outline of the entry.
+
+---
+
+## 7. See also
 
 - [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) — the end-to-end model this versioning
   feeds: merge preconditions, CI producing all images to ACR by version, and the policy-driven
