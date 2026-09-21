@@ -1159,8 +1159,14 @@ Two clusters in that sweep were one condition each, reported once per shard and 
 activation. The discriminators were already in the evidence: the memory-stream tickets differ only in
 the per-queue log **category** (`…Memory.memory-0` … `memory-7`, 8 registered queues, one provider),
 and the `[ROUTE] Routing back-pressure` tickets are split by a field the line itself explains —
-`deepest per-destination queue` ≥ 1 is head-of-line blocking, `0` is load. Consolidating on the title
+`deepest per-channel queue` ≥ 1 is head-of-line blocking, `0` is load. Consolidating on the title
 instead would have merged the two readings and lost the only thing that tells them apart.
+
+🚨 **That field was named `deepest per-destination queue` until the channel key was narrowed to
+(destination, stream), so a line from an older image reads the field the old way and a large depth
+there is over-serialisation rather than one slow leg** — see
+[Ordered Route Channels](../OrderedRouteChannels). A ticket whose samples span the change carries
+both spellings, which is the only way to tell which image produced which sample.
 
 ## What this is not
 

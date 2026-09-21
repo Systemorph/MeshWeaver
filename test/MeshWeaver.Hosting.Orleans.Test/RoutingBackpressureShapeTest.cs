@@ -30,10 +30,17 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </list>
 ///
 /// <para><b>What DOES tell them apart</b> is <c>OrderedRouteDispatcher.QueueSnapshot()</c>:
-/// <c>(64 destinations, deepest 0)</c> is breadth — every leg is executing, nothing waits on
-/// anything. <c>(1 destination, deepest 63)</c> is head-of-line blocking — 63 legs are waiting on a
+/// <c>(64 channels, deepest 0)</c> is breadth — every leg is executing, nothing waits on
+/// anything. <c>(1 channel, deepest 63)</c> is head-of-line blocking — 63 legs are waiting on a
 /// leg. The saturation report now carries that pair, so the next occurrence is diagnosable from the
 /// log line instead of from a profiler on a live pod.</para>
+///
+/// <para>🚨 <b>A channel is (destination, stream), not a destination — issue #5009.</b>
+/// <see cref="OneMultiplexerDestination_ManyStreams_IsBreadthNotHeadOfLine"/> is the third shape,
+/// and the one memex-cloud actually reported for ~1.5 h: 64 legs to ONE cache hub, 62 of them
+/// queued, which read as head-of-line blocking because the channel key was the address. They were
+/// 64 INDEPENDENT streams that had no reason to wait on each other, and after #5009 that shape
+/// reports as breadth over one destination.</para>
 ///
 /// <para>Deterministic and cluster-free: legs are <see cref="Subject{T}"/>s, so "in flight" and
 /// "completed" are decided by the test, never by a timer.</para>
@@ -51,8 +58,9 @@ public class RoutingBackpressureShapeTest
     /// the moment they are all enqueued. Bookkeeping is byte-for-byte what <c>RoutingGrain</c> does:
     /// increment at enqueue, decrement in the leg-completed callback.
     /// </summary>
-    private static (int InFlight, int Destinations, int Deepest, Subject<Unit>[] Legs, Func<int> Completed)
-        Enqueue(int legs, Func<int, string> destinationOf, OrderedRouteDispatcher dispatcher)
+    private static (int InFlight, int Channels, int Destinations, int Deepest, Subject<Unit>[] Legs, Func<int> Completed)
+        Enqueue(int legs, Func<int, string> destinationOf, OrderedRouteDispatcher dispatcher,
+            Func<int, string?>? streamOf = null)
     {
         var subjects = Enumerable.Range(0, legs).Select(_ => new Subject<Unit>()).ToArray();
         var inFlight = 0;
@@ -63,6 +71,7 @@ public class RoutingBackpressureShapeTest
             Interlocked.Increment(ref inFlight);
             dispatcher.Enqueue(
                 destinationOf(i),
+                streamOf?.Invoke(i),
                 subject.AsObservable(),
                 () =>
                 {
@@ -71,8 +80,9 @@ public class RoutingBackpressureShapeTest
                 });
         }
 
-        var (destinations, deepest) = dispatcher.QueueSnapshot();
-        return (Volatile.Read(ref inFlight), destinations, deepest, subjects, () => Volatile.Read(ref completed));
+        var (channels, destinations, deepest) = dispatcher.QueueSnapshot();
+        return (Volatile.Read(ref inFlight), channels, destinations, deepest, subjects,
+            () => Volatile.Read(ref completed));
     }
 
     /// <summary>
@@ -90,7 +100,7 @@ public class RoutingBackpressureShapeTest
         var spread = new OrderedRouteDispatcher(pool, NullLogger.Instance);
         var a = Enqueue(Legs, i => $"portal/user-{i}", spread);
 
-        Assert.True(SpinWait.SpinUntil(() => spread.QueueSnapshot().Destinations == Legs, Budget),
+        Assert.True(SpinWait.SpinUntil(() => spread.QueueSnapshot().Channels == Legs, Budget),
             "all 64 destinations must have claimed a queue entry");
         var aSnapshot = spread.QueueSnapshot();
 
@@ -110,12 +120,14 @@ public class RoutingBackpressureShapeTest
             + "support the claim that 'a delivery leg is not completing'");
 
         // 2️⃣ …and in shape A nothing is stuck at all: 64 in flight is a perfectly healthy silo.
+        aSnapshot.Channels.Should().Be(Legs);
         aSnapshot.Destinations.Should().Be(Legs);
         aSnapshot.Deepest.Should().Be(0,
             "64 independent destinations each with one executing leg is BREADTH — no leg is waiting "
             + "on another, so reaching the reporting threshold here means load, not a wedge");
 
         // 3️⃣ The discriminator the saturation report now carries.
+        bSnapshot.Channels.Should().Be(1);
         bSnapshot.Destinations.Should().Be(1);
         bSnapshot.Deepest.Should().Be(Legs - 1,
             "one destination with 63 legs stacked behind its head IS head-of-line blocking — this is "
@@ -130,8 +142,59 @@ public class RoutingBackpressureShapeTest
             "every leg must terminate and release its slot — including the 63 that were queued, which "
             + "the dispatcher subscribes one at a time as the one ahead completes");
         Assert.True(SpinWait.SpinUntil(
-                () => spread.ActiveDestinations == 0 && blocked.ActiveDestinations == 0, Budget),
-            "a destination's entry is removed the moment its queue drains — a silo that has served "
+                () => spread.ActiveChannels == 0 && blocked.ActiveChannels == 0, Budget),
+            "a channel's entry is removed the moment its queue drains — a silo that has served "
             + "millions of short-lived portal/{user} addresses must hold none of them");
+    }
+
+    /// <summary>
+    /// 🚨 THE #5009 SHAPE, on both sides of the fix. 64 legs to ONE stream-routed destination — a
+    /// multiplexer hub, which every one of them is: <c>cache/{meshId}</c> fronts one
+    /// <c>sync/{streamId}</c> sub-hub per observed node, and <c>portal/{userId}</c> the same for a
+    /// viewer's areas.
+    ///
+    /// <para><b>Before:</b> the channel key was the ADDRESS, so those 64 independent streams shared
+    /// one FIFO — 1 channel, deepest 63, one in-flight grain call at a time. On memex-cloud that was
+    /// 62 of 64 legs stacked behind one <c>cache/…</c> address for ~1.5 h, reported (correctly, by
+    /// the log line's own rule) as head-of-line blocking, while the peer pod — whose own cache
+    /// channel is LOCAL and therefore fast — showed deepest 0 and read as load. Nothing was stuck:
+    /// the channel key simply could not let unrelated streams overlap.</para>
+    ///
+    /// <para><b>After:</b> 64 channels over 1 destination, deepest 0 — breadth. Which is what the
+    /// silo was actually doing, and is now what the log line says.</para>
+    ///
+    /// <para>This is a load control as much as a blocking control: the legs are all in flight and
+    /// the dispatcher is at its busiest, and it must still drain to zero holding no per-stream
+    /// state.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void OneMultiplexerDestination_ManyStreams_IsBreadthNotHeadOfLine()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        using var pool = new IoPool(256);
+        var dispatcher = new OrderedRouteDispatcher(pool, NullLogger.Instance);
+
+        var m = Enqueue(Legs, _ => "cache/12xX8OXQIEmdwvf_ZZ8LjA", dispatcher, i => $"sync/stream-{i}");
+
+        Assert.True(SpinWait.SpinUntil(() => dispatcher.QueueSnapshot().Channels == Legs, Budget),
+            "each of the 64 streams must hold its OWN channel — they share a destination hub, not an "
+            + "ordering relationship");
+        var snapshot = dispatcher.QueueSnapshot();
+
+        m.InFlight.Should().Be(Legs);
+        snapshot.Channels.Should().Be(Legs);
+        snapshot.Destinations.Should().Be(1,
+            "all 64 channels front the SAME multiplexer hub — that is the shape #5009 was filed on");
+        snapshot.Deepest.Should().Be(0,
+            "no leg is waiting on a leg: 64 frames of 64 DIFFERENT streams have no ordering "
+            + "relationship, so serialising them was over-serialisation, never head-of-line blocking. "
+            + "Before #5009 this identical traffic reported deepest 63");
+
+        foreach (var leg in m.Legs) leg.OnCompleted();
+        Assert.True(SpinWait.SpinUntil(() => m.Completed() == Legs, Budget),
+            "every leg must terminate and release its slot");
+        Assert.True(SpinWait.SpinUntil(() => dispatcher.ActiveChannels == 0, Budget),
+            "a channel is held only while it has work in flight — a silo that has served millions of "
+            + "short-lived streams must retain none of them");
     }
 }
