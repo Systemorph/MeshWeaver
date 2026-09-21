@@ -194,6 +194,13 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // The declared public surface — what the installer's access step scopes a
                         // free package's public read to.
                         PublicSegments = peeked.PublicSegments,
+                        // The declared PROTECTED surface — the segments that stay closed even on an
+                        // otherwise public partition. Read here for the same dead-metadata reason as
+                        // everything above, and this one had a security consequence: unread, a
+                        // pre-installed partition declaring `_Submissions` got the fully-public
+                        // policy and core's legacy-gate heal then retired the Store's own denies on
+                        // the next boot (MeshWeaver#4716).
+                        ProtectedSegments = peeked.ProtectedSegments,
                         // The compiled-module declaration (#1664) — what routes this package
                         // through the module bundle funnel on top of its content install — and
                         // its declared platform floor, the module lane's landing gate.
@@ -233,6 +240,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
         string? NodeType, string? Name, string? Description,
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
         bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
+        ImmutableList<string> ProtectedSegments,
         string? License, string? ContactEmail, string? Module, string? MinMeshVersion,
         ImmutableList<PackageParameter> Parameters, string? Tier);
 
@@ -254,6 +262,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             var requires = ImmutableList<string>.Empty;
             string? license = null;
             var publicSegments = ImmutableList<string>.Empty;
+            var protectedSegments = ImmutableList<string>.Empty;
             string? module = null;
             string? minMeshVersion = null;
             var parameters = ImmutableList<PackageParameter>.Empty;
@@ -307,6 +316,17 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         .Where(e => e.ValueKind == JsonValueKind.String)
                         .Select(e => e.GetString()!)
                         .ToImmutableList();
+                // The plugin's declared PROTECTED surface ("protectedSegments") — the inverse
+                // declaration: the child segments that must stay closed to Public/Anonymous even on
+                // a partition published in full. Unread, the installer could neither pick a shape
+                // that honours it nor stop its own legacy-gate heal from retiring the denies the
+                // Store's gate writes for it (MeshWeaver#4716).
+                if (content.TryGetProperty("protectedSegments", out var prot)
+                    && prot.ValueKind == JsonValueKind.Array)
+                    protectedSegments = prot.EnumerateArray()
+                        .Where(e => e.ValueKind == JsonValueKind.String)
+                        .Select(e => e.GetString()!)
+                        .ToImmutableList();
                 // The package's compiled-module declaration ("module": the entry-assembly name,
                 // #1664). Read here because the INSTALL funnel and the registry's bundle index both
                 // key on the manifest — leaving it unread would make it dead metadata, the defect
@@ -340,8 +360,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("description", out var d) ? d.GetString() : null,
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
-                price, currency, poster, preInstalled, requires, publicSegments, license,
-                contactEmail, module, minMeshVersion, parameters, tier);
+                price, currency, poster, preInstalled, requires, publicSegments, protectedSegments,
+                license, contactEmail, module, minMeshVersion, parameters, tier);
         }
         catch (JsonException ex)
         {

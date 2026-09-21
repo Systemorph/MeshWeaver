@@ -885,9 +885,17 @@ public static class PackageInstaller
 
     /// <summary>
     /// The one node whose presence PROVES <see cref="EnsureDeclaredAccess"/> did its job for this
-    /// manifest — the fully-public shape's <c>{partition}/_Policy</c>, or the scoped shape's root
-    /// <c>Public</c> grant. <c>null</c> when the manifest declares nothing to publish (a commercial
-    /// package installs gated on purpose, so there is no marker and nothing to verify). Pure.
+    /// manifest — the fully-public shape's <c>{partition}/_Policy</c>, or the root <c>Public</c> grant
+    /// of either GRANT-based shape (scoped-public, or open-with-protected-segments). <c>null</c> when
+    /// the manifest declares nothing to publish (a commercial package installs gated on purpose, so
+    /// there is no marker and nothing to verify). Pure.
+    ///
+    /// <para>🚨 It must track the shape DECISION in <see cref="EnsureDeclaredAccess"/> exactly: a
+    /// marker naming a node the chosen shape does not write turns the post-condition into an error on a
+    /// correct install. The open-with-protected-segments shape
+    /// (<see cref="EnsureOpenWithProtectedSegments"/>) writes a <c>_Policy</c> too — one that
+    /// WITHHOLDS <c>PublicRead</c> — precisely so this marker keeps holding for a pre-installed
+    /// manifest whichever of the two the declaration selects (MeshWeaver#4716).</para>
     /// </summary>
     internal static string? DeclaredAccessMarker(PackageManifest manifest, string? partition)
     {
@@ -957,8 +965,18 @@ public static class PackageInstaller
     /// <list type="bullet">
     ///   <item><b>Pre-installed</b> (<see cref="PackageManifest.PreInstalled"/>) — platform
     ///     baseline, fully public: <c>PartitionAccessPolicy { PublicRead = true }</c> at
-    ///     <c>{partition}/_Policy</c> (#902). Declared segments are irrelevant — everything is
+    ///     <c>{partition}/_Policy</c> (#902). Declared PUBLIC segments are irrelevant — everything is
     ///     readable.</item>
+    ///   <item>🚨 <b>Anything declaring <see cref="PackageManifest.ProtectedSegments"/></b> — public
+    ///     EXCEPT the declared segments, published through root Public+Anonymous Viewer GRANTS with a
+    ///     Public+Anonymous DENY on each declared segment, and NO <c>_Policy</c>
+    ///     (<see cref="EnsureOpenWithProtectedSegments"/>). This bullet used to read "declared
+    ///     segments are irrelevant — everything is readable" for the pre-installed case, and it was:
+    ///     the fully-public policy's <c>PublicRead</c> is ORed in AFTER the deny subtraction on the C#
+    ///     read path, so every deny protecting a declared segment under it was inert there while the
+    ///     SQL fold honoured it — one segment, two answers, which is the paywall-bypass shape. A
+    ///     submission inbox was published that way (MeshWeaver#4716). Takes precedence over both
+    ///     branches above, pre-installed included.</item>
     ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent AND no
     ///     <see cref="PackageManifest.ContactEmail"/>) with no declared
     ///     <see cref="PackageManifest.PublicSegments"/> — the same fully-public policy: a free
@@ -1022,10 +1040,188 @@ public static class PackageInstaller
         }
 
         var declared = DeclaredPublicSegments(manifest);
+        var isolated = DeclaredProtectedPaths(manifest, partition!);
+
+        // 🚨 A DECLARED PROTECTED SEGMENT TAKES THE PARTITION OFF THE POLICY MECHANISM ENTIRELY
+        // (MeshWeaver#4716). The fully-public shape publishes through PartitionAccessPolicy.PublicRead,
+        // which the C# evaluator ORs in AFTER the deny subtraction — so under it a Public/Anonymous
+        // deny withholds nothing on that read path, while the SQL projection's longest-prefix fold
+        // honours it. A partition that has to say "public, except here" therefore cannot use it: the
+        // two read paths would answer differently about the one segment that matters, which is the
+        // paywall-bypass shape (readable by exact path, absent from every listing).
+        //
+        // Root Public+Anonymous Viewer GRANTS carry the same publication and are resolved the same
+        // way by both folds — readability is a ROLE, and a deeper deny removes the role. So a
+        // declaration of protected segments routes to the grant-based shape whether the package is
+        // pre-installed or free-with-public-segments, and the declared segments are gated in it.
+        if (isolated.Count > 0)
+            return declared.Count > 0
+                ? EnsureScopedPublicRead(
+                    hub, manifest, partition!, declared, isolated, installedPaths, logger)
+                : EnsureOpenWithProtectedSegments(hub, manifest, partition!, isolated, logger);
+
         return !manifest.PreInstalled && declared.Count > 0
-            ? EnsureScopedPublicRead(hub, manifest, partition!, declared, installedPaths, logger)
+            ? EnsureScopedPublicRead(hub, manifest, partition!, declared, [], installedPaths, logger)
             : EnsurePartitionPublicRead(hub, manifest, partition!, logger);
     }
+
+    /// <summary>
+    /// The OPEN-WITH-EXCEPTIONS shape: root Public+Anonymous Viewer GRANTS at the partition (which
+    /// inherit strictly downward, so everything the package ships is readable by everyone) plus a
+    /// Public+Anonymous Viewer DENY on each segment the manifest declares in
+    /// <see cref="PackageManifest.ProtectedSegments"/>. NO <c>_Policy</c> is written — the whole
+    /// point is to publish through grants rather than through
+    /// <see cref="PartitionAccessPolicy.PublicRead"/>, which the C# fold and the SQL fold do not
+    /// resolve the same way when a deeper deny is present (MeshWeaver#4716).
+    ///
+    /// <para><b>What "protected" means here.</b> A deny names only the two well-known subjects, so it
+    /// takes the read away from the anonymous and role-less public and from nobody else: the people
+    /// who triage the segment hold their own grant and are untouched, and a write that runs as SYSTEM
+    /// (the Feedback inbox's submit path impersonates) short-circuits the fold entirely. That is what
+    /// keeps a submission inbox SUBMITTABLE while not being READABLE — the property a deeper
+    /// <c>Read = false</c> cap cannot express, because it darkens the reviewers too.</para>
+    ///
+    /// <para><b>Denies first, root grants last</b> — the same ordering rule as the scoped shape, for
+    /// the same reason: the root grant is what opens the partition, so an interrupted publication must
+    /// leave the protected segment CLOSED. Create-only and sequential (the access table deadlocks
+    /// under parallel writers, 40P01); a steady-state re-run writes nothing.</para>
+    /// </summary>
+    private static IObservable<Unit> EnsureOpenWithProtectedSegments(
+        IMessageHub hub, PackageManifest manifest, string partition,
+        IReadOnlyCollection<string> isolated, ILogger? logger)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var policyPath = $"{partition}/{PartitionPolicyId}";
+        var existing = persistence is not null
+            ? persistence.Read(policyPath, hub.JsonSerializerOptions).Take(1)
+            : Observable.Return<MeshNode?>(null);
+        return existing.SelectMany(current => PublishExceptProtected(
+            hub, partition, isolated, current,
+            // This step publishes only where it WOULD have published with the blanket policy: no
+            // policy yet, or one that declares PublicRead. A policy already withholding it is a
+            // partition this step leaves closed, and a declaration must not open it — see the
+            // create-only remarks on PublishExceptProtected.
+            publish: current is null || DeclaresPublicRead(current, hub),
+            (denies, grants, policyWritten) => logger?.LogInformation(
+                "[PackageInstaller] {Id} declares {Partition} public EXCEPT [{Protected}] — gated the "
+                + "protected segment(s) ({Denies} deny node(s) written) and published the rest through "
+                + "root Public/Anonymous Viewer grants ({Grants} written, _Policy rewritten to withhold "
+                + "PublicRead: {PolicyWritten}; 0 grants means the partition already withheld public "
+                + "read and is left closed). The blanket policy grant cannot express this: the C# "
+                + "evaluator ORs it in AFTER the deny subtraction, so the segment would be readable by "
+                + "exact path there while the SQL fold's longest-prefix scan correctly denied it "
+                + "(MeshWeaver#4716)",
+                manifest.Id, partition, string.Join(", ", isolated), grants, denies, policyWritten)));
+    }
+
+    /// <summary>
+    /// Writes the OPEN-WITH-EXCEPTIONS shape and returns once it is in place: a Public+Anonymous
+    /// Viewer DENY on each path in <paramref name="protectedScopes"/>, then a <c>_Policy</c> that
+    /// explicitly withholds <c>PublicRead</c>, then the two root Public+Anonymous Viewer GRANTS.
+    ///
+    /// <para><b>The order is the safe-failure order.</b> The root grant is what OPENS the partition
+    /// and grants inherit strictly downward, and the policy flip is what makes the denies BITE, so an
+    /// interrupted run must never leave the partition open with the segment ungated. Written this way
+    /// the worst interruption leaves the PUBLIC half dark — recoverable on the next pass, and the half
+    /// it is safe to fail on.</para>
+    ///
+    /// <para><b>The access nodes are create-only; the policy is not.</b> An existing grant or deny is
+    /// a shape somebody chose and is left exactly as it is. A policy that declares <c>PublicRead</c>,
+    /// though, CONTRADICTS the protection being established — it is the same contradiction the legacy
+    /// heal exists for, in the other direction — so it is rewritten with <c>PublicRead = false</c> and
+    /// every other field (a <c>RedirectOnDenied</c> funnel) preserved. A policy that already withholds
+    /// it is left alone. The node is also the record OF the decision, so the next reader finds the
+    /// partition saying "not public-read" rather than having to infer it from the grants.</para>
+    ///
+    /// <para>🚨 <b><paramref name="publish"/> is the create-only rule, and it is the difference between
+    /// MOVING a publication and ADDING one.</b> This shape exists to take a partition this step would
+    /// have opened with a policy and open it with grants instead — never to open one it would have left
+    /// closed. So the policy flip and the root grants happen only when this step would otherwise have
+    /// published: no policy yet (the original create), a policy that declares <c>PublicRead</c>, or the
+    /// legacy fingerprint the heal opens on. On every other partition only the DENIES are written,
+    /// because a deny can only ever narrow. Without that distinction a declaration would have re-opened
+    /// a pre-installed partition an operator had deliberately closed.</para>
+    /// </summary>
+    private static IObservable<Unit> PublishExceptProtected(
+        IMessageHub hub, string partition, IReadOnlyCollection<string> protectedScopes,
+        MeshNode? currentPolicy, bool publish, Action<int, int, bool> report)
+    {
+        var denies = new List<MeshNode>();
+        foreach (var scope in protectedScopes)
+        {
+            denies.Add(ViewerAssignment(scope, WellKnownUsers.Public, denied: true));
+            denies.Add(ViewerAssignment(scope, WellKnownUsers.Anonymous, denied: true));
+        }
+        var grants = new List<MeshNode>
+        {
+            ViewerAssignment(partition, WellKnownUsers.Public, denied: false),
+            ViewerAssignment(partition, WellKnownUsers.Anonymous, denied: false),
+        };
+
+        // A policy that grants public read has to go — under it the denies above withhold nothing on
+        // the C# read path. An absent one is created so the partition CARRIES the decision (and so the
+        // declared-access post-condition marker is where DeclaredAccessMarker says it is).
+        // 🚨 PUBLISHING IS NOT THIS STEP'S TO ADD — it only ever MOVES a publication off the policy.
+        // When `publish` is false this step would not have opened the partition either (a policy that
+        // already withholds public read and carries no legacy fingerprint is left alone, which is the
+        // create-only rule), so writing the root grants here would OPEN a partition somebody closed.
+        // Measured on the control instance memex.systemorph.com 2026-09-21: `Feedback/_Policy` carries
+        // no `publicRead` and the partition has no `_Submissions` at all, so the declaration alone must
+        // add nothing but the gate. The DENIES are written either way — they can only narrow.
+        var policyContent = currentPolicy?.ContentAs<PartitionAccessPolicy>(hub.JsonSerializerOptions);
+        var rewritePolicy = publish && (currentPolicy is null || policyContent is not { PublicRead: false });
+        var policyWrite = rewritePolicy
+            ? Upsert(hub, WithholdPublicReadPolicy(partition, policyContent)).Select(_ => 1)
+            : Observable.Return(0);
+        if (!publish)
+            return CreateOnly(hub, denies)
+                .Do(deniesWritten => report(deniesWritten, 0, false))
+                .Select(_ => Unit.Default);
+
+        return CreateOnly(hub, denies)
+            .SelectMany(deniesWritten => policyWrite
+                .SelectMany(_ => CreateOnly(hub, grants))
+                .Do(grantsWritten => report(deniesWritten, grantsWritten, rewritePolicy)))
+            .Select(_ => Unit.Default);
+    }
+
+    /// <summary>
+    /// Writes each node that is not already there, SEQUENTIALLY (the access table deadlocks under
+    /// parallel writers, 40P01), and yields how many landed. An existing node is left exactly as it
+    /// is — a shape someone chose is never widened or narrowed here — and a failed write PROPAGATES
+    /// (<c>Upsert</c> throws on <c>!Success</c>). Cold.
+    /// </summary>
+    private static IObservable<int> CreateOnly(IMessageHub hub, IEnumerable<MeshNode> nodes)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        return nodes
+            .Select(node =>
+            {
+                var existing = persistence is not null
+                    ? persistence.Read(node.Path, hub.JsonSerializerOptions).Take(1)
+                    : Observable.Return<MeshNode?>(null);
+                return existing.SelectMany(current => current is not null
+                    ? Observable.Return(0)
+                    : Upsert(hub, node));
+            })
+            .ToObservable()
+            .Concat()
+            .Sum();
+    }
+
+    /// <summary>
+    /// The policy node of a partition published through GRANTS: <c>PublicRead = false</c>, every other
+    /// field of an existing policy preserved. The mirror image of <see cref="PublicReadPolicy"/>.
+    /// </summary>
+    private static MeshNode WithholdPublicReadPolicy(
+        string partition, PartitionAccessPolicy? existingContent) =>
+        new(PartitionPolicyId, partition)
+        {
+            NodeType = PartitionAccessPolicyNodeType.NodeType,
+            Name = "Access Policy",
+            State = MeshNodeState.Active,
+            Content = (existingContent ?? new PartitionAccessPolicy()) with { PublicRead = false },
+        };
 
     /// <summary>
     /// The fully-public shape — <c>PartitionAccessPolicy { PublicRead = true }</c> at
@@ -1115,58 +1311,113 @@ public static class PackageInstaller
             if (current is not null && DeclaresPublicRead(current, hub))
                 return Observable.Return(Unit.Default);
 
-            // No policy at all: the original create. Nothing to contradict, so no sweep.
-            if (current is null)
-                return Upsert(hub, PublicReadPolicy(partition, existingContent: null))
-                    .Do(_ => logger?.LogInformation(
-                        "[PackageInstaller] {Id} declares public content — published {Partition} "
-                        + "read-only to everyone via {Path}", manifest.Id, partition, policyPath))
-                    .Select(_ => Unit.Default);
-
-            // A policy that withholds public read. Heal it ONLY together with the legacy denies that
-            // identify it as the pre-#902 scoped gate; on their own it is a deliberate shipped
-            // policy and stays untouched.
-            //
-            // 🚨 …and ONLY on a PRE-INSTALLED partition. The fingerprint below — a policy that
-            // withholds public read PLUS Public/Anonymous Viewer denies on every child — is NOT
-            // unreachable by current code, which is what this heal used to assume. The Store's
-            // gating reconcile (`PluginGate.SeedGating`, in-mesh source in MeshWeaver.Plugins, so
-            // invisible to `dotnet build` and to any grep over core's *.cs) writes EXACTLY that
-            // shape, deliberately and continuously, for every non-pre-installed plugin whose
-            // manifest declares no publicSegments — its stated model is "the cover + declared
-            // public segments are the ONLY public surface … there is no open-content tier".
-            //
-            // So on such a partition the heal is not a migration, it is one half of a ping-pong:
-            // core retires the denies and opens the policy, the gating reconcile re-denies and
-            // re-gates, and neither ever sticks. Measured on CD run 34190841613 (2026-09-08):
-            // Chess's idempotence re-install retired 26 denies, `PluginGating` logged
-            // "reconcile is NOT CONVERGING — rewrote 26 …", and the heal's own `Chess/_Policy`
-            // write starved behind the contention for 20s and faulted
-            // ("MeshNode Unknown at 'Chess/_Policy': TimeoutException") — which failed the
-            // package-install idempotence gate and left the promoted image set UNSEALED. The
-            // same fight, at a smaller amplitude, is visible in the run that passed 65 minutes
-            // earlier (9 denies retired instead of 26): identical content, different count, which
-            // is the tell that the steady state was decided by a race rather than by either rule.
-            //
-            // The #902 incident this heal exists for was about the platform BASELINE — "its 8
-            // pre-installed partitions carried 136 legacy denies while memex/systemorph —
-            // installed after #902 — were correct" — and a pre-installed partition is the one
-            // case where the two components AGREE: SeedGating's pre-installed arm retracts the
-            // very denies this sweep retires, so nothing fights and the heal sticks. Restricting
-            // it there keeps the incident's fix intact and takes core out of a contest it cannot
-            // win. A non-pre-installed partition's access model belongs to the gating reconcile;
-            // if that model is wrong, it is wrong in ONE place, which is the point.
-            if (!manifest.PreInstalled)
+            return WellKnownDenies(hub, partition, logger).SelectMany(found =>
             {
-                logger?.LogDebug(
-                    "[PackageInstaller] {Partition} withholds public read and is not pre-installed "
-                    + "— leaving its policy to the gating reconcile that owns it (no legacy heal)",
-                    partition);
-                return Observable.Return(Unit.Default);
-            }
+                // A policy that withholds public read on a NON-pre-installed partition: core writes
+                // nothing at all here, so this is decided FIRST and every arm below is a case where
+                // core would otherwise WRITE.
+                //
+                // 🚨 The fingerprint the heal keys on — a policy that withholds public read PLUS
+                // Public/Anonymous Viewer denies on every child — is NOT unreachable by current code,
+                // which is what this heal used to assume. The Store's gating reconcile
+                // (`PluginGate.SeedGating`, in-mesh source in MeshWeaver.Plugins, so invisible to
+                // `dotnet build` and to any grep over core's *.cs) writes EXACTLY that shape,
+                // deliberately and continuously, for every non-pre-installed plugin whose manifest
+                // declares no publicSegments — its stated model is "the cover + declared public
+                // segments are the ONLY public surface … there is no open-content tier".
+                //
+                // So on such a partition the heal is not a migration, it is one half of a ping-pong:
+                // core retires the denies and opens the policy, the gating reconcile re-denies and
+                // re-gates, and neither ever sticks. Measured on CD run 34190841613 (2026-09-08):
+                // Chess's idempotence re-install retired 26 denies, `PluginGating` logged
+                // "reconcile is NOT CONVERGING — rewrote 26 …", and the heal's own `Chess/_Policy`
+                // write starved behind the contention for 20s and faulted
+                // ("MeshNode Unknown at 'Chess/_Policy': TimeoutException") — which failed the
+                // package-install idempotence gate and left the promoted image set UNSEALED. The
+                // same fight, at a smaller amplitude, is visible in the run that passed 65 minutes
+                // earlier (9 denies retired instead of 26): identical content, different count, which
+                // is the tell that the steady state was decided by a race rather than by either rule.
+                //
+                // The #902 incident this heal exists for was about the platform BASELINE — "its 8
+                // pre-installed partitions carried 136 legacy denies while memex/systemorph —
+                // installed after #902 — were correct" — and a pre-installed partition is the one
+                // case where the two components AGREE: SeedGating's pre-installed arm retracts the
+                // very denies this sweep retires, so nothing fights and the heal sticks. Restricting
+                // it there keeps the incident's fix intact and takes core out of a contest it cannot
+                // win. A non-pre-installed partition's access model belongs to the gating reconcile;
+                // if that model is wrong, it is wrong in ONE place, which is the point.
+                if (current is not null && !manifest.PreInstalled)
+                {
+                    logger?.LogDebug(
+                        "[PackageInstaller] {Partition} withholds public read and is not pre-installed "
+                        + "— leaving its policy to the gating reconcile that owns it (no legacy heal)",
+                        partition);
+                    return Observable.Return(Unit.Default);
+                }
 
-            return ContradictingDenies(hub, partition, logger).SelectMany(stale =>
-            {
+                // 🚨 SOMEBODY ELSE HAS DELIBERATELY GATED A SATELLITE HERE — publish through GRANTS,
+                // and never write the blanket policy over it (MeshWeaver#4716). This arm is the
+                // EVIDENCE-driven twin of the declaration-driven EnsureOpenWithProtectedSegments, and
+                // it exists because the declaration does not always reach this code: the boot repair
+                // pass drives the re-assert from the INSTALL RECORD's stored manifest, and a record
+                // stamped before PackageManifest.ProtectedSegments was read carries none. Without this
+                // arm such a record republishes the segment on the next boot — the policy write ALONE
+                // is enough, no delete required, since under PublicRead the existing denies are inert
+                // on the C# read path — which is exactly how a submission inbox came to be
+                // world-readable with the Store's protection sitting right there, intact and doing
+                // nothing.
+                //
+                // The inference is sound because the installer's OWN shape never produces such a deny
+                // (GatedChildRoots skips every `_` segment — see IsSatelliteScopedDeny), so the only
+                // thing that can have written one is a live protection.
+                //
+                // 🚨 The two rules COMPOSE — this arm must not shadow the legacy heal. A partition can
+                // carry both a live satellite protection and genuine pre-#902 damage on its ordinary
+                // children, and returning early here would leave those children dark forever while
+                // looking like the right answer. So the legacy denies are still retired, under the
+                // same pre-installed restriction, and only then is the partition published.
+                if (found.Protected.Count > 0)
+                {
+                    var alsoLegacy = manifest.PreInstalled && found.Legacy.Count > 0
+                        ? Retire(hub, found.Legacy, partition, logger)
+                            .Do(_ => logger?.LogInformation(
+                                "[PackageInstaller] {Id} carries the pre-#902 gate on [{Legacy}] as "
+                                + "well — retiring those, while the protected segments stay closed",
+                                manifest.Id, string.Join(", ", found.Legacy)))
+                        : Observable.Return(Unit.Default);
+                    return alsoLegacy.SelectMany(_ => PublishExceptProtected(
+                        hub, partition, found.Protected, current,
+                        // Same create-only rule as the declaration arm: publish only where this step
+                        // would have. `current is null` is its original create; the legacy fingerprint
+                        // is the one case where it deliberately OPENS an existing closed policy — and
+                        // it has just retired those denies above, so the grants replace them.
+                        publish: current is null
+                                 || (manifest.PreInstalled && found.Legacy.Count > 0),
+                        (denies, grants, policyWritten) => logger?.LogWarning(
+                            "[PackageInstaller] {Id} declares {Partition} fully public, but [{Scopes}] "
+                            + "carry a deliberate Public/Anonymous deny that this installer cannot "
+                            + "have written — publishing through root grants instead and withholding "
+                            + "PublicRead (grants {Grants}, denies {Denies}, policy rewritten "
+                            + "{PolicyWritten}). A PublicRead policy would leave those denies INERT on "
+                            + "the C# read path while the SQL fold honours them. If the segments are "
+                            + "meant to be public, retire the denies — do not add PublicRead "
+                            + "(MeshWeaver#4716)",
+                            manifest.Id, partition, string.Join(", ", found.Protected),
+                            grants, denies, policyWritten)));
+                }
+
+                // No policy at all: the original create. Nothing to contradict, so no sweep.
+                if (current is null)
+                    return Upsert(hub, PublicReadPolicy(partition, existingContent: null))
+                        .Do(_ => logger?.LogInformation(
+                            "[PackageInstaller] {Id} declares public content — published {Partition} "
+                            + "read-only to everyone via {Path}", manifest.Id, partition, policyPath))
+                        .Select(_ => Unit.Default);
+
+                // A pre-installed policy that withholds public read. Heal it ONLY together with the
+                // legacy denies that identify it as the pre-#902 scoped gate; on their own it is a
+                // deliberate shipped policy and stays untouched.
+                var stale = found.Legacy;
                 if (stale.Count == 0)
                     return Observable.Return(Unit.Default);
 
@@ -1208,8 +1459,18 @@ public static class PackageInstaller
         policy.ContentAs<PartitionAccessPolicy>(hub.JsonSerializerOptions) is { PublicRead: true };
 
     /// <summary>
-    /// The Public/Anonymous Viewer DENIES inside <paramref name="partition"/> — the fingerprint of
-    /// the pre-#902 scoped gate. Only the two well-known subjects
+    /// The Public/Anonymous Viewer DENIES inside <paramref name="partition"/>, SPLIT into the two
+    /// kinds the fully-public branch has to treat oppositely:
+    /// <list type="bullet">
+    ///   <item><b>Legacy</b> — a deny at a scope the installer's own scoped shape could have written
+    ///     (the partition root, or an ordinary child). That is the fingerprint of the pre-#902 gate and
+    ///     the heal may retire it.</item>
+    ///   <item><b>Protected</b> — a deny at (or under) an UNDERSCORE SATELLITE scope, which this
+    ///     installer has never written and therefore cannot be its damage: a live protection from the
+    ///     plugin machinery's <c>ProtectedSegments</c> arm. It is never retired, and its presence takes
+    ///     the partition off the blanket-policy shape altogether (MeshWeaver#4716).</item>
+    /// </list>
+    /// Only the two well-known subjects
     /// (<see cref="WellKnownUsers.Public"/> / <see cref="WellKnownUsers.Anonymous"/>) with an
     /// entirely denied role set count: every deny naming a real user or group, and every grant, is
     /// invisible to this and therefore never at risk.
@@ -1218,13 +1479,25 @@ public static class PackageInstaller
     /// partition on which no user holds a role by construction. A listing failure yields NOTHING
     /// rather than throwing, which makes the caller leave the partition untouched: healing on an
     /// unknown deny set is the one outcome worse than not healing.</para>
+    ///
+    /// <para>🚨 <b>The split is what stops the heal retiring a live protection, and reading the two as
+    /// one republished a submission inbox (MeshWeaver#4716).</b> The scoped shape whose damage this heal
+    /// exists to undo cannot produce a satellite-scoped deny: <see cref="GatedChildRoots"/> skips every
+    /// `_`-prefixed segment, so no version of this installer has ever written one. Matching on it made
+    /// the heal DELETE live security state and republish the segment, silently, on every boot, wearing
+    /// an INFO line that called it "the pre-#902 gate". The exclusion is by CONSTRUCTION, not by taste:
+    /// this sweep may only retire what this sweep's own past self could have written. It is deliberately
+    /// independent of whether the manifest still declares the segment, because an install RECORD stamped
+    /// before <see cref="PackageManifest.ProtectedSegments"/> was read carries no declaration at all,
+    /// and the boot repair pass drives this from that record.</para>
     /// </summary>
-    private static IObservable<IReadOnlyList<string>> ContradictingDenies(
-        IMessageHub hub, string partition, ILogger? logger)
+    private static IObservable<(IReadOnlyList<string> Legacy, IReadOnlyList<string> Protected)>
+        WellKnownDenies(IMessageHub hub, string partition, ILogger? logger)
     {
+        var empty = ((IReadOnlyList<string>)[], (IReadOnlyList<string>)[]);
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return Observable.Return<IReadOnlyList<string>>([]);
+            return Observable.Return(empty);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return Observable.Using(
@@ -1234,17 +1507,40 @@ public static class PackageInstaller
                     + $"nodeType:{AccessAssignmentNodeType.NodeType} limit:{QueryLimit}")))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .Select(change => (IReadOnlyList<string>)change.Items
-                .Where(node => IsWellKnownDeny(node, hub))
-                .Select(node => node.Path)
-                .ToList())
+            .Select(change =>
+            {
+                var denies = change.Items.Where(node => IsWellKnownDeny(node, hub)).ToList();
+                return (
+                    Legacy: (IReadOnlyList<string>)denies
+                        .Where(node => !IsSatelliteScopedDeny(node.Path, partition))
+                        .Select(node => node.Path).ToList(),
+                    // The deny's SCOPE, not its node path: that is what a grant/deny is written at, and
+                    // what the grant-based shape gates.
+                    Protected: (IReadOnlyList<string>)denies
+                        .Where(node => IsSatelliteScopedDeny(node.Path, partition))
+                        .Select(node => DenyScope(node.Path))
+                        .Where(scope => scope is not null)
+                        .Select(scope => scope!)
+                        .Distinct(StringComparer.Ordinal)
+                        .OrderBy(scope => scope, StringComparer.Ordinal).ToList());
+            })
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,
                     "[PackageInstaller] listing access assignments of {Partition} failed — it is "
                     + "left exactly as it is", partition);
-                return Observable.Return<IReadOnlyList<string>>([]);
+                return Observable.Return(empty);
             });
+    }
+
+    /// <summary>
+    /// The SCOPE an access assignment at <paramref name="path"/> applies to — everything before its
+    /// <c>/_Access/</c> segment. <c>null</c> when the path carries none. Pure.
+    /// </summary>
+    private static string? DenyScope(string path)
+    {
+        var cut = path.LastIndexOf($"/{AccessFolder}/", StringComparison.Ordinal);
+        return cut <= 0 ? null : path[..cut];
     }
 
     /// <summary>
@@ -1287,6 +1583,32 @@ public static class PackageInstaller
     /// declaration contradicts. Anything naming another subject, or granting rather than denying,
     /// is not one. Pure apart from the content deserialization.
     /// </summary>
+    /// <summary>
+    /// Whether an access-assignment path denies at a scope that is (or sits under) an UNDERSCORE
+    /// SATELLITE of <paramref name="partition"/> — <c>{partition}/_Submissions/_Access/…</c> and
+    /// anything deeper. Such a deny is outside the legacy fingerprint by construction: the
+    /// installer's own scoped shape never gates a satellite (<see cref="GatedChildRoots"/> skips
+    /// every `_` segment), so nothing this sweep could have written lands there, and what does is a
+    /// live protection from the plugin machinery's <c>ProtectedSegments</c> arm (MeshWeaver#4716).
+    ///
+    /// <para>The partition's OWN <c>_Access</c> container is not a satellite scope in this sense —
+    /// a deny there gates the partition root itself, which IS the shape the heal exists to undo, so
+    /// it stays in scope. Pure.</para>
+    /// </summary>
+    internal static bool IsSatelliteScopedDeny(string path, string partition)
+    {
+        var prefix = partition + "/";
+        if (path is null || !path.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        var rel = path[prefix.Length..];
+        var firstSlash = rel.IndexOf('/');
+        if (firstSlash < 0)
+            return false;                        // no scope below the partition — not a satellite
+        var segment = rel[..firstSlash];
+        return segment.StartsWith('_')
+            && !string.Equals(segment, AccessFolder, StringComparison.Ordinal);
+    }
+
     private static bool IsWellKnownDeny(MeshNode node, IMessageHub hub) =>
         node.ContentAs<AccessAssignment>(hub.JsonSerializerOptions) is { } assignment
         && (string.Equals(assignment.AccessObject, WellKnownUsers.Public, StringComparison.OrdinalIgnoreCase)
@@ -1325,9 +1647,9 @@ public static class PackageInstaller
     /// </summary>
     private static IObservable<Unit> EnsureScopedPublicRead(
         IMessageHub hub, PackageManifest manifest, string partition,
-        IReadOnlyCollection<string> declared, IEnumerable<string>? installedPaths, ILogger? logger)
+        IReadOnlyCollection<string> declared, IReadOnlyCollection<string> isolated,
+        IEnumerable<string>? installedPaths, ILogger? logger)
     {
-        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
 
@@ -1346,40 +1668,34 @@ public static class PackageInstaller
 
         return currentChildren.SelectMany(children =>
         {
-            var gated = GatedChildRoots(
-                children.Concat(installedPaths ?? []), partition, declared);
+            // 🚨 DENIES FIRST, ROOT GRANTS LAST — see PublishThroughRootGrants. The declared
+            // PROTECTED segments are unioned in because GatedChildRoots deliberately skips
+            // underscore satellites, which is exactly where a protected segment normally lives
+            // (MeshWeaver#4716): without the union a declared `_Submissions` is published by the
+            // root grant and no component gates it.
+            var gated = GatedChildRoots(children.Concat(installedPaths ?? []), partition, declared)
+                .Concat(isolated)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
 
-            // 🚨 DENIES FIRST, ROOT GRANTS LAST — the same rule EnsurePartitionPublicRead states
-            // for its heal sweep, and for the same reason: the root grant is what OPENS the
-            // partition and grants inherit strictly downward, so between the grant and a child's
-            // deny that child is publicly readable. Ordered this way an interrupted publication
-            // leaves the partition CLOSED, which is the safe half to fail on. It matters more now
-            // that this whole step runs BEFORE the package's content (#1758): the denies are
-            // established before the segments they gate even exist, so a gated child is born gated
-            // instead of being reachable until its deny catches up.
-            var shape = new List<MeshNode>();
-            foreach (var child in gated)
-            {
-                shape.Add(ViewerAssignment(child, WellKnownUsers.Public, denied: true));
-                shape.Add(ViewerAssignment(child, WellKnownUsers.Anonymous, denied: true));
-            }
-            shape.Add(ViewerAssignment(partition, WellKnownUsers.Public, denied: false));
-            shape.Add(ViewerAssignment(partition, WellKnownUsers.Anonymous, denied: false));
-
-            // Create-only, sequential; a failed write propagates (Upsert throws on !Success).
-            return shape
-                .Select(node =>
+            // 🚨 DENIES FIRST, ROOT GRANTS LAST — the root grant is what OPENS the partition and
+            // grants inherit strictly downward, so between the grant and a child's deny that child is
+            // publicly readable. Ordered this way an interrupted publication leaves the partition
+            // CLOSED, which is the safe half to fail on. It matters more now that this whole step runs
+            // BEFORE the package's content (#1758): the denies are established before the segments
+            // they gate even exist, so a gated child is born gated instead of being reachable until
+            // its deny catches up.
+            var shape = gated
+                .SelectMany(child => new[]
                 {
-                    var existing = persistence is not null
-                        ? persistence.Read(node.Path, hub.JsonSerializerOptions).Take(1)
-                        : Observable.Return<MeshNode?>(null);
-                    return existing.SelectMany(current => current is not null
-                        ? Observable.Return(0)
-                        : Upsert(hub, node));
+                    ViewerAssignment(child, WellKnownUsers.Public, denied: true),
+                    ViewerAssignment(child, WellKnownUsers.Anonymous, denied: true),
                 })
-                .ToObservable()
-                .Concat()
-                .Sum()
+                .Append(ViewerAssignment(partition, WellKnownUsers.Public, denied: false))
+                .Append(ViewerAssignment(partition, WellKnownUsers.Anonymous, denied: false));
+
+            return CreateOnly(hub, shape)
                 .Do(written => logger?.LogInformation(
                     "[PackageInstaller] {Id} declares public segments [{Segments}] — {Partition} "
                     + "cover published, {Gated} other child(ren) gated ({Written} access node(s) "
@@ -1409,6 +1725,39 @@ public static class PackageInstaller
             if (segment.Length == 0 || segment.Contains('/') || segment is "." or "..")
                 continue;
             seen.Add(segment);
+        }
+        return seen;
+    }
+
+    /// <summary>
+    /// The manifest's declared PROTECTED segments resolved to FULL PATHS under
+    /// <paramref name="partition"/>, sanitized the same way <see cref="DeclaredPublicSegments"/>
+    /// sanitizes the public ones — one path segment each, blank entries / traversals / anything
+    /// containing a slash dropped, duplicates collapsed case-insensitively.
+    ///
+    /// <para>🚨 Unlike <see cref="GatedChildRoots"/> this does NOT skip an underscore satellite:
+    /// a protected segment normally IS one (a submission inbox at <c>{partition}/_Submissions</c>),
+    /// and skipping it is what left the declaration unhonoured (MeshWeaver#4716). The `_` prefix is
+    /// not the protection — the DECLARATION is, which is why a package is still free to publish a
+    /// satellite it does not declare.</para>
+    ///
+    /// <para>Pure. Sorted so the write order (and every log line) is deterministic — the same
+    /// <c>SortedSet</c>/<c>OrdinalIgnoreCase</c> shape the Store's <c>PluginGate</c> uses for the
+    /// identical declaration, so the two components resolve one manifest to one set of paths.</para>
+    /// </summary>
+    internal static IReadOnlyCollection<string> DeclaredProtectedPaths(
+        PackageManifest manifest, string partition)
+    {
+        if (manifest.ProtectedSegments is not { Count: > 0 } segments
+            || string.IsNullOrWhiteSpace(partition))
+            return [];
+        var seen = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in segments)
+        {
+            var segment = (raw ?? string.Empty).Trim().Trim('/');
+            if (segment.Length == 0 || segment.Contains('/') || segment is "." or "..")
+                continue;
+            seen.Add($"{partition}/{segment}");
         }
         return seen;
     }
