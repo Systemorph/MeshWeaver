@@ -424,6 +424,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [AKS](DeploymentAKS)
 - [Database Migration Procedure](DatabaseMigrationProcedure) — the schema moves before the image, every roll; the 2026-09-03 wedge behind a 200, the recovery, and why a migration deadlocks under load
 - [Container Apps](DeploymentContainerApps)
+- [Hybrid delivery — GitHub for code, Azure DevOps for the deploy](HybridGitHubAzureDevOps) — for organisations whose change management lets ONLY an Azure DevOps pipeline touch the cluster: the GitHub App that merges to main is the App that triggers the deploy, one Azure Pipelines run per SEALED image set (never per push), the record selects the executor, and the pipeline ends with one signed report — same record, same action, a different executor
 - [In-cluster databases](InClusterDatabases) — each instance's PostgreSQL as its own Helm release: a CloudNativePG Cluster on a dedicated `db` node pool, primary and standby in two zones; why neither the chart's bundled Postgres nor the shared Flexible Server serves a client instance
 - [Local Dev Workflow](LocalDevWorkflow)
 - [Onboarding a New Environment](OnboardingNewEnvironment)
