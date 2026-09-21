@@ -179,6 +179,60 @@ name. A slot is an exemption from the comparison, so it may only be created in t
 by editing `AGENTS.md`; the checker refuses a slot the register does not declare, which is what
 stops "add a slot around the part I changed" from becoming the way around the gate.
 
+## 🚨 The other axis: a rule and the SKILL it mandates, inside one repo
+
+This register holds a rule's copies identical **across repos**. It says nothing about the second way
+the same rule splits — **within** a repo, between `AGENTS.md` and the `.claude/skills/**` file it
+mandates.
+
+That gap was live, and it is the reason `AgentsRuleAndSkillAgreementGuard` exists (#4965). #4964
+changed the What's New rule from *per user-facing change* to *per release* in `AGENTS.md` and in
+`ReleaseProcess.md`, and did not change `.claude/skills/pullrequest/SKILL.md`, whose step 0.5 still
+opened with *"every USER-FACING PR ships a 'What's New' entry"* and still carried the minting
+apparatus — `DATE=$(date -u +%Y-%m-%d)`, the front-matter `printf`, `git add "$NOTE_FILE"`.
+
+**`AGENTS.md` does not merely reference that skill — it requires it** (*"automatically follow the
+`pullrequest` skill"*). So for as long as both stood, an agent received two contradictory rules and
+the operative one was whichever it read last, with the skill holding the copy-pasteable commands. CI
+was green throughout. The automatic reviewer caught it by hand.
+
+The two guards that already read `.claude/skills/**` check something else — `GuidanceBridgeRatchetGuard`
+ratchets `.ToTask(` inside ` ```csharp ` fences, and `SkillFrontMatterGuard` checks front-matter
+shape — so nothing compared a skill's *content* against the rule that mandates it.
+
+### Why it is a ratchet of literals and not a diff
+
+*"Do two prose documents agree?"* is not mechanically decidable, so the guard does not try. It is a
+table of **(rule, forbidden literal)** pairs plus one **shape**, which is the cheaper of the two forms
+#4965 proposes and the one that catches what happened.
+
+**The property that makes a table of literals safe to keep is that it cannot go stale silently.** A
+forbidden-literal table is a statement about today's wording: retire the rule and the entry permits
+nothing, catches nothing, and reads as coverage. So every pair also names **evidence** that its rule
+is still stated in `AGENTS.md` — for `whatsnew-cadence`, the policy id itself — and a pair whose
+evidence has gone is **RED, not inert**. Retiring a rule and retiring its pair are one change set.
+That is the same discipline the transitional allow files use, and the same failure this guard exists
+for, applied to the guard.
+
+### The shape, and the version of it that was wrong
+
+The literal half catches a relapse that reuses the old wording. The shape half catches one that does
+not: **no skill may CONSTRUCT a path under `WhatsNew/`.** Naming the path in prose with placeholder
+metavariables — `WhatsNew/<yyyy-MM-dd>-<slug>.md`, which the *release* procedure legitimately does —
+is fine.
+
+🚨 The first version of that pattern looked for `printf` / `cat >` / `git add` on the same line as
+`WhatsNew`, and **it missed the real defect**: the apparatus assigned the path to a variable and every
+verb afterwards named the *variable*, not the path. Its own positive control is what said so. The
+discriminator that works is a `WhatsNew/` path carrying a **shell interpolation**, because only a line
+building a filename at run time has one — and the trailing slash is load-bearing, since without it the
+pattern matches `WhatsNewEntryIntegrityTest` on a line that also quotes an anchored regex ending in
+`$`.
+
+Both detectors carry a positive control that feeds them the defect verbatim and then the corrected
+text, because both are expected to find nothing in a healthy tree and neither could otherwise tell
+*clean* from *broken*.
+
 ## What this does not do
 
 It does not decide what the canonical text of any rule *should* be. It holds copies identical; it
