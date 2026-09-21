@@ -196,3 +196,4 @@ has no bound, where load and a leak are not distinguishable from the count. Noth
 | The other reader | `src/MeshWeaver.Messaging.Hub/MessageStormBreaker.cs` |
 | Why the FIFO cannot simply be removed | [Pod-Hub Delivery — the Transport Swap and its Roll Plan](../PodHubDeliveryRollPlan) |
 | The guard the order protects | [Data Sync and CRDT](../DataSyncAndCrdt) |
+| How to READ the report this renamed, and the other two verdicts at that log site | [Reading a Routing Saturation Report](../ReadingARoutingSaturationReport) |
