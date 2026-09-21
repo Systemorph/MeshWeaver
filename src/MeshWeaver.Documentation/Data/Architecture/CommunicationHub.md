@@ -302,6 +302,16 @@ form, so there are no hand-built selects. Connecting a provider that needs conse
 the just-in-time consent link rather than failing: a tool answering *"I don't have access to your
 mailbox and calendar yet"* is the consent step, not a missing capability.
 
+🚨 **`Transport` is a string, so its picker comes from the MESH, not from the type.** An `enum`
+property renders as a dropdown automatically (`PickableEnumType`); a `string` would render as a
+free-text box, and hard-coding the platform's constants into a `Select` would re-close the
+vocabulary in the UI — the exact thing
+[Open Vocabularies Are String Constants](/Doc/Architecture/OpenVocabulariesAsStringConstants)
+forbids. The field therefore carries `[Dimension]` **without** `Options`, which streams the members
+live from dimension nodes (`EditorExtensions` → `GetStream(host, dimensionAttribute)`), so a module
+that adds a transport adds a member node and its value appears in the picker with no change to
+core. This is the shape the CRM package already uses for `Crm/CounterpartyType` and `Crm/Country`.
+
 🚨 **The secret is never a form field.** A provider's credential is issued where it lives and stored
 by reference; the tab shows whether a credential resolves, never its value.
 

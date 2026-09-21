@@ -32,8 +32,11 @@ public record NotificationRule
     /// Optional explicit channel for a simple structured rule. When set it is a strong hint to triage
     /// (and lets a user route without writing prose); <see cref="RuleText"/> still refines it.
     /// </summary>
+    /// <remarks>A <see cref="NotificationChannelKind"/> constant, or a value a module defined
+    /// itself — the vocabulary is open, so an unrecognised channel is routed to whoever claims it
+    /// and reported when nobody does, never rejected here.</remarks>
     [Browsable(false)]
-    public NotificationChannelKind? Channel { get; init; }
+    public string? Channel { get; init; }
 
     /// <summary>Whether the rule is active. Disabled rules are ignored by triage.</summary>
     public bool Enabled { get; init; } = true;
