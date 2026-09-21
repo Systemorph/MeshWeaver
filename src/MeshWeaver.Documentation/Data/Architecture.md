@@ -212,6 +212,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Activity Control Plane](ActivityControlPlane)
 - [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
 - [Activity Operations](ActivityOperations)
+- [The Communication Hub](CommunicationHub) — one participant registry, one message-type family (approvals, notifications, information requests) and the master-plus-copies fan-out that keeps every inbox query anchored to one schema
 - [Notifications](Notifications)
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
 - [Agentic AI](AgenticAI)
