@@ -86,14 +86,34 @@ public class RoutingSaturationNamesItsOwnVerdictTest
         // One slot, held by a leg parked inside its own subscribe, and the rest stacked at the gate.
         using var starved = new IoPool(1);
         var release = 0;
+
+        // 🚨 A park that EXPIRED and a park that was RELEASED are different facts about this test's
+        // own subject, so the spin's result may not be discarded — completing on both would make an
+        // expired park read as a held one.
+        //
+        // 🚨 And faulting alone is NOT enough, which is the half that is easy to miss. The
+        // subscriptions below are `Subscribe(_ => { }, _ => { })` and that error arm is deliberate:
+        // 63 of these legs are cancelled at their gate wait when the pool drains, and the test must
+        // not red on expected teardown. So an OnError from the parked leg would be swallowed by the
+        // very arm that exists for the cancelled ones. The expiry is therefore ALSO recorded in a
+        // flag an assertion can see.
+        //
+        // A volatile int and not the Exception itself: the write happens on a pool thread and the
+        // read on the test thread, and an unsynchronised reference read may never observe it. This is
+        // the same shape the house uses for every release into a deliberately parked worker.
+        var parkExpired = 0;
         var parked = Observable.Create<Unit>(observer =>
         {
-            try
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.DefaultOuterBound))
             {
-                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.DefaultOuterBound);
-                observer.OnCompleted();
+                Volatile.Write(ref parkExpired, 1);
+                observer.OnError(new TimeoutException(
+                    "the parked leg's release was never signalled, so it stopped holding the pool's "
+                    + "only slot on its own — every reading taken here is about a pool that was no "
+                    + "longer starved"));
+                return Disposable.Empty;
             }
-            catch (Exception ex) { observer.OnError(ex); }
+            observer.OnCompleted();
             return Disposable.Empty;
         });
 
@@ -149,6 +169,13 @@ public class RoutingSaturationNamesItsOwnVerdictTest
                 (starvedWaiting - spread.CurrentlyWaiting).Should().BeGreaterThanOrEqualTo(Legs - 1,
                     "`CurrentlyWaiting` is the only one of the two gauges that moves between these "
                     + "states, which is why the saturation report has to print it");
+
+                // 4️⃣ …and every reading above is only about a starved pool if the park actually held.
+                //    Checked LAST rather than first: the park is released in the finally below, so
+                //    this is the point at which an expiry would already have happened.
+                Volatile.Read(ref parkExpired).Should().Be(0,
+                    "the starved shape means nothing if its head leg stopped holding the pool's only "
+                    + "slot before the readings were taken");
             }
             finally
             {
