@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -55,9 +56,15 @@ public class AgentsRuleAndSkillAgreementGuard
     /// skill correctly STATING the current rule cannot match it.
     /// </param>
     /// <param name="Why">Printed on failure: what the contradiction does to a reader.</param>
-    private sealed record Pair(string RuleId, string RuleEvidence, string[] ForbiddenInSkills, string Why);
+    private sealed record Pair(
+        string RuleId, string RuleEvidence, ImmutableArray<string> ForbiddenInSkills, string Why);
 
-    private static readonly Pair[] Pairs =
+    // 🚨 ImmutableArray, not Pair[]/string[]: a static array is a static MUTABLE collection — any
+    // caller can write through the reference — and the repo's rule permits only an IMMUTABLE
+    // static readonly lookup (Doc/Architecture/NoStaticState; the same note sits on
+    // NodePageProvenanceGuard.ScannedRoots). It matters more than usual for a register whose whole
+    // job is to be the fixed statement of what is forbidden.
+    private static readonly ImmutableArray<Pair> Pairs =
     [
         new("whatsnew-cadence",
             // Both AGENTS.md sentences that carry this rule cite the policy id, so the id is the
