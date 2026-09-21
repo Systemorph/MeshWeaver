@@ -3231,6 +3231,15 @@ public static class MeshExtensions
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        // 🚨 RESOLVED HERE, NOT IN THE COMMIT STAGE'S CONTINUATION (#5064). The commit stage runs
+        // inside a `SelectMany` several `Timeout`-bounded stages deep, and by then this delete has
+        // begun disposing the per-node hubs of the paths it removed — `hub.ServiceProvider` is an
+        // Autofac child LifetimeScope that can be closed under it, and Autofac then throws
+        // `ObjectDisposedException` at RESOLUTION, outside every `.Catch` in the pipeline, failing
+        // the whole delete with `partial-deleted=0`. The registry is a mesh-lifetime singleton, so
+        // only the lookup path was short-lived; the SNAPSHOT still has to be taken where the stage
+        // opens, and it is.
+        var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
         var meshHub = ResolveMeshHub(hub);
         // 🚨 THE HUB THIS DELETE'S TWO FAN-OUTS ARE ISSUED ON — never the router (issue #2477).
         // A recursive delete posts one request PER DESCENDANT twice over: the pre-flight
@@ -3718,7 +3727,9 @@ public static class MeshExtensions
                                         // the depth is zero. Differencing the wait buckets against
                                         // this makes the reading cover the WINDOW, which is the
                                         // only thing the watchdog's verdict is about.
-                                        var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+                                        // The REGISTRY was resolved at handler entry (#5064); only
+                                        // the SNAPSHOT belongs here, because it is a point-in-time
+                                        // reading taken as the stage opens.
                                         var poolsAtStageStart = ioPools?.Snapshot();
 
                                         var drainProgress = new Subject<string>();
@@ -4374,6 +4385,32 @@ public static class MeshExtensions
             progress.OnNext(deleted);
         }
 
+        // 🚨 RESOLVE THE MESH SINGLETONS HERE, ONCE, WHILE THE SCOPE IS ALIVE — never inside the
+        // per-path continuations below (Systemorph/MeshWeaver#5064).
+        //
+        // `meshHub.ServiceProvider` is an Autofac child LifetimeScope, and these continuations run
+        // as each leaf's delete COMMITS — by which point this delete has already disposed the
+        // per-node hubs of the paths it removed (`hostedHub?.Dispose()` below is this pipeline's
+        // own act). A resolution against a closed scope throws
+        // `ObjectDisposedException: … this LifetimeScope … has already been disposed` at RESOLUTION,
+        // which is outside every per-item `.Catch` in the pipeline, so the whole delete aborted:
+        // measured in production as `[DeleteNode] unexpected path=… partial-deleted=0` for
+        // `Northwind/Guide/_Access/Anonymous_Access`, `Store/Licences/Enterprise` and
+        // `Store/Licences/Free` — three silently failed deletes, subtrees left in place.
+        //
+        // 🚨 Hoisting, not guarding. Both services are MESH-LIFETIME SINGLETONS — only the child
+        // scope used to LOOK THEM UP is short-lived, so the captured instance is the same object
+        // the continuation would have resolved, and it stays valid for the whole operation.
+        // Guarding the resolution instead (`?.` on a null service) would silently skip the change
+        // publish and the stream-cache invalidation, which is how a deleted node keeps being
+        // served from a `Replay(1)` entry.
+        //
+        // This is the same correction, and for the same reason, that `ResolvePostDeletionHandlers`
+        // already applies to step 5's handlers — the pattern, swept to every site in this
+        // pipeline rather than only the one an incident happened to name.
+        var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
+        var streamCache = meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+
         return HierarchicalPathDeletion.DeleteSubtree(
             rootPath,
             descendantPaths.Remove(rootPath),
@@ -4391,7 +4428,6 @@ public static class MeshExtensions
                     // Descendant deletes re-enter this same handler and hit this
                     // branch for THEIR own path, so each leaf publishes once.
                     logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
-                    var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
 
                     if (rootAlreadyDeleted)
                         // Drain pass: the root row was deleted in pass 1. DeleteIfExists
@@ -4414,8 +4450,10 @@ public static class MeshExtensions
                             // 🚨 Invalidate the process-wide MeshNodeStreamCache so
                             // subsequent reads of this path don't see the pre-delete
                             // value held in the Replay(1) entry.
-                            meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>()?
-                                .Invalidate(path);
+                            // Resolved once at the top of this method, NOT here: this
+                            // continuation runs post-commit, after the hub disposal
+                            // below has closed scopes under it (#5064).
+                            streamCache?.Invalidate(path);
                             // 🚨 Dispose the per-node hub at this path if one was
                             // activated — the cache invalidate clears the
                             // process-wide cache entry, but the hub itself retains
