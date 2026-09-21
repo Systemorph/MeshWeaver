@@ -84,6 +84,39 @@ for the portal's own identity brings the repository's sync sources onto its comm
 
 ## Preconditions for a release (gates the lane enforces — check them before tagging)
 
+### 🚨 Before any of the below: the READINESS gate, which the lane does NOT enforce
+
+**A release may be cut only when NO `sev:B` and NO `sev:H` bug is open, in any of the seven gated
+repositories** (maintainer, 2026-09-20: *"let's set bar of release to no high issues left"*; and on the
+rest of the ladder, *"medium / low we don't care for release"* — `sev:M`/`sev:L` never gate a cut).
+
+Enforced by `Governance/Standards/release.cut` in MeshWeaver.Plugins — 7 repositories × 2 labels = 14
+`NoOpenIssues` gates — so a release proposal cannot reach `Ready` while one is open. `Memex` and
+`MeshWeaver.Feedback` are deliberately outside it. Rubric and the two rules that keep it honest:
+[Issue Taxonomy](../../../src/MeshWeaver.Documentation/Data/Architecture/IssueTaxonomy.md).
+
+Check it first — it is the cheapest gate here and it stops everything:
+
+```bash
+for R in MeshWeaver MeshWeaver.Plugins MeshWeaver.Crm MeshWeaver.SocialMedia \
+         MeshWeaver.Reinsurance MeshWeaver.Manufacturing MeshWeaver.Education; do
+  for S in B H; do
+    printf '%-26s sev:%s = %s\n' "$R" "$S" \
+      "$(gh api "repos/Systemorph/$R/issues?state=open&labels=sev:$S&per_page=100" \
+           --jq '[.[]|select(.pull_request==null)]|length')"
+  done
+done
+```
+
+🚨 **Read a zero against its coverage.** A `search/*` query answers 0 when it is truncated,
+rate-limited (search has its OWN ~30/min limit) or unanchored — indistinguishable from "none open",
+and this is the one place a false zero ships a known blocker. The loop above uses the REST issues
+endpoint for that reason, and filters `pull_request == null` because PRs share it.
+
+🚨 **A green gate reached by DOWNGRADING an `sev:H` to `sev:M` is not a green gate.** That is the
+cheapest defeat of this bar and `release.cut`'s acceptance criterion names it; spot-check the most
+recently re-labelled two.
+
 1. **The commit is on `main` and its CD run SEALED**: `Promote`, `Verify every image shipped` and
    `Plugins: bake + seal` all `success` — read the seal JOB, never the run's conclusion:
    ```bash
