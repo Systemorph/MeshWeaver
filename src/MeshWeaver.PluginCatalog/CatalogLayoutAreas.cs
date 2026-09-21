@@ -1362,6 +1362,22 @@ public static class CatalogLayoutAreas
             return full();
         }
 
+        // 🚨 MeshWeaver#4812 — a lane that reaches THIS exit is ASSERTING the package (the boot
+        // baseline, an environment flag, a human's Install/Update click): whoever deleted the
+        // partition, the caller wants the package installed, so a torn-down partition is healed
+        // like an incomplete one. The boot REPAIR pass is the one caller that must not — it
+        // filters TornDown out before it ever gets here (InstalledPackageRepairService.Heal).
+        if (verdict.Kind is InstallCompletenessKind.TornDown)
+        {
+            logger?.LogWarning(
+                "Package {Id} records module {ModuleVersion} as installed, but its partition was "
+                + "torn down after that install: {Because}. This lane asserts the package, so it "
+                + "is being REINSTALLED in full; whether that landed is reported separately "
+                + "(MeshWeaver#4812).",
+                pkg.Id, pkg.ModuleVersion, verdict.Because);
+            return full();
+        }
+
         if (verdict.Kind is InstallCompletenessKind.Complete)
             logger?.LogInformation(
                 "Package {Id} content is up to date (module {ModuleVersion}, {Present}/{Declared} "

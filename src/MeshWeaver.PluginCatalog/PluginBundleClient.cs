@@ -41,7 +41,11 @@ public sealed class PluginBundleClient
     // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
     // long-lived and shared; a per-call `new HttpClient()` leaks sockets. Immutable shared
     // resource, not a cache, so it does not fall under the no-static-state rule.
-    private static readonly HttpClient SharedHttp = new();
+    // 🚨 No HttpClient.Timeout: that is a TOTAL-DURATION bound over the header stage, which puts
+    // "is the registry answering?" back behind one clock that cannot say what it measured. Every
+    // stage of a transfer is bounded by THIS client (see Receive) — on silence, and on size — so
+    // the transport's own clock would only add a second, unnamed cut at 100 s.
+    private static readonly HttpClient SharedHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     private readonly IMessageHub _hub;
     private readonly string _registryUrl;
@@ -58,7 +62,25 @@ public sealed class PluginBundleClient
     // ONE index read per client, shared by every package the install pass covers. PromiseSlot, not
     // a plain cached field: concurrent first callers share the single run, and a fault EVICTS so
     // the next caller retries rather than replaying a transient failure forever (#1369).
+    // 🚨 The slot must hold a `pool.Run(...)` — HOT, replayed — never a cold `pool.Invoke(...)`
+    // (#4528): a cold observable in the slot is re-subscribed, and therefore re-SENT, by every
+    // package of a reconcile pass, so "one index read per client" was fourteen index reads per
+    // pass, each paying the whole stall on its own. See SharedIndex.
     private readonly PromiseSlot<BundleIndex> _index = new();
+
+    /// <summary>
+    /// How long any stage of a transfer may go SILENT before it is refused — the response start
+    /// and the body alike. Defaults to <see cref="TransferStallBudget"/>; a test sets it low so a
+    /// stalled socket is refused in seconds rather than minutes.
+    /// </summary>
+    internal TimeSpan StallBudget { get; init; } = TransferStallBudget;
+
+    /// <summary>
+    /// The largest body this client accepts, in bytes. Null (the default) re-establishes exactly
+    /// the bound the buffering read used to carry, <see cref="HttpClient.MaxResponseContentBufferSize"/>
+    /// — which streaming the body (#4549) had silently removed.
+    /// </summary>
+    internal long? MaxTransferBytes { get; init; }
 
     /// <summary>Creates the client.</summary>
     /// <param name="hub">Calling hub — supplies the I/O pool, the workspace the seeder writes
@@ -153,38 +175,61 @@ public sealed class PluginBundleClient
     /// registry does not serve bundles (404) — an older registry is a reason to compile, not an
     /// error to surface to a user installing a plugin.
     /// </summary>
-    public IObservable<BundleIndex> FetchIndex() =>
-        _httpPool.Invoke(async ct =>
-        {
-            // 🚨 The index is asked IN THIS INSTANCE'S LANE, exactly as the download route has been
-            // asked since #1751 — and until #3768 it was not, which is what made the download
-            // route's lane-awareness unreachable. The registry answered with its OWN bake identity,
-            // <see cref="Adopt"/> compared that once and declined the whole index, and no package
-            // was ever requested. Measured twice on the fleet's own portals (2026-09-09 and
-            // 2026-09-11, a different identity pair each time): 25 attempts, 0 adopted, 25
-            // FrameworkDeclined, while the publication sealed for the consumer's identity sat on
-            // the share the registry mounts. A registry that holds nothing for this lane still
-            // answers with its own identity, so the decline — and its cost argument — is unchanged
-            // in exactly the case it is right.
-            var url = $"{_registryUrl}{RoutePrefix}/index.json"
-                      + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
-                      + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
-            using var request = Request(HttpMethod.Get, url);
-            using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
+    public IObservable<BundleIndex> FetchIndex() => _httpPool.Invoke(ReadIndex);
 
-            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
-                return new BundleIndex(null, []);
+    /// <summary>
+    /// The one index read every package of this client shares — cold at the call site, hot and
+    /// replayed once subscribed. A fault evicts the slot, so the NEXT package asks again; a
+    /// success is answered from the replay for the rest of the pass.
+    /// </summary>
+    private IObservable<BundleIndex> SharedIndex() =>
+        Observable.Defer(() => _index.GetOrCreate(() => _httpPool.Run(ReadIndex)));
 
-            var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode)
-                // Carries the status (see RegistryResponseException): the index read shares the
-                // registry's availability, so a caller deciding whether to re-ask must be able to
-                // tell a refusal from a transient 5xx without reading the message text.
-                throw new RegistryResponseException(resp.StatusCode,
-                    $"Bundle index fetch failed ({(int)resp.StatusCode}): {json}");
+    private async Task<BundleIndex> ReadIndex(CancellationToken ct)
+    {
+        // 🚨 The index is asked IN THIS INSTANCE'S LANE, exactly as the download route has been
+        // asked since #1751 — and until #3768 it was not, which is what made the download
+        // route's lane-awareness unreachable. The registry answered with its OWN bake identity,
+        // <see cref="Adopt"/> compared that once and declined the whole index, and no package
+        // was ever requested. Measured twice on the fleet's own portals (2026-09-09 and
+        // 2026-09-11, a different identity pair each time): 25 attempts, 0 adopted, 25
+        // FrameworkDeclined, while the publication sealed for the consumer's identity sat on
+        // the share the registry mounts. A registry that holds nothing for this lane still
+        // answers with its own identity, so the decline — and its cost argument — is unchanged
+        // in exactly the case it is right.
+        var url = $"{_registryUrl}{RoutePrefix}/index.json"
+                  + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
+                  + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
+        using var request = Request(HttpMethod.Get, url);
+        // 🚨 Bounded at every stage like the bundle itself (#4528). The index is small, but the
+        // stall that took the fleet's reconcile down was THIS request — the registry accepting the
+        // connection and never beginning a response — and a buffered `SendAsync(request, ct)`
+        // left that to the transport pipeline, whose attempt timeout retries inside a budget that
+        // cannot hold the retry and whose event names neither the route nor the stage.
+        var receipt = await Receive(request, "Bundle index", ct).ConfigureAwait(false);
 
-            return JsonSerializer.Deserialize<BundleIndex>(json, Json) ?? new BundleIndex(null, []);
-        });
+        if (receipt.Status == System.Net.HttpStatusCode.NotFound)
+            return new BundleIndex(null, []);
+
+        var json = System.Text.Encoding.UTF8.GetString(receipt.Body);
+        if (!receipt.IsSuccess)
+            // Carries the status (see RegistryResponseException): the index read shares the
+            // registry's availability, so a caller deciding whether to re-ask must be able to
+            // tell a refusal from a transient 5xx without reading the message text.
+            throw new RegistryResponseException(receipt.Status,
+                $"Bundle index fetch failed ({(int)receipt.Status}): {json}");
+
+        var index = JsonSerializer.Deserialize<BundleIndex>(json, Json) ?? new BundleIndex(null, []);
+        // The index's own measurement — one line per pass per registry, so the next "the registry
+        // is slow" question is answered by the log rather than by a month-old comment.
+        _logger?.LogInformation(
+            "Bundle index from {Registry}: {Bytes} byte(s) in {Elapsed} ms, {Count} bundle(s) "
+            + "advertised on {Identity}/{Architecture}",
+            _registryUrl, receipt.Body.Length, (long)receipt.Elapsed.TotalMilliseconds,
+            index.Bundles?.Count ?? 0, PrebuiltAssemblySeeder.LiveFrameworkMvid,
+            ReleaseArchitecture.Live);
+        return index;
+    }
 
     /// <summary>
     /// Fetches <paramref name="pluginId"/>'s bundle and seeds every assembly in it.
@@ -199,7 +244,7 @@ public sealed class PluginBundleClient
     /// the caller should compile. Cold: nothing is fetched until Subscribe.</para>
     /// </summary>
     public IObservable<int> Adopt(string pluginId) =>
-        _index.GetOrCreate(FetchIndex)
+        SharedIndex()
             .Take(1)
             .SelectMany(index =>
             {
@@ -362,7 +407,7 @@ public sealed class PluginBundleClient
 
         var declineOnLane = Observable.Return<string?>(unattended ? policyDecline : null);
 
-        return _index.GetOrCreate(FetchIndex)
+        return SharedIndex()
             .Take(1)
             .SelectMany(index => landing.GetActivation().Take(1)
                 .SelectMany(activation => declineOnLane
@@ -542,7 +587,7 @@ public sealed class PluginBundleClient
     /// collapsed "404 for this lane" and "the registry is down" into the same null, and the caller
     /// then collapsed that into the same 0 as a successful adoption.
     /// </summary>
-    private sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null);
+    internal sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null);
 
     /// <summary>
     /// The bytes of <paramref name="bundle"/>: from the fleet's OCI registry by digest when the
@@ -627,7 +672,13 @@ public sealed class PluginBundleClient
         });
     }
 
-    private IObservable<FetchResult> DownloadOverHttp(string pluginId, string version) =>
+    /// <summary>
+    /// The HTTP bundle route — <c>GET {registry}/api/plugins/bundles/{plugin}/{version}</c> in
+    /// this instance's lane — received with every stage bounded by <see cref="Receive"/>.
+    /// Internal rather than private so the three refusals can be exercised against a real socket
+    /// without an archive that also has to seed.
+    /// </summary>
+    internal IObservable<FetchResult> DownloadOverHttp(string pluginId, string version) =>
         _httpPool.Invoke(async ct =>
         {
             // 🚨 The consumer asks IN ITS OWN LANE (#1751): the registry resolves each NodeType's
@@ -640,98 +691,168 @@ public sealed class PluginBundleClient
                       + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
                       + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
             using var request = Request(HttpMethod.Get, url);
-            // 🚨 TIMING STARTS BEFORE THE REQUEST, not after the headers land. The case this
-            // change exists to illuminate is "the registry never answered", and a clock started
-            // after `SendAsync` returns cannot see it: a header-stage cancellation would exit
-            // before any measurement existed and emit the same bare Polly timeout as before.
-            var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            long received = 0;
-            long? declared = null;
-            try
+            var receipt = await Receive(request, $"Bundle for {pluginId}@{version}", ct)
+                .ConfigureAwait(false);
+
+            if (receipt.Status == System.Net.HttpStatusCode.NotFound)
             {
-                // 🚨 HEADERS FIRST, then stream — never the buffering default (#4528). With
-                // `ResponseContentRead` the whole archive is downloaded INSIDE `SendAsync`, so the
-                // transfer pipeline's 120 s ATTEMPT budget measured (bundle size ÷ throughput)
-                // rather than "is the registry answering?". Reading headers first puts the body
-                // outside that attempt, so the attempt bounds RESPONSIVENESS — and the body is
-                // bounded HERE, by a STALL budget, never by the caller's.
-                // `OciRegistryClient` has always read its blobs this way.
-                using var resp = await _http
-                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
-                    .ConfigureAwait(false);
-
-                if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
-                {
-                    _logger?.LogInformation(
-                        "No prebuilt bundle for {Plugin}@{Version} at {Registry} — {Consequence}",
-                        pluginId, version, _registryUrl, MissConsequence("will compile"));
-                    return new FetchResult(null, BundleAdoptionKind.NotServed,
-                        $"the registry advertises {pluginId}@{version} but serves no bytes for "
-                        + $"{PrebuiltAssemblySeeder.LiveFrameworkMvid}/{ReleaseArchitecture.Live}");
-                }
-
-                if (!resp.IsSuccessStatusCode)
-                {
-                    // 🚨 Not thrown: a registry that is down, rate-limiting or has revoked
-                    // this install's grant must not fail the INSTALL. Compiling is the correct
-                    // fallback and it always works; turning a distribution hiccup into an install
-                    // failure trades a slow success for a hard error.
-                    _logger?.LogWarning(
-                        "Bundle fetch for {Plugin}@{Version} failed ({Status}) — {Consequence}",
-                        pluginId, version, (int)resp.StatusCode, MissConsequence("will compile"));
-                    return new FetchResult(null, BundleAdoptionKind.FetchFailed,
-                        $"HTTP {(int)resp.StatusCode} from {_registryUrl}");
-                }
-
-                // 🚨 WHAT THIS TRANSFER MOVED, AND HOW FAST — the measurement whose absence
-                // made #4528 unanswerable. Eighteen adopts failed across 2026-09-15/16 leaving only
-                // "The operation has timed out", with no byte count and no elapsed time anywhere in
-                // the fleet: nothing could say whether the budget was exceeded by a LARGE BUNDLE or
-                // by a SLOW REGISTRY, and those want opposite fixes. `Content-Length` is stated
-                // separately from the bytes actually received, because a transfer cut mid-body is
-                // exactly the interesting case.
-                declared = resp.Content.Headers.ContentLength;
-                await using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-                using var buffer = declared is > 0 and <= int.MaxValue
-                    ? new System.IO.MemoryStream((int)declared.Value)
-                    : new System.IO.MemoryStream();
-                received = await CopyStallBounded(body, buffer, pluginId, version, ct)
-                    .ConfigureAwait(false);
-
-                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
                 _logger?.LogInformation(
-                    "Bundle for {Plugin}@{Version}: {Bytes} byte(s) over HTTP from {Registry} in "
-                    + "{Elapsed} ms ({Throughput} KiB/s)",
-                    pluginId, version, buffer.Length, _registryUrl,
-                    (long)elapsed.TotalMilliseconds, ThroughputKibPerSecond(buffer.Length, elapsed));
+                    "No prebuilt bundle for {Plugin}@{Version} at {Registry} — {Consequence}",
+                    pluginId, version, _registryUrl, MissConsequence("will compile"));
+                return new FetchResult(null, BundleAdoptionKind.NotServed,
+                    $"the registry advertises {pluginId}@{version} but serves no bytes for "
+                    + $"{PrebuiltAssemblySeeder.LiveFrameworkMvid}/{ReleaseArchitecture.Live}");
+            }
 
-                return new FetchResult(buffer.ToArray(), BundleAdoptionKind.Adopted);
-            }
-            catch (Exception ex)
+            if (!receipt.IsSuccess)
             {
-                // Record what HAD arrived, then let the fault through UNTOUCHED — never swallowed
-                // to produce a log line. This covers the HEADER stage too, where `received` is
-                // still 0: "zero bytes after two minutes" accuses the registry, while most of a
-                // large archive accuses the size. The registry is NAMED because an instance may
-                // have several configured, and a byte count that cannot be attributed to an
-                // endpoint does not say which one needs fixing.
+                // 🚨 Not thrown: a registry that is down, rate-limiting or has revoked
+                // this install's grant must not fail the INSTALL. Compiling is the correct
+                // fallback and it always works; turning a distribution hiccup into an install
+                // failure trades a slow success for a hard error.
                 _logger?.LogWarning(
-                    "Bundle for {Plugin}@{Version} over HTTP from {Registry} did NOT complete after "
-                    + "{Elapsed} ms — {Received} of {Declared} byte(s) had arrived. Cause: {Cause}",
-                    pluginId, version, _registryUrl,
-                    (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
-                    received, declared?.ToString() ?? "an undeclared number of",
-                    ex.Message);
-                throw;
+                    "Bundle fetch for {Plugin}@{Version} failed ({Status}) — {Consequence}",
+                    pluginId, version, (int)receipt.Status, MissConsequence("will compile"));
+                return new FetchResult(null, BundleAdoptionKind.FetchFailed,
+                    $"HTTP {(int)receipt.Status} from {_registryUrl}");
             }
+
+            // 🚨 WHAT THIS TRANSFER MOVED, AND HOW FAST — the measurement whose absence made #4528
+            // unanswerable. Eighteen adopts failed across 2026-09-15/16 leaving only "The operation
+            // has timed out", with no byte count and no elapsed time anywhere in the fleet: nothing
+            // could say whether the budget was exceeded by a LARGE BUNDLE or by a SLOW REGISTRY, and
+            // those want opposite fixes.
+            _logger?.LogInformation(
+                "Bundle for {Plugin}@{Version}: {Bytes} byte(s) over HTTP from {Registry} in "
+                + "{Elapsed} ms ({Throughput} KiB/s)",
+                pluginId, version, receipt.Body.Length, _registryUrl,
+                (long)receipt.Elapsed.TotalMilliseconds,
+                ThroughputKibPerSecond(receipt.Body.Length, receipt.Elapsed));
+
+            return new FetchResult(receipt.Body, BundleAdoptionKind.Adopted);
         });
 
+    /// <summary>One registry transfer that ran to the end of its body: the status the registry
+    /// answered, the body, and how long the whole transfer took from the request going out.</summary>
+    internal sealed record TransferReceipt(System.Net.HttpStatusCode Status, byte[] Body, TimeSpan Elapsed)
+    {
+        /// <summary>A 2xx answer.</summary>
+        public bool IsSuccess => (int)Status is >= 200 and < 300;
+    }
+
+    /// <summary>Bytes of the body that have arrived so far — shared between the copy and the
+    /// failure line, so a transfer cut by the CALLER still reports how far it got.</summary>
+    private sealed class TransferProgress
+    {
+        public long Received;
+    }
+
     /// <summary>
-    /// 🚨 The body's own bound, and it bounds SILENCE rather than SIZE (#4528 review).
+    /// 🚨 THE ONE PLACE A REGISTRY TRANSFER IS RECEIVED, and every stage of it is bounded HERE, by
+    /// this client — never left to the transport pipeline or to the caller (#4528).
     ///
-    /// <para>Reading headers first takes the body outside the attempt policy, which is the point —
-    /// but it would also leave the read bounded by nothing on the callers that have no operation
-    /// deadline of their own. <c>RegistryUpdateReconciler</c> wraps its adopt in
+    /// <para>A transfer has three ways to fail that want three different remedies, and until this
+    /// method existed the fleet could name none of them: the registry <b>never begins a response</b>
+    /// (anything before the first byte — the connection, the handshake or the registry; #4963 is the registry, told apart by its fast `/api/version`), the body <b>goes quiet
+    /// mid-transfer</b> (the transport — the byte count says how far it got), or the body is
+    /// <b>larger than this client accepts</b> (the archive — the remedy is a smaller or resumable
+    /// bundle). Each is refused with a <see cref="BundleTransferException"/> naming its
+    /// <see cref="BundleTransferStage"/>, the registry, the elapsed time and the byte counts.</para>
+    ///
+    /// <para>The two stall bounds are bounds on SILENCE, never on total duration: the response
+    /// start gets <see cref="StallBudget"/> from the request going out, and every chunk of the body
+    /// that arrives resets a deadline of the same length. A large transfer still making progress is
+    /// never cut off — the defect #4549 removed — while one that goes quiet fails and says so. The
+    /// size bound is the one the buffering read always carried
+    /// (<see cref="HttpClient.MaxResponseContentBufferSize"/>), re-established explicitly because
+    /// streaming had removed it; a declared <c>Content-Length</c> over it is refused before a byte
+    /// is read, an undeclared body is refused the moment it exceeds it.</para>
+    ///
+    /// <para>🚨 The clock starts BEFORE the request, not after the headers land. The case this
+    /// exists to illuminate is "the registry never answered", and a clock started after
+    /// <c>SendAsync</c> returns cannot see it. On any failure the line below records what HAD
+    /// arrived and lets the fault through UNTOUCHED — never swallowed to produce a log line — and
+    /// it names the registry, because an instance may have several configured.</para>
+    /// </summary>
+    private async Task<TransferReceipt> Receive(
+        HttpRequestMessage request, string transfer, CancellationToken ct)
+    {
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var progress = new TransferProgress();
+        long? declared = null;
+        try
+        {
+            using var resp = await BeginResponse(request, transfer, startedAt, ct).ConfigureAwait(false);
+
+            declared = resp.Content.Headers.ContentLength;
+            var bound = TransferByteBound;
+            if (declared > bound)
+                throw new BundleTransferException(
+                    BundleTransferStage.OverSize, transfer, _registryUrl,
+                    System.Diagnostics.Stopwatch.GetElapsedTime(startedAt), 0, declared, bound);
+
+            await using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var buffer = declared is > 0 and <= int.MaxValue
+                ? new System.IO.MemoryStream((int)declared.Value)
+                : new System.IO.MemoryStream();
+            await CopyStallBounded(body, buffer, transfer, declared, bound, progress, startedAt, ct)
+                .ConfigureAwait(false);
+
+            return new TransferReceipt(
+                resp.StatusCode, buffer.ToArray(), System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                "{Transfer} over HTTP from {Registry} did NOT complete after {Elapsed} ms — "
+                + "{Received} of {Declared} byte(s) had arrived. Cause: {Cause}",
+                transfer, _registryUrl,
+                (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                progress.Received, declared?.ToString() ?? "an undeclared number of",
+                ex.Message);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The RESPONSE-START stage: headers first, never the buffering default — with
+    /// <c>ResponseContentRead</c> the whole archive is downloaded inside <c>SendAsync</c> and a
+    /// budget over it measures (size ÷ throughput) rather than "is the registry answering?"
+    /// (#4528). The one clock here is <see cref="StallBudget"/>, armed before the request goes out.
+    ///
+    /// <para>🚨 The filter reads the STALL token, not the exception's type: a host's transport
+    /// pipeline may carry its own attempt timeout of the same length, and when its timer wins the
+    /// race by a millisecond the pipeline retries, that retry is cancelled by this clock, and what
+    /// surfaces is whatever the pipeline chose to throw. "This client's budget expired and the
+    /// caller's did not" is the diagnosis in every one of those orderings, so that is what is
+    /// tested.</para>
+    /// </summary>
+    private async Task<HttpResponseMessage> BeginResponse(
+        HttpRequestMessage request, string transfer, long startedAt, CancellationToken ct)
+    {
+        using var start = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        start.CancelAfter(StallBudget);
+        try
+        {
+            return await _http
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, start.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception) when (start.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new BundleTransferException(
+                BundleTransferStage.NoResponse, transfer, _registryUrl,
+                System.Diagnostics.Stopwatch.GetElapsedTime(startedAt), 0, null,
+                (long)StallBudget.TotalSeconds);
+        }
+    }
+
+    /// <summary>
+    /// The BODY stage: bounded on SILENCE and on SIZE, never on total duration (#4528 review).
+    ///
+    /// <para>Reading headers first takes the body outside the transport's attempt policy, which is
+    /// the point — but it would also leave the read bounded by nothing on the callers that have no
+    /// operation deadline of their own. <c>RegistryUpdateReconciler</c> wraps its adopt in
     /// <c>PerPackageAdoptBudget</c>; <c>CatalogLayoutAreas.InstallPackage</c> (the manual click) and
     /// <c>InstanceAutoRegistrationService</c> (the default install) do NOT, so a registry that sends
     /// headers and then stops would hang them indefinitely. A hang is worse than a failure
@@ -739,19 +860,19 @@ public sealed class PluginBundleClient
     ///
     /// <para>So the deadline is reset by every chunk that ARRIVES: a transfer still making progress
     /// is never cut off however large it is — which is the whole defect being removed — while one
-    /// that goes quiet for <see cref="TransferStallBudget"/> fails, says so, and reports the byte
-    /// count it reached.</para>
+    /// that goes quiet for <see cref="StallBudget"/> fails, says so, and reports the byte count it
+    /// reached. The size bound is checked per chunk for the undeclared case; a declared length is
+    /// refused before the first read, in <see cref="Receive"/>.</para>
     /// </summary>
-    private static async System.Threading.Tasks.Task<long> CopyStallBounded(
-        System.IO.Stream source, System.IO.Stream destination,
-        string pluginId, string version, CancellationToken ct)
+    private async Task CopyStallBounded(
+        System.IO.Stream source, System.IO.Stream destination, string transfer,
+        long? declared, long bound, TransferProgress progress, long startedAt, CancellationToken ct)
     {
         var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(81920);
-        var total = 0L;
         try
         {
             using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            stall.CancelAfter(TransferStallBudget);
+            stall.CancelAfter(StallBudget);
             while (true)
             {
                 int read;
@@ -759,20 +880,26 @@ public sealed class PluginBundleClient
                 {
                     read = await source.ReadAsync(rented.AsMemory(), stall.Token).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                catch (OperationCanceledException) when (stall.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
                     // The stall budget, not the caller: named, because "the registry stopped
                     // sending" and "somebody cancelled" are different diagnoses.
-                    throw new TimeoutException(
-                        $"the registry sent no data for {TransferStallBudget.TotalSeconds:0} s while "
-                        + $"transferring {pluginId}@{version}; {total} byte(s) had arrived");
+                    throw new BundleTransferException(
+                        BundleTransferStage.StalledMidBody, transfer, _registryUrl,
+                        System.Diagnostics.Stopwatch.GetElapsedTime(startedAt), progress.Received,
+                        declared, (long)StallBudget.TotalSeconds);
                 }
                 if (read == 0)
-                    return total;
+                    return;
+                if (progress.Received + read > bound)
+                    throw new BundleTransferException(
+                        BundleTransferStage.OverSize, transfer, _registryUrl,
+                        System.Diagnostics.Stopwatch.GetElapsedTime(startedAt), progress.Received + read,
+                        declared, bound);
                 await destination.WriteAsync(rented.AsMemory(0, read), ct).ConfigureAwait(false);
-                total += read;
+                progress.Received += read;
                 // Progress resets the clock — this bounds silence, never total size.
-                stall.CancelAfter(TransferStallBudget);
+                stall.CancelAfter(StallBudget);
             }
         }
         finally
@@ -781,11 +908,16 @@ public sealed class PluginBundleClient
         }
     }
 
-    /// <summary>How long a transfer may send NOTHING before it is abandoned. Deliberately the same
-    /// 120 s the attempt budget allows, because it bounds the same property — the registry being
-    /// responsive — and deliberately NOT a bound on the transfer's total duration, which is the
-    /// bound #4528 removed.</summary>
+    /// <summary>How long a transfer may send NOTHING before it is abandoned — before its headers
+    /// and between its chunks alike. Deliberately the same 120 s the transport pipeline's attempt
+    /// budget allows, because it bounds the same property — the registry being responsive — and
+    /// deliberately NOT a bound on the transfer's total duration, which is the bound #4528
+    /// removed. <see cref="StallBudget"/> is the per-instance value; this is its default.</summary>
     internal static readonly TimeSpan TransferStallBudget = TimeSpan.FromSeconds(120);
+
+    /// <summary>The byte bound in force: the test override, or the transport's own buffer bound —
+    /// exactly what the buffering read used to enforce.</summary>
+    private long TransferByteBound => MaxTransferBytes ?? _http.MaxResponseContentBufferSize;
 
     /// <summary>
     /// Transfer rate in KiB/s, or <c>0</c> when the elapsed time is too small to divide by — a

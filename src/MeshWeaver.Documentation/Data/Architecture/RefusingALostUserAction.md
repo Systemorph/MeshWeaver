@@ -570,6 +570,154 @@ contributor to the owner-side half of the `Started` `sync/` population in #3432 
 how often the Blazor components dispose their streams before the portal hub reaches
 `DisposeHostedHubs` (which sends the release through the still-open door) was not measured.
 
+## 🚨 The door NEITHER announcer reached — the OWNER deactivating (2026-09-20)
+
+Everything above is about the SUBSCRIBER's half: a click the client accepted, and the release or the
+portal-hub teardown that overtook it. #3986 was then reopened four more times, and the last batch
+falsifies its own filing.
+
+### The measurement that does not fit the filed cause
+
+memex-cloud, one pod, occurrences 5–8 of `Admin/_LogIncident/c3ea7263f217a7f3`:
+
+```
+16:47:18.478  REFUSING ClickedEvent on area Catalog/Categories/Cat-Education
+              for stream b98AWu3uVUS05xCcA9XQeA on hub Store …
+              Sender: sync/b98AWu3uVUS05xCcA9XQeA~portal/ASZ-lU6GbnZJU__d0Japk2GPwZqsjg214pwfwTV5YY0
+16:47:20.144  … same area, same stream, same sender
+16:47:28.175  … same area, same stream, same sender
+16:47:30.464  … same area, same stream, same sender
+```
+
+**Four clicks, one stream, one sender, twelve seconds.** Each line is written 5 s after the message
+arrived (the registration grace), so the arrivals span 16:47:13–16:47:25. A subscriber whose circuit
+is gone does not click four times over twelve seconds — and one whose STREAM has been released posts
+nothing at all: `SubmitUserAction` answers locally off `HubIfHeld` and never reaches the owner. **The
+client half was alive and working; the OWNER had no `sync/{id}`.** The person kept clicking because
+the page still rendered.
+
+The 2026-09-10 occurrence has the same shape with one click (`Catalog/Categories/Cat-Insurance`, the
+same `Store` hub), and the two middle ones name a per-node request hub and a per-node exercise hub —
+`rbuergi/Requests/provision-pearl-20260914`,
+`AgenticOffice/03-Rechnung/Exercise/VierFehlerarten` — the addresses that go idle and deactivate.
+All eight are owner-side.
+
+### Why the subscriber was never told
+
+A stream's end has TWO announcers, and for a deactivating owner both were keyed to an event that does
+not happen:
+
+1. **`JsonSynchronizationStream`'s per-stream `StreamEndedEvent`** is deliberately SUPPRESSED once the
+   owning hub is disposing — *"a hub must speak only for itself, and never while it is dying"*, because
+   a dying owner reaching up the hub tree resurrects the Orleans activation it is retiring
+   (`OrleansGrainTeardownStragglerTest`). It delegates that case, in terms, to the second announcer.
+2. **`Workspace`'s `RecycleAnnouncement`** has neither problem: it snapshots the client-subscription
+   registry while the hub is whole, resolves a non-router carrier that OUTLIVES the hub, and posts only
+   after `DisposalCompleted`. But it was hung on `MessageHub.HandleDispose` — on a message-routed
+   `DisposeRequest`.
+
+`MessageHubGrain.OnDeactivateAsync` calls `hub.Dispose()` **directly** and posts no `DisposeRequest`,
+and this codebase calls that *"the largest single source of direct `Dispose()` in the mesh"* (#4888).
+So on the commonest teardown there is, neither announcer spoke. `RecycleAnnouncementTest` even pinned
+the silence as intended, with the reason *"only a message-routed DisposeRequest is a RECYCLE — an
+address that is coming back. A direct `Dispose()` is a teardown"*. That reasoning is right for
+`HostedHubsCollection` disposing its children and **false for a grain deactivating on a live silo**:
+the address IS coming back, and the subscribers are live mirrors in other hubs, circuits and pods that
+are NOT going down with it.
+
+Nothing else covers it, which `HandleDispose`'s own comment had already established for the routed
+case and which holds verbatim here: **the recycle re-arm needs an in-flight `SubscribeRequest` to be
+NACKed** (nothing re-asks, so nothing is NACKed) and **the change-feed latch needs a WRITE** (a
+deactivation is not one). The mirror kept replaying its last snapshot, and every user action it sent
+afterwards was refused *"NO sync hub for this stream was EVER registered on the current activation"* —
+the third sentence of the classifier above, describing a platform drop exactly as designed.
+
+### The fix — the goodbye hangs on the TEARDOWN, not on the request
+
+`MessageHub.AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt` is the FIRST statement of `Dispose()`, so
+it runs on whatever turn started the teardown and before `IsDisposing` flips — which is what keeps the
+two things the announcement reads available (the registry, and a resolvable parent). `HandleDispose`
+no longer announces; it ends in `Dispose()` on the same turn, so a routed recycle behaves exactly as
+before and still gets exactly ONE goodbye.
+
+The guard is the fact that actually decides whether telling a subscriber to re-ask is right, and it is
+answered in two independent places, neither a guess:
+
+- **Is an ANCESTOR taking us with it?** `IsShuttingDown` is already true then —
+  `HostedHubsCollection.CloseCreation` freezes the whole subtree the instant the ancestor's own
+  `Dispose()` starts, strictly before it disposes its children. The carrier (our parent) is going down
+  too, the address is not coming back, and a re-ask is the resurrection (1) exists to prevent. Silent,
+  exactly as before.
+- **Does a carrier outlive us at all?** `Workspace.AnnounceRecycleToClientSubscriptions` already
+  resolves one and returns without posting when there is none — which is what keeps a ROOT hub's host
+  teardown silent (its parent resolves to itself) without `MessageHub` knowing about hosts.
+
+🚨 **The first question is asked TWICE, because its answer is only final at delivery.** The read at
+the top of `Dispose()` is unsynchronized with an ancestor's `CloseCreation` on another thread — a
+window that existed unchanged when the read sat on `HandleDispose`. Closing it with a lock would mean
+holding one across hubs around a callback. It needs none: `Workspace`'s deferred `Announce()` asks the
+CARRIER `IsShuttingDown` when the owner's `DisposalCompleted` fires. A cascade that raced the first
+read has by then frozen the carrier too — it is this hub's parent, or a sibling under the same router
+— so a shutting-down carrier means the tree is going, and the goodbye is declined.
+
+🚨 **The seam's contract changed with it** (`RecycleAnnouncement`): `Announce` is invoked by whichever
+thread STARTS the hub's own teardown — the hub's turn for a routed request, the caller's thread for a
+direct `Dispose()` — so an implementation must be thread-safe and must not assume a hub turn. The one
+real implementation already was: it snapshots a `ConcurrentDictionary` and resolves a parent hub.
+
+Nothing new waits, nothing is timed, nothing polls and nothing retries. The announcement was already
+event-driven off `DisposalCompleted`; only the event it hangs from moved.
+
+### The measurement
+
+| test | project | asserts |
+|---|---|---|
+| `RecycleAnnouncementTest.ADirectDisposeAnnouncesOnce_BecauseAnOrleansDeactivationIsOne` | Messaging.Hub.Test | the Orleans route (a direct `Dispose()`) announces ONCE, while `IsDisposing` is still false |
+| `RecycleAnnouncementTest.AnAncestorsCascadeDoesNotAnnounce` | Messaging.Hub.Test | a child an ancestor is disposing stays SILENT — the whole-tree teardown the old expectation was really about |
+| `RecycleAnnouncementTest.RoutedDisposeRequest_Announces_Once_AndBeforeTheTeardownStarts` | Messaging.Hub.Test | unchanged, and now also the control on WHERE the announcement is made: `HandleDispose` ends in `Dispose()`, so two call sites would double every routed recycle's goodbye |
+| `OwnerDeactivationTellsItsLiveSubscribersTest.AClickAfterItsOwnerDeactivatedStillRuns` | Layout.Test | the whole chain — live mirror → owner deactivates → subscriber told → mirror re-hydrates on the NEW activation → the click RUNS, with no refusal line |
+| `OwnerDeactivationTellsItsLiveSubscribersTest.AGoodbyeIsDeclinedWhenItsCarrierStartedGoingDownAfterItWasChosen` | Layout.Test | the stale-read interleaving, made deterministic: the carrier is healthy when RESOLVED and disposed in that same call, so it is shutting down by construction at delivery — the goodbye is declined. Falsified by disabling the delivery-time check: RED, while the click test stays green |
+
+The end-to-end fixture is the production shape rather than a simulation: `host/1` is reached through
+`RouteAddressToHostedHub` with `HostedHubCreation.Always`, so disposing it and then addressing it again
+IS deactivate-then-reactivate — a new activation with no `sync/{id}` for a stream a live subscriber
+still holds. Every wait is on the event that settles its step (the owner's own `DisposalCompleted`, the
+mirror's next emission, the click action's own signal), and the file contains no interval of its own at
+all: the negative assertion's window is the host's `SyncStreamOptions.SyncHubRegistrationGrace`, READ
+from the hub rather than set or written as a literal — a number the test invented would either be
+shorter than the framework's (an assertion that cannot fail) or a guess about a machine's speed.
+
+Falsified by moving `AnnounceRecycle()` back onto `HandleDispose` alone, rebuilding both test projects
+and rerunning:
+
+| test | with the announcement back on the routed request only |
+|---|---|
+| `ADirectDisposeAnnouncesOnce_BecauseAnOrleansDeactivationIsOne` | **RED** — *"Expected value to be 1 … but found 0"* |
+| `AClickAfterItsOwnerDeactivatedStillRuns` | **RED** — the subscriber is never told, so the wait for its own re-subscribe emits nothing |
+| `RoutedDisposeRequest_Announces_Once_AndBeforeTheTeardownStarts` | GREEN — which is why it stays: the routed path must not change |
+| `AnAncestorsCascadeDoesNotAnnounce` | GREEN — the silence that was correct stays correct |
+
+The two that stay green are the positive controls a wrong fix would fail: announcing from BOTH sites
+reds the routed test on `announcements == 2`, and dropping the `IsShuttingDown` guard reds the cascade
+test.
+
+### 🚨 One trap the end-to-end hit first: the test tree's log floor is `Warning`
+
+The first run of `AClickAfterItsOwnerDeactivatedStillRuns` was RED **with the fix in place**, for 36
+seconds, because its re-subscribe assertion reads an `Information` line and `test/appsettings.json`
+floors every category at `Warning` — and filtering happens in the `LoggerFactory`, BEFORE a provider is
+handed the record. The sink saw nothing whatever the framework did. The fix is a provider-scoped
+`AddFilter<SubjectLoggerProvider>(null, LogLevel.Trace)`: this test's sink sees everything, the console
+sink keeps the tree's floor, and no src-tree level moves. A sibling test in this family
+(`RefusalNamesWhichEndTheStreamMetTest`) never hit it because every line it reads is `Error`.
+
+### What this still does not do
+
+It does not make a click that ALREADY missed its `sync/{id}` run — the refusal above is still the answer
+for one in flight when the activation went. What it ends is the **stranding**: the subscriber learns
+within one round trip and the NEXT click lands on a live handler, instead of every click for the rest
+of that page's life being thrown away.
+
 ## What this deliberately does not do
 
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an

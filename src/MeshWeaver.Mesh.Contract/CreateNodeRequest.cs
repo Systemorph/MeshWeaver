@@ -613,12 +613,26 @@ public enum NodeDeletionRejectionReason
 /// upserts the supplied <see cref="Node"/> as-is — Create on missing,
 /// Update on existing. Used by node-copy / move / import flows where the
 /// caller has the complete shape.</item>
-/// <item><b>JSON Patch</b>: set <see cref="Patch"/>. The handler applies the
-/// patch to the existing node (or to <see cref="Node"/> as the seed if the
-/// target is missing) and writes the result. Used for incremental edits
-/// where multiple writers may race on the same node — log lines, view-count
-/// bumps, status-flip patterns.</item>
+/// <item><b>JSON Patch</b>: set <see cref="Patch"/>. 🚨 <b>NOT IMPLEMENTED — the handler
+/// REFUSES every patch payload</b> (<c>NodeUpsertRejectionReason.PatchFailed</c>, "Patch-mode
+/// upserts are not yet supported"), and no caller in this repo or MeshWeaver.Plugins sets it.
+/// This entry used to describe the mode as serving "log lines, view-count bumps, status-flip
+/// patterns"; it served none of them, because the mode does not exist. The property is kept as
+/// the declared shape of the designed mode rather than deleted — see below.</item>
 /// </list>
+///
+/// <para><b>A FOLD is now expressible — see <see cref="Folds"/> (#4928).</b> What follows is why it
+/// had to be, and what is still true of the plain full-instance path.</para>
+///
+/// <para>🚨 <b>Full-instance mode alone cannot express a fold.</b>
+/// Full-instance mode merges through <c>UpdateAccordingToSourceNode</c>, which takes
+/// <c>Content = sourceNode.Content ?? state.Content</c> — content wholesale, computed by the caller
+/// from a read that is stale by construction, so any <c>count + 1</c> in it is the OLD count plus one.
+/// A caller needing both create-if-missing AND an owner-side fold therefore has no route today and
+/// falls back to deciding create-vs-update from the eventually-consistent query index, which is the
+/// exact shape this verb exists to retire. <see cref="Folds"/> is the repair: the caller declares the
+/// RULE and the OPERAND, and the owner applies them inside the <c>Update</c> lambda it already runs.
+/// <c>Doc/Architecture/ExpressingAWrite</c>.</para>
 ///
 /// <para>Permission resolution is dynamic: missing target → <see cref="Permission.Create"/>
 /// is checked; existing target → <see cref="Permission.Update"/> is checked.
@@ -639,11 +653,40 @@ public record CreateOrUpdateNodeRequest(MeshNode Node)
     /// the existing node. When null, <see cref="Node"/> is the full instance
     /// to upsert. Typed as <c>object?</c> so the patch type is owned by the
     /// caller's package (Json.Patch.Net) rather than pulling that dependency
-    /// into Mesh.Contract — handlers cast on receipt.</summary>
+    /// into Mesh.Contract — handlers cast on receipt.
+    ///
+    /// <para>🚨 <b>Setting this gets you a refusal, not a patch.</b> The handler rejects every
+    /// non-null payload with <see cref="NodeUpsertRejectionReason.PatchFailed"/>. It is the
+    /// declared shape of the mode designed in <c>Doc/Architecture/ExpressingAWrite</c> — where a
+    /// caller-authored lambda lowers into patch operations the owner applies inside its own
+    /// serialised <c>Update</c> — and stays here so that design has a place to land (#4928).</para></summary>
     public object? Patch { get; init; }
 
     /// <summary>The user or system requesting the upsert.</summary>
     public string? RequestedBy { get; init; }
+
+    /// <summary>
+    /// Declarative folds over TOP-LEVEL content members, applied against the node as the OWNER holds
+    /// it rather than against anything the caller read (#4928).
+    ///
+    /// <para>This is what lets one upsert both CREATE a node when it is missing and ADD TO a value it
+    /// already holds — the combination that had no expression before, and whose absence is why
+    /// activity tracking still decides create-vs-update from the eventually-consistent query index
+    /// (#1174). A fold carries the RULE and the OPERAND (<c>Sum 1</c>), never a result
+    /// (<c>accessCount: 6</c>), so the caller does not have to have read the node.</para>
+    ///
+    /// <para>On the CREATE leg they are not applied: there is nothing to fold onto, so
+    /// <see cref="Node"/>'s content is the seed verbatim — state the intended initial value there
+    /// (<c>AccessCount = 1</c>), not a delta.</para>
+    ///
+    /// <para>Build them with <see cref="ContentFoldBuilder{T}"/> so a renamed property is a compile
+    /// error rather than a fold that matches nothing.</para>
+    ///
+    /// <para>🚨 Caller-read-free is NOT the same as cluster-atomic. The upsert's write still leaves
+    /// this hub as an RFC 7396 merge patch carrying the folded RESULT, so two mirrors folding from
+    /// the same base can still lose an increment. See <see cref="ContentFolds"/>.</para>
+    /// </summary>
+    public ImmutableList<ContentFold>? Folds { get; init; }
 
     /// <summary>
     /// 🚨 <b>THE IMPORT ORDERING ESCAPE HATCH, and nothing else.</b> Set this and the update branch

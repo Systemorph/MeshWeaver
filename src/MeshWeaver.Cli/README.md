@@ -146,8 +146,8 @@ Same behaviour, no install — useful for trying it on a repo before the tool ve
 | `get <path>` | Read a node or resource by path |
 | `search <query>` | Search the mesh (GitHub-style query, e.g. `nodeType:Agent`) |
 | `create -f node.json` | Create a node from a JSON file |
-| `update -f nodes.json` | Full-replace update from a JSON array file |
-| `patch <path> …` | Partial update of a node's top-level fields |
+| `update -f nodes.json` | Full-replace update from a JSON array file — **every field the file omits is still written**, so a concurrent writer's field is reverted |
+| `patch <path> …` | Partial update of a node's top-level fields (content deep-merged per RFC 7396) |
 | `delete <paths…>` | Delete nodes (recursive) |
 | `move <src> <dst>` / `copy <src> <ns>` | Move / copy a node and its descendants |
 | `upload <path> <file>` | Upload a file into a node's content collection |
@@ -158,6 +158,24 @@ Same behaviour, no install — useful for trying it on a repo before the tool ve
 | `navigate-to <path>` / `base-url` | Print the browser URL for a path / the portal base URL |
 
 All commands print the server's JSON verbatim, so output pipes cleanly into `jq`. Errors go to stderr with a non-zero exit code.
+
+### Choosing between `update` and `patch`
+
+`update` is the **full-entity** write and is only correct when you are the sole authority for that
+node's content — a one-way sync source, or a buffer that *is* the new content. `patch` is the right
+default for "change these fields, leave the rest alone".
+
+Two things neither can do, both by construction:
+
+- **Neither can express a fold.** `count + 1` has to be computed by you from a read, which a second
+  writer can invalidate before your write lands. The agent/MCP surface has the same gap; only
+  in-process C# (`GetMeshNodeStream(path).Update(lambda)`) folds against the live node.
+- **Neither splices text.** Both replace a text field wholesale, so editing one line of a long
+  markdown body or code source means re-emitting the document. The agent/MCP surface has an anchored
+  `edit_content` for this; the CLI has no equivalent verb yet.
+
+The full design — the four shapes a write can take and which context may use which — is
+`Doc/Architecture/ExpressingAWrite`.
 
 ## Learn more
 

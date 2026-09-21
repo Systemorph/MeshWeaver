@@ -502,15 +502,27 @@ compile-progress overlay while the compile had succeeded seconds earlier — and
 framework-identity bump recompiles every dynamic NodeType at once, that is every open page in the
 portal on one deploy (Systemorph/MeshWeaver#2533 / #2551).
 
-**The seam is `RecycleAnnouncement`,** hung on the hub with `hub.Set(...)` and invoked by
-`HandleDispose` on the recycle's own turn:
+**The seam is `RecycleAnnouncement`,** hung on the hub with `hub.Set(...)` and invoked as the FIRST
+statement of `Dispose()` — i.e. on whatever turn starts the teardown, whether that is a routed
+`DisposeRequest`'s handler or a direct call:
 
 ```csharp
-// MessageHub.HandleDispose
-if (!IsShuttingDown)          // an ancestor's cascade is NOT a recycle — see below
-    AnnounceRecycle();        // Get<RecycleAnnouncement>()?.Announce()
-Dispose();
+// MessageHub.Dispose() — the first statement, before IsDisposing flips
+AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt();
+//   if (IsShuttingDown) return;            // an ancestor's cascade — see below
+//   one-shot, then Get<RecycleAnnouncement>()?.Announce()
 ```
+
+🚨 **It used to hang on `HandleDispose` instead, and that keyed it on the wrong fact (#3986).** The
+reasoning was that a routed request means *the address is coming back* while a direct `Dispose()` means
+*the whole tree is going down*. The second half is false for `MessageHubGrain.OnDeactivateAsync`, which
+calls `hub.Dispose()` directly for an address Orleans reactivates on the next message — and which this
+codebase calls "the largest single source of direct `Dispose()` in the mesh" (#4888). So an owner grain
+that deactivated told nobody, live mirrors elsewhere kept replaying a stale snapshot, and every user
+action they sent afterwards was refused *"NO sync hub for this stream was EVER registered on the
+current activation"* and thrown away. `HandleDispose` still ends in `Dispose()` on the same turn, so
+the routed recycle is unchanged and still announces exactly once. Full account:
+[Refusing a Lost User Action](../RefusingALostUserAction).
 
 `Workspace` registers the one real implementation, because the client-subscription registry that
 knows who is listening lives there. Three properties make it safe, and each is load-bearing:
@@ -519,7 +531,7 @@ knows who is listening lives there. Three properties make it safe, and each is l
 |---|---|
 | **Announced BEFORE `Dispose()`** | The hub is still whole: the registry is intact and `Configuration.ParentHub` still resolves. Both are gone or unreliable a phase later. |
 | **DELIVERED after `DisposalCompleted`, through the PARENT hub** | The subscriber answers with ONE bounded re-ask. Delivered earlier, that re-ask lands on the still-dying instance, is NACKed `ShuttingDown`, and burns a budget meant for a genuinely non-converging owner. Delivered by the dying hub itself, it is the up-the-tree post that resurrects the activation. The parent outlives the target and speaks to a third party. |
-| **Never for an ancestor's cascade** (`IsShuttingDown` already true) | There the address is *not* coming back, every subscriber is going down with it, and telling them to re-ask is exactly the resurrection the suppression exists to prevent. A direct `Dispose()` — how `HostedHubsCollection` tears its children down — never reaches `HandleDispose` at all, so it stays silent by construction. |
+| **Never for an ancestor's cascade** (`IsShuttingDown` already true) | There the address is *not* coming back, every subscriber is going down with it, and telling them to re-ask is exactly the resurrection the suppression exists to prevent. `HostedHubsCollection.CloseCreation` freezes the whole subtree the instant the ancestor's own `Dispose()` starts — strictly before it disposes its children — so a child torn down that way reads `IsShuttingDown` as already true and stays silent. A ROOT hub's host teardown is silent for the second reason instead: its parent resolves to itself, so the announcement finds no carrier that outlives it and posts nothing. |
 
 Nothing here polls, retries or times out: `DisposalCompleted` is the event, and the re-ask it
 triggers is the pre-existing bounded one. A recycle of a hub nobody is subscribed to costs
@@ -527,8 +539,10 @@ exactly what it did before.
 
 Repros: `RecycleStrandsLiveSubscriberTest` (Hosting.Monolith.Test — a live layout-area
 subscription re-converges on the re-activated hub after a bare `DisposeRequest`, with no node
-write anywhere) and `RecycleAnnouncementTest` (Messaging.Hub.Test — announced once, before the
-teardown; silent on a direct `Dispose()`).
+write anywhere), `RecycleAnnouncementTest` (Messaging.Hub.Test — announced exactly once and before
+the teardown, on a routed request AND on a direct `Dispose()`; silent only for an ancestor's
+cascade) and `OwnerDeactivationTellsItsLiveSubscribersTest` (Layout.Test — the deactivation route
+end to end: a click after its owner deactivated still runs).
 
 > Only the *automatic* recycles were affected. `MeshOperations.Recycle` (the MCP tool) publishes a
 > `MeshChangeEvent` for the path before its `DisposeRequest`, which is what fed the change-feed
@@ -546,9 +560,12 @@ definition, not of one hub. The definition's hub carries a second seam beside `R
 // MessageHub.HandleDispose — on the recycle's own turn, BEFORE Dispose()
 if (startsTheTeardown && request.Message.CascadedFrom is null)
     CascadeRecycle(request.Message);   // Get<RecycleCascade>()?.Cascade(request)
-AnnounceRecycle();
-Dispose();
+Dispose();                             // whose first statement makes the announcement
 ```
+
+The cascade stays on `HandleDispose` because it needs the REQUEST — `DisposeRequest.CascadedFrom` is
+what stops a cascade fanning out again — while the announcement needs only the hub, which is why the
+two now sit in different places.
 
 `NodeTypeNodeType` installs the one real `RecycleCascade` (`NodeTypeRecycleCascade`). It derives the
 **dependency network** from the index — the NodeTypes whose sources reach into this type's tree

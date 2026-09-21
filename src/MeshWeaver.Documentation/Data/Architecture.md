@@ -111,6 +111,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [MeshNode Stream Cache](MeshNodeStreamCache)
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
+- [Expressing a Write](ExpressingAWrite) — the four shapes a mutation can take (C# lambda, JSON Patch + text splice, full entity, other), which context may use which, and the lowering that keeps the fold owner-side
 - [Data Access Patterns](DataAccessPatterns)
 - [Node Identity and Path Keying](NodeIdentityAndPathKeying) — `(namespace, id)` is the key and `path` is derived, so splitting a path positionally leaves the path identical while re-keying the node into a second row
 - [Workspace References](WorkspaceReferences)
@@ -130,6 +131,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Evicted-Stream Retention](EvictedStreamRetention) — a change-feed eviction parks a remote stream and `ReclaimIfUnheld` refuses to dispose one that carries no lease entry, so every unleased call site retains one stream, and two `sync/` hubs, per change event
 - [The Read Path Minted a Hub Per Read](ReadPathStreamMinting) — a live in-process census decomposed a replica's `sync/` hubs into their holders and pinned the growth on the read path: a constant configuration took `GetDataRequest` out of the stream cache, so every read left a permanent hub behind (six reads, six hubs, measured on the running portal)
 - [A Reference That Cannot Be a Key](AReferenceThatCannotBeAKey) — the same defect through the other door: a record whose member is a collection is compared BY REFERENCE, so the reference can never hit the stream cache at all; every one of a replica's 311 `sync/` hubs attributed to its minting stream, and the duplicates split into "cache bypassed" and "key unhittable" by comparing the reference objects on the heap. Carries the census script, because the last two were lost
+- [A Release Refused at the Source](AReleaseRefusedAtTheSource) — the other direction: why the population never DRAINS. An `UnsubscribeRequest` is the only thing that ends an owner-side `sync/` hub, and on the hub-teardown route the subscribing hub is in `DisposeHostedHubs` by construction when it is posted, so the teardown guard refused it at the source and the owner was never told; the `IReleasesRemoteState` marker and the one-hop parent carrier
 - [The Recursive-Delete Drain](RecursiveDeleteDrain) — the plan is a snapshot the removals may exceed, the completion check must include the ROOT, and the stage bound measures progress, not duration
 - [Deleting What Is Already Gone](IdempotentDelete) — an absent node already satisfies the delete's postcondition, so the delete succeeds and reports that it removed nothing; why checking existence first cannot close the race, and which absences are still failures
 - [Business Rules & Calculations](BusinessRules)
@@ -196,14 +198,17 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
+- [PublicRead and Denies](PublicReadAndDenies) — a Public/Anonymous deny under a `PublicRead` policy is honoured by the SQL read path and ignored by the C# evaluator; what that split exposes, and what each remedy costs
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
 - [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
+- [Protected Segments on a Public Partition](ProtectedSegmentsOnAPublicPartition) — a partition that is public except for one inbox cannot be expressed with `PublicRead`: the C# evaluator and the SQL projection resolve a deeper deny under it differently, so the segment reads by exact path and is absent from every listing. The grant shape both folds agree on, why a read cap is a blackout rather than a gate, and why the boot heal may never retire a deny it could not have written
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
 
 ### Threads, activities & AI
 
 - **Start here:** [Thread Operations](ThreadOperations)
+- [Thread Supervision](ThreadSupervision) — a round ends stamped, whatever failed; the one death the hub cannot cover is its own, and the supervisor, dispatch pool and `Admin/Threads` queue page that cover it
 - [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
@@ -362,6 +367,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [An Unreachable Store Is Not a Refusal](StoreUnreachableIsNotARefusal) — one classification, three consumers; reporting an availability failure as a verdict is how a retried create becomes a duplicate
 - [A Name That Does Not Resolve Is Not Transient](ANameThatDoesNotResolveIsNotTransient) — the default pipeline retried a hostname that does not exist three times and logged each attempt at Error, so a URL in somebody's data manufactured a platform incident; the one socket error that is permanent, why the breaker must not count it either, and the control that keeps a nameserver hiccup retryable
 - [A Departed Silo Is Not a Delivery Defect](ADepartedSiloIsNotADeliveryDefect) — two incidents (191 and 3,959 occurrences) read as two defects for four weeks and are ONE root; which predicate sees which of the four rejection shapes, why the cure is the classifier and never a retry, and why an incident fingerprinted on a dependency's logger counts attempts rather than verdicts
+- [A Timed-Out Delivery Is Still Held by the Callee](ATimedOutDeliveryIsStillHeldByTheCallee) — a response timeout is a caller-side give-up timer, so the six-retry ladder sized for an instant rejection re-sent seven copies of every slow delivery and held a dispatch slot for 3 m 40 s; the three-predicate ladder that separates "is this transient" from "may we send it again", and the one caller that keeps the wider answer because it is idempotent
 - [A Bulk Create Compensates Per Node](BulkCreateCompensation) — every row is durable before any post-creation handler runs, so one critical failure left the failed node AND every node after it, whose handlers never ran and which nothing can tell apart from a success; what the rollback removes, why it walks backwards, and the measured reason the stop is a fault and not a `Take(1)`
 - [Undetermined Is Not No](UndeterminedIsNotNo) — a read that did not answer is a THIRD state; the second door that shared the first door's failure domain, and the rule for what a gate does with "I could not determine"
 - [Reading a Silo Eviction](ReadingASiloEviction) — a heartbeat newer than the suspect votes is not proof the silo was healthy; the control arm that tells a correct eviction from a false positive
@@ -433,6 +439,8 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Self-Update Schema Wall](SelfUpdateSchemaWall) — every schema-bumping release is un-takeable by self-update, the stall is invisible, and a promoted tag is not a deployable tag
 - [Bake Identity Mismatch](BakeIdentityMismatch) — why a green CD can publish a bake no portal adopts, and the one rule that keeps two images of one commit on one address
 - [Release Availability Gates](ReleaseGates) — one predicate; never roll or build into a release a package cannot survive
+- [Adding a Data Sync Needs a Global Admin](DataSyncApproval) — a sync is a standing grant, not a one-off action: it keeps moving data indefinitely under an identity nobody re-examines, so the review at creation is the only one there will be. The trigger list, what is explicitly NOT covered, why a credential request instead of a proposal is the anti-pattern, and the one finding that blocks rather than being filed
+- [Policy Not Prose](PolicyNotProse) — never hard-code a decision's date or author into source, a comment, an XML doc comment or doc prose; a policy is a record with a value and an in-force date and everything else cites its id. The register, what counts as evidence rather than a policy marker (and so stays), the review finding, and why it is forward-only with no backward migration
 - [Issue Taxonomy and the Release Readiness Gate](IssueTaxonomy) — four axes on every issue, and the one that is a gate: `sev:B` and `sev:H` must both be zero to cut a release; why only bugs carry a severity, why a zero is only trustworthy when its query's coverage is, and why the ledger stays in GitHub rather than being mirrored
 - [Combo Gate Wiring](ComboGateWiring) — the roll consults the combo verdict; Red refuses, and "could not find out" is neither
 - [Roll Selection](RollSelection) — completeness as a SELECTION criterion: pick the latest release that ships all of an environment's plugins, refuse an empty denominator, and never roll backwards

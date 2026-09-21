@@ -194,6 +194,25 @@ public class Workspace : IWorkspace
 
         void Announce()
         {
+            // 🚨 THE "IS AN ANCESTOR TAKING US WITH IT?" QUESTION IS ASKED AGAIN HERE, AT DELIVERY —
+            // the one moment its answer is final (#3986 review). MessageHub reads IsShuttingDown as
+            // the first statement of Dispose(), and an ancestor's CloseCreation can freeze the subtree
+            // on another thread between that read and this callback; that window existed unchanged
+            // when the read sat on HandleDispose. Serializing the two would mean holding a lock
+            // across hubs around a callback. It needs none: a cascade that raced the read has, by the
+            // time OUR disposal has completed, frozen the carrier too (it is this hub's parent, or a
+            // sibling under the same router), so the carrier says so itself. A carrier that is
+            // shutting down means the tree is going: the address is not coming back, and telling a
+            // subscriber to re-ask is the resurrection the teardown silence exists to prevent.
+            if (carrier.IsShuttingDown)
+            {
+                _logger.LogDebug(
+                    "Workspace {WorkspaceId}: carrier {Carrier} is itself shutting down — the tree is "
+                    + "going, so the end of {Count} client subscription(s) is NOT announced",
+                    Id, carrier.Address, orphaned.Length);
+                return;
+            }
+
             foreach (var (subscriber, streamId) in orphaned)
             {
                 try
