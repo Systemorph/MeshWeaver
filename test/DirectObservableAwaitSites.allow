@@ -44,22 +44,28 @@
 # that has gone stale is REPORTED, not failed — two PRs shrinking concurrently would otherwise red
 # main on whichever merged second.
 #
-# Scope: memex/ and test/. src/, tools/, samples/ and clients/ are held at ZERO by
-# NoProductionCodeAwaitsAnObservableDirectly, with no allow file and no line to add — they reached
-# zero on 2026-09-18 when MeshWeaver.Testing.InMesh.MeshTestContext.First, the last one, was fixed.
+# Scope: test/, and nothing else. src/, tools/, samples/, clients/ AND memex/ are held at ZERO by
+# NoProductionCodeAwaitsAnObservableDirectly, with no allow file and no line to add — the first four
+# reached zero on 2026-09-18 when MeshWeaver.Testing.InMesh.MeshTestContext.First, the last one, was
+# fixed, and memex/ JOINED that set when its five DevLogin sign-in sites were converted (#4756).
 # test/MeshWeaver.Messaging.Hub.Test/InlineResumptionMechanismTest.cs is NOT listed: it is exempt,
 # because it is the file whose entire purpose is to exhibit the shape and measure it, and the
 # exemption is verified rather than trusted by TheExemptedPinningTestStillPinsTheShape.
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# memex/ — 5 sites in one file, all in the DevLogin sign-in action. It is a genuine ASP.NET edge, so
-# a bridge belongs there; these are still counted because the bridge it uses is the WRONG one. Note
-# that AwaitedMeshReadSites.allow budgets this file at 1: that guard keys on a mesh entry point
-# NAMED in the awaited expression, and four of these five name none (`_onboarding.GrantPlatformAdmin`,
-# `_meshQuery.Query<MeshNode>` — the marker is `.Query(`, not `.Query<`). The two counts disagreeing
-# is the instrument gap, not a mistake in either file.
-
-memex/Memex.Portal.Shared/Authentication/DevAuthController.cs	5
+# memex/ — GONE FROM THIS FILE, because the ROOT moved rather than the line being deleted (#4756).
+# It held 5 sites in one file, all in the DevLogin sign-in action: a genuine ASP.NET edge where a
+# bridge belongs, counted because the bridge it used was the WRONG one. All five now carry
+# `.Await(HttpContext.RequestAborted)`, so the sign-in action's remainder no longer runs on whichever
+# mesh thread answered. `memex/` is PRODUCTION code, and a ratchet is the wrong home for production
+# code: a ratchet promises "this may only shrink", and what is wanted is "there are none" — so the
+# root is now in DirectAwaitZeroRoots and the next one added there is refused with no line to add.
+#
+# 🚨 AwaitedMeshReadSites.allow still budgets DevAuthController.cs at 1, and that is NOT stale. It is
+# a different question — awaiting a mesh READ at all, whatever the bridge — and its own note says the
+# migration means "reshaping the sign-in action around a subscription", which this change did not do.
+# The two counts answering differently is the instrument gap the previous note described, not a
+# mistake in either file.
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # test/ — 223 sites in 66 files. Every one is a suite waiting on the mesh, and the thread it
