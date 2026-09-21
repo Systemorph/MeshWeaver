@@ -787,6 +787,19 @@ A recurrence is therefore always folded onto the ticket that exists:
   ticket's own defect, the fix is to
   [repoint the link](#-when-a-fingerprint-outlives-its-issue-repoint-the-link-never-suppress),
   never to suppress the incident.
+- 🚨 **A close is a DECISION, and `State` + `ClosedAt` do not carry it.** "Fixed", "won't do" and
+  "this is tracked on another issue" are three different statements about the same closed ticket, and
+  a predicate that reads only the close TIME treats them identically — which is how a deliberate
+  consolidation is undone by a fault that is, by construction, still firing
+  (Systemorph/MeshWeaver.Plugins#2177: 35 tickets closed as `duplicate` onto 9 roots, two of them
+  reopened within 11 and 14 minutes). `GitHubIssue.StateReason` carries GitHub's `state_reason` so the
+  decision is readable: `Completed`, `NotPlanned`, `Duplicate`, `Reopened`, or **`Unknown`**, which
+  means *the reason was not established* — an open issue carries none, GitHub omits it for anything
+  closed before the field existed, and a list read never asks. `Unknown` is never a synonym for
+  `Completed`.
+  🚨 It is parsed from the RAW wire token, not through Octokit's `StringEnum<ItemStateReason>.Value`:
+  that enum has three members and no `duplicate`, so `.Value` throws `ArgumentException` on exactly
+  the value this exists to read (measured against Octokit 14.0.0).
 - A comment that lands writes the incident back to `Filed`, clearing a stale `Failed` — leaving it
   is what let ingest re-triage a ticketed incident in the first place.
 
