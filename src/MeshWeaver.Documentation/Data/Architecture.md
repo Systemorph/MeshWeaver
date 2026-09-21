@@ -197,6 +197,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
 - [Invitation-Only Onboarding](InvitationOnlyOnboarding)
+- [The Redirect-Target Contract](RedirectTargetContract) — every `returnUrl` sink validates local-only, so every source must mint local; a wrong source is refused rather than followed, which costs the whole flow and logs nothing
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
