@@ -1702,6 +1702,68 @@ refuses_hard "a vault name that is not a plain name is refused before anything r
   env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault 'kv;rm -rf /'
 rm -rf "$_vh_dir"
 
+# ── hosting-deploy keeps the RUNNING image when the values carry no portal.image KEY ────────────
+# 🚨 Systemorph/Memex#458, measured on pearl 2026-09-21 11:25Z. The record names an imagePullSecret
+# and pins no tag, so HelmValues rendered `portal:` + `  imagePullSecret:` and NO image. The old
+# test (`grep -q '^portal:'`) took that block as "the values carry an image", skipped the keep-running
+# read, and helm fell through to the chart default ghcr :latest (3.0.0-rc13, 2026-08-31) — a
+# Reconcile, documented never to move the image, rolled the instance back three weeks. These cases
+# pin the KEY as the question: a pull-Secret-only block keeps the running image; a real portal.image
+# is left to the values; `image:` under ANOTHER block does not count; and with nothing running and
+# no image anywhere, the first-install refusal still stands before helm.
+echo
+echo "── hosting-deploy: keeps the running image unless portal.image is set (Memex#458) ──"
+_ki_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_ki_dir/"; _ki_log="$_ki_dir/calls.log"; : > "$_ki_log"
+_ki_vals="$_ki_dir/values.yaml"
+_ki_running="cr.example.test/memex-portal-ai:3.0.0-ci.9101"
+printf '%s' "$_ki_running" > "$_ki_dir/running-image"
+_ki_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_ki_dir" HOSTING_DEPLOY_STUB_LOG="$_ki_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_ki_vals" 2>&1; }
+# pearl's shape: the pull Secret alone under portal:
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\nselfUpdate:\n  registry: "cr.example.test"\n' > "$_ki_vals"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+if [ "$_ki_rc" -eq 0 ] && printf '%s' "$_ki_up" | grep -q -- "--set portal.image=${_ki_running}" \
+   && printf '%s' "$_ki_up" | grep -q -- "--set migration.image=cr.example.test/memex-migration:3.0.0-ci.9101" \
+   && printf '%s' "$_ki_out" | grep -q "keeping the running ${_ki_running}"; then
+  ok "a portal: block carrying only imagePullSecret keeps the RUNNING image (portal + migration)"
+else
+  bad "a pull-Secret-only portal: block keeps the running image" "rc=${_ki_rc} upgrade: '${_ki_up}' out: ${_ki_out}"
+fi
+# `image:` under a DIFFERENT top-level block (migration:) is not portal.image.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\nmigration:\n  image: "cr.example.test/memex-migration:1"\n' > "$_ki_vals"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+[ "$_ki_rc" -eq 0 ] && printf '%s' "$_ki_up" | grep -q -- "--set portal.image=${_ki_running}" \
+  && ok "an image: under another block (migration:) does not count as portal.image" \
+  || bad "an image: under another block does not count as portal.image" "rc=${_ki_rc} upgrade: '${_ki_up}'"
+# An EMPTY portal.image is no image either.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  image: ""\n  imagePullSecret: "registry-pull"\n' > "$_ki_vals"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+[ "$_ki_rc" -eq 0 ] && printf '%s' "$_ki_up" | grep -q -- "--set portal.image=${_ki_running}" \
+  && ok "an empty portal.image (\"\") keeps the running image" \
+  || bad "an empty portal.image keeps the running image" "rc=${_ki_rc} upgrade: '${_ki_up}'"
+# A record that DOES render portal.image (a pinned tag) is left to the values: no override, no read.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  image: "cr.example.test/memex-portal-ai:7"\n  imagePullSecret: "registry-pull"\nmigration:\n  image: "cr.example.test/memex-migration:7"\n' > "$_ki_vals"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+if [ "$_ki_rc" -eq 0 ] && [ -n "$_ki_up" ] && ! printf '%s' "$_ki_up" | grep -q -- '--set portal.image=' \
+   && ! grep -q 'get deploy memex-portal-deployment' "$_ki_log"; then
+  ok "a rendered portal.image is left to the values — no --set override, no running-image read"
+else
+  bad "a rendered portal.image is left to the values" "rc=${_ki_rc} upgrade: '${_ki_up}' log: $(cat "$_ki_log")"
+fi
+# Nothing running and no image anywhere: still the first-install refusal, before helm.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\n' > "$_ki_vals"; rm -f "$_ki_dir/running-image"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+if [ "$_ki_rc" -ne 0 ] && printf '%s' "$_ki_out" | grep -q 'no image to deploy' && ! grep -q '^helm upgrade' "$_ki_log"; then
+  ok "nothing running and no portal.image is refused before helm — never the chart default"
+else
+  bad "nothing running and no portal.image is refused before helm" "rc=${_ki_rc} out: ${_ki_out} log: $(cat "$_ki_log")"
+fi
+rm -rf "$_ki_dir"
+
 # ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
 # Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
 # and its --atomic rollback erred too. The preflight asks `kubectl auth can-i` per rendered kind
