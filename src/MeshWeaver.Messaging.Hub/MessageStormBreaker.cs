@@ -336,24 +336,14 @@ public sealed class MessageStormBreaker
     /// pre-#1200 <c>(sender, target, type)</c> tuple. That is deliberate: the fallback is the old,
     /// stricter behaviour (fail CLOSED), never "let it through".
     /// </summary>
+    /// <remarks>
+    /// The resolution itself lives in <see cref="DeliveryIdentity"/>, shared with
+    /// <c>RoutingGrain</c>'s ordered-channel key: "which messages are about one thing" has to be
+    /// ONE answer, or the routing layer's notion of an ordered channel and this breaker's notion of
+    /// a rate bucket drift apart.
+    /// </remarks>
     private static string? ResolvePayloadKey(IMessageDelivery delivery, object message)
-    {
-        if (message is IDiagnosticKeyed keyed)
-            return keyed.DiagnosticKey is { Length: > 0 } key ? key : null;
-        if (message is not RawJson)
-            return null;
-        if (!delivery.Properties.TryGetValue(IDiagnosticKeyed.DeliveryProperty, out var value))
-            return null;
-        // In-process the value is the string we stamped; across a JSON wire hop it arrives as a
-        // JsonElement, whose ToString() is the string content (same read PatchDataResponse's
-        // RequestId correlation uses).
-        return value switch
-        {
-            string s => s.Length > 0 ? s : null,
-            null => null,
-            _ => value.ToString() is { Length: > 0 } s ? s : null
-        };
-    }
+        => DeliveryIdentity.Read(delivery, message);
 
     /// <summary>
     /// TryGetValue + TryAdd rather than <c>GetOrAdd</c>: the live-key count must only be
