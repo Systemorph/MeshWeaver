@@ -1099,10 +1099,12 @@ public static class PackageInstaller
     /// keeps a submission inbox SUBMITTABLE while not being READABLE — the property a deeper
     /// <c>Read = false</c> cap cannot express, because it darkens the reviewers too.</para>
     ///
-    /// <para><b>Denies first, root grants last</b> — the same ordering rule as the scoped shape, for
-    /// the same reason: the root grant is what opens the partition, so an interrupted publication must
-    /// leave the protected segment CLOSED. Create-only and sequential (the access table deadlocks
-    /// under parallel writers, 40P01); a steady-state re-run writes nothing.</para>
+    /// <para><b>Policy first, then the denies, then the root grants</b> — see
+    /// <see cref="PublishExceptProtected"/> for why that, and not the scoped shape's "denies first", is
+    /// the fail-closed order once an existing policy may be granting public read. An interrupted
+    /// publication must leave the partition CLOSED, never the protected segment open. Create-only and
+    /// sequential (the access table deadlocks under parallel writers, 40P01); a steady-state re-run
+    /// writes nothing.</para>
     /// </summary>
     private static IObservable<Unit> EnsureOpenWithProtectedSegments(
         IMessageHub hub, PackageManifest manifest, string partition,
