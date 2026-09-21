@@ -315,6 +315,38 @@ that file fails `NoProductionCodeAwaitsAnObservableDirectly`, naming the file, w
 is no allow file for this root set."* Under the old arrangement the same edit would have been silently
 within budget.
 
+### 🚨 …and a five-root zero scan needs its roots asserted, or the zero is unearned
+
+`SourceScan.SourceFiles` drops a root that does not exist and raises only when the **combined** result
+is empty. With one root that is a perfect instrument. With five it is not: `src/` alone keeps the
+combined set at ~1,400 files, so a renamed, moved or mistyped `memex/` leaves every rule over it
+reporting zero **having scanned nothing there**, with nothing red — a guard whose subject moved and
+whose roots did not.
+
+The exposure predates this change: `ProductionRoots` has carried five roots since `memex/`'s
+`.ToTask(` sweep reached zero. What the move removed was the last accidental signal — a vanished
+`memex/` used to turn that root's allow-file entry STALE and print it, and a zero root has no allow
+file. So `EveryZeroToleranceRootExistsAndItsContributionIsPrinted` asserts over the **union** of both
+root lists, closing the older half with the newer one.
+
+**The assertion is EXISTENCE, and a count of zero is reported rather than failed** — a distinction the
+test earned on its first run. The first version failed a root that contributed nothing, and went red on
+`clients/`, which exists, holds Python and Docker and a README, and has **no** `.cs`/`.razor`/`.csx` at
+all. That is not a broken scan: the root is there, it is polyglot, and the day a C# file lands in it the
+rules cover it automatically. Failing on it pushes the next reader toward *deleting* the root, which is
+the one change that would leave that future file genuinely unguarded. So a root that does not exist
+fails, and every root's count is printed:
+
+```
+clients: 0 file(s) reach these rules  ← carries no C# at all; covered the moment it does
+memex:   111 file(s) reach these rules
+samples: 90 · src: 1402 · tools: 42
+```
+
+which keeps *"I measured nothing there"* and *"I measured, and it was clean"* as two different printed
+sentences instead of one silence — the rule the `/health` census follows for its `census`-tagged
+entries.
+
 **`AwaitedMeshReadSites.allow` still budgets that file at 1, and that is not stale.** It asks a
 different question — whether a mesh READ is awaited at all, whatever the bridge — and its own note
 says the migration means *"reshaping the sign-in action around a subscription"*, which this did not do.
