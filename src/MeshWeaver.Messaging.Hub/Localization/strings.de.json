@@ -1361,6 +1361,8 @@
   "activity.compile.notPublished": "Assembly NICHT VERÖFFENTLICHT — Roslyn hat sie erzeugt, aber der Assembly-Store hat die Bytes nicht behalten, daher wurde kein Release erstellt: {detail}",
   "activity.compile.aborted": "Kompilierung abgebrochen durch {exceptionType}:\n{detail}",
   "activity.compile.releaseCreated": "Release erstellt: {path}",
+  "activity.compile.releasePostCondition.restored": "Release-Nachbedingung (#781): {violation}.{firstAttempt} Bei {path} aus den Bytes dieses Compile-Vorgangs wiederhergestellt \u2014 ohne Neukompilierung.",
+  "activity.compile.releasePostCondition.violated": "Release-Nachbedingung (#781) VERLETZT: {violation}.{firstAttempt} Auch das erneute Erstellen des Release ist nicht gelandet{reason}. F\u00fcr diesen Build existiert kein Release.",
   "activity.compile.importRefusedSources": "⚠ {count} Quell-Node(s), die diese Kompilierung benötigt, wurden von einem Import dieser Partition ABGELEHNT; das Mesh enthält sie also NICHT — die unten nicht auflösbaren Namen sind fehlende DATEIEN, keine fehlenden Module: {paths}. Korrigieren Sie die Quelldatei im Repository und importieren Sie erneut.",
   "activity.dataUpdate.noRoute": "DataChangeRequest konnte nicht gesendet werden (keine Route).",
   "activity.dataUpdate.streamClosed": "Die Verbindung zu dieser Seite wurde geschlossen; es wurde nichts übermittelt.",
