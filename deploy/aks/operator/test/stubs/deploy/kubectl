@@ -6,6 +6,8 @@
 #   get namespace X                          → exists
 #   create --dry-run=client -o name -f -     → $FIXTURE/names.txt (kubectl's own parsing is not under test)
 #   get <res> -o json                        → the live object, or NotFound
+#   get deploy memex-portal-deployment …     → the running portal image from $FIXTURE/running-image,
+#                                              else NotFound (nothing running: a first install)
 #   annotate / label                         → recorded; the live object is REWRITTEN with the ownership
 #                                              so a second pass reads it as owned (adoption is idempotent)
 set -uo pipefail
@@ -22,7 +24,10 @@ case "${1:-}" in
     echo "yes" ;;
   get)
     if [ "${2:-}" = "namespace" ]; then echo "NAME STATUS AGE"; exit 0; fi
-    if [ "${2:-}" = "deploy" ]; then echo "Error from server (NotFound)" >&2; exit 1; fi
+    if [ "${2:-}" = "deploy" ]; then
+      [ -f "$fixture/running-image" ] && { cat "$fixture/running-image"; exit 0; }
+      echo "Error from server (NotFound)" >&2; exit 1
+    fi
     f="$(live_file "${2:-}")"
     [ -f "$f" ] || { echo "Error from server (NotFound): ${2:-} not found" >&2; exit 1; }
     cat "$f" ;;

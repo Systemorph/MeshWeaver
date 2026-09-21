@@ -101,7 +101,26 @@ sets=(
 # deliberate roll. Otherwise: keep the image the install is ALREADY RUNNING, so the upgrade is a
 # no-op on the build; and on a first install with nothing running and no pin, REFUSE — the chart
 # default is ghcr :latest, which on this fleet is a release tag that cannot boot.
-if [ -z "$image" ] && ! grep -q '^portal:' "$values"; then
+#
+# 🚨 The question is whether the values carry the KEY portal.image, not whether they carry a
+# `portal:` BLOCK. HelmValues renders the block for the pull Secret alone (`portal:` +
+# `  imagePullSecret: "registry-pull"`) whenever the record names one and pins no tag. The old test
+# (`grep -q '^portal:'`) read that block as "the values carry an image", skipped the keep-running
+# step, and helm fell through to the chart default. Measured on pearl, 2026-09-21 11:25Z
+# (Systemorph/Memex#458): a Reconcile, documented never to move the image, took the instance from
+# 3.0.0+67cbbe0ee (2026-09-08) back to ghcr.io/systemorph/memex-portal-ai:latest = 3.0.0-rc13
+# (2026-08-31). Every record with an imagePullSecret and no pin (pearl, build) had this exposure.
+# HelmValues emits a fixed shape (top-level keys at column 0, children indented by two, strings
+# always double-quoted), so the key is found by its position under `portal:`. An empty `image: ""`
+# does not count as an image.
+values_carry_portal_image() {
+  awk '
+    /^[^[:space:]#]/ { in_portal = ($0 ~ /^portal:[[:space:]]*$/); next }
+    in_portal && /^  image:[[:space:]]*"?[^"[:space:]]/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+if [ -z "$image" ] && ! values_carry_portal_image "$values"; then
   # 🚨 THREE ANSWERS, not two (MeshWeaver#4722) — and this one is the most expensive to get wrong
   # in the whole file. The read used to be `2>/dev/null || true`, so a Forbidden on `deployments`
   # left $running empty and the else-branch below announced that "namespace <ns> runs no portal
