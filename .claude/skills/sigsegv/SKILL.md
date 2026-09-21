@@ -106,9 +106,13 @@ Both are SIGSEGV. They are different bugs and the dump distinguishes them in one
 
 | **A corrupt reference, surfacing in MANAGED code** *(sighting #18)* | exits **134**, not 139. `NT_SIGINFO` is the abort; the real fault is `TRAPNO=14`/`ERR=0x4` with `CR2` **non-null** (`0x3001000048`), `RIP` in **JIT-compiled code**, on an application thread with a full managed stack, and `Unwind: exception type` ×6 in the core | an object-reference slot (there: a generic type's GC static) held a **MethodTable pointer** — a wrong pointer, not a zero | **Unattributed.** Same class as row 2, different form; no ALC involved. |
 
-🚨 **`si_addr = 0x0` is NOT part of the fingerprint** — it is only the offset of whichever MethodTable
-field the faulting code happened to read. Sighting #10 faults at `si_addr = 0x4` and is the same bug.
-Match on *"a MethodTable word that is exactly zero"*, never on the literal address.
+🚨 **Within a `si_signo = 11` / `SEGV_MAPERR` record, `si_addr` is NOT part of the fingerprint** — it
+is only the offset of whichever MethodTable field the faulting code happened to read. Sighting #10
+faults at `si_addr = 0x4` and is the same bug. Match on *"a MethodTable word that is exactly zero"*,
+never on the literal address. 🚨 **That rule does not extend to a `SIGABRT` record, and row 3 is why:**
+when `si_signo = 6` the `si_addr = 0x0` is the *abort's* and says nothing about any dereference, so
+reading it as a MethodTable field offset produces this family's fingerprint out of the wrong event.
+Check `si_signo` before you interpret `si_addr` at all.
 
 The second one is the FutuRe family. 🚨 **And the family has a second form, so "no zeroed MethodTable
 word ⇒ not this family" is not a verdict.** Sighting #18 (2026-09-21, `10.0.12`) faulted in

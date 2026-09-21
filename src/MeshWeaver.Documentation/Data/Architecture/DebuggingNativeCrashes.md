@@ -81,32 +81,43 @@ Four steps, each a few lines of pure Python over the core (no debugger, no elfut
    `0x53494749` carries `si_signo` / `si_code` / `si_addr`. `si_code == 1` is `SEGV_MAPERR`, and
    `si_addr` is the dereferenced address — `0x0` versus a plausible-but-unmapped pointer is already
    the difference between a null read and a use-after-unload.
-   🚨 **Read `si_signo` before you read `si_addr`.** On a `134` death `NT_SIGINFO` describes the
-   **`SIGABRT` the runtime raised** (`si_signo=6`, `si_code=0` = `SI_USER`, `si_addr=0x0`), not the
-   page fault that started it: the runtime caught the access violation, converted it to an uncatchable
-   managed `AccessViolationException`, and fail-fasted. That `si_addr` of `0x0` is *the abort's*, and
-   reading it as the fault address manufactures this family's fingerprint out of the wrong event — see
-   sighting #18. The real fault context is still in the core, on the alternate signal stack; step 3
-   says how to pick it out when `CR2 == si_addr` is unavailable.
+   🚨 **Read `si_signo` before you read `si_addr`.** `si_signo = 6` means the process raised
+   `SIGABRT` on itself, and `NT_SIGINFO` then describes **that abort** (`si_code = 0` = `SI_USER`,
+   `si_addr = 0x0`) — nothing about any dereference. Reading its `si_addr` of `0x0` as a fault address
+   manufactures this family's fingerprint out of the wrong event.
+   🚨 **An exit of `134` on its own establishes only `SIGABRT`, never the reason for it.** A native
+   `abort()` — a glibc assertion, `std::terminate`, a `FailFast` with no prior fault — produces the
+   same code, and there is then **no page-fault `ucontext` to go looking for**. Confirm a runtime
+   fail-fast *before* you hunt the alternate signal stack: `Fatal error.` plus an exception type in
+   the job log, and/or `Unwind: exception type` in the core. Sighting #18 carries both (six `Unwind`
+   hits; `System.AccessViolationException` with a full managed stack under `Error output:`) — that,
+   not the exit code, is what says an earlier access violation happened and its context is still
+   recoverable. Step 3 says how to pick it out when `CR2 == si_addr` is unavailable.
 2. **`NT_FILE` → the module load bases.** Note type `0x46494c45` maps every file-backed range;
    the minimum start for `libcoreclr.so` is the load base you subtract to get an RVA.
 3. **The faulting `ucontext`** — *not* `NT_PRSTATUS`, which `createdump` records from inside its own
    signal handler (its `rip` is `waitpid` in libc). Scan the `PT_LOAD` segments on 8-byte alignment
-   for a `gregs[23]` block whose `TRAPNO` (index 20) is `14` (page fault) — 🚨 **and whose `CR2`
-   (index 22) EQUALS the `NT_SIGINFO` `si_addr`, and whose `ERR` (index 19) decodes the access
-   (`0x4` = a user-mode read of a non-present page). Those two conditions are not optional trimmings:
-   a stack carries many stale register blocks that satisfy `TRAPNO == 14` and hold a plausible
-   `libcoreclr` RIP, and sighting #17 was first published from one of them.** The surviving block
-   also lies on the crashing thread's own stack, which is the cross-check that costs nothing; `ERR` (19) and `CR2` (22) then decode the access — `ERR == 0x4` is a
-   user-mode **read** of a non-present page. Read the bytes at `RIP` straight out of the core through
-   the same `PT_LOAD` table: that is the faulting instruction, and with the register values it names
-   the exact dereference.
-   🚨 **On a `134` death `CR2 == si_addr` cannot be the filter** — `si_addr` belongs to the abort
-   (step 1). Substitute the cross-checks that do not depend on it: `CR2` must be **reproduced by
-   decoding the instruction at `RIP`** (sighting #18: `CR2 = RAX + 0x48` against
-   `mov rax,(%rax,0x48)` — a coincidence no stale block survives), `RSP` must lie in the crashing
-   thread's own stack VMA, and `EFL`/`CSGSFS` must be well-formed (`0x10246`; `cs=0x33`, `ss=0x2b`).
-   Those three took 8,821 `TRAPNO == 14` blocks down to exactly one.
+   for a `gregs[23]` block whose `TRAPNO` (index 20) is `14` (page fault) and whose `ERR` (index 19)
+   decodes the access (`0x4` = a user-mode **read** of a non-present page). 🚨 **That is not enough on
+   its own** — a stack carries many stale register blocks that satisfy `TRAPNO == 14` and hold a
+   plausible `libcoreclr` RIP, and sighting #17 was first published from one of them. **Which
+   cross-check eliminates them depends on `si_signo` from step 1, so branch here:**
+
+   - **`si_signo == 11` (the `139` case).** 🚨 **`CR2` (index 22) must EQUAL the `NT_SIGINFO`
+     `si_addr`.** This is the strongest filter available and it is not an optional trimming — it is
+     what caught #17's stale block — so never weaken it when it applies.
+   - **`si_signo == 6` (a confirmed fail-fast, per step 1).** `si_addr` belongs to the abort, so
+     `CR2 == si_addr` would **reject the real block**. Substitute the three cross-checks that do not
+     depend on it: `CR2` must be **reproduced by decoding the instruction at `RIP`** (sighting #18:
+     `CR2 = RAX + 0x48` against `mov rax,(%rax,0x48)` — a coincidence no stale block survives), `RSP`
+     must lie in the crashing thread's own stack VMA, and `EFL`/`CSGSFS` must be well-formed
+     (`0x10246`; `cs=0x33`, `ss=0x2b`). Those three took 8,821 `TRAPNO == 14` blocks down to exactly
+     one.
+
+   Either way the surviving block also lies on the crashing thread's own stack, which is the
+   cross-check that costs nothing. Read the bytes at `RIP` straight out of the core through the same
+   `PT_LOAD` table: that is the faulting instruction, and with the register values it names the exact
+   dereference.
 4. **RVA → function name, via the public symbol server.** The shipped `libcoreclr.so` is stripped to
    nine exported `STT_FUNC` symbols, so resolving against it fails — and that failure looks like the
    technique not working rather than the file being stripped. Fetch the separate debug file, keyed by
