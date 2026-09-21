@@ -28,12 +28,19 @@ public enum CollectibleUnloadNotMeasured
 /// <param name="RetainedContexts">Contexts that a full collection could not free — rooted by
 /// something live. Empty unless <see cref="Retained"/>.</param>
 /// <param name="Fault">The fault of an unload that was abandoned, when one was.</param>
-/// <param name="NotMeasured">Set when the drain measured nothing; then none of the other fields is a
-/// reading, and <see cref="Collected"/> is <c>false</c> — "nothing was pending" is not "collected".</param>
 public sealed record CollectibleUnloadOutcome(
-    int Rounds, IReadOnlyList<string> RetainedContexts, Exception? Fault,
-    CollectibleUnloadNotMeasured? NotMeasured = null)
+    int Rounds, IReadOnlyList<string> RetainedContexts, Exception? Fault)
 {
+    /// <summary>
+    /// Set when the drain measured nothing; then none of the other fields is a reading, and
+    /// <see cref="Collected"/> is <c>false</c> — "nothing was pending" is not "collected". An init
+    /// property rather than a fourth positional parameter: a module and the platform it loads into
+    /// must agree on a record's primary constructor EXACTLY (the binary-compatibility gate,
+    /// <c>scripts/check-record-signatures.py</c>), and this record is read by MeshWeaver.Plugins'
+    /// test base.
+    /// </summary>
+    public CollectibleUnloadNotMeasured? NotMeasured { get; init; }
+
     /// <summary>The drain drove collections and observed the signal — the other fields are a reading.</summary>
     public bool Measured => NotMeasured is null;
 
@@ -98,9 +105,9 @@ public static class CollectibleUnloadDrain
         CollectibleContextUnloads? unloads)
     {
         if (unloads is null)
-            return new CollectibleUnloadOutcome(0, [], null, CollectibleUnloadNotMeasured.NoTracker);
+            return new CollectibleUnloadOutcome(0, [], null) { NotMeasured = CollectibleUnloadNotMeasured.NoTracker };
         if (unloads.Pending == 0)
-            return new CollectibleUnloadOutcome(0, [], null, CollectibleUnloadNotMeasured.NothingPending);
+            return new CollectibleUnloadOutcome(0, [], null) { NotMeasured = CollectibleUnloadNotMeasured.NothingPending };
 
         // 🚨 Leave the caller's frame BEFORE collecting (measured, Plugins#1605). The drain is called
         // from a teardown that has just disposed the mesh, and that frame's stack slots still hold it:
