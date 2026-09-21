@@ -505,17 +505,53 @@ Each refusal, concretely:
 conservative seed that is not a spurious denial**. The fold genuinely needs its inputs, so a starving
 leg's only sound terminal is an **error** — which the fold already propagates as
 `PermissionCheckOutcome.Undetermined` → `ErrorType.Unavailable` (retryable, and attributed to the read
-rather than to the caller's impatience). Making a *silent* starvation produce that error is a
-query-layer change, not a fold change: `MeshQuery` already **detects** it (`InitialStallProbe`, 20 s,
-whose own warning says *"Fix the stalled provider; never bump the consumer's timeout"*) and
-deliberately only logs. Turning that probe into a terminal would change every query in the mesh and is
-a platform decision in its own right — it is tracked, not slipped in under a symptom fix. **And the
-blast radius is the argument, not caution:** the other shape the fan-in has for an unanswered
-provider — count it empty and NAME it on the frame — is exactly the permissive seed the three bullets
-above rule out, so delivering one to this fold would be a hole, not a diagnosis. What a CONSUMER can
-do instead is refuse to convert a named-silent frame into a verdict of its own; path resolution now
-does that, and [HubInitializationFailure](../HubInitializationFailure) →
-"Resolving the node is a READ" carries the worked case (issue #1186) with the measurements.
+rather than to the caller's impatience). **And the blast radius is the argument, not caution:** the
+other shape the fan-in has for an unanswered provider — count it empty and NAME it on the frame — is
+exactly the permissive seed the three bullets above rule out, so delivering one to this fold would be
+a hole, not a diagnosis. What a CONSUMER can also do is refuse to convert a named-silent frame into a
+verdict of its own; path resolution does that, and
+[HubInitializationFailure](../HubInitializationFailure) → "Resolving the node is a READ" carries the
+worked case (issue #1186) with the measurements.
+
+### 🚨 The stall is now that error — the fan-in is rung 4 of the ladder
+
+Making a *silent* starvation produce that error is a **query-layer** change, not a fold change, and it
+has been made: policy [`query-fanin-stall-terminal`](../PolicyNotProse). `MeshQuery`'s
+`InitialStallProbe` had **detected** this for a long time and only logged — on `memex`, over the 400
+minutes to 2026-09-21T04:12Z, it emitted 200+ warnings whose own text reads *"the query is silently
+stalled on its all-providers Initial gate and its consumer hangs with no error"*, alongside 95
+`No MeshNode emitted for` faults (~14/hour), and nothing acted on any of them. It now **terminates**
+the merged query with `QueryProviderStalledException`, naming the providers that did not answer.
+
+**Nothing in this fold changed, and that is the point.** Every consumer that turns a mesh read into a
+decision already classifies a fault correctly, because the three bullets above are what forced them
+to: `CheckPermissionOutcome` answers `Undetermined` ⇒ `IsGranted == false` (#974, #2742),
+`RlsNodeValidator` answers `NodeRejectionReason.Unavailable`, `AnonymousGate` projects to `false`, and
+`MeshNodeStreamCache.EvictFaultedQuery` drops the chain so one terminal is not replayed for the life
+of the process (#1316). The terminal is the input those classifiers were built for and never received.
+
+**The budget is DERIVED, and it had to be.** The probe's diagnostic delay was a hard-coded 20 s —
+*exactly* `PermissionEstablishmentBudget` at the production default. Promoting that constant to a
+terminal as-is would have recreated #1198's defect precisely: equal is not an ordering, the outer clock
+starts first, so the fan-in could never win and every stalled read would still have been reported as
+"the check could not be established" with no provider named. `MeshOperationOptions.QueryInitialBudget`
+is therefore **rung 4** — `Nest(PermissionEstablishmentBudget)`, 30 s / 25 s / 20 s / **15 s** at the
+default — so the level that can name WHICH provider starved is the level that fires. `RlsNodeValidator`
+has a fourth `why` arm for it, and reports the provider rather than its own budget.
+
+| where the read stalls | what the caller is told |
+|---|---|
+| a leg of a `[RequiresPermission]` message gate's fold | `Undetermined` → `ErrorType.Unavailable`, naming the provider |
+| a leg of a node operation's `RlsNodeValidator` fold | `NodeRejectionReason.Unavailable`: *"the effective-permission read of 'X' could not be read: query provider(s) [Y] did not emit an Initial within 15s"* |
+| a leg of the anonymous gate | `AllowAnonymous == false`, warned once, naming the path |
+| a layout area's own data read | `AreaErrorClassifier.IsStorageUnavailable` ⇒ the **localized** "temporarily unavailable, worth re-opening" frame, not a raw framework sentence |
+
+Pinned by `StalledPolicyReadFailsClosedTest` — one user, one role, two partitions, and a provider that
+stalls one partition's `_Policy` read: the control partition still **allows**, and the stalled one
+answers `Undetermined` with the provider named, *for a caller who holds Admin there*. The fan-in's own
+contract is pinned by `QueryFanInStallIsTerminalTest`, including the case that keeps the two apart — a
+provider that **completes** without an Initial is still counted empty and named on the frame, never
+faulted. Full account: [Query Fan-In Stall Terminal](../QueryFanInStallTerminal).
 
 **The gate stays unbounded, deliberately.** `AccessControlPipeline` carries no `Timeout` (see its "No
 Timeout here" comment) and this change does not add one. Bounding the shared gate would change the

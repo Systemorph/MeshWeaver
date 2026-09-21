@@ -284,7 +284,28 @@ public sealed class EventSubscriptionRunner(
                             Execute(s, node);
                     }
                 },
-                ex => logger?.LogWarning(ex, "Trigger-node watch for {NodeType} failed", nodeType));
+                ex =>
+                {
+                    // 🚨 DROP THE REGISTRY ENTRY, or this node type is never watched again for the
+                    // life of the runner: the `ContainsKey` guard at the top of this method is what
+                    // makes the watch one-per-type, and a terminated subscription left in the
+                    // dictionary short-circuits every later attempt to re-establish it. The query
+                    // fan-in now TERMINATES on a stalled provider instead of parking, so this arm
+                    // is reachable by an ordinary availability blip — and what it silently strands
+                    // is the deferred invite/grant reconcile (a user onboards and gets no access).
+                    // The same discipline as MeshNodeStreamCache.EvictFaultedQuery: nothing
+                    // re-subscribes on its own, the NEXT emission that needs this watch rebuilds it.
+                    // PAIR-EXACT on (nodeType, this slot), for the reason EvictFaultedQuery is: the
+                    // prune at ReconcileWatches can drop this type and a later emission re-establish
+                    // it, and a late terminal from the OLD chain must never evict the healthy new
+                    // one. Our own slot is disposed either way — it is already dead.
+                    nodeChangeSubs.TryRemove(
+                        new KeyValuePair<string, IDisposable>(nodeType, slot));
+                    slot.Dispose();
+                    logger?.LogWarning(ex,
+                        "Trigger-node watch for {NodeType} failed — dropped from the watch registry, "
+                        + "so the next emission that needs it opens a fresh one", nodeType);
+                });
     }
 
     /// <summary>

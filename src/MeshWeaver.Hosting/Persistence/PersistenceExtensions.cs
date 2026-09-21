@@ -684,7 +684,15 @@ public static class PersistenceExtensions
         // IMeshQueryProvider. Hub null is OK; the unsecured surface takes options
         // explicitly and doesn't read hub.JsonSerializerOptions.
         services.TryAddSingleton<IMeshQueryCore>(sp =>
-            new MeshQuery(sp.GetServices<IMeshQueryProvider>(), hub: null!));
+            // 🚨 The budget ladder is passed EXPLICITLY here, and it has to be: this instance is
+            // built with a null hub (the unsecured surface takes options per call), so the fan-in's
+            // own lazy `hub.ServiceProvider` lookup cannot reach it — it would silently take the
+            // DEFAULT rung and ignore a configured WithMeshOperationTimeout. The security fold reads
+            // through THIS registration, so that silence would mean the ladder's innermost rung was
+            // the one value nobody could configure.
+            new MeshQuery(
+                sp.GetServices<IMeshQueryProvider>(), hub: null!,
+                sp.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()));
 
         // Versioning is per-backend. Default no-op; PostgreSQL / FileSystem
         // can override with their own IVersionQuery registration.
@@ -747,7 +755,15 @@ public static class PersistenceExtensions
         // IMeshQueryProvider; null hub is OK because the IMeshQueryCore
         // surface takes options explicitly.
         services.TryAddSingleton<IMeshQueryCore>(sp =>
-            new MeshQuery(sp.GetServices<IMeshQueryProvider>(), hub: null!));
+            // 🚨 The budget ladder is passed EXPLICITLY here, and it has to be: this instance is
+            // built with a null hub (the unsecured surface takes options per call), so the fan-in's
+            // own lazy `hub.ServiceProvider` lookup cannot reach it — it would silently take the
+            // DEFAULT rung and ignore a configured WithMeshOperationTimeout. The security fold reads
+            // through THIS registration, so that silence would mean the ladder's innermost rung was
+            // the one value nobody could configure.
+            new MeshQuery(
+                sp.GetServices<IMeshQueryProvider>(), hub: null!,
+                sp.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()));
 
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
         {

@@ -16,10 +16,11 @@ namespace MeshWeaver.Mesh.Services;
 ///
 /// <para><b>The rule, and it holds by construction:</b> exactly ONE value is configured
 /// (<see cref="Timeout"/>); every bound nested inside it is DERIVED by <see cref="Nest"/>, which is
-/// strictly contracting. So <see cref="PermissionEstablishmentBudget"/> &lt;
-/// <see cref="NestedTimeout"/> &lt; <see cref="Timeout"/> for every configuration, and the ladder
-/// cannot drift apart again because there is nothing to drift against. At the production default
-/// the rungs are <b>30 s / 25 s / 20 s</b>.</para>
+/// strictly contracting. So <see cref="QueryInitialBudget"/> &lt;
+/// <see cref="PermissionEstablishmentBudget"/> &lt; <see cref="NestedTimeout"/> &lt;
+/// <see cref="Timeout"/> for every configuration, and the ladder cannot drift apart again because
+/// there is nothing to drift against. At the production default the rungs are
+/// <b>30 s / 25 s / 20 s / 15 s</b>.</para>
 /// </summary>
 public sealed record MeshOperationOptions
 {
@@ -143,6 +144,38 @@ public sealed record MeshOperationOptions
     /// is what the word NESTED does all the work for here.</para>
     /// </summary>
     public TimeSpan PermissionEstablishmentBudget => Nest(NestedTimeout);
+
+    /// <summary>
+    /// <b>Rung 4 — ONE query fan-in's Initial frame, inside a rung-3 fold.</b> How long
+    /// <c>MeshQuery.MergeProviderObservables</c> waits for every registered
+    /// <c>IMeshQueryProvider</c> to deliver its Initial before terminating the merged query with
+    /// <see cref="MeshWeaver.Mesh.QueryProviderStalledException"/>.
+    ///
+    /// <para>🚨 <b>It is the innermost rung because it is the innermost READ.</b> Every rung-3
+    /// permission fold is a <c>CombineLatest</c> over <c>$security-*</c> queries served by this
+    /// fan-in, so the fan-in's answer is what the fold is waiting for. Before this rung existed the
+    /// fan-in had no terminal at all — a provider that neither emitted, completed nor errored
+    /// starved the gate for ever and only produced a logged warning — so the fold's own
+    /// <see cref="PermissionEstablishmentBudget"/> was the first bound to fire, and it can say no
+    /// more than "the check could not be established". Which PROVIDER starved is knowable only
+    /// here.</para>
+    ///
+    /// <para>🚨 <b>It must not read the same as the bound enclosing it</b>, which is why it is
+    /// derived rather than written down: the stall probe's diagnostic delay was a hard-coded 20 s,
+    /// the identical value <see cref="PermissionEstablishmentBudget"/> takes at the production
+    /// default. Promoting that constant to a terminal as-is would have recreated issue #1198's
+    /// defect exactly — equal is not an ordering, the outer clock starts first, so the attribution
+    /// would have been lost to a coin flip. <see cref="Nest"/> makes the collision
+    /// unrepresentable. At the production default the ladder now reads <b>30 s / 25 s / 20 s /
+    /// 15 s</b>, and 15 s is still roughly twice the observed healthy worst case for a cold
+    /// provider under suite load (single-digit seconds).</para>
+    ///
+    /// <para>A false positive here is self-correcting and cheap: the answer is an availability
+    /// failure a caller may retry, and <c>MeshNodeStreamCache.EvictFaultedQuery</c> drops the
+    /// chain so the next read re-probes the providers for real (#1316). A false NEGATIVE — the
+    /// hang — is neither.</para>
+    /// </summary>
+    public TimeSpan QueryInitialBudget => Nest(PermissionEstablishmentBudget);
 
     /// <summary>
     /// The bound for work nested one level inside <paramref name="enclosing"/>. Strictly

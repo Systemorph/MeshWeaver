@@ -67,7 +67,46 @@ public class MeshQuery : IMeshQueryCore
         this.hub = hub;
     }
 
+    /// <summary>
+    /// Test seam for the stall terminal's budget: the production surface derives it from the ONE
+    /// configured mesh-operation bound (<see cref="MeshOperationOptions.QueryInitialBudget"/>,
+    /// 15 s at the default), which is far too long to wait for in a unit test. Internal — there is
+    /// deliberately no production knob that could turn the terminal back into a hang.
+    /// </summary>
+    /// <param name="providers">The registered per-adapter query providers to aggregate.</param>
+    /// <param name="hub">The message hub supplying JSON serializer options and identity context.</param>
+    /// <param name="operationOptions">The budget ladder this fan-in takes its rung-4 bound from.</param>
+    internal MeshQuery(
+        IEnumerable<IMeshQueryProvider> providers, IMessageHub hub, MeshOperationOptions operationOptions)
+        : this(providers, hub)
+        => _operationOptions = operationOptions;
+
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
+
+    private MeshOperationOptions? _operationOptions;
+
+    /// <summary>
+    /// The budget ladder this fan-in's stall terminal takes its rung from. Resolved lazily and
+    /// ONCE — the unsecured <c>IMeshQueryCore</c> registration constructs <see cref="MeshQuery"/>
+    /// with <c>hub: null</c>, and a hub whose DI scope is mid-disposal throws on
+    /// <c>ServiceProvider</c>, so both cases fall back to the defaults rather than failing a query.
+    /// </summary>
+    private MeshOperationOptions OperationOptions
+    {
+        get
+        {
+            if (_operationOptions is not null) return _operationOptions;
+            try
+            {
+                return _operationOptions =
+                    hub?.ServiceProvider?.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
+            }
+            catch (ObjectDisposedException)
+            {
+                return _operationOptions = new MeshOperationOptions();
+            }
+        }
+    }
 
     private ILogger? _logger;
 
@@ -472,31 +511,66 @@ public class MeshQuery : IMeshQueryCore
                     ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? "");
                 return ClipMergedInitial<T>(hits, change, parsed, request);
             });
-            // Same stall probe as the multi-provider merge below — a single provider that
-            // neither emits nor completes hangs its consumer just as silently. The probe is a
-            // standalone hub-independent object (see InitialStallProbe) so the process-global
-            // TimerQueue timer can never pin the owning hub past disposal (MeshHubDisposalLeakTest).
-            var singleProbe = new InitialStallProbe([observables[0].Provider]);
+            // Same stall TERMINAL as the multi-provider merge below — a single provider that
+            // neither emits nor completes hangs its consumer just as silently.
+            //
+            // 🚨 The probe is built PER SUBSCRIPTION (inside Observable.Create), exactly as the
+            // multi-provider merge builds its own. It used to be one instance shared by every
+            // subscription of this cold observable, and its `seen` flag with it — so the first
+            // subscription to answer silenced the second's probe. While the probe only LOGGED that
+            // cost a missing warning; now it would swallow a second subscriber's TERMINAL and leave
+            // exactly the hang this change removes, for the one caller nobody was watching.
             var singleProbeLogger = Logger;
             var singleProbeQuery = request.Query;
             var singleProbeUser = request.UserId;
             var singleProviderName = observables[0].Provider;
+            var singleBudget = OperationOptions.QueryInitialBudget;
             return Observable.Create<QueryResultChange<T>>(observer =>
             {
-                var probeArm = singleProbe.Arm(
-                    InitialStallProbeDelay, singleProbeLogger, singleProbeQuery, singleProbeUser);
+                var singleProbe = new InitialStallProbe([singleProviderName]);
+                // One gate for the whole subscription, exactly as the multi-provider merge has:
+                // the stall terminal is delivered from a timer thread while the provider may be
+                // emitting on its own, and an observer may not be touched by two threads at once.
+                var singleGate = new object();
                 var sawInitial = false;
+                var terminated = false;
+                var probeArm = singleProbe.Arm(
+                    singleBudget, singleProbeLogger, singleProbeQuery, singleProbeUser,
+                    stalled =>
+                    {
+                        lock (singleGate)
+                        {
+                            // Answered (or already terminal) while the timer callback was in
+                            // flight — the disposal in MarkSeen races it by design, so the check
+                            // is what makes the terminal exactly-once.
+                            if (terminated || sawInitial) return;
+                            terminated = true;
+                            observer.OnError(stalled);
+                        }
+                    });
                 var sub = single.Subscribe(
                     change =>
                     {
-                        if (change.ChangeType == QueryChangeType.Initial)
+                        lock (singleGate)
                         {
-                            sawInitial = true;
-                            singleProbe.MarkSeen(0);
+                            if (terminated) return;
+                            if (change.ChangeType == QueryChangeType.Initial)
+                            {
+                                sawInitial = true;
+                                singleProbe.MarkSeen(0);
+                            }
+                            observer.OnNext(change);
                         }
-                        observer.OnNext(change);
                     },
-                    observer.OnError,
+                    ex =>
+                    {
+                        lock (singleGate)
+                        {
+                            if (terminated) return;
+                            terminated = true;
+                            observer.OnError(ex);
+                        }
+                    },
                     () =>
                     {
                         // 🚨 The SAME completion guard the multi-provider merge has, and for the
@@ -507,27 +581,33 @@ public class MeshQuery : IMeshQueryCore
                         // nothing" just as durably as it would cache a fabricated empty. Emit the
                         // empty Initial and NAME the provider on it, so the answer is delivered
                         // (nothing hangs) and is visibly one nobody gave (MeshWeaver#4557).
-                        if (!sawInitial)
+                        lock (singleGate)
                         {
-                            singleProbeLogger?.LogWarning(
-                                "Query provider {Provider} completed WITHOUT emitting an Initial for query "
-                                + "'{Query}' (user '{UserId}') — contract violation; answering with an EMPTY "
-                                + "Initial that names it, so nothing hangs and nothing caches this as a real "
-                                + "answer. Fix the provider: every Query<T> observable must emit exactly one "
-                                + "Initial.",
-                                singleProviderName, singleProbeQuery, singleProbeUser);
-                            singleProbe.MarkSeen(0);
-                            observer.OnNext(new QueryResultChange<T>
+                            if (terminated) return;
+                            if (!sawInitial)
                             {
-                                ChangeType = QueryChangeType.Initial,
-                                Items = Array.Empty<T>(),
-                                Timestamp = DateTimeOffset.UtcNow,
-                                Query = new QueryParser().Parse(
-                                    request.EffectiveQueries.FirstOrDefault() ?? ""),
-                                SilentProviders = [singleProviderName],
-                            });
+                                singleProbeLogger?.LogWarning(
+                                    "Query provider {Provider} completed WITHOUT emitting an Initial for query "
+                                    + "'{Query}' (user '{UserId}') — contract violation; answering with an EMPTY "
+                                    + "Initial that names it, so nothing hangs and nothing caches this as a real "
+                                    + "answer. Fix the provider: every Query<T> observable must emit exactly one "
+                                    + "Initial.",
+                                    singleProviderName, singleProbeQuery, singleProbeUser);
+                                sawInitial = true;
+                                singleProbe.MarkSeen(0);
+                                observer.OnNext(new QueryResultChange<T>
+                                {
+                                    ChangeType = QueryChangeType.Initial,
+                                    Items = Array.Empty<T>(),
+                                    Timestamp = DateTimeOffset.UtcNow,
+                                    Query = new QueryParser().Parse(
+                                        request.EffectiveQueries.FirstOrDefault() ?? ""),
+                                    SilentProviders = [singleProviderName],
+                                });
+                            }
+                            terminated = true;
+                            observer.OnCompleted();
                         }
-                        observer.OnCompleted();
                     });
                 return new System.Reactive.Disposables.CompositeDisposable(probeArm, sub);
             });
@@ -575,6 +655,12 @@ public class MeshQuery : IMeshQueryCore
             var silentProviders = new List<string>();
             ParsedQuery? lastQuery = null;
             var gate = new object();
+            // 🚨 The merged stream's terminal, taken EXACTLY ONCE and under `gate` — because the
+            // stall terminal below is delivered from a timer thread while the providers may be
+            // emitting on their own, and Rx forbids both an observer touched concurrently and any
+            // emission after a terminal. Every OnNext / OnError / OnCompleted path in this merge
+            // checks it first.
+            var terminated = false;
 
             // Standalone, hub-independent stall probe (see the Arm(...) call after the subscribe
             // loop). Driven by MarkSeen(idx) in each provider's Initial handler below; keeps the
@@ -597,6 +683,8 @@ public class MeshQuery : IMeshQueryCore
             // Emits the merged Initial once the gate is satisfied. Must be called under `gate`.
             void EmitMergedInitialIfComplete(QueryResultChange<T> template)
             {
+                if (terminated)
+                    return;
                 if (initialCount != initialTarget)
                     return;
                 foreach (var path in initialPaths)
@@ -631,6 +719,7 @@ public class MeshQuery : IMeshQueryCore
                         {
                             lock (gate)
                             {
+                                if (terminated) return;
                                 // Pair items with their score (or 0 when the
                                 // provider didn't score this batch). The
                                 // contract: when Scores is non-null it MUST
@@ -670,12 +759,21 @@ public class MeshQuery : IMeshQueryCore
                         {
                             lock (gate)
                             {
+                                if (terminated) return;
                                 if (TryFilterDuplicateLiveChange(change, liveItems, out var filtered))
                                     observer.OnNext(filtered);
                             }
                         }
                     },
-                    ex => observer.OnError(ex),
+                    ex =>
+                    {
+                        lock (gate)
+                        {
+                            if (terminated) return;
+                            terminated = true;
+                            observer.OnError(ex);
+                        }
+                    },
                     // 🚨 Completion guard — the merged Initial gates on EVERY provider
                     // emitting one. A provider whose observable COMPLETES without an
                     // Initial (an Observable.Empty-shaped branch, a swallowed fault, an
@@ -691,6 +789,8 @@ public class MeshQuery : IMeshQueryCore
                     {
                         lock (gate)
                         {
+                            if (terminated)
+                                return;
                             if (initialSeen[idx])
                                 return;
                             Logger?.LogWarning(
@@ -725,43 +825,73 @@ public class MeshQuery : IMeshQueryCore
                 subscriptions.Add(sub);
             }
 
-            // 🔦 Stall probe — pure diagnosability, no behavior change. The merged Initial
-            // gates on EVERY provider; the completion guard above covers a provider that
-            // COMPLETES without an Initial, but a provider that neither emits nor completes
-            // nor errors starves the gate FOREVER and the consumer hangs in TOTAL silence
-            // (CI 2026-07-21: ExportImportAccessControlTest watchdog-killed at 60s with a
-            // flat heap and not one log line — this warning is the line that was missing).
-            // Warning level so default CI/prod log levels carry it; names the exact laggards
-            // so the NEXT occurrence is attributable. Disposed with the subscriptions, so a
-            // normally-answered query never logs.
-            // 🚨 The timer lives on the process-global TimerQueue for the probe window; it reads a
-            // standalone InitialStallProbe (provider-name strings + a seen flag), NEVER the merge's
-            // closure — so it cannot root the owning hub past disposal (MeshHubDisposalLeakTest).
-            // The per-provider Initial handler above calls stallProbe.MarkSeen(idx).
+            // 🚨 THE STALL TERMINAL. The merged Initial gates on EVERY provider; the completion
+            // guard above covers a provider that COMPLETES without an Initial, but a provider that
+            // neither emits nor completes nor errors starved the gate FOREVER and the consumer hung
+            // in TOTAL silence (CI 2026-07-21: ExportImportAccessControlTest watchdog-killed at 60s
+            // with a flat heap and not one log line; memex over the 400 minutes to
+            // 2026-09-21T04:12Z: 200+ of this probe's warnings, and nothing acted on any of them).
+            //
+            // It used to only LOG — deliberately, because the OTHER shape available to the fan-in
+            // for an unanswered provider is "count it empty and name it", and an EMPTY policy or
+            // grant snapshot handed to the permission fold is a HOLE, not a diagnosis
+            // (Doc/Architecture/AccessControl → "The convergence contract"). That left the fold
+            // with no terminal at all. The terminal it needs is an ERROR, which every consumer that
+            // decides access already classifies fail-CLOSED and retryable
+            // (PermissionCheckOutcome.Undetermined → ErrorType.Unavailable; RlsNodeValidator's
+            // UnestablishedCheck → NodeRejectionReason.Unavailable) — so faulting here is what
+            // turns a silent starvation into the availability failure it always was, attributed to
+            // the provider that starved. Policy `query-fanin-stall-terminal`
+            // (Doc/Architecture/PolicyNotProse).
+            //
+            // Warning level is unchanged: the FAULT is what the consumer reports, and logging the
+            // same event at Error here would double-report it.
+            //
+            // 🚨 The timer holds the merge's fault sink only while the answer is OUTSTANDING:
+            // MarkSeen disposes it the instant the last provider's Initial lands, so a healthy
+            // query roots nothing for the budget window — strictly LESS rooting than the old
+            // log-only probe, which stayed armed for its whole delay. And a stalled query already
+            // roots this observer chain through the provider's own pending subscription, for ever;
+            // firing at rung 4 is what ENDS that, so the terminal shortens the worst leak rather
+            // than adding one (MeshHubDisposalLeakTest's TimerQueue shape).
             subscriptions.Add(stallProbe.Arm(
-                InitialStallProbeDelay, Logger, request.Query, request.UserId));
+                OperationOptions.QueryInitialBudget, Logger, request.Query, request.UserId,
+                stalled =>
+                {
+                    lock (gate)
+                    {
+                        // Answered (or already terminal) while the timer callback was in flight —
+                        // MarkSeen's disposal races it by design, so this check is what makes the
+                        // terminal exactly-once.
+                        if (terminated || initialCount == initialTarget) return;
+                        terminated = true;
+                        observer.OnError(stalled);
+                    }
+                }));
 
             return new System.Reactive.Disposables.CompositeDisposable(subscriptions);
         });
     }
 
     /// <summary>
-    /// How long a query provider may take to deliver its Initial before the merge's stall probe
-    /// names it in a warning. Diagnostic only — nothing is cancelled; generous enough that a slow
-    /// cold provider under suite load doesn't produce noise (the observed healthy worst case is
-    /// single-digit seconds), short enough to land well before consumer watchdogs (60s+).
-    /// </summary>
-    private static readonly TimeSpan InitialStallProbeDelay = TimeSpan.FromSeconds(20);
-
-    /// <summary>
-    /// Standalone, HUB-INDEPENDENT state + timer for the Initial stall diagnostic. It exists as its
-    /// own object (not the merge's closure) for one load-bearing reason: the diagnostic timer lives
-    /// on the PROCESS-GLOBAL TimerQueue for the whole probe window, and a timer whose callback closed
-    /// over the merge's <c>Observable.Create</c> scope would transitively root the observer chain and
-    /// the owning <c>MessageHub</c> until it fires — pinning a disposed mesh's hub past disposal and
-    /// failing <c>MeshHubDisposalLeakTest</c>. This object holds ONLY provider-name strings and a
-    /// seen flag, so the timer that reads it can never reach a hub. It is fed by <see cref="MarkSeen"/>
-    /// from each provider's Initial (or silent-completion) handler; <see cref="Arm"/> starts the timer.
+    /// Standalone state + timer for the Initial stall TERMINAL. It is its own object rather than
+    /// part of the merge's closure so that its own state — provider-name strings and a seen flag —
+    /// stays hub-free, and so that the ARM it hands out can be released the instant the query is
+    /// answered rather than only when the consumer unsubscribes.
+    ///
+    /// <para>🚨 <b>What changed when the probe became a terminal.</b> A terminal has to REACH the
+    /// observer, so the timer's callback necessarily holds the merge's fault sink — and therefore,
+    /// transitively, the observer chain and its hub — while it is armed. That is why
+    /// <see cref="MarkSeen"/> disposes the arm the moment the last provider's Initial lands: the
+    /// rooting window is exactly the window in which the query has no answer, which is the window
+    /// this type exists to end. A healthy query now roots NOTHING for the budget, where the old
+    /// log-only probe stayed armed for its full delay; and a stalled query's observer chain is
+    /// already rooted for ever by the provider's own pending subscription, so firing releases both.
+    /// The <c>TimerQueue</c> shape <c>MeshHubDisposalLeakTest</c> hunts is therefore strictly
+    /// shorter-lived than before, not newly introduced.</para>
+    ///
+    /// <para>It is fed by <see cref="MarkSeen"/> from each provider's Initial (or silent-completion)
+    /// handler; <see cref="Arm"/> starts the timer.</para>
     /// </summary>
     private sealed class InitialStallProbe(string[] providerNames)
     {
@@ -769,10 +899,18 @@ public class MeshQuery : IMeshQueryCore
         private readonly object _gate = new();
         private int _seenCount;
 
+        // The armed timer, so the LAST MarkSeen can release it (and with it the fault sink's hold
+        // on the observer chain) without waiting for the consumer to unsubscribe. Null once
+        // released or never armed.
+        private IDisposable? _armed;
+
         /// <summary>Records that provider <paramref name="idx"/> has delivered (or terminally
-        /// completed) its Initial, so the probe no longer counts it as stalled. Idempotent.</summary>
+        /// completed) its Initial, so the probe no longer counts it as stalled. Idempotent. Once
+        /// EVERY provider is accounted for it releases the armed timer — the query has its answer,
+        /// so there is nothing left to terminate and nothing left to hold.</summary>
         public void MarkSeen(int idx)
         {
+            IDisposable? release;
             lock (_gate)
             {
                 if (idx >= 0 && idx < _seen.Length && !_seen[idx])
@@ -780,7 +918,14 @@ public class MeshQuery : IMeshQueryCore
                     _seen[idx] = true;
                     _seenCount++;
                 }
+                if (_seenCount < _seen.Length)
+                    return;
+                release = _armed;
+                _armed = null;
             }
+            // Outside the lock: disposing an Rx timer subscription is not this type's business to
+            // do while holding its own gate.
+            release?.Dispose();
         }
 
         /// <summary>Comma-joined names of providers that have not yet delivered an Initial, or
@@ -796,25 +941,52 @@ public class MeshQuery : IMeshQueryCore
         }
 
         /// <summary>
-        /// Arms the diagnostic timer. The returned subscription is added to the merge's disposables,
-        /// so a normally-answered (and thus unsubscribed) query cancels the timer well before it
-        /// fires. The callback closes over ONLY <c>this</c> (hub-free) + the passed logger/strings —
-        /// deliberately a separate display class from the merge closure (this method is on this
-        /// nested type, not inside <c>Observable.Create</c>), which is what keeps the hub uncaptured.
+        /// Arms the stall timer. The returned subscription is added to the merge's disposables, so
+        /// an unsubscribed query cancels it; <see cref="MarkSeen"/> cancels it earlier, on the
+        /// answer. When it fires with providers still missing it logs the laggards BY NAME and then
+        /// hands <paramref name="onStalled"/> the <see cref="QueryProviderStalledException"/> that
+        /// carries that attribution — the caller decides what a terminal means for its observer
+        /// (the merge faults it; nothing else may).
         /// </summary>
-        public IDisposable Arm(TimeSpan delay, ILogger? logger, string? query, string? userId) =>
-            Observable.Timer(delay).Subscribe(_ =>
+        /// <param name="delay">The fan-in's rung of the budget ladder
+        /// (<see cref="MeshOperationOptions.QueryInitialBudget"/>).</param>
+        /// <param name="logger">Diagnostic sink; absent on the hub-less unsecured registration.</param>
+        /// <param name="query">The query text, for attribution.</param>
+        /// <param name="userId">The identity the query ran under, for attribution.</param>
+        /// <param name="onStalled">Delivers the terminal. Invoked at most once, on a timer thread.</param>
+        public IDisposable Arm(
+            TimeSpan delay, ILogger? logger, string? query, string? userId,
+            Action<QueryProviderStalledException> onStalled)
+        {
+            var sub = Observable.Timer(delay).Subscribe(_ =>
             {
                 var missing = MissingOrNull();
                 if (missing is null)
                     return;
-                logger?.LogWarning(
-                    "Query provider(s) [{Providers}] have not emitted an Initial after {Delay}s for query "
-                    + "'{Query}' (user '{UserId}') — the query is silently stalled on its all-providers "
-                    + "Initial gate and its consumer hangs with no error. Fix the stalled provider; "
+                var stalled = new QueryProviderStalledException(missing, delay, query, userId);
+                logger?.LogWarning(stalled,
+                    "Query provider(s) [{Providers}] did not emit an Initial within {Delay}s for query "
+                    + "'{Query}' (user '{UserId}') — the query is stalled on its all-providers Initial "
+                    + "gate and has NO snapshot to answer with, so it is TERMINATED as unavailable "
+                    + "(retryable) rather than left hanging with no error. Fix the stalled provider; "
                     + "never bump the consumer's timeout.",
                     missing, delay.TotalSeconds, query, userId);
+                onStalled(stalled);
             });
+            // Publish the arm so MarkSeen can release it — and re-check, because a provider may have
+            // answered synchronously between the subscribe above and this line, in which case the
+            // MarkSeen that would have released it has already run and found nothing to release.
+            lock (_gate)
+            {
+                if (_seenCount < _seen.Length)
+                {
+                    _armed = sub;
+                    return sub;
+                }
+            }
+            sub.Dispose();
+            return System.Reactive.Disposables.Disposable.Empty;
+        }
     }
 
     /// <summary>
