@@ -56,8 +56,31 @@ namespace MeshWeaver.Graph;
 /// 13.5 s of a 101 s boot); worse, a probe of an adopted-but-not-yet-loadable bake trips the
 /// loader's corrupt-file self-heal, which DELETES the store's bytes and forces a re-adoption
 /// (ShippedPrebuiltBundlesTest pins that boot contract). A dynamic type registers the moment an
-/// instance hub activates — and a dynamic type with zero instances has no payload carrying its
-/// discriminator, so there is nothing to degrade.</para>
+/// instance hub activates.</para>
+///
+/// <para>🚨 <b>That last clause used to end "…and a dynamic type with zero instances has no
+/// payload carrying its discriminator, so there is nothing to degrade", and the premise is false
+/// for a type with FEW instances</b> (Systemorph/MeshWeaver.Plugins#2178, #2180). A per-node hub is
+/// a single activation cluster-wide, so a type whose handful of instances all activate on ANOTHER
+/// replica registers there and nowhere else — while every other replica reads those nodes through
+/// its own stream cache and cannot bind the <c>$type</c>. Measured on two live portals 2026-09-21:
+/// 8-11 such types per replica, a different set on each, <c>Hosting/Deployment</c> and
+/// <c>Hosting/DeploymentStatus</c> among them, every one of them carrying a usable assembly. The
+/// boot scope here is unchanged; what is corrected is the REASON, because the old one reads as
+/// "nothing is exposed" and something is.</para>
+///
+/// <para>🚨 <b>Do NOT close it by calling <see cref="ProbeRegister"/> from a degrade seam.</b>
+/// Getting a dynamic type's configuration means
+/// <c>IMeshNodeHubFactory.ResolveHubConfiguration</c> → <c>NodeTypeEnrichmentHelpers</c>, which
+/// TRIGGERS THE COMPILATION CHAIN and can WRITE the shared NodeType record (the stale-Ok self-heal
+/// flips it to <c>Pending</c> to force a recompile) and arms the rebind watcher. A read seam that
+/// did this would let every non-owning replica independently compile and re-stamp one record that
+/// the whole deployment shares — the cross-stamp <c>NodeTypeLiveRecordCensus</c> exists to DETECT.
+/// Measured: an adopt-only branch wired that way turned an <c>AdoptedVerified</c> type into
+/// <c>Compiled</c> (<c>ANodeTypesSourcesWaitForItsBundleTest</c>). Registration belongs with the
+/// component already sanctioned to activate dynamic types on this replica — the pre-warmer, whose
+/// <c>AlreadyBaked</c> branch is where the skip happens — not with whoever reads a node. See
+/// <c>Doc/Architecture/DynamicContentTypeRegistration</c>.</para>
 /// </summary>
 public static class ContentTypeRegistration
 {
