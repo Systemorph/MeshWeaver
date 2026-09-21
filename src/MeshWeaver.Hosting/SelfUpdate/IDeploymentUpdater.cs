@@ -41,7 +41,8 @@ public interface IDeploymentUpdater
     /// (<c>memex-migration-su-&lt;tag&gt;</c>) built from the same ConfigMap and Secret the chart's
     /// <c>helm upgrade</c> Job uses — and reports how it ended. The poller calls this BEFORE
     /// <see cref="PatchToVersionAsync"/> on every roll and refuses the roll on
-    /// <see cref="MigrationRunOutcome.Failed"/> / <see cref="MigrationRunOutcome.TimedOut"/>.
+    /// <see cref="MigrationRunOutcome.Failed"/> / <see cref="MigrationRunOutcome.TimedOut"/> —
+    /// and, since #4764, on <see cref="MigrationRunOutcome.Forbidden"/> too.
     ///
     /// <para><b>Why it exists (2026-09-03).</b> The migration is a Job that only <c>helm upgrade</c>
     /// minted, named by release revision; a self-update patches the portal image with
@@ -53,8 +54,11 @@ public interface IDeploymentUpdater
     ///
     /// <para>Default implementation answers <see cref="MigrationRunOutcome.NotSupported"/>: a host
     /// whose updater predates this member rolls exactly as it did before, with <c>DbVersionGate</c>
-    /// as the only net — and the poller says so at Warning. A default rather than an abstract member
-    /// so the seam can land in core first without turning every dependent's build red.</para>
+    /// as the only net — and the poller says so at Warning AND on the policy node, as a roll
+    /// qualified <c>UNMIGRATED</c> rather than a plain applied one (#4764). A default rather than an
+    /// abstract member so the seam can land in core first without turning every dependent's build
+    /// red — which is also why <c>NotSupported</c> is the one non-success outcome that still rolls:
+    /// every implementation that has not adopted the member answers it.</para>
     /// </summary>
     /// <param name="versionTag">The platform version tag whose migration must run.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -94,8 +98,10 @@ public interface IDeploymentUpdater
 /// <summary>
 /// How <see cref="IDeploymentUpdater.RunMigrationAsync"/> ended. The poller's rule: only
 /// <see cref="Completed"/> proves the schema moved; <see cref="Failed"/> and <see cref="TimedOut"/>
-/// prove it did NOT and refuse the roll; <see cref="NotSupported"/> and <see cref="Forbidden"/> are
-/// the two "could not even try" states, which roll as before — loudly.
+/// prove it did NOT and refuse the roll; <see cref="Forbidden"/> proves nothing either way and also
+/// refuses, because the <c>helm upgrade</c> that grants the missing permission runs the migration
+/// itself (#4764); <see cref="NotSupported"/> alone still rolls — an install that can NEVER migrate
+/// would otherwise freeze for ever (#2553) — and is recorded as an <c>UNMIGRATED</c> roll.
 /// </summary>
 public enum MigrationRunOutcome
 {
@@ -115,6 +121,12 @@ public enum MigrationRunOutcome
     /// The cluster refused to create the Job (403): the portal's service account has not been
     /// granted <c>batch/jobs</c> — the chart's <c>memex-portal/rbac.yaml</c> grants it, and takes
     /// effect on the next <c>helm upgrade</c>.
+    ///
+    /// <para>🚨 This REFUSES the roll (#4764). It reads like the other "could not even try" state
+    /// and is not one: the remedy is a <c>helm upgrade</c> an operator already owes this install, and
+    /// that upgrade renders the migration Job itself — so refusing asks for nothing new, while
+    /// patching asks <c>DbVersionGate</c> to veto the new pods three seconds into their boot behind
+    /// an old ReplicaSet that keeps answering 200, which nothing in the process can undo.</para>
     /// </summary>
     Forbidden,
 }

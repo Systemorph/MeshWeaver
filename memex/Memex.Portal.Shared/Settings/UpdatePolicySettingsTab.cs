@@ -176,8 +176,42 @@ public static class UpdatePolicySettingsTab
                                     ex => h.UpdateData(ResultId, h.Localize("ui.updateHandoverFailed", ex.Message)));
                             return;
                         }
-                        pool.Invoke(ct => updater!.PatchToVersionAsync(tag, ct)).Subscribe(
-                            _ => h.UpdateData(ResultId, h.Localize("ui.updateRolling", tag)),
+                        // 🚨 THE SCHEMA MOVES FIRST HERE TOO (#4764). This button honoured the
+                        // availability gate, the combo gate and the control-lane route — and skipped
+                        // the migration entirely, so an admin click made exactly the image-only roll
+                        // across a db_version boundary that the poller had stopped making: the new
+                        // pods refuse to start on DbVersionGate, Kubernetes restarts them for ever,
+                        // and the old ReplicaSet keeps answering 200. Worse than the poller's old
+                        // blind branch, because a click leaves no verdict anywhere to inspect.
+                        //
+                        // The decision is SelfUpdateVerdict.MayPatchAfter — the same predicate the
+                        // poller's outcome is held to, so the two routes cannot drift apart when an
+                        // outcome is added to the enum.
+                        pool.Invoke(ct => updater!.RunMigrationAsync(tag, ct)).Subscribe(
+                            outcome =>
+                            {
+                                if (!SelfUpdateVerdict.MayPatchAfter(outcome))
+                                {
+                                    // The two refusals stay DIFFERENT sentences: a migration that ran
+                                    // and broke sends the operator to the Job's log, one that could
+                                    // not be created sends them to a helm upgrade. The outcome name
+                                    // renders verbatim — machine text, like the gate diagnostics
+                                    // above.
+                                    h.UpdateData(ResultId, h.Localize(
+                                        outcome == MigrationRunOutcome.Forbidden
+                                            ? "ui.updateMigrationUnavailableManual"
+                                            : "ui.updateMigrationFailedManual",
+                                        tag, outcome.ToString()));
+                                    return;
+                                }
+                                pool.Invoke(ct => updater!.PatchToVersionAsync(tag, ct)).Subscribe(
+                                    _ => h.UpdateData(ResultId, h.Localize(
+                                        outcome == MigrationRunOutcome.NotSupported
+                                            ? "ui.updateRollingUnmigrated"
+                                            : "ui.updateRolling",
+                                        tag)),
+                                    ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
+                            },
                             ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
                     });
                 });
