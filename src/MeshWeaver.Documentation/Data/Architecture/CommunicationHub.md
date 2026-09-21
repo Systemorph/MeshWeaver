@@ -289,10 +289,82 @@ confirms positively.
 One row per item, whatever the channel:
 
 ```text
-✅  🏢 Acme AG → Counterparty   Retype 8 partition roots, 3 fields  ⚙️ Approvals/Workspace   2m
-✉️  📄 A. Buyer (Acme AG)       Re: workshop follow-up              ✉️ a.buyer@acme.example  1h
-💬  👤 B. Seller (Acme AG)      Question on the proposal            📱 +41 ·· ··· ·· ··      3h
+☐  🏢 Acme AG → Counterparty   Retype 8 partition roots, 3 fields  ⚙️ Approvals/Workspace   2m
+☐  📄 A. Buyer (Acme AG)       Re: workshop follow-up              ✉️ a.buyer@acme.example  1h
+☐  👤 B. Seller (Acme AG)      Question on the proposal            📱 +41 ·· ··· ·· ··      3h
 ```
+
+🚨 **The leading glyph shows what is MISSING. A green check appears ONLY when the item is done —
+never before.** An inbox item is an OPEN obligation: the whole reason it is in the inbox is that
+something is still owed. A ✅ on a pending row reads as *already handled* and makes a list of
+outstanding work look finished at a glance, which is the one thing this surface must never do.
+
+- **open** → an empty box `☐`, whatever the channel
+- **done** → `✅`, and only then
+- **overdue** → its own mark, not a colour alone, so the state survives for a viewer who cannot
+  distinguish red from green
+
+### Three bands: what is owed, what is running, what just happened
+
+```text
+Needs you
+☐  🏢 Acme AG → Counterparty   Retype 8 partition roots, 3 fields  ⚙️ Approvals/Workspace   2m
+
+Running
+⏳  📄 Quarterly export         Writing rows… 1 240 so far          ⚙️ Activities            4m
+⏳  💬 Pricing review           Agent is answering…                 💬 Threads               1m
+⏳  🏢 Acme AG bake             Compiling node types                ⚙️ Activities           12m
+
+Last 24 hours
+✅  🏢 Acme AG onboarding       Approved by you                     ⚙️ Approvals/Workspace   4h
+❌  📄 Nightly import           Failed: 3 rows rejected             ⚙️ Activities            9h
+```
+
+All three are fed by the same mechanism — each band is one or more provider-contributed query
+strings, anchored the same way. The bands differ only in what their legs select:
+
+| band | selects | glyph |
+|---|---|---|
+| **Needs you** | open obligations addressed to the viewer | `☐` |
+| **Running** | activities in flight (`ActivityStatus.Running`) **and threads executing** | `⏳` |
+| **Last 24 hours** | terminal activities inside a window | `✅` / `❌` |
+
+**Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
+*Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It
+is also the band that answers the question people actually open the inbox with when something is
+slow: *is it still going?*
+
+🚨 **Running is a live band, so it needs no poller.** The rows come from the same node streams
+everything else binds to; an activity that finishes moves itself to the third band on the next
+emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
+implementation.
+
+This is also the only place a tick legitimately appears — the third band is *by definition* things
+that are done. Keeping the bands apart is what lets the first stay an honest list of outstanding
+work: one merged list sorted by time buries the single open item under twenty completed ones, which
+is exactly what the glyph rule above guards against.
+
+The activity legs read the viewer's own `_Activity` satellites — `namespace:{viewer}/_Activity
+nodeType:Activity sort:LastModified-desc` — one partition, pinned, like every other leg. That is the
+same shape the platform's existing **running-activities stripe** already uses, so the Running band
+is a second reader of a query that ships today, not a new mechanism.
+
+**A running THREAD is a second leg in the same band, contributed by the Threads app** — the potluck
+working as intended: the inbox learns nothing about threads, it just runs the query Threads brought.
+The leg reads the viewer's own `_Thread` satellites and selects the executing ones, and each row
+**opens in the Threads app** rather than rendering a conversation inside the inbox. The inbox lists
+what is in flight and hands off; it is not a second chat client, and a row whose only job is to link
+must not grow the ability to answer.
+
+🚨 **`Executing` is a thread's own `Status`, not an `ActivityStatus`, and the two must not be
+conflated in one leg.** They are different vocabularies on different node types with different
+lifecycles — a thread also has `Idle`, `StartingExecution` and `Done`, and `StartingExecution` is a
+claim edge rather than work in flight ([Activity Control Plane](/Doc/Architecture/ActivityControlPlane)).
+Two legs, each selecting its own type's own states, merged for display only.
+
+🚨 **The 24-hour window is a display bound, not retention.** Narrowing it hides rows; it deletes
+nothing, and it must never be mistaken for the retention pass that actually bounds the data
+([Notification Retention](/Doc/Architecture/NotificationRetention)).
 
 Built from framework controls only — `Controls.DataGrid` with `PropertyColumnControl<T>`, composed
 in `Controls.Stack`. 🚨 **No `StringBuilder`, no `Controls.Html(markup)` for the rows**: structured
