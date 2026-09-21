@@ -355,11 +355,25 @@ public sealed class UserIdentityCache : IDisposable
             return;
         if (Interlocked.CompareExchange(ref _opening, 1, 0) != 0)
             return;   // another caller is already opening this chain
-        // Cleared as the fresh read opens, so a miss is "has not filled YET" again — which is what
-        // Classify needs in order to keep answering Unavailable instead of a false definitive
-        // "no such user" while the new snapshot is on its way.
-        Volatile.Write(ref _subscriptionFailure, null);
+        // 🚨 DOWN FIRST, CLEAR, THEN un-fail — the same order, and for the same reason, as
+        // Apply's Initial/Reset arm. All three writes are observable by a concurrent Lookup, and two
+        // of the six orderings answer a LIE:
+        //
+        //  • un-fail before going down → the reader sees failure==null AND hydrated==true over the
+        //    DEAD chain's index, so a MISS is a definitive "no such user" — the false, actionable
+        //    verdict #974/#637 exist to prevent, and the exact input that drives onboarding.
+        //  • go down but keep the rows → Classify answers Found(hit) BEFORE it consults either flag
+        //    (a hit outranks both, by design), so a user deleted or renamed since the terminal is
+        //    still served off a snapshot that has stopped learning. Retaining the unavailable state
+        //    does NOT close this one: the hit wins over that too. Only clearing does.
+        //
+        // In this order the worst a concurrent reader observes is Unavailable, which
+        // UntilDetermined turns into a pending question that the replacement chain's first snapshot
+        // resolves. Found by review on #5048.
         Volatile.Write(ref _hydrated, false);
+        _byEmail.Clear();
+        _byId.Clear();
+        Volatile.Write(ref _subscriptionFailure, null);
         var subscription = new SingleAssignmentDisposable();
         _connections.Add(subscription);
         subscription.Disposable = _mesh

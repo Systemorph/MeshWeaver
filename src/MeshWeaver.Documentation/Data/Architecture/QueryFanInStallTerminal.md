@@ -142,6 +142,20 @@ door; each turned a hang into something worse, so each is fixed in the same chan
    the dead chain is dropped and the **next caller** re-opens it, which on a live portal is the next
    request or circuit start, and that chain's first snapshot un-parks whoever was already waiting.
    Same discipline as `EvictFaultedQuery`, one class over.
+
+   🚨 **The re-open window has exactly two ways to lie, and both are about identity** (found by review
+   on the change that introduced it). `Classify` answers `Found(hit)` *before* it consults either
+   flag — a hit outranks both, by design — so keeping the dead chain's rows serves a user deleted or
+   renamed since the terminal, and *retaining the unavailable state does not close that*: the hit wins
+   over it too. And clearing the failure before lowering the hydrated flag lets a reader see "healthy
+   and authoritative" over the dead index, so a MISS becomes a definitive **Unknown** — "no such
+   user", which is the false actionable verdict #974/#637 exist to prevent and the exact input that
+   drives onboarding. The cure is `Apply`'s own Initial/Reset order reused verbatim — **down first,
+   clear, then un-fail** — under which the worst a concurrent reader observes is `Unavailable`, which
+   `UntilDetermined` turns back into a pending question. Pinned by
+   `UserIndexReopenDoesNotServeADeadSnapshotTest`, whose control is that the released replacement
+   chain does fill the index again: a permanent blackout would be the opposite failure and must not
+   pass.
 3. **`EventSubscriptionRunner.WatchTriggerNodeType`** keyed its one-watch-per-node-type guard on a
    dictionary entry it never removed on a terminal, so a faulted watch was **dead for the life of the
    runner** — silently stranding the deferred invite/grant reconcile (a user onboards and gets no
