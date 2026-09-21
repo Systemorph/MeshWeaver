@@ -85,6 +85,10 @@ public static class CodeQueryResolver
     /// <c>NodeTypeDefinition.Tests</c> into one-or-more concrete mesh query
     /// strings ready for <c>IMeshService.Query&lt;MeshNode&gt;</c>. An optional
     /// <c>name=</c> prefix is stripped first — the compiler ignores grouping.
+    ///
+    /// <para>Every expansion that names an absolute location is followed by its MOUNT-ANCHORED
+    /// sibling when the two differ — see <see cref="AnchorToMount"/> for why, and for the
+    /// <c>@@</c>-include precedent it shares its rule with.</para>
     /// </summary>
     public static IEnumerable<string> Expand(string rawQuery, string selfPath)
     {
@@ -98,15 +102,106 @@ public static class CodeQueryResolver
             if (stripped.Length == 0) yield break;
             if (stripped.Contains(':'))
             {
-                yield return WithCodeTypeFilter(stripped);
+                foreach (var q in WithMountAnchoredSibling(WithCodeTypeFilter(stripped), selfPath))
+                    yield return q;
                 yield break;
             }
-            yield return WithCodeTypeFilter($"path:{stripped}");
-            yield return WithCodeTypeFilter($"namespace:{stripped} scope:subtree");
+            foreach (var q in WithMountAnchoredSibling(
+                         WithCodeTypeFilter($"path:{stripped}"), selfPath))
+                yield return q;
+            foreach (var q in WithMountAnchoredSibling(
+                         WithCodeTypeFilter($"namespace:{stripped} scope:subtree"), selfPath))
+                yield return q;
             yield break;
         }
 
-        yield return WithCodeTypeFilter(RebaseRelativeNamespace(expanded, selfPath));
+        foreach (var q in WithMountAnchoredSibling(
+                     WithCodeTypeFilter(RebaseRelativeNamespace(expanded, selfPath)), selfPath))
+            yield return q;
+    }
+
+    /// <summary>
+    /// <paramref name="query"/>, followed by its mount-anchored form when anchoring changes it.
+    /// Both are emitted — never one instead of the other — for the same reason
+    /// <c>NodeCompileShaping.ResolveCodeIncludes</c> tries the anchored include path FIRST and
+    /// keeps the authored one as a fallback: which spelling resolves is a property of the mount,
+    /// not of the entry, and a query that matches nothing costs a query and changes no result.
+    /// </summary>
+    private static IEnumerable<string> WithMountAnchoredSibling(string query, string selfPath)
+    {
+        yield return query;
+        if (AnchorToMount(query, selfPath) is { } anchored)
+            yield return anchored;
+    }
+
+    /// <summary>
+    /// 🚨 Rebases the <c>path:</c> / <c>namespace:</c> value of an expanded query onto the mount
+    /// prefix the OWNING NodeType lives under — or <c>null</c> when that changes nothing.
+    ///
+    /// <para><b>Why this exists.</b> A cross-type source reference is authored MOUNT-RELATIVE,
+    /// exactly like an <c>@@</c> include: <c>samples/Graph/Data/Northwind/Product.json</c> declares
+    /// <c>shared=@Northwind/AnalyticsCatalog/Source/Supplier</c>, which is the right spelling at a
+    /// root mount and the wrong one in a statically-imported partition, where the nodes are served
+    /// from a prefix (<c>MeshWeaver/samples/Graph/Data/Northwind/…</c>). Resolved verbatim there the
+    /// entry matches NOTHING — and because the type's OWN <c>namespace:Source scope:subtree</c> is
+    /// rebased on <c>$self</c> and does match, the merged set is non-empty, so neither
+    /// <see cref="SourceSnapshot"/>'s emptiness check nor <c>PreWarmStatus.NoSources</c> fires.
+    /// Roslyn is handed a set SHORT of the sibling entity sources and reports a completely
+    /// genuine-looking <c>CS0246: The type or namespace name 'Supplier' could not be found</c>
+    /// about code that is fine — issue #4813, measured on memex-cloud where
+    /// <c>MeshWeaver/samples/Graph/Data/Northwind/Product</c> failed that way on every pod that
+    /// attempted it, with source discovery reporting 2 matched Code nodes.</para>
+    ///
+    /// <para><b>The include half of this defect was already closed and this is the same rule.</b>
+    /// <c>NodeCompileShaping.AnchorIncludePath</c> exists for the identical failure on <c>@@</c>
+    /// include paths (an unresolved include is left verbatim, so Roslyn parses the <c>@@</c> line
+    /// and reports on path segments as if they were symbols). Calling THAT function rather than a
+    /// second copy of the rule is deliberate: a source query and an include that name the same node
+    /// must not disagree about where it lives.</para>
+    ///
+    /// <para><b>What it deliberately does NOT touch.</b> Anchoring is a no-op unless the value's
+    /// first segment appears in <paramref name="selfPath"/> BELOW the root, so: a root-mounted type
+    /// keeps behaving exactly as before (the whole reason the samples work in the Monolith); a
+    /// genuinely cross-partition reference stays verbatim (<c>shared=@Store/Core/Source</c> read
+    /// from <c>rbuergi/OperationRequest</c> — the #3903 shape — has no <c>Store</c> segment to
+    /// anchor to); and an already-absolute reference is never double-prefixed, because its first
+    /// segment is the mount root itself, which sits at index 0 and is excluded.</para>
+    /// </summary>
+    /// <param name="query">One fully expanded query, as <see cref="Expand"/> emits it.</param>
+    /// <param name="selfPath">The owning NodeType's mesh path — the mount anchor.</param>
+    internal static string? AnchorToMount(string query, string selfPath)
+    {
+        if (string.IsNullOrEmpty(selfPath)) return null;
+
+        var rewritten = query;
+        foreach (var key in MountAnchoredKeys)
+        {
+            if (TryGetTokenValue(rewritten, key) is not { } value) continue;
+            var anchored = NodeCompileShaping.AnchorIncludePath(value, selfPath);
+            if (string.Equals(anchored, value, System.StringComparison.Ordinal)) continue;
+            rewritten = ReplaceTokenValue(rewritten, key, anchored);
+        }
+
+        return string.Equals(rewritten, query, System.StringComparison.Ordinal) ? null : rewritten;
+    }
+
+    /// <summary>The query tokens whose value names a mesh location and is therefore mount-relative.
+    /// An immutable lookup initialised once and never written — <c>NoStaticState.md</c>'s sanctioned
+    /// <c>static readonly</c>.</summary>
+    private static readonly string[] MountAnchoredKeys = ["path:", "namespace:"];
+
+    /// <summary>Replaces the value of <paramref name="key"/> in <paramref name="query"/>, keeping
+    /// every other token — including the trailing <c>scope:</c> / <c>nodeType:</c> filters — exactly
+    /// as it was.</summary>
+    private static string ReplaceTokenValue(string query, string key, string newValue)
+    {
+        var idx = query.IndexOf(key, System.StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return query;
+        var valueStart = idx + key.Length;
+        var valueEnd = valueStart;
+        while (valueEnd < query.Length && !char.IsWhiteSpace(query[valueEnd]))
+            valueEnd++;
+        return query[..valueStart] + newValue + query[valueEnd..];
     }
 
     /// <summary>
@@ -196,6 +291,12 @@ public static class CodeQueryResolver
     /// Extracts the one namespace root all of a group's <c>namespace:</c> queries share
     /// — or null when they disagree (mixed roots can't be relativised consistently).
     /// <c>path:</c>-only queries contribute nothing.
+    ///
+    /// <para>🚨 A root and its MOUNT-ANCHORED form are the SAME root, resolved two ways, so they do
+    /// not count as a disagreement — the anchored spelling wins. Without this, an entry that
+    /// <see cref="AnchorToMount"/> anchors would hand the GUI a group whose root is null and whose
+    /// files therefore render as full paths, purely because the resolver now also asks for the
+    /// spelling that actually resolves.</para>
     /// </summary>
     private static string? TryGetCommonNamespaceRoot(IReadOnlyList<string> expandedQueries)
     {
@@ -204,11 +305,25 @@ public static class CodeQueryResolver
         {
             var ns = TryGetTokenValue(query, "namespace:");
             if (ns is null) continue;
-            if (root is null) root = ns;
-            else if (!string.Equals(root, ns, System.StringComparison.Ordinal)) return null;
+            if (root is null) { root = ns; continue; }
+            if (string.Equals(root, ns, System.StringComparison.Ordinal)) continue;
+            if (IsMountAnchoredForm(ns, root)) { root = ns; continue; }
+            if (IsMountAnchoredForm(root, ns)) continue;
+            return null;
         }
         return root;
     }
+
+    /// <summary>
+    /// <c>true</c> when <paramref name="candidate"/> is <paramref name="authored"/> prefixed by a
+    /// mount — i.e. the authored value with whole segments in front of it. The segment-boundary
+    /// check is what keeps <c>Northwind/Source</c> from reading as the anchored form of
+    /// <c>wind/Source</c>.
+    /// </summary>
+    private static bool IsMountAnchoredForm(string candidate, string authored) =>
+        candidate.Length > authored.Length + 1
+        && candidate.EndsWith(authored, System.StringComparison.Ordinal)
+        && candidate[candidate.Length - authored.Length - 1] == '/';
 
     /// <summary>
     /// Heuristic path-level matcher over expanded queries: <c>path:X</c> matches the
