@@ -45,18 +45,36 @@ secret="${HOSTING_TLS_SECRET:-${namespace}-tls}"
 [ -n "$issuer" ] || issuer="${HOSTING_TLS_ISSUER:-letsencrypt-prod}"
 [ "$issuer" = "none" ] && hosting::die "the issuer is 'none' — that record asks cert-manager for nothing, so this step must not have been composed. Nothing was created."
 
+# 🚨 Both reads below are called from the WAIT LOOP, so a refusal that reads as "not yet" does not
+# merely mislead — it spends the entire budget first and only then lies (MeshWeaver#4722). Measured
+# shape before this change: a Forbidden on `certificates` left $state empty for the full timeout and
+# the step then died with `Certificate Ready: no such object`, asserting the object does not exist.
+# The pearl Provision of 2026-09-15 stopped on exactly that Forbidden, which is why the ClusterRole
+# grants `certificates` today — and why a future RBAC change must not be able to bring the sentence
+# back. A refusal ends the wait immediately; nothing is ruled out and no budget is burned.
+#
+# 🚨 Both are called DIRECTLY, never in a command substitution: hosting::die inside $( ) ends only
+# the substitution and the caller carries on with an empty value (see hosting::safe_name).
 ready() {
-  local tls_crt
-  tls_crt="$(kubectl -n "$namespace" get secret "$secret" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)"
-  [ -n "$tls_crt" ]
+  local rc
+  hosting::probe output kubectl -n "$namespace" get secret "$secret" -o jsonpath='{.data.tls\.crt}'
+  rc=$?
+  [ "$rc" -ne 2 ] || hosting::die_refused "the TLS Secret ${secret} in ${namespace}"
+  [ "$rc" -eq 0 ]
 }
 
 # The Certificate's Ready condition — "True" once cert-manager has issued, plus its message while
 # it has not. Read explicitly (see the header) so the refusal can say WHY, not just that nothing
 # arrived.
+# Sets CERT_STATE rather than printing, for the command-substitution reason stated above.
+CERT_STATE=""
 cert_state() {
-  kubectl -n "$namespace" get certificates "$secret" \
-    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null || true
+  local rc
+  hosting::probe any kubectl -n "$namespace" get certificates "$secret" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.conditions[?(@.type=="Ready")].message}'
+  rc=$?
+  [ "$rc" -ne 2 ] || hosting::die_refused "the Certificate ${secret} in ${namespace}"
+  CERT_STATE="$HOSTING_PROBE_OUT"
 }
 
 if ready; then
@@ -95,7 +113,7 @@ YAML
 deadline=$(( $(date +%s) + timeout ))
 state=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  state="$(cert_state)"
+  cert_state; state="$CERT_STATE"
   if ready && [ "${state%% *}" = "True" ]; then
     hosting::log "certificate issued into ${secret} (Certificate ${secret} is Ready)"
     hosting::say tls issued

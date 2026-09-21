@@ -33,8 +33,15 @@ if hosting::dry; then
   exit 0
 fi
 
-cm="$(kubectl -n "$namespace" get cm memex-portal-config -o json 2>/dev/null)" \
-  || hosting::die "no memex-portal-config ConfigMap in ${namespace} — the release did not render one, so nothing configured the catalog"
+# 🚨 THREE ANSWERS, not two (MeshWeaver#4722). This read used to be `2>/dev/null || hosting::die
+# "…the release did not render one…"`, so a Forbidden on `configmaps` came out as a VERDICT ABOUT
+# THE RELEASE — a verify step blaming the chart for a permission this Job did not hold.
+hosting::probe any kubectl -n "$namespace" get cm memex-portal-config -o json
+case $? in
+  2) hosting::die_refused "the ConfigMap memex-portal-config in ${namespace}" ;;
+  1) hosting::die "no memex-portal-config ConfigMap in ${namespace} — the release did not render one, so nothing configured the catalog" ;;
+esac
+cm="$HOSTING_PROBE_OUT"
 
 # One key per mount: PluginCatalog__Registries__<i>__Name.
 mounts="$(printf '%s' "$cm" | grep -o '"PluginCatalog__Registries__[0-9]*__Name"' | sort -u | wc -l | tr -d ' ')"
