@@ -182,6 +182,16 @@ collectible-ALC lease, and that arm is reached only when `meshHub.IsDisposing` i
 the resolve threw, the Rx error handler rethrew, and the lease was held for the process lifetime:
 exactly the load-context leak the mechanism exists to bound. The release now happens first.
 
+🚨 **And that site is the counter-example to the hoist**, which is why it is worth stating as its own
+rule. Hoisting its resolve to the top of the method — the correction applied everywhere else above —
+makes it *worse*: the same possible throw then sits ahead of the release on **every** path, including
+the normal-completion path that resolves nothing today, turning a lost log line into a guaranteed
+leak. So the test is not "is this resolve inside a continuation" but **"what does this resolve stand
+in front of"**. Where it stands in front of a cleanup, reorder rather than hoist, and let the
+diagnostic be the thing that is allowed to fail. `HostedHubsCollection.ReadOwnerCause` is the
+established precedent: a best-effort teardown diagnostic, read where it is needed, never permitted to
+fault the teardown it describes.
+
 ### The swept inventory
 
 A lexical sweep of `src/` and `memex/` (scope-aware: comments and every string form stripped, a
