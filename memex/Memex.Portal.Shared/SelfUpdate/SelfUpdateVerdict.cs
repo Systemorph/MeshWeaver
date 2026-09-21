@@ -148,6 +148,22 @@ public enum SelfUpdateOutcome
     /// declares, so the control plane takes it unattended. Appended, never inserted.
     /// </summary>
     RestartHandedOver,
+
+    /// <summary>
+    /// 🚨 A newer release exists, every gate passed, and the roll was REFUSED because the database
+    /// migration for it could not be ATTEMPTED at all — the cluster refused the Job
+    /// (<see cref="MigrationRunOutcome.Forbidden"/>).
+    ///
+    /// <para>Distinct from <see cref="MigrationFailed"/>, and the distinction is the operator's
+    /// whole next move: <c>MigrationFailed</c> means the migration ran and broke — read its log —
+    /// while this means the mechanism is not there, and a <c>helm upgrade</c> both grants it and
+    /// runs the migration Job itself. Distinct from <see cref="Held"/> and
+    /// <see cref="ComboBlocked"/> for the same reason those two are distinct from each other: three
+    /// gates, three places to go.</para>
+    ///
+    /// <para>🚨 Appended, never inserted: the members before it keep their ordinals.</para>
+    /// </summary>
+    MigrationUnavailable,
 }
 
 /// <summary>
@@ -199,6 +215,7 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     public bool FoundNewerRelease => Outcome is SelfUpdateOutcome.Held or SelfUpdateOutcome.Deferred
         or SelfUpdateOutcome.DetectOnly or SelfUpdateOutcome.Applied
         or SelfUpdateOutcome.ComboBlocked or SelfUpdateOutcome.MigrationFailed
+        or SelfUpdateOutcome.MigrationUnavailable
         or SelfUpdateOutcome.HandedOver or SelfUpdateOutcome.HandoverFailed;
 
     /// <summary>The policy says never update.</summary>
@@ -347,6 +364,53 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         + "log (kubectl logs job/memex-migration-su-<tag>) and Doc/Architecture/DatabaseMigrationProcedure.",
         tag);
 
+    /// <summary>
+    /// 🚨 The roll was REFUSED because the migration could not be ATTEMPTED: the cluster answered
+    /// 403 to the Job (<see cref="MigrationRunOutcome.Forbidden"/>), so nothing established that the
+    /// schema is where <paramref name="tag"/> needs it.
+    ///
+    /// <para><b>Why refusing is the honest answer here, when it is not for
+    /// <see cref="MigrationRunOutcome.NotSupported"/>.</b> A 403 says this install's chart predates
+    /// <c>memex-portal/rbac.yaml</c>'s <c>batch/jobs</c> grant, so an operator <c>helm upgrade</c> is
+    /// already required — and that upgrade renders the migration Job itself. Refusing therefore asks
+    /// for nothing that was not already owed, and it removes the one move that cannot be recovered
+    /// from in-process: patching the image, having established nothing, and letting
+    /// <c>DbVersionGate</c> veto the new pods three seconds into their boot, behind an old
+    /// ReplicaSet that keeps answering 200 (#4764, measured on memex-cloud 2026-09-19 —
+    /// <c>CrashLoopBackOff</c>, restarts=2 by 05:06Z, nothing converging and nothing rolling back).
+    /// The verdict names both halves — what could not be run, and the one command that fixes it —
+    /// because a refusal an operator cannot act on is its own outage.</para>
+    /// </summary>
+    public static SelfUpdateVerdict MigrationUnavailable(string tag, MigrationRunOutcome outcome, string remedy) => new(
+        SelfUpdateOutcome.MigrationUnavailable,
+        $"roll to {tag} REFUSED: the database migration for it could not be run ({outcome}), so "
+        + "nothing established that the schema is where this build needs it — and a build that "
+        + "expects a newer db_version than the database has crash-loops on DbVersionGate behind a "
+        + $"portal that still answers 200. {remedy} "
+        + "Doc/Architecture/SelfUpdateSchemaWall and Doc/Architecture/DatabaseMigrationProcedure.",
+        tag);
+
+    /// <summary>
+    /// 🚨 Qualifies a roll that was taken WITHOUT its database migration — the
+    /// <see cref="MigrationRunOutcome.NotSupported"/> state, which is neither a migrated roll nor a
+    /// refused one.
+    ///
+    /// <para>It has to ride the verdict rather than only a log line, for the reason
+    /// <see cref="UpdatePolicyContent.LastCheckVerdict"/> exists at all: a log line depends on a
+    /// per-category log level a deployment may simply not have set, a node write does not. #4764's
+    /// second ask is exactly this — <c>lastCheckVerdict</c> reported the patch as done while the
+    /// crash-loop lived only on the pod, so "rolled with its schema moved" and "rolled blind" were
+    /// the same recorded sentence. They are now different ones.</para>
+    ///
+    /// <para>🚨 And it is a QUALIFIER, not a refusal, deliberately: <c>NotSupported</c> means the
+    /// updater has no migration mechanism at all, and refusing every roll on that would freeze the
+    /// install silently, which is the worse failure shape (#2553). What makes the difference safe to
+    /// leave is that the state is now RECORDED, and the remedy — update the
+    /// <c>MeshWeaver.SelfUpdate.Aks</c> module — is named in it.</para>
+    /// </summary>
+    public SelfUpdateVerdict Unmigrated(string reason) =>
+        this with { Message = $"{Message} UNMIGRATED — {reason}" };
+
     /// <summary>The check faulted.</summary>
     public static SelfUpdateVerdict CheckFailed(Exception ex) => new(
         SelfUpdateOutcome.CheckFailed,
@@ -424,6 +488,14 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// it. A hand-over that FAILED is not a roll in flight — nothing was handed to anyone — so the
     /// pending restart is still considered (and, on the same broken inbox, reported as unavailable
     /// naming the cause rather than silently skipped). Pure; pinned by <c>SelfUpdateVerdictTest</c>.
+    ///
+    /// <para>🚨 <see cref="SelfUpdateOutcome.MigrationUnavailable"/> is deliberately NOT in this
+    /// list, unlike <see cref="SelfUpdateOutcome.MigrationFailed"/>. A restart re-creates the pods on
+    /// the image that is ALREADY running, whose schema the database already satisfies — the wall the
+    /// migration refusal stands on is about the TARGET build, not this one. A broken migration is
+    /// fixed in minutes; a missing migration mechanism waits for an operator's <c>helm upgrade</c>,
+    /// and holding a landed module generation unactivated for that whole time would be a second
+    /// freeze caused by the first (#3650).</para>
     /// </summary>
     public static bool MayRestartAfter(SelfUpdateVerdict platform) => platform.Outcome
         is not (SelfUpdateOutcome.Applied or SelfUpdateOutcome.MigrationFailed

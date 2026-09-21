@@ -31,6 +31,9 @@ public class SelfUpdateVerdictTest
     // A migration refusal is a release that WAS waiting and could not be taken — the report must
     // fire for it exactly as for a hold; a schema that did not move is not "nothing newer".
     [InlineData(SelfUpdateOutcome.MigrationFailed, true)]
+    // A migration that could not even be ATTEMPTED refused a release that WAS waiting, for the same
+    // reason (#4764) — the report must fire for it as for any other refusal.
+    [InlineData(SelfUpdateOutcome.MigrationUnavailable, true)]
     [InlineData(SelfUpdateOutcome.NoNewerRelease, false)]
     [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
     [InlineData(SelfUpdateOutcome.CheckFailed, false)]
@@ -68,6 +71,8 @@ public class SelfUpdateVerdictTest
             SelfUpdateVerdict.NoOutcome(),
             SelfUpdateVerdict.ComboBlocked("3.0.1", "'Widget' does not compile against it"),
             SelfUpdateVerdict.MigrationFailed("3.0.1", MigrationRunOutcome.TimedOut),
+            SelfUpdateVerdict.MigrationUnavailable(
+                "3.0.1", MigrationRunOutcome.Forbidden, "run a helm upgrade for this instance."),
             SelfUpdateVerdict.InstalledTagWithdrawn("3.1.0-ci.7841", "it is not in the registry"),
             SelfUpdateVerdict.Restarted(SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", null),
             SelfUpdateVerdict.RestartDeferred(
@@ -243,6 +248,12 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.InstalledTagWithdrawn, true)]
     [InlineData(SelfUpdateOutcome.Applied, false)]
     [InlineData(SelfUpdateOutcome.MigrationFailed, false)]
+    // 🚨 And MigrationUnavailable is TRUE, unlike MigrationFailed (#4764). A restart re-creates the
+    // pods on the image ALREADY running, whose schema the database already satisfies; the wall is
+    // about the TARGET build. A broken migration is fixed in minutes — a missing migration
+    // MECHANISM waits for an operator's helm upgrade, and holding a landed module generation
+    // unactivated for all of that would be a second freeze caused by the first.
+    [InlineData(SelfUpdateOutcome.MigrationUnavailable, true)]
     [InlineData(SelfUpdateOutcome.CheckFailed, false)]
     [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
     [InlineData(SelfUpdateOutcome.NoOutcome, false)]

@@ -61,17 +61,34 @@ self-updater runs it.
 **2. One-time grant per install (operator).** The self-updater creates Jobs under
 `memex-portal-sa`; the chart's `memex-portal/rbac.yaml` grants `batch/jobs create,get,list,delete`.
 An install that has not been `helm upgrade`d since that rule landed answers the Job POST with 403 —
-the self-updater logs, at Warning, that it is rolling *without* the migration and names this
-paragraph. Do the `helm upgrade` once and it stops.
+and **the roll is refused** (see the table below), because that `helm upgrade` is the same act that
+mints the migration Job. Do it once and it stops.
 
 **3. Every automatic roll.** `RunMigrationAsync(tag)` creates `memex-migration-su-<tag>` (same
 ConfigMap and Secret as the helm Job, same image tag as the portal it precedes), waits for
 `status.succeeded` within `SelfUpdate:MigrationJobTimeout` (30 min), and only then patches the
-portal image. `Failed` or timed out ⇒ **the roll is refused** and recorded as
-`SelfUpdateOutcome.MigrationFailed` on `Admin/UpdatePolicy`; the schema demonstrably did not move,
-so the image must not. `NotSupported` (a host whose `IDeploymentUpdater` predates the seam) or
-`Forbidden` (step 2 not done) ⇒ the roll proceeds as it always did, at Warning, with `DbVersionGate`
-as the only net.
+portal image. The rule is that **only `Completed` proves the schema moved**, and the four other
+outcomes are not one case:
+
+| `MigrationRunOutcome` | Means | The roll | On `Admin/UpdatePolicy` |
+|---|---|---|---|
+| `Completed` | `status.succeeded ≥ 1` | patched | `applied update <tag>`, no qualifier |
+| `Failed` / `TimedOut` | it RAN and the schema demonstrably did not move | **REFUSED** | `MigrationFailed` — names the Job whose log to read |
+| `Forbidden` | 403: no `batch/jobs` grant (step 2 not done) | **REFUSED** | `MigrationUnavailable` — names the missing permission and the `helm upgrade` that both grants it and runs the migration |
+| `NotSupported` | this updater has no migration mechanism at all (its `MeshWeaver.SelfUpdate.Aks` generation predates the seam) | patched | `applied update <tag>` **`UNMIGRATED —`** …, naming the module to update |
+
+`NotSupported` is the one non-success outcome that still rolls, and deliberately: an install that can
+*never* migrate would otherwise be frozen for ever, and silently, which is the worse failure shape.
+What makes that safe to leave is that the roll is no longer indistinguishable from a migrated one —
+the record says `UNMIGRATED` and says what to update.
+
+🚨 **Why `Forbidden` is a refusal and not the same permissive case** — it read as one until #4764.
+Measured on memex-cloud 2026-09-19: a roll that patched the image with nothing established about the
+schema put the new pod in `CrashLoopBackOff` on `DbVersionGate` 3,319 ms into its boot, restarts=2
+within three minutes, while four old pods kept answering 200 — desired 4, ready 4 all on the OLD
+ReplicaSet, updated 1, unavailable 1. Nothing converged, nothing rolled back, and the policy record
+still said the roll was made. A 403 costs an operator nothing extra to clear, and the `helm upgrade`
+that clears it runs the migration in the same act.
 
 **4. Verifying.** `helm list -n <ns>` against `kubectl get deploy memex-portal-deployment -n <ns>
 -o jsonpath='{.spec.template.spec.containers[0].image}'`: divergence means the schema and the code

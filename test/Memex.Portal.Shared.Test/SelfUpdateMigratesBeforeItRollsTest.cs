@@ -19,9 +19,20 @@ namespace Memex.Portal.Shared.Test;
 /// <para>This pins the ORDER and the REFUSAL, which is where the correctness lives: rolling the
 /// image after a failed migration would only reproduce the wedge, so
 /// <c>SelfUpdateHostedService</c> must call <c>RunMigrationAsync</c> first and return a
-/// <c>MigrationFailed</c> verdict — without patching — on <c>Failed</c>/<c>TimedOut</c>. The two
-/// "could not even try" outcomes (<c>NotSupported</c>, <c>Forbidden</c>) must NOT refuse: freezing
-/// every install until an operator acts, silently, is the worse failure shape (#2553).</para>
+/// <c>MigrationFailed</c> verdict — without patching — on <c>Failed</c>/<c>TimedOut</c>.</para>
+///
+/// <para>🚨 <b>And on <c>Forbidden</c> (#4764).</b> That outcome used to patch "loudly", which is
+/// how a roll across a schema bump still reached the unrecoverable state: measured on memex-cloud
+/// 2026-09-19, <c>CrashLoopBackOff</c> on <c>DbVersionGate</c> at 3.3 s while four old pods kept
+/// answering 200, nothing converging, nothing rolling back, and the record still saying the roll was
+/// made. It refuses now, because a 403 establishes nothing about the schema and the <c>helm
+/// upgrade</c> that grants the missing <c>batch/jobs</c> permission runs the migration Job itself —
+/// so the refusal asks nothing of an operator that was not already owed.</para>
+///
+/// <para><c>NotSupported</c> — the ONE outcome that still rolls — must NOT refuse: an install whose
+/// updater has no migration mechanism at all would freeze for ever, and silently, which is the worse
+/// failure shape (#2553). It is instead RECORDED, as a roll qualified <c>UNMIGRATED</c>, so the
+/// policy node distinguishes a roll whose schema moved from one that rolled blind.</para>
 ///
 /// <para>Read as text rather than driven through a fake updater because the subject IS the source
 /// order — a fake proves the call happened, not that it happened first. The KUBERNETES half (the
@@ -76,9 +87,52 @@ public class SelfUpdateMigratesBeforeItRollsTest
                 $"{terminal} must be handled explicitly: the schema demonstrably did not move, so the "
                 + "image must not either.");
 
-        foreach (var permissive in new[] { "MigrationRunOutcome.NotSupported", "MigrationRunOutcome.Forbidden" })
-            Assert.True(source.Contains(permissive, StringComparison.Ordinal),
-                $"{permissive} must be handled explicitly, and must not refuse the roll: freezing every "
-                + "install until an operator acts — silently — is the worse failure shape (#2553).");
+        Assert.True(source.Contains("MigrationRunOutcome.Forbidden", StringComparison.Ordinal),
+            "MigrationRunOutcome.Forbidden must be handled explicitly.");
+        Assert.True(source.Contains("MigrationRunOutcome.NotSupported", StringComparison.Ordinal),
+            "MigrationRunOutcome.NotSupported must be handled explicitly, and must NOT refuse the "
+            + "roll: freezing every install whose updater can never migrate — silently — is the "
+            + "worse failure shape (#2553).");
+    }
+
+    /// <summary>
+    /// 🚨 <b>A 403 on the migration Job REFUSES the roll, and a roll taken without a migration says
+    /// so on the record (#4764).</b> The behaviour is driven end-to-end against a real mesh by
+    /// <c>SelfUpdateSchemaBumpRefusalTest</c>; what is pinned HERE is the source order that no fake
+    /// can prove — that the <c>Forbidden</c> branch RETURNS before reaching
+    /// <c>PatchToVersionAsync</c>, rather than falling through to it as it did until this change.
+    ///
+    /// <para><b>Fails on unfixed code:</b> the <c>Forbidden</c> branch <c>break</c>s into the patch
+    /// and <c>MigrationUnavailable</c> does not exist.</para>
+    /// </summary>
+    [Fact]
+    public void A403OnTheMigrationJob_ReturnsBeforeThePatch()
+    {
+        var source = ReadPollerSource();
+
+        var forbidden = source.IndexOf("case MigrationRunOutcome.Forbidden:", StringComparison.Ordinal);
+        var notSupported = source.IndexOf("case MigrationRunOutcome.NotSupported:", StringComparison.Ordinal);
+        var patch = source.IndexOf("_updater.PatchToVersionAsync(", StringComparison.Ordinal);
+        Assert.True(forbidden > -1 && notSupported > -1 && patch > -1,
+            "this guard's subject moved — the poller no longer switches on the migration outcome "
+            + "before patching.");
+        Assert.True(forbidden < notSupported && notSupported < patch,
+            "the two 'could not even try' branches must precede the patch — a branch after it "
+            + "cannot stop it.");
+
+        var refusal = source.IndexOf(
+            "SelfUpdateVerdict.MigrationUnavailable(", forbidden, StringComparison.Ordinal);
+        Assert.True(refusal > -1 && refusal < notSupported,
+            "the Forbidden branch must RETURN a MigrationUnavailable verdict, inside its own case, "
+            + "before the NotSupported branch: the cluster refused the Job, so nothing established "
+            + "that the schema is where the target needs it — and patching anyway is the "
+            + "DbVersionGate crash-loop behind a 200 measured on memex-cloud 2026-09-19 (#4764). "
+            + "The helm upgrade that grants batch/jobs runs the migration itself, so refusing asks "
+            + "for nothing an operator did not already owe.");
+
+        Assert.True(source.IndexOf(".Unmigrated(", notSupported, StringComparison.Ordinal) > -1,
+            "the roll that IS still taken (NotSupported) must be recorded as UNMIGRATED. #4764's "
+            + "second ask: lastCheckVerdict reported the patch as done while the crash-loop lived "
+            + "only on the pod, so a migrated roll and a blind one were the same recorded sentence.");
     }
 }
