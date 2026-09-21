@@ -255,10 +255,11 @@ public static class NodeTypeBuildState
             var requestedBy = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
             var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-            // OBSERVED create: emit the path only once the create response lands.
-            // Bounded — a hung owner must never block the compile's terminal write;
-            // on timeout/fault emit null so the parent never advertises a phantom
-            // Release path (mirrors RunCompile's activity-create guard).
+            // OBSERVED create: report the path only once the create response lands.
+            // Bounded — a hung owner must never block the compile's terminal write; on
+            // timeout/fault the outcome carries no path (and, since #5057, the REASON), so
+            // the parent never advertises a phantom Release path (mirrors RunCompile's
+            // activity-create guard).
             return Bounded(
                 Observable.Using(
                         () => !string.IsNullOrEmpty(requestedBy) && accessService is not null
@@ -307,52 +308,59 @@ public static class NodeTypeBuildState
         create
             .Take(1)
             .Select(_ => ReleaseCreateOutcome.Landed(releasePath))
-                // 🚨 A BOUND THAT FAULTS, never one that SUBSTITUTES (#5057). This was
-                // `Timeout(bound, Observable.Return<string?>(null))` — the expiry replaced the
-                // sequence with the same `null` a refusal produced, wrote NO log line of any kind,
-                // and was therefore the one failure channel with no trace whatsoever. It is also the
-                // channel the incident names: on `Hosting/InstanceRequest` the "Re-cutting…" line
-                // was logged at 22:16:14Z and "…AND the release could not be re-cut" at 22:16:24Z —
-                // exactly this bound, expiring, reported by nothing but the gap between two lines
-                // that happened to be adjacent. Faulting routes it into the catch below, where it
-                // becomes a reason like every other failure.
+            // 🚨 A BOUND THAT FAULTS, never one that SUBSTITUTES (#5057). This was
+            // `Timeout(bound, Observable.Return<string?>(null))` — the expiry replaced the sequence
+            // with the same `null` a refusal produced, wrote NO log line of any kind, and was
+            // therefore the one failure channel with no trace whatsoever. It is also the channel the
+            // incident names: on `Hosting/InstanceRequest` the "Re-cutting…" line was logged at
+            // 22:16:14Z and "…AND the release could not be re-cut" at 22:16:24Z — exactly this
+            // bound, expiring, reported by nothing but the gap between two lines that happened to be
+            // adjacent. Faulting routes it into the catch below, where it becomes a reason like
+            // every other failure.
+            //
+            // 🚨 And it bounds the WAIT, not the CREATE: the request is already on the bus, so the
+            // owning hub writes the node whether or not anyone is still listening. Measured over
+            // `Hosting/InstanceRequest/Release/*` on the control instance (200 nodes, a floor), from
+            // each id's own second stamp to the node's creation: median 0.7 s, 8 of 200 BEYOND this
+            // bound, out to 17.8 s. Which is why `Describe` sends the reader to the path instead of
+            // saying the release was not created.
             .Timeout(CreateBound, scheduler ?? DefaultScheduler.Instance)
             .Catch<ReleaseCreateOutcome, Exception>(ex =>
+            {
+                // 🚨 A COLLISION AT OUR OWN ID IS SUCCESS (#3407). ReleasePostCondition re-cuts
+                // when latestReleasePath still names an earlier build; when the retry lands in
+                // the SAME SECOND as the first attempt, both mint the same id and the second
+                // create throws. Swallowing that into null left the pointer un-advanced: the
+                // bytes were published, the Release node existed, and the type went on
+                // advertising a build no release named — every instance kept executing the
+                // previous assembly behind a $Banner whose own text says a recycle will not
+                // clear it. Measured on memex.localhost 2026-09-06 (Edu/CourseInvite build 767);
+                // only a pod restart cleared it, and nothing in the pipeline did.
+                //
+                // Adopting is naming the same bytes, not guessing. The id is
+                // {yyyyMMddHHmmss}-{8 chars of SHA256(Collection/ContentPath)} — the hash comes
+                // from the DURABLE content reference, so an equal id means equal second AND
+                // equal content. A collision can therefore only be this same code's own earlier
+                // attempt for this same compile. (Healthy re-cuts show in the release list as
+                // PAIRS a second or two apart sharing the suffix; the failing one was the single
+                // unpaired id.)
+                if (AdoptOnOwnCollision(ex, releasePath) is { } adopted)
                 {
-                    // 🚨 A COLLISION AT OUR OWN ID IS SUCCESS (#3407). ReleasePostCondition re-cuts
-                    // when latestReleasePath still names an earlier build; when the retry lands in
-                    // the SAME SECOND as the first attempt, both mint the same id and the second
-                    // create throws. Swallowing that into null left the pointer un-advanced: the
-                    // bytes were published, the Release node existed, and the type went on
-                    // advertising a build no release named — every instance kept executing the
-                    // previous assembly behind a $Banner whose own text says a recycle will not
-                    // clear it. Measured on memex.localhost 2026-09-06 (Edu/CourseInvite build 767);
-                    // only a pod restart cleared it, and nothing in the pipeline did.
-                    //
-                    // Adopting is naming the same bytes, not guessing. The id is
-                    // {yyyyMMddHHmmss}-{8 chars of SHA256(Collection/ContentPath)} — the hash comes
-                    // from the DURABLE content reference, so an equal id means equal second AND
-                    // equal content. A collision can therefore only be this same code's own earlier
-                    // attempt for this same compile. (Healthy re-cuts show in the release list as
-                    // PAIRS a second or two apart sharing the suffix; the failing one was the single
-                    // unpaired id.)
-                    if (AdoptOnOwnCollision(ex, releasePath) is { } adopted)
-                    {
-                        logger?.LogInformation(
-                            "CompileWatcher: Release node at {ReleasePath} already exists — adopting "
-                            + "it. The re-cut collided with its own first attempt in the same second; "
-                            + "the id encodes the content hash, so this names the same bytes.",
-                            adopted);
-                        return Observable.Return(ReleaseCreateOutcome.Landed(adopted));
-                    }
+                    logger?.LogInformation(
+                        "CompileWatcher: Release node at {ReleasePath} already exists — adopting "
+                        + "it. The re-cut collided with its own first attempt in the same second; "
+                        + "the id encodes the content hash, so this names the same bytes.",
+                        adopted);
+                    return Observable.Return(ReleaseCreateOutcome.Landed(adopted));
+                }
 
-                    // The STACK stays here, where it exists; the one-line REASON travels out, to the
-                    // ERROR line and the compile _Activity that report the consequence (#5057).
-                    logger?.LogWarning(ex,
-                        "CompileWatcher: failed to create Release node at {ReleasePath}",
-                        releasePath);
-                    return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath)));
-                });
+                // The STACK stays here, where it exists; the one-line REASON travels out, to the
+                // ERROR line and the compile _Activity that report the consequence (#5057).
+                logger?.LogWarning(ex,
+                    "CompileWatcher: failed to create Release node at {ReleasePath}",
+                    releasePath);
+                return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath)));
+            });
 
     /// <summary>
     /// One create failure as one operator-readable line. A <see cref="TimeoutException"/> is named
