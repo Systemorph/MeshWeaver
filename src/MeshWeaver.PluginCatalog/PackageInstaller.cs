@@ -1328,11 +1328,15 @@ public static class PackageInstaller
     /// is "no current code produces this", the survey has to cover the MESH, not the compiler's
     /// view of one repository.</para>
     ///
-    /// <para><b>Order matters: denies first, policy last.</b> While the policy still withholds public
-    /// read the denies are what hides the content, and the policy node is the marker that says "this
-    /// partition is already in the declared shape". Writing the marker first would strand a
-    /// half-swept partition permanently, so the sweep runs BEFORE the policy write and a failure
-    /// simply leaves the old policy in place for the next boot to retry.</para>
+    /// <para><b>Order matters: the legacy sweep runs BEFORE this branch's policy write.</b> While the
+    /// policy still withholds public read the denies are what hides the content, and the policy node is
+    /// the marker that says "this partition is already in the declared shape". Writing the marker first
+    /// would strand a half-swept partition permanently, so the sweep runs first and a failure simply
+    /// leaves the old policy in place for the next boot to retry. 🚨 The GRANT-based shape orders itself
+    /// the OTHER way round — policy, then denies, then root grants — because it is opening a partition
+    /// rather than sweeping one, and there the flip is what must precede the opening; see
+    /// <see cref="PublishExceptProtected"/>, which explains why "denies first" is not fail-closed for
+    /// that transition. The two orders are not in tension: one retires a gate, the other installs one.</para>
     ///
     /// <para>🚨 <b>This paragraph used to add "an explicit deny beats <c>PublicRead</c>" as a general
     /// rule, and on the C# read path that is FALSE — measured (MeshWeaver#4716).</b>
@@ -1344,21 +1348,32 @@ public static class PackageInstaller
     /// is a deeper <c>Read = false</c> cap, which is ANDed into every role-derived permission too — a
     /// blackout, not a gate.</para>
     ///
-    /// <para>🚨 <b>The rule is still the stated INTENT, and the Postgres projection CLAIMS to
-    /// implement it</b> — it emits this policy as allow-<c>Read</c> rows at this prefix and records
-    /// that <i>"a deny at a LONGER prefix still wins the per-subject longest-prefix query fold; that is
-    /// the store-gating shape and it is intentional"</i>. 🚨 That is its author's comment, NOT a test
-    /// result: no Postgres path was executed for #4716, so "the two read paths disagree" is the thing
-    /// to go and confirm, not an established contract — and confirming it is the first step of any fix,
-    /// because a remedy built on an unverified half is how this defect arose. If it holds, the split is
-    /// the paywall-bypass shape this evaluator carries its own account of (79,650 characters of paid
-    /// course content served by exact path while <c>search</c> correctly denied it).</para>
+    /// <para>🚨 <b>The rule is the stated INTENT, and the Postgres projection implements it — CONFIRMED,
+    /// no longer "the thing to go and confirm".</b> It emits this policy as allow-<c>Read</c> rows for
+    /// <c>Public</c>/<c>Anonymous</c> at this prefix — the SAME row shape a root grant produces — and the
+    /// READ side resolves <c>DISTINCT ON (user_id) … ORDER BY LENGTH(node_path_prefix) DESC</c> in three
+    /// independent emitters (<c>PostgreSqlSqlGenerator.BuildPerSchemaAccessClause</c>,
+    /// <c>GenerateAccessControlClause</c>, <c>public.search_across_schemas</c>), so a deny row at a
+    /// longer prefix wins there. That half is executable SQL, not prose, and it is already pinned
+    /// against a real Postgres in MeshWeaver.Plugins
+    /// (<c>PerSubjectAccessFoldTests</c>, <c>AccessControlQueryTests.PaywalledContent_StaysInvisibleToAnonymous</c>).
+    /// So the two read paths DO disagree, and the split is the paywall-bypass shape this evaluator
+    /// carries its own account of (79,650 characters of paid course content served by exact path while
+    /// <c>search</c> correctly denied it). Core still executes no Postgres case — it has no lane — so
+    /// that remains a read of another repository's SQL plus its tests, never a run from here.</para>
     ///
-    /// <para>Either way the sentence was load-bearing HERE: #4716's triage cited it to conclude a
-    /// per-path deny would protect a submission inbox, and the Store's <c>PluginGate</c> pre-installed
-    /// arm implements exactly that for a manifest's <c>ProtectedSegments</c> — so on this path the
-    /// protection it applies is none. Full measurement, the confidence on each half, and what each
-    /// candidate remedy costs: <c>Doc/Architecture/PublicReadAndDenies</c>.</para>
+    /// <para>The sentence was load-bearing HERE: #4716's triage cited it to conclude a per-path deny
+    /// would protect a submission inbox, and the Store's <c>PluginGate</c> pre-installed arm implements
+    /// exactly that for a manifest's <c>ProtectedSegments</c> — so on this path the protection it applies
+    /// was none. 🚨 <b>THAT IS NOW FIXED UPSTREAM OF HERE, and this branch is no longer reachable for
+    /// such a partition:</b> <see cref="EnsureDeclaredAccess"/> routes a manifest declaring
+    /// <see cref="PackageManifest.ProtectedSegments"/> to the GRANT-based shape
+    /// (<see cref="EnsureOpenWithProtectedSegments"/>), which both folds resolve identically, and the
+    /// evidence arm below refuses the blanket policy over a partition that carries such a deny even when
+    /// the manifest does not say so. The remedy was to stop using the mechanism the folds disagree about,
+    /// not to pick a winner between them. Full measurement, the confidence on each half, and what each
+    /// candidate remedy costs: <c>Doc/Architecture/PublicReadAndDenies</c> and
+    /// <c>Doc/Architecture/ProtectedSegmentsOnAPublicPartition</c>.</para>
     /// </summary>
     private static IObservable<Unit> EnsurePartitionPublicRead(
         IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger)
@@ -1734,15 +1749,24 @@ public static class PackageInstaller
     /// concern) and the well-known <c>Public</c> segment is always public — so the installer's
     /// shape and the Store's reconcile converge on the same nodes instead of fighting.</para>
     ///
-    /// <para>🚨 <b>That delegation is sound for THIS shape and a real gap for the other one</b>
-    /// (MeshWeaver#4716). The <c>ProtectedSegments</c> machinery it hands off to writes
-    /// Public/Anonymous DENIES, which work here — the read is a root role GRANT, and a deny removes a
-    /// role — and which the C# read path does NOT honour under the fully-public shape's
-    /// <c>PublicRead</c> policy, though the SQL path does; see the remarks on
-    /// <see cref="EnsurePartitionPublicRead"/>. A pre-installed partition takes that other shape, so a
-    /// satellite it declares protected is published to that path anyway and no component reports it.
-    /// Do not "fix" it by gating satellites from the <c>_</c> prefix: a package is entitled to publish
-    /// one, and the declaration is what distinguishes them.</para>
+    /// <para>🚨 <b>That delegation was sound for THIS shape and a real gap for the other one, and the gap
+    /// is now CLOSED — by reading the declaration, exactly as the last sentence below demanded</b>
+    /// (MeshWeaver#4716). The <c>ProtectedSegments</c> machinery it hands off to writes Public/Anonymous
+    /// DENIES, which work here — the read is a root role GRANT, and a deny removes a role — and which the
+    /// C# read path does NOT honour under the fully-public shape's <c>PublicRead</c> policy, though the
+    /// SQL path does; see the remarks on <see cref="EnsurePartitionPublicRead"/>. A pre-installed
+    /// partition used to take that other shape, so a satellite it declared protected was published to
+    /// that path anyway and no component reported it.</para>
+    ///
+    /// <para>Two things changed. <see cref="PackageManifest.ProtectedSegments"/> is now READ
+    /// (<c>NodeRepoPackageSource.Peek</c> dropped it), so a declaring manifest never reaches the
+    /// blanket-policy shape at all; and the declared paths are unioned into this shape's gated set
+    /// through the <c>isolated</c> parameter, because this walk still skips `_` satellites on its own.
+    /// The prohibition that came with the gap stands unchanged and is the reason it was closed this way:
+    /// do NOT gate satellites from the <c>_</c> prefix — a package is entitled to publish one, and the
+    /// DECLARATION is what distinguishes them. <see cref="IsSatelliteScopedDeny"/> leans on the same
+    /// asymmetry from the other side: a deny at a satellite scope is one this installer could never have
+    /// written, so the legacy heal may not retire it.</para>
     ///
     /// <para>Segments
     /// come from the paths this install wrote UNIONED with the partition's current children (read

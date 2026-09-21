@@ -216,6 +216,13 @@ the SQL plus a live observation, not a measurement.
 
 ## See also
 
+- [PublicRead and Denies](../PublicReadAndDenies) — the measurement of the fold split itself, and the
+  four candidate remedies with what each costs. **This page is the remedy that was taken**: that page
+  stops short of a behavioural fix and records the SQL half as its author's comment rather than a
+  result; here the SQL half is confirmed from executable SQL plus the Postgres tests that already run
+  in `MeshWeaver.Plugins`, and the conclusion is to stop using the mechanism the folds disagree about
+  rather than to pick a winner between them. Its `PublicReadIsNotSuppressedByADenyTest` still measures
+  the divergence and is still expected to stay as it is — nothing here closes it.
 - [Access Control](../AccessControl) — the permission model, `PartitionAccessPolicy`, and the
   "Public policy grants and deeper read caps" section this page qualifies.
 - [Granting Access](../GrantingAccess) — how an `AccessAssignment` is placed and what a role grant
