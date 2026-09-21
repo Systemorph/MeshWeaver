@@ -70,9 +70,23 @@ readable** is what a feedback inbox needs, and only the grant shape delivers it.
   The policy node stays for two reasons: it is the declared-access post-condition marker
   (`DeclaredAccessMarker`), and it records the decision so the next reader finds the partition saying
   "not public-read" instead of inferring it from the grants.
-- **Denies first, policy second, root grants last.** The root grant opens the partition and the policy
-  flip is what makes the denies bite, so an interrupted run leaves the PUBLIC half dark — the half it
-  is safe to fail on — never the segment open.
+- **Policy first, then the denies, then the root grants** — and that order is the fail-closed one,
+  which the obvious "denies first" is *not* on the single transition that matters. With an existing
+  `PublicRead = true` policy, writing the denies first and failing before the flip leaves the blanket
+  grant live and the fresh denies inert: exactly the state the change exists to end. Flipping the
+  policy first removes that grant while no root grant exists yet, so the partition is momentarily
+  **closed** rather than momentarily open; the denies land while it is closed, and the grants re-open
+  only the public half with the gate already in place. A failure anywhere leaves the partition closed,
+  and the next pass completes it. (The first draft had the order the other way round *and* claimed the
+  fail-closed property — review caught the gap between the two.)
+- **A deny is written on presence OR on the wrong shape.** Plain create-only asks only whether a node
+  is there, so a `Public`/`Anonymous` assignment at a declared-protected scope that happens to be a
+  **grant** would survive and the root grant would then publish the segment — the protection reading
+  as established without being it. So the protected-segment denies supersede an existing assignment
+  for those two subjects that is not already an all-denied role set, which is the predicate the
+  Store's gate already uses (`StillNeedsDeny`). It can only ever narrow, and it is deliberately not
+  applied to the scoped shape's `publicSegments`-derived gating of *ordinary* children, where the same
+  overwrite would take away a publication an operator chose.
 - The access nodes are **create-only**; a policy that declares `PublicRead` is **rewritten**, because
   it contradicts the protection being established. Every other field it carries (a `RedirectOnDenied`
   funnel) is preserved.
@@ -125,6 +139,16 @@ installer cannot have written takes the partition off the blanket policy even wh
 nothing, and the partition is published through grants instead. The warning it logs names the scopes
 and says what to do if they were meant to be public — retire the denies, never add `PublicRead`.
 
+🚨 **Both arms read that evidence off the query's `Initial` snapshot, not off its first emission.** The
+query can emit pre-`Initial` `Added`/`Updated` frames, and both decisions taken off this read fail
+*open* on a short frame: a missing satellite deny leaves the protected set empty, so the evidence arm
+does not fire and the heal proceeds to retire denies and write `PublicRead` — republishing the very
+segment the arm exists to protect. Filtering for `Initial` is the established idiom here
+(`DeploymentReportService`, `PlanTierLadder`, `GitHubSyncService`, `PathResolutionService`, …), and a
+snapshot that never arrives times out into the existing `Catch`, which yields nothing and leaves the
+partition exactly as it is. The legacy retire had been taking a **delete** decision off the same
+unfiltered read; review on this change is what surfaced it.
+
 **The two rules compose.** A partition can carry both a live satellite protection and genuine
 pre-#902 damage on its ordinary children, so the legacy denies are still retired (pre-installed only,
 which is the restriction that keeps core out of the gating reconcile's ping-pong) and only then is the
@@ -142,6 +166,13 @@ public-half control, so a denial cannot pass for the right answer on a partition
 produces, and — the case that would have caught this — an undeclared-but-protected partition in the
 live shape, whose denies must survive and whose policy must not gain `PublicRead`. Reverting the fix
 fails that on the assertion naming the delete.
+
+`AProtectedSegmentDeclarationSurvivesDiscoveryTest` covers the hop nothing else looks at: the
+declaration travelling from an authored `index.json` through `NodeRepoPackageSource.ListPackages` into
+the manifest the access step reads. Every other test builds the manifest in-process, so without it the
+first half of the defect — core dropping the field on the way in — could come back and red nothing.
+Disabling the read fails it; a manifest that declares nothing still comes back empty, which is the
+asymmetry that matters.
 
 **The SQL fold is not executed by any of it, and cannot be from this repository — core has no
 Postgres test lane** (no `Testcontainers`/`Npgsql` reference in any core test project). What is known

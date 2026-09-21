@@ -326,6 +326,23 @@ public class ProtectedSegmentDiscriminatorTest
                 + "correct install");
 
     [Fact]
+    public void ABothDeclaringPreInstalledManifest_TakesTheGrantMarker() =>
+        PackageInstaller.DeclaredAccessMarker(
+                new PackageManifest
+                {
+                    Id = Partition,
+                    PreInstalled = true,
+                    PublicSegments = ["Issues"],
+                    ProtectedSegments = ["_Submissions"],
+                },
+                Partition)
+            .Should().Be("Feedback/_Access/Public_Access",
+                "a protected segment forces the SCOPED shape even for a pre-installed manifest that also "
+                + "declares public segments, and that shape writes root grants and NO policy — so a "
+                + "marker naming _Policy would report a CORRECT install as a failure. The marker must "
+                + "mirror the branch predicate, never restate it (found in review on MeshWeaver#4716)");
+
+    [Fact]
     public void ADeclarationOfNothing_IsNotADeclarationOfProtection() =>
         PackageInstaller.DeclaredProtectedPaths(new PackageManifest { Id = Partition }, Partition)
             .Should().BeEmpty(
