@@ -170,6 +170,39 @@ A deployment that configures `MeshOperationOptions.Timeout` low enough to drive 
 the first two back in the fan-in's reach — but a fault there is already their documented answer, so
 the direction is unchanged.
 
+## The dependent half (MeshWeaver.Plugins)
+
+This is **break shape 7** — behaviour changing behind an unchanged signature — so no gate sees it, and
+Plugins carries **no core pin any more**: every run resolves the newest *sealed* `main-cd` set, so this
+reaches it on the next seal with nothing to co-ordinate. Swept read-only; what the sweep found, so the
+next session does not have to re-derive it.
+
+**Compatible already.** No custom `IPermissionEvaluator`, no `ObserveScopePolicies` call site, no
+`RlsNodeValidator` override, no `NodeRejectionReason.Unavailable` use, and no `Subscribe(onNext)`
+without an `onError` arm on a mesh-query chain. No Plugins test asserts that a query must hang — every
+"hang" test asserts the opposite. `ContentGateUndeterminedTest` already requires a faulted *and* a
+silent evaluator to yield **503, not 404**, and `PermissionSwallowRatchetGuard` fails the build on
+`CheckPermission(...).Catch(→ verdict)`.
+
+**What the Plugins half is:**
+
+1. `Hosting.Monolith.Test/StarvedPermissionReadTest` is written *around* the old behaviour — its class
+   doc states the leg "never errors … so it can only STALL" and contrasts it with a throwing provider
+   that "fails fast today". Its assertions still hold (`UnestablishedCheck` produces "could not be
+   established" on the fault arm too), but its prose is now wrong and its 20 s
+   `MeshOperationOptions.Timeout` contracts to a 5 s rung, so its elapsed expectations want revisiting.
+2. `CompileSourceSnapshotWedgeTest` becomes timing-sensitive: its `Release()` may land after the
+   terminal has already ended the subscriptions it means to flush.
+3. `Store/Core/Source/MeshQueries.cs` documents relying on the hang — *"waiting writes nothing,
+   guessing rewrote everything"*. The invariant it protects **survives** (an error writes nothing
+   either), but the paragraph describes a contract that no longer exists.
+4. `Store/Catalog/Source/StoreCatalogLayoutAreas.cs`'s `.Catch(→ empty / ViewerFacts.Anonymous)` on the
+   entitlement reads will render a *confident wrong* answer — "Get" for a plugin the viewer has bought
+   — where a stall used to show a spinner. This is the one place the terminal makes a user-visible
+   statement worse rather than better, and it is a Plugins-side decision.
+5. `LogIncidentControlPlane`'s unbounded incident watch now retries once a minute against a
+   permanently stalled provider and escalates at five — new, bounded, visible noise.
+
 ## What is pinned, and what is not
 
 - **`QueryFanInStallIsTerminalTest`** (`test/MeshWeaver.Hosting.Test`) — a stalled provider faults and
