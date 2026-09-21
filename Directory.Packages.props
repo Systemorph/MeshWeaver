@@ -73,7 +73,7 @@
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.4.6" />
     <PackageVersion Include="Aspire.Npgsql" Version="13.4.6" />
     <!-- Pinned: Autofac.Extensions.DI 11.0.0 breaks TryAddEnumerable with factory delegates -->
-    <PackageVersion Include="Autofac" Version="9.3.2" />
+    <PackageVersion Include="Autofac" Version="9.3.4" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="11.0.2" />
     <PackageVersion Include="Azure.Core" Version="1.60.0" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
@@ -101,7 +101,7 @@
          Removing json-everything (#1231) exposed that, so the dependency is now declared where
          it is used. -->
     <PackageVersion Include="Humanizer.Core" Version="3.0.10" />
-    <PackageVersion Include="Markdig" Version="1.3.2" />
+    <PackageVersion Include="Markdig" Version="1.4.0" />
     <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.3" />
     <!-- 🚨 Microsoft.AspNetCore.DataProtection pinned to override transitive 10.0.0
          (CVE-2026-40372 / GHSA-9mv3-2cwr-p262) — but NOTHING references it directly and
@@ -178,8 +178,8 @@
          packages and the base image stays as it is — the font is supplied from an embedded
          resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
          multi-arch portal image requires. -->
-    <PackageVersion Include="SkiaSharp" Version="4.152.0" />
-    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.152.0" />
+    <PackageVersion Include="SkiaSharp" Version="4.152.1" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.152.1" />
     <!-- 🚨 SkiaSharp DRAWS; it does not PARSE. The favicon rasterizer (IconRasterizer, issue
          #2075) has to turn a node's AUTHORED &lt;svg&gt; mark into PNG bytes because Safari
          renders no SVG favicon at all, so the whole per-content favicon feature was invisible on
@@ -235,11 +235,11 @@
     <PackageVersion Include="Snowflake.Data" Version="5.7.0" />
     <!-- OpenTelemetry.Api pinned to override transitive 1.13.1 / 1.15.2 (CVE-2026-40894 / GHSA-g94r-2vxg-569j) -->
     <PackageVersion Include="OpenTelemetry.Api" Version="1.18.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.19.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.19.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.19.0" />
     <PackageVersion Include="System.Interactive" Version="7.0.1" />
     <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
          platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
@@ -309,7 +309,7 @@
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
