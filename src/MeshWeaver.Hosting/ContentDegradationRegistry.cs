@@ -132,9 +132,17 @@ public sealed class ContentDegradationRegistry
     public static string Describe(IReadOnlyList<ContentDegradation> degraded) =>
         degraded.Count == 0
             ? "every node content read on this replica typed"
-            : $"{degraded.Count} node type(s) whose content this replica cannot type — the module "
-              + "that declares the type is not loaded here (its prebuilt bundle was declined or its "
-              + "compiled assembly is not on this replica), so their pages render empty: "
+            : $"{degraded.Count} node type(s) whose content this replica cannot type — the CLR type "
+              + "is not registered in THIS process, so their pages render empty. Commonest cause, and "
+              + "the one to check first: a dynamic NodeType registers its content type only when one "
+              + "of its instances activates here, and a type this replica ADOPTED rather than compiled "
+              + "is never activated by the bake — so a type with few instances, all activated on another "
+              + "replica, is untypeable here with a perfectly usable assembly "
+              + "(Doc/Architecture/DynamicContentTypeRegistration). Otherwise the module that declares "
+              + "the type is not loaded here: its prebuilt bundle was declined, or its compiled assembly "
+              + "is not on this replica. 🚨 bake-report DECIDES between them — if its no-usable-assembly "
+              + "list does not name a type below, that type's assembly is present and the first cause is "
+              + "the answer: "
               + string.Join("; ", degraded.Select(d => $"{d.NodeType} ×{d.Count} (last {d.LastPath})"));
 }
 
