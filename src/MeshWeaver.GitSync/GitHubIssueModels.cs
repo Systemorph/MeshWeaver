@@ -14,6 +14,81 @@ public enum GitHubIssueState
 }
 
 /// <summary>
+/// WHY a GitHub issue is closed — the <c>state_reason</c> GitHub records beside the state.
+///
+/// <para>🚨 <b>A close is a decision, and <see cref="GitHubIssueState.Closed"/> does not carry
+/// it.</b> "Fixed", "won't do" and "this is tracked elsewhere" are three different statements about
+/// the same closed issue, and a caller that can only read the state treats them identically —
+/// which is how an automated recurrence reverted a human's deliberate consolidation
+/// (Systemorph/MeshWeaver.Plugins#2177).</para>
+///
+/// <para>🚨 <b>Deliberately NOT Octokit's <c>ItemStateReason</c>, and not for tidiness.</b> That
+/// enum has three members — <c>Completed</c>, <c>NotPlanned</c>, <c>Reopened</c> — and GitHub
+/// serves a fourth value, <c>duplicate</c>. Octokit models the field as
+/// <c>StringEnum&lt;ItemStateReason&gt;?</c>, whose <c>.Value</c> THROWS
+/// <c>ArgumentException: Value 'duplicate' is not a valid 'ItemStateReason' enum value</c>
+/// (measured against Octokit 14.0.0). So the one reason this type exists to express is the one
+/// reason the vendor enum cannot hold, and reading it the obvious way faults on it. This enum is
+/// parsed from the RAW string by <see cref="GitHubIssueStateReasons.Parse"/>, is total, and answers
+/// <see cref="Unknown"/> for a value GitHub has not taught it yet rather than throwing.</para>
+/// </summary>
+public enum GitHubIssueStateReason
+{
+    /// <summary>
+    /// GitHub reported no reason, or a value this build does not know.
+    ///
+    /// <para>🚨 It is the default on purpose, and it means <b>"nothing was established"</b>, never
+    /// "closed as completed". A caller deciding anything on the reason must treat it as an absence
+    /// of evidence: GitHub omits <c>state_reason</c> entirely for an OPEN issue and for issues
+    /// closed before it existed, and a future value would land here too.</para>
+    /// </summary>
+    Unknown,
+
+    /// <summary>Closed as done — the work landed.</summary>
+    Completed,
+
+    /// <summary>Closed as not planned — a decision that it will not be done.</summary>
+    NotPlanned,
+
+    /// <summary>
+    /// Closed as a duplicate — a decision that the subject is tracked on another issue.
+    ///
+    /// <para>🚨 The value Octokit's own <c>ItemStateReason</c> does not have; see the type remarks.</para>
+    /// </summary>
+    Duplicate,
+
+    /// <summary>Reopened. GitHub keeps the reason on an issue that was closed and reopened.</summary>
+    Reopened,
+}
+
+/// <summary>Reads GitHub's <c>state_reason</c> wire value into <see cref="GitHubIssueStateReason"/>.</summary>
+public static class GitHubIssueStateReasons
+{
+    /// <summary>
+    /// The wire value as a <see cref="GitHubIssueStateReason"/>. TOTAL: null, empty, and any value
+    /// this build does not know all answer <see cref="GitHubIssueStateReason.Unknown"/> — never an
+    /// exception, which is the whole difference from Octokit's <c>StringEnum.Value</c>.
+    /// </summary>
+    /// <param name="wireValue">GitHub's <c>state_reason</c>, e.g. <c>duplicate</c>. May be null.</param>
+    /// <returns>The parsed reason, or <see cref="GitHubIssueStateReason.Unknown"/>.</returns>
+    public static GitHubIssueStateReason Parse(string? wireValue) => wireValue?.Trim() switch
+    {
+        null or "" => GitHubIssueStateReason.Unknown,
+        var v when v.Equals("completed", StringComparison.OrdinalIgnoreCase)
+            => GitHubIssueStateReason.Completed,
+        // GitHub's wire spelling is snake_case; Octokit's StringEnum round-trips the same token.
+        var v when v.Equals("not_planned", StringComparison.OrdinalIgnoreCase)
+                   || v.Equals("notplanned", StringComparison.OrdinalIgnoreCase)
+            => GitHubIssueStateReason.NotPlanned,
+        var v when v.Equals("duplicate", StringComparison.OrdinalIgnoreCase)
+            => GitHubIssueStateReason.Duplicate,
+        var v when v.Equals("reopened", StringComparison.OrdinalIgnoreCase)
+            => GitHubIssueStateReason.Reopened,
+        _ => GitHubIssueStateReason.Unknown,
+    };
+}
+
+/// <summary>
 /// A GitHub issue mirrored into the Space as a satellite MeshNode at
 /// <c>{spacePath}/_Issue/{number}</c> (NodeType <c>GitHubIssue</c>). Unlike a pull request
 /// (whose live status is delegated), issues are content the user asked to <b>sync in</b> —
@@ -64,6 +139,18 @@ public record GitHubIssue
 
     /// <summary>When the issue was closed on GitHub (null while open).</summary>
     public DateTimeOffset? ClosedAt { get; init; }
+
+    /// <summary>
+    /// WHY the issue is closed, when GitHub said — <c>completed</c>, <c>not_planned</c> or
+    /// <c>duplicate</c>.
+    ///
+    /// <para>🚨 <see cref="GitHubIssueStateReason.Unknown"/> is the default and means the reason was
+    /// NOT established: an open issue carries none, GitHub omits it for issues closed before the
+    /// field existed, and a list read that never asked lands here too. It is not a synonym for
+    /// <see cref="GitHubIssueStateReason.Completed"/>, and reading it as one is the failure this
+    /// field exists to prevent.</para>
+    /// </summary>
+    public GitHubIssueStateReason StateReason { get; init; }
 
     /// <summary>The issue's comments, populated on a detailed sync (empty on a list sync).</summary>
     public ImmutableList<GitHubIssueComment> Comments { get; init; } = ImmutableList<GitHubIssueComment>.Empty;

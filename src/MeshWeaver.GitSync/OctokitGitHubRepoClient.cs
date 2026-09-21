@@ -569,8 +569,14 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         _ => ItemStateFilter.All,
     };
 
-    /// <summary>Maps an Octokit <see cref="Issue"/> to our snapshot record (comments filled separately).</summary>
-    private static GitHubIssue ToIssue(Issue issue) => new()
+    /// <summary>
+    /// Maps an Octokit <see cref="Issue"/> to our snapshot record (comments filled separately).
+    ///
+    /// <para>Internal so <c>AWebhookIssueSnapshotKeepsItsCloseDecisionTest</c> can hold this mapper
+    /// and <c>GitHubWebhookProcessor.MapIssue</c> to the same answer — two mappers onto one record is
+    /// where a field gets added to one and forgotten in the other.</para>
+    /// </summary>
+    internal static GitHubIssue ToIssue(Issue issue) => new()
     {
         Number = issue.Number,
         Title = issue.Title,
@@ -584,6 +590,11 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         CreatedAt = issue.CreatedAt,
         UpdatedAt = issue.UpdatedAt,
         ClosedAt = issue.ClosedAt,
+        // 🚨 .StringValue, never .Value: Octokit's ItemStateReason has no `duplicate` member and
+        // StringEnum<T>.Value THROWS ArgumentException on a value outside the enum — so the one
+        // reason a caller most needs is the one that would fault the whole read. GitHubIssueStateReasons
+        // .Parse is total over the raw token.
+        StateReason = GitHubIssueStateReasons.Parse(issue.StateReason?.StringValue),
     };
 
     /// <summary>Maps an Octokit <see cref="IssueComment"/> to our comment record.</summary>
