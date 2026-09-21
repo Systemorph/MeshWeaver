@@ -53,11 +53,11 @@ public record Participant
     /// <summary>Display name — "Work mailbox", "Approvals bot", a person's display name.</summary>
     public string Name { get; init; } = string.Empty;
 
-    /// <summary>WHAT this participant is.</summary>
-    public ParticipantKind Kind { get; init; }        // Person | Agent | System | ChannelAccount
+    /// <summary>WHAT this participant is — a <see cref="ParticipantKind"/> constant.</summary>
+    public string Kind { get; init; } = ParticipantKind.Person;
 
-    /// <summary>HOW it is reached.</summary>
-    public TransportKind Transport { get; init; }     // InApp | Email | Teams | WhatsApp | IMessage | Sms | Webhook
+    /// <summary>HOW it is reached — a <see cref="TransportKind"/> constant.</summary>
+    public string Transport { get; init; } = TransportKind.InApp;
 
     /// <summary>The address ON that transport — the id a human recognises.</summary>
     /// <remarks>An email address, an E.164 phone number, a Teams conversation id, a handle.</remarks>
@@ -66,8 +66,8 @@ public record Participant
     /// <summary>The party's mesh partition, when it has one. Null for a purely external party.</summary>
     [MeshNode] public string? MeshAddress { get; init; }
 
-    /// <summary>Which way traffic may flow over this participant.</summary>
-    public TransportDirection Direction { get; init; } = TransportDirection.Both;
+    /// <summary>Which way traffic may flow — a <see cref="TransportDirection"/> constant.</summary>
+    public string Direction { get; init; } = TransportDirection.Both;
 
     /// <summary>A REFERENCE to the credential, never the secret itself.</summary>
     [Browsable(false)] public string? CredentialRef { get; init; }
@@ -75,6 +75,44 @@ public record Participant
     public bool Enabled { get; init; } = true;
 }
 ```
+
+### 🚨 These vocabularies are STRING CONSTANTS, never enums
+
+Every closed vocabulary here — the kind, the transport, the direction — is a `static class` of
+`const string`, **named exactly as the enum would have been**:
+
+```csharp
+public static class TransportKind
+{
+    public const string InApp    = "InApp";
+    public const string Email    = "Email";
+    public const string Teams    = "Teams";
+    public const string WhatsApp = "WhatsApp";
+    public const string IMessage = "IMessage";
+    public const string Sms      = "Sms";
+    public const string Webhook  = "Webhook";
+    public const string Log      = "Log";
+}
+
+public static class ParticipantKind
+{
+    public const string Person         = "Person";
+    public const string Agent          = "Agent";
+    public const string System         = "System";
+    public const string ChannelAccount = "ChannelAccount";
+}
+```
+
+🚨 **And these sets are a starting point, never the permitted set.** A module, a satellite or a
+customer deployment declares its **own** constants class and puts its own transport in the same
+field — no registration, no allow-list, no change to core. That is what makes the hub extensible at
+all: a channel nobody here has heard of is carried, stored, queried and rendered like any other, and
+routed to whoever declared it.
+
+The general rule, the two obligations it imposes on consumers (never validate against the platform's
+own set; never let an unknown value take a meaningful default), and when an `enum` is still correct
+are in **[Open Vocabularies Are String Constants](/Doc/Architecture/OpenVocabulariesAsStringConstants)**
+— policy `open-vocabulary-string-constants`.
 
 `Address` is the field the inbox row renders beside the transport glyph — `thomas.mueller@…`,
 `+41 79 …`. **`CredentialRef` names a credential; it never carries one.** The hub resolves it, the
@@ -88,15 +126,15 @@ distinction is worth stating because collapsing them is the obvious mistake:
 - a **Participant** is an *identity* — this mailbox exists, this number is ours;
 - a **NotificationChannel** is a *preference* — "reach me at this one".
 
-A channel references a participant. `TransportKind` is the shared vocabulary, so
-`NotificationChannelKind` becomes an alias of it and gains `WhatsApp`, `IMessage`, `Sms`, `Webhook`.
+A channel references a participant. `TransportKind` is the shared vocabulary, so the existing
+`NotificationChannelKind` **enum** is converted to those constants and gains `WhatsApp`, `IMessage`,
+`Sms`, `Webhook`, `Log`.
 
-🚨 **Widening that enum is a breaking change to code the compiler cannot see.** It is a `public`
-enum in `MeshWeaver.Mesh.Contract`; adding members is source-compatible, but every exhaustive
-`switch` over it becomes non-exhaustive and `-warnaserror` turns that into a build failure — in
-`src/`, **and** in in-mesh NodeType sources that no `dotnet build` ever type-checks
-([NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation)). Sweep both trees and the node JSON
-before widening it.
+🚨 **That conversion is the migration the rule is built for.** `NotificationChannelKind` is a
+`public` enum in `MeshWeaver.Mesh.Contract`; keeping the name and the member spellings means every
+`NotificationChannelKind.Email` at every call site is untouched — only the declaration and the field
+type change. Widening it *as an enum* would instead have broken every exhaustive `switch` under
+`-warnaserror`, including in in-mesh NodeType sources that no `dotnet build` type-checks.
 
 ## 3. Message types — a family, not a switch
 
