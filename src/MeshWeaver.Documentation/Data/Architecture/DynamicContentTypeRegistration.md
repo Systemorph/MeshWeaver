@@ -91,16 +91,30 @@ falsifies both stated causes and is the cheapest way to recognise this failure �
   control instance's `Sample` action, but it truncates each health body — the untruncated bodies
   come from calling the public `/health` several times.
 
-## The consequence that is not cosmetic
+## The blast radius — and the consumer it does NOT reach
 
-The control plane is written in types that live in the mesh. When the replica hosting the
-self-update inbox cannot type `Hosting/Deployment`, `SelfUpdateRouting`'s record lookup returns
-**0 rows** while the rows are in the table and every other hub lists them. The announcement is
-consumed and dropped with no error and no log line naming a cause — the thing that would report
-the failure is written in the type that failed. That is
-[Plugins#2178](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2178), a 24-hour CD stall;
-[Plugins#2180](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2180) is the same shape one
-type over.
+**Everything that reads a node's content through `MeshNodeStreamCache` and then asks for the CLR
+type is affected**: a view renders empty, `Content is X` / `as X` yields null, and a reactive wait
+on a typed shape never completes. There is no exception and no log line naming a cause beyond the
+degradation warning itself.
+
+🚨 **It does NOT reach a consumer that uses `ContentAs<T>` with a statically-known `T`, and
+getting that wrong is easy.** `ContentAs<T>` deserialises to the type the CALLER names; it never
+consults the mesh-wide registry, which is exactly why it is the mandated accessor. So a lane that
+reads a record this way is immune to this defect even on a replica that cannot type the same node
+for a view.
+
+That distinction was worth an issue comment to retract. `SelfUpdateRouting` answering *"no
+`Hosting/Deployment` record … lists 0"*
+([Plugins#2178](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2178), a 24-hour CD stall)
+reads exactly like this defect and is NOT it, twice over: its lookup folds over INDEX ROWS
+(`MatchRecord` on path/id, no content), and `DeploymentContent` is a framework type shipped in the
+image, reached by reference. That zero was core#4958 — a zero with two causes, "none exist" and "I
+could not see them", treated as one — and the lane now answers `RecordVerdict.Unseen` at Error
+instead of concluding absence.
+
+The lesson generalises: **a silent empty is not evidence of this defect.** Before attributing one
+here, check whether the consumer names its type statically; if it does, look elsewhere.
 
 🚨 **A restart does not fix it and neither does a recycle.** A fresh activation re-reads, but what
 it *finds* is the same shared store and the same skip: `AlreadyBaked`, never activated, never
