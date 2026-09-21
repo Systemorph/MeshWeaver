@@ -128,6 +128,49 @@ public sealed record SeoAncestorCard(
     string Title, string? Description, string Image, string AncestorPath);
 
 /// <summary>
+/// 🚨 THE CARD A GATED PAGE SHARES WHEN ITS OWNER OPTED IN — the node's OWN name, its own authored
+/// summary, its own share image and its own mark, for a page whose CONTENT a logged-out visitor
+/// still may not read.
+///
+/// <para><b>Opt-in, default off.</b> It is produced only where
+/// <see cref="PartitionAccessPolicy.PublicPreview"/> is set on the node's scope or an ancestor's;
+/// with the flag unset — every partition, until someone sets it — a gated page behaves exactly as it
+/// did, which is the control that matters. What it answers is the question a partition owner keeps
+/// asking of a gated link: <i>couldn't it say the name of the node, and the description, and the
+/// icon?</i> It can, once they say so.</para>
+///
+/// <para>🚨 <b>This IS a disclosure, and that is the point.</b> A link into an opted-in partition
+/// tells whoever holds it what the page is CALLED and what it is ABOUT. That is why it is not a
+/// default and never inferred: the precedent is <c>/health</c>, which was deliberately changed to
+/// print the PARTITION and not the node's own name (#4258/#3890) because a control that works by
+/// disclosing other people's node titles is a disclosure surface wearing an instrument's colours.
+/// The difference here is consent — the owner of the data states it, per scope, in the same
+/// <c>_Policy</c> that governs everything else about that subtree.</para>
+///
+/// <para><b>What it deliberately cannot carry:</b> the node itself, and therefore the BODY. The
+/// crawler-facing body component renders a <see cref="SeoPageData"/>, which only
+/// <see cref="SeoResolver.Resolve"/> produces and which this page is still refused — so the opt-in
+/// cannot be widened into serving content by a caller that misreads it.</para>
+/// </summary>
+/// <param name="Title">The node's own name (its id when it has no name).</param>
+/// <param name="Description">The node's AUTHORED summary, plus the partition's call to action when
+/// it declares a <see cref="PartitionAccessPolicy.RedirectOnDenied"/>. Null when it has neither.
+/// Never the body — see <see cref="SeoResolver.ResolvePreview"/>.</param>
+/// <param name="Image">The node's own share image, exactly as <see cref="SeoResolver.ShareImage"/>
+/// returns it: authored when it declares one, else its drawn <c>/api/og/{path}.png</c>. The routes
+/// serve it under the same flag (<see cref="SeoResolver.ResolveShareableNode"/>), so what the head
+/// declares can actually be fetched.</param>
+/// <param name="NodePath">The node the card describes — what a log line and a test name.</param>
+/// <param name="Icons">The node's own icon links, as <see cref="SeoResolver.ResolveIconLinks"/>
+/// builds them for a public page: empty for a node with no mark of its own.</param>
+public sealed record SeoPreviewCard(
+    string Title,
+    string? Description,
+    string Image,
+    string NodePath,
+    IReadOnlyList<PageIcon> Icons);
+
+/// <summary>
 /// Server-side SEO resolution for the initial HTTP response. Reactive end to end; the ONE
 /// <c>Task</c> bridge sits at the Razor static-SSR boundary (<see cref="ResolveAsync"/>), the
 /// same adapter shape the MCP/REST surfaces use. Fail-open to null: a slow or faulted mesh
@@ -169,15 +212,45 @@ public static class SeoResolver
     /// <see cref="AnonymousGate.AllowAnonymous"/>. Emits null when the path is no node, the node
     /// is not anonymous-readable, or anything errors/times out. Cold.
     /// </summary>
-    public static IObservable<SeoPageData?> Resolve(IMessageHub hub, string path)
+    public static IObservable<SeoPageData?> Resolve(IMessageHub hub, string path) =>
+        ResolveGated(hub, path)
+            .Select(gated => gated is { Readable: true } readable
+                ? new SeoPageData(
+                    readable.Node, ExtractDescription(readable.Node), ShareImage(readable.Node))
+                {
+                    Remainder = string.IsNullOrEmpty(readable.Resolution.Remainder)
+                        ? null
+                        : readable.Resolution.Remainder,
+                }
+                : null)
+            .Timeout(ResolveBudget)
+            .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
+
+    /// <summary>
+    /// 🚨 THE ONE RESOLVE-AND-GATE PASS. Every SEO surface — the page head, the share card route,
+    /// the icon route — asks this and nothing else, so there is no second permission rule here to
+    /// drift from the page's. It answers TWO facts and keeps them apart: the node the URL names, and
+    /// whether the <see cref="AnonymousGate"/> admits it.
+    ///
+    /// <para><b>The node is returned whether or not the gate admits it, and that is not a leak</b> —
+    /// it is the same shape this has always had (the gate is evaluated AFTER the resolution because
+    /// <see cref="IPathResolver"/> is the router's own literal resolution and is not access-filtered).
+    /// What decides disclosure is what each CALLER does with <c>Readable</c>: <see cref="Resolve"/>
+    /// discards the node entirely when it is false, and the preview path below discloses only what
+    /// <see cref="PartitionAccessPolicy.PublicPreview"/> opts in.</para>
+    ///
+    /// <para>Raw: no time bound and no Catch — every public entry point applies its own
+    /// <see cref="ResolveBudget"/> and fail-open, exactly as before.</para>
+    /// </summary>
+    private static IObservable<GatedNode?> ResolveGated(IMessageHub hub, string path)
     {
         var resolver = hub.ServiceProvider.GetService<IPathResolver>();
         if (resolver is null)
-            return Observable.Return<SeoPageData?>(null);
-        return resolver.ResolvePath(path.Trim('/'))
+            return Observable.Return<GatedNode?>(null);
+        return resolver.ResolvePath((path ?? "").Trim('/'))
             .Take(1)
             .SelectMany(resolution => resolution?.Node is not { } node
-                ? Observable.Return<SeoPageData?>(null)
+                ? Observable.Return<GatedNode?>(null)
                 // The BOOLEAN projection is correct here and stays (#2901): "not public" and "the
                 // gate could not find out" both mean WITHHOLD the rich metadata, and neither is
                 // asserted to a human — an omitted og: block is not a claim about the visitor. A
@@ -185,17 +258,15 @@ public static class SeoResolver
                 // AnonymousGate.Evaluate and branch on IsUndetermined first.
                 : AnonymousGate.AllowAnonymous(hub, resolution.Prefix)
                     .Take(1)
-                    .Select(allowed => allowed
-                        ? new SeoPageData(node, ExtractDescription(node), ShareImage(node))
-                        {
-                            Remainder = string.IsNullOrEmpty(resolution.Remainder)
-                                ? null
-                                : resolution.Remainder,
-                        }
-                        : null))
-            .Timeout(ResolveBudget)
-            .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
+                    .Select(allowed => (GatedNode?)new GatedNode(resolution, node, allowed)));
     }
+
+    /// <summary>What one URL resolved to, and whether a logged-out visitor may read it.</summary>
+    /// <param name="Resolution">The literal path resolution — <c>Prefix</c> is the scope every
+    /// policy and permission question below is asked about.</param>
+    /// <param name="Node">The node the URL names, gated or not.</param>
+    /// <param name="Readable">The <see cref="AnonymousGate"/>'s fail-closed verdict.</param>
+    private sealed record GatedNode(AddressResolution Resolution, MeshNode Node, bool Readable);
 
     /// <summary>
     /// The static-SSR boundary bridge — the only <c>Task</c> on this surface, and it goes through
@@ -396,6 +467,119 @@ public static class SeoResolver
                 : LocalizationCatalog.Get(CallToActionKey, locale))
             .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
             .DefaultIfEmpty(null);
+
+    /// <summary>
+    /// 🚨 THE NODE'S OWN CARD FOR A GATED PAGE — and it exists ONLY because the partition's owner
+    /// switched <see cref="PartitionAccessPolicy.PublicPreview"/> on. Emits null for every path that
+    /// is readable anyway (the caller already has <see cref="Resolve"/> for those), for every path
+    /// whose scope has not opted in — which is every scope by default — and for anything that errors
+    /// or times out. Cold.
+    ///
+    /// <para><b>What it discloses, exhaustively:</b> the node's <c>Name</c>, its AUTHORED summary
+    /// (<see cref="ExtractDescription"/> — <c>Description</c>, else <c>abstract</c>/<c>description</c>/
+    /// <c>tagline</c>/<c>summary</c>/<c>headline</c>), its share image, and its own icon links.
+    /// <b>Never its body:</b> this returns no <see cref="SeoPageData"/> and carries no
+    /// <see cref="MeshNode"/>, so the body the crawler-facing <c>SeoPrerenderedBody</c> renders
+    /// cannot be reached from it — that component reads a <c>SeoPageData</c>, which only
+    /// <see cref="Resolve"/> produces, and <see cref="Resolve"/> still refuses this node.</para>
+    ///
+    /// <para>🚨 <b>The summary is an authored summary, not the first line of the body.</b> That is a
+    /// property of <see cref="ExtractDescription"/>, which reads six summary members and never
+    /// <c>content</c> or <c>body</c>; <see cref="RenderBody"/> is the only thing that touches those,
+    /// and nothing here calls it. If a future member is added to the description chain, it must be
+    /// an authored summary for the same reason.</para>
+    ///
+    /// <para>The node stays OUT of <c>/sitemap.xml</c> and off the public host, because both read
+    /// <see cref="Resolve"/> (via <c>PublicSite</c>) and neither reads this — unfurlable is not
+    /// indexable, and the head states <c>noindex</c> to say so.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose path resolver, gate and policy chain answer.</param>
+    /// <param name="path">The node path the visitor asked for.</param>
+    /// <param name="locale">The VIEWER's language tag, read explicitly off their AccessContext by
+    /// the caller — never from an ambient culture. Null ⇒ English.</param>
+    public static IObservable<SeoPreviewCard?> ResolvePreview(
+        IMessageHub hub, string path, string? locale = null) =>
+        ResolveGated(hub, path)
+            .SelectMany(gated => gated is not { Readable: false } withheld
+                ? Observable.Return<SeoPreviewCard?>(null)
+                : hub.GetPublicPreview(withheld.Resolution.Prefix)
+                    .Take(1)
+                    .SelectMany(optedIn => optedIn
+                        ? CallToAction(hub, withheld.Resolution.Prefix, locale)
+                            .Select(callToAction => ComposePreviewCard(withheld.Node, callToAction))
+                        : Observable.Return<SeoPreviewCard?>(null)))
+            .Timeout(ResolveBudget)
+            .Catch<SeoPreviewCard?, Exception>(_ => Observable.Return<SeoPreviewCard?>(null));
+
+    /// <summary>
+    /// The static-SSR boundary bridge for <see cref="ResolvePreview"/> — <c>ObserveCompletion</c>,
+    /// never <c>.ToTask()</c>, for the reason <see cref="ResolveAsync"/> states.
+    /// </summary>
+    /// <param name="hub">The hub whose path resolver, gate and policy chain answer.</param>
+    /// <param name="path">The node path the visitor asked for.</param>
+    /// <param name="locale">The viewer's language tag; null ⇒ English.</param>
+    public static Task<SeoPreviewCard?> ResolvePreviewAsync(
+        IMessageHub hub, string path, string? locale = null)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SeoResolver));
+        return ResolvePreview(hub, path, locale)
+            .FirstAsync()
+            .ObserveCompletion(ex => logger?.LogWarning(
+                ex,
+                "The public-preview card for '{Path}' faulted after the head had already been produced",
+                path));
+    }
+
+    /// <summary>
+    /// The card, from the node and nothing else. Pure — no hub, no IO — so everything a previewed
+    /// page can possibly say is decided here and is testable without a mesh.
+    /// </summary>
+    /// <param name="node">The node whose page was withheld, on a scope that opted in.</param>
+    /// <param name="callToAction">The localized sentence to append, or null for none.</param>
+    public static SeoPreviewCard ComposePreviewCard(MeshNode node, string? callToAction)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        var summary = FirstNonEmpty(ExtractDescription(node));
+        return new SeoPreviewCard(
+            node.Name ?? node.Id,
+            summary is null
+                ? callToAction
+                : callToAction is null ? summary : $"{summary} {callToAction}",
+            ShareImage(node),
+            node.Path,
+            ResolveIconLinks(node));
+    }
+
+    /// <summary>
+    /// 🚨 THE ONE PREDICATE THE IMAGE ROUTES ASK — the node whose picture <c>/api/og/{path}.png</c>
+    /// and <c>/api/icon/{path}.png</c> may draw: one the gate admits, or one whose scope opted in to
+    /// <see cref="PartitionAccessPolicy.PublicPreview"/>. Null ⇒ 404, which is also what a missing
+    /// node answers, so the routes still cannot be used as an existence oracle.
+    ///
+    /// <para>It exists so the routes and the HEAD cannot disagree: a head that declares
+    /// <c>og:image</c> for a previewed page while the route 404s would ship a card with a broken
+    /// picture — worse than no card, because several unfurlers drop the whole preview when the image
+    /// they were promised does not fetch. Everything those two routes draw is exactly what the head
+    /// discloses (name, authored summary, category, mark, price chip, instance + path) and never the
+    /// body, which is why one flag can govern both.</para>
+    ///
+    /// <para>The policy read happens only on the REFUSED leg, so a public page costs exactly what it
+    /// costs today and a path that names no node costs no policy read at all.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose path resolver, gate and policy chain answer.</param>
+    /// <param name="path">The node path the picture was asked for.</param>
+    public static IObservable<MeshNode?> ResolveShareableNode(IMessageHub hub, string path) =>
+        ResolveGated(hub, path)
+            .SelectMany(gated => gated is not { } resolved
+                ? Observable.Return<MeshNode?>(null)
+                : resolved.Readable
+                    ? Observable.Return<MeshNode?>(resolved.Node)
+                    : hub.GetPublicPreview(resolved.Resolution.Prefix)
+                        .Take(1)
+                        .Select(optedIn => optedIn ? resolved.Node : null))
+            .Timeout(ResolveBudget)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
 
     /// <summary>
     /// The node's document body as HTML, for <see cref="SeoPageData.Body"/>: the content's own

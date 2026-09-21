@@ -269,11 +269,14 @@ public static class SeoEndpoints
     /// public page has an Open Graph image without anyone authoring one. An authored image always
     /// wins; this is what <see cref="SeoResolver.ExtractImage"/> falls back to.</para>
     ///
-    /// <para><b>Gated identically to the SEO head.</b> The card is drawn from
-    /// <see cref="SeoResolver.Resolve"/>, which returns null for anything the fail-closed
-    /// <see cref="AnonymousGate"/> refuses — so a private node's NAME cannot be lifted out of this
-    /// route, and a missing node and a private one answer the same 404. There is no parallel
-    /// permission rule here to drift from the page's.</para>
+    /// <para><b>Gated identically to the SEO head — literally the same call.</b> The card is drawn
+    /// from <see cref="SeoResolver.ResolveShareableNode"/>, the ONE predicate the head's own card
+    /// block asks: a node the fail-closed <see cref="AnonymousGate"/> admits, or one whose scope opted
+    /// in to <see cref="PartitionAccessPolicy.PublicPreview"/>. Anything else is 404 — the same
+    /// answer a missing node gets, so the route is still no existence oracle. There is no parallel
+    /// permission rule here to drift from the page's, which is the whole reason that predicate is one
+    /// function: a head declaring <c>og:image</c> for a page whose picture 404s ships a broken card,
+    /// and several unfurlers then drop the preview entirely.</para>
     ///
     /// <para><b>Shared-cacheable on purpose</b> — the one image route where <c>public</c> is
     /// correct. Everything drawn on it is already served to anonymous callers on the page itself,
@@ -298,10 +301,10 @@ public static class SeoEndpoints
             if (nodePath.Length == 0)
                 return Task.FromResult(PngResult(http, renderer.RenderSite(http.Request.Host.Host)));
 
-            return SeoResolver.Resolve(hub, nodePath)
-                .Select(data => data is null
+            return SeoResolver.ResolveShareableNode(hub, nodePath)
+                .Select(node => node is null
                     ? Results.NotFound()
-                    : CardResult(http, renderer, data))
+                    : CardResult(http, renderer, node))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}"), ct)!;
@@ -320,10 +323,11 @@ public static class SeoEndpoints
     /// instead of it.</para>
     ///
     /// <para><b>Gated identically to the SEO head and the share card.</b> It resolves through
-    /// <see cref="SeoResolver.Resolve"/>, which returns null for anything the fail-closed
-    /// <see cref="AnonymousGate"/> refuses — so a private node's MARK cannot be lifted out of this
-    /// route, and a missing node, a private one and a node with no mark all answer the same 404.
-    /// There is no parallel permission rule here to drift from the page's.</para>
+    /// <see cref="SeoResolver.ResolveShareableNode"/> — the same one predicate — so a mark reaches
+    /// this route only for a node the fail-closed <see cref="AnonymousGate"/> admits or one whose
+    /// scope opted in to <see cref="PartitionAccessPolicy.PublicPreview"/>; a missing node, a
+    /// withheld one that did not opt in, and a node with no mark all answer the same 404. There is no
+    /// parallel permission rule here to drift from the page's.</para>
     ///
     /// <para><b>404 is the fallback, and nothing ever points at it.</b> A node with no icon of its
     /// own gets no icon link in its head either (<see cref="SeoResolver.ResolveIconLinks"/> returns
@@ -357,10 +361,10 @@ public static class SeoEndpoints
 
             var pixels = size;
             var unrenderable = UnrenderableIcon(hub, nodePath);
-            return SeoResolver.Resolve(hub, nodePath)
-                .Select(data => data is null
+            return SeoResolver.ResolveShareableNode(hub, nodePath)
+                .Select(node => node is null
                     ? Results.NotFound()
-                    : IconResult(http, data.Node, pixels, unrenderable))
+                    : IconResult(http, node, pixels, unrenderable))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/icon/{nodePath}"), ct)!;
@@ -410,24 +414,30 @@ public static class SeoEndpoints
         return Results.File(png, "image/png");
     }
 
-    private static IResult CardResult(HttpContext http, OgCardRenderer renderer, SeoPageData data) =>
-        PngResult(http, renderer.Render(CardContent(data)));
+    private static IResult CardResult(HttpContext http, OgCardRenderer renderer, MeshNode node) =>
+        PngResult(http, renderer.Render(CardContent(node)));
 
     /// <summary>
-    /// Everything the card says about a node, read off the node the resolver already gated:
+    /// Everything the card says about a node, read off the node the resolver already cleared:
     /// name, description (with the catalog-copy fallbacks), category or type as the eyebrow, its
     /// own mark through the SAME backplate policy the favicon route draws
     /// (<see cref="SeoResolver.ResolveIconSvg"/>), the price when it sells something, and the
     /// path. Internal so a test reads the endpoint's own mapping rather than re-deriving it.
+    ///
+    /// <para>🚨 Takes the NODE, not a <see cref="SeoPageData"/>. It never needed more than the node
+    /// — the description it drew was always <see cref="SeoResolver.ExtractDescription"/> of it — and
+    /// taking the node means the card path cannot reach <see cref="SeoPageData.Body"/> even by
+    /// accident. That matters since the route now also serves a node the gate REFUSED, on a scope
+    /// that opted in to <see cref="PartitionAccessPolicy.PublicPreview"/>: the picture discloses the
+    /// same name, summary, eyebrow and mark the head does, and nothing else.</para>
     /// </summary>
-    internal static OgCardContent CardContent(SeoPageData data)
+    internal static OgCardContent CardContent(MeshNode node)
     {
-        var node = data.Node;
         var price = SeoResolver.ContentDecimal(node, "price");
         return new OgCardContent
         {
             Title = node.Name ?? node.Id,
-            Description = data.Description,
+            Description = SeoResolver.ExtractDescription(node),
             Eyebrow = string.IsNullOrWhiteSpace(node.Category) ? TypeLeaf(node.NodeType) : node.Category,
             IconSvg = SeoResolver.ResolveIconSvg(node),
             Price = price is > 0m
