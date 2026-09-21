@@ -41,6 +41,14 @@ public class OrderedRouteDispatcherDrainRecursionTest
 {
     private const string Destination = "client/subscriber-1";
 
+    /// <summary>
+    /// One stream id for the whole backlog. The FIFO channel is (destination, stream) since issue
+    /// #5009, so a backlog 32 deep behind one head leg — the subject of this test — only exists when
+    /// every leg names the SAME stream. Spreading them over streams is now a 32-wide fan, which is
+    /// the point of that change and would make this test vacuous.
+    /// </summary>
+    private const string OrderingKey = "sync/one-stream";
+
     /// <summary>Legs queued BEHIND the in-flight head leg. Enough that a per-leg stack frame group is
     /// unmistakable next to the frame count of a single completion, and small enough that the
     /// recursion this pins cannot overflow the stack and kill the host.</summary>
@@ -76,6 +84,7 @@ public class OrderedRouteDispatcherDrainRecursionTest
         // whose post is in flight when the silo goes down.
         dispatcher.Enqueue(
             Destination,
+            OrderingKey,
             Observable.Create<Unit>(_ =>
             {
                 headSubscribed.OnNext(Unit.Default);
@@ -92,7 +101,7 @@ public class OrderedRouteDispatcherDrainRecursionTest
         for (var leg = 1; leg <= QueuedBehindHead; leg++)
         {
             var queued = leg;
-            dispatcher.Enqueue(Destination, Observable.Never<Unit>(), () => Record(queued));
+            dispatcher.Enqueue(Destination, OrderingKey, Observable.Never<Unit>(), () => Record(queued));
         }
 
         dispatcher.QueueSnapshot().Deepest.Should().Be(QueuedBehindHead,

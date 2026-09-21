@@ -89,9 +89,11 @@ internal class RoutingGrain(
         ?? MessageSizeGuard.DefaultGrainTransportBodyBytes;
 
     /// <summary>
-    /// Per-destination FIFO for the stream-routed branch. Instance field — its lifetime is this
-    /// activation's, and it holds an entry only while a destination has work in flight.
-    /// See <see cref="OrderedRouteDispatcher"/> for why the order is a correctness requirement.
+    /// Per-CHANNEL FIFO for the stream-routed branch, a channel being (destination, payload
+    /// identity). Instance field — its lifetime is this activation's, and it holds an entry only
+    /// while a channel has work in flight.
+    /// See <see cref="OrderedRouteDispatcher"/> for why the order is a correctness requirement, and
+    /// why the channel is not the destination alone (issue #5009).
     /// </summary>
     private readonly OrderedRouteDispatcher orderedDispatcher = new(
         meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Routing)
@@ -262,12 +264,23 @@ internal class RoutingGrain(
         if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
         {
             ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+            // 🚨 THE ORDERED CHANNEL IS (destination, payload identity) — issue #5009. A
+            // stream-routed address is a MULTIPLEXER: the node-stream cache hub fronts one
+            // sync/{streamId} sub-hub per observed node, so keying the FIFO on the address alone
+            // serialised a whole process's data-sync traffic into ONE lane with ONE in-flight grain
+            // call, and 62 of 64 in-flight legs stacked behind one cache/… address in prod. The
+            // ordering invariant the FIFO protects is per MIRROR, i.e. per stream, and
+            // DeliveryIdentity reads exactly that off the ENVELOPE — one dictionary lookup of a
+            // string that MessageDelivery.Package already stamped, no payload cast, nothing parsed.
+            // Null (no identity) keeps the destination-wide channel, i.e. today's behaviour.
+            var orderingKey = DeliveryIdentity.Read(delivery);
             // Claimed at ENQUEUE like the in-flight slot — a leg queued behind another leg is work
             // this silo has accepted and must let land before it stops (#2638). Labelled so the
             // shutdown residual can NAME it if it never lands (#2833).
             var slot = quiescence?.Track($"stream-routed → {addressPath} (delivery {delivery.Id})");
             orderedDispatcher.Enqueue(
                 addressPath,
+                orderingKey,
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
                 () =>
                 {
@@ -341,11 +354,22 @@ internal class RoutingGrain(
     /// stuck.</para>
     ///
     /// <para><b>So report the discriminators, never a cause.</b> <c>Deepest</c> counts legs QUEUED
-    /// BEHIND the one executing leg of a destination, so <c>Deepest &gt;= 1</c> already means a leg
-    /// is waiting on a leg — head-of-line blocking on one stream destination. <c>Deepest = 0</c>
-    /// with many destinations, or a backlog that clears in milliseconds, is load.
+    /// BEHIND the one executing leg of an ordered CHANNEL, so <c>Deepest &gt;= 1</c> already means a
+    /// leg is waiting on a leg — head-of-line blocking within one channel. <c>Deepest = 0</c>
+    /// with many channels, or a backlog that clears in milliseconds, is load.
     /// <see cref="ReportDrained"/> prints how long the episode lasted, which separates a throughput
     /// burst from a real stall without anyone having to profile a pod.</para>
+    ///
+    /// <para>🚨 <b>A channel is (destination, stream), not a destination — issue #5009, and it
+    /// changes what a non-zero <c>Deepest</c> MEANS.</b> Until that issue the channel was the
+    /// destination address, so a deep queue could be — and on memex-cloud was — 62 unrelated
+    /// streams waiting behind each other at one multiplexer hub, which is not head-of-line blocking
+    /// on anything, merely a channel key too coarse to let them overlap. Now a non-zero
+    /// <c>Deepest</c> means frames of the SAME stream are stacking up, which really is one
+    /// destination not keeping up with one producer. Both counts are printed because their RATIO is
+    /// the remaining discriminator: many channels over FEW destinations is a busy multiplexer
+    /// draining in parallel (load); few channels with a deep queue is a stream that is not
+    /// draining.</para>
     /// </summary>
     private void ReportSaturation(int inFlight, string addressPath)
     {
@@ -354,24 +378,27 @@ internal class RoutingGrain(
         var startedUtc = DateTime.UtcNow;
         Volatile.Write(ref saturationSinceTicks, startedUtc.Ticks);
         var episode = Interlocked.Increment(ref saturationEpisode);
-        var (destinations, deepest) = orderedDispatcher.QueueSnapshot();
+        var (channels, destinations, deepest) = orderedDispatcher.QueueSnapshot();
         logger.LogCritical(
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
             + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
-            + "stream destinations queued {Destinations}, deepest per-destination queue {Deepest}, routing pool subscribing {PoolInFlight}. "
+            + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
+            + "deepest per-channel queue {Deepest}, routing pool subscribing {PoolInFlight}. "
             + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
             + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
             + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
-            + "A deepest queue of 1 or more means legs are blocked behind a leg (head-of-line on one destination); "
-            + "0 means nothing is waiting on anything, so read it as load. "
+            + "A CHANNEL is (destination, stream), so a deepest queue of 1 or more means legs of the SAME stream are "
+            + "blocked behind one another (head-of-line within one channel); 0 means nothing is waiting on anything, "
+            + "so read it as load. Many channels over FEW destinations is a multiplexer hub draining in parallel, "
+            + "which is load too — before issue #5009 those legs shared one channel and read as head-of-line. "
             + "🚨 Deepest is sampled AT THE CROSSING, so like the in-flight count it is partly an artefact of the "
-            + "threshold: with N destinations sharing the backlog it is ~InFlight/N whatever is wrong. "
+            + "threshold: with N channels sharing the backlog it is ~InFlight/N whatever is wrong. "
             + "READ THE EPISODE STAMP, not the depth: a later line with a HIGHER episode on this activation means "
             + "this episode drained; a line with a DIFFERENT activation id means the grain was recycled; and if "
             + "neither a clear nor a higher episode ever follows, the in-flight count never fell below half the "
             + "threshold — which means a leg never terminated and its slot leaked, not that the silo was busy.",
             activationId, episode, startedUtc, inFlight, SaturationThreshold,
-            destinations, deepest, routingPool.CurrentInFlight, addressPath);
+            channels, destinations, deepest, routingPool.CurrentInFlight, addressPath);
     }
 
     private void ReportDrained(int inFlight)

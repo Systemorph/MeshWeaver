@@ -87,8 +87,17 @@ public class TestTimeoutLiteralRatchetGuard
     /// failure this guard's message predicts verbatim, at exactly 30 s. Converted to
     /// <c>TestTimeouts.Convergence</c>. This is what a downward edit looks like: one site cured, one
     /// off the count.</para>
+    ///
+    /// <para><b>386 → 380 by CONVERSION.</b> A routing change (#5009) added three cases to
+    /// <c>OrderedRouteDispatcherTest</c>, each copying that file's existing
+    /// <c>[Fact(Timeout = 30_000)]</c>, and this guard caught the rise on the PR. All SEVEN sites in
+    /// the file were converted rather than the three that were new: the positive waits to
+    /// <c>TestTimeouts.Quick</c> (an in-memory dispatcher with no mesh and no cluster IS a local
+    /// settle) and the outer bound to a literal <c>120_000</c> that dominates it, since an attribute
+    /// argument cannot be a property. Measured, not computed — baseline temporarily 0, count read
+    /// back out of the failure, exactly as the entry above describes.</para>
     /// </summary>
-    private const int Baseline = 386;
+    private const int Baseline = 380;
 
     [Fact]
     public void TheHandWrittenTimeoutCountOnlyEverGoesDown()

@@ -100,8 +100,12 @@ Two lifecycle details that are the whole correctness argument:
   activation stranded on the pod it left. `Attach` reports `false` when it lands on a silo that is
   not the owner, and the owner retries, bounded, so the move converges instead of wedging.
 
-`OrderedRouteDispatcher` is unchanged and stays: the per-destination FIFO is a correctness
-requirement of the delta protocol, and a call into a `[Reentrant]` grain does not restore ordering.
+`OrderedRouteDispatcher` stays: its FIFO is a correctness requirement of the delta protocol, and a
+call into a `[Reentrant]` grain does not restore ordering. What the transport swap does NOT change is
+that the ordering has to be claimed on the routing grain's turn. (Its channel key was later narrowed
+from the destination address to (destination, stream), which is the domain the protocol's guard
+actually operates on — see [Ordered Route Channels](../OrderedRouteChannels). The FIFO itself is as
+required as it ever was.)
 `StreamMessageSizeGuard` (#1890) does not disappear either — it **retargets**. It still guards the
 stream fallback, where the wall is Orleans' 1 MiB memory-stream block and crossing it is *silent*
 (the publish succeeds and the pulling agent rejects the message forever, naming a queue id and
