@@ -366,6 +366,61 @@ Two legs, each selecting its own type's own states, merged for display only.
 nothing, and it must never be mistaken for the retention pass that actually bounds the data
 ([Notification Retention](/Doc/Architecture/NotificationRetention)).
 
+### Ordering: by IMPORTANCE first, date second
+
+🚨 **The default order is importance, not time.** What the viewer must act on comes **first, at the
+top**, above everything running and everything finished — a newest-first list buries the one item
+that needs a decision under twenty that need nothing, and the inbox then costs attention instead of
+saving it. Recency is a *tiebreaker within* a band, not the primary key.
+
+Other orderings are offered and none is the default: **by date** (when the whole point is "what
+happened this morning"), **by source**, **by due date** for the obligations band. Ordering is a
+view preference, and it never changes which legs run — the same rows, arranged differently.
+
+### Styling: an obligation must LOOK like one
+
+The glyph alone is not enough. A row the viewer must act on carries **visible emphasis** — its own
+accent, stronger weight, a persistent marker — so that "I have to do something here" survives a
+glance at a full screen, not just a careful read.
+
+🚨 **Never colour alone.** The distinction must hold for a viewer who cannot tell red from green
+and for one reading in high-contrast or dark mode, so emphasis is carried by **position, weight,
+glyph and an accessible label together** — colour is the fourth signal, never the only one. This is
+the same rule as the transport marker: the meaning lives in something a screen reader can say.
+
+### The filter bar is `MeshSearchControl` — not a new one
+
+🚨 **Do not build an inbox filter bar.** `MeshSearchControl` already is one, and every feature this
+surface needs is in it. Building a second is the hand-rolling the platform rules forbid, and it
+would be a worse one.
+
+The mapping is almost exact, which is the tell that this is the right control:
+
+| Inbox needs | `MeshSearchControl` gives |
+|---|---|
+| the three **bands** | **scope tabs** — a tab strip above the header, one `MeshSearchScope(Label, Query)` per band, each carrying its band's hidden query |
+| **ordering**, importance first | `SortOptions` — `MeshSearchSortOption(Label, Query)`, **per scope**. Each option is a FULL query, so one can change ordering *and* the result set |
+| a **filter bar** | the control's own search bar |
+| a term that survives switching band | built in — scopes deliberately **share one search bar**, so switching swaps only the hidden query while the typed text stays |
+| how rows render | `MeshSearchRenderMode` |
+
+Two consequences worth stating, because both are properties of the control rather than choices we
+get to make later:
+
+- **The first sort option is the default, and it must match the scope's `HiddenQuery`.** So
+  importance-first is not styling applied after the fact — it is the *first* `SortOptions` entry and
+  the hidden query's own ordering, in agreement. If those two disagree the list reorders itself the
+  moment the user touches the dropdown.
+- **The provider legs ARE the hidden queries.** A provider contributing a leg is contributing the
+  scope's query text, so the potluck and the control are the same mechanism seen from two sides —
+  nothing has to be adapted between them.
+
+🚨 **A filter must never silently hide an obligation.** Filtering to *Recent* and seeing an empty
+"Needs you" band is indistinguishable from having nothing to do — the same failure as a tick on a
+pending row, reached a different way. When a filter or scope hides open items, the inbox says so and
+how many: *"3 items needing you are hidden by this filter."* The count is never filtered away with
+the rows.
+
 Built from framework controls only — `Controls.DataGrid` with `PropertyColumnControl<T>`, composed
 in `Controls.Stack`. 🚨 **No `StringBuilder`, no `Controls.Html(markup)` for the rows**: structured
 data gets a control ([Data Binding](/Doc/GUI/DataBinding)).
