@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Threading;
@@ -114,6 +115,92 @@ public class RetiredContextCollectedSignalTest
         var started = false;
         using var subscription = unloads.AllCollected.Subscribe(_ => started = true);
         started.Should().BeTrue("the next start after a completed unload is not delayed");
+    }
+
+    /// <summary>
+    /// #4654 — the drain used to answer <c>Rounds = 0, Retained = [], Fault = null</c> for a tracker with
+    /// nothing pending, and <see cref="CollectibleUnloadOutcome.ToString"/> rendered that as "all retired
+    /// contexts collected after 0 round(s)": the sentence a MEASURED, collected unload writes. A trace
+    /// line reading as a clean unload could therefore be a teardown that never drove a collection. The
+    /// two facts must print differently, and "nothing was pending" must never read as "collected".
+    /// </summary>
+    [Fact]
+    public async Task WithNothingPending_TheDrainSaysNoUnloadWasMeasured_NeverThatEverythingWasCollected()
+    {
+        var unloads = new CollectibleContextUnloads();
+        unloads.Pending.Should().Be(0, "the arrangement: a tracker with nothing retired");
+
+        var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+
+        outcome.NotMeasured.Should().Be(CollectibleUnloadNotMeasured.NothingPending);
+        outcome.Measured.Should().BeFalse("no collection was driven and no signal observed");
+        outcome.Collected.Should().BeFalse(
+            "'every retired context was collected' is vacuous with none retired, and a vacuous true is "
+            + "what let a never-measured teardown count as a clean unload in the #4654 analysis");
+        outcome.Rounds.Should().Be(0);
+        outcome.ToString().Should().Contain("nothing was pending")
+            .And.Contain("no unload was measured")
+            .And.NotContain("collected",
+                "the sentence must not be readable as a measurement — that reading is void");
+    }
+
+    /// <summary>
+    /// The other way the drain is handed nothing: the test base resolves the tracker late in teardown,
+    /// after hosted services are stopped and activities quiesced, so a phase that throws before that
+    /// leaves it <c>null</c> — and the mesh may register no tracker at all. Neither is "collected".
+    /// </summary>
+    [Fact]
+    public async Task WithNoTracker_TheDrainSaysNoUnloadWasMeasured_NeverThatEverythingWasCollected()
+    {
+        var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads: null);
+
+        outcome.NotMeasured.Should().Be(CollectibleUnloadNotMeasured.NoTracker);
+        outcome.Measured.Should().BeFalse();
+        outcome.Collected.Should().BeFalse("without a tracker the drain cannot know what was retired");
+        outcome.ToString().Should().Contain("no unload was measured")
+            .And.Contain("tracker")
+            .And.NotContain("collected");
+    }
+
+    /// <summary>
+    /// The control on the other side of the split: with ONE context pending the drain measures, and
+    /// its verdict is worded so that it cannot be confused with the not-measured one. Also pins what
+    /// the trace's <c>alc=</c> counter can and cannot see — it is <c>AssemblyLoadContext.All</c>
+    /// (<c>MonolithMeshTestBase.TestMemTrace</c>), and that enumeration drops a context the moment
+    /// <c>Unload()</c> is REQUESTED, so <c>alc=1</c> says nothing about contexts still unloading.
+    /// </summary>
+    [Fact]
+    public async Task WithOnePending_TheDrainMeasures_AndItsVerdictCannotBeReadAsTheNotMeasuredOne()
+    {
+        var unloads = new CollectibleContextUnloads();
+        using var cache = NewCache(unloads);
+        var weakContext = LoadUseAndRetire(cache, "Measured4654");
+        unloads.Pending.Should().Be(1, "the arrangement: one retired context, Unload() requested");
+        weakContext.IsAlive.Should().BeTrue("Unload() has only been requested — the runtime still holds it");
+        IsEnumeratedByAssemblyLoadContextAll(weakContext).Should().BeFalse(
+            "AssemblyLoadContext.All — what the trace's alc= counts — no longer lists a context once its "
+            + "unload is requested, so an alc=1 checkpoint cannot rule out a context mid-unload");
+
+        var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+        var nothingPending = await CollectibleUnloadDrain.WaitUntilCollectedAsync(new CollectibleContextUnloads());
+
+        outcome.NotMeasured.Should().BeNull();
+        outcome.Measured.Should().BeTrue();
+        outcome.Collected.Should().BeTrue($"nothing roots the context, so it must be collected ({outcome})");
+        weakContext.IsAlive.Should().BeFalse("and it must actually be gone");
+        outcome.ToString().Should().Contain("all retired contexts collected")
+            .And.NotContain("no unload was measured");
+        outcome.ToString().Should().NotBe(nothingPending.ToString(),
+            "a measured collection and an empty tracker are two facts and must print as two sentences");
+    }
+
+    // Out of line so the strong reference taken from the weak one lives on no caller frame across the
+    // drain — a rooted context would read as RETAINED for a reason this test did not arrange.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool IsEnumeratedByAssemblyLoadContextAll(WeakReference weakContext)
+    {
+        var context = weakContext.Target;
+        return context is not null && AssemblyLoadContext.All.Contains(context);
     }
 
     [Fact]
