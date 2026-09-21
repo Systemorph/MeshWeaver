@@ -87,8 +87,9 @@ for the portal's own identity brings the repository's sync sources onto its comm
 ### 🚨 Before any of the below: the READINESS gate, which the lane does NOT enforce
 
 **A release may be cut only when NO `sev:B` and NO `sev:H` bug is open, in any of the seven gated
-repositories** (maintainer, 2026-09-20: *"let's set bar of release to no high issues left"*; and on the
-rest of the ladder, *"medium / low we don't care for release"* — `sev:M`/`sev:L` never gate a cut).
+repositories**; `sev:M` and `sev:L` never gate a cut. That is policy
+[`release-blocker-gate`](../../../src/MeshWeaver.Documentation/Data/Architecture/PolicyNotProse.md),
+which carries when it took effect and who set it — this page carries only the rule.
 
 Enforced by `Governance/Standards/release.cut` in MeshWeaver.Plugins — 7 repositories × 2 labels = 14
 `NoOpenIssues` gates — so a release proposal cannot reach `Ready` while one is open. `Memex` and
@@ -98,8 +99,18 @@ Enforced by `Governance/Standards/release.cut` in MeshWeaver.Plugins — 7 repos
 Check it first — it is the cheapest gate here and it stops everything:
 
 ```bash
-for R in MeshWeaver MeshWeaver.Plugins MeshWeaver.Crm MeshWeaver.SocialMedia \
-         MeshWeaver.Reinsurance MeshWeaver.Manufacturing MeshWeaver.Education; do
+REPOS="MeshWeaver MeshWeaver.Plugins MeshWeaver.Crm MeshWeaver.SocialMedia
+       MeshWeaver.Reinsurance MeshWeaver.Manufacturing MeshWeaver.Education"
+
+# Fail CLOSED first. A label that does not exist answers 0 open issues, which reads as GREEN.
+for R in $REPOS; do
+  for S in B H; do
+    gh api "repos/Systemorph/$R/labels/sev:$S" --jq '.name' >/dev/null 2>&1 \
+      || { echo "ABORT: $R carries no sev:$S label — a count against it would read 0 and mean nothing"; exit 1; }
+  done
+done
+
+for R in $REPOS; do
   for S in B H; do
     printf '%-26s sev:%s = %s\n' "$R" "$S" \
       "$(gh api "repos/Systemorph/$R/issues?state=open&labels=sev:$S&per_page=100" \
@@ -108,10 +119,16 @@ for R in MeshWeaver MeshWeaver.Plugins MeshWeaver.Crm MeshWeaver.SocialMedia \
 done
 ```
 
-🚨 **Read a zero against its coverage.** A `search/*` query answers 0 when it is truncated,
-rate-limited (search has its OWN ~30/min limit) or unanchored — indistinguishable from "none open",
-and this is the one place a false zero ships a known blocker. The loop above uses the REST issues
-endpoint for that reason, and filters `pull_request == null` because PRs share it.
+🚨 **Read a zero against its coverage — THREE ways this count lies, all measured.** (1) A
+`search/*` query answers 0 when it is truncated, rate-limited (search has its OWN ~30/min limit) or
+unanchored, indistinguishable from "none open" — which is why the loop uses the REST issues endpoint
+instead. (2) PRs share that endpoint, hence `pull_request == null`. (3) 🚨 **An unknown label folds the
+gate to GREEN**: `labels=sev:DOESNOTEXIST` answers `0`, byte-identical to a real label with nothing
+open, so a renamed or missing label ships a known blocker silently. The assertion above is what makes
+the count mean something — and it uses the SINGLE-label endpoint deliberately, because **listing
+labels is the trap one level down**: core holds 13 pages of them and its `sev:*` four sit on page 2,
+so a one-page existence check reports them absent from the repository that carries the most open
+`sev:H`. `repos/{o}/{r}/labels/sev:H` needs no pagination and 404s when the label is gone.
 
 🚨 **A green gate reached by DOWNGRADING an `sev:H` to `sev:M` is not a green gate.** That is the
 cheapest defeat of this bar and `release.cut`'s acceptance criterion names it; spot-check the most

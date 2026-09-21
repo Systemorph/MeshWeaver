@@ -140,9 +140,10 @@ Full reference: <!--slot:reference-->[/gui](.claude/skills/gui/SKILL.md) · [GUI
 
 **Every bug carries a severity, and two of the four BLOCK a release.** `sev:B` (blocking) and `sev:H`
 (a primary path broken, an intermittent user-visible failure, or silently WRONG results anywhere) must
-both be **zero** to cut a release; `sev:M` and `sev:L` are a priority conversation and never gate one
-(maintainer, 2026-09-20: *"let's set bar of release to no high issues left"* · *"medium / low we don't
-care for release"*). An `enhancement`, `documentation` or `chore` carries no severity at all.
+both be **zero** to cut a release; `sev:M` and `sev:L` are a priority conversation and never gate one.
+That is policy [`release-blocker-gate`](src/MeshWeaver.Documentation/Data/Architecture/PolicyNotProse.md),
+which carries when it took effect and who set it — this page carries only the rule. An `enhancement`,
+`documentation` or `chore` carries no severity at all.
 
 **So work the queue in that order** — `sev:B`, then `sev:H`, and treat `sev:M`/`sev:L` as backlog
 unless asked. Before starting on an issue, check it is actually classified: an unlabelled issue has not
@@ -152,8 +153,11 @@ been triaged, and working it ahead of a labelled `sev:H` is choosing by accident
 `NoOpenIssues` for both labels across the seven gated repositories — 14 gates. 🚨 Two traps, both
 measured: a zero from `search/*` can mean truncated-or-rate-limited rather than none (read a count
 against its coverage, and prefer the REST issues endpoint), and an **unknown label folds the gate to
-GREEN** — so verify a label EXISTS with a *paginated* read, since core carries 112 labels and an
-un-paginated `labels?per_page=100` reports `sev:B`/`sev:H` as absent from it.
+GREEN** — `labels=sev:DOESNOTEXIST` answers `0`, byte-identical to a real label with nothing open. 🚨
+Verify each label exists with the SINGLE-label endpoint `repos/{o}/{r}/labels/sev:H`, which 404s when
+it is absent — **never by listing labels**, which is the trap one level down: core holds 13 pages of
+them and its `sev:*` four sit on page 2, so a one-page existence check reports them missing from the
+repository that currently carries the most open `sev:H`.
 
 Full reference: [Issue Taxonomy and the Release Readiness Gate](src/MeshWeaver.Documentation/Data/Architecture/IssueTaxonomy.md) · [/release](.claude/skills/release/SKILL.md) → *the READINESS gate*.
 
