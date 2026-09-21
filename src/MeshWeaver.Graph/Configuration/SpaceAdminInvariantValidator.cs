@@ -25,6 +25,18 @@ namespace MeshWeaver.Graph;
 /// <para>Scope: assignments at <c>{partition}/_Access/...</c> only. Root-scope global-admin
 /// assignments (<c>_Access/{user}_Access</c>, no partition prefix) are exempt.</para>
 ///
+/// <para>🚨 <b>Two kinds of partition are exempt because they have no HUMAN administrator to keep,
+/// and holding one there makes their documented end state unreachable</b>: a system-managed mirror
+/// (<c>WellKnownPartitions.IsMirror</c>), and a SYSTEM-OWNED partition — one with a ONE-WAY
+/// <c>_GitSync</c>, whose content is rewritten from its repo on every sync so that the only writer
+/// whose edits survive is the importer identity. For the second, this invariant used to meet
+/// <c>AccessAssignmentGuard.IsForbiddenOnSystemOwned</c> head-on: that rule refuses GRANTING another
+/// Admin there, this one refused REMOVING the existing one, so
+/// <c>SystemOwnedAccessRetractionHandler</c>'s sweep could only spare the last grant on every run
+/// and the partition kept a human Admin over content nobody may usefully edit (#5140). A BIJECTIVE
+/// sync is deliberately NOT exempt — there the mesh nodes are somebody's working copy, editing them
+/// is the point, and the people doing it must keep write access.</para>
+///
 /// <para><b>Deadlock-safe read.</b> The remaining-admin count comes from
 /// <see cref="IMeshService.Query{T}"/> (the read-side query provider — a direct
 /// store/DB read), NOT a <c>workspace.GetQuery</c> synced subscription: the validator runs
@@ -101,6 +113,63 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
         if (meshService is null)
             return Observable.Return(NodeValidationResult.Valid());
 
+        // 🚨 A SYSTEM-OWNED partition has no user administrator to keep, and holding one there makes
+        // the documented end state UNREACHABLE. Once a partition has a one-way `_GitSync` its
+        // content is rewritten from the repo on every sync, so the only identity that may write it
+        // is the importer's (AccessAssignmentGuard.IsSystemOwned). Two rules then meet head-on:
+        // AccessAssignmentGuard.IsForbiddenOnSystemOwned refuses GRANTING another Admin there, and
+        // this invariant refuses REMOVING the existing one — so
+        // SystemOwnedAccessRetractionHandler's sweep can only spare that last grant, every time it
+        // runs, and the partition keeps a human Admin over content nobody may usefully edit (whose
+        // edits the next sync reverts). Exempting the invariant is what lets the sweep converge:
+        // the partition does keep an administrator, and it is the System identity. The existing
+        // mirror-partition exemption above is the same reasoning one step earlier.
+        //
+        // The read is the shared authoritative one (storage, then static/config providers) rather
+        // than a stream subscription — this runs inside the delete/update pipeline ON the owning
+        // partition hub, where a synced read that round-trips back to that hub deadlocks. It is
+        // paid only once this operation is already known to remove an admin, so an ordinary
+        // _Access write costs nothing.
+        return NodeTypeAccessRuleGate
+            .ReadSubjectNode(hub, AccessAssignmentGuard.SyncConfigPath(partition))
+            .Take(1)
+            .SelectMany(sync =>
+                AccessAssignmentGuard.IsSystemOwned(sync, hub.JsonSerializerOptions)
+                    ? SystemOwnedIsExempt(partition, node.Id)
+                    : LastAdminVerdict(meshService, partition, node, context.Operation))
+            .Catch<NodeValidationResult, Exception>(ex =>
+            {
+                // Guard-rail, not a security boundary (RLS already gates who may write here):
+                // a lookup failure/timeout falls through to Valid rather than wedging all
+                // admin churn. Logged so a genuinely broken read-side is visible.
+                logger?.LogWarning(ex,
+                    "SpaceAdminInvariantValidator: admin-count query failed for '{Partition}' — allowing", partition);
+                return Observable.Return(NodeValidationResult.Valid());
+            });
+    }
+
+    /// <summary>
+    /// The system-owned outcome: allowed, and said out loud. Access disappearing silently is its
+    /// own bug class, and this is the branch that lets the last human Admin of a repo-owned space
+    /// actually go — so it states which rule permitted it rather than looking like no rule ran.
+    /// </summary>
+    private IObservable<NodeValidationResult> SystemOwnedIsExempt(string partition, string id)
+    {
+        logger?.LogInformation(
+            "Allowed last-admin removal on SYSTEM-OWNED partition '{Partition}' (assignment "
+            + "'{Id}'): it has {Partition}/_GitSync and is rewritten from its repo on every sync, "
+            + "so its administrator is the importer identity, not a person.",
+            partition, id, partition);
+        return Observable.Return(NodeValidationResult.Valid());
+    }
+
+    /// <summary>
+    /// The ordinary verdict: block when no OTHER non-denied Admin assignment remains in
+    /// <c>{partition}/_Access</c>.
+    /// </summary>
+    private IObservable<NodeValidationResult> LastAdminVerdict(
+        IMeshService meshService, string partition, MeshNode node, NodeOperation operation)
+    {
         // Count the OTHER non-denied Admin assignments remaining in {partition}/_Access.
         return meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
@@ -119,21 +188,15 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
 
                 logger?.LogInformation(
                     "Blocked last-admin removal on partition '{Partition}' (assignment '{Id}', op {Op})",
-                    partition, node.Id, context.Operation);
+                    partition, node.Id, operation);
                 return NodeValidationResult.Invalid(
                     $"Cannot remove the last administrator of '{partition}'. " +
                     "A space must always have at least one admin — grant another user the Admin role first.",
                     NodeRejectionReason.ValidationFailed);
-            })
-            .Catch<NodeValidationResult, Exception>(ex =>
-            {
-                // Guard-rail, not a security boundary (RLS already gates who may write here):
-                // a lookup failure/timeout falls through to Valid rather than wedging all
-                // admin churn. Logged so a genuinely broken read-side is visible.
-                logger?.LogWarning(ex,
-                    "SpaceAdminInvariantValidator: admin-count query failed for '{Partition}' — allowing", partition);
-                return Observable.Return(NodeValidationResult.Valid());
             });
+        // No Catch here: the caller wraps BOTH reads — the system-owned probe and this count — in
+        // the one fall-through-to-Valid handler, so a fault in either takes the same documented
+        // path. A second handler here would swallow the probe's fault before the caller saw it.
     }
 
     /// <summary>
