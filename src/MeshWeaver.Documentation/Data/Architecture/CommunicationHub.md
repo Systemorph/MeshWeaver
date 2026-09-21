@@ -243,7 +243,50 @@ Three constraints the hub inherits and must not quietly drop:
 
 ## 6. The inbox surface
 
-One row per delivery, whatever the channel:
+### 🚨 The inbox is an ARRAY OF QUERY STRINGS — everyone brings their own food
+
+**The inbox owns the table, not the food.** It holds no schema for other people's items and knows
+nothing about approvals, mail or chat. Every provider contributes **its own query string**; the
+inbox runs them all and merges the rows into one list. That is the entire contract.
+
+```text
+inbox(viewer) = merge(
+    "namespace:{viewer}/_Notification nodeType:Notification sort:CreatedAt-desc",   ← notifications
+    "namespace:{viewer}/_Delivery     nodeType:… sort:CreatedAt-desc",              ← messages
+    …one leg per provider, each contributed by the provider itself
+)
+```
+
+🚨 **Installing a package installs its queries.** A package that creates things a person must act on
+ships, as part of its installation, the query leg that finds them — alongside its node types and its
+views. A provider that has to be taught about in the inbox's own code is a provider that will be
+forgotten; the inbox must never carry a list of the packages it knows.
+
+Like the dispatch chain, the legs are **durable** — contributed as nodes, so a package adds one by
+installing a node and the inbox picks it up with no redeploy. Same rule, same reason:
+[Open Vocabularies Are String Constants](/Doc/Architecture/OpenVocabulariesAsStringConstants).
+
+🚨 **Every leg names ONE partition, and this is where the master-plus-copies design pays for
+itself.** A leg must be anchored or it becomes the `UNION ALL` over every schema described in §4 —
+so a leg reads the VIEWER's own partition. But an approval lives beside the document it approves,
+which may be in any partition at all, so *"every approval where I am the approver"* is exactly the
+unanchored query that cannot be allowed. The copy in the viewer's partition is what the leg finds.
+
+**This is not aspirational — the shipped Approvals package already works this way.**
+`ApprovalActions.Request` writes the approval as an `_Approval` satellite of the document (the
+master, beside the content, inheriting its access) and then dispatches a `Notification` to the
+approver (the copy, in the approver's own partition). The bell's existing leg finds the copy. The
+Communication Hub generalises a shape that is already in production, rather than introducing one.
+
+Two rules inherited from the bell, both load-bearing: one leg per partition and **never a
+`namespace:A|B` alternation** (an alternation leaves the path null, takes the fan-out route, and is
+narrowed by intersection with `searchable_schemas`, which excludes `Admin` — so the platform lane
+would vanish silently); and the platform leg is issued only for a viewer `hub.IsGlobalAdmin()`
+confirms positively.
+
+### The row
+
+One row per item, whatever the channel:
 
 ```text
 ✅  🏢 PG3 → Counterparty      Retype 8 CRM roots, 3 fields each   ⚙️ Approvals/Workspace    2m
