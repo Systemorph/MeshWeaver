@@ -5,7 +5,9 @@ Description: >-
   One log line carried four unrelated defects, so its issue could never be closed: every close
   against one cause was followed by a recurrence on another. What an incident's identity is actually
   computed from — including the two-line trap that hid the last cause entirely — and the rule that
-  puts a failure CLASS in the template instead of a parameter.
+  puts a failure CLASS in the template instead of a parameter — and the same defect one layer down,
+  where the REMEDY's four failure channels collapsed into a bare null and the one the incident names
+  wrote no log line at all.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16"/><path d="M4 12h10"/><path d="M4 19h6"/><circle cx="18" cy="17" r="3"/></svg>
 ---
 
@@ -168,8 +170,91 @@ repository ever sees ([NodeTypeCompilation](../NodeTypeCompilation)). A caller t
 refusal to a user keeps using `onError`; a caller that LOGS one should take `onRefused`, so the class
 reaches the template.
 
+## The REMEDY's failure needs a class too (#5057)
+
+Everything above is about a **refusal** carrying its cause. The same defect sits one layer down, on
+the **repair**: `ReleasePostCondition` exists because a consumed release request can leave
+`latestReleasePath` naming an earlier build, and its answer is to re-cut the release from the bytes
+the compile just produced. That remedy can itself fail — and when it did, it reported the failure in
+the one shape nobody can act on.
+
+### What was measured
+
+`Admin/_LogIncident/a98877ee6204cad1`, category `MeshWeaver.Graph.CompileWatcher`, **8 occurrences
+over 3 minutes across two `memex` pods**, seven node types (`Store/Catalog`, `Store/Purchase`,
+`Store/Provision`, `Store/Tier`, `Store/Publishing`, `Store/Subscription`, `Hosting/InstanceRequest`).
+The line, in full:
+
+> `[ReleasePostCondition] Hosting/InstanceRequest: a release request (requestedReleaseAt=…) was
+> consumed and this compile succeeded, yet latestReleasePath still names '…' — cut for an EARLIER
+> build (lastCompiledVersion 4650 → 4658) — AND the release could not be re-cut. The node advertises
+> a build no release names; instances will keep binding '…' until a release is created for it.`
+
+It names the consequence, the stale path, the build and the cost. It cannot name the cause, and the
+cause is the only thing that decides what to do. **The reason was discarded one frame below**:
+`NodeTypeBuildState.TryCreateReleaseNode` collapsed four unrelated failures into a bare
+`IObservable<string?>` emitting `null` —
+
+| channel | what it logged |
+|---|---|
+| no `IMeshService` on the hub | nothing |
+| the create was **refused** (attribution, validation, a partition the requester may not write) | `Warning` + stack |
+| the create **threw** while being composed | `Warning` + stack |
+| the 10 s bound **expired** | **nothing at all** |
+
+The last row is the one the incident names, and it was invisible by construction:
+`Timeout(bound, Observable.Return<string?>(null))` **substitutes** the fallback sequence instead of
+faulting, so the expiry never reached the `Catch` that logs. The only trace it left in production is
+a gap between two adjacent lines — `Hosting/InstanceRequest` logged "Re-cutting…" at 22:16:14Z and
+"…could not be re-cut" at **22:16:24Z**, exactly the bound. And the three rows that *did* log logged
+at `Warning`, which the log watcher does not ingest, so the loudest line in the log is the one that
+cannot say why.
+
+This is the same rule as the top of this page, applied to a value rather than a template: **the words
+that discriminate must travel with the failure, not behind it.** A `string?` can hold "landed" and
+"did not land"; it cannot hold "did not land BECAUSE x", and it cannot distinguish either from "no
+create was attempted".
+
+### The fix: three states, and a bound that faults
+
+`NodeTypeBuildState.ReleaseCreateOutcome` carries the path **or** the reason, with `Attempted`
+separating a failure from a create nobody asked for. `Timeout(CreateBound)` now faults, routing the
+expiry into the same `Catch` as every other failure, where it becomes a reason naming the bound it
+waited out **and** that the create's fate is *unknown* rather than known not to have happened — the
+difference between re-issuing it and going to look. Every sentence the post-condition emits — the
+`Error` line and the compile `_Activity` diagnosis — names the cause of **both** attempts: the
+settle's own create (previously a `Warning` reaching no operator-facing surface at all) and the
+re-cut. `ReleaseCreateOutcome.Because` never returns the empty string: an attempted failure that
+arrives with no reason SAYS the reason is missing, so the defect cannot reappear wearing terseness.
+
+🚨 **The bound was not widened, and must not be.** A create that cannot land in ten seconds is not a
+slow create, and raising the number is precisely the band-aid that would have made this unobservable
+for longer. `CreateBound` is named so the refusal can quote it and so no test writes the number
+again.
+
+🚨 **The batch bake runs no post-condition at all**, and its stamp keeps the previous release path
+when a create fails — the same silently-wrong state with no reporter above it. It now logs the reason
+itself, because the bake is unwatched *by design*, which is exactly why the reason has to be in its
+log rather than inferred from a release that never appeared.
+
+### The control
+
+`ReleaseRecutReportsWhyItFailedTest` drives the pure sentence composition
+(`FirstAttemptClause`, `RestoredDiagnosis`, `FailedDiagnosis`, `Describe`) with no hub and no stream.
+Measured: against the pre-fix wording restored on top of the fix, `TheFailedDiagnosis_NamesBothCauses`
+and `ATimeout_NamesTheBoundItWaitedOut` both go **red** — the assertions can fail. The other side of
+the control is `TheRestoredDiagnosis_ReadsAsARepair`: a re-cut that WORKED must read as a repair with
+no failure wording in it, because a fix that made every outcome sound like a failure would satisfy
+every other assertion here and be worse than the defect.
+
 ## What this does not claim
 
+- **It does not establish WHY the re-cut's create does not land.** That is the point: the reason was
+  unobservable, the filed issue's own first task was to make it reach the log, and inventing a cause
+  from a ten-second gap would be a guess dressed as a finding. The candidates the evidence admits —
+  a boot-time storm (the `Store/*` requests were consumed a day and a half after they were made), a
+  cross-hub write refused mid-flight, an owner that never answered — are distinguishable only by the
+  next occurrence, which is now diagnosable. Nothing here should be read as excluding any of them.
 - **It does not fix any of the four causes.** It makes them arrive separately, each naming itself, so
   each can be owned, fixed and closed on its own evidence. The base-state one was fixed (#1990); the
   teardown one belongs to #1540's family; the routing no-verdict and the non-terminating leg keep
@@ -196,3 +281,5 @@ reaches the template.
 - [Reading a Recurrence Reopen](../ReadingARecurrenceReopen) — what a bot reopen asserts, and the two
   ways it fails
 - [NodeType Compilation](../NodeTypeCompilation) — the release path these refusals come from
+- [A Failure Report Answers Its Own Instruction](../AFailureReportAnswersItsOwnInstruction) — the
+  general form of the #5057 half: a report that reads complete and withholds the deciding fact

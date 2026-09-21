@@ -4438,17 +4438,23 @@ internal static class NodeTypeCompilationHelpers
                     var releasePathObservable = ok
                         ? NodeTypeBuildState.TryCreateReleaseNode(
                             hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath, logger)
-                        : Observable.Return<string?>(null);
+                        // 🚨 NOT-ATTEMPTED, not failed (#5057). A compile that produced no assembly
+                        // was never asked to release anything, and the post-condition below must not
+                        // be told a create failed when none was made.
+                        : Observable.Return(NodeTypeBuildState.ReleaseCreateOutcome.NotAttempted);
 
                     releasePathObservable
                         .Take(1)
                         // 🚨 Same totality guard as the compile pipeline above: the terminal
                         // Status write below runs in THIS OnNext — a release-create observable
                         // that completed empty would silently skip it and wedge the NodeType at
-                        // Compiling. TryCreateReleaseNode is bounded (null on timeout/fault) by
-                        // contract; DefaultIfEmpty makes the write unconditional even if that
-                        // contract is ever violated.
-                        .DefaultIfEmpty()
+                        // Compiling. TryCreateReleaseNode is bounded (a reasoned failure on
+                        // timeout/fault) by contract; DefaultIfEmpty makes the write unconditional
+                        // even if that contract is ever violated — and says so rather than producing
+                        // a null indistinguishable from a refusal (#5057).
+                        .DefaultIfEmpty(NodeTypeBuildState.ReleaseCreateOutcome.Failed(
+                            "the release create completed without emitting — the pipeline's "
+                            + "exactly-once contract was violated"))
                         // 🚨 THE POST-CONDITION (#781), checked where the compile SETTLES — the one
                         // moment at which "does a release name the build this node is about to
                         // advertise?" is answerable from facts all in hand. A consumed request whose
@@ -4458,12 +4464,12 @@ internal static class NodeTypeCompilationHelpers
                         // remedy re-cuts from the bytes this compile just produced (no recompile,
                         // under System) and is loud either way. Also totality-safe: exactly one
                         // emission, never a fault.
-                        .SelectMany(newReleasePath => ok
+                        .SelectMany(firstAttempt => ok
                             ? ReleasePostCondition.Restore(
                                 hub, hubPath, outcome.Result!, outcome.PendingNode,
-                                resolvedActivityPath, newReleasePath, logger)
+                                resolvedActivityPath, firstAttempt, logger)
                             : Observable.Return<(string? ReleasePath, string? Diagnosis)>(
-                                (newReleasePath, null)))
+                                (firstAttempt.ReleasePath, null)))
                         // 🚨 #4469 — THE JOIN POINT. A failure on an unresolved NAME asks the
                         // partition's import bookkeeping whether it lost the file that would have
                         // defined it, so the operator who lands on the compile error is told about

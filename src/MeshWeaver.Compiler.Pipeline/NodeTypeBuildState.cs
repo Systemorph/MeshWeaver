@@ -44,9 +44,17 @@ public static class NodeTypeBuildState
     /// 2-core flake). Same rule as RunCompile's activity-create guard: the stamp
     /// follows the create; it is never a path that does not exist.</para>
     ///
-    /// <para>Failures are swallowed (emit <c>null</c>): the release MeshNode is
-    /// observability + history. Compile correctness must not depend on the create
-    /// succeeding. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    /// <para>Compile correctness must not depend on the create succeeding — the release MeshNode is
+    /// observability + history — so a failure does not fault the compile. See
+    /// <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    ///
+    /// <para>🚨 <b>But a failure is never SILENT, and that is issue #5057.</b> This used to emit a
+    /// bare <c>null</c> for every one of its four failure channels, so the reason was thrown away at
+    /// the only place that knew it. <see cref="ReleaseCreateOutcome"/> carries the reason out
+    /// instead, because the caller that reports the consequence — <c>ReleasePostCondition</c>, which
+    /// logs an ERROR and writes the compile <c>_Activity</c> — is not the frame that can see the
+    /// cause. An <c>Exception</c>'s stack still goes to the log here, where it exists; the one-line
+    /// reason is what travels.</para>
     /// </summary>
     /// <summary>
     /// The re-cut's own release path when a create failed only because that path is already taken,
@@ -54,10 +62,66 @@ public static class NodeTypeBuildState
     /// only its ingredient — pinning <see cref="NodeCreationFailure.IsNodeAlreadyExists"/> alone
     /// would leave the catch free to keep returning <c>null</c> and stay green.
     /// </summary>
+    /// <param name="ex">The exception the create failed with.</param>
+    /// <param name="releasePath">The path this attempt was minting.</param>
     internal static string? AdoptOnOwnCollision(Exception ex, string releasePath)
         => ex.IsNodeAlreadyExists() ? releasePath : null;
 
-    internal static IObservable<string?> TryCreateReleaseNode(
+    /// <summary>
+    /// How long the observed create may take before the attempt is abandoned.
+    ///
+    /// <para>🚨 Named, so the refusal can SAY what it waited for — and so no test writes the number
+    /// again. It is a bound on a cross-hub round trip inside a compile settle; raising it is not the
+    /// remedy for it expiring (a create that cannot land in ten seconds is not a slow create), which
+    /// is exactly why the expiry now has to be reportable.</para>
+    /// </summary>
+    internal static readonly TimeSpan CreateBound = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// What ONE Release-create attempt amounts to: the path when the create LANDED, else the reason
+    /// it did not — and <see cref="NotAttempted"/> when none was made.
+    ///
+    /// <para>🚨 <b>Three states, never two.</b> "Landed", "tried and failed BECAUSE x" and "never
+    /// tried" are three different facts about a build, and a <c>string?</c> can hold only two of
+    /// them — which is how #5057 came to report <i>"the release could not be re-cut"</i> with
+    /// nothing after it, eight times over three minutes across seven node types, while the channel
+    /// that produced it (a <see cref="CreateBound"/> that expired) wrote no log line at all.</para>
+    /// </summary>
+    /// <param name="ReleasePath">The release that now exists, or <c>null</c>.</param>
+    /// <param name="Failure">
+    /// Why no release exists, in one operator-readable line — <c>null</c> both when the create
+    /// landed and when no create was attempted, which <see cref="Attempted"/> separates.
+    /// </param>
+    /// <param name="Attempted">False only for <see cref="NotAttempted"/>.</param>
+    internal sealed record ReleaseCreateOutcome(string? ReleasePath, string? Failure, bool Attempted = true)
+    {
+        /// <summary>No create was made — this compile was not asked to release anything.</summary>
+        internal static readonly ReleaseCreateOutcome NotAttempted = new(null, null, Attempted: false);
+
+        /// <summary>The create landed at <paramref name="releasePath"/>.</summary>
+        /// <param name="releasePath">The release that now exists.</param>
+        internal static ReleaseCreateOutcome Landed(string releasePath) => new(releasePath, null);
+
+        /// <summary>The create was attempted and did not land, for <paramref name="reason"/>.</summary>
+        /// <param name="reason">Why, in one line an operator can act on.</param>
+        internal static ReleaseCreateOutcome Failed(string reason) => new(null, reason);
+
+        /// <summary>True when a release exists for these bytes.</summary>
+        internal bool Succeeded => ReleasePath is not null;
+
+        /// <summary>
+        /// The reason as a clause to append to a sentence — <c>": …"</c> when there is one, and a
+        /// sentence that SAYS the reason is missing when there is not. Never the empty string: a
+        /// report that trails off is the defect, not the terse form of it.
+        /// </summary>
+        internal string Because => Failure is { Length: > 0 } reason
+            ? $": {reason}"
+            : Attempted
+                ? " — and the attempt reported no reason, which is itself a defect in this pipeline"
+                : " — no create was attempted";
+    }
+
+    internal static IObservable<ReleaseCreateOutcome> TryCreateReleaseNode(
         IMessageHub hub,
         string nodeTypePath,
         NodeCompilationResult result,
@@ -68,7 +132,9 @@ public static class NodeTypeBuildState
         try
         {
             var meshService = hub.ServiceProvider.GetService<IMeshService>();
-            if (meshService is null) return Observable.Return<string?>(null);
+            if (meshService is null)
+                return Observable.Return(ReleaseCreateOutcome.Failed(
+                    "no IMeshService is registered on this hub, so no Release node could be created"));
 
             // Markdown release notes the author wrote on the NodeType's
             // ReleaseNotes field BEFORE clicking Create Release — sourced
@@ -201,9 +267,18 @@ public static class NodeTypeBuildState
                         })
                         : System.Reactive.Disposables.Disposable.Empty,
                     _ => meshService.CreateNode(node).Take(1))
-                .Select(_ => (string?)releasePath)
-                .Timeout(TimeSpan.FromSeconds(10), Observable.Return<string?>(null))
-                .Catch<string?, Exception>(ex =>
+                .Select(_ => ReleaseCreateOutcome.Landed(releasePath))
+                // 🚨 A BOUND THAT FAULTS, never one that SUBSTITUTES (#5057). This was
+                // `Timeout(bound, Observable.Return<string?>(null))` — the expiry replaced the
+                // sequence with the same `null` a refusal produced, wrote NO log line of any kind,
+                // and was therefore the one failure channel with no trace whatsoever. It is also the
+                // channel the incident names: on `Hosting/InstanceRequest` the "Re-cutting…" line
+                // was logged at 22:16:14Z and "…AND the release could not be re-cut" at 22:16:24Z —
+                // exactly this bound, expiring, reported by nothing but the gap between two lines
+                // that happened to be adjacent. Faulting routes it into the catch below, where it
+                // becomes a reason like every other failure.
+                .Timeout(CreateBound)
+                .Catch<ReleaseCreateOutcome, Exception>(ex =>
                 {
                     // 🚨 A COLLISION AT OUR OWN ID IS SUCCESS (#3407). ReleasePostCondition re-cuts
                     // when latestReleasePath still names an earlier build; when the retry lands in
@@ -229,22 +304,39 @@ public static class NodeTypeBuildState
                             + "it. The re-cut collided with its own first attempt in the same second; "
                             + "the id encodes the content hash, so this names the same bytes.",
                             adopted);
-                        return Observable.Return<string?>(adopted);
+                        return Observable.Return(ReleaseCreateOutcome.Landed(adopted));
                     }
 
+                    // The STACK stays here, where it exists; the one-line REASON travels out, to the
+                    // ERROR line and the compile _Activity that report the consequence (#5057).
                     logger?.LogWarning(ex,
                         "CompileWatcher: failed to create Release node at {ReleasePath}",
                         releasePath);
-                    return Observable.Return<string?>(null);
+                    return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath)));
                 });
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex,
                 "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath}", nodeTypePath);
-            return Observable.Return<string?>(null);
+            return Observable.Return(ReleaseCreateOutcome.Failed(
+                $"the Release node could not be composed at all: {ex.GetType().Name}: {ex.Message}"));
         }
     }
+
+    /// <summary>
+    /// One create failure as one operator-readable line. A <see cref="TimeoutException"/> is named
+    /// for what it IS — the bound expired and the owning hub never answered — because "TimeoutException:
+    /// The operation has timed out" tells a reader nothing about which operation or what it waited for.
+    /// Pure.
+    /// </summary>
+    /// <param name="ex">The exception the create failed with.</param>
+    /// <param name="releasePath">The path the attempt was minting.</param>
+    internal static string Describe(Exception ex, string releasePath) =>
+        ex is TimeoutException
+            ? $"the create at '{releasePath}' did not land within {CreateBound} — the owning hub did "
+              + "not answer, so whether the node exists is UNKNOWN from here, not no"
+            : $"the create at '{releasePath}' failed: {ex.GetType().Name}: {ex.Message}";
 
     /// <summary>
     /// Holds a NodeType MeshNode stream until <see cref="NodeTypeDefinition.CompilationStatus"/>
