@@ -81,6 +81,13 @@ Four steps, each a few lines of pure Python over the core (no debugger, no elfut
    `0x53494749` carries `si_signo` / `si_code` / `si_addr`. `si_code == 1` is `SEGV_MAPERR`, and
    `si_addr` is the dereferenced address — `0x0` versus a plausible-but-unmapped pointer is already
    the difference between a null read and a use-after-unload.
+   🚨 **Read `si_signo` before you read `si_addr`.** On a `134` death `NT_SIGINFO` describes the
+   **`SIGABRT` the runtime raised** (`si_signo=6`, `si_code=0` = `SI_USER`, `si_addr=0x0`), not the
+   page fault that started it: the runtime caught the access violation, converted it to an uncatchable
+   managed `AccessViolationException`, and fail-fasted. That `si_addr` of `0x0` is *the abort's*, and
+   reading it as the fault address manufactures this family's fingerprint out of the wrong event — see
+   sighting #18. The real fault context is still in the core, on the alternate signal stack; step 3
+   says how to pick it out when `CR2 == si_addr` is unavailable.
 2. **`NT_FILE` → the module load bases.** Note type `0x46494c45` maps every file-backed range;
    the minimum start for `libcoreclr.so` is the load base you subtract to get an RVA.
 3. **The faulting `ucontext`** — *not* `NT_PRSTATUS`, which `createdump` records from inside its own
@@ -94,6 +101,12 @@ Four steps, each a few lines of pure Python over the core (no debugger, no elfut
    user-mode **read** of a non-present page. Read the bytes at `RIP` straight out of the core through
    the same `PT_LOAD` table: that is the faulting instruction, and with the register values it names
    the exact dereference.
+   🚨 **On a `134` death `CR2 == si_addr` cannot be the filter** — `si_addr` belongs to the abort
+   (step 1). Substitute the cross-checks that do not depend on it: `CR2` must be **reproduced by
+   decoding the instruction at `RIP`** (sighting #18: `CR2 = RAX + 0x48` against
+   `mov rax,(%rax,0x48)` — a coincidence no stale block survives), `RSP` must lie in the crashing
+   thread's own stack VMA, and `EFL`/`CSGSFS` must be well-formed (`0x10246`; `cs=0x33`, `ss=0x2b`).
+   Those three took 8,821 `TRAPNO == 14` blocks down to exactly one.
 4. **RVA → function name, via the public symbol server.** The shipped `libcoreclr.so` is stripped to
    nine exported `STT_FUNC` symbols, so resolving against it fails — and that failure looks like the
    technique not working rather than the file being stripped. Fetch the separate debug file, keyed by
@@ -161,7 +174,11 @@ strings -a dump.dmp | grep -oE "/usr/share/dotnet/shared/Microsoft.NETCore.App/[
 ```
 
 - `AccessViolation` + `FailFast` ⇒ the runtime tripped over bad memory; this is not a managed
-  exception that someone forgot to catch.
+  exception that someone forgot to catch. 🚨 It *does* travel as one, though: an
+  `AccessViolationException` is uncatchable by design, so the runtime unwinds it and fail-fasts —
+  which is why sighting #18 has **six** `Unwind: exception type` hits in its core and is still a real
+  page fault. `Unwind` present therefore means *"find out WHICH exception"*, never *"not a native
+  fault"*; the exception's own type is the answer.
 - The second line reveals **which runtime patch CI actually ran**. It is regularly *not* the one you
   have locally (2026-08-03: CI on `10.0.10`, local on `10.0.9`) — on its own a candidate explanation
   for "only fails on CI", and worth eliminating before blaming load or shard composition.
@@ -1399,6 +1416,169 @@ despite `alc=1` (`AssemblyLoadContext.All` drops a context the moment `Unload()`
 excludes nothing). Not done in this sighting.
 
 Runtime tally: `10.0.12` is now **3** of the family's sightings (#15, #16, #17).
+
+### 2026-09-21: sighting #18 — the fault surfaces in MANAGED code, the process aborts (134), and there is **NO collectible ALC at all**
+
+`MeshWeaver.Futu-1773.dmp` (1,159,008,256 bytes, pid 1773; MeshWeaver.Plugins run
+[`35564711328`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35564711328), job
+`106225931702`, `portal-hosts (network-133 · leg 2/8)`, head `55f7d789`, on MeshWeaver.Plugins#2209 —
+a pull request whose entire diff is `clients/react/src/i18n/*.json`, so nothing in it can reach this
+suite. Platform set `3.0.0-ci.9067`. Artifact `teardown-stragglers-35564711328-1-network-133-1`).
+
+**This one is different from the seventeen before it in four measured ways, and it is the first with a
+managed fault site.** Read on a Mac with the ELF walk above plus ClrMD in a `linux/amd64` container.
+
+| | **#18** `MeshWeaver.Futu-1773.dmp` |
+|---|---|
+| exit / `createdump` | **134**; `Crashing thread 074d signal 6 (0006)`, `Target process is alive` — the runtime's own fail-fast, not a kernel kill |
+| `NT_SIGINFO` | `si_signo=6  si_errno=0  si_code=0` (`SI_USER`) `si_addr=0x0` — 🚨 **this is the ABORT, not the fault.** Matching it against the family's `11 / 1 / 0x0` is matching on the wrong event |
+| `Unwind: exception type` | **six** occurrences in the core — where #15 and #16 had **zero**. The death *is* a managed exception routed through `createdump` |
+| the managed exception | `System.AccessViolationException: Attempted to read or write protected memory`, with the full stack in the job log under `Error output:` (CI's canned *"An exception escaped on a non-test thread"* misdirects — it says no stack was printed, and one was) |
+| the real fault `ucontext` | `gregs[]` block at `0x7fea8fbb0328`, on the 3-page `RW` mapping `0x7fea8fbae000–0x7fea8fbb1000` (the alternate signal stack): `TRAPNO=14`, **`ERR=0x4`** (user-mode READ of a non-present page), **`CR2=0x3001000048`**, `RIP=0x7fea1ea517cc`, `RSP=0x7fd6a7ffc940`, `EFL=0x10246`, `CSGSFS=0x2b000000000033` |
+| **runtime** | `10.0.12` (`_runtimes.txt`; the runner held no other) — the family's **fourth** sighting on the patch that carries dotnet/runtime#131708 |
+| faulting instruction | `48 8b 40 48` = `mov rax,(%rax,0x48)` with **`RAX = 0x3001000000`**; preceded by `48 8b 07` = `mov (%rdi),%rax` with **`RDI = 0x7fea1704ccf8`**, followed by `ff 10` = `call *(%rax)` and `44 8b f8` = `mov %eax,%r15d` — a virtual dispatch returning an `int` |
+| frame | **`System.Reactive.Subjects.ReplaySubject<__Canon>+ReplayBase+Subscription.Dispose()` + 0x3ac** (`nativeCode=0x7fea1ea51420`), i.e. **JIT-compiled managed code**, not `libcoreclr`. Every prior sighting faulted inside `libcoreclr` |
+| thread | tid `0x74d` = 1869 — the hub's own **`MessageService.DrainLoop`** thread, carrying 97 managed frames, running application teardown. Nine of the previous sightings faulted on threads with no managed frame at all |
+| the corrupt word | `RDI = 0x7fea1704ccf8` is the **MethodTable of `Autofac.Core.Resolving.Pipeline.MiddlewareDeclaration`** (ClrMD `GetTypeByMethodTable`), in `Autofac.dll`'s loader heap and in **none of the 47 GC segments**. The word at it reads `0x0000003001000000` — that MethodTable's own `m_dwFlags` (`0x01000000` = *contains GC pointers*) and `m_BaseSize` (`0x30`), **read out of the core, not inferred from the register**. `[0x3001000000 + 0x48]` is `CR2` |
+| **ALC census** | ClrMD roots: **exactly one** `AssemblyLoadContext` — `DefaultAssemblyLoadContext`, `_state = 0` (Alive), a StrongHandle. **133 modules, not one name loaded twice.** Trace log: `alc=1` at **all 73** of pid 1773's checkpoints (and all 493 in the file), `asm` flat at 115→130, **36** `DISPOSE_UNLOADS_COLLECTED … after 0 round(s)`, **zero** `DISPOSE_ALC_RETAINED` |
+| phase | died **inside the CURRENT instance's teardown**: `TEST_END GroupAnalysis_LayoutAreas_ShouldRenderCatalog outcome=Passed` 05:42:40.493 → `DISPOSE_START` → `DISPOSE_CLIENTS_DONE` → `DISPOSE_HOSTED_SERVICES_STOPPED` → `DISPOSE_INVOKED elapsed=4ms` 05:42:40.498 → one `MEM_WATCHDOG` at 05:42:41.964 → **nothing**. No `DISPOSE_IOPOOL_DRAIN_START`. There is no next instance |
+| GC | ClrMD `heap.IsServer = False` — **workstation** GC, as in every prior sighting |
+| truncation | `total: 36, succeeded: 36, failed: 0` over a 59-test suite, and `MeshWeaver.FutuRe.Test.HOST_CRASHED (exit=134)` written into the trx by `record-host-crash.py`. The summary line is a floor, not a count |
+
+#### 🚨 The selection rule for the fault context does not work on an exit-134 death — here is the substitute
+
+Step 3 of the recipe says a `ucontext` candidate is only a candidate when **`CR2` equals the
+`NT_SIGINFO` `si_addr`**. On a `FailFast` abort that rule cannot fire: `NT_SIGINFO` describes the
+`SIGABRT` the runtime raised (`si_signo=6`, `si_code=0`, `si_addr=0x0`), while the page fault that
+started it all happened earlier and is recorded only on the alternate signal stack. Matching on
+`si_addr` here would have selected a block with `CR2 = 0` and published a fault address of zero — the
+family's fingerprint, arrived at by reading the wrong event. The core holds **8,821** blocks with
+`gregs[20] == 14`, of which **50** also have `ERR ∈ {4,5,6,7}`; the rule that leaves exactly one is:
+
+1. **`ERR` decodes the access** (`0x4` = user-mode read of a non-present page), and
+2. **`CR2` is reproduced by decoding the instruction at `RIP`** — here `CR2 = RAX + 0x48` is exactly
+   `mov rax,(%rax,0x48)`, which cannot happen by coincidence, and
+3. **`RSP` lies in the crashing thread's own stack VMA** (`0x7fd6a7800000–0x7fd6a8078000`, above tid
+   `0x74d`'s in-handler `RSP` of `0x7fd6a7ff6dc0`), and
+4. **`EFL` and `CSGSFS` are well-formed** (`0x10246`; `cs=0x33`, `ss=0x2b`) — the stale blocks that
+   trapped sighting #17 carry garbage in both.
+
+So: on a `139` cross-check `CR2 == si_addr`; on a `134` cross-check `CR2` against the **decoded
+instruction**. Either way the claim is only as good as the cross-check, never the frame name.
+
+#### What the fault actually touched — and the control that says the object graph was fine
+
+The fault block is the **cold path** the JIT emits when its devirtualization guard fails. Disassembled
+end to end, `Subscription.Dispose()` inlines `ReplayBase.Unsubscribe` → `ImmutableList<T>.Remove` →
+`IndexOf`, and just before the loop it does
+
+```
++0x0fb  mov  %rsi,%rdi                     ; a slot of ImmutableList<T>'s shared-generic dictionary
++0x0fe  call <static-base helper>          ; → the GC static base of EqualityComparer<T>
++0x103  mov  (%rax),%rdi                   ; rdi = its first GC static — EqualityComparer<T>.Default
++0x106  movabs $0x7fea18956a90,%rsi        ; the expected comparer MethodTable
++0x110  cmp  %rsi,(%rdi)                   ; devirtualization guard
++0x113  jne  0x…17bd                       ; ← TAKEN. the guard is CORRECT: (%rdi) is not that MT
+```
+
+and the taken branch is the fault block at `+0x39d`. **So the corrupt slot is a GC-reference static —
+by the code shape, `EqualityComparer<IScheduledObserver<IEnumerable<LineOfBusiness>>>.Default` — and it
+held a MethodTable pointer where an object reference belonged.**
+
+Everything else on the path is intact, read through the DAC:
+
+| register | object | state |
+|---|---|---|
+| `R14` `0x7fd747092f88` | `ReplaySubject<IEnumerable<LineOfBusiness>>+ReplayOne` | `_observers` → `R13`, `_error` null, `_value` a live `OrderedIterator` |
+| `R13` `0x7fd7470932e0` | `System.Reactive.ImmutableList<IScheduledObserver<IEnumerable<LineOfBusiness>>>` | `_data` → `R12` |
+| `R12` `0x7fd7470932c0` | `IScheduledObserver<IEnumerable<LineOfBusiness>>[]` | **Length 1, Generation2**, `[0] = 0x7fd7470931e8` = the `FastImmediateObserver` in `RBX`/`RDX` — the very observer being removed. The corrupt value appears **nowhere** in the array |
+
+That last row is the control that matters: with one element, and that element being the one sought,
+**the inlined fast loop would have matched on the first comparison and never made a call.** The only
+reason any dispatch happened is the corrupt comparer static. The corruption is the cause here, not a
+bystander found by a GC that happened to walk past it.
+
+The disposal chain itself is ours and is named: `VirtualDataSource.SetupDataSourceStream` registers
+`Observable.Defer(typeSource.GetStreamUpdates).RetryWhen(…).Subscribe(…)` through
+`stream.RegisterForDisposal`, and `VirtualTypeSource<T>.StreamUpdates()` is
+`StreamProvider(Workspace).DistinctUntilChanged().Replay(1).RefCount()` — which is exactly the
+`RetryWhen → RefCount.Eager → ReplaySubject…Subscription` chain in the stack, with `LineOfBusiness` as
+the virtual collection's element type. It is the *victim*: it is simply the code that read the static.
+
+#### What this eliminates
+
+- **A collectible-ALC overlap.** Not "unmeasured" — *absent*. One ALC, alive; 133 modules, none
+  duplicated; `alc=1` at every checkpoint; zero retained contexts; and the death is inside the current
+  instance's own dispose, with no next instance started. The 2026-09-11 diagnosis and the fixes built
+  on it (core #4042/#4046/#4048/#4053, Plugins#1677/#1680) are all present in this build and **could
+  not have prevented this occurrence**, because the state they sequence never existed.
+- **First-party or third-party native code.** The process maps **19** `.so` files: `ld-linux`, `libc`,
+  `libcrypto`, `libdl`, `libgcc_s`, `libicudata/i18n/uc`, `libm`, `libpthread`, `librt`, `libssl`,
+  `libstdc++`, `libhostfxr`, `libhostpolicy`, `libclrjit`, `libcoreclr`, `libSystem.Native`,
+  `libSystem.Security.Cryptography.Native.OpenSsl`. **No third-party native library at all.** Neither
+  repository sets `AllowUnsafeBlocks`; core `src/` contains **zero** `Unsafe.Write/AsRef/Add/Copy`,
+  `MemoryMarshal.Cast/GetReference/Write`, `Marshal.Write*/Copy/StructureToPtr`, `GCHandle.*`,
+  `AddrOfPinnedObject` or `NativeMemory.*`, and MeshWeaver.Plugins `src/` has exactly one P/Invoke —
+  `DllImport("libc", EntryPoint = "geteuid")` — which passes no buffer. **The only native code in this
+  process that writes the managed heap is the CLR itself.**
+- **Disk pressure**, by the same four arguments as sighting #15: a complete 1.16 GB core was written
+  at the moment of the fault, three further suites ran green after it, and a full filesystem cannot
+  produce a `TRAPNO=14` / `ERR=0x4` page fault.
+
+#### What it does NOT establish
+
+- **Who wrote the bad value.** A static that is written once by a type initializer held a MethodTable
+  pointer. Whether that arrived via a mis-resolved generic-dictionary static base, a relocation that
+  updated the wrong slot, or something else is **not** determined by this dump.
+- **How many other slots are corrupt.** A hand ELF heap walk reached ~2.0 M objects across the 47
+  segments, but needed ~13 k resynchronisations, so it is not a reliable corrupt-slot counter and no
+  count is claimed from it. What *is* established is narrower and still useful: the objects on the
+  fault path are individually intact, and the walk does not collapse — this is not wholesale
+  corruption. `VerifyHeap` was unavailable: ClrMD threw `ArgumentOutOfRangeException` inside its own
+  scan (the tool failing, not a verdict — see sighting #1's note on the same trap).
+- **Whether #18 and #12–#16 share a root.** They share *a* fingerprint at the level of "a word that
+  should be a pointer is not one", and nothing finer. #18 is closest to **#11** (GitSync,
+  `GetCodeInfo`): no collectible context, a pointer that is stale rather than zero.
+
+#### Why this matters upstream
+
+Every previous sighting could be answered with *"you were unloading collectible assemblies."* This one
+cannot. It is a clean-room instance — one ALC, no third-party native code, no `unsafe` anywhere in the
+process's own assemblies, an intact object graph, a **named** corrupt slot (a generic type's GC static)
+and a **managed** fault site with a full stack. That is materially better evidence than sixteen GC-thread
+dumps, and it is what an upstream report should be built on.
+
+#### Comparison with the production crash, Systemorph/MeshWeaver#4654 — NOT established as the same defect
+
+#4654 (`memex.systemorph.com`, both portal containers, 2026-09-17, exit 139) exposes exactly three
+fingerprint-bearing fields, from its `createdump` line: `signo 11`, `code 0001`, `addr (nil)`. Those
+three match this family's canonical form — and they are **precisely the three that every null
+dereference in any process shares**. The fields that discriminate (the faulting frame, whether a
+MethodTable word reads zero, the ALC census, the thread) all live in
+`/data/dumps/coredump.1.1789671392` and nowhere else.
+
+Against that, **two properties of the two processes are measured and differ**:
+
+| | CI (`MeshWeaver.FutuRe.Test`, all 18 sightings) | production (`memex.systemorph.com`, #4654) |
+|---|---|---|
+| GC flavour | **workstation** — `heap.IsServer = False` (#18), and every symbolised frame in #1–#17 resolves to `WKS::gc_heap::*` | **server** — `serverGC=True` on the portal's own `[LIVENESS]` line. Its `gc_heap` frames would be `SVR::`, an implementation the family has never been read in |
+| native surface | **19** `.so`, runtime + libc/ICU/OpenSSL only; no third-party native library | maps **`libSkiaSharp.so`** (named in #4654's own dump header). A class of heap writer that CI provably does not have |
+
+Neither difference proves the two are different defects, and the Skia mapping is **not** an accusation
+— #4654's body already warns that the last DSO in the header is enumeration order, not the culprit.
+What they do is remove the temptation to treat "both are `SIGSEGV` at `nil`" as a link: the two
+processes do not share their GC implementation or their native surface, so a shared root has to be
+argued, not assumed.
+
+**Verdict: the identity claim is unsupported by anything that discriminates, and it cannot be settled
+from CI.** The next reading is #4654's own dump, and it needs exactly five facts, in this order:
+`Unwind: exception type` (zero or not — #18 shows this family can produce a *managed* death, so the
+2026-08-26 lesson that a `139` may be an unhandled managed exception is live again); `si_code`/`si_addr`
+from `NT_SIGINFO`; the fault `ucontext` by the `CR2 == si_addr` rule, with `SVR::` symbols; whether the
+dereferenced MethodTable word reads **zero** or a plausible-but-wrong pointer; and the ALC census read
+as *managed* state through ClrMD, never from `AssemblyLoadContext.All`. A production dump that shows a
+zeroed MethodTable word in `SVR::gc_heap` with collectible contexts mid-unload joins the family; one
+that shows anything else is a second defect and must not be filed under this one.
 
 ### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sightings #15 and #16 crashed ON `10.0.12`
 
