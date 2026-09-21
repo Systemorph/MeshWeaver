@@ -445,6 +445,107 @@ red as *half covered*, because that installation pins its portal images **here**
 service's own image on GHCR. See
 [FleetRegistryRetention §8](/Doc/Architecture/FleetRegistryRetention).
 
+### 🚨 The declaration is checked BOTH ways, because the half that went wrong first was the other one
+
+For three weeks the `registries` table was the only one of this file's three tables checked in a
+single direction. The strict half — *an undeclared host is a blocker* — worked exactly as designed:
+on 2026-09-17 it refused, nightly, naming `memexaksacr43rzd6faaix36.azurecr.io`. What nothing
+checked was whether a **declaration still answered to anything**, and that is where the failure
+actually began.
+
+PartnerRe's ramp-up estate — subscription `17b34cbc`, which sat in the *Systemorph* tenant — carried
+the ACR `memexaksacrqoqqdqnhlaksg.azurecr.io`, and that is the host the table declared. The estate
+was torn down on 2026-09-16 and rebuilt on 2026-09-17T09:26Z in **PartnerRe's own subscription and
+Entra tenant**, minting a new registry. The overlay moved to it the same morning
+(`Systemorph/PartnerRe.Memex` `25249d2f`, *"the portal pulls from PartnerRe's own registry"*). The
+declaration did not.
+
+**Nothing could tell us**, and the record kept validating green the whole time: a well-formed
+`disposition`, a `reason`, an `out-of-estate` retention block naming a subscription — every field
+correct in shape and every one of them about a registry that no longer existed. Measured read-only
+on 2026-09-21: subscription `17b34cbc` is in state `Warned` and holds **zero** container registries.
+
+The two halves then read as one symptom with the wrong cause. A reader of the nightly log saw a
+blocker about a host `instances.json` "does not account for" — which sounds like a registry that had
+just appeared — beside a table that already carried a PartnerRe entry, spelled almost identically.
+The lane was red for six days across ten runs, and its green is `pause.reEnableWhen` in
+`.github/acr-retention/tasks.json`, so the stale line stood between the fleet and re-enabling
+cleanup on a registry that was at 94.3% of its included storage.
+
+`check_registry_roster` is the missing direction, and it is the doctrine the two sibling tables
+already carry — `check_repository_roster` for repositories, `check_publication_accounting` for
+`publishes` blocks — stated in that code as *a stale exemption accounts for nothing and hides the
+next one*. Here the hiding is literal: a table accumulating one dead entry per estate churn is a
+table where the next reader cannot tell which line describes the registry in front of them.
+
+**A host is answered for by one of three things, and the population is their union** — which is what
+keeps this arm from contradicting the gate next door:
+
+| answered by | the gate that owns it | why it must count here |
+|---|---|---|
+| an **overlay reference** | this arm | the fleet pins an image there — the same `foreign_references` set the PROTECTED SET report prints, so report and verdict cannot drift |
+| a **`publishes` block** | `check_publication_accounting` | that gate already reds on a block nothing pushes to; deleting the host here would deadlock the two — one demanding the line go, the other demanding it exist |
+| the fleet **pushing** there | derived from the publishing lanes | `cr.meshweaver.cloud` is exactly this case and carries no `publishes` block, its `fleet-unlockable` disposition already saying our images live there |
+
+🚨 **And `complete` is the denominator, exactly as for the repository table.** *"This host is
+unknown"* is sound over any scan; *"nothing answers to this declaration"* is sound only over the
+whole fleet, and `--repos` / `--root` deliberately scan part of it. A partial run **says** it did not
+make the assertion rather than making it wrongly or skipping it silently.
+
+🚨 **An UNREADABLE overlay tree stands the stale direction down entirely, and `complete` is not that
+condition.** A full `--discover` stays complete while one repository's tree could not be read, so a
+declaration answered for *only* by an overlay in that repository reads as answered for by nothing —
+a false cause printed beside the real unreadable-repository blocker. That is the same trap
+`check_repository_roster` already carries the fix for: *two contradictory blockers about one thing
+send the reader to delete the line that is right.*
+
+**And that sibling's remedy does not transfer, which is why this takes its own argument.**
+`check_repository_roster` can count an unreadable tree as REACHED, because a repository's identity
+**is** its name. A registry's reference lives **inside** the unread file, so there is no host to
+credit and nothing to compare — the only sound answer is not to assert at all, and to **say** it was
+not asserted, naming the repositories that suppressed it. The strict direction is untouched: an
+unreadable tree may buy a missing assertion, never a widening.
+
+🚨 **The blocker names the host it is about and no other.** The first cut of this arm embedded the
+PartnerRe incident in the generic message, including *"while the lane refused over the ACR that
+replaced it"* — which on any other stale host is not a stale example but a false assertion that a
+replacement exists, sending an operator to a registry with nothing to do with the case. The incident
+lives here, in prose; a printed blocker says what is true of the host in front of it.
+
+#### 🚨 The report was also stating a classification that did not exist
+
+The same runs printed a second blocker: *"pins images ONLY in `memexaksacr43rzd6faaix36.azurecr.io`,
+every one of them declared `third-party`"* — about a host `instances.json` did not mention at all,
+one line below the blocker saying the record does not account for it.
+
+The mechanism is a `continue`. `classify_foreign_registries` blocks on an undeclared host and returns
+before assigning `unlockable_registries`, so `resolve_running_sets` read that empty list as *"every
+foreign host is declared, and none of them fleet-unlockable"* — and the comment above the branch
+asserted exactly that. **The run's verdict was right either way, which is why nothing caught it.**
+
+It matters because the two readings lead opposite ways. A reader who believes the first blocker looks
+for the entry to change. A reader who believes the second concludes somebody already decided the
+images are not ours — and `third-party` on a host serving `memex-portal-ai` is the false half of
+#4323's own sentence. Undeclared is now carried on the instance as its own fact
+(`undeclared_registries`) and gets its own sentence, still a blocker: *a running set no declaration
+classifies is a running set nothing accounts for.* The other side is held by the arm that was already
+there — a host genuinely declared `third-party` must still get the third-party sentence.
+
+#### What the gate can answer now, and what is still not answered
+
+With the denominator complete the lane can state the sentence the purge decision needs: **every tag
+reference the fleet pins is locked**, over a denominator that names every registry the fleet's
+overlays reach. That is a precondition for re-enabling cleanup, not a licence — the purge tasks and
+the registry's own retention policy stay `Disabled`, the honest verdict on this incident's own
+exposure remains *mitigated by being OFF, not fixed*, and turning either back on is the maintainer's
+decision. What this change removes is the gate's inability to answer at all.
+
+Two things it still cannot say, unchanged by this: it measures nothing about what retains
+`memexaksacr43rzd6faaix36.azurecr.io` (the `out-of-estate` rule says so in as many words — the
+registry is in PartnerRe's tenant, and the lane has no credential there and none it could be
+granted), and it locks nothing in `cr.meshweaver.cloud`, where the answer is
+[FleetRegistryRetention](/Doc/Architecture/FleetRegistryRetention)'s.
+
 ### The table is small because it was measured, not guessed
 
 Across the fleet's **twelve** deployment overlays on 2026-09-13, exactly **two** foreign hosts:

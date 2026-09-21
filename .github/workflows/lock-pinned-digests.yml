@@ -35,9 +35,19 @@ name: Lock pinned image digests
 #     "is the credential set?" in order to decide whether to check.
 #   * `protect` runs `needs: [preflight]` with NO input-shaped `if:` and NO `continue-on-error:`.
 #   * The script probes the registry with a CONTROL first and fails closed on an unreadable
-#     repository, a truncated git tree, an unclassifiable pin, an indeterminate registry answer, or
-#     a lock that did not take. 🚨 That LAST one is an assertion, not a phrase: `apply_locks` READS
-#     `deleteEnabled` BACK after every write and requires `false`. `az`'s exit code is a statement
+#     repository, a truncated git tree, an unclassifiable pin, an indeterminate registry answer, a
+#     DECLARATION THAT ANSWERS TO NOTHING, or a lock that did not take.
+#     🚨 THE SECOND-TO-LAST is the half that was missing until 2026-09-21, and it is why this lane
+#     was red from 2026-09-17: `instances.json`'s `registries` table was checked only for hosts the
+#     fleet pins and this file does not name, never for a line naming a host the fleet no longer
+#     pins. PartnerRe's estate was rebuilt in its own subscription on 2026-09-17, the overlay moved
+#     to the new ACR the same morning, and the declaration stayed on one that no longer exists — a
+#     well-formed entry about nothing, validating green, while the run refused nightly over its
+#     replacement. Both directions now, on the same `--discover`-only denominator the repository
+#     table uses — and it stands DOWN, saying so, while any overlay tree could not be read, because
+#     the reference it would look for lives inside the file it could not open.
+#     🚨 THE LAST is an assertion, not a phrase: `apply_locks` READS `deleteEnabled` BACK after
+#     every write and requires `false`. `az`'s exit code is a statement
 #     about the REQUEST, and a write that returns 0 without the attribute moving would leave this
 #     job reporting `Protected N manifest(s)` over manifests the 03:00 purge can still delete —
 #     which is precisely the failure it exists to remove, pointed at itself. An INDETERMINATE

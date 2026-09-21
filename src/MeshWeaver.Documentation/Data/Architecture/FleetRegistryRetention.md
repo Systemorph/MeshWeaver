@@ -535,7 +535,7 @@ decision, not a retention one, and changing it moves what an unconfigured instal
 ### 8.6 🚨 `out-of-estate` — our images in a registry outside this fleet's reach (#3438)
 
 `Systemorph/PartnerRe.Memex` joined the fleet on 2026-09-14 with a **live** control instance
-(`partnerre.meshweaver.cloud`) whose overlay pins the portal and migration images in
+(`partnerre.meshweaver.cloud`) whose overlay pinned the portal and migration images in
 `memexaksacrqoqqdqnhlaksg.azurecr.io` — an ACR in the **`PartnerRe Memex` subscription**, which this
 lane's OIDC credential does not reach at all. Every rule in the vocabulary was a *false sentence*
 about it:
@@ -545,6 +545,17 @@ about it:
 | `not-ours` | the images **are** ours, mirrored from the platform's own build — and a `third-party` disposition also **reds** the lane, because an installation whose every pin is third-party is one whose running set no registry holding our images accounts for |
 | `nothing-deletes` | its enumeration is held to a committed **chart** this gate re-derives the deleters from, plus the ACL carrying the `delete` action. An ACR renders neither; nothing in this repository could re-derive a word of it |
 | `derived-protected-set` | it asserts a cleanup exists there that deletes only the complement of a derived set. Nobody here is in a position to say that |
+
+🚨 **THE HOST IN THAT PARAGRAPH IS THE ONE IT WAS DECLARED ABOUT, AND IT HAS MOVED.** That
+estate was torn down on 2026-09-16 and rebuilt on 2026-09-17 in PartnerRe's *own* subscription
+(`5896de84`) and Entra tenant (`e51e062f`), minting `memexaksacr43rzd6faaix36.azurecr.io`; the
+overlay followed the same morning and the declaration did not, which held the lock lane red from
+2026-09-17 to 2026-09-21. (The three reds before that are a different cause and worth separating: the
+ramp-up portal stopped answering `/api/version` as it was torn down, which is the axis-3 refusal
+working. Ten runs, two causes — reading them as one is what made the lane look like a single
+unexplained red.) Nothing in the reasoning below changed — the rule is still the only true sentence about the
+host — but the *staleness* is what the table had no arm for, and now does:
+[ArtifactRetentionInterlock → the declaration is checked BOTH ways](/Doc/Architecture/ArtifactRetentionInterlock).
 
 Leaving it undeclared reds the lane; a false declaration is worse than a red. So the vocabulary grew
 a word for the fact: **the registry is in an estate outside this fleet's reach, what deletes from it
