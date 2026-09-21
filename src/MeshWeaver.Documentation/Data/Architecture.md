@@ -387,6 +387,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
 - [Guards and Unknown States](GuardsAndUnknownStates)
 - [Mesh Admission](MeshAdmission)
+- [Disposed Scopes and Dying Hubs — one symptom, five roots](DisposedScopeAndDyingHubs) — every `ObjectDisposedException` on an Autofac `LifetimeScope` looks identical in a log and comes from one of five unrelated roots; the discriminators, which are fixed, and the swept inventory of deferred resolve sites
 - [Mesh Lifecycle — Build Up & Tear Down](MeshLifecycle)
 - [Ordered Route Channels — the FIFO Key Is (Destination, Stream)](OrderedRouteChannels) — a stream-routed address is a multiplexer, so keying the router's ordering FIFO on the destination serialised a whole process's data-sync traffic into one lane with one in-flight cross-silo grain call; 62 of 64 dispatch slots queued behind one cache hub for 1.5 h while the peer pod's local lane read as load, and the identity that separates the streams was already stamped on the envelope
 - [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
