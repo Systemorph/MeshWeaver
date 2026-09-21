@@ -1161,11 +1161,14 @@ public class MeshOperations
     /// version 4 while the caller was told the write had failed.</para>
     ///
     /// <para>The rule this restores: <b>the expectation is what we can actually STORE, not what the
-    /// caller typed.</b> A key the caller sent whose value the serializer does not write is dropped
-    /// from the expectation (there is nothing to wait for); every key that IS written is compared by
-    /// its stored form, so the comparison resolves to one unambiguous state. #2469's guarantee is
-    /// untouched — only keys the caller named are ever projected, so a concurrent writer's change
-    /// elsewhere on the node can still neither satisfy nor fail the check.</para>
+    /// caller typed.</b> Every key the caller named is still expected — one whose value the
+    /// serializer WRITES is compared in its stored form, and one the serializer OMITS is expected
+    /// to be absent (projected as an explicit null, which <see cref="FieldsLandedIn"/> satisfies
+    /// with a live key that is missing or null). So the comparison resolves to one unambiguous
+    /// state in both directions: a landed write confirms, and a REFUSED write that leaves the old
+    /// non-default value in place still fails. #2469's guarantee is untouched — only keys the
+    /// caller named are ever projected, so a concurrent writer's change elsewhere on the node can
+    /// still neither satisfy nor fail the check.</para>
     /// </summary>
     /// <param name="normalized">The node about to be written, serialized with the hub's options.</param>
     /// <param name="delta">The caller's own submitted fields — the key paths, not the values.</param>
@@ -1176,7 +1179,18 @@ public class MeshOperations
         foreach (var (key, deltaVal) in delta)
         {
             if (!normalized.TryGetPropertyValue(key, out var storedVal))
-                continue;   // the serializer does not write it — nothing to wait for
+            {
+                // 🚨 ABSENT IS AN EXPECTATION, NOT A REASON TO STOP ASKING. The serializer will
+                // not write this key, so the landed node must not carry it either — project it as
+                // an explicit null, which FieldsLandedIn already reads as "absent OR null" (RFC
+                // 7396 remove). DROPPING it instead is a false POSITIVE, which is the failure
+                // #2469 exists to prevent and strictly worse than the false negative this method
+                // fixes: a patch touching only a serializer-omitted field would project
+                // {"content":{}}, and an empty expectation is satisfied by the FIRST emission
+                // whatever the live node holds — so a REFUSED write reports "Patched:".
+                projected[key] = null;
+                continue;
+            }
             if (deltaVal is JsonObject deltaObj && storedVal is JsonObject storedObj)
                 projected[key] = ProjectTouched(storedObj, deltaObj);
             else

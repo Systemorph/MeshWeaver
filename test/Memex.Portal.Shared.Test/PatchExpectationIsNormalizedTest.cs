@@ -34,11 +34,11 @@ public class PatchExpectationIsNormalizedTest
 
     /// <summary>
     /// 🚨 THE production case. The caller sends a default-valued enum; the serializer omits it. The
-    /// expectation must not demand a key that will never be written, or confirmation can never
-    /// succeed for this node again.
+    /// expectation must not demand a VALUE that will never be written — but it must still demand
+    /// the key's ABSENCE, or the check stops being a check at all.
     /// </summary>
     [Fact]
-    public void ADefaultValuedEnumTheSerializerOmits_IsNotExpected()
+    public void ADefaultValuedEnumTheSerializerOmits_IsExpectedToBeAbsent()
     {
         var delta = Obj("""{"content":{"purpose":"Migrate 8 roots","status":"Pending"}}""");
         // What the serializer actually writes: no `status` (zero member omitted).
@@ -46,7 +46,33 @@ public class PatchExpectationIsNormalizedTest
 
         var expected = MeshOperations.ProjectTouched(stored, delta);
 
-        Assert.False(expected["content"]!.AsObject().ContainsKey("status"));
+        // Expected as an explicit null — FieldsLandedIn reads that as "missing or null".
+        Assert.True(expected["content"]!.AsObject().ContainsKey("status"));
+        Assert.Null(expected["content"]!["status"]);
+        Assert.True(MeshOperations.FieldsLandedIn(stored, expected));
+    }
+
+    /// <summary>
+    /// 🚨 The other side of the SAME case, and the one that could have falsified the fix: dropping
+    /// a serializer-omitted key from the expectation does not merely fail to detect a refusal — it
+    /// makes a patch that touched ONLY such a field report success unconditionally, because the
+    /// expectation it leaves behind (<c>{"content":{}}</c>) is satisfied by the first emission
+    /// whatever the node holds. That is #2469's false POSITIVE coming back, which is strictly
+    /// worse than the false negative this class removes: a write that lies about having happened
+    /// never gets retried.
+    /// </summary>
+    [Fact]
+    public void ARefusedWriteOfADefaultValue_StillFailsConfirmation()
+    {
+        var delta = Obj("""{"content":{"status":"Pending"}}""");
+        var stored = Obj("""{"content":{"approver":"rbuergi"}}""");
+        // The owner refused the write; the live node still carries the value it had.
+        var refused = Obj("""{"content":{"status":"Approved","approver":"rbuergi"}}""");
+
+        var expected = MeshOperations.ProjectTouched(stored, delta);
+
+        Assert.False(MeshOperations.FieldsLandedIn(refused, expected));
+        // …and the write that DID land still confirms, so this is not just a stricter check.
         Assert.True(MeshOperations.FieldsLandedIn(stored, expected));
     }
 
@@ -110,18 +136,26 @@ public class PatchExpectationIsNormalizedTest
         Assert.True(MeshOperations.FieldsLandedIn(stored, expected));
     }
 
-    /// <summary>A default-valued number or bool is dropped by the same rule as the enum.</summary>
+    /// <summary>
+    /// A default-valued number or bool projects by the same rule as the enum — expected ABSENT,
+    /// satisfied when it landed and failed when the old value is still there.
+    /// </summary>
     [Theory]
-    [InlineData("""{"content":{"name":"x","order":0}}""", "order")]
-    [InlineData("""{"content":{"name":"x","enabled":false}}""", "enabled")]
-    public void ADefaultValuedScalarTheSerializerOmits_IsNotExpected(string deltaJson, string omitted)
+    [InlineData("""{"content":{"name":"x","order":0}}""", "order", """{"content":{"name":"x","order":7}}""")]
+    [InlineData("""{"content":{"name":"x","enabled":false}}""", "enabled", """{"content":{"name":"x","enabled":true}}""")]
+    public void ADefaultValuedScalarTheSerializerOmits_IsExpectedToBeAbsent(
+        string deltaJson, string omitted, string refusedJson)
     {
         var stored = Obj("""{"content":{"name":"x"}}""");
 
         var expected = MeshOperations.ProjectTouched(stored, Obj(deltaJson));
 
-        Assert.False(expected["content"]!.AsObject().ContainsKey(omitted));
+        Assert.True(expected["content"]!.AsObject().ContainsKey(omitted));
+        Assert.Null(expected["content"]![omitted]);
         Assert.True(MeshOperations.FieldsLandedIn(stored, expected));
+
+        // The refused write: the live node kept the non-default value the caller was replacing.
+        Assert.False(MeshOperations.FieldsLandedIn(Obj(refusedJson), expected));
     }
 
     /// <summary>Node-level fields project the same way — the patch that DID confirm in production.</summary>
@@ -137,16 +171,27 @@ public class PatchExpectationIsNormalizedTest
         Assert.True(MeshOperations.FieldsLandedIn(stored, expected));
     }
 
-    /// <summary>An explicit null (RFC 7396 "remove") is a real instruction, not a default to drop.</summary>
+    /// <summary>
+    /// An explicit null (RFC 7396 "remove") is a real instruction, and the shape the store actually
+    /// produces is the key GONE — not a key carrying a JSON null. Pinned in that shape deliberately:
+    /// written the other way this test passes under a projection that drops absent keys, and so
+    /// proves nothing about the case it is named for.
+    /// </summary>
     [Fact]
-    public void AnExplicitNullRemoval_IsKeptWhenTheStoreWritesNull()
+    public void AnExplicitNullRemoval_ExpectsTheKeyToBeGone()
     {
         var delta = Obj("""{"content":{"icon":null}}""");
-        var stored = Obj("""{"content":{"icon":null}}""");
+        // After the merge the key is gone, so the serializer writes no `icon` at all.
+        var stored = Obj("""{"content":{"name":"x"}}""");
 
         var expected = MeshOperations.ProjectTouched(stored, delta);
 
         Assert.True(expected["content"]!.AsObject().ContainsKey("icon"));
+        Assert.Null(expected["content"]!["icon"]);
         Assert.True(MeshOperations.FieldsLandedIn(stored, expected));
+        // A live key explicitly set to null is "removed" too — RFC 7396 makes them the same state.
+        Assert.True(MeshOperations.FieldsLandedIn(Obj("""{"content":{"name":"x","icon":null}}"""), expected));
+        // But a removal the owner REFUSED is caught.
+        Assert.False(MeshOperations.FieldsLandedIn(Obj("""{"content":{"name":"x","icon":"Folder"}}"""), expected));
     }
 }
