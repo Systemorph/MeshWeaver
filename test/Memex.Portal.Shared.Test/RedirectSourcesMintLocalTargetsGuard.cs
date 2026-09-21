@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -37,8 +38,13 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class RedirectSourcesMintLocalTargetsGuard
 {
-    /// <summary>The names a redirect target travels under — the sink guard's list, unchanged.</summary>
-    private static readonly string[] TargetNames =
+    /// <summary>
+    /// The names a redirect target travels under — the sink guard's list, unchanged.
+    /// <c>ImmutableArray</c>, not <c>string[]</c>: an array is a mutable collection whatever the
+    /// field's modifiers say, and the collections policy admits a <c>static readonly</c> only for a
+    /// constant lookup that cannot be written at runtime.
+    /// </summary>
+    private static readonly ImmutableArray<string> TargetNames =
         ["returnUrl", "returnTo", "returnPath", "redirectUrl", "redirectTo"];
 
     /// <summary>
@@ -53,7 +59,7 @@ public class RedirectSourcesMintLocalTargetsGuard
     private static readonly Regex Identifier = new(@"[A-Za-z_][A-Za-z0-9_]*", RegexOptions.Compiled);
 
     /// <summary>Names that are calls/types in the expression rather than the value being carried.</summary>
-    private static readonly string[] NotAValue =
+    private static readonly ImmutableArray<string> NotAValue =
         ["Uri", "EscapeDataString", "ReturnUrlPolicy", "Sanitize", "string", "Join", "Format",
          "LocalUrl", "LocalOrRoot", "LocalOrNull", "InstanceConnectFlow"];
 
@@ -64,7 +70,8 @@ public class RedirectSourcesMintLocalTargetsGuard
             dir = dir.Parent;
         Assert.NotNull(dir);
         // Both trees that compose portal URLs: the auth/portal surface and the framework.
-        foreach (var relative in new[] { Path.Combine("memex", "Memex.Portal.Shared"), "src" })
+        ImmutableArray<string> relatives = [Path.Combine("memex", "Memex.Portal.Shared"), "src"];
+        foreach (var relative in relatives)
         {
             var root = Path.Combine(dir!.FullName, relative);
             Assert.True(Directory.Exists(root), $"{root} not found — update this guard's roots.");
@@ -75,61 +82,37 @@ public class RedirectSourcesMintLocalTargetsGuard
     [Fact]
     public void Every_minted_return_target_is_a_local_path()
     {
-        var offenders = new List<string>();
-        var sitesSeen = 0;
-
-        foreach (var root in Roots())
-        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
-        {
-            var text = File.ReadAllText(file);
-            foreach (Match m in MintSite.Matches(text))
+        // One pass, no accumulator: the sites are a SEQUENCE and both readings below are derived
+        // from it, so the vacuity check and the verdicts cannot disagree about what was scanned.
+        var sites = Roots()
+            .SelectMany(root => Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+            .SelectMany(file =>
             {
-                // 🚨 Prose, not code. Both connect endpoints DOCUMENT their routes as
-                // `GET /connect/github?returnPath={path}` in an XML comment, where `{path}` is a
-                // placeholder for the reader and names no C# value at all — the guard's fail-closed
-                // branch reported it, correctly, as something it could not resolve. A comment mints
-                // nothing, so the subject is the code line.
-                if (IsInAComment(text, m.Index))
-                    continue;
+                var text = File.ReadAllText(file);
+                return MintSite.Matches(text)
+                    // 🚨 Prose, not code. Both connect endpoints DOCUMENT their routes as
+                    // `GET /connect/github?returnPath={path}` in an XML comment, where `{path}` is a
+                    // placeholder for the reader and names no C# value at all — the guard's
+                    // fail-closed branch reported it, correctly, as something it could not resolve.
+                    // A comment mints nothing, so the subject is the code line.
+                    .Where(m => !IsInAComment(text, m.Index))
+                    .Select(m => (Name: Path.GetFileName(file), Text: text, Match: m));
+            })
+            .ToImmutableArray();
 
-                sitesSeen++;
-                var expression = m.Groups[2].Value;
-                var name = Path.GetFileName(file);
-
-                var carried = Identifier.Matches(expression)
-                    .Select(i => i.Value)
-                    .Where(i => !NotAValue.Contains(i, StringComparer.Ordinal))
-                    .Distinct(StringComparer.Ordinal)
-                    .ToArray();
-
-                if (carried.Length == 0)
-                {
-                    offenders.Add(
-                        $"{name}: {m.Value} — the guard could not tell what value this carries.");
-                    continue;
-                }
-
-                var verdicts = carried.Select(id => Classify(text, id, m.Index)).ToArray();
-                if (verdicts.Any(v => v.Absolute))
-                    offenders.Add(
-                        $"{name}: {m.Value} — carries {verdicts.First(v => v.Absolute).Detail}, "
-                        + "which is an ABSOLUTE url.");
-                else if (verdicts.All(v => !v.Resolved))
-                    offenders.Add(
-                        $"{name}: {m.Value} — no assignment or parameter found for "
-                        + $"{string.Join("/", carried)}; the guard fails closed rather than "
-                        + "assuming it is local.");
-            }
-        }
+        var offenders = sites
+            .Select(site => Offence(site.Text, site.Name, site.Match))
+            .Where(o => o is not null)
+            .ToImmutableArray();
 
         // 🚨 The guard must have a subject. A refactor that renames these parameters, or moves the
         // portal surface out of this repo, would otherwise leave it green having checked nothing.
-        Assert.True(sitesSeen > 0,
+        Assert.True(!sites.IsEmpty,
             "No returnUrl/returnPath minting site was found in either root. Either the roots above "
             + "are stale or the parameter names changed — a guard with no subject passes vacuously.");
 
         Assert.True(
-            offenders.Count == 0,
+            offenders.IsEmpty,
             "These sites hand a redirect target onward that the shared local-only policy will NOT "
             + "keep. Every sink refuses a non-local target (correctly — that is the open-redirect "
             + "defence), so such a value is DISCARDED rather than followed: the user completes the "
@@ -139,6 +122,40 @@ public class RedirectSourcesMintLocalTargetsGuard
             + "login page and the endpoint are the same origin, so the absolute form carries no "
             + "information and costs the whole flow.\n  "
             + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// The finding for one minting site, or <c>null</c> when the site is clean.
+    ///
+    /// <para>🚨 The unresolvable branch tests <b>Any</b>, not All. <c>All(v =&gt; !v.Resolved)</c>
+    /// reports only when NOTHING resolved, so an expression combining a known local with one
+    /// unclassifiable member would pass — which contradicts the fail-closed contract this guard is
+    /// built on, and in the one branch whose whole purpose is not to assume. If any carried value
+    /// cannot be classified, the site is not clean.</para>
+    /// </summary>
+    private static string? Offence(string text, string name, Match m)
+    {
+        var carried = Identifier.Matches(m.Groups[2].Value)
+            .Select(i => i.Value)
+            .Where(i => !NotAValue.Contains(i))
+            .Distinct(StringComparer.Ordinal)
+            .ToImmutableArray();
+
+        if (carried.IsEmpty)
+            return $"{name}: {m.Value} — the guard could not tell what value this carries.";
+
+        var verdicts = carried.Select(id => Classify(text, id, m.Index)).ToImmutableArray();
+
+        if (verdicts.Any(v => v.Absolute))
+            return $"{name}: {m.Value} — carries {verdicts.First(v => v.Absolute).Detail}, "
+                   + "which is an ABSOLUTE url.";
+
+        var unresolved = verdicts.Where(v => !v.Resolved).ToImmutableArray();
+        return unresolved.IsEmpty
+            ? null
+            : $"{name}: {m.Value} — no assignment or parameter found for "
+              + $"{string.Join("/", unresolved.Select(v => v.Detail))}; the guard fails closed "
+              + "rather than assuming it is local.";
     }
 
     /// <summary>

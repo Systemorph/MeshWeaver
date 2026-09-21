@@ -33,7 +33,9 @@ namespace MeshWeaver.Graph;
 /// <c>AccessAssignmentGuard.IsForbiddenOnSystemOwned</c> head-on: that rule refuses GRANTING another
 /// Admin there, this one refused REMOVING the existing one, so
 /// <c>SystemOwnedAccessRetractionHandler</c>'s sweep could only spare the last grant on every run
-/// and the partition kept a human Admin over content nobody may usefully edit (#5140). A BIJECTIVE
+/// and the partition kept a human Admin over content nobody may usefully edit (#5140). This
+/// exemption is HALF the fix — the sweep's own pre-spare had to go with it, or this one is inert and
+/// nothing reports that it is. A BIJECTIVE
 /// sync is deliberately NOT exempt — there the mesh nodes are somebody's working copy, editing them
 /// is the point, and the people doing it must keep write access.</para>
 ///
@@ -118,10 +120,12 @@ public sealed class SpaceAdminInvariantValidator(IMessageHub hub, ILogger<SpaceA
         // content is rewritten from the repo on every sync, so the only identity that may write it
         // is the importer's (AccessAssignmentGuard.IsSystemOwned). Two rules then meet head-on:
         // AccessAssignmentGuard.IsForbiddenOnSystemOwned refuses GRANTING another Admin there, and
-        // this invariant refuses REMOVING the existing one — so
-        // SystemOwnedAccessRetractionHandler's sweep can only spare that last grant, every time it
-        // runs, and the partition keeps a human Admin over content nobody may usefully edit (whose
-        // edits the next sync reverts). Exempting the invariant is what lets the sweep converge:
+        // this invariant refused REMOVING the existing one — so
+        // SystemOwnedAccessRetractionHandler's sweep could only spare that last grant, every time it
+        // ran, and the partition kept a human Admin over content nobody may usefully edit (whose
+        // edits the next sync reverts). Exempting the invariant is HALF of what lets the sweep
+        // converge; the other half is the sweep's own pre-spare, removed in the same change, because
+        // this exemption is inert while that is still refusing to issue the delete. Both halves:
         // the partition does keep an administrator, and it is the System identity. The existing
         // mirror-partition exemption above is the same reasoning one step earlier.
         //
