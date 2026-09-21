@@ -56,7 +56,20 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
         public int Calls => _calls;
 
         public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
-            => (IObservable<QueryResultChange<T>>)(object)behaviour(Interlocked.Increment(ref _calls));
+        {
+            // The fixture only knows how to answer MeshNode, and PathResolutionService's single
+            // call site (ResolveSegmentsCore) asks for exactly that. SAY so: the
+            // `(IObservable<QueryResultChange<T>>)(object)` hop below is sound only under that
+            // assumption, and if the subject ever queried another type it would surface as an
+            // InvalidCastException naming neither the type nor this double — the shape of
+            // diagnostic this whole change exists to remove.
+            if (typeof(T) != typeof(MeshNode))
+                throw new NotSupportedException(
+                    $"{nameof(SequencedQueryCore)} answers Query<MeshNode> only, and was asked for "
+                    + $"Query<{typeof(T).Name}>. PathResolutionService is expected to query MeshNode; "
+                    + "if that changed, teach this fixture the new type rather than casting through it.");
+            return (IObservable<QueryResultChange<T>>)(object)behaviour(Interlocked.Increment(ref _calls));
+        }
     }
 
     private (PathResolutionService Svc, SequencedQueryCore Query) BuildService(
@@ -103,7 +116,7 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
     /// frame. It must fault, and the fault must NAME the provider that went silent, because that
     /// name is the whole difference between "look for the node" and "look for the provider".
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FloorWithNothingMatched_IsRefused_NeverAnsweredAsAbsent()
     {
         var (svc, _) = BuildService(_ => Snapshot(["pg-partitioned"]));
@@ -111,7 +124,7 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.ResolvePath("Admin/_Notification/p8i5C-9eWUSrfKQlEcEYMg")
                 .Take(1)
-                .Timeout(TimeSpan.FromSeconds(5))
+                .Timeout(TestTimeouts.Quick)
                 .Await(TestContext.Current.CancellationToken));
 
         // The three facts a triage needs, on the exception the fingerprint is built from.
@@ -128,7 +141,7 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
     /// answering with its ancestor until the process restarts or a Created/Deleted event for that
     /// exact path arrives — and a reconcile re-writing an unchanged node publishes neither.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FloorWithOnlyAShallowerAncestor_IsRefused_AndNothingIsCached()
     {
         var (svc, query) = BuildService(call => call == 1
@@ -140,7 +153,7 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.ResolvePath("Admin/_Notification/p8i5C")
                 .Take(1)
-                .Timeout(TimeSpan.FromSeconds(5))
+                .Timeout(TestTimeouts.Quick)
                 .Await(TestContext.Current.CancellationToken));
         Assert.Contains("deeper than 'Admin'", error.Message);
 
@@ -148,7 +161,7 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
         // Against the unguarded code the first call caches Prefix=Admin and this reads it back.
         var resolved = await svc.ResolvePath("Admin/_Notification/p8i5C")
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
+            .Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
 
         Assert.NotNull(resolved);
@@ -163,14 +176,14 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
     /// supports a resolution after all. Refusing here would turn every query that raced a silent
     /// provider into a 404 for a node that was found.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task FloorWhoseHitIsTheFullRequestedPath_IsAnswered()
     {
         var (svc, _) = BuildService(_ => Snapshot(["pg-partitioned"], Node("Admin/_Notification/p8i5C")));
 
         var resolved = await svc.ResolvePath("Admin/_Notification/p8i5C")
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
+            .Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
 
         Assert.NotNull(resolved);
@@ -184,14 +197,14 @@ public class PathResolutionFloorIsNotAnAnswerTest(ITestOutputHelper output) : Hu
     /// promptly and correctly). Without this case the fixture could not tell "we stopped trusting
     /// floors" from "we stopped answering absent".
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task CompleteSnapshotWithNothingMatched_StillAnswersAbsent()
     {
         var (svc, _) = BuildService(_ => Snapshot(null));
 
         var resolved = await svc.ResolvePath("Admin/_Notification/p8i5C")
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
+            .Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
 
         Assert.Null(resolved);

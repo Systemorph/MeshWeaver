@@ -527,13 +527,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// provider claims its partition."</c> — an indeterminacy diagnostic standing in for a
     /// determinate answer, 30 s late. That is #1186's second fingerprint, and it is what EVERY
     /// sample on that issue shows (2026-08-10 → 2026-09-14, 629 occurrences across four pods); the
-    /// Warning path never appears in one of them.
+    /// Warning path never appears in one of them.</para>
     ///
     /// <para>🚨 The quoted sentence is HISTORY — do not grep for it. Once this fix made the absent
     /// case prompt, that timer could only ever fire on a SILENT source, and a sentence about the
     /// node was then false in every case it could reach; <see cref="FirstNodeResolutionTimeout"/>
     /// now carries a message that attributes the READ instead. The determinate wording moved to
-    /// where it is true: the "no usable node" handler in <see cref="OnActivateAsync"/>.</para></para>
+    /// where it is true: the "no usable node" handler in <see cref="OnActivateAsync"/>.</para>
     ///
     /// <para><c>TakeUntil</c> ends the source on the AUTHORITATIVE branch's own terminal, which is
     /// what the rest of this comment already assumed: the accelerator contributes a VALUE and can
