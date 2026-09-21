@@ -1142,6 +1142,64 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Projects the caller's touched key PATHS onto the serializer-NORMALIZED form of what is about
+    /// to be written, producing the expectation <see cref="FieldsLandedIn"/> can actually satisfy.
+    ///
+    /// <para>🚨 <b>Why the caller's raw JSON is the wrong expectation.</b> #2469 replaced a
+    /// version-only confirmation (which produced false POSITIVES — any concurrent writer's bump
+    /// satisfied it) with a comparison of the caller's submitted leaves against the live node. That
+    /// fixed the false positive and introduced a false NEGATIVE, because the caller's raw values and
+    /// the STORED values are not the same JSON: the owner persists what the serializer writes.
+    /// Anything the serializer normalizes away makes the comparison unsatisfiable forever, so a
+    /// write that landed is reported as <i>"did not land within the confirmation window"</i> — and
+    /// the message tells the caller to retry, which for a non-idempotent write is actively
+    /// harmful.</para>
+    ///
+    /// <para>Measured 2026-09-21 on a live approval: a patch carrying <c>"status": "Pending"</c> —
+    /// the enum's ZERO member, which the serializer omits — was reported as not landed on three
+    /// attempts. The third had also changed <c>purpose</c>, and that change was in the store at
+    /// version 4 while the caller was told the write had failed.</para>
+    ///
+    /// <para>The rule this restores: <b>the expectation is what we can actually STORE, not what the
+    /// caller typed.</b> Every key the caller named is still expected — one whose value the
+    /// serializer WRITES is compared in its stored form, and one the serializer OMITS is expected
+    /// to be absent (projected as an explicit null, which <see cref="FieldsLandedIn"/> satisfies
+    /// with a live key that is missing or null). So the comparison resolves to one unambiguous
+    /// state in both directions: a landed write confirms, and a REFUSED write that leaves the old
+    /// non-default value in place still fails. #2469's guarantee is untouched — only keys the
+    /// caller named are ever projected, so a concurrent writer's change elsewhere on the node can
+    /// still neither satisfy nor fail the check.</para>
+    /// </summary>
+    /// <param name="normalized">The node about to be written, serialized with the hub's options.</param>
+    /// <param name="delta">The caller's own submitted fields — the key paths, not the values.</param>
+    /// <returns>The caller's key paths carrying their stored values.</returns>
+    internal static JsonObject ProjectTouched(JsonObject normalized, JsonObject delta)
+    {
+        var projected = new JsonObject();
+        foreach (var (key, deltaVal) in delta)
+        {
+            if (!normalized.TryGetPropertyValue(key, out var storedVal))
+            {
+                // 🚨 ABSENT IS AN EXPECTATION, NOT A REASON TO STOP ASKING. The serializer will
+                // not write this key, so the landed node must not carry it either — project it as
+                // an explicit null, which FieldsLandedIn already reads as "absent OR null" (RFC
+                // 7396 remove). DROPPING it instead is a false POSITIVE, which is the failure
+                // #2469 exists to prevent and strictly worse than the false negative this method
+                // fixes: a patch touching only a serializer-omitted field would project
+                // {"content":{}}, and an empty expectation is satisfied by the FIRST emission
+                // whatever the live node holds — so a REFUSED write reports "Patched:".
+                projected[key] = null;
+                continue;
+            }
+            if (deltaVal is JsonObject deltaObj && storedVal is JsonObject storedObj)
+                projected[key] = ProjectTouched(storedObj, deltaObj);
+            else
+                projected[key] = storedVal?.DeepClone();
+        }
+        return projected;
+    }
+
+    /// <summary>
     /// Tries to resolve a path as a Unified Path with prefix (schema/, model/, data/, content/).
     /// Supports both legacy colon format (address/prefix:path) and new slash format (address/prefix/path).
     /// Parses the path to find the prefix, splits into address and remainder,
@@ -1925,7 +1983,10 @@ public class MeshOperations
                 // live mirror — the caller's raw content sub-delta, not the merged snapshot (which
                 // also carries whatever unrelated fields — e.g. a poller's checkedAt — happened to
                 // be live at merge time, and would never match a busy node's live state again).
-                var expectedFields = jsonObj.DeepClone().AsObject();
+                // The caller's own key PATHS. Values are projected from the normalized
+                // merged node below (ProjectTouched) — never taken from here, because the
+                // raw submitted value is not what gets stored.
+                var callerDelta = jsonObj.DeepClone().AsObject();
 
                 if (jsonObj["content"] is JsonObject contentPatch)
                 {
@@ -1977,6 +2038,15 @@ public class MeshOperations
                 var validationObs = (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
                     ? ValidateContentWithSchema(merged)
                     : Observable.Return<string?>(null);
+
+                // 🚨 Build the expectation from what will actually be STORED — the merged node
+                // as the serializer writes it — projected onto the caller's own key paths. See
+                // ProjectTouched: comparing the caller's RAW values makes any serializer-normalized
+                // field (a default-valued enum, a rewritten date, a renamed enum member) an
+                // expectation that can never be met, so a landed write reports as not landed.
+                var mergedJson = JsonSerializer.SerializeToNode(merged, hub.JsonSerializerOptions)
+                    as JsonObject ?? new JsonObject();
+                var expectedFields = ProjectTouched(mergedJson, callerDelta);
 
                 var versionBefore = existing.Version;
                 return validationObs.SelectMany(validationError =>
