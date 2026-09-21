@@ -232,6 +232,32 @@ app, and a customer portal must not send through that. Until the instance has a 
 its own, an invitation is **recorded and not delivered**, and the page says so rather than reporting
 a send that did not happen.
 
+### The objects that do not exist
+
+Maintainer, 2026-09-21: *"it should also show me secrets which don't actually exist."* Provenance and
+the object name are not enough; the third state is a mapping the record or repository **declares
+whose object is not in the vault**. The ramp-up gates cannot know this — they deliberately carry no
+credential, so they assert that a mapping is *declared*, never that its object *exists*. The dialog
+runs on the instance, which mounts that vault with *Key Vault Secrets User*: a read right, which is
+exactly what an existence check needs. It asks the object's **versions listing**, so existence is
+answered without a value ever entering the process.
+
+The answer is three-valued on purpose. `200` is *exists*, `404` is *missing*, and everything else —
+a 403, a timeout, no route — is *not checked*, never either answer: "missing" on a permission error
+sends somebody to create an object that exists, and "exists" hides the very row the probe is for.
+Missing rows sort first and say what a deploy would otherwise say: a declared-but-absent object fails
+the whole CSI mount, every new pod pending, so it is created **before** the deploy.
+
+The measured case: PartnerRe's record mapped `GitHub__App__PrivateKey → memex-GitHub-App-PrivateKey`
+until 2026-09-20, an object that never existed in `memexaks-kv-i6gzgik26ydg`, and nothing surfaced it
+until a deploy tripped over it.
+
+### The first administrator learns nothing here
+
+Maintainer, same day: *"the learning path i don't need for first onboarding of global admin."* An
+ordinary new user is pinned to four documentation sections; the first global administrator is pinned
+to none. They are setting the instance up, not learning it.
+
 ## The plugin catalog in the wizard
 
 The wizard shows the catalog of the registry the instance is mounted on, lets the person select what
