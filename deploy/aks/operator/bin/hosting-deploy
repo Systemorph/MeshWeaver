@@ -102,8 +102,18 @@ sets=(
 # no-op on the build; and on a first install with nothing running and no pin, REFUSE — the chart
 # default is ghcr :latest, which on this fleet is a release tag that cannot boot.
 if [ -z "$image" ] && ! grep -q '^portal:' "$values"; then
-  running="$(hosting::read kubectl -n "$namespace" get deploy memex-portal-deployment \
-      -o jsonpath='{.spec.template.spec.containers[?(@.name=="memex-portal")].image}' 2>/dev/null || true)"
+  # 🚨 THREE ANSWERS, not two (MeshWeaver#4722) — and this one is the most expensive to get wrong
+  # in the whole file. The read used to be `2>/dev/null || true`, so a Forbidden on `deployments`
+  # left $running empty and the else-branch below announced that "namespace <ns> runs no portal
+  # yet (first install)" and asked for an image tag to be pinned on the record. Following that
+  # remedy PINS A TAG, which is a deliberate roll of the build — exactly what the comment above
+  # this block exists to prevent. A refusal must stop here instead, with nothing to act on wrongly.
+  hosting::probe any kubectl -n "$namespace" get deploy memex-portal-deployment \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="memex-portal")].image}'
+  case $? in
+    2) hosting::die_refused "deployment/memex-portal-deployment in ${namespace}, which decides whether this upgrade keeps the image the install is already running" ;;
+  esac
+  running="$HOSTING_PROBE_OUT"
   if [ -n "$running" ]; then
     image="$running"
     hosting::log "image     keeping the running ${image}"
@@ -138,7 +148,12 @@ if [ -n "$vault" ]; then
   # shellcheck disable=SC2064  # expand the path NOW: the trap must name this file, not a later $vault_values
   trap "rm -f '$vault_values'" EXIT
   hosting::log "vault     ${vault}: reading the values half helm-values-${release}"
-  kv_err="$(hosting::read az keyvault secret download --vault-name "$vault" --name "helm-values-${release}" --file "$vault_values" --output none 2>&1 >/dev/null)" \
+  # 🚨 `--overwrite`: the file above is PRE-CREATED (mktemp, 0600) so the secret never lands with
+  # the default umask, and `az keyvault secret download` REFUSES an existing --file without it —
+  # "File '/tmp/tmp.…' already exists. Use --overwrite" — which this step then reported as "holds no
+  # values half", and every record-driven Reconcile of memex died at step 4/7 on 2026-09-20 with the
+  # half sitting in the vault. The test stub used to overwrite silently; it now refuses like the CLI.
+  kv_err="$(hosting::read az keyvault secret download --vault-name "$vault" --name "helm-values-${release}" --file "$vault_values" --overwrite --output none 2>&1 >/dev/null)" \
     || hosting::die "Key Vault ${vault} holds no values half for release ${release} (helm-values-${release}): ${kv_err}. The record declares vaultValuesKeys — keys the chart's own Secret must carry — and nothing in the record renders them, so an upgrade without this file would re-render memex-portal-secrets from the chart's in-cluster defaults and every new pod would fail at silo start (MeshWeaver#3780). Run the config repo's helm-release workflow with action=capture for this release first, or clear vaultValuesKeys on the record if the chart's Secret genuinely carries nothing."
   [ -s "$vault_values" ] \
     || hosting::die "the values half helm-values-${release} in Key Vault ${vault} is EMPTY — an empty vault half is not 'no secrets', it is a capture that wrote nothing. Re-run helm-release capture for this release (MeshWeaver#3780)."
@@ -199,7 +214,18 @@ if [ -n "$rendered" ]; then
     || hosting::die "could not list the rendered resources for adoption: ${names}"
   while IFS= read -r res; do
     [ -n "$res" ] || continue
-    live="$(hosting::read kubectl -n "$namespace" get "$res" -o json 2>/dev/null)" || { absent=$((absent+1)); continue; }
+    # 🚨 THREE ANSWERS, not two (MeshWeaver#4722). This read used to be `2>/dev/null` with any
+    # failure counted as ABSENT, so a Forbidden on the kind became one more resource "to be
+    # created" — in a count this command REPORTS (hosting::say adopted). The preflight below asks
+    # `auth can-i` for create/patch/delete and never for GET, so nothing else would have caught it;
+    # an unowned live object would then go un-adopted and helm would fail on ownership metadata
+    # with a number in the log that said it was never there.
+    hosting::probe any kubectl -n "$namespace" get "$res" -o json
+    case $? in
+      2) hosting::die_refused "${res} in ${namespace}, which adoption must read before helm may own it" ;;
+      1) absent=$((absent+1)); continue ;;
+    esac
+    live="$HOSTING_PROBE_OUT"
     rel="$(printf '%s' "$live" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')"
     mgr="$(printf '%s' "$live" | jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // ""')"
     if [ "$rel" = "$release" ] && [ "$mgr" = "Helm" ]; then

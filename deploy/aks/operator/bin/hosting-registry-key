@@ -137,7 +137,13 @@ fi
 
 refuse_inline "$live_key" "--live-secret cannot see — the guard against revoking the pods' own key would compare the wrong value"
 hosting::step "Revoke the key at the registry"
-target="$(hosting::secret_value "$namespace" "$secret" "$key")" \
+# 🚨 A REFUSED read (2) is not an absent key (1) — this command is about to decide whether a key
+# exists to revoke, and "carries no ${key}" is a statement about the Secret's CONTENTS that a
+# refusal never entitles it to make (MeshWeaver#4722).
+target="$(hosting::secret_value "$namespace" "$secret" "$key")"; _rk_rc=$?
+[ "$_rk_rc" -ne 2 ] \
+  || hosting::die "REFUSED, not absent: this operator's ClusterRole does not permit reading Secret ${secret} in ${namespace}, so whether it carries ${key} is UNKNOWN — nothing was ruled out and nothing was changed. Grant it in MeshWeaver deploy/aks/manifests/hosting-operator/operator-rbac.yaml; it reaches the cluster through Systemorph/Memex's helm-release lane."
+[ "$_rk_rc" -eq 0 ] \
   || hosting::die "${secret} in ${namespace} carries no ${key} — there is no key there to revoke. Nothing was changed."
 target_hash="$(printf '%s' "$target" | hosting::sha256)"
 # The live key must be READ, not assumed: an unreadable one would make the comparison below

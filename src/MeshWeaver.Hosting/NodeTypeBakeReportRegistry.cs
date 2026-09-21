@@ -185,6 +185,13 @@ public sealed class NodeTypeBakeReportRegistry
 
     private volatile string settlement = string.Empty;
 
+    /// <summary>
+    /// 🚨 The LIVE reading (#4632) — refreshed on every catalog emission by the standing watch the
+    /// pre-warmer holds, so unlike <see cref="latest"/> it is never a boot-time snapshot. Same
+    /// volatile-reference shape: one writer, any number of probe readers, no gate.
+    /// </summary>
+    private volatile NodeTypeLiveRecordCensus? live;
+
     /// <summary>Records the reading this pass produced, replacing any earlier one.</summary>
     /// <param name="reading">The reading.</param>
     public void Record(BakeReportReading reading) => latest = Project(reading);
@@ -300,6 +307,40 @@ public sealed class NodeTypeBakeReportRegistry
         return slash > 0 ? typePath[..slash] : typePath;
     }
 
+    /// <summary>
+    /// 🚨 <b>Records the live catalog census</b> (#4632) — called by the standing subscription
+    /// <c>DynamicTypePreWarmer.ObserveLiveRecordCensus</c> feeds, on EVERY emission, so the reading
+    /// <c>/health</c> prints is the catalog as it stands rather than as it stood at boot. Replaces
+    /// the previous reading: the question is "what do the records say now", not a history.
+    /// </summary>
+    /// <param name="census">The reading.</param>
+    public void RecordLiveRecords(NodeTypeLiveRecordCensus census)
+    {
+        ArgumentNullException.ThrowIfNull(census);
+        live = census;
+    }
+
+    /// <summary>The live catalog census, or <c>null</c> when none has been taken on this replica.</summary>
+    public NodeTypeLiveRecordCensus? LiveRecords => live;
+
+    /// <summary>
+    /// 🚨 Records that the standing catalog watch FAULTED — an ARMED instrument that broke, which is
+    /// a different fact from one that has not emitted yet. The last reading is kept (it was true
+    /// when taken) and the fault is printed beside it, so a reader cannot take a frozen reading
+    /// for a current one; the entry degrades, as it does for an absent bake report.
+    /// </summary>
+    /// <param name="reason">The fault, as one line.</param>
+    public void RecordLiveRecordsFault(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        liveFault = reason;
+    }
+
+    /// <summary>Why the standing catalog watch stopped, or <c>null</c> while it is live.</summary>
+    public string? LiveRecordsFault => liveFault;
+
+    private volatile string? liveFault;
+
     /// <summary>The last reading, or <c>null</c> when this replica has produced none.</summary>
     public BakeReportReading? Latest => latest;
 
@@ -311,6 +352,30 @@ public sealed class NodeTypeBakeReportRegistry
     /// <returns><c>true</c> only for a reading whose snapshot was not behind this process.</returns>
     public static bool IsClean(BakeReportReading? reading) =>
         reading is not null && reading.ClassifiedFromLocalAdoption == 0;
+
+    /// <summary>
+    /// <see cref="IsClean"/> joined with the live catalog census (#4632): a
+    /// record re-keyed to another framework AFTER this replica booted degrades the entry.
+    ///
+    /// <para>🚨 An ABSENT live census does not degrade — deliberately the opposite of the absent
+    /// bake report above. The bake report is published by every boot of every pre-warming host, so
+    /// its absence means the enumeration faulted; the live watch is a standing subscription that has
+    /// simply not emitted yet on a replica that is still coming up, and degrading every boot on it
+    /// would teach readers to ignore the entry. The absence is still PRINTED as its own sentence, so
+    /// "not measured" and "measured clean" stay two different readings.</para>
+    ///
+    /// <para>A FAULTED watch (<paramref name="liveFault"/>) DOES degrade: unlike a watch that has
+    /// not emitted yet, it was armed, was measuring, and stopped — the last reading it left is
+    /// frozen, and a frozen reading read as a current one is the boot-time defect this half exists
+    /// to close, one level up.</para>
+    /// </summary>
+    /// <param name="reading">The bake reading, or <c>null</c>.</param>
+    /// <param name="live">The live catalog census, or <c>null</c> when none has been taken.</param>
+    /// <param name="liveFault">Why the standing watch stopped, or <c>null</c> while it is live.</param>
+    /// <returns><c>true</c> only when both halves are clean and the watch is live.</returns>
+    public static bool IsCleanIncludingLive(
+        BakeReportReading? reading, NodeTypeLiveRecordCensus? live, string? liveFault = null) =>
+        IsClean(reading) && liveFault is null && (live is null || live.IsClean);
 
     /// <summary>
     /// The one sentence an operator reads on <c>/health</c>. Pure — it is the whole publication, so
@@ -350,6 +415,29 @@ public sealed class NodeTypeBakeReportRegistry
               + $"snapshot (#3703). {common}";
 
         return $"{plan} {DescribeOutcomes(reading)}";
+    }
+
+    /// <summary>
+    /// <see cref="Describe"/> followed by the live catalog census's own sentence
+    /// (#4632) — the boot-time plan, the sweep's outcome, and then what the records say NOW. The
+    /// live sentence prints whatever the bake reading is, including when there is none: a replica
+    /// whose enumeration faulted at boot can still hold a live reading, and the absence of the one
+    /// must not silence the other.
+    /// </summary>
+    /// <param name="reading">The bake reading, or <c>null</c>.</param>
+    /// <param name="live">The live catalog census, or <c>null</c> when none has been taken.</param>
+    /// <param name="liveFault">Why the standing watch stopped, or <c>null</c> while it is live.</param>
+    /// <returns>The sentence.</returns>
+    public static string DescribeIncludingLive(
+        BakeReportReading? reading, NodeTypeLiveRecordCensus? live, string? liveFault = null)
+    {
+        var fault = liveFault is null
+            ? string.Empty
+            : $"🚨 LIVE RECORD CENSUS WATCH FAULTED ({liveFault}): the standing NodeType-catalog "
+              + "subscription stopped, so nothing on this replica is watching for a record re-keyed to "
+              + "another framework any more. The reading that follows is the LAST one taken and is "
+              + "FROZEN — an armed instrument that broke, NOT a clean one (#4632). ";
+        return $"{Describe(reading)} {fault}{NodeTypeLiveRecordCensus.Describe(live)}";
     }
 
     /// <summary>

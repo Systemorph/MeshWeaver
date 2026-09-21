@@ -218,6 +218,11 @@ re-fingerprints **future** occurrences only; existing `Admin/_LogIncident/*` nod
 they were minted under, and nothing recomputes them. So after an identity fix, folded traffic keeps
 arriving on the same old threads until that backlog is migrated — which is its own change.
 
+> **That change has since landed** (MeshWeaver.Plugins#1796, 2026-09-18) and the backlog is being
+> re-addressed on every fold. The paragraph above is the pre-migration world; read
+> *The corpus RE-ADDRESSES itself now* below before acting on it, because whether a node has been
+> migrated yet decides whether closing its issue holds.
+
 Re-measured 2026-09-11T09:1xZ, same incident, and the spread had widened rather than settled:
 `occurrences: 62`, **26** entries in `pods[]`, `firstSeen` 2026-09-10T02:26:49Z,
 `lastSeen` 2026-09-11T05:22:40Z. All **ten** retained `samples[]` are one of three node paths —
@@ -286,6 +291,69 @@ node keeps the identity it was minted under), and it does not merge the two hist
 issue keeps its own evidence table and its own close. Say what you did on **both** threads: the
 incident node is the only place the link lives, and a reader who finds the new ticket reopening from
 a fingerprint filed under an old title has no other way to know why.
+
+### 🚨 The corpus RE-ADDRESSES itself now — so read `status` before deciding a close will hold
+
+The paragraph above ("Fixing the identity function does not clear this") described the state of the
+world until 2026-09-18. It no longer holds, and the difference decides whether closing a folded
+bucket is durable or theatre. **MeshWeaver.Plugins#1795** narrowed the identity function and
+**#1796** — *"existing `Admin/_LogIncident/*` nodes carry a fingerprint from an older identity
+function, so a corrected identity cannot close the issues it fixes"* — added the migration that
+carries the history across. Both are closed (#1795 on 09-13, #1796 `completed` on 09-18), and the
+re-addressing starts as soon as a portal runs an identity newer than the deployed watcher's.
+
+**It is keyed on the reporter's own fingerprint, never on a recomputed one.** The watcher's report
+says which id *its* generation computed (`reporterFingerprint`); the portal computes its own; when
+they differ, `LogIncidentCorpusMigration.Fold` carries the legacy node's counts, window, pods,
+evidence and shape ledger onto the successor and `Supersede` marks the legacy
+`Status = Superseded`, `SupersededBy = <successor>`. Recomputing a legacy node's identity from its
+stored fields was rejected deliberately: mint-time masking and the retained fields have drifted
+apart, so the stored fields no longer reproduce what was hashed. **The migration therefore runs on a
+FOLD** — it needs a live burst to carry the exact id — so a bucket that has gone quiet keeps its old
+identity until it fires again.
+
+🚨 **A superseded node is INERT, and that is what makes a hand-close stick.**
+`LogIncidentIngestService.NextRequest` answers `{ Status: Superseded } => LogIncidentRequest.None`
+before every other rule: no triage, no comment, and **no `ReopenOnRecurrence`**, ever again. So the
+three-month "closed on evidence → reopened by the watcher → closed again" cycle that #1134, #1840 and
+#2387 each ran is ended by the supersede, not by a better closing argument.
+
+**Two outcomes, and they mean opposite things for the old issue.** The ticket moves **only into an
+empty seat** (`target.IssueNumber is null`), and it brings the link, the comment budget, the draft
+and the triage thread with it:
+
+| After the fold | The legacy issue | What a later reopen means |
+|---|---|---|
+| successor had **no** issue ⇒ it **inherits** the legacy's | still the fault's one ticket, now addressed by a NARROW identity | genuinely actionable — one shape, not bucket traffic |
+| successor **already** had one (it filed its own, or a second bucket split onto it) | **orphaned but inert** — it keeps `issueNumber` and will never speak again | impossible; the issue must be closed BY HAND |
+
+The second row is the one that reads wrong. `Admin/_LogIncident/c0b1424c7beb28e0` (2733
+occurrences, the bucket behind [#3883](https://github.com/Systemorph/MeshWeaver/issues/3883)) was
+superseded by `e60160b647aa00b4` at 2026-09-19T13:02:25Z; the successor had already filed
+[#4876](https://github.com/Systemorph/MeshWeaver/issues/4876), so #3883 kept its link and went
+silent. Nothing announces that on the thread — the issue simply stops being reopened — and a reader
+who takes continued silence for "the watcher agrees it is fixed" has it backwards: the watcher is no
+longer looking at that node at all.
+
+**So before closing an auto-filed issue, read the incident's `status`:**
+
+- `Filed` and still folding ⇒ the close WILL be reverted on the next recurrence. Either wait for the
+  supersede, or repoint the link by hand as the section above prescribes.
+- `Superseded` ⇒ the close holds. Say so on the thread and name `supersededBy`, because the
+  successor is where the traffic now lives.
+
+The wave is not hypothetical and it is not slow: measured on the control instance 2026-09-19,
+`search 'namespace:Admin/_LogIncident scope:children nodeType:LogIncident content.status:Superseded'`
+returned **48**, `truncated: false`, every one re-addressed that day between 11:41Z and 18:48Z —
+including `9ca334c1e8dad9ca`, the Polly bucket the redirect section above is written about.
+
+🚨 **And `shapes[]` is now the instrument `samples[]` could never be.** `RecordShape` keeps a
+per-defect ledger — what the CURRENT identity computes for each burst alone, with its own
+`firstSeen`, `lastSeen` and `occurrences`, the `MaxShapes` (12) most recent kept and the rest counted
+in `ShapesEvicted`. That answers the question a bucketed incident previously could not: *has THIS
+shape been seen since the fix?* `samples[]` is a rolling evidence window and can only say what the
+last few bursts carried; a shape row says when that particular fault was last seen. Read `shapes[]`
+first and fall back to `samples[]` only for a node minted before the ledger existed.
 
 ### The two cases this has to get right
 
@@ -477,13 +545,32 @@ it works on any incident that carries one.
 
 `StructuralLogIncidentIdentity.Compute` is a pure function of the burst, so its payload is a dated
 artefact of the binary that computed it. Take the fingerprint out of a refused report's evidence line
-— `refused undiagnosable report <fp> for category <cat> …` — and test the candidate payloads:
+— `refused undiagnosable report <fp> for category <cat> …` — and test the candidate payloads.
+
+The 2026-08-09 payload is `{category}\n{eventId}\n{discriminator}`, and the discriminator switches on
+the PAIR `(exceptionType, topFrame)` — four branches, all four of which occur in the live record:
 
 | payload hashed (`sha256`, first 8 bytes, lower hex) | in force |
 |---|---|
-| `{category}\n{eventId}\n` | 2026-08-09 (core `8115e39425`, "Stop deriving incident identity from prose") |
-| `{category}\n{eventId}\n{exceptionType}` | same change, when the burst carried an exception |
+| `{category}\n{eventId}\n` — neither present | 2026-08-09 (core `8115e39425`, "Stop deriving incident identity from prose") |
+| `{category}\n{eventId}\n{exceptionType}` | same change, exception but no application frame |
+| `{category}\n{eventId}\n{topFrame}` | same change, **frame but no exception type** |
+| `{category}\n{eventId}\n{exceptionType}\|{topFrame}` | same change, both |
 | `site\n{category}\n{eventId}\n{fault}\n{detail}` — or `frame\n{frame}\n{fault}\n{detail}` | current |
+
+🚨 **The frame-only row is easy to miss and it addresses one of the busiest ids in the record.**
+Measured 2026-09-19, `Admin/_LogIncident/92c0e9442e275f65` ([#3110](https://github.com/Systemorph/MeshWeaver/issues/3110)):
+
+```
+SHA256("MeshWeaver.Messaging.MessageService\n0\n"
+     + "MeshWeaver.Messaging.MessageHub.HandleMessageAsync(IMessageDelivery delivery, "
+     + "AsyncDelivery[] ruleChain, CancellationToken cancellationToken)")[..8]  = 92c0e9442e275f65
+```
+
+No exception type in the key at all — so that one id addresses **every fault of every type that
+surfaces inside `MessageHub.HandleMessageAsync`**, the most-travelled method in the mesh. An issue
+filed from such an id is titled after whichever fault arrived first, and two occurrences of it can
+share nothing but the method they died in.
 
 Measured 2026-09-14 against `Admin/_LogIncident/log-burst-header-only-{memex,memex-cloud}` on the
 control instance, every refused fingerprint on both namespaces reproduced from the **first** row:
@@ -539,6 +626,86 @@ Two things this is good for beyond dating:
 - **Telling a fingerprint FOLD from a recurrence** — the same job the
   [reopen section](#-a-reopen-is-not-a-recurrence--read-samples-before-you-believe-it) describes, done
   arithmetically instead of by eye.
+
+### 🚨 One log SITE holds TWO buckets, and the second one's TITLE reads like a per-caller ticket
+
+Because the discriminator switches on the pair, a site that emits *both* shapes — some lines with an
+exception body attached, some bodyless — takes **two different branches of the table above** and mints
+**two** fingerprints, each of which then files its own GitHub issue about the same defect class.
+Measured 2026-09-19 on memex.systemorph.com,
+`MeshWeaver.Hosting.PostgreSql.PostgreSqlPartitionedMeshQuery` has exactly two, both reproducible
+locally (the site logs no application frame either way, so these are the exception-only and
+neither-present rows):
+
+| fingerprint | payload (branch) | issue | what folds onto it |
+|---|---|---|---|
+| `d4c8f6f74ecfa422` | `{category}\n0\n{UnanchoredQueryException}` — exception, no frame | [#3545](https://github.com/Systemorph/MeshWeaver/issues/3545), titled `nodeType:*Post` | every unanchored query **with** the exception body, whatever the caller |
+| `5d52ad4396af9a59` | `{category}\n0\n` — neither present | [#4443](https://github.com/Systemorph/MeshWeaver/issues/4443), titled `nodeType:Skill` | every **bodyless** one, whatever the caller |
+
+`search 'namespace:Admin/_LogIncident nodeType:LogIncident content.category:*PartitionedMeshQuery* select:name,lastModified limit:50'`
+→ `count: 2`, `truncated: false`, `coverage.partitions: ["admin"]`. Two buckets, two tickets, one site.
+
+🚨 **So a per-caller-looking TITLE is not evidence that a per-caller identity shipped.** #4443 names
+`nodeType:Skill` because that is the sample it happened to be filed from; its bucket is the whole
+site. #3545's thread had been waiting since 2026-09-13 for the identity that keeps a `nodeType:`
+term (`{types:…}`), and the check that settles it is arithmetic: the per-caller payloads for that
+very sample — `{category}\n0\n{types:Skill}` → `45d3d07500163cd1`, `{category}\n0\nnodeType:Skill` →
+`ed08112634d8759d` — appear **nowhere**, while the bare payload reproduces `5d52ad4396af9a59` byte
+for byte. Control on a second site, same day: `SHA256("Polly\n0\n")[..8] = 9ca334c1e8dad9ca`, which
+is `Admin/_LogIncident/833c5f2e6337f4d3`'s `reporterFingerprint` verbatim. The **reporter** still
+runs the 2026-08-09 function.
+
+### 🚨 The portal RE-ADDRESSES a reported fingerprint — so a frozen `lastSeen` is NOT a stopped fault
+
+Since 2026-09-19 the portal recomputes the identity of every report it accepts and keeps its own
+node, folding the reporter's id into it. The new fields are the tell — measured on nodes created
+`11:41:32Z` (`833c5f2e6337f4d3`) and `11:51:04Z` (`6b49ccecb9615d8f`):
+
+```jsonc
+{ "fingerprint": "6b49ccecb9615d8f",          // the PORTAL's id — the node's own path
+  "reporterFingerprint": "1b405a782123de6b",  // what the watcher computed (2026-08-09 payload)
+  "foldedFrom": ["1b405a782123de6b"],
+  "shapes": [ { "key": "6b49ccecb9615d8f", "detail": "Failed to deliver to {path}", "occurrences": 2 } ] }
+```
+
+The fold comment says it in words — *"Re-addressed by the current identity function: this incident
+inherited `1b405a782123de6b`. Those nodes are superseded and will not fold, file or comment again"* —
+and the successor **inherits the old node's issue link**, so the churn moves rather than ending.
+
+Two consequences for a triager, and the first one is a trap:
+
+- **The predecessor node goes quiet whether or not the fault did.** After a re-addressing its
+  `occurrences`/`lastSeen` freeze by construction, exactly as they would if the caller had been
+  fixed. `lastSeen` alone cannot tell those apart — the same warning the capture-gap section makes
+  about a stale `lastSeen`, now with a second cause.
+- **The successor sweep is by CATEGORY.** 🚨 `content.foldedFrom:<id>` does **not** match an array
+  member: the positive control `content.foldedFrom:1b405a782123de6b` returns `count: 0` on the very
+  node whose `foldedFrom` holds that value, so a zero there is a broken instrument, not an answer.
+  Sweep `content.category:*<Category>*` instead and read `count` against `truncated` and
+  `coverage.partitions`.
+
+🚨 **And the recompute instrument above dates the REPORTER only.** The portal's payload is not
+reproducible from the fields its node carries — `{category}\n{eventId}\n` combined with the exception
+type, the `normalizedMessage`, the shape `detail`, or any pairing of them, hashes to none of
+`6b49ccecb9615d8f`/`833c5f2e6337f4d3` (tried 2026-09-19). Date the watcher with the hash; do not try
+to date the portal with it.
+
+**Proving a fault has STOPPED across a re-addressing boundary takes two mechanisms plus a liveness
+control**, because neither covers the whole window:
+
+1. *Before* the boundary the predecessor node would have advanced — so its `lastSeen` bounds the
+   fault's end on that side.
+2. *After* it a successor node with that category would exist — so the category sweep covers the
+   other side.
+3. The ingest must be shown reading that namespace **across** the window, and the evidence for that
+   is a line CAPTURED from it inside the window (another incident's `lastSeen`), never the watcher's
+   own health.
+
+Worked example, the one that closed #3545: `d4c8f6f74ecfa422` froze at `2026-09-19T05:15:30Z`,
+re-addressing went live at `11:41Z`, the category sweep finds no successor, and memex-cloud lines
+were captured at `06:30:42Z` and `08:54:16Z` with a memex-cloud incident still updating at
+`19:00:24Z`. Zero unanchored fan-out lines on that portal after 05:15:30Z, with no hole in the
+window.
 
 ### 🚨 A bodyless capture can SWALLOW diagnosable bursts — `occurrences` is not a count of bodyless lines
 
@@ -899,9 +1066,101 @@ each produced a steady ticket stream:
   can still resolve. A live scope that threw that type for its own reasons still reads as a fault,
   and a probe that cannot answer leaves the outcome LOUD.
 
+- 🚨 **Classify EVERY reporter of the fault, or the ticket does not stop — and this is the identity
+  rule above working as designed, not a bug.** Because the fingerprint identifies the fault and not
+  the reporter (the category is excluded once a frame is present, and the discriminating text is the
+  *exception's* message rather than the reporter's prose), downgrading one site leaves the incident
+  firing through every other site that prints the same exception. Measured on #3243: the missing-hub
+  line was classified on 2026-09-04, and the incident reopened on 2026-09-18 carrying
+  `[ACTIVATE] Grain Admin/_Notification/…: activation faulted for …` — the *activation chain's*
+  error arm, a few lines away in the same grain, still an unconditional `LogError`. The same
+  `ObjectDisposedException`, a different `catch`, one fingerprint. So when you downgrade an expected
+  condition, grep the component for its SIBLING arms first: the thing that keeps a ticket alive is
+  the one you did not classify. `MessageHubGrain.ActivationFaultLevel` is that arm's classifier and
+  shares the two existing predicates — `HubDisposingException.IsHubDisposal` (the hub announced its
+  own disposal) and `IsDisposedContainer` (a scope closed underneath live work) — rather than
+  re-deriving the fact a third time.
+
 `CancellationIsNotAFaultTest` pins the cancellation directions, including the timeout impostor;
 `HubCreationDuringTeardownIsNotAFaultTest` and `HubConstructionOutcomeReportingTest` pin the
-hub-creation ones, including the configuration-throw that must stay red.
+hub-creation ones, including the configuration-throw that must stay red and the activation arm's
+own control — a `TimeoutException` or an unresolvable node stays red, and a null fault is an unknown
+rather than a shutdown.
+
+## Before you CLOSE one: two things the fingerprint does not assert
+
+Measured 2026-09-19 while consolidating the 53 bot-filed issues then open on this repository — 34 of
+them were duplicates of 9 roots. Both traps below produce a closure that *reads* like a pass.
+
+### 1. An empty `normalizedDetail` makes the fingerprint SITE-ONLY, so "the titled fault is fixed" licenses nothing
+
+The identity's third term is the normalized **detail** — the exception's own message when there is one,
+else the logged message. It is the parser property `NormalizedDetail`, and it lands on the incident node
+as the JSON field `normalizedDetail`; the JSON spelling is used from here on, because everything this
+section tells you to read is read off the node with `get @Admin/_LogIncident/<fingerprint>`. A burst that
+carries no exception type *and* whose parse leaves that field empty contributes nothing to the third
+term, and the identity collapses to the log **site**. Every `Error` from that category then folds onto
+one incident, with `variants: 1` — so nothing on the ticket says it happened.
+
+[#4597](https://github.com/Systemorph/MeshWeaver/issues/4597) is the worked example.
+`Admin/_LogIncident/253b5feaa9ed755e` carries `normalizedDetail: ""`, a title naming a content-cast
+failure, and five samples of which **four are a different fault**:
+
+```
+normalizedMessage:  As<MarkdownContent> for {path}: value is EmailContent (…), not convertible
+ 2026-09-05 12:26:06Z  As<MarkdownContent> … not convertible                      <- the titled fault
+ 2026-09-17 08:57:24Z  As<InstanceActionContent> could not recover value: JsonException
+ 2026-09-17 13:05:50Z  As<MarkdownContent>       could not recover value: JsonException
+ 2026-09-17 15:22:21Z  As<MarkdownContent>       could not recover value: JsonException
+ 2026-09-18 12:39:09Z  As<MarkdownContent>       could not recover value: JsonException
+```
+
+The titled fault *is* fixed: `NodeUpdatePipeline.WithExistingContentTyped` now asks
+`ContentDiscriminator.Admits` first and logs at `Warning` instead of reporting a failed `As<T>`
+recovery at `Error` (`3c36d05ade`, 2026-09-18 07:19 +0200) — and that commit is an ancestor of the
+commit each production portal reports at `/api/version`. A closure reading *"fixed, and live, proved by
+`merge-base --is-ancestor`"* would therefore have passed every check a careful reader applies, while
+closing a fault that fired at **12:39Z that same day** from `ObjectAsExtensions.LogRecoveryFailure` —
+a different call site, still `LogError`, untouched by that commit.
+
+🚨 **The discriminator costs one read: the incident node's `samples`, not its title.** When the samples
+disagree with `normalizedMessage`, the fingerprint is site-only and the ticket covers more than it
+says — so a fix for the titled fault is a comment, never a close.
+
+### 2. A `MeshWeaver.`-prefixed category can belong to a Plugins assembly, and a transfer does not stop the re-file
+
+Routing is by category prefix (above), and **a prefix does not name an assembly**.
+`MeshWeaver.SelfUpdate.Aks.*` and `Memex.Portal.Distributed.*` are MeshWeaver.Plugins projects; a
+framework category such as `Microsoft.Extensions.Diagnostics.HealthChecks.DefaultHealthCheckService`
+carries no hint of who registered the failing check at all. Each of those files onto core.
+
+When a human then transfers the ticket the redirect keeps working —
+`repos/Systemorph/MeshWeaver/issues/1897` resolves to `MeshWeaver.Plugins#2154` — but the same
+fingerprint was measured open **twice, in two repositories**, three times over:
+
+| fingerprint | open in MeshWeaver.Plugins | open again on MeshWeaver (core) |
+|---|---|---|
+| `93710ed097873d0b` | [Plugins#2132](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2132) | [core#4767](https://github.com/Systemorph/MeshWeaver/issues/4767) |
+| `34928a1851aa5217` | [Plugins#2153](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2153) | [core#4794](https://github.com/Systemorph/MeshWeaver/issues/4794) |
+| `cd48b16db4d9809b` | [Plugins#2154](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2154) | [core#4795](https://github.com/Systemorph/MeshWeaver/issues/4795) |
+
+`Admin/_LogIncident/93710ed097873d0b` shows the shape: `"issueNumber": 4767` alongside
+`"supersededIssueUrl": ".../issues/4611"` and `"status": "Superseded"` — the incident was superseded and
+filed a fresh ticket, into the repository the route still points at. So **"one fault, one ticket" holds
+per incident node, not per fault**, across a supersession or a transfer.
+
+🚨 Before opening *or* closing one, search the owning repository by **fingerprint** as well as by title;
+and when the code is not in this repository's `src/`, the ticket wants a transfer rather than an
+analysis.
+
+### And a fan-out is read from the log line, not the title
+
+Two clusters in that sweep were one condition each, reported once per shard and once per grain
+activation. The discriminators were already in the evidence: the memory-stream tickets differ only in
+the per-queue log **category** (`…Memory.memory-0` … `memory-7`, 8 registered queues, one provider),
+and the `[ROUTE] Routing back-pressure` tickets are split by a field the line itself explains —
+`deepest per-destination queue` ≥ 1 is head-of-line blocking, `0` is load. Consolidating on the title
+instead would have merged the two readings and lost the only thing that tells them apart.
 
 ## What this is not
 

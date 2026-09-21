@@ -39,7 +39,18 @@ public static class BoundedBody
         return buffer?.ToArray();
     }
 
-    /// <summary>The one reader both public forms share, so the cap semantics cannot drift apart.</summary>
+    /// <summary>
+    /// The one reader both public forms share, so the cap semantics cannot drift apart.
+    ///
+    /// <para>🚨 A client that aborts mid-body is NOT the same outcome as an oversized one, and the
+    /// two must never be folded together. Over the cap returns <c>null</c>, which both call sites
+    /// answer with <c>413 Payload Too Large</c>. A truncated delivery instead surfaces Kestrel's
+    /// <see cref="Microsoft.AspNetCore.Http.BadHttpRequestException"/> ("Unexpected end of request
+    /// content"), which is a <c>400</c> — catching it here and returning <c>null</c> would tell a
+    /// caller whose connection dropped that its payload was too large, and log a cap warning about
+    /// a body that was never over the cap (#4860). The exception is deliberately left to propagate
+    /// so the distinction survives to whoever decides the status code.</para>
+    /// </summary>
     private static async Task<MemoryStream?> ReadBufferAsync(Stream body, long maxBytes, CancellationToken ct)
     {
         var buffer = new MemoryStream();

@@ -1,7 +1,7 @@
 ---
 Name: Reading a Recurrence Reopen
 Category: Architecture
-Description: What a bot reopen does and does not assert, measured over the 2026-09-17 wave. Two predicates are needed, not one — the fault must have been seen AFTER the close, and it must have been seen RECENTLY — and the residue of that wave passes the first on all 51 counts while failing the second on 41. The honest triple for the fleet, the per-issue evidence behind it, and why 15 of the 51 point at a third predicate nobody has written yet.
+Description: What a bot reopen does and does not assert, measured over the 2026-09-17 wave. Two predicates are needed, not one — the fault must have been seen AFTER the close, and it must have been seen RECENTLY — and the residue of that wave passes the first on all 51 counts while failing the second on 41. The honest triple for the fleet, the per-issue evidence behind it, and why 15 of the 51 point at a third predicate nobody has written yet. Plus the prior question both predicates assume away — whether this issue is still the thing the evidence lands on — after an identity change re-addressed three of core's oldest bot tickets on 2026-09-19.
 Icon: ArrowSync
 ---
 
@@ -129,6 +129,171 @@ the rule for the three that are live. It also explains why Plugins#2014's predic
 correct, leaves a residue that still reads wrong: a close and a delivery are different events, and
 the reopen rule compares against the earlier one.
 
+## The mirror image: dormancy is only evidence if the trigger happened
+
+The section above is about a close that races the *delivery* — post-close lines coming from replicas
+still running the old image. This is its inverse, measured on 2026-09-19, and it bites the closing
+side rather than the reopening one.
+
+**Three teardown faults were closed partly on dormancy and all three reopened within a day:**
+
+| issue | closed | reopened | newest occurrence |
+|---|---|---|---|
+| #1540 | 09-18 05:58:27 | 09-19 05:08:26 | 09-19 05:07:01Z |
+| #1547 | 09-18 05:57:08 | 09-19 05:07:26 | 09-19 05:10:25Z |
+| #1548 | 09-18 05:57:09 | 09-19 05:05:27 | 09-19 05:12:06Z |
+
+Every reopen is **correct** by the post-close predicate — each occurrence genuinely postdates its
+close. The mistake is upstream, in the reasoning that closed them: one carried the words *"15 days
+with no occurrence"*.
+
+🚨 **All three fired inside one seven-minute window, 05:05–05:12Z, and that window is a roll.** Their
+subjects are teardown by construction — `ObjectDisposedException` unregistering a grain from the
+directory, a mesh hub resolving from a disposed Autofac scope. They fire when pods stop, and they
+are silent when nothing is stopping them. Fifteen quiet days meant fifteen days without a roll, not
+fifteen days of health.
+
+🚨 **Correlation with a roll window is NOT the same finding as the mechanism.** Two more issues
+reopened across the same period — #1422 (Release-snapshot cleanup, whose reopen is a cascade racing
+a concurrent delete) and #1449 (a PostgreSQL `CreateNode` Unicode failure) — and it is tempting to
+sweep them in. Their records identify neither as teardown- or boot-shaped, and #1449's occurrence
+(09-18 15:35:29Z) is not in the window at all. Firing *during* a roll is evidence; needing a roll in
+order to fire is the claim, and only the three above carry it. An earlier draft of this section
+asserted all five, which is the very over-reach the page exists to warn about.
+
+**The predicate:** silence is evidence only over a window in which the fault's trigger actually
+occurred. For a roll-triggered fault, a dormancy argument has to name the rolls it survived. Without
+that it is the same shape as [a sweep's zero with no denominator](../SearchCoverageAndRefusal) — a
+number that reads like an answer and measured nothing.
+
+Classifying by the timestamp is cheap and splits the backlog usefully. Of fifteen old incident
+issues checked the same day, three more sit in the roll window (#1126, #1840, #2833 — two compile-at-
+boot, one shutdown quiescence), while four fired at 08:54–09:03Z, after the image then running was
+built (#1246, #2307, #2480, #3045).
+
+🚨 **But "fired after the image was built" does NOT imply "fires on that image", and for a teardown
+fault it implies close to the opposite.** The pod that emits a teardown fault is the pod being
+REPLACED — it is running the image the roll is replacing, by construction. #2480 is exactly that
+shape: its subject is the mesh drain *at silo shutdown*, and its 08:59Z occurrence sits right after
+an 08:32Z roll, so the likeliest reading is the old replica tearing down, not the new one failing.
+The timestamp separates "during a roll" from "between rolls"; deciding WHICH image was running still
+needs the pod→image mapping, which the incident comments do not carry.
+
+So the classification gives three buckets, not two: silent-between-rolls, fires-during-normal-
+operation, and fires-at-teardown-on-the-outgoing-image — and only the middle one is evidence about
+the image now serving.
+
+## A fourth check that is not a predicate: the fingerprint may have been RE-ADDRESSED under the issue
+
+Every check above asks *what does the evidence on this issue mean*. This one asks the prior
+question — **is this issue still the thing the evidence lands on** — and on 2026-09-19 the answer
+changed for three of core's oldest bot tickets at once.
+
+Between **11:41:37Z and 11:44:05Z on 2026-09-19** a new incident-identity function
+([MeshWeaver.Plugins#1796](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1796))
+re-addressed the fleet's high-volume fingerprints: a mega-fingerprint that had been folding several
+different log SHAPES was split per shape, the old node was marked `Superseded`, and each surviving
+shape either inherited the old issue or filed its own. Read off the nodes on the control instance
+the same afternoon:
+
+| incident node | carries issue | `status` | newest `lastSeen` | `namespace` |
+|---|---|---|---|---|
+| `d1cd36f53a5f3a6c` | #1246 | **Superseded** → `c3a4225a446594c7` | 2026-09-19 05:20:00Z | memex-cloud |
+| `465a6677047a571b` (Feedback gating, 2 paths) | **#1246**, inherited | Filed | 2026-09-19 08:59:06Z | memex-cloud |
+| `c3a4225a446594c7` (Feedback gating, 1 path) | **#4814**, new (already closed) | Filed | 2026-09-19 07:49:05Z | memex-cloud |
+| `4ff70ec1124b1b3c` (Feedback gating, 3 paths) | **#4806**, new | Filed | 2026-09-19 09:40:44Z | memex |
+| `b03482717d5ba39a` | #3659 | superseded (its own fold comment says so) | 2026-09-19 07:41:12Z | memex-cloud |
+| `fc3bfaea16374d50` (`DefaultViews` absence) | **#3659**, inherited | Filed | 2026-09-19 07:41:12Z | **memex** |
+| `c93238020fe2f0b5` (`ClaimsDeepfield` absence) | **#4812**, new | Filed | 2026-09-19 09:09:51Z | memex-cloud |
+
+Three consequences, each of which reverses a reading a triage pass would otherwise make.
+
+1. **"It will just be reopened" stops being true for a superseded node.** The fold comment says it in
+   so many words — *"Those nodes are superseded and will not fold, file or comment again."* The
+   recurrence pressure a session declines to close against may already be gone, and the only place
+   that is written is `content.status` / `content.supersededBy` on the node. The issue's own history
+   cannot show it: the last fold comment looks exactly like every earlier one.
+2. **The residue that held a ticket open may have MOVED to another ticket.** #3659 was held open on
+   2026-09-17 for one operator item — `ClaimsDeepfield`, 82 of 83 declared nodes absent on
+   memex-cloud, unhealed for three weeks. That shape is now its own fingerprint with its own,
+   correctly-titled issue (**#4812**), still folding as of 09:09:51Z. Closing #3659 no longer buries
+   it. So check every successor's `issueNumber` before concluding a ticket still owns its residue —
+   and before concluding that closing it would lose something.
+3. **Inheriting an issue and filing a new one are indistinguishable from GitHub.** Both arrive as an
+   ordinary bot comment on some issue. The binding is written only on the node
+   (`issueNumber`, `reporterFingerprint`, `foldedFrom`).
+
+### The fingerprint's `namespace` is not the deployment its NEWEST samples came from
+
+`content.namespace` is one value on a node whose samples accumulate for weeks, and a split can hand
+a successor a namespace that no longer matches the sample you are reading. It is worse than stale:
+**one fingerprint can span deployments while that field holds a single value.** `4ff70ec1124b1b3c`
+carries `namespace: memex` and its pod list contains both `…-6cd5d8f887-2kcwk` (in
+`Ops/Status/memex`'s roster, `3.0.0-ci.8968`) and `…-69956b6dbc-{v5r29,s246c}` (in
+`Ops/Status/memex-cloud`'s, `3.0.0-ci.8969`). No single value can be right for that node.
+
+🚨 **A pod name IS decisive — but only once you resolve it against a roster, never by reading it.**
+Every portal runs a Deployment called `memex-portal-deployment`, so the name carries no cluster; what
+separates them is the replicaset hash, and which hash belongs to which deployment is knowable only
+from `Ops/Status/<deployment>`'s `replicas[]`. Measured 2026-09-19: memex-cloud was on
+`…-69956b6dbc-*` (`3.0.0-ci.8969`, commit `c25f86ae85b7…`) and memex on `…-6cd5d8f887-*`
+(`3.0.0-ci.8968`, `96f88406b4…`). So a sample naming `…-69956b6dbc-s246c` is memex-cloud's **even
+though the node it sits on says `namespace: memex`** — and an earlier draft of this paragraph had it
+backwards, inferring the pod's cluster from the node's namespace, which is the error the paragraph
+exists to name.
+
+**The second discriminator, and the only one left when the pod is gone or the namespace is not being
+scraped, is a record version quoted in the log line.** #3659's 05:29:06Z
+sample says `taken over Plugins/DefaultViews v48 (written 2026-09-19T00:24:55Z)`. Read the same hour
+on both portals, `Plugins/DefaultViews` is **v31** (written 2026-09-18T21:31:10Z) on
+memex.meshweaver.cloud and **v54** (2026-09-19T07:50:02Z) on memex.systemorph.com. memex-cloud never
+held a v48, so that sample is the other portal's — and an ancestry argument about *memex-cloud's*
+running image says nothing about it. The same trick works on any line that names a node version, a
+module version or an `installedAtUtc`.
+
+### The positive control for "no recurrence since the roll" lives on OTHER tickets
+
+A close review at 2026-09-19T10:35Z could not establish *"not seen since the roll"* for twelve
+issues, because no incident anywhere in the readable population had folded a sighting since
+07:28:51Z — a reading indistinguishable from a stopped watcher, and correctly refused as evidence.
+By 15:41Z the same instrument had folded sightings from pods in
+`Ops/Status/memex-cloud`'s own roster. 🚨 **What qualifies each row below is the POD, never the
+incident node's `namespace`** — for the reason in the section just above, two of these three nodes
+carry `namespace: memex` while the pod they name is in memex-cloud's roster:
+
+| incident node | sighting | pod | in memex-cloud's roster? |
+|---|---|---|---|
+| `465a6677047a571b` | 08:57:30Z, 08:59:06Z | `…-69956b6dbc-gx6z6` | yes — **currently running**, started 08:39:58Z |
+| `4ff70ec1124b1b3c` | 09:08:04Z, 09:09:45Z, 09:14:38Z | `…-69956b6dbc-s246c` | yes — **currently running**, started 08:34:53Z |
+| `c93238020fe2f0b5` | 09:09:51Z | `…-69956b6dbc-g6bbb` | same generation, since replaced |
+
+(`Ops/Status/memex-cloud` sampled 18:53:13Z lists exactly `…-69956b6dbc-{gx6z6,ndnxt,s246c}` on
+`3.0.0-ci.8969`; `Ops/Status/memex` lists `…-6cd5d8f887-{2kcwk,lvmpf}` on `3.0.0-ci.8968`. That is
+what makes the pod decisive and the namespace field not.)
+
+🚨 **The control does not have to be the fingerprint you are judging.** Any fold naming a pod from
+the current generation establishes that ingestion is alive for that generation, which is exactly
+what converts a silence on your own fingerprint from "unusable" into evidence. Sort the readable
+`Admin/_LogIncident` population by `lastModified` descending and read the newest nodes'
+`content.lastSeen` and `content.samples[].pod` — a node rewritten without its `occurrences`
+advancing is triage bookkeeping and is NOT such a control.
+
+### The pod→image mapping the section above wants DOES exist, on the deployment record
+
+*"Deciding WHICH image was running still needs the pod→image mapping, which the incident comments do
+not carry"* — they do not, but `Ops/Status/<deployment>` does, whenever kube-state-metrics is
+scraping the namespace (`notScraped: false`; it flips, #4218). Its `replicas[]` carries `pod`,
+`image`, `generation`, `commit`, `startedAt` and `restarts` per replica, so a sample's pod name
+resolves to an image and a start time in one read. Measured 2026-09-19T18:53:13Z for memex-cloud:
+three replicas on `3.0.0-ci.8969` / `c25f86ae85b7…`, started 08:34:53 / 08:39:58 / 08:39:59Z.
+
+That closes the teardown ambiguity in the direction the section above leaves open: a sample whose pod
+STARTED before the sample is the incoming replica, not the outgoing one. #1246's 08:57:30Z and
+08:59:06Z sightings are from `…-69956b6dbc-gx6z6`, started 08:39:58Z — eighteen minutes earlier — so
+they are the NEW replica reporting, and the fault is on the image that roll delivered. 🚨 The same
+read also warns you when the node's own `namespace` disagrees with the roster a pod appears in, which
+is the mis-attribution above.
+
 ## How to read one, until both predicates exist
 
 - A reopen means **"re-read the record"**. It does not mean a fix regressed
@@ -140,8 +305,22 @@ the reopen rule compares against the earlier one.
   September, with the same headline.
 - **Compare it to three timestamps, in this order:** the close (was it even after?), today (is it
   recent?), and the image the reporting pod was running (could the fix have been in it?).
+- 🚨 **And before closing one on quiet, ask what the fault needs in order to fire.** A teardown or
+  boot fault is silent by construction while nothing rolls, so dormancy across a roll-free window is
+  not evidence — see the section above for five issues closed that way and reopened within a day.
 - A burn-down or "zero issues" reading across 2026-09-17T07:51Z is comparing two different
   populations. Say which side of the wave a count was taken on.
+- **Read the incident NODE, not only the issue.** `content.status`, `content.supersededBy` and
+  `content.issueNumber` on `Admin/_LogIncident/{fingerprint}` are the only place it is written
+  whether this issue is still what the evidence lands on. A superseded node folds nothing further,
+  and a successor may have carried the residue to a new ticket.
+- **Name the deployment from the pod resolved against `Ops/Status/<deployment>`'s roster**, or from
+  a record version quoted in the line — never from the incident's `namespace`, which holds one value
+  for a fingerprint whose samples span deployments, and never from a pod name read on its own (every
+  portal's Deployment has the same name).
+- **Take the positive control off a DIFFERENT fingerprint.** "Not seen since the roll" needs one
+  fold from a current pod somewhere in the readable population; without it the silence is
+  indistinguishable from a stopped watcher.
 
 ## Appendix — the 51, one row each
 

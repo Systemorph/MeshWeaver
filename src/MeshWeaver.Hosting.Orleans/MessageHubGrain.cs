@@ -80,10 +80,25 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// resolver merged with the mesh-node stream cache). Bounds only node
     /// RESOLUTION — once the source emits, the Amb in OnActivateAsync commits to
     /// it and this timer is unsubscribed, so slow-but-bounded enrichment (cold
-    /// compile slow path) is never cut short. A source that produces nothing in
-    /// this window means the node doesn't exist or no query provider claims its
-    /// partition; the activation faults (callers get a deterministic NACK via
-    /// RoutingGrain) and the grain deactivates for retry-on-next-access.
+    /// compile slow path) is never cut short.
+    ///
+    /// <para>🚨 <b>What expiry MEANS changed under this class's feet, and the message did not
+    /// follow it (issue #1186).</b> This window used to be the only terminal for BOTH "the node is
+    /// not there" and "the read did not answer", so its exception named both possibilities — "the
+    /// node does not exist or no query provider claims its partition". #4371 gave the first case
+    /// its own, prompt terminal: the authoritative branch alone decides when the source is done, so
+    /// an absent node completes it in MILLISECONDS and faults through the "no usable node" handler
+    /// in <see cref="OnActivateAsync"/> instead. From that commit on, the ONLY thing that can still
+    /// reach this timer is a source that neither emitted nor terminated — a stalled READ — and the
+    /// sentence it threw was then false in every case it could fire. Measured on memex
+    /// 2026-09-21: 95 of these faults in 400 minutes, against a running instance whose
+    /// path-resolution query fan-in was logging <c>"Query provider(s)
+    /// [StorageAdapterMeshQueryProvider] have not emitted an Initial after 20s … the query is
+    /// silently stalled on its all-providers Initial gate and its consumer hangs with no error"</c>
+    /// seconds earlier — the real cause, in the same log, never joined to the ticket because the
+    /// incident fingerprint is built from THIS exception's message
+    /// (see <see cref="ActivationFaultReason"/>). So the message attributes the READ and points at
+    /// that warning; it no longer guesses about the node.</para>
     /// </summary>
     private static readonly TimeSpan FirstNodeResolutionTimeout = TimeSpan.FromSeconds(30);
 
@@ -158,6 +173,26 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
     /// <summary>
+    /// Orleans' deactivation reason as ONE clause for the hub's teardown attribution — the code
+    /// always, plus the description when there is one.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 Named and pure so the string handed to <see cref="MessageHub.NoteDirectDisposalBy"/> is
+    /// pinned by a test. Raised in review on #4960: the attribution tests exercise the HUB's side,
+    /// and the handoff — this formatting and the call itself — could regress with every one of
+    /// them green. This closes the formatting half; the call site is named as still uncovered
+    /// rather than papered over.
+    ///
+    /// <para>A blank description must not leave a trailing separator: a human reading a
+    /// <c>[DISPOSE-DISCARD]</c> sees "ActivationIdle — " as a TRUNCATED sentence rather than an
+    /// absent one — the same "renders as nothing, reads as something missing" failure the
+    /// blank-reason normalisation on the hub side exists to prevent. Orleans supplies no
+    /// description for several reason codes, so this is the ordinary case, not an edge one.</para>
+    /// </remarks>
+    internal static string FormatDeactivationReason(string reasonCode, string? description) =>
+        string.IsNullOrWhiteSpace(description) ? reasonCode : $"{reasonCode} — {description}";
+
+    /// <summary>
     /// <see cref="Grain.DeactivateOnIdle"/> guarded for the mesh↔Orleans lifetime boundary —
     /// same rationale as <see cref="TryDelayDeactivation"/>. Callers request deactivation from
     /// reactive continuations (activation-source terminal handlers, the NACK-fallback branch,
@@ -192,9 +227,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <see cref="DeliverMessage"/> callers park on that ReplaySubject until a
     /// terminal outcome lands.
     ///
-    /// <para>Node resolution is bounded by <see cref="FirstNodeResolutionTimeout"/>
-    /// (missing node / unclaimed partition → activation fault → deterministic NACK
-    /// + DeactivateOnIdle). Enrichment is bounded internally by the slow-path
+    /// <para>Node resolution has TWO terminals and they say different things. A source
+    /// that COMPLETES with no node is the determinate answer — the node is not there, or
+    /// no query provider claims its partition — and it arrives as fast as storage answers.
+    /// A source that goes SILENT is bounded by <see cref="FirstNodeResolutionTimeout"/>
+    /// and is a stalled READ, never a statement about the node (see that field). Both end
+    /// in an activation fault → deterministic NACK + DeactivateOnIdle; only the second is
+    /// somebody else's bug. Enrichment is bounded internally by the slow-path
     /// budgets in <c>NodeTypeEnrichmentHelpers</c>. An enrichment that settles
     /// WITHOUT a usable configuration activates a NACK fallback hub (see
     /// <see cref="CompleteActivation"/>) — never a silent park.</para>
@@ -378,7 +417,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     node => CompleteActivation(streamId, address, grainScheduler, node),
                     ex =>
                     {
-                        logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
+                        // 🚨 The SIBLING reporter of the same fault (#3243, second half). The
+                        // missing-hub line below classifies HostShuttingDown down to Debug; this arm
+                        // did not, and reported EVERY activation fault at fail level — including the
+                        // teardown race that line exists to excuse. Because the incident fingerprint
+                        // identifies the fault and NOT the reporter (Doc/Architecture/LogWatchTriage:
+                        // the category is not in the identity when a frame is present, and the
+                        // discriminating text is the EXCEPTION's message, never the reporter's prose),
+                        // a teardown-race ObjectDisposedException logged here lands on the very
+                        // incident the first half was closing — so the ticket kept reopening through
+                        // the unclassified sibling. Classifying the level is what stops that; the
+                        // wording is for the human and cannot split anything.
+                        logger.Log(ActivationFaultLevel(ex), ex,
+                            "[ACTIVATE] Grain {StreamId}: {Reason}", streamId,
+                            ActivationFaultReason(addressPath, ex));
                         // Defect 3: stash the REAL cause so a caller whose delivery only ever sees the
                         // raw Orleans rejection (grain mid-deactivation) still gets the actionable error.
                         activationFailures?.Record(streamId, ex.Message);
@@ -477,6 +529,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// sample on that issue shows (2026-08-10 → 2026-09-14, 629 occurrences across four pods); the
     /// Warning path never appears in one of them.</para>
     ///
+    /// <para>🚨 The quoted sentence is HISTORY — do not grep for it. Once this fix made the absent
+    /// case prompt, that timer could only ever fire on a SILENT source, and a sentence about the
+    /// node was then false in every case it could reach; <see cref="FirstNodeResolutionTimeout"/>
+    /// now carries a message that attributes the READ instead. The determinate wording moved to
+    /// where it is true: the "no usable node" handler in <see cref="OnActivateAsync"/>.</para>
+    ///
     /// <para><c>TakeUntil</c> ends the source on the AUTHORITATIVE branch's own terminal, which is
     /// what the rest of this comment already assumed: the accelerator contributes a VALUE and can
     /// never gate the outcome, in either direction. It also RELEASES the self-referential
@@ -545,8 +603,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 sourceStream,
                 Observable.Timer(firstNodeResolutionTimeout, scheduler ?? Scheduler.Default)
                     .SelectMany(_ => Observable.Throw<MeshNode>(new TimeoutException(
-                        $"No MeshNode emitted for '{addressPath}' within {firstNodeResolutionTimeout.TotalSeconds:0}s. " +
-                        "Either the node does not exist or no query provider claims its partition."))))
+                        $"Node resolution for '{addressPath}' neither answered nor terminated within "
+                        + $"{firstNodeResolutionTimeout.TotalSeconds:0}s. The activation source is SILENT — "
+                        + "that is a stalled READ, and it says nothing about the node. An absent node does "
+                        + "NOT reach here: it completes the source at once and faults with \"No MeshNode "
+                        + "resolvable for address …\" instead. Look for the query fan-in's Initial-gate "
+                        + "warning that lands BEFORE this line — it names the provider that did not deliver "
+                        + "an Initial, which is the fault to fix."))))
             .SelectMany(enrich)
             .Take(1);
 
@@ -790,6 +853,62 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         outcome == HostedHubOutcome.HostShuttingDown ? LogLevel.Debug : LogLevel.Error;
 
     /// <summary>
+    /// True when an activation fault is the host/scope teardown race rather than a defect —
+    /// the ACTIVATION-chain counterpart of <see cref="HubConstructionFailureLevel"/> (#3243).
+    ///
+    /// <para>Both classifiers already exist and are deliberately shared rather than re-derived
+    /// here: <see cref="HubDisposingException.IsHubDisposal"/> covers the case where the hub
+    /// announced its own disposal, and <see cref="HubDisposingException.IsDisposedContainer"/>
+    /// the case a scope was closed underneath live work — an
+    /// <see cref="ObjectDisposedException"/> naming a disposed Autofac <c>LifetimeScope</c>, which
+    /// is exactly the signature #3243 was filed on. Both walk the exception CHAIN, because the
+    /// fault reaches this arm wrapped.</para>
+    /// </summary>
+    /// <param name="ex">The activation fault; may be null.</param>
+    /// <returns><c>true</c> when the fault is a teardown race.</returns>
+    internal static bool IsActivationTeardownRace(Exception? ex) =>
+        HubDisposingException.IsHubDisposal(ex) || HubDisposingException.IsDisposedContainer(ex);
+
+    /// <summary>
+    /// The level the activation-fault line is logged at — a TICKETING decision, not a verbosity
+    /// knob, for the same reason <see cref="HubConstructionFailureLevel"/> is one (#3243).
+    /// Everything a portal reports as red becomes an incident and a GitHub issue
+    /// (<c>Doc/Architecture/LogWatchTriage</c>), so an expected teardown race logged at
+    /// <c>fail:</c> is indistinguishable from an activation that genuinely cannot resolve.
+    ///
+    /// <para>🚨 Only the teardown race is benign. Anything else — a node that never resolved, a
+    /// configuration that threw, an unknown — stays at <see cref="LogLevel.Error"/>, and nothing
+    /// about the arm's BEHAVIOUR changes either way: the fault is still recorded on
+    /// <c>activationFailures</c>, still pushed to <c>_hubReadyRaw.OnError</c>, and the grain still
+    /// deactivates so the next access re-runs resolution.</para>
+    /// </summary>
+    /// <param name="ex">The activation fault; may be null.</param>
+    /// <returns>The log level to report it at.</returns>
+    internal static LogLevel ActivationFaultLevel(Exception? ex) =>
+        IsActivationTeardownRace(ex) ? LogLevel.Debug : LogLevel.Error;
+
+    /// <summary>
+    /// What the activation-fault line says. Two sentences rather than one union, so a reader is
+    /// told WHICH condition fired instead of being handed both and left to guess — the same
+    /// correction <see cref="HubConstructionFailureReason"/> made for the sibling line.
+    ///
+    /// <para>🚨 This wording splits no incident and is not trying to: when a burst carries an
+    /// exception, the fingerprint's discriminating text is the EXCEPTION's message and the
+    /// reporter's prose is excluded by design, so that two catch sites printing one fault stay one
+    /// ticket. The level above is what changes whether this is ticketed at all.</para>
+    /// </summary>
+    /// <param name="path">The address being activated.</param>
+    /// <param name="ex">The activation fault; may be null.</param>
+    /// <returns>The sentence to log.</returns>
+    internal static string ActivationFaultReason(string path, Exception? ex) =>
+        IsActivationTeardownRace(ex)
+            ? $"activation of {path} was abandoned because the host (or its DI scope) is tearing "
+              + "down — an expected teardown race, not a fault. Nothing was written; the next "
+              + "access re-activates this node on a live host."
+            : $"activation faulted for {path}";
+
+
+    /// <summary>
     /// Composes the per-emission "enrich with HubConfiguration" step as an
     /// observable so the activation chain stays purely reactive.
     /// <para>
@@ -1004,6 +1123,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             try
             {
+                // 🚨 SAY WHO AND WHY BEFORE DISPOSING (#4888). Orleans deactivation is the
+                // largest single source of direct Dispose() in the mesh, and until this the hub
+                // could only report itself as "a direct Dispose() (no routed DisposeRequest)" —
+                // honest, and useless to the reader of a [DISPOSE-DISCARD], which is the Error
+                // that becomes an ISSUE. That report names the discarded message, its sender and
+                // the gates it was parked behind, and then could not say which teardown threw it
+                // away; the answer was one line above, in the deactivation log, and went nowhere.
+                //
+                // FIRST CAUSE WINS inside the claim: a hub already asked to recycle by name keeps
+                // that attribution, so this never overwrites a routed DisposeRequest that started
+                // the teardown before Orleans caught up.
+                (hub as MessageHub)?.NoteDirectDisposalBy(
+                    $"Orleans deactivating grain {grainId}",
+                    FormatDeactivationReason(reason.ReasonCode.ToString(), reason.Description));
                 hub.CancelCurrentExecution();
                 hub.Dispose();
 

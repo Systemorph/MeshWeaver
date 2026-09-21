@@ -116,6 +116,27 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     private readonly ILogger<RegistryUpdateReconciler> logger;
     private readonly CompositeDisposable subscriptions = new();
 
+    /// <summary>The boot reconcile's end, replayed to whoever asks after the fact.</summary>
+    private readonly AsyncSubject<Unit> bootReconciled = new();
+
+    /// <summary>
+    /// Completes once the BOOT reconcile pass has finished — succeeded, faulted, or had no registry
+    /// to read — and replays that to late subscribers (<c>AsyncSubject</c>), the same shape as
+    /// <see cref="InstanceAutoRegistrationService.Completed"/>. The signal an unattended writer of
+    /// the same partitions waits on before it writes (the boot repair pass's re-assert,
+    /// MeshWeaver#4812 — review on #4985): the boot reconcile can APPLY a moved module hash into a
+    /// package's partition, and two unattended passes must not write one partition at once. The
+    /// later inbox and safety-net passes run on this service's own serialised lane and are not
+    /// covered by it. Never emits on an instance whose hosted service was not started.
+    /// </summary>
+    public IObservable<Unit> BootReconciled => bootReconciled;
+
+    private void MarkBootReconciled()
+    {
+        bootReconciled.OnNext(Unit.Default);
+        bootReconciled.OnCompleted();
+    }
+
     /// <summary>Id of the ledger node — an underscore-prefixed sibling in the install-records
     /// partition, exactly like <c>_DefaultInstallLedger</c>.</summary>
     public const string LedgerId = "_RegistryReconcileLedger";
@@ -248,7 +269,11 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() => subscriptions.Dispose();
+    public void Dispose()
+    {
+        subscriptions.Dispose();
+        bootReconciled.Dispose();
+    }
 
     private void Start()
     {
@@ -258,6 +283,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             logger.LogDebug(
                 "[RegistryUpdate] no registry configured — nothing to reconcile against. "
                 + "A registry instance learns from its own repos through the build watcher instead.");
+            // Nothing to be behind: whoever sequences after the boot reconcile may go at once.
+            MarkBootReconciled();
             return;
         }
 
@@ -279,9 +306,16 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 _ => { },
-                ex => logger.LogError(ex,
-                    "[RegistryUpdate] the boot reconcile failed; installed packages keep their "
-                    + "current version and the catalog page still offers a manual Update.")));
+                ex =>
+                {
+                    logger.LogError(ex,
+                        "[RegistryUpdate] the boot reconcile failed; installed packages keep their "
+                        + "current version and the catalog page still offers a manual Update.");
+                    // A faulted pass has still ENDED — nothing further will write from it, so a
+                    // writer sequenced behind it must not be parked forever on its failure.
+                    MarkBootReconciled();
+                },
+                MarkBootReconciled));
 
         // #3650 — the two other events, armed after the same precondition and independent of how
         // the boot pass went: a boot that deferred still has an inbox to drain and a floor to keep.
@@ -926,10 +960,27 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         public int Attempts { get; } = attempts;
     }
 
-    /// <summary>The most one package's module adopt may take before the reconcile moves on —
-    /// generous for a large bundle download, small against a boot; the point is only that it is
-    /// FINITE (see the Timeout note below, Plugins#959).</summary>
-    internal static readonly TimeSpan PerPackageAdoptBudget = TimeSpan.FromMinutes(3);
+    /// <summary>
+    /// The most one package's module adopt may take before the reconcile moves on — the point is
+    /// that it is FINITE (see the Timeout note below, Plugins#959), and it is DERIVED, never a
+    /// second number authored beside the client's own (#4528).
+    ///
+    /// <para>🚨 The client bounds every stage of a transfer on SILENCE, each stage getting
+    /// <see cref="PluginBundleClient.TransferStallBudget"/> — the response start, and every gap
+    /// between chunks — and refuses with a <see cref="BundleTransferException"/> that names the
+    /// stage. This outer bound exists for what those bounds cannot see: a transfer that keeps
+    /// trickling, a landing write that never answers. So it is one stall budget — the longest any
+    /// single stage may stay silent — plus a minute for the index read, the decision and the
+    /// landing. It therefore always fires AFTER the client's own refusal for a stalled stage, which
+    /// is what keeps the cause in the log: the 09-15/16 failures reached this bound first and left
+    /// "The operation has timed out" as their only sentence, because the transport pipeline's
+    /// retry (three attempts inside a five-minute total) was structurally unable to finish inside
+    /// it, and the client itself measured nothing. Neither number was raised; the client's clock
+    /// now runs first, and the pipeline's retry of a stall — which could never complete here —
+    /// is cancelled by it.</para>
+    /// </summary>
+    internal static readonly TimeSpan PerPackageAdoptBudget =
+        PluginBundleClient.TransferStallBudget + TimeSpan.FromMinutes(1);
 
     /// <summary>
     /// The module half of the boot reconcile (#1664 Slice C): for each of the registry's packages

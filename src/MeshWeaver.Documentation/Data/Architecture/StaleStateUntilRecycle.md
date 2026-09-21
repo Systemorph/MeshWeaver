@@ -158,11 +158,15 @@ race, the reactivated hub re-ran its source query against a half-invalidated sta
   *"requested by itself — a rebind or self-heal recycle"* and nothing more: one sentence covering
   three states. The poster always knows why; only the log did not.
 
-A recycle is announced to the subscribers it is about to orphan. `HandleDispose` calls
-`AnnounceRecycle()` on the turn the request is handled, **while the hub is whole**, because the
-teardown itself is silent by construction — a dying owner reaching up the hub tree for a last word
-resurrects the activation it is retiring (#2533 / #2551; the mechanism is in
-[Hub Disposal Model](/Doc/Architecture/HubDisposalModel)).
+A recycle is announced to the subscribers it is about to orphan. `Dispose()` makes that announcement
+as its FIRST statement, **while the hub is whole**, because the teardown itself is silent by
+construction — a dying owner reaching up the hub tree for a last word resurrects the activation it is
+retiring (#2533 / #2551; the mechanism is in
+[Hub Disposal Model](/Doc/Architecture/HubDisposalModel)). 🚨 It hung on `HandleDispose` until
+2026-09-20, which keyed it on "was there a routed request" rather than on "is an ancestor taking me
+with it" — so an **Orleans deactivation**, a direct `Dispose()` of an address that IS coming back,
+told its live subscribers nothing and every click they sent afterwards was discarded (#3986,
+[Refusing a Lost User Action](/Doc/Architecture/RefusingALostUserAction)).
 
 ## 🚨 A dispose makes the activation RE-READ. It does not change what the re-read FINDS
 
@@ -209,7 +213,14 @@ question none of them answers is *"is there a NodeType this replica cannot **ser
 census built to answer it — per-type outcome, with its denominator stated, and with "no sweep has
 reported here" printed as its own sentence rather than as a clean one — is
 [#4647](https://github.com/Systemorph/MeshWeaver/pull/4647)'s addition to `bake-report`. **Read the
-outcome, not the plan, when a page is blank and the record says `Ok`.**
+outcome, not the plan, when a page is blank and the record says `Ok`.** And since the outcome census
+is itself a sweep-time reading, read `bake-report`'s **`LIVE RECORD CENSUS`** sentence for the
+cross-stamp shape above ([#4632](https://github.com/Systemorph/MeshWeaver/issues/4632)): it is
+refolded from the NodeType catalog on every emission and names, by partition and framework
+identity, every record keyed to a framework this replica does not run — with the ones stamped
+**after this replica booted** counted apart, which is exactly what the 14:33 adoption by the other
+generation was. See [Compiled Against Another Platform](../CompiledAgainstAnotherPlatform) → "The
+live record census".
 
 The remedies there, none of which is another dispose-only recycle:
 

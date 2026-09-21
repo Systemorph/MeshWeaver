@@ -430,8 +430,28 @@ jobs:
             echo "  nobody deployed, so this is a failure, not a fallback."
             exit 1
           fi
+          # 🚨 SAY WHICH MODE THIS RUN TOOK. An env's deploy.sh applies portal-patch.json AFTER
+          # `helm upgrade`, and --expect-patch is what makes those envFrom additions count as
+          # DECLARED rather than as drift. When the file is absent, reporting them is the
+          # deliberate fail-loud choice check-chart-drift.sh's header defends ("reporting an
+          # expected difference is a nuisance; hiding an unexpected one is the bug this script
+          # exists to prevent") — this block does not change that. What it fixes is that the
+          # branch used to be SILENT, so a reader of "31 divergence(s)" could not tell whether
+          # expected post-helm patches were among the 31, and two environments' counts could not
+          # be known to be comparable. Note the contrast with the missing-values case above,
+          # which already fails loudly and names what to do.
           PATCH_ARG=""
-          [ -f "$ENV_DIR/portal-patch.json" ] && PATCH_ARG="--expect-patch $ENV_DIR/portal-patch.json"
+          if [ -f "$ENV_DIR/portal-patch.json" ]; then
+            PATCH_ARG="--expect-patch $ENV_DIR/portal-patch.json"
+            echo "Post-helm patch DECLARED: $ENV_DIR/portal-patch.json — its envFrom additions"
+            echo "  count as declared, not as drift."
+          else
+            echo "::notice::No $ENV_DIR/portal-patch.json — this environment declares no post-helm"
+            echo "  patch, so any addition an env's deploy.sh applies AFTER helm upgrade is reported"
+            echo "  as drift below. That is deliberate (fail loud), not a fallback — but it means a"
+            echo "  divergence count from this environment is NOT comparable with one from an"
+            echo "  environment that does declare a patch. Commit the patch file if this env has one."
+          fi
           # `tee` keeps the log exactly as it was while giving the reporter below something to read.
           #
           # 🚨 TWO traps in three lines, and they pull in opposite directions.

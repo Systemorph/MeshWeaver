@@ -1476,13 +1476,31 @@ public class SelfUpdateHostedService : IHostedService
     ///     — the migration ran and the schema demonstrably did not move ⇒ the roll is REFUSED and
     ///     recorded as <see cref="SelfUpdateOutcome.MigrationFailed"/>. Rolling anyway would only
     ///     reproduce the wedge.</item>
-    ///   <item><see cref="MigrationRunOutcome.NotSupported"/> / <see cref="MigrationRunOutcome.Forbidden"/>
-    ///     — the migration could not even be attempted (an updater predating the seam; the
-    ///     service account not yet granted <c>batch/jobs</c> by a <c>helm upgrade</c>) ⇒ the roll
-    ///     proceeds exactly as it always did, with <c>DbVersionGate</c> as the only net, and says so
-    ///     at Warning naming the fix. Refusing here would freeze every install until an operator
-    ///     acts, silently — the worse failure shape (#2553).</item>
+    ///   <item>🚨 <see cref="MigrationRunOutcome.Forbidden"/> — the cluster answered 403 to the Job,
+    ///     so the migration could not be attempted and NOTHING was established about the schema ⇒
+    ///     the roll is REFUSED as <see cref="SelfUpdateOutcome.MigrationUnavailable"/> (#4764). This
+    ///     branch used to patch anyway "loudly", and that is the move which cannot be recovered from
+    ///     in-process: measured on memex-cloud 2026-09-19, the new pod went
+    ///     <c>CrashLoopBackOff</c> on <c>DbVersionGate</c> at 3.3 s while four old pods kept
+    ///     answering 200, nothing converged and nothing rolled back. Refusing asks nothing new of an
+    ///     operator either: a 403 means this install's chart predates
+    ///     <c>memex-portal/rbac.yaml</c>'s <c>batch/jobs</c> grant, so a <c>helm upgrade</c> is
+    ///     already owed — and it runs the migration Job itself.</item>
+    ///   <item><see cref="MigrationRunOutcome.NotSupported"/> — the updater has no migration
+    ///     mechanism at all (its <c>MeshWeaver.SelfUpdate.Aks</c> generation predates the seam) ⇒ the
+    ///     roll proceeds, because refusing on "this install can never migrate" would freeze it for
+    ///     ever and silently, the worse failure shape (#2553). What changed is that it is no longer
+    ///     recorded as a plain <c>Applied</c>: the verdict carries
+    ///     <see cref="SelfUpdateVerdict.Unmigrated"/>, so the policy node distinguishes a roll whose
+    ///     schema moved from one that rolled blind — #4764's second ask.</item>
     /// </list>
+    /// <para>🚨 What this canNOT do, and the reason it is a blanket rule rather than a version
+    /// compare: the schema a build expects is a constant compiled into that build
+    /// (<c>DbVersionGate.ExpectedDbVersion</c>), not a published property of a release, so a portal
+    /// running the OLD image cannot read the NEW image's number. Running the migration IS the
+    /// comparison, executed rather than computed — which is why "could not run it" and "do not know"
+    /// are the same fact here. Making the expected version knowable from outside an image is the open
+    /// half, described on <c>Doc/Architecture/SelfUpdateSchemaWall</c>.</para>
     /// <para>Both calls run on the Http pool like every other Kubernetes edge here; the migration
     /// wait is bounded by <see cref="SelfUpdateOptions.MigrationJobTimeout"/> inside the updater.</para>
     /// </summary>
@@ -1490,6 +1508,9 @@ public class SelfUpdateHostedService : IHostedService
         _http.Invoke(ct => _updater.RunMigrationAsync(target, ct))
             .SelectMany(outcome =>
             {
+                // The qualifier a roll taken WITHOUT its migration carries on the policy node, or
+                // null when the schema provably moved. Never a silent difference (#4764).
+                string? unmigrated = null;
                 switch (outcome)
                 {
                     case MigrationRunOutcome.Completed:
@@ -1506,27 +1527,50 @@ public class SelfUpdateHostedService : IHostedService
                             target, outcome);
                         return Observable.Return(SelfUpdateVerdict.MigrationFailed(target, outcome));
                     case MigrationRunOutcome.Forbidden:
-                        _logger?.LogWarning(
-                            "[SelfUpdate] rolling {Tag} WITHOUT running its database migration: the cluster "
-                            + "refused the migration Job (403 — the portal service account has no batch/jobs "
-                            + "grant; the chart's memex-portal/rbac.yaml grants it on the next helm upgrade). "
-                            + "If this build expects a newer db_version the new pods will refuse to start "
-                            + "(DbVersionGate) while the old ones keep serving. Doc/Architecture/DatabaseMigrationProcedure.",
+                        // 🚨 REFUSED, not "rolled loudly" (#4764). A 403 establishes nothing about
+                        // the schema, and the move it used to make — patch and let DbVersionGate
+                        // veto the new pods — is unrecoverable in-process and invisible from the
+                        // front door. The remedy is already owed: the grant arrives with the very
+                        // helm upgrade that renders the migration Job.
+                        _logger?.LogCritical(
+                            "[SelfUpdate] roll to {Tag} REFUSED: the cluster refused the migration Job "
+                            + "(403 — the portal service account has no batch/jobs grant; the chart's "
+                            + "memex-portal/rbac.yaml grants it on the next helm upgrade), so nothing "
+                            + "established that the schema is where that build needs it. The portal image is NOT "
+                            + "patched: a build expecting a newer db_version than the database has would "
+                            + "crash-loop on DbVersionGate behind pods that keep answering 200. Run a helm "
+                            + "upgrade for this instance — it both grants batch/jobs and runs the migration "
+                            + "Job. Doc/Architecture/SelfUpdateSchemaWall.",
                             target);
-                        break;
+                        return Observable.Return(SelfUpdateVerdict.MigrationUnavailable(
+                            target, outcome,
+                            "The portal service account has no batch/jobs grant, so the migration Job could "
+                            + "not be created; run a helm upgrade for this instance — the chart's "
+                            + "memex-portal/rbac.yaml adds the grant AND its own Job runs the migration."));
                     case MigrationRunOutcome.NotSupported:
+                        // Rolls on, because an install that can NEVER migrate would otherwise freeze
+                        // for ever and silently (#2553) — but the record says it rolled blind.
                         _logger?.LogWarning(
                             "[SelfUpdate] rolling {Tag} WITHOUT running its database migration: this "
                             + "install's IDeploymentUpdater cannot run one (it predates the seam, or the "
                             + "host is not Kubernetes). DbVersionGate is the only net. "
                             + "Doc/Architecture/DatabaseMigrationProcedure.",
                             target);
+                        unmigrated =
+                            "this install's deployment updater cannot run a database migration — it predates "
+                            + "IDeploymentUpdater.RunMigrationAsync; update the MeshWeaver.SelfUpdate.Aks "
+                            + "module. If this build expects a newer db_version than the database has, the "
+                            + "new pods refuse to start (DbVersionGate) while the old ones keep answering 200.";
                         break;
                 }
 
                 return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct))
-                    .Select(_ => SelfUpdateVerdict.Applied(
-                        target, ShippedReleaseSeed.InstalledPlatformVersion, lastRolledAt));
+                    .Select(_ =>
+                    {
+                        var applied = SelfUpdateVerdict.Applied(
+                            target, ShippedReleaseSeed.InstalledPlatformVersion, lastRolledAt);
+                        return unmigrated is null ? applied : applied.Unmigrated(unmigrated);
+                    });
             });
 
     /// <summary>

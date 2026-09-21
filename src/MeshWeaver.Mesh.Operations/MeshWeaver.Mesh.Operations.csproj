@@ -23,6 +23,7 @@
          (#2276, now in MeshWeaver.Plugins) — dangling here but harmless; kept so a re-added suite
          of the same name needs no csproj change. -->
     <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Threading.Test" />
     <!-- #2469: pins FieldsLandedIn (the Patch/Update landed-write check) directly against a
          hand-built fixture — same "internal primitive, not the tool surface" pattern as above. -->

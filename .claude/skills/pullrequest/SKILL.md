@@ -157,50 +157,41 @@ differs and the full suite runs; there is no way to skip an untested tree.
 git status --porcelain | grep '^??'        # untracked files a committed file might reference
 dotnet build src/<TheProjectYouTouched> -c Release -warnaserror --no-restore   # match the CI flags
 
-# 0.5 RELEASE NOTE — every USER-FACING PR ships a "What's New" entry as a doc node (one node per
-#     entry → no cross-PR merge conflicts). It's shipped in the docs partition and surfaced by the
-#     What's New settings tab (Doc/WhatsNew, grouped by ship day, newest first). SKIP only for
-#     pure-internal changes (refactor/test/CI/deps with NO user-visible effect) — say so in the PR
-#     body when you skip.
+# 0.5 RELEASE NOTE — NOT per pull request (policy `whatsnew-cadence`, Doc/Architecture/PolicyNotProse).
+#     A merge mints NO What's New file. It updates the DOC PAGE its change belongs to (AGENTS.md
+#     `conserve-work-products`), and What's New is written once per RELEASE, when the release is
+#     cut — naming what completed and linking to those pages. See Release Process §6. The old
+#     per-merge rule took the folder to 1,292 entries (662 in August 2026, 590 in September,
+#     ~20/day), which is the commit log with nicer titles: every entry individually defensible,
+#     the aggregate unusable.
 #
-#     🚨 A BUG FIX A USER CAN NOTICE IS USER-FACING. Fixes are the entries that go missing: over
-#     2026-07-29…08-09, 86 of 127 `fix/` PRs shipped none, against 22 of 69 `feat/` PRs. That is
-#     what makes the feed read as a feature-only changelog when most of the work is repair. A fix
-#     costs one line — Category: Fix bundles it into the day's "N fixes" summary rather than giving
-#     it a paragraph — so the bar is "would a user notice?", never "is it big enough?".
+#     So there is nothing to mint in this step. Confirm instead that the durable form exists:
+#       • behaviour a user can notice  → the doc page explaining it is in THIS change set
+#       • no page covers it yet        → write one (AuthoringDocumentation.md), or say in the PR
+#                                        body why none is needed
 #
-#     Category is the LABEL the tab groups by, not a constant:
-#       feat/ perf/ chore/ docs/ → Category: Feature   (rendered in full, with its Description)
-#       fix/                     → Category: Fix       (bundled into the day's one-line fix summary)
-#     Order is -YYYYMMDD (a NEGATIVE date), which sorts the doc tree and the Doc/WhatsNew folder
-#     page newest-first — without it they fall back to alphabetical by title.
+#     🚨 WHEN YOU ARE CUTTING A RELEASE — and only then — the entry's mechanics are:
 #
-#     🚨 IN A SATELLITE REPO (Plugins, Education, Reinsurance, SocialMedia, Memex) the path below
-#     does not exist — it is core-only. Write the entry into YOUR repo instead, at
-#     `WhatsNew/${DATE}-<slug>.md`, and add ONE line to the front matter:
+#       path    core:       src/MeshWeaver.Documentation/Data/WhatsNew/<yyyy-MM-dd>-<slug>.md
+#               satellite:  WhatsNew/<yyyy-MM-dd>-<slug>.md, plus ONE front-matter line,
+#                           `nodeType: WhatsNew` — the feed lists by node TYPE as well as by the
+#                           core path (#2539), so an entry declaring it reaches the one
+#                           Doc/WhatsNew feed from any repo with no cross-repo PR.
 #
-#         nodeType: WhatsNew
+#       name    🚨 MUST START WITH THE ISO SHIP DATE. `WhatsNewEntryIntegrityTest` enforces
+#               `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES `Order` from that date, so a
+#               version-prefixed name is rejected from the feed. The version belongs in `Name` /
+#               `Description`, never in the filename.
 #
-#     That is the whole difference. The feed lists entries by node TYPE as well as by the core
-#     path (#2539), so an entry declaring it reaches the one Doc/WhatsNew feed from any repo, with
-#     no cross-repo PR. Everything else — Name / Category / Description / Icon / Order, and the
-#     rule that a user-noticeable FIX gets an entry — is identical.
+#       Order   `-YYYYMMDD` (a NEGATIVE ship date), which sorts the doc tree and the folder page
+#               newest-first; without it they fall back to alphabetical by title. The test
+#               requires it to match the filename's date exactly.
 #
-#     Before #2539 there was no route at all, so satellite fixes were simply skipped, and the feed
-#     drifted toward being a platform-only changelog while reading as a complete one.
-DATE=$(date -u +%Y-%m-%d)                   # no clock in scripts elsewhere, but this is a shell step
-NOTE_FILE=src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md   # core; satellites: WhatsNew/${DATE}-<slug>.md
-# Frontmatter is printf'd (Order needs the date substituted); the PROSE goes in a QUOTED heredoc so
-# a note containing `$`, `${…}` or backticks is written literally instead of being expanded by bash.
-printf -- '---\nName: %s\nCategory: %s\nDescription: %s\nIcon: Sparkle\nOrder: -%s\n---\n\n' \
-  '<short human title of the change>' '<Feature|Fix>' \
-  '<one-line summary shown in the What'"'"'s New list>' "${DATE//-/}" > "$NOTE_FILE"
-cat >> "$NOTE_FILE" <<'NOTE'
-# <title>
-
-<2–5 plain-language sentences on what changed and why it matters to a user — not the how.>
-NOTE
-git add "$NOTE_FILE"
+#       content A release entry names FIXES as well as features. Fixes are the items that go
+#               missing — over 2026-07-29…08-09, 86 of 127 `fix/` PRs shipped no note against 22
+#               of 69 `feat/` PRs — which is what made the feed read as a feature-only changelog
+#               when most of the work is repair. `Category: Fix` bundles an item into the one-line
+#               fix summary, so the bar is "would a user notice?", never "is it big enough?".
 
 # 1. CREATE the PR (branch must be pushed first; push only when the user asked — AGENTS.md).
 git push -u origin "$(git branch --show-current)"
@@ -403,16 +394,22 @@ changes about this procedure:
 - **The step-3 poll still applies to the PR's own run**, and after the queue lands it, to `main`'s.
   The queue is not a reason to stop watching; it is the reason the merge is no longer yours to press.
 
-## What's New entry (step 0.5) — one doc node per user-facing PR
+## What's New entry — the MECHANICS, for when you are cutting a release
 
-The platform's **What's New** feed is not a hand-maintained changelog: it's the set of per-entry
-markdown nodes under `src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition,
-so every self-updating deployment shows the same feed). The **What's New** settings tab lists them
+> 🚨 **This section is NOT a per-PR step. A merge mints no What's New file** — see step 0.5 above,
+> and policy `whatsnew-cadence`. What follows is the file format, which you need only when you are
+> writing the entry for a **release**. Everything below is about *how* to write one, never *whether*
+> to. (This heading used to read "one doc node per user-facing PR"; that rule is retired.)
+
+The platform's **What's New** feed is the set of per-entry markdown nodes under
+`src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition, so every
+self-updating deployment shows the same feed). The **What's New** settings tab lists them
 newest-first; each entry is a normal doc node you can open.
 
-- **One file per PR** (`<YYYY-MM-DD>-<slug>.md`) — the date prefix drives newest-first ordering, and
-  a distinct filename per PR means two concurrent PRs never conflict on the feed (the reason we do
-  NOT prepend to a single rolling file).
+- **One file per RELEASE** (`<YYYY-MM-DD>-<slug>.md`), written when the release is cut, named by the
+  SHIP DATE — `WhatsNewEntryIntegrityTest` enforces `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES
+  `Order` from it, so a version-prefixed name is rejected from the feed. The version belongs in
+  `Name`/`Description`, never in the filename.
 - **Front-matter**: `Name` (title shown in the list), `Category` — **`Feature` or `Fix`, nothing else**
   (`feat/ perf/ chore/ docs/` → `Feature`, rendered in full; `fix/` → `Fix`, bundled into the day's
   one-line summary) — `Description` (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`), and
@@ -420,8 +417,10 @@ newest-first; each entry is a normal doc node you can open.
   newest-first instead of alphabetically by title. Body is plain-language user-facing prose.
   `WhatsNewEntryIntegrityTest` enforces all five — a wrong `Category` or a missing `Order` turns
   **main** red, not just your PR, because the entry only reaches CI once it has merged.
-- **When to skip**: pure-internal PRs (refactors, tests, CI, dependency bumps) with no user-visible
-  change don't need an entry — note the skip in the PR body so a reviewer knows it was deliberate.
+- **What it names**: what the release COMPLETED — the user-visible outcome of the features and
+  fixes in that stream, each linking to the doc page that explains it. Internal work (refactors,
+  tests, CI, dependency bumps) is not announced; there is no per-PR skip to note, because no PR
+  writes an entry (policy `whatsnew-cadence`).
 
 ## The half-committed-WIP trap (how main went red on a clean CI)
 

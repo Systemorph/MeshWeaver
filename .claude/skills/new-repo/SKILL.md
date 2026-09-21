@@ -12,6 +12,71 @@ allowed-tools:
 
 # /new-repo — Stand up a repository in the fleet
 
+## 🚨 READ FIRST — what a stand-up measured on 2026-09-20 (MeshWeaver.FundReporting)
+
+**This section OVERRIDES the sections below wherever they disagree.** They were written from the fleet
+as it stood in late August; every item here was measured while standing up a private content repo on
+2026-09-20, and each names the section it corrects. Where a sentence below contradicts one of these,
+this one is the current fleet and that one is history.
+
+- **The lanes are called `@main` now, not by SHA.** Every adopted caller (Crm, SocialMedia,
+  Reinsurance) reads `uses: Systemorph/MeshWeaver/.github/workflows/node-repo-*.yml@main` with
+  `platform-ref: main` / `scripts-ref: main`, and the platform IMAGE is resolved at run time by
+  `preflight` (`resolve-platform.py`, the newest SEALED set) — `Nothing pins the platform` REFUSES a
+  pin coming back. §5's "pin every `uses:` to a 40-char SHA" describes the pre-2026-09-12 shape.
+  **Copy `MeshWeaver.Crm@main`'s `ci.yml`** (the newest content-only caller; SocialMedia's carries a
+  `src/` module lane you do not want).
+- **Core's fleet roster must name the repo, or `validate` is red on the first PR.** `node-repo-validate`
+  asserts a row for the calling repo in core's `.github/lane-caller-grants.yml` (`This repo's callers
+  still match the platform's fleet roster` → *"is not in Systemorph/MeshWeaver's
+  .github/lane-caller-grants.yml"*). Add the row — Crm's ten callers, same grants — in a core PR
+  BEFORE the first push (core #4975 is the shape). 🔒 Core is PUBLIC and the roster names the repo,
+  so **a client's repo gets a neutral name** (what it does, never whose it is); the client is named
+  only inside the repo.
+- **Four org inputs are `selected`-visibility and do NOT reach a new repo:** `CONTROL_WEBHOOK_SECRET`,
+  `CONTROL_WEBHOOK_URL`, `MW_RUNNER_GATE`, `MW_RUNNER_HEAVY`. Add the repo id:
+  `gh api -X PUT orgs/Systemorph/actions/secrets/CONTROL_WEBHOOK_SECRET/repositories/<repo_id>`
+  (and `…/actions/variables/<NAME>/repositories/<repo_id>` for the three variables). Preflight names
+  them, so this is a red, not a hole — but it is a step §10 did not list. The runner group is
+  `visibility: all`; 🚨 **the two org Apps are different things and must not be conflated** —
+  `meshweaver-cloud` (app_id 4220566) is the write App the lanes mint from, `meshweaver-reader` is the
+  read-only App §10a calls `fleet-reader`, whose INSTALLATION is what core's pinned-digest sweep and
+  lock discover the fleet from. Measured 2026-09-20, `gh api /orgs/Systemorph/installations --jq
+  '.installations[]|"\(.app_slug) \(.repository_selection)"'` returned **both with
+  `repository_selection: all`**, which is the only reason that day's new repo needed no install step.
+  §10a's requirement stands: run that one-liner, and if either has flipped to `selected`, add the repo
+  to it — a repo the read-only App does not reach is not red, it is simply absent from the sweep.
+- **The ACR scope map also needs `memex-portal-ai content/read`** (the gate pulls the PORTAL image as
+  the reference set since core #3022): `--repository mw-plugin-test content/read metadata/read
+  --repository memex-portal-ai content/read` — §10a lists only the tester.
+- **`meshweaver-cloud` now holds `workflows: write`** (and `issues: write`) — §13's "no `workflows`
+  permission" is history; verify with the App JWT → `GET /app` as §10a says.
+- **The OIDC identity `github-actions-bake` is at 14 of Azure's 20 federated-credential slots** after
+  this repo (two per repo). Three more repos fill it; plan the identity split before then.
+- **`validate-repos.py` walks EVERY top-level folder**, so a non-package folder (client reference
+  material, a transcription) must be in every script's `SKIP` set AND in
+  `scripts/gen-manifests.config.json` — being package-less (no `index.json`) keeps it out of the
+  manifest, the bake and the registry, but not out of the JSON-shape walk.
+- **The mesh gate reads the `Tests` area's rendered table**, so a CASE NAME containing ❌ counts as a
+  failure (`41/41 passed` and `tests=FAILED`). Never put a verdict glyph in a case name.
+- **Running the in-node tests locally on a Mac:** `run-node-tests.py` builds a console runner against
+  the image's (Linux, arm64) framework and dies at run with exit 134. Build it with `--keep`, then
+  execute the kept `bin/Debug/net10.0` INSIDE the tester image: `docker cp` it into a container of
+  the image, strip the `Microsoft.AspNetCore.App` entry from `NodeTests.runtimeconfig.json`, copy the
+  extracted refs' `Microsoft.AspNetCore.App/10.0.12/*.dll` beside it, delete `NodeTests.deps.json`,
+  `docker start -a`. The compile gate needs the three registry-served module assemblies
+  (`MeshWeaver.AI`, `MeshWeaver.Markdown.Collaboration`, `MeshWeaver.Maps`) beside the image's
+  `/app` — it REFUSES an `/app`-only set by design.
+- **A client-private repo is MOUNTED on the instances that should see it, never registered on the
+  public registry**: registration seeds `<Source>/*` for EVERY configured source to any instance on a
+  plan (`MeshWeaverInstanceService.PlanGrantEntries`), and there is no per-source private flag. The
+  mount is `pluginRepos[] {isRegistrySource: true}` on the instance's Deployment record (App-
+  authenticated, no per-source token; `SecretName` is never rendered), mirrored into the overlay
+  (`Record renders the overlay` reds otherwise), and the Store lists it because
+  `StoreManifestSource.Resolve` folds the deployment's configured GIT sources (Plugins #2192/#2194)
+  — the live Store node is system-synced and is never edited for this.
+
+
 **Copy a repo that already works; do not invent a shape.** Six exist today and they agree on far
 more than they differ. What follows is the agreement, with each divergence flagged as a decision
 you have to make rather than a default you can drift into.
@@ -304,7 +369,10 @@ A real caller, verbatim from it:
 
 **The rules the caller must honour:**
 
-- **Pin every `uses:` to a 40-char commit SHA, never `@main` and never a tag.** On `@main` one edit
+- 🚨 **SUPERSEDED — see "READ FIRST" at the top: the fleet calls the lanes `@main` with run-time
+  platform resolution, and a pin coming back is REFUSED by `Nothing pins the platform`. The paragraph
+  below is the pre-2026-09-12 shape, kept for repos that have not moved.** Pin every `uses:` to a
+  40-char commit SHA, never `@main` and never a tag. On `@main` one edit
   to a shared workflow changes every satellite's gates at once and *"did my change break this, or
   did the workflow move under me?"* stops being answerable. A tag is worse: moving it changes all
   satellites with no commit anywhere to attribute it to. GitHub forbids an expression in `uses:`,
@@ -697,6 +765,10 @@ trigger one sync and count the partition's source nodes against the repo.
 
 ## 13. The pin-bump lane needs the App's `workflows` permission — or it never opens a PR
 
+🚨 **SUPERSEDED — see "READ FIRST": `meshweaver-cloud` HOLDS `workflows: write` since (at latest)
+2026-09-20, measured with an App JWT against `GET /app`. The account below is why the grant exists and
+how to re-measure it; the grant itself is no longer missing.**
+
 `platform-ref-bump.yml` → core's `node-repo-platform-ref-bump.yml` opens the pin-bump PR with a
 token minted for the `meshweaver-cloud` App. The pin lives in `.github/workflows/ci.yml` (the
 `uses: …@<sha>` refs cannot live anywhere else), and GitHub refuses any push touching a workflow
@@ -744,7 +816,8 @@ Files and settings:
 - [ ] `.github/dependabot.yml` copied.
 - [ ] At least one package: `index.json` (`Store/Plugin` + `PluginContent` + `entryPoint`) and a
       `manifest.lock` generated by `python3 scripts/gen-manifests.py`.
-- [ ] `ci.yml` copied from SocialMedia; every `uses:` pinned to one SHA; image digest pinned;
+- [ ] `ci.yml` copied from **MeshWeaver.Crm** (see "READ FIRST"; SocialMedia carries a `src/` module
+      lane you do not want); lanes called `@main`, the platform resolved at run time — **not** pinned;
       triggers include `merge_group` **and** `schedule`; `cancel-in-progress` off for main pushes.
 - [ ] **Webhooks (§12): one per live portal, that portal's vault secret, ping delivery `code=200`**
       — `gh api repos/Systemorph/<Repo>/hooks --jq length` equals the number of live portals.

@@ -149,7 +149,7 @@ That keeps the two failure modes apart, which is the whole property:
 | a **guard** | `ready` is untouched, so every other guard still reports |
 
 `.github/scripts/check-guard-step-masking.py` enforces both halves on two declared subjects —
-`node-repo-validate.yml`'s `validate` (36 guards) and `dotnet-test.yml`'s `workflow-shell` (60 guards,
+`node-repo-validate.yml`'s `validate` (39 guards) and `dotnet-test.yml`'s `workflow-shell` (61 guards,
 the job that gates `main-cd.yml`, the module lanes and every script a satellite fetches). It also
 requires the prerequisites to *be* a prefix, matched exactly (a prefix comparison let
 `actions/checkout-foo` satisfy `uses:actions/checkout`), refuses a job whose guard list is empty so it

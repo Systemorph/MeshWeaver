@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -628,6 +629,82 @@ public static class DynamicTypePreWarmer
     }
 
     /// <summary>
+    /// The stable id of the standing catalog subscription <see cref="ObserveLiveRecordCensus"/>
+    /// opens — one per process, keyed with its query set, never composed per call (#1311).
+    /// </summary>
+    internal const string LiveRecordCensusQueryId = "nodetype-live-record-census";
+
+    /// <summary>
+    /// 🚨 <b>WATCHES, NEVER BUILDS — the live half of <c>bake-report</c></b> (#4632).
+    ///
+    /// <para>A standing subscription to the mesh-wide NodeType catalog, folded on every emission
+    /// into a <see cref="NodeTypeLiveRecordCensus"/>: which records, AS THEY STAND NOW, name a build
+    /// keyed to a framework this process does not run, and how many of those were stamped after
+    /// <paramref name="bootedAt"/>. The two boot-time passes above (<see cref="ProbeDynamicTypes"/>,
+    /// <see cref="WarmDynamicTypes"/>) take ONE enumeration and publish; a record another replica
+    /// re-stamps a minute later is invisible to both, which is how a mid-roll cross-stamp reached a
+    /// customer-facing page with every instrument green. This one keeps reading.</para>
+    ///
+    /// <para>Same population as the bake — dynamic types only, the ones with source to compile — and
+    /// the same System scope, for the same reason: enumerating NodeType definitions across every
+    /// partition is infrastructure, not a user-attributable read. The synced query is the canonical
+    /// surface for a live collection (<c>hub.GetQuery</c>): one shared upstream, whole-set
+    /// emissions, change events applied for the process's life. The fold is pure and touches no
+    /// store and no hub, so an emission costs a pass over a few hundred typed records.</para>
+    ///
+    /// <para>Cold, like every observable here: the caller subscribes and owns the subscription
+    /// (the hosted service disposes it with the service). Faults propagate — a catalog that cannot
+    /// be read must not be reportable as "nothing foreign".</para>
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    /// <param name="bootedAt">The boundary <see cref="NodeTypeLiveRecordCensus.ForeignSinceBoot"/> splits on.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <returns>One census per catalog emission.</returns>
+    public static IObservable<NodeTypeLiveRecordCensus> ObserveLiveRecordCensus(
+        IMessageHub mesh, DateTimeOffset bootedAt, ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var accessService = mesh.ServiceProvider.GetService<AccessService>();
+        var liveFramework = NodeTypeCompilationHelpers.FrameworkVersion;
+        var options = mesh.JsonSerializerOptions;
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
+        // WarmDynamicTypes (#1444/#1790) for why the scope must be sealed inside the one Subscribe.
+        return accessService.RunAsSystem(() => mesh
+                // Every NodeType definition — a catalog, mesh-wide by nature (#3202 — fan-out is
+                // opt-in, and this is one of its three legitimate shapes: a process-wide watch).
+                .GetQuery(LiveRecordCensusQueryId, MeshWideQuery.OfType(MeshNode.NodeTypePath)))
+            // 🚨 No logger into the fold: this runs on EVERY catalog emission for the process's
+            // life, so a permanently untyped record would re-log the same conversion failure on
+            // every unrelated NodeType write — a log wave during a bake. The boot-time DynamicTypesOf
+            // already names each untyped path once; here it is COUNTED (Untyped) and printed.
+            .Select(nodes => NodeTypeLiveRecordCensus.Of(
+                LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>
+    /// The census's input from one catalog emission: every ACTIVE node whose definition has
+    /// compilable source (the bake's own population rule, <see cref="HasCompilableSource"/>), or
+    /// whose content could not be typed at all (carried as <c>null</c> so the census can count what
+    /// it decided nothing about). Static types — no source, assembly shipped with the process — are
+    /// not in it, exactly as they are not in <see cref="DynamicTypesOf"/>.
+    /// </summary>
+    internal static ImmutableList<(string Path, NodeTypeDefinition? Definition)> LiveRecordsOf(
+        IEnumerable<MeshNode> nodes, JsonSerializerOptions options, ILogger? logger)
+        => nodes
+            .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
+            .Select(n => (
+                Path: n.Path!,
+                Definition: n.ContentAs<NodeTypeDefinition>(options, logger),
+                HasContent: n.Content is not null))
+            // A typed definition is in the population iff it has source to compile; an untyped
+            // node is in it iff it HAD content the hub could not type (no content is nothing at
+            // all, not a failure to type) — the same two rules DynamicTypesOf applies.
+            .Where(pair => pair.Definition is { } d ? HasCompilableSource(d) : pair.HasContent)
+            .GroupBy(pair => pair.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (g.First().Path, g.First().Definition))
+            .ToImmutableList();
+
+    /// <summary>
     /// 🚨 <b>Publishes the report so <c>/health</c> can carry it</b> (#3703).
     ///
     /// <para>The report's numbers — and above all
@@ -1187,7 +1264,7 @@ public static class DynamicTypePreWarmer
     }
 
     /// <summary>A NodeType has something for Roslyn to compile (so it is a dynamic type worth warming).</summary>
-    private static bool HasCompilableSource(NodeTypeDefinition d) =>
+    internal static bool HasCompilableSource(NodeTypeDefinition d) =>
         !string.IsNullOrWhiteSpace(d.Configuration)
         || !string.IsNullOrWhiteSpace(d.HubConfiguration)
         || (d.Sources is { Count: > 0 });

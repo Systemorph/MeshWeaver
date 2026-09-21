@@ -97,6 +97,14 @@ public static class Controls
     /// <returns>A new <see cref="TextFieldControl"/>.</returns>
     public static TextFieldControl Text(object data) => new(data);
 
+    /// <summary>
+    /// Creates a hand-drawn signature input bound to <paramref name="data"/> — a canvas signed with
+    /// a finger, a pen or the mouse; the value is the signature as a PNG data URL.
+    /// </summary>
+    /// <param name="data">The bound value (a PNG data URL) or data-binding expression.</param>
+    /// <returns>A new <see cref="SignaturePadControl"/>.</returns>
+    public static SignaturePadControl SignaturePad(object data) => new(data);
+
     /// <summary>Creates a numeric input control bound to <paramref name="data"/>.</summary>
     /// <param name="data">The bound numeric value or data-binding expression.</param>
     /// <param name="type">The numeric type (e.g. integer, decimal) that constrains input.</param>

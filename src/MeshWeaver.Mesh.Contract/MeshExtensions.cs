@@ -21,6 +21,25 @@ namespace MeshWeaver.Mesh;
 public static class MeshExtensions
 {
     /// <summary>
+    /// How loudly a FAILED delete is reported, from the two facts that decide it: whether the
+    /// failure was a not-found, and whether anything had already been removed when it happened.
+    ///
+    /// <para>🚨 Extracted so the decision is testable on its own — it lives at the bottom of a long
+    /// classification chain inside a <c>Catch</c>, which is the one place a severity is easiest to
+    /// get wrong and hardest to pin.</para>
+    ///
+    /// <para><b>The rule the rest of that chain already follows:</b> a torn subtree is an Error and
+    /// nothing else is. A delete that removed nodes and then failed left the tree half-gone
+    /// (<c>partialCount &gt; 0</c>); one that failed having removed nothing mutated nothing. So a
+    /// not-found with no partial deletion is a <see cref="LogLevel.Warning"/> — worth seeing,
+    /// because a caller may be naming a path that was never there, but not a fault. Anything else
+    /// stays <see cref="LogLevel.Error"/>, including every <c>unexpected</c>: an unclassified
+    /// failure is precisely when loud is correct.</para>
+    /// </summary>
+    internal static LogLevel DeleteFailureLevel(bool isNotFound, int partialCount)
+        => isNotFound && partialCount == 0 ? LogLevel.Warning : LogLevel.Error;
+
+    /// <summary>
     /// Registers mesh-related types with the hub's type registry.
     /// </summary>
     /// <param name="config">The message hub configuration.</param>
@@ -3990,7 +4009,20 @@ public static class MeshExtensions
                             + "operation was aborted before any node was removed, so nothing is inconsistent.",
                             path, CancellationClassifier.Describe(ex));
                     else
-                        logger.LogError(ex, "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
+                        // 🚨 A NOT-FOUND THAT MUTATED NOTHING IS NOT AN ERROR (#1422). Every other
+                        // pair in this chain already tests `partial.Count` and this branch never
+                        // did: unauthorized is Error only once nodes were already removed (#1128),
+                        // and cancelled likewise (#2182) -- both on the reasoning that what has to
+                        // stay LOUD is a TORN SUBTREE. A delete whose target was already gone tore
+                        // nothing, and the commonest way to reach it is a cascade racing a
+                        // concurrent delete of the same satellites. Reported at Error it minted a
+                        // ticket and, through a shared fingerprint, kept REOPENING a fixed one:
+                        // #1422 was closed on its own subject twice and reopened twice by these
+                        // lines. `unexpected` keeps Error whatever the count -- it is by definition
+                        // a state nobody classified, and that is exactly when loud is right.
+                        logger.Log(
+                            DeleteFailureLevel(isNotFound, partial.Count), ex,
+                            "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
                             isNotFound ? "not-found" : "unexpected", path, partial.Count);
                     // Say "cancelled", never "Unexpected error" — this string is what a user, an
                     // agent or a test reads, and retrying a cancelled delete is meaningful in a way
@@ -5858,7 +5890,7 @@ public static class MeshExtensions
                     DispatchInnerCreate();
                     return;
                 }
-                if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig))
+                if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig, inboundRequest.Folds))
                 {
                     hub.NoteRequestStage(request.Id, "UPSERT_READ existing → no-op probe");
                     SkipNoOpIfAuthorized(existing);
@@ -6283,6 +6315,17 @@ public static class MeshExtensions
                 // mechanism anywhere able to restore it. Flooring on the row we JUST read makes
                 // the write forward by construction, so the repair lands on the first attempt.
                 // Content is untouched by this: it still comes from `live`.
+                // The fold step, as a named function so the merge reads in the order it runs:
+                // full-instance merge, then the folds that override the members they name.
+                MeshNode FoldOntoLive(MeshNode mergedNode, MeshNode liveNode) =>
+                    inboundRequest.Folds is { Count: > 0 }
+                        ? mergedNode with
+                        {
+                            Content = ContentFolds.Apply(
+                                mergedNode.Content, liveNode, inboundRequest.Folds, hub.JsonSerializerOptions),
+                        }
+                        : mergedNode;
+
                 var write = hub.GetMeshNodeStream(node.Path)
                     // 1b', on the MERGED node. The create path repairs a stale self-default MainNode
                     // before it is ever stored; the update path has to repair it AFTERWARDS, because
@@ -6291,8 +6334,20 @@ public static class MeshExtensions
                     // what makes a re-import heal the six Skill nodes #2939 measured — a
                     // GetMeshNodeStream patch CAN express it, which is the route MeshNode.MainNode's
                     // remarks name as the only one that restores a main node.
+                    // 🚨 The FOLDS run here and nowhere else (#4928). This lambda is the one place
+                    // in the upsert that holds `live` — the node as its owner currently has it — so
+                    // it is the only place a rule like `Sum 1` can be turned into a value. Applying
+                    // them on `existing` (the durable row this handler read) would reintroduce the
+                    // very staleness the fold exists to remove: that read is a snapshot, `live` is
+                    // the merge target.
+                    //
+                    // Order matters and is not arbitrary: the full-instance merge runs FIRST and
+                    // takes `Content` wholesale, then the folds overwrite exactly the members they
+                    // name. A fold therefore always beats the incoming content for its own member,
+                    // which is what makes `Content = record` plus `Sum(accessCount, 1)` mean "take
+                    // my content, except the counter, which you compute".
                     .Update(live => RepairStaleSelfDefaultMainNode(
-                        UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions) with
+                        FoldOntoLive(UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions), live) with
                         {
                             Version = Math.Max(live.Version, existing.Version),
                             // Identity fields the merge is meant to PRESERVE — recovered from the
@@ -6613,8 +6668,22 @@ public static class MeshExtensions
     /// </summary>
     private static bool IsNoOpUpsert(
         MeshNode existing, MeshNode sourceNode, JsonSerializerOptions options,
-        MeshConfiguration? meshConfig)
+        MeshConfiguration? meshConfig, IReadOnlyCollection<ContentFold>? folds = null)
     {
+        // 🚨 A FOLD IS NEVER A NO-OP (#4928). This comparison answers "does the incoming node differ
+        // from the stored row" — and a fold's whole point is that the incoming node does NOT carry
+        // the value it wants written. `Sum 1` on a node whose seed content already equals the stored
+        // content compares EQUAL, so without this the upsert is acknowledged as a skip, the update
+        // lambda never runs, and the counter silently does not move. The caller is told success.
+        //
+        // It cannot be decided more cleverly here: whether a fold changes anything depends on the
+        // LIVE node, which this comparison does not have (it holds the durable row this handler
+        // read). The owner-side lambda is where that is knowable, so the honest answer is to stop
+        // claiming no-op and let the write path decide — the same shape as the stale-MainNode
+        // repair below, which also takes the write path to let the merge settle it.
+        if (folds is { Count: > 0 })
+            return false;
+
         // 🚨 The STORED row may itself need the 1b' repair, and then this write is not a no-op even
         // when every field matches. A stale self-default MainNode cannot be moved by the incoming
         // node — a full instance can express "point elsewhere" but never "point back at myself"
