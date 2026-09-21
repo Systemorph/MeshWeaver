@@ -108,6 +108,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Reading & writing nodes
 
 - **Start here:** [CQRS — Queries vs. Content Access](CqrsAndContentAccess)
+- [Three Registries a Read Can Miss](ThreeRegistriesAReadCanMiss) — "the type is not registered" is three unrelated tables (the hub's type registry, the workspace's mapped collections, the reduce manager), so a guard that checks one while the read uses another passes having checked nothing; plus what a refusal and a recovery failure must NAME to be followed up
 - [An Answer Nobody Gave Is Not Cached](AnswerNobodyGaveIsNotCached) — a synced chain replays its FIRST frame for the life of the process, and a provider that completes without an Initial is counted as an empty one, so a cold moment used to become a permanent false "absent"; the frame now names who never answered and an unanswered frame is delivered but not kept
 - [The Query Fan-In's Stall Terminal](QueryFanInStallTerminal) — a provider that neither emits, completes nor errors used to starve the all-providers Initial gate for ever, with no error and nothing to grep; the merge now faults naming it, at a DERIVED rung strictly inside the permission fold's own budget, and every consumer that decides access already fails closed on it
 - [MeshNode Stream Cache](MeshNodeStreamCache)
