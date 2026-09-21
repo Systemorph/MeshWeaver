@@ -70,31 +70,30 @@ hosting::safe_name storage-class "$storage_class"
 # customresourcedefinitions get+list). This discrimination stays anyway: a future RBAC change can
 # take the permission away again, and the script must not silently regress to lying when it does.
 #
-#   probe <any|output> <what> <cmd…>
-#     0 = present · 1 = absent (missing[]) · 2 = refused (refused[])
+#   hosting::probe <any|output> <cmd…>  (_common.sh)
+#     0 = present · 1 = absent · 2 = refused
 #   `output` additionally requires non-empty stdout — `kubectl get nodes -l …` exits 0 and prints
 #   nothing when the selector matches no node, which is an ABSENCE, not a failure.
+#
+# 🚨 The three-answer primitive lives in _common.sh, NOT here. It was a local helper in this file
+# when #4436 first made the discrimination, and that is precisely why the fix did not sweep: the
+# credentials-Secret read forty lines below, and two reads in other commands, went on collapsing
+# REFUSED into ABSENT with nothing to say so. See MeshWeaver#4722.
 missing=()
 refused=()
 probe() {
-  local need="$1" what="$2"; shift 2
-  local out rc err errfile
-  errfile="$(mktemp)"
-  out="$("$@" 2>"$errfile")"; rc=$?
-  err="$(head -1 "$errfile")"; rm -f "$errfile"
-  if [ "$rc" -ne 0 ]; then
-    case "$err" in
-      *Forbidden*|*forbidden*) refused+=("${what} — ${err}"); return 2 ;;
-      *)                       missing+=("$what");            return 1 ;;
-    esac
-  fi
-  if [ "$need" = output ] && [ -z "$out" ]; then missing+=("$what"); return 1; fi
+  local what="$1"; shift
+  hosting::probe "$@"
+  case $? in
+    2) refused+=("${what} — ${HOSTING_PROBE_ERR}"); return 2 ;;
+    1) missing+=("$what");                         return 1 ;;
+  esac
   return 0
 }
 
-probe any    "the CloudNativePG operator (CRD clusters.postgresql.cnpg.io)" kubectl get crd clusters.postgresql.cnpg.io
-probe any    "the StorageClass ${storage_class}"                            kubectl get storageclass "$storage_class"
-probe output "a node pool labelled workload=db (the db pool)"               kubectl get nodes -l workload=db -o name
+probe "the CloudNativePG operator (CRD clusters.postgresql.cnpg.io)" any    kubectl get crd clusters.postgresql.cnpg.io
+probe "the StorageClass ${storage_class}"                            any    kubectl get storageclass "$storage_class"
+probe "a node pool labelled workload=db (the db pool)"               output kubectl get nodes -l workload=db -o name
 
 # REFUSED is reported FIRST and on its own. When a probe could not run, NOTHING is known about the
 # platform layer — so reporting "absent" alongside it would be a guess wearing a measurement's
@@ -135,9 +134,20 @@ hosting::log "waiting up to ${timeout}s for the Cluster ${release} to report Rea
 kubectl -n "$namespace" wait "cluster.postgresql.cnpg.io/${release}" --for=condition=Ready --timeout="${timeout}s" \
   || hosting::die "the Cluster ${release} did not become Ready within ${timeout}s. Read 'kubectl -n ${namespace} describe cluster ${release}' and its pods' events (a Pending pod usually means the db pool, its taint or the StorageClass). The release is installed; re-requesting the action resumes the wait."
 
-pw_len="$(kubectl -n "$namespace" get secret "${release}-app" -o jsonpath='{.data.password}' 2>/dev/null | wc -c | tr -d ' ')"
-[ "${pw_len:-0}" -gt 0 ] \
-  || hosting::die "the Cluster ${release} is Ready but its credentials Secret ${release}-app carries no password — the portal would start with none. Read the operator's log in cnpg-system."
+# 🚨 THREE ANSWERS HERE TOO, and this read is why the primitive moved to _common.sh. It was
+#     pw_len="$(kubectl … get secret "${release}-app" -o jsonpath='{.data.password}' 2>/dev/null | wc -c …)"
+# — the same `2>/dev/null` the platform-layer probes above were fixed for, surviving forty lines
+# below the fix, and inside a PIPE where no `||` could have caught it either. A Forbidden on
+# `secrets` and an absent Secret both came out as the Secret "carrying no password", which is the
+# operator stating the contents of something it never read. The portal's pods read this Secret at
+# start, so the sentence decides whether a reader goes to cnpg-system or to the ClusterRole.
+hosting::probe any kubectl -n "$namespace" get secret "${release}-app" -o jsonpath='{.data.password}'
+case $? in
+  2) hosting::die_refused "the credentials Secret ${release}-app in ${namespace}, which the portal's pods read at start" ;;
+  1) hosting::die "the Cluster ${release} is Ready but its credentials Secret ${release}-app is ABSENT in ${namespace} — the portal would start with no password. Read the CloudNativePG operator's log in cnpg-system: it creates this Secret, and a Ready Cluster without one is its failure, not helm's. Nothing here creates it." ;;
+esac
+[ -n "$HOSTING_PROBE_OUT" ] \
+  || hosting::die "the Cluster ${release} is Ready and its credentials Secret ${release}-app exists, but carries NO password key — the portal would start with none. Read the CloudNativePG operator's log in cnpg-system."
 
 hosting::log "ready     ${release}-rw.${namespace}.svc:5432, credentials in Secret ${release}-app (password present, not shown)"
 hosting::say db_release "$release"

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# A stand-in `helm` for test/run-tests.sh, so hosting-db-release's POST-INSTALL verification can be
+# reached without a cluster. It installs nothing: what the tests past this point assert is which of
+# the three answers the credentials-Secret read gives (MeshWeaver#4722).
+set -uo pipefail
+echo "Release \"${2:-}\" has been upgraded. Happy Helming!"

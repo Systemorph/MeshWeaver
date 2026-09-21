@@ -217,9 +217,15 @@ jobs:
         # tests run against stubs under test/stubs/pull-secret/, and a stub git refused to track
         # makes those tests fail on a fresh checkout as "command not found" — or, worse, fall
         # through to a REAL az/kubectl on a runner that has one.
+        #
+        # 🚨 db-release/helm is why the worse half is not hypothetical: the hosting-db-release
+        # happy-path case runs the command all the way to its post-install verification, so an
+        # untracked or non-executable stub there means a REAL `helm upgrade --install --namespace
+        # pearl` on the runner. Both db-release stubs were absent from this list until the
+        # MeshWeaver#4722 sweep added them with the helm one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done
