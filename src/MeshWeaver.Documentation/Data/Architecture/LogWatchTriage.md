@@ -1181,6 +1181,17 @@ there is over-serialisation rather than one slow leg** — see
 [Ordered Route Channels](../OrderedRouteChannels). A ticket whose samples span the change carries
 both spellings, which is the only way to tell which image produced which sample.
 
+🚨 **And the one field to read BEFORE deciding whether a crossing is a fault at all is
+`oldest leg in flight`.** The depth and the in-flight count cannot tell a busy silo from one holding a
+slot that will never be released; the line's own advice for that — *a later line with a higher episode
+means this episode drained* — needs a SECOND sample, which a per-sample filer does not have. The age
+does it in one: every leg young is load, one leg minutes old is a leaked slot **and the label names the
+leg**. `not tracked on this host` means the quiescence gauge is not registered there, and is not a
+clean reading. The companion `waiting for a pool slot` separates a thread shortage from downstream I/O,
+which `routing pool subscribing` provably cannot — it counts only the subscribe prologue, so both
+states read ~0. Full reading order:
+[Reading a Routing Saturation Report](../ReadingARoutingSaturationReport).
+
 ## What this is not
 
 - **Not an alerting system.** A provisioned Grafana rule covers the "tell a human now" case
