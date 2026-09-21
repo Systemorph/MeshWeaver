@@ -87,6 +87,46 @@ public sealed record SeoPageData(MeshNode Node, string? Description, string? Ima
 }
 
 /// <summary>
+/// 🚨 THE CARD A GATED PAGE SHARES WITH — composed from the nearest ancestor the
+/// <see cref="AnonymousGate"/> ADMITS, plus the request path's own segments. Never from the page
+/// that was withheld.
+///
+/// <para><b>What it fixes.</b> A link into a private subtree of a PUBLIC root unfurled as the bare
+/// site card. Measured 2026-09-20 on <c>www.meshweaver.cloud</c>: <c>/PG3Reporting</c> carried
+/// <c>og:title "Fund Reporting"</c>, a description and <c>/api/og/PG3Reporting.png</c>, while every
+/// descendant — <c>…/Funds</c>, <c>…/Funds/InsuranceCore</c>,
+/// <c>…/Funds/InsuranceCore/2026-06-30</c> — carried <c>og:title "MeshWeaver"</c> and
+/// <c>/api/og.png</c>. Not depth (<c>/Doc/Architecture/AccessControl</c> unfurls fully on the same
+/// host) but ACCESS: that partition's <c>_Policy</c> declares a <c>RedirectOnDenied</c> and no
+/// <c>PublicRead</c>, so its root is a public listing over gated content.
+/// </para>
+///
+/// <para>🚨 <b>Why this discloses nothing.</b> The tail of <see cref="Title"/> is the request path's
+/// own segments — they are in the URL the sharer pasted into the chat, so rendering them back tells
+/// the reader nothing they are not already looking at. Everything else belongs to the PUBLIC
+/// ancestor and is already served to anyone who asks: its name, its description, and the card at
+/// <c>/api/og/{ancestor}.png</c> that the same gate already serves anonymously. The withheld node's
+/// own <see cref="MeshNode.Name"/>, description, icon and content are never read — see
+/// <see cref="SeoResolver.ComposeAncestorCard"/>, which cannot read them because it is never given
+/// them.
+/// </para>
+///
+/// <para>When no ancestor is public either there is no card here, and the caller keeps the site
+/// card. That is the honest floor: a private page under a private root says only what its URL
+/// already said.</para>
+/// </summary>
+/// <param name="Title">The ancestor's title, then the requested path's segments below it.</param>
+/// <param name="Description">The ancestor's description, plus the partition's call to action when it
+/// declares one. Null when the ancestor has neither.</param>
+/// <param name="Image">The ancestor's share image — root-relative or absolute, exactly as
+/// <see cref="SeoResolver.ShareImage"/> returns it, so the caller prefixes the host and declares its
+/// size the same way it does for a public page.</param>
+/// <param name="AncestorPath">The node the card was built from. Not rendered; it is what a log line
+/// and a test name to say WHICH ancestor answered.</param>
+public sealed record SeoAncestorCard(
+    string Title, string? Description, string Image, string AncestorPath);
+
+/// <summary>
 /// Server-side SEO resolution for the initial HTTP response. Reactive end to end; the ONE
 /// <c>Task</c> bridge sits at the Razor static-SSR boundary (<see cref="ResolveAsync"/>), the
 /// same adapter shape the MCP/REST surfaces use. Fail-open to null: a slow or faulted mesh
@@ -96,6 +136,13 @@ public static class SeoResolver
 {
     /// <summary>Per-request stash key so the head and body components resolve ONCE.</summary>
     public const string HttpContextItem = "Memex.Seo.PageData";
+
+    /// <summary>
+    /// How long any one of these resolutions may take before the page ships without it. Named
+    /// rather than repeated, so the public-page pass and the public-ancestor pass of the SAME HTTP
+    /// response cannot drift into different budgets.
+    /// </summary>
+    private static readonly TimeSpan ResolveBudget = TimeSpan.FromSeconds(3);
 
     /// <summary>Route prefixes that are never mesh nodes — skipped without touching the mesh.
     /// "mcp" is deliberately NOT here: <c>Mcp</c> is a real partition (the MCP Server store
@@ -145,7 +192,7 @@ public static class SeoResolver
                                 : resolution.Remainder,
                         }
                         : null))
-            .Timeout(TimeSpan.FromSeconds(3))
+            .Timeout(ResolveBudget)
             .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
     }
 
@@ -170,6 +217,184 @@ public static class SeoResolver
             .ObserveCompletion(ex => logger?.LogWarning(
                 ex, "SEO resolution for '{Path}' faulted after the head had already been produced", path));
     }
+
+    /// <summary>
+    /// 🚨 THE CALL-TO-ACTION KEY. The one sentence this surface adds to a gated page's card. It is
+    /// platform-owned text, so it follows the VIEWER's language and lives in the catalog
+    /// (<c>strings.{en,de}.json</c>) like every other string a human reads. Public so the head, the
+    /// tests and a translator can all name the same key.
+    /// </summary>
+    public const string CallToActionKey = "seo.gatedCard.accessRoute";
+
+    /// <summary>
+    /// How far above the requested path a public ancestor is looked for. The walk is over the
+    /// ancestors of the deepest node that EXISTS (<see cref="AddressResolution.Prefix"/>), never
+    /// over the raw URL segments, so a 40-segment URL into nothing costs one resolution and stops —
+    /// this bound only ever bites content nested deeper than any in the fleet, and it is what keeps
+    /// an anonymous request from buying an unbounded number of permission folds.
+    /// </summary>
+    private const int MaxAncestorsWalked = 12;
+
+    /// <summary>
+    /// 🚨 THE FALLBACK for a page the gate WITHHELD: the nearest anonymous-readable ancestor's card,
+    /// captioned with the requested path. Emits null — meaning "keep the site card" — when the URL
+    /// matches no node at all, when no ancestor is public either, or when anything errors or times
+    /// out. Cold.
+    ///
+    /// <para>Call it only when <see cref="Resolve"/> answered null: this walk starts STRICTLY ABOVE
+    /// the node the URL resolved to, so it can never re-serve a page that was withheld.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose path resolver and permission evaluator answer.</param>
+    /// <param name="path">The node path the visitor asked for.</param>
+    /// <param name="locale">The VIEWER's language tag, read explicitly off their AccessContext by
+    /// the caller — never from an ambient culture. Null ⇒ English.</param>
+    public static IObservable<SeoAncestorCard?> ResolvePublicAncestor(
+        IMessageHub hub, string path, string? locale = null)
+    {
+        var resolver = hub.ServiceProvider.GetService<IPathResolver>();
+        var requested = (path ?? "").Trim('/');
+        if (resolver is null || requested.Length == 0)
+            return Observable.Return<SeoAncestorCard?>(null);
+
+        return resolver.ResolvePath(requested)
+            .Take(1)
+            // 🚨 The walk starts at the deepest node that EXISTS, not at the URL's last segment.
+            // ResolvePath already falls back to the nearest existing ancestor — that is how
+            // `/PG3Reporting/Subscribe`, a layout-area route, resolves to `PG3Reporting` and unfurls
+            // as it today — so a resolution of null means NO node matches any prefix of this URL.
+            // There is nothing above it to find, and the honest answer is the site card.
+            .SelectMany(resolution => resolution is null
+                ? Observable.Return<SeoAncestorCard?>(null)
+                : NearestPublicAncestor(hub, AncestorPaths(resolution.Prefix))
+                    .SelectMany(ancestor => ancestor is null
+                        ? Observable.Return<SeoAncestorCard?>(null)
+                        : CallToAction(hub, resolution.Prefix, locale)
+                            .Select(callToAction =>
+                                ComposeAncestorCard(ancestor, requested, callToAction))))
+            // Same budget and the same fail-open-to-null as Resolve: a slow or faulted mesh costs
+            // the card, never the page, and the caller's site card is the floor.
+            .Timeout(ResolveBudget)
+            .Catch<SeoAncestorCard?, Exception>(_ => Observable.Return<SeoAncestorCard?>(null));
+    }
+
+    /// <summary>
+    /// The static-SSR boundary bridge for <see cref="ResolvePublicAncestor"/> — same shape and same
+    /// reasoning as <see cref="ResolveAsync"/>: <c>ObserveCompletion</c>, never <c>.ToTask()</c>,
+    /// because the latter would resume the rest of the Razor render inline on whichever mesh hub
+    /// answered.
+    /// </summary>
+    /// <param name="hub">The hub whose path resolver and permission evaluator answer.</param>
+    /// <param name="path">The node path the visitor asked for.</param>
+    /// <param name="locale">The viewer's language tag; null ⇒ English.</param>
+    public static Task<SeoAncestorCard?> ResolvePublicAncestorAsync(
+        IMessageHub hub, string path, string? locale = null)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SeoResolver));
+        return ResolvePublicAncestor(hub, path, locale)
+            .FirstAsync()
+            .ObserveCompletion(ex => logger?.LogWarning(
+                ex,
+                "The public-ancestor card for '{Path}' faulted after the head had already been produced",
+                path));
+    }
+
+    /// <summary>
+    /// 🚨 THE COMPOSITION — and the whole disclosure argument in one signature: it takes a
+    /// <see cref="SeoPageData"/> the gate ADMITTED plus the requested PATH, and there is
+    /// deliberately no overload that takes the withheld node. Pure — no hub, no IO — so everything
+    /// the card can possibly say is decided here, and is testable without a mesh.
+    /// </summary>
+    /// <param name="ancestor">The nearest anonymous-readable ancestor's page data.</param>
+    /// <param name="requestedPath">The node path the visitor asked for.</param>
+    /// <param name="callToAction">The localized sentence to append, or null for none.</param>
+    public static SeoAncestorCard ComposeAncestorCard(
+        SeoPageData ancestor, string requestedPath, string? callToAction)
+    {
+        ArgumentNullException.ThrowIfNull(ancestor);
+        var tail = TailBelow(requestedPath, ancestor.Node.Path);
+        var ancestorTitle = ancestor.Node.Name ?? ancestor.Node.Id;
+        var description = FirstNonEmpty(ancestor.Description) is { } text
+            ? callToAction is null ? text : $"{text} {callToAction}"
+            : callToAction;
+        return new SeoAncestorCard(
+            tail.Length == 0 ? ancestorTitle : $"{ancestorTitle} · {tail}",
+            description,
+            ancestor.Image ?? SiteCard,
+            ancestor.Node.Path);
+    }
+
+    /// <summary>
+    /// The requested path's segments BELOW <paramref name="ancestorPath"/>, joined for reading —
+    /// exactly the text the sharer pasted, in their own spelling, and nothing else. Empty when the
+    /// requested path IS that ancestor, or is not under it at all: the walk cannot produce the
+    /// latter, and an empty tail is the one answer that invents nothing if it ever does.
+    /// </summary>
+    private static string TailBelow(string requestedPath, string ancestorPath)
+    {
+        var requested = requestedPath.Trim('/');
+        var ancestor = ancestorPath.Trim('/');
+        if (ancestor.Length == 0)
+            return requested.Replace("/", SegmentSeparator);
+        if (!requested.StartsWith(ancestor, StringComparison.OrdinalIgnoreCase))
+            return "";
+        return requested[ancestor.Length..].Trim('/').Replace("/", SegmentSeparator);
+    }
+
+    /// <summary>Punctuation, not words: the path separator spaced out for a card, and the
+    /// title/caption divider the page <c>&lt;title&gt;</c> already uses. Nothing here is language,
+    /// so nothing here is translated.</summary>
+    private const string SegmentSeparator = " / ";
+
+    /// <summary>
+    /// The strict ancestors of <paramref name="nodePath"/>, DEEPEST FIRST — the candidate order for
+    /// "the nearest public ancestor". The node itself is excluded on purpose: this surface is only
+    /// ever reached because the gate withheld it, and a card built from it would BE the leak.
+    /// </summary>
+    private static IEnumerable<string> AncestorPaths(string nodePath)
+    {
+        var segments = (nodePath ?? "").Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var walked = 0;
+        for (var depth = segments.Length - 1; depth > 0 && walked < MaxAncestorsWalked; depth--, walked++)
+            yield return string.Join('/', segments.Take(depth));
+    }
+
+    /// <summary>
+    /// The first of <paramref name="ancestors"/> the anonymous gate admits, or null when none is.
+    /// <c>Concat</c> over a LAZY sequence with <c>Take(1)</c>: the next ancestor is resolved only
+    /// because the previous one was withheld, and nothing above the hit is read at all.
+    /// </summary>
+    private static IObservable<SeoPageData?> NearestPublicAncestor(
+        IMessageHub hub, IEnumerable<string> ancestors) =>
+        ancestors
+            .Select(ancestor => Resolve(hub, ancestor))
+            .Concat()
+            .Where(data => data is not null)
+            .Take(1)
+            .DefaultIfEmpty(null);
+
+    /// <summary>
+    /// The localized call to action for a gated path, or null when the partition offers no route in.
+    /// A <see cref="PartitionAccessPolicy.RedirectOnDenied"/> is the owner SAYING there is one (a
+    /// sign-up page, a course cover); without it, telling a reader to sign in would be advice that
+    /// leads nowhere.
+    ///
+    /// <para>The redirect TARGET is deliberately not named on the card. It is not in the URL the
+    /// sharer pasted, so printing it would disclose something new — and the link on the card already
+    /// goes there, because that is what the redirect does to whoever clicks it.</para>
+    ///
+    /// <para>The policy read gets its own Catch: a faulted policy chain costs the sentence, not the
+    /// whole card — the same fail-open-to-less-information this resolver applies throughout. A read
+    /// that never emits is bounded by the caller's budget instead.</para>
+    /// </summary>
+    private static IObservable<string?> CallToAction(IMessageHub hub, string deniedPath, string? locale) =>
+        hub.GetRedirectOnDenied(deniedPath)
+            .Take(1)
+            .Select(redirect => string.IsNullOrWhiteSpace(redirect)
+                ? null
+                : LocalizationCatalog.Get(CallToActionKey, locale))
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+            .DefaultIfEmpty(null);
 
     /// <summary>
     /// The node's document body as HTML, for <see cref="SeoPageData.Body"/>: the content's own

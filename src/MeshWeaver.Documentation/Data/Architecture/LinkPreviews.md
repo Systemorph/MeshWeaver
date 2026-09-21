@@ -49,10 +49,11 @@ Blazor circuit exists:
    title beside the site favicon). The head declares `og:image:type/width/height` for the drawn
    card (an authored image's size is unknown) and mirrors it as `twitter:image`.
 
-   **Every page has a card.** The home page, a route that is no node, and a node the anonymous
-   gate withholds all share as the INSTANCE — `og:title` is the site name and `og:image` is
-   **`/api/og.png`**, the site card (name + host, nothing read from the mesh). A private page's
-   name, description and mark never reach that block.
+   **Every page has a card.** The home page and a route that is no node share as the INSTANCE —
+   `og:title` is the site name and `og:image` is **`/api/og.png`**, the site card (name + host,
+   nothing read from the mesh). A node the anonymous gate withholds shares as its nearest PUBLIC
+   ANCESTOR when it has one (below), and as the instance when it does not. A private page's own
+   name, description and mark never reach either block.
 3. **`SeoNoScriptBody`** serves the page's pre-rendered markdown inside `<noscript>`, so non-JS
    crawlers index actual content rather than an empty Blazor shell.
 
@@ -79,7 +80,8 @@ What that means in practice:
   public MeshWeaver repository, so anonymous read reveals nothing not already on github.com).
 - **A private workspace, thread or space does not unfurl — and must not.** The fix for "my link
   shows no card" is never to weaken the resolver; it is to decide whether that partition should
-  be public, and say so in its `_Policy`.
+  be public, and say so in its `_Policy`. What a gated page under a PUBLIC root shares instead is
+  the next section — and it is still not that page's own words.
 
 A partition opts in with one bit on its seeded or authored policy:
 
@@ -93,6 +95,63 @@ Content = new PartitionAccessPolicy
 
 `PublicRead` **grants** Read to everyone including anonymous; `Read` merely **caps** (false =
 deny) and never grants — see [Access Control](/Doc/Architecture/AccessControl).
+
+## A gated page under a public root: the public-ancestor card
+
+A **public root over gated content** is a shape the platform ships on purpose — a store listing, a
+course catalog, a reporting space whose cover is the marketing surface and whose data is not. Until
+2026-09-21 a link into one of those shared as the bare site card, which is the least useful thing it
+could say.
+
+Measured on `www.meshweaver.cloud`, 2026-09-20:
+
+| URL | `og:title` | `og:image` |
+|---|---|---|
+| `/PG3Reporting` | Fund Reporting | `/api/og/PG3Reporting.png` |
+| `/PG3Reporting/Funds` | MeshWeaver | `/api/og.png` |
+| `/PG3Reporting/Funds/InsuranceCore` | MeshWeaver | `/api/og.png` |
+| `/PG3Reporting/Funds/InsuranceCore/2026-06-30` | MeshWeaver | `/api/og.png` |
+| `/Doc/Architecture/AccessControl` | Access Control Architecture | `/api/og/Doc/…png` |
+
+The last row is the control: **it was never about depth.** `PG3Reporting/_Policy` is a
+`PartitionAccessPolicy` with a `RedirectOnDenied` of `PG3Reporting/Subscribe` and no `PublicRead`, so
+the root is a public listing and everything under it is gated — and the head, gating through the
+`AnonymousGate`, had nothing to say about any of it.
+
+`SeoResolver.ResolvePublicAncestor` now walks **UP** from a withheld page to the nearest ancestor the
+gate DOES admit and builds the card from that:
+
+- **`og:title`** — the ancestor's title, then the requested path's own segments (`Fund Reporting ·
+  Funds / InsuranceCore / 2026-06-30`).
+- **`og:description`** — the ancestor's description, plus one localized sentence
+  (`seo.gatedCard.accessRoute`) when the gated partition declares a `RedirectOnDenied`, because that
+  declaration is the owner saying a route in exists. Without one, no call to action: advice that
+  leads nowhere is worse than none.
+- **`og:image`** — the ancestor's card, `/api/og/{ancestor}.png`, which the same gate already serves
+  anonymously, so the unfurler can actually fetch it.
+- **`noindex, follow`** — the page's content is gated, so it is not a page to rank; the links stay
+  crawlable.
+
+### 🚨 Why this discloses nothing
+
+**The path segments are already in the URL the sharer pasted.** Rendering them back in the title
+tells the reader nothing they are not already looking at in their own chat window. Everything else on
+the card belongs to the **public ancestor** and is already served to anyone who asks for it.
+
+The withheld node's own `Name`, description, icon and content are **never read**. That is enforced by
+the shape of the code, not by care: the composition
+(`SeoResolver.ComposeAncestorCard`) takes an `SeoPageData` the gate ADMITTED plus the request path,
+and there is deliberately no overload that takes the requested node. The redirect target is not on
+the card either — it is the one thing here that is *not* in the pasted URL, and the card's link
+already goes there for whoever clicks it.
+
+`SeoPublicAncestorCardTest` holds both sides: a public page still resolves its own card unchanged, a
+gated page under a public root gets the ancestor's, a gated page with **no** public ancestor still
+gets nothing — and one control names the withheld nodes' own words and asserts they appear in no
+field of the card.
+
+**When no ancestor is public either, the site card stays.** That is the honest floor, and it is the
+answer for a private page in a private partition: its link says only what its URL already said.
 
 ## The inbound `OgCard` layout area
 
