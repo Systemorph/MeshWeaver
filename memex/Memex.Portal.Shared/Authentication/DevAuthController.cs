@@ -83,7 +83,8 @@ public class DevAuthController : ControllerBase
                 ex is TimeoutException || ex.GetType().Name == "DeliveryFailureException"
                     ? Observable.Empty<MeshNode>()
                     : Observable.Throw<MeshNode>(ex))
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync()
+            .Await(HttpContext.RequestAborted);
 
         // Fallback for the legacy `User/{id}` node shape (monolith / AddSampleUsers) — query nodeType:User
         // and match by id (case-insensitive) or the legacy path. Only reached when the authoritative read
@@ -94,7 +95,8 @@ public class DevAuthController : ControllerBase
             // (private user partitions), so an existing user is MISSED → spurious re-provision. Read as System.
             var change = await _accessService.RunAsSystem(
                     () => _meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User")))
-                .FirstAsync();
+                .FirstAsync()
+                .Await(HttpContext.RequestAborted);
             node = change.Items.FirstOrDefault(n =>
                 string.Equals(n.Id, personId, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(n.Path, $"User/{personId}", StringComparison.OrdinalIgnoreCase));
@@ -126,7 +128,7 @@ public class DevAuthController : ControllerBase
         // not, and the bootstrap hung on an admin-gated Plugin Catalog it could no longer read.
         // GrantPlatformAdmin is an idempotent create-or-update, so re-running it is free.
         if (_devLoginEnabled && IsConfiguredDevAdmin(node.Id))
-            await _onboarding.GrantPlatformAdmin(node.Id).FirstAsync();
+            await _onboarding.GrantPlatformAdmin(node.Id).FirstAsync().Await(HttpContext.RequestAborted);
 
         var person = ExtractPersonInfo(node.Id, node.Content);
         if (person == null)
@@ -205,11 +207,11 @@ public class DevAuthController : ControllerBase
             Username: username,
             Email: $"{username}@dev.local",
             FullName: personId);
-        var userNode = await _onboarding.CreateUser(request).FirstAsync();
+        var userNode = await _onboarding.CreateUser(request).FirstAsync().Await(HttpContext.RequestAborted);
         // Self-Admin on the user's OWN partition only — they must be able to write their own home
         // (installed course copies, skills, agents). This is scoped to `{user}/_Access` with
         // MainNode = {user}; it confers nothing anywhere else.
-        await _onboarding.GrantSelfAdmin(username).FirstAsync();
+        await _onboarding.GrantSelfAdmin(username).FirstAsync().Await(HttpContext.RequestAborted);
         return userNode;
     }
 

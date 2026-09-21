@@ -174,24 +174,36 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// expression.</para>
     /// </summary>
     private static readonly ImmutableArray<string> DirectAwaitZeroRoots =
-        ["src", "tools", "samples", "clients"];
+        ["src", "tools", "samples", "clients", "memex"];
 
     /// <summary>
     /// The trees carrying a seeded inventory for the direct-await shape, measured 2026-09-18.
     ///
-    /// <para><c>test/</c> carries 223 sites in 66 files and <c>memex/</c> 5 in one — and they are
-    /// not an accident: <c>AGENTS.md</c>, the <c>/async</c> skill, the <c>/testing</c> skill and
+    /// <para><c>test/</c> carries 223 sites in 66 files — and they are not an accident:
+    /// <c>AGENTS.md</c>, the <c>/async</c> skill, the <c>/testing</c> skill and
     /// <c>Doc/Architecture/AsynchronousCalls</c> all PRESCRIBED "await the observable directly with
     /// a <c>.Timeout(...)</c>" as the replacement for <c>.ToTask()</c>, while four other pages said
     /// the opposite and correctly. This change corrects the four; the inventory they produced may
     /// only shrink.</para>
+    ///
+    /// <para>🚨 <c>memex/</c> WAS in this set with 5 sites in one file and has MOVED to
+    /// <see cref="DirectAwaitZeroRoots"/> (MeshWeaver#4756). It is production code — an ASP.NET
+    /// controller, not a suite — so a ratchet was the wrong home for it: a ratchet says "this may
+    /// only shrink", and what is wanted for a production root is "there are none". The five were
+    /// all in the DevLogin sign-in action and all now wait through
+    /// <c>.Await(HttpContext.RequestAborted)</c>. Moving the root rather than merely deleting the
+    /// allow line is the point: the next one added under <c>memex/</c> is refused outright, with no
+    /// line to add.</para>
     /// </summary>
-    private static readonly ImmutableArray<string> DirectAwaitRatchetedRoots = ["memex", "test"];
+    private static readonly ImmutableArray<string> DirectAwaitRatchetedRoots = ["test"];
 
     private const string DirectAwaitAllowFileName = "DirectObservableAwaitSites.allow";
 
-    /// <summary>The seeded inventory's size for <see cref="DirectAwaitRatchetedRoots"/>.</summary>
-    private const int DirectAwaitTotalBudget = 228;
+    /// <summary>
+    /// The seeded inventory's size for <see cref="DirectAwaitRatchetedRoots"/>. 228 at seeding;
+    /// 223 since <c>memex/</c>'s five left the ratchet for the zero set (MeshWeaver#4756).
+    /// </summary>
+    private const int DirectAwaitTotalBudget = 223;
 
     /// <summary>
     /// The member names that END an expression whose static type is an
