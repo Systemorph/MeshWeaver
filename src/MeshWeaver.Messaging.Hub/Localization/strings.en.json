@@ -70,6 +70,7 @@
   "redirect.notice": "Moved here from `{0}`.",
   "redirect.parentFallbackNotice": "`{0}` does not exist. Showing the closest place that does.",
   "redirect.dismiss": "Dismiss",
+  "seo.gatedCard.accessRoute": "This page is not public. Follow the link to sign in or get access.",
   "error.accessDenied": "Access denied",
   "error.accessDeniedHint": "If you believe you should have access, ask the partition owner to grant it.",
   "error.missingReference": "Missing reference",
