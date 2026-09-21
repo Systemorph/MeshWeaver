@@ -114,8 +114,8 @@ own set; never let an unknown value take a meaningful default), and when an `enu
 are in **[Open Vocabularies Are String Constants](/Doc/Architecture/OpenVocabulariesAsStringConstants)**
 — policy `open-vocabulary-string-constants`.
 
-`Address` is the field the inbox row renders beside the transport glyph — `thomas.mueller@…`,
-`+41 79 …`. **`CredentialRef` names a credential; it never carries one.** The hub resolves it, the
+`Address` is the field the inbox row renders beside the transport glyph — a masked mail address or
+phone number. **`CredentialRef` names a credential; it never carries one.** The hub resolves it, the
 same encapsulation the plugin registry uses — see [Plugin Registry](/Doc/Architecture/PluginRegistry).
 
 ### Participant vs. NotificationChannel — two different things, both kept
@@ -289,9 +289,9 @@ confirms positively.
 One row per item, whatever the channel:
 
 ```text
-✅  🏢 PG3 → Counterparty      Retype 8 CRM roots, 3 fields each   ⚙️ Approvals/Workspace    2m
-✉️  📄 Thomas Müller           Re: Workshop-Protokoll 21. Aug      ✉️ thomas.mueller@…      1h
-💬  👤 Laurent Mager           Kurze Rückfrage zum Angebot         📱 +41 79 ···            3h
+✅  🏢 Acme AG → Counterparty   Retype 8 partition roots, 3 fields  ⚙️ Approvals/Workspace   2m
+✉️  📄 A. Buyer (Acme AG)       Re: workshop follow-up              ✉️ a.buyer@acme.example  1h
+💬  👤 B. Seller (Acme AG)      Question on the proposal            📱 +41 ·· ··· ·· ··      3h
 ```
 
 Built from framework controls only — `Controls.DataGrid` with `PropertyColumnControl<T>`, composed
