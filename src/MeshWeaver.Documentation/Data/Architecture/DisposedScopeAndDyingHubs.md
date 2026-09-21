@@ -114,17 +114,22 @@ those two points the lookup reports a hub that can serve nothing, and the window
 bounded**: a teardown that wedges never reaches the callback at all.
 
 Measured shape: the mesh's single node-operation execution hub `portal/nodeops-{meshId}` —
-resolved through `NodeOperationExecutionHub` with `HostedHubCreation.Always` — was handed to three
-separate webhook deliveries across **55 minutes** on a pod that was healthy and serving other
-traffic, each throwing out of the HTTP endpoint as a 500.
+resolved through `NodeOperationExecutionHub` with `HostedHubCreation.Always` — was handed to **four**
+webhook deliveries at three distinct times spanning **55 minutes** (09:01, 09:49, 09:56) on one pod
+that was healthy and serving other traffic throughout, each throwing out of the HTTP endpoint as a
+500. A pod drain cannot account for that span — the Kubernetes grace ceiling ends one long before —
+so the mesh was not tearing down; one hosted hub had stopped working and was never evicted.
 
 ### Why the two obvious fixes are both unsafe today
 
-**Refusing the dying hub** (answer `null` + `HostShuttingDown`) reads correct and is not: 38 call
-sites use the two-argument `GetHostedHub` overload, which is documented to return non-null for
-`Always` and is dereferenced accordingly — several store the result straight into a non-nullable
-field. Refusing would convert an attributable `ObjectDisposedException` into an unattributable
-`NullReferenceException` in code that works today, on the everyday recycle path.
+**Refusing the dying hub** (answer `null` + `HostShuttingDown`) reads correct and is not: **25** call
+sites (measured over `src/` and `memex/`, comments and declarations excluded) use the two-argument
+`GetHostedHub` overload, which is `null`-forgiving — it forwards to the three-argument form with
+`Always` and a `!` — and is dereferenced accordingly. Several assign the result straight into a
+non-nullable field or return it from a method whose return type is non-nullable
+(`Activity`, `PortalApplication`, `SessionHubFactory`, `PartitionStorageRouter`, `MeshNodeStreamCache`,
+`StaticRepoImporter`). Refusing would convert an attributable `ObjectDisposedException` into an
+unattributable `NullReferenceException` in code that works today, on the everyday recycle path.
 
 **Retiring and replacing it** (mint a fresh hub at the address, keep the old one in the disposal
 join) is the self-healing answer and needs **three** removals to become value-conditional first,
