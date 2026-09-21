@@ -83,7 +83,15 @@ falsifies both stated causes and is the cheapest way to recognise this failure �
 - **An entry's PRESENCE is a live verdict, not history.** `ContentTypeHealthCheck` calls
   `ContentDegradationRegistry.Unresolved`, which re-asks the registry per entry at probe time
   (both routes: the NodeType path and the stored `$type`). A boot-race entry disappears the moment
-  its type registers. Only the **×count** is cumulative since boot.
+  its type registers, and `Clear` removes one the moment a read of that type succeeds. Only the
+  **×count** is cumulative since boot. Measured: over 2.7 h on one deployment the named set
+  CHANGED and members left it — which a counter that never decayed could not do.
+- **A GROWING count is positive evidence, and it is the reading to take.** The ×count only rises
+  when a read degrades, so comparing two probes turns the weakest part of this instrument into its
+  strongest: measured on memex.meshweaver.cloud, `Hosting/DeploymentStatus` went ×260 and ×257 to
+  ×373 and ×376 across 2.7 h. Those reads are degrading NOW. A static count across two probes says
+  the opposite — nothing has read that type since — and is the case where the entry may be a boot
+  residue the registry has simply never been asked to clear.
 - **An entry's ABSENCE is not a clean bill.** A degradation is recorded only when a READ degrades.
   A type nobody has opened on this replica appears in no list, however unregistered it is.
 - **Repeated `/health` calls sample different replicas.** Four calls returned four different sets;
