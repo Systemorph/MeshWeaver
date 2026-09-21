@@ -139,15 +139,32 @@ installer cannot have written takes the partition off the blanket policy even wh
 nothing, and the partition is published through grants instead. The warning it logs names the scopes
 and says what to do if they were meant to be public — retire the denies, never add `PublicRead`.
 
-🚨 **Both arms read that evidence off the query's `Initial` snapshot, not off its first emission.** The
+### An unread deny set is not an empty one
+
+🚨 **Both arms read that evidence off the query's `Initial` snapshot, not off its first emission** — the
 query can emit pre-`Initial` `Added`/`Updated` frames, and both decisions taken off this read fail
 *open* on a short frame: a missing satellite deny leaves the protected set empty, so the evidence arm
-does not fire and the heal proceeds to retire denies and write `PublicRead` — republishing the very
+does not fire and the heal proceeds to retire denies and write `PublicRead`, republishing the very
 segment the arm exists to protect. Filtering for `Initial` is the established idiom here
-(`DeploymentReportService`, `PlanTierLadder`, `GitHubSyncService`, `PathResolutionService`, …), and a
-snapshot that never arrives times out into the existing `Catch`, which yields nothing and leaves the
-partition exactly as it is. The legacy retire had been taking a **delete** decision off the same
-unfiltered read; review on this change is what surfaced it.
+(`DeploymentReportService`, `PlanTierLadder`, `GitHubSyncService`, `PathResolutionService`, …). Review on
+this change surfaced it; the legacy retire had been taking a **delete** decision off the same unfiltered
+read.
+
+🚨 **But that filter is only safe because the failure is now reported as UNKNOWN, and this is the sharper
+half.** The query shape is a *measured live stall*: `path:<partition> scope:subtree
+nodeType:AccessAssignment limit:2000` as `system-security` is the verbatim query in the fan-in's
+20-second stall warning, with 200+ occurrences in a 400-minute window on `memex` (truncated at the log
+limit), because `StorageAdapterMeshQueryProvider.DefersToNativeProvider` is false for satellite reads and
+the pedestrian walk emits nothing at all until every per-path read completes. So on a Postgres portal the
+`Initial` can genuinely never arrive — and a filter that turned that into *"the read says there are no
+denies"* would be worse than the unfiltered read it replaced, deterministically rather than occasionally.
+
+So the listing answers `Ok: false` on a failure or a timeout, and **every arm declines on it**: nothing
+retired, and no blanket policy written over a shape the pass could not see. That restores a rule the
+method's own remarks had always stated — *"healing on an unknown deny set is the one outcome worse than
+not healing"* — which the original-create arm had quietly broken by writing the policy without consulting
+the listing at all. A reduced host with no query surface at all is deliberately a *different* answer
+(`Ok: true`, empty): there is demonstrably nothing to enumerate, which is not the same as not knowing.
 
 **The two rules compose.** A partition can carry both a live satellite protection and genuine
 pre-#902 damage on its ordinary children, so the legacy denies are still retired (pre-installed only,
@@ -185,6 +202,10 @@ the projection's own arm is inferred from its SQL, not from an executed case. **
 writes a real `PublicRead` `_Policy` at a shallow namespace together with a real deeper deny against
 Postgres** — that pairing is the gap this page leaves open, and it belongs in the repository that has
 the lane.
+
+**The `Ok: false` arm is not covered by a test.** Forcing the access listing to fail or to withhold its
+`Initial` needs a query-provider fault seam this suite does not have, so that one `if` is reasoned from
+the measured production stall rather than executed here. Everything else on the page is pinned.
 
 Also not established: whether a partition published through grants alone keeps the same
 `public.partition_access` membership for an anonymous fan-out as one published through a `PublicRead`

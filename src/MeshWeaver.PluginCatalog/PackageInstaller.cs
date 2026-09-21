@@ -1352,6 +1352,17 @@ public static class PackageInstaller
 
             return WellKnownDenies(hub, partition, logger).SelectMany(found =>
             {
+                // 🚨 AN UNREADABLE DENY SET DECLINES EVERY ARM — fail closed, never fail open. This
+                // method's own remarks already said "healing on an unknown deny set is the one outcome
+                // worse than not healing", and the original-create arm below quietly broke that rule: it
+                // wrote the blanket PublicRead policy without consulting the listing at all. With the
+                // shape decision now depending on what that listing SEES, an unread answer must stop the
+                // pass rather than be read as "there is nothing there" — the Catch in WellKnownDenies
+                // says why that distinction is load-bearing on a Postgres portal. Nothing is written; the
+                // next install path or boot pass tries again with a readable answer.
+                if (!found.Ok)
+                    return Observable.Return(Unit.Default);
+
                 // A policy that withholds public read on a NON-pre-installed partition: core writes
                 // nothing at all here, so this is decided FIRST and every arm below is a case where
                 // core would otherwise WRITE.
@@ -1530,13 +1541,18 @@ public static class PackageInstaller
     /// before <see cref="PackageManifest.ProtectedSegments"/> was read carries no declaration at all,
     /// and the boot repair pass drives this from that record.</para>
     /// </summary>
-    private static IObservable<(IReadOnlyList<string> Legacy, IReadOnlyList<string> Protected)>
+    private static IObservable<(bool Ok, IReadOnlyList<string> Legacy, IReadOnlyList<string> Protected)>
         WellKnownDenies(IMessageHub hub, string partition, ILogger? logger)
     {
-        var empty = ((IReadOnlyList<string>)[], (IReadOnlyList<string>)[]);
+        // Ok: true with empty lists — the read SUCCEEDED and there is nothing there.
+        var none = (Ok: true, (IReadOnlyList<string>)[], (IReadOnlyList<string>)[]);
+        // Ok: false — the read FAILED, so the deny set is UNKNOWN and every arm must decline.
+        var unknown = (Ok: false, (IReadOnlyList<string>)[], (IReadOnlyList<string>)[]);
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return Observable.Return(empty);
+            // No query surface at all (a reduced host) is NOT a failed read: there is demonstrably
+            // nothing to enumerate. Distinct from the Catch below on purpose.
+            return Observable.Return(none);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return Observable.Using(
@@ -1550,10 +1566,19 @@ public static class PackageInstaller
             // evidence arm does not fire and the heal proceeds to retire denies and write PublicRead —
             // republishing the very segment the arm exists to protect. The established idiom in this
             // repository (DeploymentReportService, PlanTierLadder, GitHubSyncService,
-            // PathResolutionService, …). A snapshot that never arrives times out into the Catch below,
-            // which yields nothing and leaves the partition exactly as it is. Found in review on
-            // MeshWeaver#4716; the legacy retire had been taking a DELETE decision off the same
-            // unfiltered read.
+            // PathResolutionService, …). Found in review on MeshWeaver#4716; the legacy retire had been
+            // taking a DELETE decision off the same unfiltered read.
+            //
+            // 🚨 AND THE FILTER IS ONLY SAFE BECAUSE THE FAILURE IS NOW `Ok: false`. This exact query
+            // shape is a MEASURED live stall: `path:<partition> scope:subtree nodeType:AccessAssignment
+            // limit:2000` as `system-security` is the verbatim query in the fan-in's stall warning, 200+
+            // occurrences in 400 minutes on memex (truncated at the log limit), because
+            // `StorageAdapterMeshQueryProvider.DefersToNativeProvider` is false for satellite reads and
+            // the pedestrian walk emits nothing at all until every per-path read completes. So on a
+            // Postgres portal the Initial can genuinely never arrive — and a filter that turned that
+            // into "the read said there are no denies" would be WORSE than the unfiltered read it
+            // replaced, deterministically rather than occasionally. The Catch below therefore reports
+            // UNKNOWN, and every arm of the caller declines on it.
             .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
@@ -1561,6 +1586,7 @@ public static class PackageInstaller
             {
                 var denies = change.Items.Where(node => IsWellKnownDeny(node, hub)).ToList();
                 return (
+                    Ok: true,
                     Legacy: (IReadOnlyList<string>)denies
                         .Where(node => !IsSatelliteScopedDeny(node.Path, partition))
                         .Select(node => node.Path).ToList(),
@@ -1577,9 +1603,11 @@ public static class PackageInstaller
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,
-                    "[PackageInstaller] listing access assignments of {Partition} failed — it is "
-                    + "left exactly as it is", partition);
-                return Observable.Return(empty);
+                    "[PackageInstaller] listing access assignments of {Partition} failed or never "
+                    + "produced its Initial snapshot — the deny set is UNKNOWN, so the partition is left "
+                    + "exactly as it is: nothing retired, and no PublicRead policy written over a shape "
+                    + "this pass could not see (MeshWeaver#4716)", partition);
+                return Observable.Return(unknown);
             });
     }
 
