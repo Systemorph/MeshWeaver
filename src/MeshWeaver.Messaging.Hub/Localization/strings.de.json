@@ -70,6 +70,7 @@
   "redirect.notice": "Von `{0}` hierher weitergeleitet.",
   "redirect.parentFallbackNotice": "`{0}` existiert nicht. Angezeigt wird die nächstgelegene vorhandene Seite.",
   "redirect.dismiss": "Ausblenden",
+  "seo.gatedCard.accessRoute": "Diese Seite ist nicht öffentlich. Folgen Sie dem Link, um sich anzumelden oder Zugriff zu erhalten.",
   "error.accessDenied": "Zugriff verweigert",
   "error.accessDeniedHint": "Falls ein Zugriff bestehen sollte, bitte den Besitzer der Partition um Freigabe bitten.",
   "error.missingReference": "Fehlender Verweis",
