@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -186,6 +187,22 @@ public sealed class UserIdentityCache : IDisposable
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILogger<UserIdentityCache> _logger;
 
+    // The mesh, kept so the directory read can be RE-OPENED after a terminal (see
+    // OpenDirectorySubscription). Held as an instance field on a mesh-scoped singleton, never static.
+    private readonly IMeshService _mesh;
+
+    // The hot, non-replaying index-change feed. It is an instance Subject rather than the query
+    // chain's own multicast so that (a) IndexChanged is a STABLE identity while the chain behind it
+    // can be replaced, and (b) a chain's TERMINAL is never replayed to later waiters — a replayed
+    // terminal is precisely what made one transient read failure permanent.
+    private readonly Subject<Unit> _indexChanged = new();
+
+    // Single-flight gate for opening the directory read: 1 while a chain is open (or opening), 0
+    // when the last one terminated and the next caller may open a replacement. An int and
+    // Interlocked, never a SemaphoreSlim — nothing waits on it; a caller that loses simply proceeds,
+    // because the winner's chain is the one that fills the index.
+    private int _opening;
+
     /// <summary>
     /// Fires once per index snapshot/delta, AFTER it has been applied to <see cref="_byEmail"/>.
     ///
@@ -291,32 +308,103 @@ public sealed class UserIdentityCache : IDisposable
         // Locale, so every timestamp renders UTC and every string English; CircuitAccessHandler
         // does not even start its identity repair, because that runs only on Unavailable. Nothing
         // is logged, and ObjectId / Email / IsVirtual all still look correct.
-        var applied = mesh
-            .Query<MeshNode>(DirectoryQuery)
-            .Select(change =>
-            {
-                Apply(change);
-                return Unit.Default;
-            })
-            .Publish();
-        IndexChanged = applied;
+        _mesh = mesh;
+        IndexChanged = _indexChanged.AsObservable();
         hub.RegisterForDisposal(_connections);
-        _connections.Add(applied.Subscribe(
-            _ => { },
-            ex =>
-            {
-                // Record the fault so lookups report UNAVAILABLE rather than answering
-                // "unknown user" forever off an index that will never fill (#974). Still
-                // logged — this is a classification, not a swallow.
-                Volatile.Write(ref _subscriptionFailure,
-                    $"user index subscription failed: {ex.GetType().Name}: {ex.Message}");
-                _logger.LogWarning(ex, "UserIdentityCache subscription failed");
-            }));
-        // Connect LAST: the fault watcher is already attached, and Publish's subject replays its
-        // terminal notification to late subscribers, so a waiter that arrives after a failure is
-        // told the index is dead instead of waiting on it forever. The connection is OWNED
-        // (ConnectOwnedBy) — released with _connections, never left to the chain itself.
-        applied.ConnectOwnedBy(_connections);
+        OpenDirectorySubscription();
+    }
+
+    /// <summary>
+    /// Opens the directory read and feeds the index — and is RE-openable, which is the whole reason
+    /// it is a method rather than three lines in the constructor.
+    ///
+    /// <para>🚨 <b>A terminal must not be permanent.</b> The directory read is the query fan-in,
+    /// which TERMINATES a stalled provider with
+    /// <see cref="MeshWeaver.Mesh.QueryProviderStalledException"/> (policy
+    /// <c>query-fanin-stall-terminal</c>) — and any provider fault reaches here too. This
+    /// subscription used to be opened exactly once in the constructor over a <c>Publish()</c>, so
+    /// ONE such terminal set <see cref="_subscriptionFailure"/> for the life of the PROCESS: every
+    /// later <see cref="Lookup"/> answered <c>Unavailable</c>, every <see cref="WhenDetermined"/>
+    /// waited on a snapshot that could never arrive, and only a pod restart cleared it. That is the
+    /// #1316 lesson — a <c>Replay</c>/<c>Publish</c> latch turns one transient read failure into a
+    /// per-process outage — one class over, and this was the one latch on the fan-in with no repair
+    /// path at all.</para>
+    ///
+    /// <para><b>The repair is that same discipline, and it is NOT a retry.</b> No timer, no poller,
+    /// no backoff, nothing re-subscribes on its own: the dead chain is dropped and the NEXT CALLER
+    /// re-opens it. Every consumer reaches this cache through <see cref="Lookup"/>
+    /// (<c>UserContextMiddleware</c>, <c>ResolveHttpCaller</c>, <c>CircuitAccessHandler</c>), so on
+    /// a live portal the next request or circuit start does that within milliseconds, and the fresh
+    /// chain's first snapshot un-parks whoever was already waiting on
+    /// <see cref="UserIdentityLookup.UntilDetermined"/>. <see cref="_opening"/> makes it
+    /// single-flight, so a burst of concurrent lookups opens exactly ONE upstream.</para>
+    ///
+    /// <para><b>What did NOT change:</b> <c>Apply</c> still runs ahead of the
+    /// <see cref="_indexChanged"/> push, so every observer still sees an index that ALREADY contains
+    /// the change it is being told about; the upstream still carries exactly ONE subscription
+    /// however many waiters there are; and it is still unconditional and owned (released with
+    /// <see cref="_connections"/>), never a <c>RefCount</c> that would tear the directory read down
+    /// whenever nobody happens to be waiting. <see cref="IndexChanged"/> is now a stable façade over
+    /// an instance <c>Subject</c> instead of the multicast chain itself — deliberately, because a
+    /// chain that can be replaced must not be the identity callers hold, and because a
+    /// <c>Publish</c> subject's replayed TERMINAL is exactly what made the old shape permanent.</para>
+    /// </summary>
+    private void OpenDirectorySubscription()
+    {
+        if (_connections.IsDisposed)
+            return;
+        if (Interlocked.CompareExchange(ref _opening, 1, 0) != 0)
+            return;   // another caller is already opening this chain
+        // Cleared as the fresh read opens, so a miss is "has not filled YET" again — which is what
+        // Classify needs in order to keep answering Unavailable instead of a false definitive
+        // "no such user" while the new snapshot is on its way.
+        Volatile.Write(ref _subscriptionFailure, null);
+        Volatile.Write(ref _hydrated, false);
+        var subscription = new SingleAssignmentDisposable();
+        _connections.Add(subscription);
+        subscription.Disposable = _mesh
+            .Query<MeshNode>(DirectoryQuery)
+            .Subscribe(
+                change =>
+                {
+                    Apply(change);
+                    _indexChanged.OnNext(Unit.Default);
+                },
+                ex =>
+                {
+                    // Record the fault so lookups report UNAVAILABLE rather than answering
+                    // "unknown user" off an index that has not filled (#974) — logged, a
+                    // classification and never a swallow — and then DROP this chain so the next
+                    // caller opens a fresh one. The ORDER matters: the reason is published before
+                    // the gate is released, so no caller can observe "not opening, not failed".
+                    Volatile.Write(ref _subscriptionFailure,
+                        $"user index subscription failed: {ex.GetType().Name}: {ex.Message}");
+                    _logger.LogWarning(ex,
+                        "UserIdentityCache subscription failed — dropped, so the next lookup opens a "
+                        + "fresh directory read");
+                    ReleaseSubscription(subscription);
+                },
+                () =>
+                {
+                    // A COMPLETED directory read is the same defect wearing a quieter face: the
+                    // index stops learning and nothing would ever open another one.
+                    Volatile.Write(ref _subscriptionFailure,
+                        "user index subscription completed — the directory read is no longer live");
+                    _logger.LogWarning(
+                        "UserIdentityCache subscription COMPLETED, so the index would stop learning "
+                        + "— dropped, so the next lookup opens a fresh directory read");
+                    ReleaseSubscription(subscription);
+                });
+    }
+
+    /// <summary>Retires a terminated directory chain and re-arms <see cref="_opening"/> so the next
+    /// <see cref="Lookup"/> can open a replacement. Removing it from <see cref="_connections"/>
+    /// keeps that registry tracking LIVE chains only, exactly as
+    /// <c>MeshNodeStreamCache.EvictFaultedQuery</c> does with its own.</summary>
+    private void ReleaseSubscription(IDisposable subscription)
+    {
+        _connections.Remove(subscription);
+        Volatile.Write(ref _opening, 0);
     }
 
     private void Apply(QueryResultChange<MeshNode> change)
@@ -386,6 +474,14 @@ public sealed class UserIdentityCache : IDisposable
     {
         if (string.IsNullOrEmpty(email))
             return UserIdentityLookup.Unknown;
+
+        // 🚨 The repair point. A directory read that TERMINATED released the single-flight gate, and
+        // this is the call every consumer of the cache makes — so the next lookup after a failure
+        // opens a fresh read instead of the failure standing for the life of the process. A no-op
+        // whenever a chain is live, which is every ordinary call. See OpenDirectorySubscription: no
+        // timer and no retry loop, the caller IS the trigger.
+        if (Volatile.Read(ref _subscriptionFailure) is not null)
+            OpenDirectorySubscription();
 
         _byEmail.TryGetValue(email, out var node);
         return UserIdentityLookup.Classify(

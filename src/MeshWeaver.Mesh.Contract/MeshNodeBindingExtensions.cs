@@ -225,6 +225,20 @@ public static class MeshNodeBindingExtensions
     /// open the point read this whole gate exists to withhold), the degradation is LOGGED naming the
     /// node and the budget, and the subscription stays live so a late answer still switches the
     /// binding onto the owner's stream.</para>
+    ///
+    /// <para>🚨 <b>"Stays subscribed" now has a limit, and it is the honest one.</b> The query fan-in
+    /// TERMINATES a read whose provider never delivered an Initial
+    /// (<see cref="MeshWeaver.Mesh.QueryProviderStalledException"/>, policy
+    /// <c>query-fanin-stall-terminal</c>), at a budget strictly WIDER than
+    /// <see cref="ReadBudget"/>'s — so the order is: degrade to <c>false</c> and draw empty first,
+    /// then, if the read is genuinely unanswerable, this observable faults. That fault is deliberately
+    /// NOT caught here. A <c>.Catch(→ false)</c> would turn "nobody can answer this" into the same
+    /// value a real absence produces, which is the lie the whole tri-state above exists to avoid;
+    /// forwarded instead, <c>AreaErrorClassifier.IsStorageUnavailable</c> recognises it and the host
+    /// renders its LOCALIZED "temporarily unavailable, worth re-opening" frame. The promise the
+    /// paragraph above makes — a late answer still lands — holds for a read that is merely SLOW,
+    /// which is the case it was written for; a terminal means there will be no late answer, and
+    /// continuing to wait for one would be the gate spinning with nothing logged all over again.</para>
     /// </summary>
     private static IObservable<bool> Exists(
         IMeshService meshService, IMessageHub hub, string nodePath,
