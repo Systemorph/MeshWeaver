@@ -63,12 +63,17 @@ all. See [Content Favicon Rasterization](../ContentFaviconRasterization).
 
 ## The one bit that decides everything: anonymous read
 
-**Only what an anonymous visitor may read gets a card.** `SeoResolver` gates every path through
-the `AnonymousGate` and fails closed: a gated node's page serves the generic head, its
+**By default, only what an anonymous visitor may read gets a card.** `SeoResolver` gates every path
+through the `AnonymousGate` and fails closed: a gated node's page serves the generic head, its
 `/api/og/…` card answers 404, and a missing node and a private one are indistinguishable from
 outside. This is deliberate — a link preview is served to whoever holds the link, so **a card for
-a private page would leak its title, description and image past the access system**. There is no
-way to make a private page unfurl richly, and none should be added.
+a private page discloses its title, description and image past the access system**.
+
+**That is the default and it is never inferred.** A partition whose page names are *meant* to travel
+can say so, per scope, with the `publicPreview` opt-in below; nothing else turns it on, and no
+heuristic ever will. The rule this page used to state — that a private page can never unfurl richly —
+was the right default stated as an absolute; what it was protecting against is disclosure **without
+consent**, and consent is exactly what the flag adds.
 
 What that means in practice:
 
@@ -152,8 +157,90 @@ gated page under a public root gets the ancestor's, a gated page with **no** pub
 gets nothing — and one control names the withheld nodes' own words and asserts they appear in no
 field of the card.
 
-**When no ancestor is public either, the site card stays.** That is the honest floor, and it is the
-answer for a private page in a private partition: its link says only what its URL already said.
+**When no ancestor is public either, the site card stays** — unless the partition opted in (next
+section). That floor is reached more often than it looks: measured on a control instance,
+`/PG3/LocalHardwareOffer` unfurled as the site card **and so did `/PG3` itself**, so there was no
+public ancestor anywhere on that chain and the fallback above correctly had nothing to offer. A
+partition that is gated all the way up needs the opt-in, not the walk.
+
+## `publicPreview`: letting a gated page describe itself
+
+The question a partition owner keeps asking of a gated link is *couldn't it say the name of the node?
+And the description? And the icon?* It can — once they say so, per scope:
+
+```csharp
+Content = new PartitionAccessPolicy
+{
+    PublicPreview = true,                       // page NAMES and summaries may travel
+    RedirectOnDenied = "Offers/Subscribe",      // …and here is the way in
+}
+```
+
+With it set, a page the gate still refuses emits **its own** `og:title`, `og:description` and
+`og:image`, plus its own icon links, and keeps `noindex` — unfurlable without being indexable. With
+it unset, which is every partition until somebody sets it, **nothing changes at all**: that negative
+is the control `SeoPublicPreviewOptInTest` leads with.
+
+### What it does NOT do
+
+- **It grants no read.** `SeoResolver.Resolve` — the call every content-serving consumer asks — still
+  refuses the page, so the BODY is never rendered for a logged-out visitor.
+- **It does not publish the node.** `/sitemap.xml`, the published surface and the public-host redirect
+  all read that same `Resolve`, so a previewed node stays out of every one of them. Unfurlable is not
+  indexable and not published; three different questions, one of which this flag answers.
+- **It is not a permission cap.** It sits beside `RedirectOnDenied` as a *disclosure* decision, not in
+  the `Read`/`Create`/… family.
+
+### The decisions, stated
+
+- **It inherits down, nearest scope first** — like `RedirectOnDenied` and unlike the caps. A root opts
+  its whole subtree in with one line; **any deeper scope opts back out with an explicit `false`**,
+  which is why the field is `bool?` and not `bool`. A policy filed at one node's own scope governs
+  that one node, so "settable on a single node" needs no second mechanism.
+- **`BreaksInheritance` does not apply.** That flag discards inherited *role assignments*; this is not
+  a role. A partition that breaks role inheritance still inherits a preview decision from above, and
+  states `false` if it does not want one.
+- **A child of an opted-in partition discloses too, and that is the point.** Opting a partition in
+  discloses the TITLE and SUMMARY of **every node under it** to anyone holding a URL. Set it where
+  page names are marketing — a catalog, an offer, a course — and never where the names *are* the
+  secret (a deal room, a person's files).
+- **The summary cannot leak the body.** `SeoResolver.ExtractDescription` reads six *authored summary*
+  members — `Description`, `abstract`, `description`, `tagline`, `summary`, `headline` — and never
+  `content` or `body`; `RenderBody` is the only thing that touches those, and no preview path calls
+  it. So the description is as authored, not the first line of the page. Anything added to that chain
+  in future has to be an authored summary for the same reason.
+- **The picture has to be FETCHABLE, so the image routes honour the same flag.** `/api/og/{path}.png`
+  and `/api/icon/{path}.png` gate through `SeoResolver.ResolveShareableNode` — the one predicate the
+  head's card block also asks — because a head that declares an `og:image` the route 404s ships a
+  broken card, and several unfurlers then drop the preview entirely. Everything those routes draw
+  (name, authored summary, category, mark, price chip, instance + path) is exactly what the head
+  discloses, which is why one flag can govern both.
+- **…and an AUTHORED image or icon is the exception, because `/api/content/…` stays gated.** A store
+  plugin usually authors its card as `/api/content/{partition}/content/og.png` and its mark as a
+  `content:` reference. That route serves file **bytes**, not the four strings this flag consents to,
+  so the opt-in deliberately does not open it — and declaring it anyway would promise exactly the
+  broken picture the previous point exists to prevent. On a **previewed** page, therefore: a
+  root-relative authored image falls back to the drawn card, an absolute one is kept (another host's
+  business), and a content-backed icon yields **no icon link at all** — the portal favicon stays,
+  which is the same honest fallback the icon route already gives a node with no usable mark. A public
+  page is untouched: its authored art is fetchable precisely because the gate admits it.
+- **It is revocable at the origin, and eventually-consistent at the consumer.** A previewed card and
+  icon are served `private, no-store` rather than the `public, max-age=86400` a gate-admitted picture
+  gets, because a policy can be withdrawn and a shared cache never re-asks the origin. So flipping
+  `PublicPreview` to `false` stops the origin serving it on the next request. **It does not reach the
+  unfurler's own copy** — Slack, Teams, iMessage and LinkedIn keep a preview for hours to days and no
+  response header controls that (the same caching that makes a *fixed* page take hours to re-scrape,
+  below). Treat the disclosure as something that outlives its withdrawal in other people's clients.
+
+### Why an opt-in and not a behaviour
+
+A blanket version of this would be a disclosure surface wearing a feature's colours — the same
+objection that made `/health` print the PARTITION rather than the node's own name (#4258/#3890). The
+difference is consent: the owner of the data states it, in the same `_Policy` that governs everything
+else about that subtree, and the card is built by a pure function
+(`SeoResolver.ComposePreviewCard`) that is handed the node and returns four strings plus icon links —
+it carries no `MeshNode` and no `SeoPageData`, so the body the crawler-facing body component renders
+cannot be reached from a preview card at all.
 
 ## The inbound `OgCard` layout area
 

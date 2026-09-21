@@ -269,11 +269,14 @@ public static class SeoEndpoints
     /// public page has an Open Graph image without anyone authoring one. An authored image always
     /// wins; this is what <see cref="SeoResolver.ExtractImage"/> falls back to.</para>
     ///
-    /// <para><b>Gated identically to the SEO head.</b> The card is drawn from
-    /// <see cref="SeoResolver.Resolve"/>, which returns null for anything the fail-closed
-    /// <see cref="AnonymousGate"/> refuses — so a private node's NAME cannot be lifted out of this
-    /// route, and a missing node and a private one answer the same 404. There is no parallel
-    /// permission rule here to drift from the page's.</para>
+    /// <para><b>Gated identically to the SEO head — literally the same call.</b> The card is drawn
+    /// from <see cref="SeoResolver.ResolveShareableNode"/>, the ONE predicate the head's own card
+    /// block asks: a node the fail-closed <see cref="AnonymousGate"/> admits, or one whose scope opted
+    /// in to <see cref="PartitionAccessPolicy.PublicPreview"/>. Anything else is 404 — the same
+    /// answer a missing node gets, so the route is still no existence oracle. There is no parallel
+    /// permission rule here to drift from the page's, which is the whole reason that predicate is one
+    /// function: a head declaring <c>og:image</c> for a page whose picture 404s ships a broken card,
+    /// and several unfurlers then drop the preview entirely.</para>
     ///
     /// <para><b>Shared-cacheable on purpose</b> — the one image route where <c>public</c> is
     /// correct. Everything drawn on it is already served to anonymous callers on the page itself,
@@ -298,10 +301,10 @@ public static class SeoEndpoints
             if (nodePath.Length == 0)
                 return Task.FromResult(PngResult(http, renderer.RenderSite(http.Request.Host.Host)));
 
-            return SeoResolver.Resolve(hub, nodePath)
-                .Select(data => data is null
+            return SeoResolver.ResolveShareableNode(hub, nodePath)
+                .Select(shareable => shareable is not { } cleared
                     ? Results.NotFound()
-                    : CardResult(http, renderer, data))
+                    : CardResult(http, renderer, cleared.Node, cleared.AnonymousReadable))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}"), ct)!;
@@ -320,10 +323,11 @@ public static class SeoEndpoints
     /// instead of it.</para>
     ///
     /// <para><b>Gated identically to the SEO head and the share card.</b> It resolves through
-    /// <see cref="SeoResolver.Resolve"/>, which returns null for anything the fail-closed
-    /// <see cref="AnonymousGate"/> refuses — so a private node's MARK cannot be lifted out of this
-    /// route, and a missing node, a private one and a node with no mark all answer the same 404.
-    /// There is no parallel permission rule here to drift from the page's.</para>
+    /// <see cref="SeoResolver.ResolveShareableNode"/> — the same one predicate — so a mark reaches
+    /// this route only for a node the fail-closed <see cref="AnonymousGate"/> admits or one whose
+    /// scope opted in to <see cref="PartitionAccessPolicy.PublicPreview"/>; a missing node, a
+    /// withheld one that did not opt in, and a node with no mark all answer the same 404. There is no
+    /// parallel permission rule here to drift from the page's.</para>
     ///
     /// <para><b>404 is the fallback, and nothing ever points at it.</b> A node with no icon of its
     /// own gets no icon link in its head either (<see cref="SeoResolver.ResolveIconLinks"/> returns
@@ -357,10 +361,10 @@ public static class SeoEndpoints
 
             var pixels = size;
             var unrenderable = UnrenderableIcon(hub, nodePath);
-            return SeoResolver.Resolve(hub, nodePath)
-                .Select(data => data is null
+            return SeoResolver.ResolveShareableNode(hub, nodePath)
+                .Select(shareable => shareable is not { } cleared
                     ? Results.NotFound()
-                    : IconResult(http, data.Node, pixels, unrenderable))
+                    : IconResult(http, cleared.Node, pixels, unrenderable, cleared.AnonymousReadable))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/icon/{nodePath}"), ct)!;
@@ -371,13 +375,15 @@ public static class SeoEndpoints
     /// endpoint's own decision — not a re-implementation of it — is what the tests exercise.
     /// </summary>
     /// <param name="http">The request, for conditional-GET and response headers.</param>
-    /// <param name="node">The node, already gated as anonymous-readable by the caller.</param>
+    /// <param name="node">The node, already cleared by the caller — either anonymous-readable or
+    /// preview-opted-in.</param>
     /// <param name="size">The square edge in pixels.</param>
     /// <param name="onUnrenderable">Sink for markup that is present but cannot be drawn — an
     /// AUTHORED icon that fails to parse is a content defect worth a line in the log, not something
     /// to swallow into an indistinguishable 404.</param>
     internal static IResult IconResult(
-        HttpContext http, MeshNode node, int size, Action<Exception>? onUnrenderable = null)
+        HttpContext http, MeshNode node, int size, Action<Exception>? onUnrenderable = null,
+        bool sharedCacheable = true)
     {
         if (SeoResolver.ResolveIconSvg(node) is not { } svg)
             return Results.NotFound();
@@ -403,31 +409,38 @@ public static class SeoEndpoints
             return Results.StatusCode(StatusCodes.Status304NotModified);
 
         http.Response.Headers.ETag = etag;
-        // Shared-cacheable for the same reason the share card is: everything drawn here is already
-        // served to anonymous callers in the page's own head, and the strong ETag is the render's
-        // hash — so a node that changes its mark produces a new icon rather than a stale one.
-        http.Response.Headers.CacheControl = "public, max-age=86400";
+        // Cacheable exactly as the share card is, and for the same reasons on both legs — see
+        // CacheDirective: shared for a node the gate admitted, private/no-store for one cleared only
+        // by the revocable preview opt-in.
+        http.Response.Headers.CacheControl = CacheDirective(sharedCacheable);
         return Results.File(png, "image/png");
     }
 
-    private static IResult CardResult(HttpContext http, OgCardRenderer renderer, SeoPageData data) =>
-        PngResult(http, renderer.Render(CardContent(data)));
+    private static IResult CardResult(
+        HttpContext http, OgCardRenderer renderer, MeshNode node, bool sharedCacheable) =>
+        PngResult(http, renderer.Render(CardContent(node)), sharedCacheable);
 
     /// <summary>
-    /// Everything the card says about a node, read off the node the resolver already gated:
+    /// Everything the card says about a node, read off the node the resolver already cleared:
     /// name, description (with the catalog-copy fallbacks), category or type as the eyebrow, its
     /// own mark through the SAME backplate policy the favicon route draws
     /// (<see cref="SeoResolver.ResolveIconSvg"/>), the price when it sells something, and the
     /// path. Internal so a test reads the endpoint's own mapping rather than re-deriving it.
+    ///
+    /// <para>🚨 Takes the NODE, not a <see cref="SeoPageData"/>. It never needed more than the node
+    /// — the description it drew was always <see cref="SeoResolver.ExtractDescription"/> of it — and
+    /// taking the node means the card path cannot reach <see cref="SeoPageData.Body"/> even by
+    /// accident. That matters since the route now also serves a node the gate REFUSED, on a scope
+    /// that opted in to <see cref="PartitionAccessPolicy.PublicPreview"/>: the picture discloses the
+    /// same name, summary, eyebrow and mark the head does, and nothing else.</para>
     /// </summary>
-    internal static OgCardContent CardContent(SeoPageData data)
+    internal static OgCardContent CardContent(MeshNode node)
     {
-        var node = data.Node;
         var price = SeoResolver.ContentDecimal(node, "price");
         return new OgCardContent
         {
             Title = node.Name ?? node.Id,
-            Description = data.Description,
+            Description = SeoResolver.ExtractDescription(node),
             Eyebrow = string.IsNullOrWhiteSpace(node.Category) ? TypeLeaf(node.NodeType) : node.Category,
             IconSvg = SeoResolver.ResolveIconSvg(node),
             Price = price is > 0m
@@ -442,16 +455,40 @@ public static class SeoEndpoints
     private static string? TypeLeaf(string? nodeType) =>
         string.IsNullOrWhiteSpace(nodeType) ? null : nodeType[(nodeType.LastIndexOf('/') + 1)..];
 
-    private static IResult PngResult(HttpContext http, byte[] png)
+    private static IResult PngResult(HttpContext http, byte[] png, bool sharedCacheable = true)
     {
         var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(png))}\"";
         if (string.Equals(http.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
             return Results.StatusCode(StatusCodes.Status304NotModified);
 
         http.Response.Headers.ETag = etag;
-        http.Response.Headers.CacheControl = "public, max-age=86400";
+        http.Response.Headers.CacheControl = CacheDirective(sharedCacheable);
         return Results.File(png, "image/png");
     }
+
+    /// <summary>
+    /// 🚨 THE CACHE DIRECTIVE FOLLOWS WHICH DECISION CLEARED THE RESPONSE, and that is a correctness
+    /// property rather than a tuning one.
+    ///
+    /// <para><b>Gate-admitted ⇒ shared-cacheable.</b> Everything drawn is already served to anonymous
+    /// callers on the page itself, crawlers refetch cards aggressively, and the strong ETag is the
+    /// render's own hash — so a node that changes its mark produces a new picture rather than a stale
+    /// one.</para>
+    ///
+    /// <para><b>Preview-only ⇒ <c>private, no-store</c>.</b> That response is reachable because a
+    /// POLICY says so, and a policy is revocable while a shared cache never re-asks the origin: a day
+    /// of <c>public, max-age</c> would leave a withdrawn disclosure publicly retrievable after the
+    /// owner withdrew it. The ETag still goes out, so a conditional GET works for whoever holds
+    /// one.</para>
+    ///
+    /// <para>🚨 It does NOT reach the unfurler's own copy — Slack, Teams, iMessage and LinkedIn keep a
+    /// preview for hours to days and no response header controls that. Revocation is immediate at the
+    /// origin and eventually-consistent at the consumer; <c>Doc/Architecture/LinkPreviews</c> says so
+    /// where an owner reads about the flag.</para>
+    /// </summary>
+    /// <param name="sharedCacheable">True when the anonymous gate admitted the node.</param>
+    private static string CacheDirective(bool sharedCacheable) =>
+        sharedCacheable ? "public, max-age=86400" : "private, no-store";
 
     /// <summary>
     /// The sitemap XML, built reactively: candidate roots from the (System-read) type queries,
