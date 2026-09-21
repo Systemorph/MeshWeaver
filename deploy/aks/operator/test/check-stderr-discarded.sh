@@ -61,9 +61,18 @@ for f in "$BIN"/hosting-* "$BIN"/_common.sh "$BIN"/run.sh; do
   while IFS= read -r line; do
     case "$line" in *2\>/dev/null*|*\>/dev/null\ 2\>\&1*) ;; *) continue ;; esac
     case "$line" in *kubectl*) ;; *) continue ;; esac
-    # A comment line describes the defect; it does not commit it. (bin/ comments quote the old
+    # A comment LINE describes the defect; it does not commit it. (bin/ comments quote the old
     # shapes on purpose, so this exclusion is load-bearing, not tidiness.)
-    case "$line" in \#*|[[:space:]]*\#*) continue ;; esac
+    #
+    # 🚨 It must match a comment line and NOTHING ELSE. The obvious glob — `[[:space:]]*\#*` —
+    # reads as "one space-class char, then anything, then a #, then anything", so it also swallows
+    # every real line carrying a TRAILING comment: `live="$(kubectl … 2>/dev/null)"  # why`. That
+    # is a skip-trapdoor inside the gate written to close one, and it would have been invisible —
+    # a call excluded from the scan looks exactly like a call that is not there. Strip the leading
+    # whitespace first, then test the FIRST character; the self-test at the bottom pins both
+    # directions.
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    case "$trimmed" in '#'*) continue ;; esac
     while read -r verb res; do
       [ -n "$verb" ] || continue
       res="${res%%/*}"
@@ -102,6 +111,17 @@ while IFS= read -r key; do
        stale=$((stale+1)) ;;
   esac
 done < <(printf '%s' "$declared" | tr '|' '\n' | grep .)
+
+# ── the parser's own control ────────────────────────────────────────────────────────────────────
+# A gate whose scan silently drops lines reports "0 undeclared" for a tree full of them, and the
+# two readings are indistinguishable from outside. One case on each side of the comment test.
+selftest_fail=0
+_is_comment() { local l="$1" t; t="${l#"${l%%[![:space:]]*}"}"; case "$t" in '#'*) return 0 ;; *) return 1 ;; esac; }
+_is_comment '# kubectl get pv 2>/dev/null'            || { echo "  SELFTEST  a bare comment line must be excluded" >&2; selftest_fail=1; }
+_is_comment '   # kubectl get pv 2>/dev/null'         || { echo "  SELFTEST  an indented comment line must be excluded" >&2; selftest_fail=1; }
+_is_comment '  x="$(kubectl get pv 2>/dev/null)"  # w' && { echo "  SELFTEST  a real call with a TRAILING comment must be SCANNED, not excluded" >&2; selftest_fail=1; }
+_is_comment 'x="$(kubectl get pv 2>/dev/null)"'       && { echo "  SELFTEST  a plain call must be scanned" >&2; selftest_fail=1; }
+[ "$selftest_fail" -eq 0 ] || { echo "check-stderr-discarded: ERROR: the parser's own control failed — its verdict below means nothing" >&2; exit 2; }
 
 echo "check-stderr-discarded: ${scanned} kubectl read(s) discarding stderr across bin/, ${undeclared} undeclared, ${stale} stale declaration(s)"
 # A zero denominator is a broken parser, not a clean tree: bin/ legitimately holds declared ones.
