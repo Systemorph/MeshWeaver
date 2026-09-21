@@ -1422,6 +1422,37 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, 
 
     for instance in instances.values():
         if instance.state != "live":
+            # 🚨 A NON-LIVE DECLARATION IS RE-MEASURED, NEVER TRUSTED (#3848). The file's own
+            # header says forgetting an entry is "always the stricter mistake, never the looser
+            # one" — true of an ABSENT line, and it says nothing about a line that has gone WRONG.
+            # A stale exemption is the looser mistake, and it is silent by construction: the
+            # installation is skipped, so nothing ever contradicts it. Measured 2026-09-21 — the
+            # `pearl` entry read "never installed — pearl.meshweaver.cloud has no DNS record
+            # (measured 2026-09-12)" and ended "Delete this entry the day it is provisioned";
+            # pearl was provisioned 2026-09-16 and had been answering for five days, outside this
+            # lane's protected set AND outside the combo-verification roster derived from the same
+            # file, with nothing anywhere saying so.
+            #
+            # So the exemption is held to the ONE question that can falsify it — does a portal
+            # answer there? — using the probe seam this function already takes. Costs one HTTPS
+            # call per exempted installation (three in the fleet today), and only for one that
+            # names a host: an entry for something with no ingress host cannot be falsified this
+            # way and is left to the roster's own stale-entry check. The reading is the COMMIT, not
+            # the absence of an error: `derive-combo-instances.py` passes a probe that answers
+            # nothing (`_no_probe`), so the combo lane stays free of a call to every portal in the
+            # fleet and this arm is inert there by construction — one lane does the network.
+            if instance.host:
+                answered, _version, _error = probe(instance.host)
+                if answered:
+                    blockers.append(
+                        f"{ROSTER_PATH} declares `{instance.label}` {instance.state}, but "
+                        f"https://{instance.host}{VERSION_ROUTE} ANSWERS — it is running core "
+                        f"{answered[:7]}. A non-live line states that nothing is expected to "
+                        "answer there, and while it stands this installation is missing from "
+                        "every denominator derived from this file: its running images are "
+                        "protected by nothing here, and a roster derived from it covers it "
+                        "nowhere. That is an omission in the one direction a hand-maintained "
+                        "file may not fail in. Delete the line — the installation is live.")
             continue
         if not instance.host:
             instance.error = ("its overlay declares the installation but no ingress host, so it "
@@ -6116,6 +6147,30 @@ ingress:
                         roster={"ghost": ("retired", "decommissioned in 2019", "")})
     check(any("ghost" in b and "exempts nothing" in b for b in plan.blockers),
           f"ARM 25: a roster entry for an installation no overlay declares did not red: {plan.blockers}")
+
+    # ── ARM 25b: a non-live declaration whose portal ANSWERS is stale, and reds (#3848) ─────────
+    # ARM 25 covers an exemption naming NOBODY. This covers the other half, which is the one that
+    # actually happened: an exemption naming a real installation that has since been stood up. The
+    # `pearl` line said "never installed — pearl.meshweaver.cloud has no DNS record (measured
+    # 2026-09-12)" and "Delete this entry the day it is provisioned"; pearl went live 2026-09-16
+    # and answered for five days while this file still exempted it, so its running images were
+    # protected by nothing here and the combo roster derived from this same file covered it
+    # nowhere. Nothing contradicted the line, because a non-live installation was never asked.
+    plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        roster={"memex-cloud": ("not-installed", "never stood up", "")})
+    check(any("memex-cloud" in b and "ANSWERS" in b for b in plan.blockers),
+          f"ARM 25b: an exemption for a portal that ANSWERS did not red — the stale half of a "
+          f"hand-maintained file fails in the looser direction and silently: {plan.blockers}")
+
+    # …and the NEGATIVE control, which is what makes the arm above a test rather than a tautology:
+    # an exemption that is still TRUE stays silent. The same roster, the same fixture, and the one
+    # thing changed is that nothing answers at that host.
+    plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        roster={"memex-cloud": ("not-installed", "never stood up", "")},
+                        probe=_answers(None, "no such host"))
+    check(not any("ANSWERS" in b for b in plan.blockers),
+          f"ARM 25b: a still-true exemption was reported as stale, which would make the arm above "
+          f"fire on every declaration and train its reader to delete correct lines: {plan.blockers}")
 
     # ── ARM 26: an installation running an image the registry no longer carries reds ────────────
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),

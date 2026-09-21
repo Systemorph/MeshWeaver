@@ -303,13 +303,6 @@
       "issue": "MeshWeaver#3438"
     },
     {
-      "id": "pearl",
-      "state": "not-installed",
-      "reason": "Declared by deployments/aks/pearl/values.pearl.public.yaml and never installed — pearl.meshweaver.cloud has no DNS record (measured 2026-09-12). Memex#219 records the same state: 'live on pearl, which has never been installed and would have seeded from an unpullable tag'. Its overlay pins are still protected on AXIS 2; what is not expected is an answer from a portal that was never stood up. Delete this entry the day it is provisioned.",
-      "declaredAt": "2026-09-12",
-      "issue": "Memex#219"
-    },
-    {
       "id": "partnerre",
       "repo": "Systemorph/PartnerRe.Memex",
       "state": "not-installed",
