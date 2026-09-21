@@ -383,7 +383,8 @@ internal class RoutingGrain(
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
             + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
             + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
-            + "deepest per-channel queue {Deepest}, routing pool subscribing {PoolInFlight}. "
+            + "deepest per-channel queue {Deepest}, routing pool subscribing {PoolInFlight}, "
+            + "waiting for a pool slot {PoolWaiting}; oldest leg in flight {OldestLeg}. "
             + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
             + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
             + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
@@ -391,6 +392,14 @@ internal class RoutingGrain(
             + "blocked behind one another (head-of-line within one channel); 0 means nothing is waiting on anything, "
             + "so read it as load. Many channels over FEW destinations is a multiplexer hub draining in parallel, "
             + "which is load too — before issue #5009 those legs shared one channel and read as head-of-line. "
+            + "🚨 THE TWO POOL GAUGES ANSWER DIFFERENT QUESTIONS AND ONLY ONE SEES THE WAIT NAMED ABOVE — issue #5018. "
+            + "'subscribing' counts legs inside their SUBSCRIBE PROLOGUE only, so a leg still waiting for a ThreadPool "
+            + "thread and a leg already past its subscribe BOTH read 0 there; 'waiting for a pool slot' is the gauge "
+            + "that sees the pre-subscribe wait. High while subscribing is below the pool's cap is a THREAD shortage; "
+            + "both near zero means the legs are past their subscribe and the wait is downstream I/O. "
+            + "🚨 READ THE OLDEST LEG FIRST: it is the only load-vs-leak discriminator available from a SINGLE line — "
+            + "every leg young is load the silo is absorbing, one leg minutes old is a slot that never came back and "
+            + "the label names it — whereas the episode stamp below needs a SECOND line to say anything. "
             + "🚨 Deepest is sampled AT THE CROSSING, so like the in-flight count it is partly an artefact of the "
             + "threshold: with N channels sharing the backlog it is ~InFlight/N whatever is wrong. "
             + "READ THE EPISODE STAMP, not the depth: a later line with a HIGHER episode on this activation means "
@@ -398,7 +407,35 @@ internal class RoutingGrain(
             + "neither a clear nor a higher episode ever follows, the in-flight count never fell below half the "
             + "threshold — which means a leg never terminated and its slot leaked, not that the silo was busy.",
             activationId, episode, startedUtc, inFlight, SaturationThreshold,
-            channels, destinations, deepest, routingPool.CurrentInFlight, addressPath);
+            channels, destinations, deepest, routingPool.CurrentInFlight, routingPool.CurrentlyWaiting,
+            DescribeOldestLeg(), addressPath);
+    }
+
+    /// <summary>
+    /// The oldest in-flight routing leg, as ONE phrase the report prints — its age and the label that
+    /// identifies it, or a sentence saying why there is none.
+    ///
+    /// <para>🚨 <b>Why a composed phrase and not a number plus a string.</b> The two "no reading"
+    /// cases are not zero and must never render as a number: a sentinel age of <c>-1</c> or <c>0</c> is
+    /// exactly the shape that gets read as "the oldest leg is brand new", which is the *opposite* of
+    /// what it would mean. "nothing in flight" and "not tracked on this host" (the quiescence gauge is
+    /// resolved with <c>GetService</c>, so a host that registered none has none) are therefore printed
+    /// as words. Everything else on this line is a number precisely because a number is a fair summary
+    /// of it; this one is not.</para>
+    ///
+    /// <para>Called once per saturation EPISODE, from the latched branch of
+    /// <see cref="ReportSaturation"/> — never per route. The scan behind it is O(in-flight legs), the
+    /// same cost argument <c>OrderedRouteDispatcher.QueueSnapshot</c> already makes on this turn, and
+    /// the count it walks is ~the reporting threshold at the moment the report fires.</para>
+    /// </summary>
+    private string DescribeOldestLeg()
+    {
+        if (quiescence is null)
+            return "not tracked on this host";
+        var oldest = quiescence.OldestInFlight();
+        return oldest is null
+            ? "none in flight"
+            : $"{(long)oldest.Value.Age.TotalMilliseconds} ms — {oldest.Value.Label}";
     }
 
     private void ReportDrained(int inFlight)
