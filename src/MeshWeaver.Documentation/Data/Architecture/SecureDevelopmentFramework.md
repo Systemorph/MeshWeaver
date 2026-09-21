@@ -34,6 +34,11 @@ source-control tenant; the same roles map onto any equivalent.
 <defs>
 <marker id="sdf-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
 <style>
+  .sdf { --sdf-client: #1f62a8; --sdf-vendor: #0b6e80; --sdf-warn: #8a5a10; --sdf-iface: #5f6670; }
+  [data-theme="dark"] .sdf { --sdf-client: #82b7f2; --sdf-vendor: #5fcbdf; --sdf-warn: #e6ac52; --sdf-iface: #a3a8b1; }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) .markdown-body:not([data-theme="light"]) .sdf { --sdf-client: #82b7f2; --sdf-vendor: #5fcbdf; --sdf-warn: #e6ac52; --sdf-iface: #a3a8b1; }
+  }
   .sdf text { fill: currentColor; }
   .sdf .muted { opacity: .72; }
   .sdf .panel { fill: currentColor; fill-opacity: .04; }
@@ -41,23 +46,21 @@ source-control tenant; the same roles map onto any equivalent.
   .sdf .store { fill: currentColor; fill-opacity: .10; }
   .sdf .edge  { stroke: currentColor; stroke-opacity: .85; fill: none; }
   .sdf .rule  { stroke: currentColor; stroke-opacity: .25; }
-  .sdf .b-client { stroke: #4b90d6; }
-  .sdf .b-iface  { stroke: #8a8f98; }
-  .sdf .b-vendor { stroke: #2aa0b5; }
-  .sdf .b-warn   { stroke: #c08a2e; }
-  .sdf .t-client { fill: #4b90d6; }
-  .sdf .t-vendor { fill: #2aa0b5; }
-  .sdf .t-warn   { fill: #c08a2e; }
+  .sdf .b-client { stroke: var(--sdf-client); }
+  .sdf .b-iface  { stroke: var(--sdf-iface); }
+  .sdf .b-vendor { stroke: var(--sdf-vendor); }
+  .sdf .b-warn   { stroke: var(--sdf-warn); }
+  .sdf .t-client { fill: var(--sdf-client); }
+  .sdf .t-vendor { fill: var(--sdf-vendor); }
+  .sdf .t-warn   { fill: var(--sdf-warn); }
 </style>
 </defs>
 <g class="sdf">
 <text x="655" y="28" text-anchor="middle" font-size="18" font-weight="600">Target development framework: secure production and development</text>
 <text x="1290" y="24" text-anchor="end" font-size="11" class="muted">Reference architecture</text>
-
 <rect x="20" y="70" width="390" height="720" rx="10" class="zone b-client" stroke-width="2"/>
 <text x="215" y="95" text-anchor="middle" font-size="15" font-weight="600" class="t-client">Client environment</text>
 <text x="215" y="112" text-anchor="middle" font-size="12" class="t-client">ringfenced: every access via the client identity provider</text>
-
 <rect x="40" y="130" width="350" height="275" rx="8" class="panel b-client" stroke-width="1.5"/>
 <text x="215" y="153" text-anchor="middle" font-weight="600" class="t-client">memex (production) on Kubernetes</text>
 <ellipse cx="215" cy="175" rx="60" ry="10" class="store b-client"/>
@@ -76,7 +79,6 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="215" y="361" text-anchor="middle" font-size="11">binaries from the public registry; the project module</text>
 <text x="215" y="375" text-anchor="middle" font-size="11">from the project repository; no source code enters</text>
 <text x="215" y="394" text-anchor="middle" font-size="11" font-style="italic" class="muted">AI on original data: memex harness with approved models only</text>
-
 <rect x="40" y="418" width="350" height="100" rx="8" class="zone b-client" stroke-width="1.5"/>
 <circle cx="66" cy="441" r="8" class="edge b-client" stroke-width="1.6"/>
 <path d="M52 464a14 14 0 0 1 28 0" class="edge b-client" stroke-width="1.6"/>
@@ -85,7 +87,6 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="230" y="473" text-anchor="middle" font-size="11">documented request (what, why); runs scripts and</text>
 <text x="230" y="487" text-anchor="middle" font-size="11">inspects project data; the counterpart for everything</text>
 <text x="230" y="501" text-anchor="middle" font-size="11">that requires client hands</text>
-
 <rect x="40" y="532" width="350" height="118" rx="8" class="panel b-warn" stroke-width="1.5"/>
 <text x="215" y="554" text-anchor="middle" font-weight="600" class="t-warn">Access and data boundary: security relevant</text>
 <text x="215" y="573" text-anchor="middle" font-size="11">No human has access to the cluster: only the source-control</text>
@@ -94,18 +95,15 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="215" y="615" text-anchor="middle" font-size="11">Original data never leaves this environment; content goes</text>
 <text x="215" y="629" text-anchor="middle" font-size="11">only to security-approved models inside it.</text>
 <text x="215" y="643" text-anchor="middle" font-size="11">The vendor only ever gets anonymised generic data.</text>
-
 <rect x="40" y="665" width="350" height="96" rx="8" class="panel b-client" stroke-width="1.5"/>
 <text x="215" y="687" text-anchor="middle" font-weight="600" class="t-client">Client identity provider</text>
 <text x="215" y="706" text-anchor="middle" font-size="11">secures memex, the cluster and the source-control tenant</text>
 <text x="215" y="720" text-anchor="middle" font-size="11">memex system identity: enterprise app in this tenant</text>
 <text x="215" y="738" text-anchor="middle" font-size="11" font-style="italic" class="muted">step 2: this set-up is rebuilt here, one instance first;</text>
 <text x="215" y="752" text-anchor="middle" font-size="11" font-style="italic" class="muted">the client provides the domain name and the certificate</text>
-
 <rect x="430" y="70" width="440" height="720" rx="10" class="zone b-iface" stroke-width="2"/>
 <text x="650" y="95" text-anchor="middle" font-size="15" font-weight="600">Interface</text>
 <text x="650" y="112" text-anchor="middle" font-size="12" class="muted">what connects the two environments, and nothing else</text>
-
 <rect x="450" y="130" width="380" height="150" rx="8" class="panel b-vendor" stroke-width="1.5"/>
 <text x="640" y="153" text-anchor="middle" font-weight="600" class="t-vendor">The public registry instance</text>
 <text x="640" y="169" text-anchor="middle" font-size="12" font-weight="600" class="t-vendor">the source of all binaries</text>
@@ -115,7 +113,6 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="640" y="233" text-anchor="middle" font-size="11">downloads its packages from here</text>
 <text x="640" y="253" text-anchor="middle" font-size="11" font-style="italic" class="muted">only compiled packages, never source code, no client data:</text>
 <text x="640" y="267" text-anchor="middle" font-size="11" font-style="italic" class="muted">not security relevant</text>
-
 <rect x="450" y="305" width="380" height="260" rx="8" class="zone b-client" stroke-width="2"/>
 <rect x="796" y="316" width="20" height="14" rx="2" fill="currentColor" fill-opacity=".8"/>
 <path d="M800 316v-4a6 6 0 0 1 12 0v4" class="edge" stroke-width="2"/>
@@ -136,7 +133,6 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="640" y="529" text-anchor="middle" font-size="11">client identity provider only; vendor staff use dedicated</text>
 <text x="640" y="543" text-anchor="middle" font-size="11">client accounts for the project-relevant services</text>
 <text x="640" y="557" text-anchor="middle" font-size="11" font-style="italic" class="muted">no system connection to the vendor environment</text>
-
 <rect x="450" y="606" width="380" height="166" rx="8" class="panel b-vendor" stroke-width="1.5"/>
 <text x="640" y="628" text-anchor="middle" font-weight="600" class="t-vendor">Interface memex: the vendor's test environment</text>
 <text x="640" y="643" text-anchor="middle" font-size="11" class="t-vendor">vendor subscription and tenant; cost billed to the client</text>
@@ -149,11 +145,9 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="640" y="738" text-anchor="middle" font-size="11" font-weight="600" class="t-vendor">Access: the vendor · not security relevant</text>
 <text x="640" y="752" text-anchor="middle" font-size="11" font-style="italic" class="muted">step 1: the plain set-up, no data at all; syncs project sources</text>
 <text x="640" y="765" text-anchor="middle" font-size="11" font-style="italic" class="muted">with the client tenant; installs from the App Store</text>
-
 <rect x="890" y="70" width="400" height="720" rx="10" class="zone b-vendor" stroke-width="2"/>
 <text x="1090" y="95" text-anchor="middle" font-size="15" font-weight="600" class="t-vendor">Vendor environment (consultant)</text>
 <text x="1090" y="112" text-anchor="middle" font-size="12" class="t-vendor">no client data, ever: not security relevant</text>
-
 <rect x="910" y="130" width="360" height="200" rx="8" class="panel b-vendor" stroke-width="1.5"/>
 <text x="1090" y="153" text-anchor="middle" font-weight="600" class="t-vendor">Platform, modules and plugins</text>
 <text x="1090" y="169" text-anchor="middle" font-size="11" font-weight="600" class="t-vendor">vendor source-control tenant</text>
@@ -166,7 +160,6 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="1090" y="275" text-anchor="middle" font-size="11">as binaries in the App Store</text>
 <text x="1090" y="297" text-anchor="middle" font-size="11" font-style="italic" class="muted">the source code stays here</text>
 <text x="1090" y="316" text-anchor="middle" font-size="11" font-style="italic" class="muted">licensing per the licence agreement</text>
-
 <rect x="910" y="350" width="360" height="170" rx="8" class="panel b-vendor" stroke-width="1.5"/>
 <text x="1090" y="373" text-anchor="middle" font-weight="600" class="t-vendor">Vendor development</text>
 <text x="1090" y="391" text-anchor="middle" font-size="11">own instance, own subscriptions (AI coding agents)</text>
@@ -178,22 +171,18 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="1090" y="477" text-anchor="middle" font-size="11">identity) and in the client tenant (dedicated client</text>
 <text x="1090" y="491" text-anchor="middle" font-size="11">account), as pull requests</text>
 <text x="1090" y="508" text-anchor="middle" font-size="11" font-style="italic" class="muted">nothing is pushed into the client environment from here</text>
-
 <rect x="910" y="540" width="360" height="90" rx="8" class="panel b-warn" stroke-width="1.5"/>
 <text x="1090" y="565" text-anchor="middle" font-weight="600" class="t-warn">Principle</text>
 <text x="1090" y="586" text-anchor="middle" font-size="12">Vendor employees have no contact</text>
 <text x="1090" y="603" text-anchor="middle" font-size="12">with production data.</text>
-
 <rect x="910" y="650" width="360" height="100" rx="8" class="panel b-vendor" stroke-width="1.5"/>
 <text x="1090" y="673" text-anchor="middle" font-weight="600" class="t-vendor">Costs</text>
 <text x="1090" y="693" text-anchor="middle" font-size="11">the vendor carries only its AI coding-agent subscriptions;</text>
 <text x="1090" y="708" text-anchor="middle" font-size="11">the Interface memex subscription and all other project-related</text>
 <text x="1090" y="723" text-anchor="middle" font-size="11">services on vendor tenants are passed through to the client;</text>
 <text x="1090" y="738" text-anchor="middle" font-size="11">everything in the client environment is the client's cost</text>
-
 <path d="M12 62 H418 V297 H838 V573 H418 V798 H12 Z" class="edge b-client" stroke-width="2" stroke-dasharray="9 6"/>
 <text x="834" y="291" text-anchor="end" font-size="11" font-weight="600" class="t-client">Client ringfence</text>
-
 <line x1="910" y1="205" x2="832" y2="205" class="edge" stroke-width="2" marker-end="url(#sdf-arr)"/>
 <text x="871" y="197" text-anchor="middle" font-size="11">publish</text>
 <line x1="448" y1="230" x2="392" y2="230" class="edge" stroke-width="2" marker-end="url(#sdf-arr)"/>
@@ -210,7 +199,6 @@ source-control tenant; the same roles map onto any equivalent.
 <text x="1100" y="345" font-size="11">commits</text>
 <polyline points="910,480 880,480 880,680 832,680" class="edge" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#sdf-arr)"/>
 <text x="867" y="592" text-anchor="middle" font-size="10" transform="rotate(-90 867 592)">vendor staff</text>
-
 <text x="655" y="820" text-anchor="middle" font-size="12" class="muted">No system connection between the vendor environment and the client environment. Security relevance stops at the client ringfence.</text>
 <text x="655" y="838" text-anchor="middle" font-size="12" class="muted">The only crossings: compiled binaries from the public registry, and people logging in with a client identity.</text>
 </g>
