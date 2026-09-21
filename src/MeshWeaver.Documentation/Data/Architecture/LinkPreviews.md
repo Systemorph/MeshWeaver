@@ -163,6 +163,29 @@ section). That floor is reached more often than it looks: measured on a control 
 public ancestor anywhere on that chain and the fallback above correctly had nothing to offer. A
 partition that is gated all the way up needs the opt-in, not the walk.
 
+### 🚨 The order the three legs are tried, and why the opt-in goes FIRST
+
+The two fallbacks are independent resolvers, so the ORDER is the renderer's decision, and a gated page
+can match BOTH — a catalog whose root is public AND whose scope opted in. `SeoHead` tries them in this
+order:
+
+1. **the node's OWN card**, when its scope states `PublicPreview` — `ResolvePreviewAsync`;
+2. else **the nearest PUBLIC ancestor's** card, captioned with the pasted path — `ResolvePublicAncestorAsync`;
+3. else **the site card**, which is what every such link said before either existed.
+
+**An explicit consent outranks an inference, which is the whole argument.** The flag's stated meaning
+is *page names and summaries may travel*; the ancestor card is what a page gets when NOBODY said that
+and the tree above it has to be read instead. Trying the walk first would invert it: the most common
+shape for a partition that WANTS previews — a store, a catalog, an offers space — is exactly a public
+cover over gated pages, so the walk would always answer and the flag would be a no-op precisely where
+it was set on purpose. It would also hand the owner a less specific card than the one they asked for:
+the ancestor's title plus the URL's segments, rather than the page's own name and authored summary.
+
+The two legs stay separate blocks in the head rather than one parameterised one, because they rest on
+OPPOSITE disclosure arguments — the preview leg reads the withheld node's own words BY CONSENT, the
+ancestor leg is safe precisely because it never reads them — and each block's comment is where a
+reviewer checks that argument against the markup it governs.
+
 ## `publicPreview`: letting a gated page describe itself
 
 The question a partition owner keeps asking of a gated link is *couldn't it say the name of the node?
