@@ -215,6 +215,22 @@ is the control `SeoPublicPreviewOptInTest` leads with.
   broken card, and several unfurlers then drop the preview entirely. Everything those routes draw
   (name, authored summary, category, mark, price chip, instance + path) is exactly what the head
   discloses, which is why one flag can govern both.
+- **…and an AUTHORED image or icon is the exception, because `/api/content/…` stays gated.** A store
+  plugin usually authors its card as `/api/content/{partition}/content/og.png` and its mark as a
+  `content:` reference. That route serves file **bytes**, not the four strings this flag consents to,
+  so the opt-in deliberately does not open it — and declaring it anyway would promise exactly the
+  broken picture the previous point exists to prevent. On a **previewed** page, therefore: a
+  root-relative authored image falls back to the drawn card, an absolute one is kept (another host's
+  business), and a content-backed icon yields **no icon link at all** — the portal favicon stays,
+  which is the same honest fallback the icon route already gives a node with no usable mark. A public
+  page is untouched: its authored art is fetchable precisely because the gate admits it.
+- **It is revocable at the origin, and eventually-consistent at the consumer.** A previewed card and
+  icon are served `private, no-store` rather than the `public, max-age=86400` a gate-admitted picture
+  gets, because a policy can be withdrawn and a shared cache never re-asks the origin. So flipping
+  `PublicPreview` to `false` stops the origin serving it on the next request. **It does not reach the
+  unfurler's own copy** — Slack, Teams, iMessage and LinkedIn keep a preview for hours to days and no
+  response header controls that (the same caching that makes a *fixed* page take hours to re-scrape,
+  below). Treat the disclosure as something that outlives its withdrawal in other people's clients.
 
 ### Why an opt-in and not a behaviour
 

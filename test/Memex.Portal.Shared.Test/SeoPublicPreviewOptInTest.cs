@@ -57,6 +57,25 @@ public class SeoPublicPreviewOptInTest(ITestOutputHelper output) : MonolithMeshT
                 Content = System.Text.Json.JsonSerializer.SerializeToElement(
                     new { content = OfferBody }),
             },
+            // 🚨 The shapes a review found this feature broken for, and it is the COMMON pair: a store
+            // plugin authors its og image as /api/content/… and its icon as a content: reference.
+            // Both routes still require Read, so declaring either for a gated node promises a picture
+            // that 404s — worse than none, because unfurlers drop a preview whose image fails.
+            new MeshNode("Authored", "Offers")
+            {
+                NodeType = "Markdown", Name = "Authored Offer", Description = "Authored art.",
+                Icon = "content:brand/mark.svg",
+                Content = System.Text.Json.JsonSerializer.SerializeToElement(
+                    new { ogImage = "/api/content/Offers/content/og.png" }),
+            },
+            // The other side: an image on SOMEBODY ELSE's host is fetchable on its own terms.
+            new MeshNode("Offsite", "Offers")
+            {
+                NodeType = "Markdown", Name = "Offsite Offer",
+                Content = System.Text.Json.JsonSerializer.SerializeToElement(
+                    new { ogImage = "https://cdn.example.org/offer.png" }),
+            },
+
             // A deeper scope opting back OUT of the inherited flag.
             new MeshNode("Sealed", "Offers") { NodeType = "Markdown", Name = SealedName },
             AssignmentNodeFactory.Policy("Offers/Sealed",
@@ -78,7 +97,7 @@ public class SeoPublicPreviewOptInTest(ITestOutputHelper output) : MonolithMeshT
     private Task<SeoPreviewCard?> Preview(string path, string? locale = null) =>
         SeoResolver.ResolvePreview(Mesh, path, locale).Should().Emit();
 
-    private Task<MeshNode?> Shareable(string path) =>
+    private Task<ShareableNode?> Shareable(string path) =>
         SeoResolver.ResolveShareableNode(Mesh, path).Should().Emit();
 
     private Task<SeoPageData?> Page(string path) => SeoResolver.Resolve(Mesh, path).Should().Emit();
@@ -189,18 +208,21 @@ public class SeoPublicPreviewOptInTest(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task TheImageRoutesServeAPreviewedNode_SoTheDeclaredCardFetches()
     {
-        var node = await Shareable("Offers/LocalHardware");
+        var cleared = await Shareable("Offers/LocalHardware");
 
-        Assert.NotNull(node);
-        Assert.Equal("Offers/LocalHardware", node.Path);
+        Assert.NotNull(cleared);
+        Assert.Equal("Offers/LocalHardware", cleared.Node.Path);
+        // Cleared by the POLICY, not by the gate — which is what decides its cache directive.
+        Assert.False(cleared.AnonymousReadable);
         // The endpoint's own mapping, from the node the predicate cleared: name and authored summary
         // reach the drawn card, and nothing else can.
-        var card = SeoEndpoints.CardContent(node);
+        var card = SeoEndpoints.CardContent(cleared.Node);
         Assert.Equal(OfferName, card.Title);
         Assert.Equal(OfferSummary, card.Description);
         Assert.DoesNotContain(OfferBody, card.Description ?? "");
         // And the icon route answers with a real PNG rather than the 404 it gave before.
-        var icon = SeoEndpoints.IconResult(new DefaultHttpContext(), node, 32);
+        var icon = SeoEndpoints.IconResult(
+            new DefaultHttpContext(), cleared.Node, 32, null, cleared.AnonymousReadable);
         Assert.IsType<FileContentHttpResult>(icon);
     }
 
@@ -271,4 +293,88 @@ public class SeoPublicPreviewOptInTest(ITestOutputHelper output) : MonolithMeshT
 
         Assert.Equal("go on", SeoResolver.ComposePreviewCard(bare, "go on").Description);
     }
+
+    /// <summary>
+    /// 🚨 A REVIEW FINDING, KEPT AS A TEST: an authored image on the portal's own
+    /// <c>/api/content/…</c> route is <c>Read</c>-gated, which this opt-in deliberately does not open
+    /// (that route serves file BYTES, not the four strings the flag consents to). Declaring it for a
+    /// gated node would promise an <c>og:image</c> anonymous unfurlers get a 404 for — worse than no
+    /// card, since several then drop the preview entirely. The preview therefore falls back to the
+    /// DRAWN card, which the same flag does serve.
+    /// </summary>
+    [Fact]
+    public async Task AnAuthoredImageOnTheContentRoute_FallsBackToTheDrawnCard()
+    {
+        var card = await Preview("Offers/Authored");
+
+        Assert.NotNull(card);
+        Assert.Equal("/api/og/Offers/Authored.png", card.Image);
+        Assert.DoesNotContain("/api/content/", card.Image);
+        // The card still says what it is — only the picture changed.
+        Assert.Equal("Authored Offer", card.Title);
+        Assert.StartsWith("Authored art.", card.Description);
+    }
+
+    /// <summary>
+    /// The other side of that control: an ABSOLUTE authored image is another host's business, fetchable
+    /// or not on its own terms, and nothing here can make it worse — so it is kept, exactly as a public
+    /// page keeps it.
+    /// </summary>
+    [Fact]
+    public async Task AnAbsoluteAuthoredImage_IsKept()
+    {
+        var card = await Preview("Offers/Offsite");
+
+        Assert.NotNull(card);
+        Assert.Equal("https://cdn.example.org/offer.png", card.Image);
+    }
+
+    /// <summary>
+    /// 🚨 THE SECOND REVIEW FINDING: a <c>content:</c> icon resolves to <c>/api/content/…</c>, still
+    /// <c>Read</c>-gated, and <c>ResolveIconLinks</c> yields that ONE link and no raster channels for
+    /// it — so a previewed page would publish exactly one icon link and it would be broken. Such a
+    /// node gets NO icon link, which is the honest fallback the icon route already documents: the
+    /// portal favicon stays rather than a link that 404s.
+    /// </summary>
+    [Fact]
+    public async Task AContentBackedIcon_YieldsNoIconLinkAtAll()
+    {
+        var card = await Preview("Offers/Authored");
+
+        Assert.NotNull(card);
+        Assert.Empty(card.Icons);
+        Assert.DoesNotContain(card.Icons, i => i.Href.Contains("/api/content/", System.StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 THE CACHE DIRECTIVE FOLLOWS THE DECISION, because a preview is REVOCABLE and a shared cache
+    /// never re-asks the origin: a day of <c>public, max-age</c> would leave a withdrawn disclosure
+    /// publicly retrievable after its owner withdrew it. A gate-admitted node keeps the shared
+    /// directive it has always had.
+    /// </summary>
+    [Fact]
+    public async Task APreviewedPictureIsNotSharedCacheable_AndAPublicOneStillIs()
+    {
+        var previewed = await Shareable("Offers/LocalHardware");
+        var open = await Shareable("Open");
+
+        Assert.NotNull(previewed);
+        Assert.NotNull(open);
+        Assert.False(previewed.AnonymousReadable);
+        Assert.True(open.AnonymousReadable);
+
+        // The endpoint's OWN header decision, reached from the node it cleared — not a copy of the
+        // rule beside it.
+        var previewHttp = new DefaultHttpContext();
+        SeoEndpoints.IconResult(previewHttp, previewed.Node, 32, null, previewed.AnonymousReadable);
+        Assert.Equal("private, no-store", previewHttp.Response.Headers.CacheControl.ToString());
+
+        var publicHttp = new DefaultHttpContext();
+        SeoEndpoints.IconResult(publicHttp, WithMark(open.Node), 32, null, open.AnonymousReadable);
+        Assert.Equal("public, max-age=86400", publicHttp.Response.Headers.CacheControl.ToString());
+    }
+
+    /// <summary>The public fixture node carries no mark, so give it one for the header assertion —
+    /// <c>IconResult</c> 404s (and sets no cache header) for a node it cannot draw.</summary>
+    private static MeshNode WithMark(MeshNode node) => node with { Icon = Mark };
 }

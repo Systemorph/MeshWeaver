@@ -171,6 +171,29 @@ public sealed record SeoPreviewCard(
     IReadOnlyList<PageIcon> Icons);
 
 /// <summary>
+/// A node whose PICTURE the share-card and icon routes may draw, and WHICH decision cleared it.
+///
+/// <para>🚨 The second field is not bookkeeping — it decides the response's cache directive, and
+/// getting that wrong makes a revocable disclosure unrevocable. A node the
+/// <see cref="AnonymousGate"/> admits is <c>public, max-age=…</c> cacheable: everything drawn on its
+/// card is already served to anonymous callers on the page itself, and crawlers refetch cards
+/// aggressively. A node cleared only by <see cref="PartitionAccessPolicy.PublicPreview"/> is NOT,
+/// because a policy is revocable and a shared cache never re-asks the origin — so it is served
+/// <c>private, no-store</c>, and flipping the flag off stops the origin serving it on the next
+/// request instead of up to a day later.</para>
+///
+/// <para>🚨 What that does NOT reach is the UNFURLER's own copy: Slack, Teams, iMessage and LinkedIn
+/// keep a preview for hours to days and no response header controls it (the same reason a fixed page
+/// can take hours to re-scrape). Revocation is therefore immediate at the origin and
+/// eventually-consistent at the consumer, and <c>Doc/Architecture/LinkPreviews</c> says so where an
+/// owner reads about the flag.</para>
+/// </summary>
+/// <param name="Node">The node whose picture may be drawn.</param>
+/// <param name="AnonymousReadable">True when the gate admitted it — the shared-cacheable case. False
+/// when only the preview opt-in cleared it.</param>
+public sealed record ShareableNode(MeshNode Node, bool AnonymousReadable);
+
+/// <summary>
 /// Server-side SEO resolution for the initial HTTP response. Reactive end to end; the ONE
 /// <c>Task</c> bridge sits at the Razor static-SSR boundary (<see cref="ResolveAsync"/>), the
 /// same adapter shape the MCP/REST surfaces use. Fail-open to null: a slow or faulted mesh
@@ -546,10 +569,55 @@ public static class SeoResolver
             summary is null
                 ? callToAction
                 : callToAction is null ? summary : $"{summary} {callToAction}",
-            ShareImage(node),
+            PreviewImage(node),
             node.Path,
-            ResolveIconLinks(node));
+            PreviewIconLinks(node));
     }
+
+    /// <summary>
+    /// 🚨 THE PICTURE A PREVIEWED PAGE MAY DECLARE — and it is NOT always
+    /// <see cref="ShareImage"/>, which is the whole point of this method existing.
+    ///
+    /// <para>An authored image is typically <c>/api/content/{partition}/content/og.png</c>: the
+    /// portal's own <b>access-controlled</b> content route, which this opt-in deliberately does not
+    /// open — that route serves file BYTES, not the four strings the flag consents to. Declaring it
+    /// for a gated node would promise an <c>og:image</c> that anonymous unfurlers receive a 404 for,
+    /// which is WORSE than no card: several drop the whole preview when the promised picture does not
+    /// fetch. So a root-relative authored image falls back to the DRAWN card, which
+    /// <see cref="ResolveShareableNode"/> does serve under the same flag.</para>
+    ///
+    /// <para>An ABSOLUTE authored image is kept: it is some other host's business, fetchable or not on
+    /// its own terms, and nothing here can make it worse. A PUBLIC page is untouched by this and keeps
+    /// declaring exactly what it declares today — its authored image is fetchable precisely because
+    /// the gate admits the node.</para>
+    /// </summary>
+    /// <param name="node">The withheld node, on a scope that opted in.</param>
+    private static string PreviewImage(MeshNode node) =>
+        ExtractImage(node) is { } authored
+        && authored.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            ? authored
+            : GeneratedCard(node.Path);
+
+    /// <summary>
+    /// 🚨 THE ICON CHANNELS A PREVIEWED PAGE MAY DECLARE: only the ones that are anonymously
+    /// fetchable BY CONSTRUCTION — the inline-svg <c>data:</c> URI, which is self-contained and
+    /// carries nothing beyond the mark itself, and the <c>/api/icon/{path}.png</c> rasters, which
+    /// honour this same flag.
+    ///
+    /// <para>A node whose icon is a <c>content:</c> reference resolves to <c>/api/content/…</c>, still
+    /// <c>Read</c>-gated, and <see cref="ResolveIconLinks"/> returns that ONE link and no raster
+    /// channels for it — so a previewed page would publish exactly one icon link and it would be
+    /// broken. Such a node gets NO icon link here, which is the same honest fallback the icon route
+    /// already documents for a node with no usable mark: the portal favicon stays, rather than a link
+    /// that 404s.</para>
+    /// </summary>
+    /// <param name="node">The withheld node, on a scope that opted in.</param>
+    private static IReadOnlyList<PageIcon> PreviewIconLinks(MeshNode node) =>
+        ResolveIconLinks(node)
+            .Where(link =>
+                link.Href.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                || link.Href.StartsWith("/api/icon/", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
     /// <summary>
     /// 🚨 THE ONE PREDICATE THE IMAGE ROUTES ASK — the node whose picture <c>/api/og/{path}.png</c>
@@ -566,20 +634,23 @@ public static class SeoResolver
     ///
     /// <para>The policy read happens only on the REFUSED leg, so a public page costs exactly what it
     /// costs today and a path that names no node costs no policy read at all.</para>
+    ///
+    /// <para>🚨 It answers WHICH decision cleared the response, not just that one did, because the two
+    /// are cacheable differently — see <see cref="ShareableNode.AnonymousReadable"/>.</para>
     /// </summary>
     /// <param name="hub">The hub whose path resolver, gate and policy chain answer.</param>
     /// <param name="path">The node path the picture was asked for.</param>
-    public static IObservable<MeshNode?> ResolveShareableNode(IMessageHub hub, string path) =>
+    public static IObservable<ShareableNode?> ResolveShareableNode(IMessageHub hub, string path) =>
         ResolveGated(hub, path)
             .SelectMany(gated => gated is not { } resolved
-                ? Observable.Return<MeshNode?>(null)
+                ? Observable.Return<ShareableNode?>(null)
                 : resolved.Readable
-                    ? Observable.Return<MeshNode?>(resolved.Node)
+                    ? Observable.Return<ShareableNode?>(new ShareableNode(resolved.Node, true))
                     : hub.GetPublicPreview(resolved.Resolution.Prefix)
                         .Take(1)
-                        .Select(optedIn => optedIn ? resolved.Node : null))
+                        .Select(optedIn => optedIn ? new ShareableNode(resolved.Node, false) : null))
             .Timeout(ResolveBudget)
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+            .Catch<ShareableNode?, Exception>(_ => Observable.Return<ShareableNode?>(null));
 
     /// <summary>
     /// The node's document body as HTML, for <see cref="SeoPageData.Body"/>: the content's own

@@ -302,9 +302,9 @@ public static class SeoEndpoints
                 return Task.FromResult(PngResult(http, renderer.RenderSite(http.Request.Host.Host)));
 
             return SeoResolver.ResolveShareableNode(hub, nodePath)
-                .Select(node => node is null
+                .Select(shareable => shareable is not { } cleared
                     ? Results.NotFound()
-                    : CardResult(http, renderer, node))
+                    : CardResult(http, renderer, cleared.Node, cleared.AnonymousReadable))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}"), ct)!;
@@ -362,9 +362,9 @@ public static class SeoEndpoints
             var pixels = size;
             var unrenderable = UnrenderableIcon(hub, nodePath);
             return SeoResolver.ResolveShareableNode(hub, nodePath)
-                .Select(node => node is null
+                .Select(shareable => shareable is not { } cleared
                     ? Results.NotFound()
-                    : IconResult(http, node, pixels, unrenderable))
+                    : IconResult(http, cleared.Node, pixels, unrenderable, cleared.AnonymousReadable))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/icon/{nodePath}"), ct)!;
@@ -375,13 +375,15 @@ public static class SeoEndpoints
     /// endpoint's own decision — not a re-implementation of it — is what the tests exercise.
     /// </summary>
     /// <param name="http">The request, for conditional-GET and response headers.</param>
-    /// <param name="node">The node, already gated as anonymous-readable by the caller.</param>
+    /// <param name="node">The node, already cleared by the caller — either anonymous-readable or
+    /// preview-opted-in.</param>
     /// <param name="size">The square edge in pixels.</param>
     /// <param name="onUnrenderable">Sink for markup that is present but cannot be drawn — an
     /// AUTHORED icon that fails to parse is a content defect worth a line in the log, not something
     /// to swallow into an indistinguishable 404.</param>
     internal static IResult IconResult(
-        HttpContext http, MeshNode node, int size, Action<Exception>? onUnrenderable = null)
+        HttpContext http, MeshNode node, int size, Action<Exception>? onUnrenderable = null,
+        bool sharedCacheable = true)
     {
         if (SeoResolver.ResolveIconSvg(node) is not { } svg)
             return Results.NotFound();
@@ -407,15 +409,16 @@ public static class SeoEndpoints
             return Results.StatusCode(StatusCodes.Status304NotModified);
 
         http.Response.Headers.ETag = etag;
-        // Shared-cacheable for the same reason the share card is: everything drawn here is already
-        // served to anonymous callers in the page's own head, and the strong ETag is the render's
-        // hash — so a node that changes its mark produces a new icon rather than a stale one.
-        http.Response.Headers.CacheControl = "public, max-age=86400";
+        // Cacheable exactly as the share card is, and for the same reasons on both legs — see
+        // CacheDirective: shared for a node the gate admitted, private/no-store for one cleared only
+        // by the revocable preview opt-in.
+        http.Response.Headers.CacheControl = CacheDirective(sharedCacheable);
         return Results.File(png, "image/png");
     }
 
-    private static IResult CardResult(HttpContext http, OgCardRenderer renderer, MeshNode node) =>
-        PngResult(http, renderer.Render(CardContent(node)));
+    private static IResult CardResult(
+        HttpContext http, OgCardRenderer renderer, MeshNode node, bool sharedCacheable) =>
+        PngResult(http, renderer.Render(CardContent(node)), sharedCacheable);
 
     /// <summary>
     /// Everything the card says about a node, read off the node the resolver already cleared:
@@ -452,16 +455,40 @@ public static class SeoEndpoints
     private static string? TypeLeaf(string? nodeType) =>
         string.IsNullOrWhiteSpace(nodeType) ? null : nodeType[(nodeType.LastIndexOf('/') + 1)..];
 
-    private static IResult PngResult(HttpContext http, byte[] png)
+    private static IResult PngResult(HttpContext http, byte[] png, bool sharedCacheable = true)
     {
         var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(png))}\"";
         if (string.Equals(http.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
             return Results.StatusCode(StatusCodes.Status304NotModified);
 
         http.Response.Headers.ETag = etag;
-        http.Response.Headers.CacheControl = "public, max-age=86400";
+        http.Response.Headers.CacheControl = CacheDirective(sharedCacheable);
         return Results.File(png, "image/png");
     }
+
+    /// <summary>
+    /// 🚨 THE CACHE DIRECTIVE FOLLOWS WHICH DECISION CLEARED THE RESPONSE, and that is a correctness
+    /// property rather than a tuning one.
+    ///
+    /// <para><b>Gate-admitted ⇒ shared-cacheable.</b> Everything drawn is already served to anonymous
+    /// callers on the page itself, crawlers refetch cards aggressively, and the strong ETag is the
+    /// render's own hash — so a node that changes its mark produces a new picture rather than a stale
+    /// one.</para>
+    ///
+    /// <para><b>Preview-only ⇒ <c>private, no-store</c>.</b> That response is reachable because a
+    /// POLICY says so, and a policy is revocable while a shared cache never re-asks the origin: a day
+    /// of <c>public, max-age</c> would leave a withdrawn disclosure publicly retrievable after the
+    /// owner withdrew it. The ETag still goes out, so a conditional GET works for whoever holds
+    /// one.</para>
+    ///
+    /// <para>🚨 It does NOT reach the unfurler's own copy — Slack, Teams, iMessage and LinkedIn keep a
+    /// preview for hours to days and no response header controls that. Revocation is immediate at the
+    /// origin and eventually-consistent at the consumer; <c>Doc/Architecture/LinkPreviews</c> says so
+    /// where an owner reads about the flag.</para>
+    /// </summary>
+    /// <param name="sharedCacheable">True when the anonymous gate admitted the node.</param>
+    private static string CacheDirective(bool sharedCacheable) =>
+        sharedCacheable ? "public, max-age=86400" : "private, no-store";
 
     /// <summary>
     /// The sitemap XML, built reactively: candidate roots from the (System-read) type queries,
