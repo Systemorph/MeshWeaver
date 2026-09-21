@@ -30,6 +30,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | Work out whether an install can actually **take** the newest release — the schema boundary self-update cannot cross, why the resulting stall is invisible, and the three conditions a tag must clear before it is a safe `helm upgrade` target | [SelfUpdateSchemaWall.md](/Doc/Architecture/SelfUpdateSchemaWall) |
 | Ship a code update to the `memex` portal on the shared AKS cluster | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | Deploy an Aspire-orchestrated `test`/`prod` Container Apps environment | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
+| Deliver to a client whose change management allows **only Azure DevOps pipelines** to touch the cluster — GitHub for code and the merge, the GitHub App triggers one pipeline run per sealed image set, the pipeline runs `helm upgrade` behind the client's own approvals | [HybridGitHubAzureDevOps.md](/Doc/Architecture/HybridGitHubAzureDevOps) |
 | Understand the private-AKS-cluster architecture & operations behind the shared portal | [MemexCloudDeployment.md](/Doc/Architecture/MemexCloudDeployment) |
 | Add a **new tenant environment** on the existing shared AKS platform | [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment) |
 | Run a **prod-like memex locally on a Mac** (Colima k3s, arm64) | [LocalColimaMac.md](/Doc/Architecture/LocalColimaMac) |
