@@ -482,6 +482,11 @@ internal class PathResolutionService : IPathResolver, IDisposable
                 // nothing at all, so it can only stall its own caller, never the
                 // whole path. The change feed invalidates positive entries on
                 // Created/Deleted and stale-marks them on Updated.
+                // 🚨 A FLOOR snapshot cannot reach here either: ResolveSegmentsCore
+                // ERRORS on a frame naming SilentProviders unless the full requested
+                // path already matched, and an error runs no Do. That is what keeps a
+                // shallower prefix hit — computed while a provider was silent — from
+                // being pinned as this path's resolution for the life of the process.
                 if (resolution is null)
                     return;
                 if (!ClaimStillHeld(key, claim))
@@ -660,6 +665,33 @@ internal class PathResolutionService : IPathResolver, IDisposable
             .Select<QueryResultChange<MeshNode>, AddressResolution?>(change =>
             {
                 var best = change.Items.OrderByDescending(n => n.Path.Length).FirstOrDefault();
+                // 🚨 A frame naming SilentProviders is a FLOOR, not an answer — read that field
+                // BEFORE deciding anything, because every verdict below is a statement about
+                // which node is DEEPEST at this path, and a provider that did not answer cannot
+                // be assumed to have had nothing deeper. See QueryResultChange.SilentProviders:
+                // the fan-in counts a silent completion as an empty Initial *by contract* (the
+                // alternative starved its all-providers gate and hung every consumer), so the
+                // frame it hands us says "nothing matched" with nothing behind it. Taken as an
+                // answer that becomes, in order: a null here → the bare-partition-root synthesis
+                // or a resolution of `null` → MessageHubGrain's "Either the node does not exist
+                // or no query provider claims its partition" — the second clause manufactured out
+                // of a frame whose whole content is "nobody said". Or worse, a SHALLOWER prefix
+                // hit gets cached (ResolveSegments caches positive results) and the path answers
+                // with its ancestor plus a remainder for the life of the process, which is the
+                // #4557 durable-negative shape with a wrong route instead of a missing node.
+                // Refuse instead: the read is INDETERMINATE and the caller is told by whom.
+                // Repro: PathResolutionFloorIsNotAnAnswerTest.
+                if (change.SilentProviders is { Count: > 0 } silent
+                    && !PathsEqual(best?.Path, string.Join("/", segments)))
+                    throw new InvalidOperationException(
+                        $"Resolution of '{string.Join("/", segments)}' is INDETERMINATE: query "
+                        + $"provider(s) [{string.Join(", ", silent)}] did not answer, so the "
+                        + "snapshot is a FLOOR and a node deeper than "
+                        + $"'{best?.Path ?? "(nothing)"}' may exist in what they hold. Refusing to "
+                        + "answer from it — a resolution is a statement about which node is "
+                        + "DEEPEST at this path, and this frame cannot support one. Fix the "
+                        + "provider that went silent; its own contract is exactly one Initial per "
+                        + "query.");
                 if (best is null) return null;
                 var matchedSegments = best.Path.Split('/').Length;
                 return BuildResolution(best.Path, segments, matchedSegments, matchedNode: best);
@@ -787,6 +819,17 @@ internal class PathResolutionService : IPathResolver, IDisposable
             .Take(1)
             .Select(results => results.Any(r => r == false) && !results.Any(r => r == true));
     }
+
+    /// <summary>
+    /// Whether a hit's path IS the path that was asked for — the one case in which a FLOOR
+    /// snapshot still supports a resolution, because nothing a silent provider holds can be
+    /// deeper than the full requested path. Case-insensitive, matching the fan-in's own path
+    /// dedup (<c>MeshQuery.MergeProviderObservables</c> keys on
+    /// <see cref="StringComparer.OrdinalIgnoreCase"/>).
+    /// </summary>
+    private static bool PathsEqual(string? candidate, string requested) =>
+        !string.IsNullOrEmpty(candidate)
+        && string.Equals(candidate, requested, StringComparison.OrdinalIgnoreCase);
 
     private static AddressResolution BuildResolution(
         string matchedPath, string[] requestedSegments, int matchedSegments, MeshNode? matchedNode)

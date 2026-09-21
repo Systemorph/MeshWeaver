@@ -80,10 +80,25 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// resolver merged with the mesh-node stream cache). Bounds only node
     /// RESOLUTION — once the source emits, the Amb in OnActivateAsync commits to
     /// it and this timer is unsubscribed, so slow-but-bounded enrichment (cold
-    /// compile slow path) is never cut short. A source that produces nothing in
-    /// this window means the node doesn't exist or no query provider claims its
-    /// partition; the activation faults (callers get a deterministic NACK via
-    /// RoutingGrain) and the grain deactivates for retry-on-next-access.
+    /// compile slow path) is never cut short.
+    ///
+    /// <para>🚨 <b>What expiry MEANS changed under this class's feet, and the message did not
+    /// follow it (issue #1186).</b> This window used to be the only terminal for BOTH "the node is
+    /// not there" and "the read did not answer", so its exception named both possibilities — "the
+    /// node does not exist or no query provider claims its partition". #4371 gave the first case
+    /// its own, prompt terminal: the authoritative branch alone decides when the source is done, so
+    /// an absent node completes it in MILLISECONDS and faults through the "no usable node" handler
+    /// in <see cref="OnActivateAsync"/> instead. From that commit on, the ONLY thing that can still
+    /// reach this timer is a source that neither emitted nor terminated — a stalled READ — and the
+    /// sentence it threw was then false in every case it could fire. Measured on memex
+    /// 2026-09-21: 95 of these faults in 400 minutes, against a running instance whose
+    /// path-resolution query fan-in was logging <c>"Query provider(s)
+    /// [StorageAdapterMeshQueryProvider] have not emitted an Initial after 20s … the query is
+    /// silently stalled on its all-providers Initial gate and its consumer hangs with no error"</c>
+    /// seconds earlier — the real cause, in the same log, never joined to the ticket because the
+    /// incident fingerprint is built from THIS exception's message
+    /// (see <see cref="ActivationFaultReason"/>). So the message attributes the READ and points at
+    /// that warning; it no longer guesses about the node.</para>
     /// </summary>
     private static readonly TimeSpan FirstNodeResolutionTimeout = TimeSpan.FromSeconds(30);
 
@@ -212,9 +227,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <see cref="DeliverMessage"/> callers park on that ReplaySubject until a
     /// terminal outcome lands.
     ///
-    /// <para>Node resolution is bounded by <see cref="FirstNodeResolutionTimeout"/>
-    /// (missing node / unclaimed partition → activation fault → deterministic NACK
-    /// + DeactivateOnIdle). Enrichment is bounded internally by the slow-path
+    /// <para>Node resolution has TWO terminals and they say different things. A source
+    /// that COMPLETES with no node is the determinate answer — the node is not there, or
+    /// no query provider claims its partition — and it arrives as fast as storage answers.
+    /// A source that goes SILENT is bounded by <see cref="FirstNodeResolutionTimeout"/>
+    /// and is a stalled READ, never a statement about the node (see that field). Both end
+    /// in an activation fault → deterministic NACK + DeactivateOnIdle; only the second is
+    /// somebody else's bug. Enrichment is bounded internally by the slow-path
     /// budgets in <c>NodeTypeEnrichmentHelpers</c>. An enrichment that settles
     /// WITHOUT a usable configuration activates a NACK fallback hub (see
     /// <see cref="CompleteActivation"/>) — never a silent park.</para>
@@ -508,7 +527,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// provider claims its partition."</c> — an indeterminacy diagnostic standing in for a
     /// determinate answer, 30 s late. That is #1186's second fingerprint, and it is what EVERY
     /// sample on that issue shows (2026-08-10 → 2026-09-14, 629 occurrences across four pods); the
-    /// Warning path never appears in one of them.</para>
+    /// Warning path never appears in one of them.
+    ///
+    /// <para>🚨 The quoted sentence is HISTORY — do not grep for it. Once this fix made the absent
+    /// case prompt, that timer could only ever fire on a SILENT source, and a sentence about the
+    /// node was then false in every case it could reach; <see cref="FirstNodeResolutionTimeout"/>
+    /// now carries a message that attributes the READ instead. The determinate wording moved to
+    /// where it is true: the "no usable node" handler in <see cref="OnActivateAsync"/>.</para></para>
     ///
     /// <para><c>TakeUntil</c> ends the source on the AUTHORITATIVE branch's own terminal, which is
     /// what the rest of this comment already assumed: the accelerator contributes a VALUE and can
@@ -578,8 +603,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 sourceStream,
                 Observable.Timer(firstNodeResolutionTimeout, scheduler ?? Scheduler.Default)
                     .SelectMany(_ => Observable.Throw<MeshNode>(new TimeoutException(
-                        $"No MeshNode emitted for '{addressPath}' within {firstNodeResolutionTimeout.TotalSeconds:0}s. " +
-                        "Either the node does not exist or no query provider claims its partition."))))
+                        $"Node resolution for '{addressPath}' neither answered nor terminated within "
+                        + $"{firstNodeResolutionTimeout.TotalSeconds:0}s. The activation source is SILENT — "
+                        + "that is a stalled READ, and it says nothing about the node. An absent node does "
+                        + "NOT reach here: it completes the source at once and faults with \"No MeshNode "
+                        + "resolvable for address …\" instead. Look for the query fan-in's Initial-gate "
+                        + "warning that lands BEFORE this line — it names the provider that did not deliver "
+                        + "an Initial, which is the fault to fix."))))
             .SelectMany(enrich)
             .Take(1);
 

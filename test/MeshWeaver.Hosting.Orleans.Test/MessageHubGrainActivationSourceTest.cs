@@ -251,10 +251,27 @@ public class MessageHubGrainActivationSourceTest
 
     /// <summary>
     /// The first-emission budget is intact: when NEITHER branch produces a node the activation still
-    /// faults with the precise, actionable diagnostic — never a silent park.
+    /// faults — never a silent park.
+    ///
+    /// <para>🚨 <b>And it must fault with a statement it can support (issue #1186, the residual).</b>
+    /// This budget once carried BOTH terminals, so its exception named both possibilities — "the node
+    /// does not exist or no query provider claims its partition". The sibling test below
+    /// (<see cref="AbsentNode_CompletesAtOnce_EvenThoughTheSelfLoopCannotTerminateInsideTheBudget"/>)
+    /// is what took the first one away: an absent node now completes the source at tick 0 and faults
+    /// through the "no usable node" handler instead. So this timer can only ever fire on the case
+    /// wired here — a source that neither emits NOR terminates — and a sentence about the node is
+    /// false in the only case that reaches it.</para>
+    ///
+    /// <para>That is not cosmetic. The incident fingerprint is built from the EXCEPTION's message
+    /// (<c>MessageHubGrain.ActivationFaultReason</c> says so: the reporter's prose is excluded by
+    /// design), so the false sentence is what a human reads, what the ticket is titled after, and
+    /// what four triage passes over six weeks chased — while the line naming the real cause sat
+    /// seconds earlier in the same log: <c>"Query provider(s) […] have not emitted an Initial after
+    /// 20s … the query is silently stalled on its all-providers Initial gate and its consumer hangs
+    /// with no error"</c>. The negative assertion is the load-bearing half of this test.</para>
     /// </summary>
     [Fact]
-    public void NeitherBranchEmits_FaultsWithTheFirstNodeResolutionDiagnostic()
+    public void NeitherBranchEmits_FaultsAttributingTheStalledRead_NotTheNode()
     {
         var scheduler = new TestScheduler();
 
@@ -267,7 +284,14 @@ public class MessageHubGrainActivationSourceTest
         Assert.Empty(nodes);
         var error = Assert.Single(errors);
         Assert.IsType<TimeoutException>(error);
-        Assert.Contains("No MeshNode emitted for 'Edu'", error.Message);
+        // Names the address, and says what actually happened to the READ.
+        Assert.Contains("'Edu'", error.Message);
+        Assert.Contains("neither answered nor terminated", error.Message);
+        Assert.Contains("SILENT", error.Message);
+        // 🚨 And does NOT claim the two things nothing established. A silent source is not a
+        // missing node: the missing node has its own, prompt terminal.
+        Assert.DoesNotContain("no query provider claims its partition", error.Message);
+        Assert.DoesNotContain("the node does not exist or", error.Message);
     }
 
     /// <summary>
@@ -284,7 +308,10 @@ public class MessageHubGrainActivationSourceTest
     /// depended on BOTH branches, an absent node could never reach the prompt "source completed
     /// with no usable node" handler: the path resolver finished empty in milliseconds, the
     /// accelerator could not finish for another 60 s, and the 30 s <c>Amb</c> timer always won
-    /// first with <c>"No MeshNode emitted for '…' within 30s"</c>.</para>
+    /// first with <c>"No MeshNode emitted for '…' within 30s"</c>. (That sentence is HISTORY — do
+    /// not grep for it. Making the absent case prompt left the timer reachable only by a SILENT
+    /// source, so the message now attributes the READ; see
+    /// <see cref="NeitherBranchEmits_FaultsAttributingTheStalledRead_NotTheNode"/>.)</para>
     ///
     /// <para>Completion must therefore be decided by the AUTHORITATIVE branch alone. Asserted on
     /// the virtual CLOCK, not just on the notification kind: a terminal at tick 0 is the
