@@ -22,10 +22,19 @@
 # Branch on all three. `hosting::probe … || hosting::die "…absent…"` is the defect wearing the
 # fix's clothes.
 #
-# What it reads: every line naming `kubectl` that also discards stderr (`2>/dev/null`, or
-# `>/dev/null 2>&1`). What it CANNOT read, stated so nobody takes green for more: a statement whose
-# `kubectl` and whose redirect sit on DIFFERENT lines, a redirect built from a variable, and
-# everything helm or az do with their own stderr. Those stay covered by review.
+# What it reads: every STATEMENT naming `kubectl` that also discards stderr (`2>/dev/null`, or
+# `>/dev/null 2>&1`). 🚨 A statement, not a line: backslash-continued lines are joined first,
+# because the `kubectl` and its redirect routinely sit on different ones —
+#     running="$(hosting::read kubectl -n "$ns" get deploy memex-portal-deployment \
+#         -o jsonpath='…' 2>/dev/null || true)"
+# is one call over two lines, and a line-at-a-time scan sees neither half. That was this checker's
+# own blind spot on its first cut, and the read above was a live instance of the very defect:
+# a Forbidden came out as "namespace <ns> runs no portal yet (first install). Pin an image tag",
+# whose remedy ROLLS THE BUILD the surrounding comment exists to prevent.
+#
+# What it still CANNOT read, stated so nobody takes green for more: a redirect built from a
+# variable, a call split across a pipeline written over several statements, and everything helm or
+# az do with their own stderr. Those stay covered by review.
 #
 # Pure bash 3.2 + grep/sed/tr — the tools bin/ itself uses, so it runs on the macOS laptop, the
 # ubuntu runner and inside the operator image (Azure Linux 3 has neither awk nor python), which is
@@ -58,6 +67,22 @@ found=""; scanned=0; undeclared=0
 for f in "$BIN"/hosting-* "$BIN"/_common.sh "$BIN"/run.sh; do
   [ -f "$f" ] || continue
   script="$(basename "$f")"
+  # Join backslash-continued lines into one logical statement BEFORE scanning (see the header).
+  #
+  # 🚨 Into a TEMP FILE, not `done < <(…)`. bash 3.2's parser takes the first unescaped `)` of a
+  # `case` pattern inside a process substitution as the END of the substitution — "syntax error
+  # near unexpected token" — while bash 5 parses it fine. The image and the runners are bash 5, so
+  # this would have been a macOS-only break that CI could never have shown.
+  joined="$(mktemp)"
+  pending=""
+  while IFS= read -r raw; do
+    case "$raw" in
+      *\\) pending="${pending}${raw%\\} " ;;
+      *)   printf '%s%s\n' "$pending" "$raw"; pending="" ;;
+    esac
+  done < "$f" > "$joined"
+  [ -z "$pending" ] || printf '%s\n' "$pending" >> "$joined"
+
   while IFS= read -r line; do
     case "$line" in *2\>/dev/null*|*\>/dev/null\ 2\>\&1*) ;; *) continue ;; esac
     case "$line" in *kubectl*) ;; *) continue ;; esac
@@ -97,7 +122,8 @@ for f in "$BIN"/hosting-* "$BIN"/_common.sh "$BIN"/run.sh; do
       | grep -o 'kubectl \(-n [^ ]* \)\?\(get\|create\|delete\|patch\|apply\|label\|annotate\|scale\|logs\|rollout\|wait\|describe\|auth\) [^ ;|)]*' \
       | sed 's/^kubectl //; s/^-n [^ ]* //' \
       | while read -r v r _; do printf '%s %s\n' "$v" "$r"; done)
-  done < "$f"
+  done < "$joined"
+  rm -f "$joined"
 done
 
 # A declaration whose call is gone is STALE: it permits something that no longer exists, and the
@@ -121,6 +147,25 @@ _is_comment '# kubectl get pv 2>/dev/null'            || { echo "  SELFTEST  a b
 _is_comment '   # kubectl get pv 2>/dev/null'         || { echo "  SELFTEST  an indented comment line must be excluded" >&2; selftest_fail=1; }
 _is_comment '  x="$(kubectl get pv 2>/dev/null)"  # w' && { echo "  SELFTEST  a real call with a TRAILING comment must be SCANNED, not excluded" >&2; selftest_fail=1; }
 _is_comment 'x="$(kubectl get pv 2>/dev/null)"'       && { echo "  SELFTEST  a plain call must be scanned" >&2; selftest_fail=1; }
+# …and over the continuation JOIN, which is the half that hid two live defects on the first cut:
+# hosting-deploy's running-image read and hosting-tls's cert_state, both `kubectl` on one line and
+# `2>/dev/null` on the next. A joiner that stops working makes them silently unscanned again.
+_join() { pending=""; while IFS= read -r raw; do
+            case "$raw" in
+              *\\) pending="${pending}${raw%\\} "; continue ;;
+              *)   printf '%s%s\n' "$pending" "$raw"; pending="" ;;
+            esac
+          done; [ -z "$pending" ] || printf '%s\n' "$pending"; }
+_joined="$(printf '%s\n' 'x="$(kubectl get deploy d \' "    -o jsonpath='{.x}' 2>/dev/null || true)\"" | _join)"
+case "$_joined" in
+  *kubectl*2\>/dev/null*) [ "$(printf '%s\n' "$_joined" | grep -c .)" = "1" ] \
+      || { echo "  SELFTEST  a backslash-continued call must join into ONE statement" >&2; selftest_fail=1; } ;;
+  *) echo "  SELFTEST  a backslash-continued call must join so kubectl and its redirect land together" >&2; selftest_fail=1 ;;
+esac
+_plain="$(printf '%s\n' 'a' 'b' | _join)"
+[ "$(printf '%s\n' "$_plain" | grep -c .)" = "2" ] \
+  || { echo "  SELFTEST  lines WITHOUT a continuation must stay separate" >&2; selftest_fail=1; }
+
 [ "$selftest_fail" -eq 0 ] || { echo "check-stderr-discarded: ERROR: the parser's own control failed — its verdict below means nothing" >&2; exit 2; }
 
 echo "check-stderr-discarded: ${scanned} kubectl read(s) discarding stderr across bin/, ${undeclared} undeclared, ${stale} stale declaration(s)"

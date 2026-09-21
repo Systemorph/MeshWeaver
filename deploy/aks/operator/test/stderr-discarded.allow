@@ -13,11 +13,10 @@
 # ── the failing branch surfaces the refusal itself ──────────────────────────────────────────────
 hosting-deploy get namespace        # exists→log, anything else→`kubectl create namespace`, whose own Forbidden is loud and unswallowed. Nothing is ever ASSERTED about the namespace from this read.
 hosting-pull-secret get namespace   # the same ensure-if-absent shape as hosting-deploy, deliberately identical so the two agree.
-hosting-tls get secret              # ready() treats a refusal as NOT-ready, so the command goes on to declare the Certificate rather than claim anything; that create surfaces the refusal loudly.
 #
 # ── the message names the READ, never the thing ─────────────────────────────────────────────────
 hosting-kv-rotate get deployment    # `set -o pipefail` carries kubectl's status past jq, and the `||` says "could not read deployment/X" — it reports a failed read and makes no claim about whether the key is set inline. The REASON is lost from the log, the VERDICT is not.
-hosting-tls describe certificate    # a diagnostic tail appended to a refusal that has already been decided by cert_state(); it asserts nothing on its own and an empty one just shortens the message.
+hosting-tls describe certificate    # a diagnostic tail appended to a refusal that has already been decided by cert_state(), which now dies on a REFUSED before this line can be reached; it asserts nothing on its own and an empty one just shortens the message.
 #
 # ── a preceding read under the same grant already proved the permission ─────────────────────────
 hosting-pull-secret get secret      # two reads: the first is `|| die "could not be read back after apply"` (names the read); the second runs only after it, so `secrets get` is proven and its failure cannot be a refusal. Same reasoning hosting-db-release states for its zones read.
