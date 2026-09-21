@@ -1097,11 +1097,17 @@ public static class PackageInstaller
             : Observable.Return<MeshNode?>(null);
         return existing.SelectMany(current => PublishExceptProtected(
             hub, partition, isolated, current,
+            // This step publishes only where it WOULD have published with the blanket policy: no
+            // policy yet, or one that declares PublicRead. A policy already withholding it is a
+            // partition this step leaves closed, and a declaration must not open it — see the
+            // create-only remarks on PublishExceptProtected.
+            publish: current is null || DeclaresPublicRead(current, hub),
             (denies, grants, policyWritten) => logger?.LogInformation(
-                "[PackageInstaller] {Id} declares {Partition} public EXCEPT [{Protected}] — published "
-                + "through root Public/Anonymous Viewer grants ({Grants} written) with a deny on each "
-                + "protected segment ({Denies} written), and a _Policy that withholds PublicRead "
-                + "(rewritten: {PolicyWritten}). The blanket policy grant cannot express this: the C# "
+                "[PackageInstaller] {Id} declares {Partition} public EXCEPT [{Protected}] — gated the "
+                + "protected segment(s) ({Denies} deny node(s) written) and published the rest through "
+                + "root Public/Anonymous Viewer grants ({Grants} written, _Policy rewritten to withhold "
+                + "PublicRead: {PolicyWritten}; 0 grants means the partition already withheld public "
+                + "read and is left closed). The blanket policy grant cannot express this: the C# "
                 + "evaluator ORs it in AFTER the deny subtraction, so the segment would be readable by "
                 + "exact path there while the SQL fold's longest-prefix scan correctly denied it "
                 + "(MeshWeaver#4716)",
@@ -1126,10 +1132,19 @@ public static class PackageInstaller
     /// every other field (a <c>RedirectOnDenied</c> funnel) preserved. A policy that already withholds
     /// it is left alone. The node is also the record OF the decision, so the next reader finds the
     /// partition saying "not public-read" rather than having to infer it from the grants.</para>
+    ///
+    /// <para>🚨 <b><paramref name="publish"/> is the create-only rule, and it is the difference between
+    /// MOVING a publication and ADDING one.</b> This shape exists to take a partition this step would
+    /// have opened with a policy and open it with grants instead — never to open one it would have left
+    /// closed. So the policy flip and the root grants happen only when this step would otherwise have
+    /// published: no policy yet (the original create), a policy that declares <c>PublicRead</c>, or the
+    /// legacy fingerprint the heal opens on. On every other partition only the DENIES are written,
+    /// because a deny can only ever narrow. Without that distinction a declaration would have re-opened
+    /// a pre-installed partition an operator had deliberately closed.</para>
     /// </summary>
     private static IObservable<Unit> PublishExceptProtected(
         IMessageHub hub, string partition, IReadOnlyCollection<string> protectedScopes,
-        MeshNode? currentPolicy, Action<int, int, bool> report)
+        MeshNode? currentPolicy, bool publish, Action<int, int, bool> report)
     {
         var denies = new List<MeshNode>();
         foreach (var scope in protectedScopes)
@@ -1146,11 +1161,22 @@ public static class PackageInstaller
         // A policy that grants public read has to go — under it the denies above withhold nothing on
         // the C# read path. An absent one is created so the partition CARRIES the decision (and so the
         // declared-access post-condition marker is where DeclaredAccessMarker says it is).
+        // 🚨 PUBLISHING IS NOT THIS STEP'S TO ADD — it only ever MOVES a publication off the policy.
+        // When `publish` is false this step would not have opened the partition either (a policy that
+        // already withholds public read and carries no legacy fingerprint is left alone, which is the
+        // create-only rule), so writing the root grants here would OPEN a partition somebody closed.
+        // Measured on the control instance memex.systemorph.com 2026-09-21: `Feedback/_Policy` carries
+        // no `publicRead` and the partition has no `_Submissions` at all, so the declaration alone must
+        // add nothing but the gate. The DENIES are written either way — they can only narrow.
         var policyContent = currentPolicy?.ContentAs<PartitionAccessPolicy>(hub.JsonSerializerOptions);
-        var rewritePolicy = currentPolicy is null || policyContent is not { PublicRead: false };
+        var rewritePolicy = publish && (currentPolicy is null || policyContent is not { PublicRead: false });
         var policyWrite = rewritePolicy
             ? Upsert(hub, WithholdPublicReadPolicy(partition, policyContent)).Select(_ => 1)
             : Observable.Return(0);
+        if (!publish)
+            return CreateOnly(hub, denies)
+                .Do(deniesWritten => report(deniesWritten, 0, false))
+                .Select(_ => Unit.Default);
 
         return CreateOnly(hub, denies)
             .SelectMany(deniesWritten => policyWrite
@@ -1335,6 +1361,12 @@ public static class PackageInstaller
                         : Observable.Return(Unit.Default);
                     return alsoLegacy.SelectMany(_ => PublishExceptProtected(
                         hub, partition, found.Protected, current,
+                        // Same create-only rule as the declaration arm: publish only where this step
+                        // would have. `current is null` is its original create; the legacy fingerprint
+                        // is the one case where it deliberately OPENS an existing closed policy — and
+                        // it has just retired those denies above, so the grants replace them.
+                        publish: current is null
+                                 || (manifest.PreInstalled && found.Legacy.Count > 0),
                         (denies, grants, policyWritten) => logger?.LogWarning(
                             "[PackageInstaller] {Id} declares {Partition} fully public, but [{Scopes}] "
                             + "carry a deliberate Public/Anonymous deny that this installer cannot "

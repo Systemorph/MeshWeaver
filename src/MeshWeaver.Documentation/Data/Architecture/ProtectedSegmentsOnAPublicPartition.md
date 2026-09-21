@@ -77,6 +77,20 @@ readable** is what a feedback inbox needs, and only the grant shape delivers it.
   it contradicts the protection being established. Every other field it carries (a `RedirectOnDenied`
   funnel) is preserved.
 
+🚨 **The shape MOVES a publication off the policy; it never ADDS one.** The denies are written on every
+partition that declares a protected segment — a deny can only narrow, so establishing it needs no
+permission to widen anything. The policy flip and the root grants only happen where this step would
+have published *anyway*: no policy yet (its original create), a policy that declares `PublicRead`, or
+the legacy fingerprint the heal deliberately opens on. On a partition whose policy already withholds
+public read, the step writes the gate and nothing else.
+
+That distinction is not decoration. On the control instance `memex.systemorph.com`, `Feedback/_Policy`
+carries no `publicRead` and the partition holds no `_Submissions` at all; without the rule, the
+declaration would have handed an anonymous reader a partition somebody had closed — a widening
+introduced by the fix for an exposure, which is the worst shape a security change can take.
+`ADeclaredProtectedSegment_OnAPartitionThatWithholdsPublicRead_IsGatedButNotOpened` pins it, and
+reverting the rule fails it on the grant it must not write.
+
 ## Two things core could not see, and the second is the one that bites
 
 **`protectedSegments` was dead metadata in core.** `NodeRepoPackageSource.Peek` dropped it — the same

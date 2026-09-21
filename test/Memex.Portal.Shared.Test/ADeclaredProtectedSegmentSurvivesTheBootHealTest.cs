@@ -46,6 +46,7 @@ public class ADeclaredProtectedSegmentSurvivesTheBootHealTest(ITestOutputHelper 
 {
     private const string Declaring = "DeclaringPkg";
     private const string Stale = "StalePkg";
+    private const string Closed = "ClosedPkg";
     private const string Inbox = "_Submissions";
 
     /// <inheritdoc />
@@ -144,6 +145,53 @@ public class ADeclaredProtectedSegmentSurvivesTheBootHealTest(ITestOutputHelper 
             "a re-assert converges — the protection is not a one-shot that the next boot undoes");
         (await Read(Deny($"{Declaring}/{Inbox}", WellKnownUsers.Public))).Should().NotBeNull(
             "and the deny pair survives its own re-assert");
+    }
+
+    /// <summary>
+    /// The create-only rule, which is the difference between MOVING a publication and ADDING one. A
+    /// pre-installed partition whose policy ALREADY withholds public read is one this step leaves
+    /// closed, so a declaration must gate the segment and open nothing.
+    ///
+    /// <para>That is not hypothetical: on the control instance memex.systemorph.com, read 2026-09-21,
+    /// <c>Feedback/_Policy</c> carries no <c>publicRead</c> and the partition has no
+    /// <c>_Submissions</c> at all. Publishing it from the declaration would have handed an anonymous
+    /// reader a partition somebody had closed — a widening introduced by the fix for an exposure,
+    /// which is the worst shape a security change can take.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ADeclaredProtectedSegment_OnAPartitionThatWithholdsPublicRead_IsGatedButNotOpened()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+
+        await WriteAsSystem(new MeshNode(Closed) { NodeType = "Space", State = MeshNodeState.Active });
+        await WriteAsSystem(new MeshNode("Cover", Closed) { NodeType = "Markdown", State = MeshNodeState.Active });
+        await WriteAsSystem(new MeshNode("theirs", $"{Closed}/{Inbox}")
+            { NodeType = "Markdown", State = MeshNodeState.Active });
+        await WriteAsSystem(new MeshNode("_Policy", Closed)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            State = MeshNodeState.Active,
+            Content = new PartitionAccessPolicy { PublicRead = false },
+        });
+
+        await Establish(Manifest(Closed, declaresProtection: true), Closed);
+
+        (await Read(Deny($"{Closed}/{Inbox}", WellKnownUsers.Public))).Should().NotBeNull(
+            "the gate is written either way — a deny can only ever NARROW, so establishing it needs no "
+            + "permission to widen anything");
+        (await Read(Deny($"{Closed}/{Inbox}", WellKnownUsers.Anonymous))).Should().NotBeNull(
+            "both halves of the pair");
+
+        (await Read(Deny(Closed, WellKnownUsers.Public))).Should().BeNull(
+            "THE assertion: no root grant. This step would not have opened this partition with a policy "
+            + "either (create-only leaves a policy that withholds public read alone), so it must not "
+            + "open it with grants — the shape exists to MOVE a publication off the policy, never to "
+            + "add one (MeshWeaver#4716)");
+        (await Read(Deny(Closed, WellKnownUsers.Anonymous))).Should().BeNull(
+            "and the same for Anonymous");
+        (await PolicyPublicRead(Closed)).Should().BeFalse(
+            "the policy is untouched — it already said what the shape needs it to say");
     }
 
     /// <summary>
