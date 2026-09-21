@@ -26,16 +26,30 @@ facts you need to run it.
 
 ## The incident store has three clocks, and one of them is a decoy
 
-| field | what it means | changed by |
+| field | what it means | advances on |
 |---|---|---|
-| `content.firstSeen` / `content.lastSeen` | **DETECTION** — when the watcher saw the log line | a fold |
-| `createdDate` | **DELIVERY** — when the report reached the mesh and the node was written | the first delivery of that fingerprint |
+| `content.firstSeen` / `content.lastSeen` | **DETECTION** — when the watcher saw the log line | **every fold** |
+| `createdDate` | **DELIVERY** — when the report reached the mesh and the node was written | **only the FIRST delivery of a fingerprint** |
 | `lastModified` | **neither** | a fold *or* any triage write |
 
 🚨 **`lastModified` is not a pipeline clock and must never be used as one.** Triage writes drafts,
 issue numbers, comment stamps and supersession pointers onto the same node, so it advances on a
 fingerprint nothing has detected for days. Sorting a listing by it produces a page of recent
 timestamps that says nothing whatever about ingestion.
+
+🚨 **The two real clocks are not symmetric, and this decides how much each can prove.** A recurrence
+is **folded onto the existing node** — it updates `lastSeen` and creates nothing — so `createdDate`
+advances only when a fingerprint is seen for the *first* time. Consequences:
+
+- **Detection is the primary liveness clock.** It moves on every fold, so it alone can separate
+  alive from stopped.
+- **A frozen newest-`createdDate` is NOT evidence that delivery stopped.** A perfectly healthy
+  watcher folding only fingerprints it has seen before freezes that clock indefinitely.
+- **A delivery *lag* is measurable only on a node whose delivery IS its first** — check
+  `createdDate` against that same node's `firstSeen` before quoting a lag. There is no per-fold
+  delivery timestamp, so the delivery latency of a fold is not observable at all.
+
+Delivery is corroboration, under those conditions. Detection is the measurement.
 
 Worked example, measured on the control instance 2026-09-21:
 
@@ -51,35 +65,43 @@ pipeline is healthy. It is a superseded fingerprint being rewritten by triage bo
 
 ## The discriminator
 
-Take **the newest delivery** and **the newest detection**, and — this is the half that is usually
-skipped — **the lag between them at the moment the record stops.**
+**Start with detection, because it is the clock that cannot be frozen by a healthy pipeline.** Then
+bring in delivery, and — the half that is usually skipped — **the lag at the moment the record
+stops.**
 
-- **Behind**: detection timestamps continue past the last delivery, and the gap between the two
-  widens. Delivery is starved; detection is fine.
-- **Dead**: both clocks stop at the same moment, and the lag *right up to that moment is normal*.
-  A pipeline that was keeping up and then produced nothing did not fall behind — it stopped.
+- **Behind**: detection timestamps continue, and the gap to the last delivery widens. Delivery is
+  starved; detection is fine.
+- **Dead**: **detection has stopped**, delivery stopped with it, and the lag *right up to that
+  moment is normal*. A pipeline that was keeping up and then produced nothing did not fall behind —
+  it stopped.
+- **Ambiguous, and not a verdict**: delivery frozen while detection continues. That is the ordinary
+  state of a watcher seeing only familiar fingerprints (see the asymmetry above), so it says
+  nothing on its own.
 
-The second reading is the one a lag-shaped hypothesis will talk you out of, so measure the lag on
-the **last few nodes before the stop**, not on the average.
+Detection stopping is what makes the dead reading available at all; the normal lag is what rules
+out a backlog. The lag reading is the one a lag-shaped hypothesis will talk you out of, so measure
+it on the **last few nodes before the stop**, not on the average — and only on nodes whose
+`createdDate` is their own first delivery.
 
 Worked example, same instance, same session:
 
+All three nodes below are **first deliveries** — each one's `createdDate` sits minutes after its own
+`firstSeen`, so the lag figures are legitimate:
+
 ```
-newest created  Admin/_LogIncident/3172fa7f8d939ff7
-                detected (lastSeen)  2026-09-20T22:23:22Z
-                delivered (created)  2026-09-20T22:30:27Z    lag ~7 min
+Admin/_LogIncident/3172fa7f8d939ff7   firstSeen 22:23:22Z   created 22:30:27Z   lag ~7 min
+Admin/_LogIncident/b8716c17b178ac35   firstSeen 22:22:16Z   created 22:29:42Z   lag ~7 min
+Admin/_LogIncident/02a25b3b8a3e219c   firstSeen 22:25:14Z   created 22:29:25Z   lag ~4 min
+                                       (all 2026-09-20)
 
-next newest     Admin/_LogIncident/b8716c17b178ac35
-                detected             2026-09-20T22:22:16Z
-                delivered            2026-09-20T22:29:42Z    lag ~7 min
-
-detection after 2026-09-20T22:2x  — none
+detection after 2026-09-20T22:2x  — none   ← the load-bearing reading
 delivery  after 2026-09-20T22:30  — none
 read at 2026-09-21T13:3xZ         — ~15 h of silence on BOTH clocks
 ```
 
-A seven-minute lag on the last two nodes and then nothing on either clock is **dead**, not behind.
-Had this been the behind shape, detection would have carried on into 09-21 with delivery trailing.
+Detection stopping is what makes this readable as death; three consecutive four-to-seven-minute
+lags immediately before it are what rule out a backlog. Had this been the behind shape, detection
+would have carried on into 09-21 with delivery trailing.
 
 ## The queries that reach each clock — and the three that do not
 
@@ -114,10 +136,14 @@ namespace:Admin scope:descendants nodeType:LogIncident sort:createdDate-desc
 matches no rows and a wildcard that cannot match are the same answer. Run the identical shape
 against a date you already know has hits:
 
+🚨 Keep the anchor on **every** control. A content-only query is *refused* as insufficiently
+specified, not answered — and a refusal you skim past reads like a zero, which is the exact mistake
+this page exists to prevent.
+
 ```
-content.lastSeen:2026-09-19*  → count 50, truncated   (instrument works)
-content.lastSeen:2026-09-20*  → count 50, truncated   (instrument works)
-content.lastSeen:2026-09-21*  → count 0,  not truncated
+namespace:Admin scope:descendants nodeType:LogIncident content.lastSeen:2026-09-19*  → 50, truncated
+namespace:Admin scope:descendants nodeType:LogIncident content.lastSeen:2026-09-20*  → 50, truncated
+namespace:Admin scope:descendants nodeType:LogIncident content.lastSeen:2026-09-21*  →  0, not truncated
 ```
 
 Three readings, one query shape, two of them non-zero: now the zero means something. And read every
@@ -170,8 +196,11 @@ second number a fact rather than a sample.
 ## Checklist
 
 1. Never sort an ingestion question by `lastModified`.
-2. Read **detection** (`content.lastSeen`) and **delivery** (`createdDate`) separately.
-3. Measure the lag on the **last nodes before the stop**; normal lag then silence means dead.
+2. Read **detection** (`content.lastSeen`) and **delivery** (`createdDate`) separately, and treat
+   detection as the measurement — delivery advances only on a fingerprint's first arrival, so a
+   frozen `createdDate` proves nothing by itself.
+3. Measure the lag on the **last nodes before the stop**, only where `createdDate` is that node's
+   own first delivery; **detection stopped** plus a normal lag means dead.
 4. Give every zero a same-shape control on a date with hits, and cite `coverage.partitions`.
 5. Treat a missing pipeline self-finding as evidence of death, never of health.
 6. Before concluding about a process, check whether any record of it exists to observe.
