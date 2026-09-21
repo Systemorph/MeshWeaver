@@ -296,12 +296,63 @@ re-grep the corrected file** — the occurrence you already know about is not th
 **A wrong sentence in guidance is how a shape propagates faster than a sweep removes it**, and
 `MeshTestContext`'s doc comment is that sentence arriving at a site as an assurance.
 
-The inventory it produced is `test/DirectObservableAwaitSites.allow` — **228 sites in 67 files**
-(223 in `test/`, 5 in one `memex/` ASP.NET controller), seeded and shrink-only. Note the `memex/`
-row disagrees with `AwaitedMeshReadSites.allow`, which budgets the same file at **1**: that guard
-keys on a mesh entry point named in the expression, and four of the five name none — one of them
-because the marker is `.Query(` and the call is `.Query<MeshNode>(`. **The two counts disagreeing IS
-the instrument gap**, not a mistake in either file.
+The inventory it produced is `test/DirectObservableAwaitSites.allow` — seeded at **228 sites in 67
+files** (223 in `test/`, 5 in one `memex/` ASP.NET controller) and shrink-only. It now holds **223 in
+66**: `memex/`'s five left it, and the way they left is the part worth copying.
+
+### 🚨 A production root leaves a ratchet by MOVING, not by having its line deleted
+
+The five were all in `DevAuthController`'s DevLogin sign-in path, and they now wait through
+`.Await(HttpContext.RequestAborted)`. Deleting the allow line at that point would have been enough
+to make the file accurate and would have left the root **ratcheted**: a ratchet promises only *"this
+may not grow"*, so the next production `await <an observable>` added under `memex/` would have been a
+one-line allow-file edit away from being tolerated. What is wanted for production code is *"there are
+none"*. So `memex` moved from `DirectAwaitRatchetedRoots` into `DirectAwaitZeroRoots`, where there is
+no allow file and no line to add, and `DirectAwaitTotalBudget` dropped 228 → 223 with it.
+
+The control is that the move is load-bearing rather than cosmetic: re-introducing one direct await in
+that file fails `NoProductionCodeAwaitsAnObservableDirectly`, naming the file, with the message *"There
+is no allow file for this root set."* Under the old arrangement the same edit would have been silently
+within budget.
+
+### 🚨 …and a five-root zero scan needs its roots asserted, or the zero is unearned
+
+`SourceScan.SourceFiles` drops a root that does not exist and raises only when the **combined** result
+is empty. With one root that is a perfect instrument. With five it is not: `src/` alone keeps the
+combined set at ~1,400 files, so a renamed, moved or mistyped `memex/` leaves every rule over it
+reporting zero **having scanned nothing there**, with nothing red — a guard whose subject moved and
+whose roots did not.
+
+The exposure predates this change: `ProductionRoots` has carried five roots since `memex/`'s
+`.ToTask(` sweep reached zero. What the move removed was the last accidental signal — a vanished
+`memex/` used to turn that root's allow-file entry STALE and print it, and a zero root has no allow
+file. So `EveryZeroToleranceRootExistsAndItsContributionIsPrinted` asserts over the **union** of both
+root lists, closing the older half with the newer one.
+
+**The assertion is EXISTENCE, and a count of zero is reported rather than failed** — a distinction the
+test earned on its first run. The first version failed a root that contributed nothing, and went red on
+`clients/`, which exists, holds Python and Docker and a README, and has **no** `.cs`/`.razor`/`.csx` at
+all. That is not a broken scan: the root is there, it is polyglot, and the day a C# file lands in it the
+rules cover it automatically. Failing on it pushes the next reader toward *deleting* the root, which is
+the one change that would leave that future file genuinely unguarded. So a root that does not exist
+fails, and every root's count is printed:
+
+```
+clients: 0 file(s) reach these rules  ← carries no C# at all; covered the moment it does
+memex:   111 file(s) reach these rules
+samples: 90 · src: 1402 · tools: 42
+```
+
+which keeps *"I measured nothing there"* and *"I measured, and it was clean"* as two different printed
+sentences instead of one silence — the rule the `/health` census follows for its `census`-tagged
+entries.
+
+**`AwaitedMeshReadSites.allow` still budgets that file at 1, and that is not stale.** It asks a
+different question — whether a mesh READ is awaited at all, whatever the bridge — and its own note
+says the migration means *"reshaping the sign-in action around a subscription"*, which this did not do.
+It also keys on a mesh entry point **named in the expression**, and four of the five named none — one
+of them because the marker is `.Query(` and the call is `.Query<MeshNode>(`. **The two counts
+disagreeing IS the instrument gap**, not a mistake in either file.
 
 ## The ratchet
 
@@ -315,8 +366,8 @@ the instrument gap**, not a mistake in either file.
 | `.ToTask(` | production | **ZERO**, no allow file. Rx's own bridge is never the safe form, so it is never registrable. |
 | `.ToTask(` | `test/` | Seeded inventory, may only **shrink**. `memex/` left this row when its sweep reached zero (#2764) and is now a production root — checked there by all three detectors, not just the marker that emptied it. |
 | `.Wait()` / `.GetAwaiter().GetResult()` | production | Seeded inventory, may only **shrink** (see below). |
-| `await <an observable>` (no bridge in source at all) | `src/`, `tools/`, `samples/`, `clients/` | **ZERO**, no allow file. Reached zero on 2026-09-18 when `MeshTestContext.First`, the last one, was fixed. |
-| `await <an observable>` | `memex/`, `test/` | Seeded inventory of 228, may only **shrink** — `DirectObservableAwaitSites.allow`. Guidance asked for these; see above. |
+| `await <an observable>` (no bridge in source at all) | `src/`, `tools/`, `samples/`, `clients/`, `memex/` | **ZERO**, no allow file. The first four reached zero on 2026-09-18 when `MeshTestContext.First`, the last one, was fixed; `memex/` joined them when its five DevLogin sign-in sites were converted — it MOVED root sets rather than having its allow line deleted, for the reason above. |
+| `await <an observable>` | `test/` | Seeded inventory, 228 → **223**, may only **shrink** — `DirectObservableAwaitSites.allow`. Guidance asked for these; see above. |
 
 **`SanctionedBridges` is a register, not an allow file.** An allow file lists sites you tolerate and
 grows by appending a line. Every entry here is machine-checked to still **exist**, to still **contain
