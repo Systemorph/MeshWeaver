@@ -159,6 +159,14 @@ per-hub scope leak and a simpler, stronger root for R2 than the window described
 established**: it contradicts the documented recycle flow and the scope-closing tests, so the
 likelier reading is a missed call site. Verify before building on it.
 
+🚨 **And note the limit of the instrument that produced it, because it applies to every
+"unreferenced" claim made this way.** In-mesh source compiles at RUNTIME in the portal and is
+invisible to a grep over `src/`, and a NodeType's `configuration` lambda is C# inside a JSON string,
+so it does not even match `grep --include='*.cs'`. The measured claim is therefore *"unreferenced in
+`src/` and `memex/`"*, which is strictly weaker than *"unreferenced"*. Anyone acting on it sweeps the
+node trees and the node JSON first. Cheapest way to settle it outright: a temporary log line in both
+`Add` and the `Lazy` factory, boot the Monolith, recycle one node, and see which one runs.
+
 ## R3 — a continuation resolving from a scope its own pipeline closed
 
 This one has nothing to do with shutdown. A handler resolves a service **inside** a reactive
