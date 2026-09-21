@@ -82,6 +82,16 @@ outcomes are not one case:
 What makes that safe to leave is that the roll is no longer indistinguishable from a migrated one —
 the record says `UNMIGRATED` and says what to update.
 
+**3b. Every MANUAL roll — the Updates tab's Apply button — follows the same rule.** It is a route that
+patches, so it migrates first and refuses on the same outcomes; the decision is literally the same
+predicate (`SelfUpdateVerdict.MayPatchAfter`), read by both, because two copies of it drift. The
+button had no migration step at all until #4764: it honoured the release-availability gate, the combo
+gate and the control-lane route and then called `PatchToVersionAsync` directly, so an admin click made
+exactly the image-only roll the poller had stopped making — and left no verdict anywhere, which is
+worse than the poller's blind branch. A refusal now renders on the tab's own result line, with the two
+cases kept apart: a migration that RAN and broke sends you to the Job's log, one that could not be
+created sends you to the `helm upgrade`.
+
 🚨 **Why `Forbidden` is a refusal and not the same permissive case** — it read as one until #4764.
 Measured on memex-cloud 2026-09-19: a roll that patched the image with nothing established about the
 schema put the new pod in `CrashLoopBackOff` on `DbVersionGate` 3,319 ms into its boot, restarts=2

@@ -411,6 +411,28 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     public SelfUpdateVerdict Unmigrated(string reason) =>
         this with { Message = $"{Message} UNMIGRATED — {reason}" };
 
+    /// <summary>
+    /// 🚨 <b>Whether the portal image may be patched, given how its migration ended — the ONE
+    /// decision, read by every route that patches (#4764).</b>
+    ///
+    /// <para><c>Completed</c> proves the schema moved; <c>NotSupported</c> proves only that this
+    /// install has no migration mechanism at all, and rolls anyway because refusing there would
+    /// freeze it for ever and silently (#2553, and the roll is then recorded
+    /// <see cref="Unmigrated"/>). Everything else is a refusal: <c>Failed</c>/<c>TimedOut</c> because
+    /// the schema demonstrably did not move, <c>Forbidden</c> because nothing was established and the
+    /// <c>helm upgrade</c> that grants the missing permission runs the migration itself.</para>
+    ///
+    /// <para>🚨 It exists as a predicate rather than as two switch statements because there are TWO
+    /// routes that patch — the poller (<c>MigrateThenPatch</c>) and the Updates tab's manual Apply —
+    /// and the second skipped the migration entirely, so an admin click made exactly the image-only
+    /// roll the poller had stopped making. Two copies of this rule would drift the same way again;
+    /// <c>SelfUpdateSchemaBumpRefusalTest</c> drives every outcome through the poller and asserts its
+    /// behaviour equals this predicate, so an outcome added to the enum cannot be handled one way in
+    /// one route and another in the other.</para>
+    /// </summary>
+    public static bool MayPatchAfter(MigrationRunOutcome outcome) =>
+        outcome is MigrationRunOutcome.Completed or MigrationRunOutcome.NotSupported;
+
     /// <summary>The check faulted.</summary>
     public static SelfUpdateVerdict CheckFailed(Exception ex) => new(
         SelfUpdateOutcome.CheckFailed,

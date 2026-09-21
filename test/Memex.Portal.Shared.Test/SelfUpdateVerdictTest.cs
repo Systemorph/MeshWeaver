@@ -225,6 +225,46 @@ public class SelfUpdateVerdictTest
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  One decision for every route that patches (#4764)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 Only <c>Completed</c> PROVES the schema moved, and only <c>NotSupported</c> is permitted
+    /// without that proof — an install with no migration mechanism at all, which would otherwise
+    /// freeze for ever and silently (#2553) and whose roll is recorded <c>UNMIGRATED</c> instead.
+    ///
+    /// <para>Pinned pure and separately from the poller because TWO routes read it: the poller and the
+    /// Updates tab's manual Apply, which had no migration step at all until #4764. Get
+    /// <c>Forbidden</c> wrong in the permissive direction and a click reproduces the crash-loop;
+    /// get <c>NotSupported</c> wrong in the strict direction and every install whose updater predates
+    /// the seam stops updating with no way to notice.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(MigrationRunOutcome.Completed, true)]
+    [InlineData(MigrationRunOutcome.NotSupported, true)]
+    [InlineData(MigrationRunOutcome.Failed, false)]
+    [InlineData(MigrationRunOutcome.TimedOut, false)]
+    [InlineData(MigrationRunOutcome.Forbidden, false)]
+    public void MayPatchAfter_PermitsOnlyAProvenOrImpossibleMigration(
+        MigrationRunOutcome outcome, bool expected)
+        => Assert.Equal(expected, SelfUpdateVerdict.MayPatchAfter(outcome));
+
+    /// <summary>Every outcome the enum can hold is decided — an outcome added later must be
+    /// classified deliberately rather than inheriting whichever side the pattern happens to fall
+    /// on.</summary>
+    [Fact]
+    public void MayPatchAfter_DecidesEveryOutcomeTheEnumCanHold()
+    {
+        var decided = new[]
+        {
+            MigrationRunOutcome.Completed, MigrationRunOutcome.NotSupported,
+            MigrationRunOutcome.Failed, MigrationRunOutcome.TimedOut, MigrationRunOutcome.Forbidden,
+        };
+
+        Assert.Equal(Enum.GetValues<MigrationRunOutcome>().OrderBy(o => o), decided.OrderBy(o => o));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  A pending restart rolls the same image, within the interval rules (#3650)
     // ══════════════════════════════════════════════════════════════════════════
 

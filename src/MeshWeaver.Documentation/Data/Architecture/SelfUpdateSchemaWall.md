@@ -179,6 +179,16 @@ either.** Only `MigrationRunOutcome.Completed` proves the schema moved, so:
 | `Forbidden` — 403 on the Job POST; the install has not been `helm upgrade`d since the RBAC rule landed | **REFUSES the roll** (`SelfUpdateOutcome.MigrationUnavailable`) | `lastCheckVerdict` on `Admin/UpdatePolicy`, naming the missing permission and the `helm upgrade` that grants it **and** runs the migration; `LogCritical` |
 | `NotSupported` — the installed `MeshWeaver.SelfUpdate.Aks` generation predates the seam, so no migration is possible at all | **rolls**, and records that it rolled blind (`applied update … UNMIGRATED — …`) | the same field, naming the module to update; `LogWarning` |
 
+🚨 **Both of the portal's own routes are held to that rule, and for a while only one of them was.**
+There are two places in the portal that patch the image: the poller, and the Updates tab's manual
+**Apply** button. The button honoured the release-availability gate, the combo gate and the
+control-lane route — and had no migration step at all, so an admin click made exactly the image-only
+roll the poller had stopped making, and left no verdict anywhere to inspect afterwards. That is what a
+per-route `switch` statement costs. The decision is now ONE predicate
+(`SelfUpdateVerdict.MayPatchAfter`) that both routes read, with a test that drives every outcome
+through the poller and asserts its behaviour equals the predicate — so an outcome added to the enum
+cannot be classified one way in one route and another in the other.
+
 The asymmetry is deliberate and is the whole judgement. A 403 is a state an operator clears with the
 very command that also moves the schema, so refusing asks for nothing that was not already owed. "This
 install can never migrate" is not like that: refusing there would freeze the install for ever, and

@@ -44,15 +44,19 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class SelfUpdateMigratesBeforeItRollsTest
 {
-    private static string ReadPollerSource()
+    private static string ReadPollerSource() =>
+        ReadSource("memex", "Memex.Portal.Shared", "SelfUpdate", "SelfUpdateHostedService.cs");
+
+    /// <summary>One repository-relative source file, or a SKIP when the tree is not reachable —
+    /// a source guard runs in-repo only and must not silently pass outside one.</summary>
+    private static string ReadSource(params string[] parts)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
             dir = dir.Parent;
         Assert.SkipWhen(dir is null, "repository tree not reachable — source guard runs in-repo only");
-        var path = Path.Combine(dir!.FullName,
-            "memex", "Memex.Portal.Shared", "SelfUpdate", "SelfUpdateHostedService.cs");
-        Assert.True(File.Exists(path), $"expected the self-update poller at {path}");
+        var path = Path.Combine([dir!.FullName, .. parts]);
+        Assert.True(File.Exists(path), $"expected the guarded source at {path}");
         return File.ReadAllText(path);
     }
 
@@ -134,5 +138,46 @@ public class SelfUpdateMigratesBeforeItRollsTest
             "the roll that IS still taken (NotSupported) must be recorded as UNMIGRATED. #4764's "
             + "second ask: lastCheckVerdict reported the patch as done while the crash-loop lived "
             + "only on the pod, so a migrated roll and a blind one were the same recorded sentence.");
+    }
+
+    /// <summary>
+    /// 🚨 <b>EVERY route that patches migrates first — the Updates tab's manual Apply included.</b>
+    ///
+    /// <para>The poller was fixed and the BUTTON was not: <c>UpdatePolicySettingsTab</c> honoured the
+    /// release-availability gate, the combo gate and the control-lane route, then called
+    /// <c>PatchToVersionAsync</c> directly. So an admin click still made the image-only roll across a
+    /// <c>db_version</c> boundary — and worse than the poller's old blind branch, because a click
+    /// leaves no verdict anywhere to inspect afterwards. Found by the automatic review on the PR that
+    /// fixed the poller, which is precisely the failure mode a per-route switch statement has.</para>
+    ///
+    /// <para>Pinned as SOURCE ORDER for the same reason as the poller's: a fake proves the call
+    /// happened, never that it happened FIRST. The shared decision itself
+    /// (<c>SelfUpdateVerdict.MayPatchAfter</c>) is pinned behaviourally by
+    /// <c>SelfUpdateSchemaBumpRefusalTest</c>.</para>
+    ///
+    /// <para><b>Fails on unfixed code:</b> the tab never calls <c>RunMigrationAsync</c>.</para>
+    /// </summary>
+    [Fact]
+    public void TheManualApplyMigratesBeforeItPatches_AndReadsTheSharedDecision()
+    {
+        var source = ReadSource("memex", "Memex.Portal.Shared", "Settings", "UpdatePolicySettingsTab.cs");
+
+        var migrate = source.IndexOf("RunMigrationAsync(", StringComparison.Ordinal);
+        var patch = source.IndexOf("PatchToVersionAsync(", StringComparison.Ordinal);
+
+        Assert.True(migrate > -1,
+            "the Updates tab's manual Apply never runs the database migration. A gate only the "
+            + "unattended path respects is not a gate — and this button is exactly the moment an "
+            + "operator, seeing an update that never applied, would force the roll (#4764).");
+        Assert.True(patch > -1, "the tab no longer patches the image — this guard's subject moved.");
+        Assert.True(migrate < patch,
+            "the migration must be run BEFORE the image is patched here too. Patching first cannot "
+            + "be recovered from in-process: the pod that would finish the work restarts into "
+            + "DbVersionGate.");
+
+        var decision = source.IndexOf("SelfUpdateVerdict.MayPatchAfter(", StringComparison.Ordinal);
+        Assert.True(decision > -1 && decision < patch,
+            "and it must read the SHARED decision before patching, not re-enumerate the outcomes: "
+            + "two copies of that rule drift, which is exactly how this route ended up with none.");
     }
 }

@@ -197,6 +197,52 @@ public class SelfUpdateSchemaBumpRefusalTest(ITestOutputHelper output) : Monolit
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  One decision, two routes
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 <b>The poller's behaviour IS <see cref="SelfUpdateVerdict.MayPatchAfter"/>, for every
+    /// outcome.</b>
+    ///
+    /// <para>There are two routes that patch — this poller and the Updates tab's manual Apply — and
+    /// the second one skipped the migration entirely until #4764, which is what a per-route switch
+    /// statement costs. The tab now reads the predicate; this drives the poller end-to-end over all
+    /// five outcomes and asserts it agrees, so an outcome ADDED to the enum cannot be handled one way
+    /// in one route and another in the other without a red test.</para>
+    ///
+    /// <para>Not a restatement of the predicate: the predicate is the tab's decision, and what is
+    /// measured here is whether a REAL check, against a real mesh, patched — read off the fake
+    /// updater's recorded tags rather than off any verdict text.</para>
+    /// </summary>
+    [Theory(Timeout = 240_000)]
+    [InlineData(MigrationRunOutcome.Completed)]
+    [InlineData(MigrationRunOutcome.Failed)]
+    [InlineData(MigrationRunOutcome.TimedOut)]
+    [InlineData(MigrationRunOutcome.Forbidden)]
+    [InlineData(MigrationRunOutcome.NotSupported)]
+    public async Task ThePollerPatchesExactlyWhenTheSharedDecisionSaysItMay(MigrationRunOutcome outcome)
+    {
+        await Seed(TestContext.Current.CancellationToken);
+        var updater = new RecordingUpdater(outcome);
+
+        await RunOneCheck(updater);
+
+        updater.Migrations.Should().Contain(CandidateTag,
+            "every roll asks about the schema first, whatever the answer turns out to be");
+        if (SelfUpdateVerdict.MayPatchAfter(outcome))
+            updater.Tags.Should().Contain(CandidateTag,
+                "MayPatchAfter says this outcome permits the patch, and the manual Apply route will "
+                + "patch on it — the poller must not be stricter than the predicate the other route "
+                + "reads, or the two disagree about the same release");
+        else
+            updater.Tags.Should().BeEmpty(
+                "MayPatchAfter refuses this outcome, and the manual Apply route will refuse on it — "
+                + "the poller must not be more permissive than the predicate the other route reads, "
+                + "which is precisely how the button ended up making the roll the poller had stopped "
+                + "making (#4764)");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  Harness — the ComboGateRollTest shapes, with the migration seam driven
     // ══════════════════════════════════════════════════════════════════════════
 
