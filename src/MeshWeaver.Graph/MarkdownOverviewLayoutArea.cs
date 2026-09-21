@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -335,51 +336,78 @@ public static class MarkdownOverviewLayoutArea
         // them up. Preference order is the LIST order, never whichever probe answered first.
         return Observable
             .CombineLatest(SignatureDeskPaths.Select(path => PluginSurfaceProbe.Exists(mesh, path)))
-            .Select(present =>
-            {
-                var index = present.IndexOf(true);
-                return index >= 0
-                    ? (UiControl?)Controls
-                        .LayoutArea(SignatureDeskPaths[index], SignatureArea, nodePath)
-                        .WithShowProgress(false)
-                    : UnconfiguredSignatureBlock(host);
-            });
+            .Select(present => SignatureBlockFor(
+                present.ToImmutableArray(),
+                nodePath,
+                host.Localize("signature.unconfigured.title"),
+                host.Localize("signature.unconfigured.body")));
+    }
+
+    /// <summary>
+    /// The whole decision this section makes, as a pure function of the probe answers: the block
+    /// delegated to the FIRST desk present in <see cref="SignatureDeskPaths"/> order, or the
+    /// unconfigured block when none is.
+    ///
+    /// <para>Separate from <see cref="SignaturesSection"/> on purpose. The properties that
+    /// actually broke — preference by LIST ORDER rather than by whichever probe answered first,
+    /// and a legible block instead of silence when nothing is installed — are decided here and are
+    /// testable here; pinning the array's contents alone (which is all the first version of
+    /// <c>SignatureDeskIsTheMaintainedPackageTest</c> did) leaves every one of them unguarded.</para>
+    /// </summary>
+    /// <param name="present">Each candidate desk's probe answer, in <see cref="SignatureDeskPaths"/> order.</param>
+    /// <param name="nodePath">The document whose signatures the desk is to render.</param>
+    /// <param name="unconfiguredTitle">Localized heading for the no-provider block.</param>
+    /// <param name="unconfiguredBody">Localized body for the no-provider block.</param>
+    internal static UiControl SignatureBlockFor(
+        IReadOnlyList<bool> present, string nodePath, string unconfiguredTitle, string unconfiguredBody)
+    {
+        for (var i = 0; i < SignatureDeskPaths.Length && i < present.Count; i++)
+            if (present[i])
+                return Controls.LayoutArea(SignatureDeskPaths[i], SignatureArea, nodePath)
+                    .WithShowProgress(false);
+
+        return UnconfiguredSignatureBlock(unconfiguredTitle, unconfiguredBody);
     }
 
     /// <summary>
     /// What the signatures section renders when NO e-Signature package is on the mesh.
     ///
-    /// <para>Deliberately a hand-woven block rather than an empty stack: a page that simply omits
-    /// the section teaches the reader that this document cannot be signed, when the truth is only
-    /// that nobody has installed a provider. It states that, names the signature level a provider
-    /// would give, and stops — it records nothing, offers no button, and is emphatically NOT a
-    /// tenth approval mechanism (the estate already has nine).</para>
+    /// <para>Deliberately a block rather than an empty stack: a page that simply omits the section
+    /// teaches the reader that this document cannot be signed, when the truth is only that nobody
+    /// has installed a provider. It states that, names the signature level a provider would give,
+    /// and stops — it records nothing, offers no button, and is emphatically NOT a tenth approval
+    /// mechanism (the estate already has nine).</para>
     ///
-    /// <para>The legend shows the badge a completed signature carries, so the standard is legible
-    /// before anyone has adopted one.</para>
+    /// <para>🚨 Composed from the platform's layout controls, never from markup. The first version
+    /// of this block was a <c>Controls.Html</c> string carrying its own flexbox card and a
+    /// hand-drawn <c>&lt;svg&gt;</c>, which is the "own UI framework in a node" shape the GUI rules
+    /// forbid: it renders on exactly one client, takes no theme token it is not told about, and the
+    /// certificate mark it drew already exists in the platform icon set.</para>
     /// </summary>
-    private static UiControl UnconfiguredSignatureBlock(LayoutAreaHost host)
-        => Controls.Stack.WithView(Controls.Html(
-            "<div style=\"border:1px solid var(--neutral-stroke-rest);border-radius:8px;" +
-            "padding:14px 16px;margin-top:12px;display:flex;gap:14px;align-items:flex-start\">" +
-            CertificateGlyph("var(--neutral-foreground-hint)") +
-            "<div><div style=\"font-weight:600;margin-bottom:2px\">" +
-            host.Localize("signature.unconfigured.title") +
-            "</div><div style=\"font-size:0.85rem;color:var(--neutral-foreground-hint)\">" +
-            host.Localize("signature.unconfigured.body") +
-            "</div></div></div>"));
+    internal static UiControl UnconfiguredSignatureBlock(string title, string body)
+        => Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(14)
+            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; "
+                       + "padding: 14px 16px; margin-top: 12px; align-items: flex-start;")
+            .WithView(UnconfiguredSignatureMark())
+            .WithView(UnconfiguredSignatureText(title, body));
 
     /// <summary>
-    /// The seal-and-ribbon certificate mark a signature carries, with a check struck through it —
-    /// one glyph that reads as "signed AND attested", which a bare tick does not. Rendered green
-    /// (<c>--success</c>) for a signature at SES or above and in the hint colour when there is
-    /// nothing to attest yet.
+    /// The certificate mark a completed signature carries, shown here as a legend so the standard
+    /// is legible before anyone has adopted one. The platform icon set already has it, and there is
+    /// nothing to attest yet, so it is the hint colour — the copy beside it must not promise
+    /// otherwise.
     /// </summary>
-    internal static string CertificateGlyph(string colour)
-        => $"<svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"{colour}\" " +
-           "stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">" +
-           "<circle cx=\"12\" cy=\"9\" r=\"6\"/><path d=\"M9.5 9l1.8 1.8L14.5 7.5\"/>" +
-           "<path d=\"M8.4 14.2L7 22l5-2.5L17 22l-1.4-7.8\"/></svg>";
+    internal static IconControl UnconfiguredSignatureMark()
+        => Controls.Icon(FluentIcons.Certificate())
+            .WithColor("var(--neutral-foreground-hint)");
+
+    /// <summary>The heading and explanation of the no-provider block.</summary>
+    internal static StackControl UnconfiguredSignatureText(string title, string body)
+        => Controls.Stack
+            .WithView(Controls.Subject(title))
+            .WithView(Controls.Body(body).WithStyle("color: var(--neutral-foreground-hint);"));
 
     /// <summary>
     /// Returns the actual markdown body control (a <see cref="CollaborativeMarkdownControl"/>
