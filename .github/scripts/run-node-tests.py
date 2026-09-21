@@ -61,6 +61,7 @@ import ast
 import glob
 import hashlib
 import json
+import platform
 import re
 import importlib.util
 import os
@@ -647,6 +648,71 @@ def _attribute(origins, line_no: int) -> str:
     return f"  [{where}:{origin[1]}]"
 
 
+# 🚨 THE PREFIX IS THE CLASSIFICATION (MeshWeaver#5080). A set whose ONLY "diagnostic" is a
+# non-zero exit code did not fail to build — Roslyn names every refusal it makes, so nothing can
+# fail to compile silently. It BUILT and the produced process could not start. Reporting that as
+# `BUILD FAILED` accuses content that `compile-check.py` reads as clean, which is the failure mode
+# `short_reference_set_refusal` was written to prevent one layer up.
+EXEC_FAILED = "the sources COMPILED and the produced process could not run — "
+
+# 128 + N, as a shell reports a signalled child. Named, because `exit 134` is not a number anybody
+# should have to look up while reading a gate log.
+_SIGNALS = {132: "SIGILL", 133: "SIGTRAP", 134: "SIGABRT", 135: "SIGBUS", 136: "SIGFPE",
+            137: "SIGKILL", 139: "SIGSEGV", 141: "SIGPIPE", 143: "SIGTERM"}
+
+
+def host_rid() -> str:
+    """This host's RID, in the spelling .NET uses for it."""
+    machine = platform.machine().lower()
+    arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine, machine)
+    os_part = ("linux" if sys.platform.startswith("linux")
+               else "osx" if sys.platform == "darwin"
+               else "win" if sys.platform.startswith("win")
+               else sys.platform)
+    return f"{os_part}-{arch}"
+
+
+def execution_host_refusal(layout: str, host: str) -> str | None:
+    """Why the suites cannot be EXECUTED on this host against this reference set, or None.
+
+    🚨 THIS HARNESS BOTH COMPILES AND RUNS, AND ONLY THE FIRST HALF IS HOST-AGNOSTIC
+    (MeshWeaver#5080). An `image`-shaped set is extracted from the platform CONTAINER, so its
+    assemblies are `linux-*`. Compiling against them is fine — `compile-check.py` does exactly that
+    and reads the same tree green. LOADING them into a `dotnet run` process on a host that is not
+    Linux is not: every set aborts on SIGABRT before the runner prints a line, and because no
+    compiler diagnostic exists to quote, each one was reported as `BUILD FAILED`. Measured
+    2026-09-19 on darwin-arm64: 8 of 8 NodeTypes "failed to BUILD" while `compile-check.py` read
+    102 of 102 clean.
+
+    So the answer is known before the first compile, and it is said once instead of being
+    mis-attributed 102 times. What is NOT claimed here: that a `linux-arm64` host can load a
+    `linux-x64` extraction. That combination is unmeasured, so it is not refused up front — it
+    falls to the per-set classification, which needs no assumption about RIDs at all.
+    """
+    if layout != "image" or host.startswith("linux"):
+        return None
+    return (f"✗ this reference set is an IMAGE extraction — its assemblies are container-built for "
+            f"linux, and this host is {host}. The suites cannot be EXECUTED here: the compile "
+            f"succeeds and the produced process aborts on load, which this harness used to report "
+            f"as BUILD FAILED against content that is clean (MeshWeaver#5080).\n"
+            f"  What DOES answer here:\n"
+            f"    • compilation — `compile-check.py` over the same tree and the same set; it only "
+            f"compiles, so the host never matters\n"
+            f"    • execution — run this harness inside the tester image, the way CI does, or point "
+            f"`--refs` at a sibling MeshWeaver checkout BUILT ON THIS HOST\n"
+            f"  Refusing rather than reporting {host} as a content failure.")
+
+
+def exit_code_reading(code: int) -> str:
+    """`dotnet run`'s exit status, said in words."""
+    if code in _SIGNALS:
+        return (f"exit {code} = 128 + {_SIGNALS[code]}, so the runtime took the process down before "
+                f"the runner reached its first line")
+    if code < 0:
+        return f"killed by signal {-code} before the runner reached its first line"
+    return f"exit {code}, with no compiler diagnostic to attribute it to"
+
+
 def run_set(work: Path, sources, refs_xml, analyzers, cc, ai_available, list_only, restored):
     """Compile and run ONE NodeType's source set.
 
@@ -695,7 +761,7 @@ def run_set(work: Path, sources, refs_xml, analyzers, cc, ai_available, list_onl
                 loc = re.search(r"\((\d+),\d+\): error (?:CS|NU|NETSDK|MSB)", line)
                 errors.append(e + (_attribute(origins, int(loc.group(1))) if loc else ""))
         if not errors:
-            errors = [f"dotnet run exited {proc.returncode} with no diagnostic captured"]
+            errors = [EXEC_FAILED + exit_code_reading(proc.returncode)]
         unverifiable = (not ai_available) and bool(errors) and all(cc._is_ai_error(e) for e in errors)
         return None, errors, proc.stdout[-2000:], unverifiable
 
@@ -1017,6 +1083,36 @@ def self_test() -> int:
              len(problems) >= 1 and any("GoneMissing.cs" in p for p in problems),
              f"{len(problems)} problem(s): {problems[0][:140] if problems else ''}")
 
+    # 🚨 A HOST THAT CANNOT EXECUTE THE SET IS NOT A BROKEN TREE (MeshWeaver#5080). The case on the
+    # FAILING side of the change is the first one: before it, a container-built set on macOS
+    # produced `✗ BUILD FAILED  dotnet run exited 134 with no diagnostic captured` for every
+    # NodeType while `compile-check.py` read the same tree clean. The two cases after it are the
+    # ones that must keep working — CI runs the image set on Linux and must never be refused, and a
+    # host-built sibling set runs anywhere.
+    print("\n── the host is named when it cannot EXECUTE the reference set (#5080) ──")
+    osx = execution_host_refusal("image", "osx-arm64")
+    case("a container-built set on a non-Linux host is REFUSED, naming both the set and the host",
+         osx is not None and "osx-arm64" in osx and "IMAGE" in osx and "compile-check.py" in osx,
+         f"got: {osx!r}")
+    case("CI's own combination — an image set on Linux — is NOT refused",
+         execution_host_refusal("image", "linux-x64") is None
+         and execution_host_refusal("image", "linux-arm64") is None,
+         "the refusal would take out every gate lane")
+    case("a host-built sibling set is NOT refused, on any host",
+         all(execution_host_refusal("source-build", h) is None
+             for h in ("osx-arm64", "linux-x64", "win-x64")),
+         "the local loop this harness exists for would be refused")
+    case("a signalled exit is read as a failure to RUN, never as a failure to build",
+         (EXEC_FAILED + exit_code_reading(134)).startswith(EXEC_FAILED)
+         and "SIGABRT" in exit_code_reading(134) and "SIGSEGV" in exit_code_reading(139),
+         f"134 → {exit_code_reading(134)!r}")
+    case("an ordinary non-zero exit still says no diagnostic could be attributed",
+         "no compiler diagnostic" in exit_code_reading(1),
+         f"1 → {exit_code_reading(1)!r}")
+    case("this host's RID is spelled the way .NET spells it",
+         re.fullmatch(r"(linux|osx|win|[a-z0-9]+)-(x64|arm64|[a-z0-9]+)", host_rid()) is not None,
+         f"got {host_rid()!r}")
+
     print(f"\n{'✓ self-test green' if not failures else '✗ ' + str(len(failures)) + ' self-test case(s) FAILED'}")
     return 0 if not failures else 1
 
@@ -1157,6 +1253,14 @@ def main() -> int:
                 "\n  Build them once in the framework checkout, then re-run:\n"
               + "".join(f"    dotnet build src/{m} -c Release\n" for m in missing_modules))
         return 2
+    host = host_rid()
+    if (refusal := execution_host_refusal(layout, host)) is not None:
+        # 🚨 EXIT 3, DISTINGUISHABLY (MeshWeaver#5080). 1 means "the content failed", 2 means "the
+        # harness could not be set up"; neither is true here — the harness is fine and the content is
+        # unexamined. A separate code lets a launcher tell "your tree is broken" from "this host
+        # cannot answer", which is the whole distinction the old `BUILD FAILED` collapsed.
+        print(refusal)
+        return 3
     if layout == "image":
         # 🚨 A DIVERGENCE THAT CANNOT BE MIRRORED, SO IT IS NAMED. Given an image-shaped set the gate
         # switches to implementation frameworks (`DisableImplicitFrameworkReferences`) and compiles
@@ -1193,6 +1297,7 @@ def main() -> int:
     build_failed: list[tuple[str, list[str]]] = []
     refused: list[tuple[str, list[str]]] = []
     unverified: list[tuple[str, list[str]]] = []
+    unrunnable: list[tuple[str, list[str]]] = []
     executed_sets = 0
     t0 = time.time()
     try:
@@ -1230,19 +1335,26 @@ def main() -> int:
                     print(f"      {e}")
                 unverified.append((lead, errors))
                 continue
+            if tally is None and errors and errors[0].startswith(EXEC_FAILED):
+                # 🚨 NOT `BUILD FAILED` (MeshWeaver#5080). No compiler diagnostic at all means it
+                # BUILT and died on load, and the two need opposite responses: one sends the reader
+                # to the source, the other to the host or the reference set. Counted in its own
+                # bucket so a run of these can never read as coverage, and the tail is shown or the
+                # failure is indistinguishable from "the harness did nothing".
+                print(f"  ✗ COULD NOT EXECUTE — {errors[0]}")
+                print(f"      this host is {host} and the reference set is {layout}-shaped"
+                      + ("; a container-built set does not load here" if layout == "image" else ""))
+                print("  ── last output ──")
+                for line in tail.splitlines()[-15:]:
+                    print(f"      {line}")
+                unrunnable.append((lead, errors))
+                continue
             if tally is None:
                 print(f"  ✗ BUILD FAILED ({len(errors)} distinct diagnostic(s)):")
                 for e in errors[:20]:
                     print(f"      {e}")
                 if len(errors) > 20:
                     print(f"      … and {len(errors) - 20} more")
-                if len(errors) == 1 and errors[0].startswith("dotnet run exited"):
-                    # No compiler diagnostic at all ⇒ it BUILT and died on load (a missing assembly
-                    # at run time reads nothing like a compile error). Show the tail, or the failure
-                    # is indistinguishable from "the harness did nothing".
-                    print("  ── last output ──")
-                    for line in tail.splitlines()[-15:]:
-                        print(f"      {line}")
                 build_failed.append((lead, errors))
                 continue
             for line in tail.splitlines():
@@ -1272,6 +1384,13 @@ def main() -> int:
                   f"which this reference set does not carry): " + ", ".join(n for n, _ in unverified))
             print("   Their suites did NOT run. Pass --refs at a set that carries the AI assemblies "
                   "(CI's does) to cover them.")
+        if unrunnable:
+            print(f"\n✗ {len(unrunnable)} NodeType(s) COULD NOT EXECUTE — they compiled and the "
+                  f"produced process did not start: " + ", ".join(n for n, _ in unrunnable))
+            print(f"   This is a property of the HOST ({host}) or of the reference set "
+                  f"({layout}-shaped), not of the content — `compile-check.py` is the tool that "
+                  f"answers about the content, and the tester image is where these run "
+                  f"(MeshWeaver#5080).")
         if build_failed:
             print(f"\n✗ {len(build_failed)} NodeType(s) failed to BUILD: "
                   + ", ".join(n for n, _ in build_failed))
@@ -1282,7 +1401,7 @@ def main() -> int:
         # local framework rendering as successful coverage. So the checkmark is suppressed whenever
         # anything is unverified, the verdict names both numbers, and a run where NO set executed at
         # all is a non-zero exit. "Nothing could be verified" is not a pass.
-        clean = not refused and not build_failed and total["failed"] == 0
+        clean = not refused and not build_failed and not unrunnable and total["failed"] == 0
         if clean and unverified:
             print(f"\n⚠ {total['cases']} test(s) {'listed' if args.list else 'passed'} across "
                   f"{total['suites']} suite(s) — and {len(unverified)} NodeType(s) were NOT "
