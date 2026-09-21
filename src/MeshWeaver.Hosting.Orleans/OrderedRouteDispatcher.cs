@@ -59,6 +59,21 @@ namespace MeshWeaver.Hosting.Orleans;
 /// ordering relationship no longer wait on each other — the pipelining a correct channel key allows
 /// and an over-coarse one forbade.</para></para>
 ///
+/// <para>🚨 <b>Two deltas the narrowing really does carry, named rather than left to be found.</b>
+/// (1) Traffic to one destination that carries NO identity — lifecycle and control messages, a
+/// <c>DisposeRequest</c>, a heartbeat, a correlated response — stays on the destination-wide channel
+/// and is therefore no longer ordered against that destination's DATA frames. Nothing relies on
+/// that pairing: the whole data-sync protocol IS keyed (<c>DataChangedEvent</c>,
+/// <c>SubscribeRequest</c>, <c>UnsubscribeRequest</c>, <c>StreamErrorEvent</c>,
+/// <c>StreamEndedEvent</c> and every <c>IUserAction</c> carry the stream id), responses correlate by
+/// request id, and a frame racing its destination's teardown was already a race the router never
+/// decided — a user ACTION, the one case where a drop at teardown matters, is protected by its
+/// <c>UserActionAccepted</c> receipt and the registration grace, never by router ordering.
+/// (2) The number of dictionary entries is now bounded by in-flight LEGS rather than by in-flight
+/// DESTINATIONS. An entry exists only while a channel holds a leg, and every held leg already holds
+/// a route slot, so the bound is the same quantity the saturation report prints — tens of bytes per
+/// entry against a delivery each.</para>
+///
 /// <para>Nothing runs on the turn and nothing is awaited: each leg is still subscribed through
 /// the mesh's drainable routing <see cref="IIoPool"/>, so teardown can cancel + join it. The
 /// queue is a plain lock-protected <see cref="ImmutableQueue{T}"/> — a synchronous data-structure

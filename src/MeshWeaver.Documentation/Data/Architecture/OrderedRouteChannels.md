@@ -113,6 +113,27 @@ The key is a `(string, string?)` **pair**, never the two concatenated: mesh addr
 channel — which would silently re-serialise unrelated streams, or let two frames of one stream
 overtake each other.
 
+### Two deltas it does carry
+
+Named here rather than left to be discovered:
+
+**Control traffic is no longer ordered against data frames.** A message with no identity — a
+`DisposeRequest`, a heartbeat, a correlated response — stays on the destination-wide channel, so it
+can now overtake or be overtaken by a data frame for a stream on the same destination. Nothing relies
+on that pairing. The entire data-sync protocol is keyed: `DataChangedEvent`, `SubscribeRequest`,
+`UnsubscribeRequest`, `StreamErrorEvent`, `StreamEndedEvent` and every `IUserAction` carry the stream
+id, so all of them keep their stream's lane. Responses correlate by request id, not by order. And a
+frame racing its destination's teardown was already a race the router never decided — the one case
+where a drop at teardown matters is a **user action**, and that is protected by its
+`UserActionAccepted` receipt and the sub-hub registration grace, never by router ordering (see
+[Data Sync and CRDT](../DataSyncAndCrdt)).
+
+**The entry count is bounded by in-flight legs, not by in-flight destinations.** An entry exists only
+while a channel holds a leg, and every held leg already holds a route slot — so the bound is the same
+quantity the saturation report prints, at tens of bytes per entry against a whole delivery each. The
+previous key made the entry count smaller but made the *queue behind one entry* the unbounded
+quantity, which is what 62 was.
+
 ### This raises no bound
 
 Nothing was widened. The legs a silo may have in flight are still capped by the routing `IIoPool`
