@@ -362,6 +362,23 @@ public static class HubPermissionExtensions
         return PermissionEvaluator.GetRedirectOnDenied(hub, targetNamespace);
     }
 
+    /// <summary>
+    /// Whether <paramref name="targetNamespace"/> opts in to describing ITSELF in a link preview
+    /// while its content stays gated — the nearest scope's
+    /// <see cref="PartitionAccessPolicy.PublicPreview"/>, <c>false</c> when no scope states one.
+    ///
+    /// <para>🚨 A DISCLOSURE answer, never an access one: it never grants Read, and no caller may
+    /// serve content on it. The only sanctioned consumers are the crawler-facing head and the share
+    /// card / icon routes it declares, which between them disclose the node's <c>Name</c>, its
+    /// authored summary and its <c>Icon</c> — and never its body.</para>
+    /// </summary>
+    public static IObservable<bool> GetPublicPreview(
+        this IMessageHub hub, string targetNamespace)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return PermissionEvaluator.GetPublicPreview(hub, targetNamespace);
+    }
+
     private static EffectivePermissionsDelegate ResolveEvaluator(IMessageHub hub) =>
         hub.Configuration.Get<EffectivePermissionsDelegate>()
         ?? MessageHubPermissionExtensions.DefaultEvaluator;

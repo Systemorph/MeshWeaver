@@ -73,7 +73,7 @@ kubectl -n <ns> logs <pod> --tail=2000 | grep -iE "Unwind: exception type|Missin
 | marker | meaning |
 |---|---|
 | `exit=139` | SIGSEGV — *or* an unhandled managed exception routed through `createdump`. Check. |
-| `exit=134` | SIGABRT — runtime abort / `FailFast`. An `AccessViolationException` on a non-null-but-unmapped pointer lands here: that **is** use-after-unload (#613). |
+| `exit=134` | SIGABRT — runtime abort / `FailFast`. An `AccessViolationException` on a non-null-but-unmapped pointer lands here. 🚨 **Corrected: that is NOT by itself use-after-unload.** Sighting #18 (2026-09-21) is this exact shape — AV at `0x3001000048`, fail-fast, `134` — in a process with **one** ALC, alive, 133 modules, none duplicated, and zero retired contexts. Read the ALC census before naming a cause. 🚨 And `NT_SIGINFO` on a `134` describes the **abort** (`signo 6`, `si_code 0`, `si_addr 0x0`), not the fault; the page-fault `ucontext` is on the alternate signal stack. |
 | `exit=124` / `137` | **not a crash** — CI's 8 m wall-clock cap killed a hang. Never appears locally (macOS ships no `timeout`). |
 | `exit=2` | xUnit v3's `AppDomain.UnhandledException` handler calling `Environment.Exit(2)`. The summary prints all green and the trx is clean. Grep the shard log for `FATAL ERROR`, not "catastrophic". |
 
@@ -104,11 +104,24 @@ Both are SIGSEGV. They are different bugs and the dump distinguishes them in one
 | **Use-after-unload** | `si_code = SI_KERNEL`, `si_addr = 0`, faulting register holds a **non-canonical** value (e.g. `rax = 0x0074007300200022` — UTF-16 text where a pointer belonged) | a **#GP on a non-canonical pointer**, not a null deref — freed-and-reused memory | **OURS.** Family A below. |
 | **Zeroed MethodTable header** | `si_code = 1` (`SEGV_MAPERR`), `TRAPNO=14`/`ERR=0x4`, `RIP` inside file-backed `libcoreclr`, instruction reading a MethodTable field off a register that is `0` — `si_addr` is the FIELD OFFSET, so `0x0` for `MT->m_dwFlags` (`mov ecx,[rax]`, `RAX = 0`) and **`0x4` for `MT->m_BaseSize`** (`mov 0x4(%rax),%esi`, sighting #10). The register allocation and the frame both vary; the dereference does not | one 8-byte object header reads as exactly zero while its block stays coherent | **CoreCLR / upstream.** Not ours. |
 
-🚨 **`si_addr = 0x0` is NOT part of the fingerprint** — it is only the offset of whichever MethodTable
-field the faulting code happened to read. Sighting #10 faults at `si_addr = 0x4` and is the same bug.
-Match on *"a MethodTable word that is exactly zero"*, never on the literal address.
+| **A corrupt reference, surfacing in MANAGED code** *(sighting #18)* | exits **134**, not 139. `NT_SIGINFO` is the abort; the real fault is `TRAPNO=14`/`ERR=0x4` with `CR2` **non-null** (`0x3001000048`), `RIP` in **JIT-compiled code**, on an application thread with a full managed stack, and `Unwind: exception type` ×6 in the core | an object-reference slot (there: a generic type's GC static) held a **MethodTable pointer** — a wrong pointer, not a zero | **Unattributed.** Same class as row 2, different form; no ALC involved. |
 
-The second one is the FutuRe family. 🚨 **Corrected 2026-09-11: the "collectible-ALC hypothesis
+🚨 **Within a `si_signo = 11` / `SEGV_MAPERR` record, `si_addr` is NOT part of the fingerprint** — it
+is only the offset of whichever MethodTable field the faulting code happened to read. Sighting #10
+faults at `si_addr = 0x4` and is the same bug. Match on *"a MethodTable word that is exactly zero"*,
+never on the literal address. 🚨 **That rule does not extend to a `SIGABRT` record, and row 3 is why:**
+when `si_signo = 6` the `si_addr = 0x0` is the *abort's* and says nothing about any dereference, so
+reading it as a MethodTable field offset produces this family's fingerprint out of the wrong event.
+Check `si_signo` before you interpret `si_addr` at all.
+
+The second one is the FutuRe family. 🚨 **And the family has a second form, so "no zeroed MethodTable
+word ⇒ not this family" is not a verdict.** Sighting #18 (2026-09-21, `10.0.12`) faulted in
+`ReplaySubject<__Canon>…Subscription.Dispose()+0x3ac` — managed code, on the hub's own
+`MessageService.DrainLoop` thread, inside the current instance's teardown — because a GC-reference
+static held `0x7fea1704ccf8`, the MethodTable of `Autofac…MiddlewareDeclaration`, which is in no GC
+segment. **There was no collectible ALC in the process at all**, so the 2026-09-11 overlap diagnosis
+and the fixes built on it could not have prevented it. Full entry and controls:
+DebuggingNativeCrashes.md, *"sighting #18"*. 🚨 **Corrected 2026-09-11: the "collectible-ALC hypothesis
 falsified three ways" line that stood here was unsound.** Its three arguments (RIP in file-backed
 runtime code; a freed `LoaderAllocator` yields a non-null *unmapped* pointer; a free-list item has no
 ALC) exclude only a freed collectible *MethodTable* being dereferenced — the zeroed word is the header

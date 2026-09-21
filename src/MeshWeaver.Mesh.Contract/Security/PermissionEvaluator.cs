@@ -501,6 +501,45 @@ internal static class PermissionEvaluator
             .DistinctUntilChanged();
     }
 
+    /// <summary>
+    /// The effective <see cref="PartitionAccessPolicy.PublicPreview"/> for
+    /// <paramref name="targetNamespace"/>: the nearest scope — self, then each ancestor up to root —
+    /// that STATES a value wins, and <c>false</c> when none does. Reuses the exact scope-policy chain
+    /// the permission evaluation reads, so a flag set once at a partition root applies to every node
+    /// beneath it and a deeper scope can state <c>false</c> to opt that subtree back out.
+    ///
+    /// <para>🚨 This answers a DISCLOSURE question, never an access one: it says whether a page the
+    /// gate refuses may still state its own name, summary and mark in a link preview. Nothing here
+    /// grants Read, and no caller may use it to serve content — see
+    /// <see cref="PartitionAccessPolicy.PublicPreview"/>.</para>
+    ///
+    /// <para>Deliberately NO <c>NodeTypeGate</c> fallback, unlike
+    /// <see cref="GetRedirectOnDenied"/>: a gate declares where a denied viewer is SENT, which is
+    /// navigation, and inferring a disclosure decision from it would opt partitions in that nobody
+    /// opted in. This flag is stated on a <c>_Policy</c> or it is off.</para>
+    /// </summary>
+    public static IObservable<bool> GetPublicPreview(IMessageHub hub, string targetNamespace)
+    {
+        var ns = targetNamespace ?? "";
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var staticPolicies = CollectStaticPolicies(hub);
+        return ObserveScopePolicies(hub, cache, ns, staticPolicies)
+            .Select(policies =>
+            {
+                // Nearest scope (self first) that STATES a value wins; walk to root. A stated
+                // `false` is an answer and stops the walk — that is what makes opting a subtree
+                // back out of an inherited `true` possible at all.
+                for (var s = ns; ; s = GetParentScope(s))
+                {
+                    if (policies.TryGetValue(s, out var p) && p.PublicPreview is { } stated)
+                        return stated;
+                    if (string.IsNullOrEmpty(s)) break;
+                }
+                return false;
+            })
+            .DistinctUntilChanged();
+    }
+
     #endregion
 
     #region Static node collection

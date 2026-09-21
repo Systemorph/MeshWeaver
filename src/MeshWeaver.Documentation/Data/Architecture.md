@@ -109,6 +109,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [CQRS — Queries vs. Content Access](CqrsAndContentAccess)
 - [An Answer Nobody Gave Is Not Cached](AnswerNobodyGaveIsNotCached) — a synced chain replays its FIRST frame for the life of the process, and a provider that completes without an Initial is counted as an empty one, so a cold moment used to become a permanent false "absent"; the frame now names who never answered and an unanswered frame is delivered but not kept
+- [The Query Fan-In's Stall Terminal](QueryFanInStallTerminal) — a provider that neither emits, completes nor errors used to starve the all-providers Initial gate for ever, with no error and nothing to grep; the merge now faults naming it, at a DERIVED rung strictly inside the permission fold's own budget, and every consumer that decides access already fails closed on it
 - [MeshNode Stream Cache](MeshNodeStreamCache)
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
@@ -199,8 +200,10 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
+- [PublicRead and Denies](PublicReadAndDenies) — a Public/Anonymous deny under a `PublicRead` policy is honoured by the SQL read path and ignored by the C# evaluator; what that split exposes, and what each remedy costs
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
 - [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
+- [Protected Segments on a Public Partition](ProtectedSegmentsOnAPublicPartition) — a partition that is public except for one inbox cannot be expressed with `PublicRead`: the C# evaluator and the SQL projection resolve a deeper deny under it differently, so the segment reads by exact path and is absent from every listing. The grant shape both folds agree on, why a read cap is a blackout rather than a gate, and why the boot heal may never retire a deny it could not have written
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
 
@@ -282,6 +285,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Install-Time Prebuilt Adoption](InstallTimePrebuiltAdoption) — the only lane that serves a package installed AFTER boot, and the four answers its zero must keep apart because a silent non-adoption reads exactly like a successful one
 - [Adoption and the Sweep Count Different Things](AdoptionAndTheSweepCountDifferentThings) — the cold boot that adopted 78 prebuilt assemblies and then reported 5, with nothing wrong on the share: what each instrument counts, why the sweep could not see its own process's writes, and the node-version ordering that keeps the fix from becoming a stale serve
 - [A Census That Counts Must Name](ACensusThatCountsMustName) — the one past-RLS census counted a permanently-broken NodeType and dropped its path one call before publication, so its output read as clean; where the identity was lost, what a PUBLIC census may name (the partition, never the node title), and how to tell a fix that is merged from a fix that is running
+- [Denied Is Not Absent](DeniedIsNotAbsent) — a Forbidden that a read discards comes back as the thing being MISSING, so the operator announces a node pool, an Ingress or a ConfigMap is absent when it was merely not permitted to look; the three answers a read owes its reader, why fixing the sites a report names does not sweep the defect, and the gate that makes the next one red
 - [Import Write Ordering](ImportWriteOrdering) — type before instance, and what a foreign type does
 - [Language Services](LanguageServices)
 - [Extensible Defaults](ExtensibleDefaults)
@@ -367,6 +371,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [An Unreachable Store Is Not a Refusal](StoreUnreachableIsNotARefusal) — one classification, three consumers; reporting an availability failure as a verdict is how a retried create becomes a duplicate
 - [A Name That Does Not Resolve Is Not Transient](ANameThatDoesNotResolveIsNotTransient) — the default pipeline retried a hostname that does not exist three times and logged each attempt at Error, so a URL in somebody's data manufactured a platform incident; the one socket error that is permanent, why the breaker must not count it either, and the control that keeps a nameserver hiccup retryable
 - [A Departed Silo Is Not a Delivery Defect](ADepartedSiloIsNotADeliveryDefect) — two incidents (191 and 3,959 occurrences) read as two defects for four weeks and are ONE root; which predicate sees which of the four rejection shapes, why the cure is the classifier and never a retry, and why an incident fingerprinted on a dependency's logger counts attempts rather than verdicts
+- [A Timed-Out Delivery Is Still Held by the Callee](ATimedOutDeliveryIsStillHeldByTheCallee) — a response timeout is a caller-side give-up timer, so the six-retry ladder sized for an instant rejection re-sent seven copies of every slow delivery and held a dispatch slot for 3 m 40 s; the three-predicate ladder that separates "is this transient" from "may we send it again", and the one caller that keeps the wider answer because it is idempotent
 - [A Bulk Create Compensates Per Node](BulkCreateCompensation) — every row is durable before any post-creation handler runs, so one critical failure left the failed node AND every node after it, whose handlers never ran and which nothing can tell apart from a success; what the rollback removes, why it walks backwards, and the measured reason the stop is a fault and not a `Take(1)`
 - [Undetermined Is Not No](UndeterminedIsNotNo) — a read that did not answer is a THIRD state; the second door that shared the first door's failure domain, and the rule for what a gate does with "I could not determine"
 - [Reading a Silo Eviction](ReadingASiloEviction) — a heartbeat newer than the suspect votes is not proof the silo was healthy; the control arm that tells a correct eviction from a false positive

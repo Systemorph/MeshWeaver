@@ -1762,6 +1762,12 @@ public static class MeshDataSourceExtensions
         meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Test nodeType:Code"))
             .Take(1)
+            // 🚨 TWO arms, not one. This chain is the query FAN-IN, which terminates with a
+            // QueryProviderStalledException when a provider never answers — and a one-arm Subscribe
+            // hands an OnError to Rx's default handler, which RETHROWS it on whichever pool thread
+            // delivered the terminal. That is an unhandled exception AND a RunTestsRequest that
+            // never gets a response: the caller waits out its own RequestTimeout with nothing in
+            // the log to attribute it to. Answer the caller with the failure instead.
             .Subscribe(queryResult =>
             {
                 var testNodes = queryResult.Items
@@ -1821,7 +1827,10 @@ public static class MeshDataSourceExtensions
                                         o => o.ResponseFor(request));
                             });
                 }
-            });
+            },
+            ex => hub.Post(
+                new RunTestsResponse([], Error: $"Could not read the test nodes: {ex.Message}"),
+                o => o.ResponseFor(request)));
 
         return request.Processed();
     }

@@ -212,7 +212,7 @@ public class OgCardRendererTest
             JsonSerializer.SerializeToElement(new { price = 490, currency = "CHF", description = "Claims, moved to the age of agents." }));
         node = node with { Name = "Claims Deepfield" };
 
-        var card = SeoEndpoints.CardContent(new SeoPageData(node, SeoResolver.ExtractDescription(node), SeoResolver.ShareImage(node)));
+        var card = SeoEndpoints.CardContent(node);
 
         Assert.Equal("Claims Deepfield", card.Title);
         Assert.Equal("Claims, moved to the age of agents.", card.Description);
@@ -230,7 +230,7 @@ public class OgCardRendererTest
         var node = Typed("Edu", "Store/Plugin", null, "/api/content/Edu/icon.png",
             JsonSerializer.SerializeToElement(new { price = 0 }));
 
-        var card = SeoEndpoints.CardContent(new SeoPageData(node, null, SeoResolver.ShareImage(node)));
+        var card = SeoEndpoints.CardContent(node);
 
         Assert.Equal("Plugin", card.Eyebrow);
         Assert.Null(card.Price);

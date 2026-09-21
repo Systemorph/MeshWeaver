@@ -167,6 +167,22 @@ So the pairing is an **explicit declaration the operator sets**, in the consumer
 | `selfUpdate.registryValidationUrl` in the chart | renders `SelfUpdate__RegistryValidationUrl` into the portal ConfigMap |
 | a record's `extraPortalConfig` / an overlay's `config.memex_portal` | renders the same key — this is how an existing instance is fixed without a chart change |
 
+🚨 **The declaration is per-record, and it goes in BOTH halves of the config repo.** `Systemorph/Memex`
+keeps a `Hosting/Deployment` record and the overlay it renders, and
+`scripts/check-record-renders-overlay.py` compares `extraPortalConfig` ↔ `config.memex_portal` in
+both directions over an allow list that is deliberately empty — so declaring on one side alone is a
+red naming the key. The two fleet-registry consumers (`build`, `pearl`) declare it in
+`Systemorph/Memex#454`; `memex` and `memex-cloud` pull from ACR and are untouched, which is the
+whole population: the discriminator is computable from the record — the `imageRepository` host is
+neither ACR nor any host the record mounts a plugin registry on.
+
+🚨 **And it is read by NOTHING until that instance runs an image whose core sha has `830c8c402`
+(#4094) as an ancestor.** Measured 2026-09-21 08:45Z: `build` served `3.0.0+c84c6c05` and `pearl`
+`3.0.0+67cbbe0e`, both of which predate that merge, so both still refuse exactly as this page
+describes. Declaring early is harmless and is the correct order — the roll is the other half, and
+neither the declaration's merge nor a green config-repo run is evidence that self-update works.
+The evidence is the instance detecting a newer tag and handing it over.
+
 The value is the registry record's `validationUrl`, copied verbatim
 (`https://memex.meshweaver.cloud/api/instances/token`); a bare host means the same thing. **Only the
 host is ever read**, and it is read whole: a non-default port is part of it, and a value carrying

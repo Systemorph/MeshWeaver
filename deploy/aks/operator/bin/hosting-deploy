@@ -102,8 +102,18 @@ sets=(
 # no-op on the build; and on a first install with nothing running and no pin, REFUSE — the chart
 # default is ghcr :latest, which on this fleet is a release tag that cannot boot.
 if [ -z "$image" ] && ! grep -q '^portal:' "$values"; then
-  running="$(hosting::read kubectl -n "$namespace" get deploy memex-portal-deployment \
-      -o jsonpath='{.spec.template.spec.containers[?(@.name=="memex-portal")].image}' 2>/dev/null || true)"
+  # 🚨 THREE ANSWERS, not two (MeshWeaver#4722) — and this one is the most expensive to get wrong
+  # in the whole file. The read used to be `2>/dev/null || true`, so a Forbidden on `deployments`
+  # left $running empty and the else-branch below announced that "namespace <ns> runs no portal
+  # yet (first install)" and asked for an image tag to be pinned on the record. Following that
+  # remedy PINS A TAG, which is a deliberate roll of the build — exactly what the comment above
+  # this block exists to prevent. A refusal must stop here instead, with nothing to act on wrongly.
+  hosting::probe any kubectl -n "$namespace" get deploy memex-portal-deployment \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="memex-portal")].image}'
+  case $? in
+    2) hosting::die_refused "deployment/memex-portal-deployment in ${namespace}, which decides whether this upgrade keeps the image the install is already running" ;;
+  esac
+  running="$HOSTING_PROBE_OUT"
   if [ -n "$running" ]; then
     image="$running"
     hosting::log "image     keeping the running ${image}"
@@ -204,7 +214,18 @@ if [ -n "$rendered" ]; then
     || hosting::die "could not list the rendered resources for adoption: ${names}"
   while IFS= read -r res; do
     [ -n "$res" ] || continue
-    live="$(hosting::read kubectl -n "$namespace" get "$res" -o json 2>/dev/null)" || { absent=$((absent+1)); continue; }
+    # 🚨 THREE ANSWERS, not two (MeshWeaver#4722). This read used to be `2>/dev/null` with any
+    # failure counted as ABSENT, so a Forbidden on the kind became one more resource "to be
+    # created" — in a count this command REPORTS (hosting::say adopted). The preflight below asks
+    # `auth can-i` for create/patch/delete and never for GET, so nothing else would have caught it;
+    # an unowned live object would then go un-adopted and helm would fail on ownership metadata
+    # with a number in the log that said it was never there.
+    hosting::probe any kubectl -n "$namespace" get "$res" -o json
+    case $? in
+      2) hosting::die_refused "${res} in ${namespace}, which adoption must read before helm may own it" ;;
+      1) absent=$((absent+1)); continue ;;
+    esac
+    live="$HOSTING_PROBE_OUT"
     rel="$(printf '%s' "$live" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')"
     mgr="$(printf '%s' "$live" | jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // ""')"
     if [ "$rel" = "$release" ] && [ "$mgr" = "Helm" ]; then

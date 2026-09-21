@@ -258,6 +258,69 @@ What this still does NOT cover: a hub that initialised *successfully* and then h
 handler. That is an ordinary wedge — see
 [ErrorPropagationAndWedges](../ErrorPropagationAndWedges).
 
+## Resolving the node is a READ, and its two terminals mean different things
+
+Before a per-node hub can be built, the grain has to learn WHICH node it is. That read has two
+terminals and conflating them cost issue #1186 six weeks of triage.
+
+| The activation source | Terminal | What it means |
+|---|---|---|
+| completes with no node | `InvalidOperationException` — *"No MeshNode resolvable for address …"* | **Determinate.** Storage answered, and the answer is "nothing here". Arrives as fast as storage answers. |
+| goes silent | `TimeoutException` after `FirstNodeResolutionTimeout` (30 s) | **A stalled READ.** Says nothing whatever about the node. |
+
+The second row used to carry the first row's sentence — *"Either the node does not exist or no query
+provider claims its partition"* — because the 30 s window was once the only terminal for both. Once
+the absent case got its own prompt terminal (`MessageHubGrain.ComposeActivationSource`: the
+authoritative branch alone decides when the source is done), that sentence became false in every
+case that could still reach the timer. It is what the incident fingerprint is built from
+(`ActivationFaultReason` excludes the reporter's prose and keeps the exception's message), so the
+false sentence is what a human reads and what a ticket gets titled after. **Measured on memex: 95 of
+these faults in 400 minutes, on an instance whose path-resolution query fan-in was logging, seconds
+earlier:**
+
+> Query provider(s) [StorageAdapterMeshQueryProvider] have not emitted an Initial after 20s for
+> query `path:… scope:subtree nodeType:AccessAssignment limit:2000` (user 'system-security') — the
+> query is silently stalled on its all-providers Initial gate and its consumer hangs with no error.
+> Fix the stalled provider; never bump the consumer's timeout.
+
+Both lines were in the same log on the same pod. Only the one that guesses was ticketed.
+
+### A FLOOR is not an answer, and path resolution must refuse it
+
+`MeshQuery.MergeProviderObservables` gates its merged Initial on EVERY provider emitting one. A
+provider that COMPLETES without an Initial is counted as empty — the alternative starved the gate
+and hung every real-user search — and is NAMED on the frame in
+`QueryResultChange.SilentProviders` for exactly one reason: *"nobody answered"* and *"there is
+nothing there"* are different facts that otherwise arrive in the same shape.
+
+`PathResolutionService` used to ignore that field, and a resolution is a statement about which node
+is **deepest** at a path — which a provider that did not answer cannot be assumed to have had
+nothing to say about. Two silent consequences followed:
+
+1. nothing matched → the resolver answered `null` → the grain reported the absent verdict, its
+   second clause manufactured out of a frame whose entire content is "nobody said";
+2. only a shallower ANCESTOR matched → that is a POSITIVE resolution, so `ResolveSegments`
+   **cached** it, and the path answered with its ancestor plus a remainder for the life of the
+   process. Nothing refreshes it either: the one event that would is a `Created`/`Deleted` for that
+   exact path, and a reconcile re-writing an unchanged node publishes neither.
+
+The rule now: **answer from a floor only when the hit IS the full requested path** — nothing a silent
+provider holds can be deeper than that — and otherwise fault, naming the providers that went silent.
+An error caches nothing, so the refusal cannot outlive the request. Repro:
+`test/MeshWeaver.Hosting.Test/PathResolutionFloorIsNotAnAnswerTest.cs`, which carries a case on each
+side: a floor whose hit is the full path still resolves, and a COMPLETE empty snapshot still answers
+absent.
+
+### What this does NOT fix
+
+A provider that neither emits, completes nor errors still starves the gate, and its consumer still
+waits. The fan-in **detects** it (a 20 s stall probe naming the laggards) and deliberately only
+logs; turning that probe into a terminal would change every query in the mesh and is reserved as a
+platform decision — see [AccessControl](../AccessControl) → "Silence is not consent", where the
+reasoning is spelled out and where delivering a floor as an answer to the permission fold would be a
+security hole rather than a diagnosis. So the chain above converts a misattribution into an
+attribution; the stalled provider is a separate fault and the warning names it.
+
 ## Test
 
 `test/MeshWeaver.Messaging.Hub.Test/InitializationErrorSurfacedTest.cs` pins the contract: a hub with a
@@ -275,3 +338,5 @@ above deterministically and asserts that the faulted arm still settles the gate.
 - [AsynchronousCalls](../AsynchronousCalls) — why init is reactive (`IObservable`, no `await`).
 - [InitializationGates](../InitializationGates) — the gate model and the framework-bypassed messages.
 - [DebuggingMessageFlow](../DebuggingMessageFlow) — diagnosing a hub that won't process messages.
+- [AccessControl](../AccessControl) → "Silence is not consent" — why the query fan-in's stall
+  probe is a diagnostic and not a terminal, and what a floor would do to the permission fold.

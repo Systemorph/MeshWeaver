@@ -87,6 +87,59 @@ hosting::do() {
 # Capture a command's stdout (queries, never mutations — a dry run still needs to read).
 hosting::read() { "$@"; }
 
+# ── DENIED, ABSENT and PRESENT are THREE answers, never two (MeshWeaver#4722) ───────────────────
+#
+# Run a READ and classify what came back:
+#   0 PRESENT — it succeeded (and, with `output`, printed something)
+#   1 ABSENT  — it failed for a reason that is NOT a refusal, or succeeded printing nothing
+#   2 REFUSED — this identity was not permitted to look, so NOTHING is known either way
+# Stdout lands in HOSTING_PROBE_OUT, the first line of stderr in HOSTING_PROBE_ERR.
+#
+# 🚨 WHY THIS IS A SHARED PRIMITIVE. The obvious shape is
+#     value="$(kubectl get thing 2>/dev/null)"; [ -n "$value" ] || hosting::die "there is no thing"
+# and `2>/dev/null` throws away the one fact that decides which sentence is true. A Forbidden —
+# this operator's ClusterRole lacking the grant — comes out as the thing being ABSENT: the operator
+# announcing that a platform layer, an Ingress or a ConfigMap does not exist when it was merely not
+# permitted to LOOK, and sending the reader off to re-create something that is already there.
+#
+# It is the denied-vs-deleted confusion that closed MeshWeaver#1391 on a `Not found` and had the
+# identical defect re-filed unchanged as #3883 four weeks later; here it is in an operator's own
+# diagnostics, the one output a reader is supposed to trust.
+#
+# This lived as a local helper inside hosting-db-release when #4436 fixed the three probes #4722
+# measured — which is exactly why the fix did not sweep: two more reads in that same file and two
+# in other commands went on collapsing the two answers. A discrimination that only one script can
+# reach is a discrimination the next script will not make.
+#
+# 🚨 Callers MUST branch on all three. `hosting::probe … || hosting::die "…absent…"` is the defect
+# wearing the fix's clothes: it turns REFUSED back into ABSENT. Branch 2 first, and say that
+# nothing was ruled out. test/check-stderr-discarded.sh is the static half.
+HOSTING_PROBE_OUT="" HOSTING_PROBE_ERR=""
+hosting::probe() {
+  local need="$1"; shift
+  local errfile rc
+  errfile="$(mktemp)"
+  HOSTING_PROBE_OUT="$("$@" 2>"$errfile")"; rc=$?
+  HOSTING_PROBE_ERR="$(head -1 "$errfile")"; rm -f "$errfile"
+  if [ "$rc" -ne 0 ]; then
+    case "$HOSTING_PROBE_ERR" in
+      *Forbidden*|*forbidden*) return 2 ;;
+      *)                       return 1 ;;
+    esac
+  fi
+  # `kubectl get nodes -l workload=db` exits 0 and prints NOTHING when the selector matches no
+  # node. That is an ABSENCE, not a failure, and only the caller knows which reads apply.
+  if [ "$need" = output ] && [ -z "$HOSTING_PROBE_OUT" ]; then return 1; fi
+  return 0
+}
+
+# The one sentence a REFUSED probe is allowed to produce. It says what is NOT known, names the file
+# the grant lives in and the lane that carries it — never that anything is absent, because a probe
+# that could not run ruled nothing out.
+hosting::die_refused() {
+  hosting::die "REFUSED, not absent: this operator's ClusterRole does not permit reading $* — so whether it exists is UNKNOWN, and nothing was ruled out. Grant it in MeshWeaver deploy/aks/manifests/hosting-operator/operator-rbac.yaml; it reaches the cluster through Systemorph/Memex's helm-release lane, never from this Job. Refused: ${HOSTING_PROBE_ERR}"
+}
+
 # ── the plugin registry's key-lifecycle surface (MeshWeaver#2802) ───────────────────────────────
 
 # A registry BASE URL: https, a hostname, an optional port — no path, no query, nothing else. It is
@@ -98,13 +151,17 @@ hosting::safe_url() {
 }
 
 # The decoded value of one key of a Secret, on STDOUT — for CAPTURE into a variable, never for
-# printing. An absent Secret, an absent key and an empty value all print nothing and return 1.
+# printing. An absent Secret, an absent key and an empty value all print nothing and return 1;
+# 🚨 a READ THIS IDENTITY WAS REFUSED returns 2, because "there is no such key" and "I was not
+# allowed to look" are different sentences and only the caller can say which one it owes its
+# reader (MeshWeaver#4722). A caller that only tests success is unaffected — both are non-zero.
 # 🚨 Callers capture with $(...) and CHECK THE STATUS THEMSELVES: a hosting::die inside a command
 # substitution ends the substitution, not the script (see hosting::safe_name).
 hosting::secret_value() {
-  local namespace="$1" secret="$2" key="$3" json value
-  json="$(kubectl -n "$namespace" get secret "$secret" -o json 2>/dev/null)" || return 1
-  value="$(printf '%s' "$json" | jq -r --arg k "$key" '.data[$k] // empty' 2>/dev/null | base64 -d 2>/dev/null)" || return 1
+  local namespace="$1" secret="$2" key="$3" value rc
+  hosting::probe any kubectl -n "$namespace" get secret "$secret" -o json; rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  value="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r --arg k "$key" '.data[$k] // empty' 2>/dev/null | base64 -d 2>/dev/null)" || return 1
   [ -n "$value" ] || return 1
   printf '%s' "$value"
 }
@@ -113,10 +170,13 @@ hosting::secret_value() {
 # ", " on STDOUT — empty when none does. Names only; a value is never read out. Returns 1 when the
 # Deployment cannot be read. An inline entry outranks every envFrom, so where one exists the pods
 # present ITS value, and no Secret an operator step reads says which key that is.
+# 🚨 Returns 2 when the read was REFUSED, 1 when the Deployment could not be read for any other
+# reason — see hosting::secret_value above (MeshWeaver#4722).
 hosting::inline_setters() {
-  local namespace="$1" deployment="$2" key="$3" json
-  json="$(kubectl -n "$namespace" get deployment "$deployment" -o json 2>/dev/null)" || return 1
-  printf '%s' "$json" | jq -r --arg k "$key" '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")'
+  local namespace="$1" deployment="$2" key="$3" rc
+  hosting::probe any kubectl -n "$namespace" get deployment "$deployment" -o json; rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$HOSTING_PROBE_OUT" | jq -r --arg k "$key" '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")'
 }
 
 # SHA-256 hex of STDIN — how two keys are compared without either being shown.

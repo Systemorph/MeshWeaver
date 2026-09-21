@@ -1774,7 +1774,12 @@ internal class RoutingGrain(
                 .Select((ex, i) => (Exception: ex, Attempt: i))
                 .SelectMany(t =>
                 {
-                    if (t.Attempt >= maxRetries || !IsTransientFailure(t.Exception))
+                    // 🚨 IsResendableDeliveryFailure, NOT IsTransientFailure — issue #1172. The
+                    // predicate that decides whether to SEND THE DELIVERY AGAIN is narrower than the
+                    // one that decides whether the fault is transient, by exactly the response-timeout
+                    // class, because neither grain call below carries an idempotency key. See
+                    // OrleansRoutingService.IsResendableDeliveryFailure for the whole argument.
+                    if (t.Attempt >= maxRetries || !IsResendableDeliveryFailure(t.Exception))
                         return Observable.Throw<long>(t.Exception);
                     var d = delay(t.Attempt);
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_RETRY id={deliveryId} grainKey={grainKey} attempt={t.Attempt + 1} delayMs={d.TotalMilliseconds}");
@@ -1786,9 +1791,42 @@ internal class RoutingGrain(
     }
 
     /// <summary>
+    /// 🚨 <b>May this DELIVERY be sent again? — issue #1172.</b> The gate on
+    /// <see cref="DeliverToGrainObservable"/>'s <c>RetryWhen</c>, and the only predicate any
+    /// re-send of <c>IMessageHubGrain.DeliverMessage</c> / <c>IPodHubGrain.Deliver</c> may consult.
+    ///
+    /// <para>Narrower than <see cref="IsTransientFailure"/> by exactly the response-timeout class:
+    /// a REJECTION means the callee refused and holds nothing, so re-invoking the call re-resolves
+    /// placement and the message lands on a fresh activation (#2314, the case this retry exists for);
+    /// a TIMEOUT means the callee accepted the request and has not answered yet, so re-sending
+    /// DUPLICATES a delivery nothing on the receive path can recognise as a repeat. The full
+    /// argument, the amplification it produced under CPU starvation, and why declining to re-send
+    /// suppresses nothing, are on
+    /// <see cref="OrleansRoutingService.IsResendableDeliveryFailure"/>.</para>
+    ///
+    /// <para>🚨 <b>Do NOT collapse this back into <see cref="IsTransientFailure"/>.</b> That one is
+    /// still the right answer to "is this fault transient" and is pinned as such by
+    /// <c>OrleansDirectoryInstabilityClassificationTest</c> and
+    /// <c>StreamPostTimeoutAttributionTest</c>; the three predicates here form a deliberate ladder —
+    /// <see cref="IsTransientFailure"/> (is another attempt conceivable) ⊇ this one (may we send the
+    /// same delivery again) ⊇ <see cref="ClassifyDeliveryException"/>'s transient set (should the
+    /// SENDER keep its unbounded recovery armed).</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <returns><c>true</c> when the delivery may be sent again.</returns>
+    internal static bool IsResendableDeliveryFailure(Exception ex) =>
+        !OrleansRoutingService.IsResponseTimeout(ex) && IsTransientFailure(ex);
+
+    /// <summary>
     /// A failure that should be RETRIED because a later attempt is likely to succeed — chiefly an Orleans
     /// rejection from a grain that is mid-<c>DeactivateOnIdle</c> ("invalid activation. Rejecting now"),
     /// plus the usual transport-level timeouts. Mirrors <c>OrleansRoutingService.IsTransientFailure</c>.
+    ///
+    /// <para>🚨 <b>This is NOT the gate on the delivery retry any more — issue #1172.</b> It answers
+    /// "is this fault transient", which is a weaker question than "may this request be sent again":
+    /// a timed-out request is still sitting in the callee's queue. The retry gates on
+    /// <see cref="IsResendableDeliveryFailure"/>; this predicate is kept because the classification
+    /// itself is correct and is pinned by tests that read it as a statement about the FAULT.</para>
     /// </summary>
     internal static bool IsTransientFailure(Exception ex) =>
         ex is TimeoutException
