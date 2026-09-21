@@ -1,0 +1,26 @@
+# kubectl READS in bin/ that discard their stderr, each with the reason collapsing REFUSED into
+# ABSENT is safe THERE. check-stderr-discarded.sh holds both directions: an undeclared call is RED,
+# and a declaration whose call is gone is STALE and RED, so this list only shrinks deliberately.
+#
+# 🚨 THIS IS NOT A PLACE TO PUT A RED. A line belongs here only when a refusal cannot reach the
+# reader as a statement about the world — because the failing branch does MORE work and surfaces
+# the refusal itself, because the message names the READ rather than the thing, or because a
+# preceding read under the same grant already proved the permission. If a refusal could come out
+# as "there is no X", the fix is hosting::probe in bin/_common.sh, not a line here.
+#
+# Format:  <script> <verb> <resource>  # why a refusal cannot be mistaken for an absence here
+#
+# ── the failing branch surfaces the refusal itself ──────────────────────────────────────────────
+hosting-deploy get namespace        # exists→log, anything else→`kubectl create namespace`, whose own Forbidden is loud and unswallowed. Nothing is ever ASSERTED about the namespace from this read.
+hosting-pull-secret get namespace   # the same ensure-if-absent shape as hosting-deploy, deliberately identical so the two agree.
+#
+# ── the message names the READ, never the thing ─────────────────────────────────────────────────
+hosting-kv-rotate get deployment    # `set -o pipefail` carries kubectl's status past jq, and the `||` says "could not read deployment/X" — it reports a failed read and makes no claim about whether the key is set inline. The REASON is lost from the log, the VERDICT is not.
+hosting-tls describe certificate    # a diagnostic tail appended to a refusal that has already been decided by cert_state(), which now dies on a REFUSED before this line can be reached; it asserts nothing on its own and an empty one just shortens the message.
+#
+# ── a preceding read under the same grant already proved the permission ─────────────────────────
+hosting-pull-secret get secret      # two reads: the first is `|| die "could not be read back after apply"` (names the read); the second runs only after it, so `secrets get` is proven and its failure cannot be a refusal. Same reasoning hosting-db-release states for its zones read.
+hosting-pv-purge get pv             # the `get pv` LIST above is guarded loudly ("could not list PersistentVolumes — is the operator's ClusterRole missing 'persistentvolumes'?"), proving the grant; the per-PV attribute reads that follow refuse by name on an empty phase and never proceed, so nothing is reported as absent.
+#
+# ── a refusal here is not a state this API can return ───────────────────────────────────────────
+hosting-deploy auth can-i           # a SelfSubjectAccessReview is always permitted, so this cannot be Forbidden; and anything but "yes" joins the denied list, which REFUSES the step naming the grant to add — the direction that stops, never the one that proceeds.

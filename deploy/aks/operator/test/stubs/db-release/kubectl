@@ -9,6 +9,12 @@
 #                            "selector matched nothing" shape: exit 0 with NO output
 #   $HOSTING_DB_STUB_ZONES   newline-separated zones the jsonpath read reports (default: two)
 #
+# Past the preflight it also answers the POST-INSTALL verification, so the credentials-Secret read
+# can be driven through its own three answers (MeshWeaver#4722): `secret` in FORBID answers
+# Forbidden, `secret` in ABSENT answers NotFound, and `password` in ABSENT is the third state the
+# old code could not say — the Secret EXISTS and carries no password key, which kubectl reports as
+# exit 0 with no output.
+#
 # The Forbidden text is copied from a real refusal, because the script discriminates on it:
 #   Error from server (Forbidden): nodes is forbidden: User "system:serviceaccount:memex-ops:
 #   hosting-operator" cannot list resource "nodes" in API group "" at the cluster scope
@@ -47,5 +53,16 @@ westeurope-2"; fi
     # exit 0 with NO output — what a real `get nodes -l workload=db` does when nothing matches.
     case "$absent" in *" nodes "*) exit 0 ;; esac
     printf 'node/aks-db-1\nnode/aks-db-2\n' ;;
+  *"wait cluster.postgresql.cnpg.io/"*)
+    echo 'cluster.postgresql.cnpg.io/pearl-db condition met' ;;
+  *"get secret "*)
+    case "$forbid" in *" secret "*) deny secrets ;; esac
+    case "$absent" in *" secret "*)
+      echo 'Error from server (NotFound): secrets "pearl-db-app" not found' >&2
+      exit 1 ;;
+    esac
+    # The Secret exists but has no `password` key: kubectl exits 0 and prints nothing.
+    case "$absent" in *" password "*) exit 0 ;; esac
+    printf 'c3VwZXItc2VjcmV0' ;;
   *) echo "kubectl stub (db-release): unexpected invocation: $*" >&2; exit 1 ;;
 esac

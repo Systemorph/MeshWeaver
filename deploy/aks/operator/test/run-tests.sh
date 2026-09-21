@@ -1884,6 +1884,82 @@ case "$_dbr_ok" in
   *) ok "a healthy platform layer passes the preflight" ;;
 esac
 
+# ── the SAME defect forty lines below the fix: the credentials Secret (MeshWeaver#4722) ─────────
+#
+# 🚨 WHY THESE EXIST. #4436 fixed the three platform-layer probes above and left this read alone:
+#   pw_len="$(kubectl … get secret "${release}-app" -o jsonpath='{.data.password}' 2>/dev/null | wc -c …)"
+# — the same `2>/dev/null`, in the same file, inside a PIPE where no `||` could have caught it.
+# Measured on main before this change, ALL THREE of Forbidden, absent-Secret and
+# present-but-no-password-key produced ONE sentence, byte for byte:
+#   "its credentials Secret pearl-db-app carries no password … Read the operator's log in
+#    cnpg-system."
+# So a missing ClusterRole grant sent the reader to CloudNativePG's log, and the operator stated
+# the CONTENTS of a Secret it had never read. Three states, three sentences, or this is red.
+_dbs_out() { ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
+                      HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
+               hosting-db-release --namespace pearl --release pearl-db --database pearl ) 2>&1; }
+
+_dbs="$(_dbs_out "secret" "")"
+case "$_dbs" in
+  *"carries no password"*|*"carries NO password key"*)
+    bad "a Forbidden on the credentials Secret is REFUSED, not an empty password" "it stated the Secret's contents: ${_dbs}" ;;
+  *"REFUSED, not absent"*) ok "a Forbidden on the credentials Secret is REFUSED, not an empty password" ;;
+  *) bad "a Forbidden on the credentials Secret is REFUSED, not an empty password" "said neither: ${_dbs}" ;;
+esac
+
+_dbs="$(_dbs_out "" "secret")"
+case "$_dbs" in
+  *"REFUSED"*) bad "an ABSENT credentials Secret is ABSENT, not refused" "the discrimination points the wrong way: ${_dbs}" ;;
+  *"is ABSENT in pearl"*) ok "an ABSENT credentials Secret is ABSENT, not refused" ;;
+  *) bad "an ABSENT credentials Secret is ABSENT, not refused" "said neither: ${_dbs}" ;;
+esac
+
+# 🚨 THE CONTROL ON THE OTHER SIDE — the state the old sentence was actually ABOUT must keep its
+# own answer. A discrimination that renamed every case would pass both assertions above while
+# losing the one reading that was correct all along.
+_dbs="$(_dbs_out "" "password")"
+case "$_dbs" in
+  *"carries NO password key"*) ok "a Secret that EXISTS with no password key still says so — the reading that was right all along" ;;
+  *) bad "a Secret that EXISTS with no password key still says so" "said: ${_dbs}" ;;
+esac
+
+# …and the whole command still SUCCEEDS when everything is there, reporting the two facts the mesh
+# reads. Without this every assertion above would pass on a command that refuses unconditionally.
+_dbs="$(_dbs_out "" "")"; _dbs_rc=$?
+case "$_dbs" in
+  *"::hosting:: db_release=pearl-db"*)
+    [ "$_dbs_rc" -eq 0 ] && ok "a healthy database release reports db_release and exits 0" \
+      || bad "a healthy database release reports db_release and exits 0" "rc=${_dbs_rc}: ${_dbs}" ;;
+  *) bad "a healthy database release reports db_release and exits 0" "never reported it: ${_dbs}" ;;
+esac
+
+# ── hosting::probe itself: the primitive every one of those sites now depends on ─────────────────
+# It moved out of hosting-db-release into _common.sh because a discrimination only one script can
+# reach is one the next script will not make — which is exactly how the five sites above survived
+# the fix that named them. Three answers, pinned directly.
+_probe_case() {  # <expected rc> <what> <cmd…>
+  local want="$1" what="$2"; shift 2
+  ( set +u; . "$(dirname -- "${BASH_SOURCE[0]}")/../bin/_common.sh" 2>/dev/null
+    hosting::probe "$@" ); local rc=$?
+  [ "$rc" = "$want" ] && ok "hosting::probe: $what" || bad "hosting::probe: $what" "returned ${rc}, expected ${want}"
+}
+_probe_case 0 "a read that answers is PRESENT"                  any    printf 'x'
+_probe_case 2 "a Forbidden on stderr is REFUSED (2)"            any    bash -c 'echo "Error from server (Forbidden): nodes is forbidden" >&2; exit 1'
+_probe_case 1 "any other failure is ABSENT (1)"                 any    bash -c 'echo "Error from server (NotFound): x not found" >&2; exit 1'
+_probe_case 1 "exit 0 with no output is ABSENT under 'output'"  output true
+_probe_case 0 "exit 0 with no output is PRESENT under 'any'"    any    true
+
+# ── every kubectl READ in bin/ that discards stderr is DECLARED, with its reason ─────────────────
+# The static half of the same defect. #4436 fixed three probes by hand and nothing compared the fix
+# against its subject, so two more reads in that file and three in other commands kept collapsing
+# REFUSED into ABSENT. Undeclared is red; a declaration whose call is gone is stale and red.
+sd_out="$(bash "$(dirname -- "${BASH_SOURCE[0]}")/check-stderr-discarded.sh" 2>&1)"; sd_rc=$?
+if [ "$sd_rc" -eq 0 ]; then
+  ok "every kubectl read in bin/ that discards stderr is declared ($(printf '%s' "$sd_out" | tail -1 | sed 's/^check-stderr-discarded: //'))"
+else
+  bad "every kubectl read in bin/ that discards stderr is declared" "$sd_out"
+fi
+
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
 # The manifest lives three directories away from the scripts and is reviewed separately; twice a
 # script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile
