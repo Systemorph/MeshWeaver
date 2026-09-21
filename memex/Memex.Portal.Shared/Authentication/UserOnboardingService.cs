@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -71,9 +72,7 @@ public sealed class UserOnboardingService(
             // so an unshipped tag stores nothing rather than pinning the profile to a language we
             // would render in English anyway.
             Locale = Locales.TryMatch(request.Locale),
-            // Pin the four documentation sections so a new user's Pinned tab opens
-            // onto a clean grid of doc landing pages (each with its own TOC).
-            PinnedPaths = ["Doc/Architecture", "Doc/DataMesh", "Doc/GUI", "Doc/AI"],
+            PinnedPaths = UserOnboardingDefaults.PinnedPathsFor(request.IsPlatformBootstrap),
         };
 
         var partitionRootNode = new MeshNode(username)
@@ -233,6 +232,30 @@ public sealed class UserOnboardingService(
     }
 }
 
+/// <summary>The learning path a new user is pinned to — and who is not.</summary>
+public static class UserOnboardingDefaults
+{
+    /// <summary>
+    /// The four documentation sections an ordinary new user's Pinned tab opens onto: a clean grid
+    /// of doc landing pages, each with its own TOC.
+    /// </summary>
+    public static readonly ImmutableList<string> LearningPath =
+        ["Doc/Architecture", "Doc/DataMesh", "Doc/GUI", "Doc/AI"];
+
+    /// <summary>
+    /// What to pin for this user.
+    ///
+    /// <para>🚨 <b>The first global administrator gets NO learning path.</b> Maintainer, 2026-09-21,
+    /// from an attempt to onboard on partnerre.meshweaver.cloud: <i>"the learning path i don't need
+    /// for first onboarding of global admin."</i> That person is setting the instance up, not
+    /// learning it — a Pinned tab full of doc landing pages in front of the setup work is noise at
+    /// the one moment it costs most. Ordinary users keep it.</para>
+    /// </summary>
+    /// <param name="isPlatformBootstrap">Whether this user is the instance's first global administrator.</param>
+    public static ImmutableList<string> PinnedPathsFor(bool isPlatformBootstrap) =>
+        isPlatformBootstrap ? [] : LearningPath;
+}
+
 /// <summary>
 /// Input shape for <see cref="UserOnboardingService.CreateUser"/>. Mirrors the form
 /// model in <c>Onboarding.razor</c>; kept in this assembly so unit tests can
@@ -250,4 +273,8 @@ public sealed record UserOnboardingRequest(
     // Accept-Language header onto AccessContext.Locale. Resolved through Locales.TryMatch at the
     // point of use, so a tag this deployment does not ship stores nothing rather than pinning the
     // profile to a language we would only ever render in English anyway.
-    string? Locale = null);
+    string? Locale = null,
+    // True when this user is the instance's FIRST global administrator — the bootstrap path
+    // (BootstrapController, and the first-user promotion in Onboarding.razor). Such a user is
+    // setting the instance up, not learning it, and is pinned to no learning path.
+    bool IsPlatformBootstrap = false);
