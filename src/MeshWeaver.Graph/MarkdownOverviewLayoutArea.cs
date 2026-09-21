@@ -398,10 +398,16 @@ public static class MarkdownOverviewLayoutArea
     /// is legible before anyone has adopted one. The platform icon set already has it, and there is
     /// nothing to attest yet, so it is the hint colour — the copy beside it must not promise
     /// otherwise.
+    ///
+    /// <para>🚨 The colour rides on <c>WithStyle</c>, NOT on <c>WithColor</c>. <c>IconControl.Color</c>
+    /// is public and the Blazor icon view binds only <c>Data</c> and <c>Width</c> (plus <c>Style</c>
+    /// from the base view), so a colour set the other way is silently dropped — which is why
+    /// <c>MeshNodeLayoutAreas.BuildAccessDenied</c>, the same kind of card, colours its icon through
+    /// the style too.</para>
     /// </summary>
     internal static IconControl UnconfiguredSignatureMark()
         => Controls.Icon(FluentIcons.Certificate())
-            .WithColor("var(--neutral-foreground-hint)");
+            .WithStyle("color: var(--neutral-foreground-hint);");
 
     /// <summary>The heading and explanation of the no-provider block.</summary>
     internal static StackControl UnconfiguredSignatureText(string title, string body)

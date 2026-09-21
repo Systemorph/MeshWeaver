@@ -142,8 +142,11 @@ public class SignatureDeskIsTheMaintainedPackageTest
         Assert.NotEqual("signature.unconfigured.body", body);
 
         // The mark is rendered in the hint token, so no wording may name a colour for it.
-        Assert.Equal("var(--neutral-foreground-hint)",
-            MarkdownOverviewLayoutArea.UnconfiguredSignatureMark().Color);
+        // 🚨 Asserted on Style, not on Color: IconControl.Color is bound by no view (the Blazor
+        // icon view binds Data and Width only), so pinning Color would pin a property nothing
+        // reads — a green assertion over a colour that never renders.
+        Assert.Contains("var(--neutral-foreground-hint)",
+            MarkdownOverviewLayoutArea.UnconfiguredSignatureMark().Style?.ToString());
         foreach (var colour in new[] { "green", "grün", "gruen" })
             Assert.DoesNotContain(colour, body, StringComparison.OrdinalIgnoreCase);
     }
