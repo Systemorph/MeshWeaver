@@ -1015,6 +1015,8 @@
   "ui.location": "Location *",
   "ui.typeRequired": "Type *",
   "ui.noComments": "No Comments",
+  "signature.unconfigured.title": "No e-signature provider is configured",
+  "signature.unconfigured.body": "Install an e-signature package to request and record legally binding signatures on this document. A completed signature carries the certificate mark shown here, in green, with its level \u2014 SES or higher.",
   "ui.noContentYet": "No content yet. Click Edit to add content.",
   "ui.markdownContentUnreadable": "This page has content that cannot be displayed.",
   "ui.markdownContentUnreadableHint": "The text is still stored, but it is saved in a shape this page cannot read (it holds: {0}). Do not start editing — saving would replace what is stored. Ask an administrator to repair the node's content.",
