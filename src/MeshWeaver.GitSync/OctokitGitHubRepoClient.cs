@@ -569,8 +569,14 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         _ => ItemStateFilter.All,
     };
 
-    /// <summary>Maps an Octokit <see cref="Issue"/> to our snapshot record (comments filled separately).</summary>
-    private static GitHubIssue ToIssue(Issue issue) => new()
+    /// <summary>
+    /// Maps an Octokit <see cref="Issue"/> to our snapshot record (comments filled separately).
+    ///
+    /// <para>Internal so <c>AWebhookIssueSnapshotKeepsItsCloseDecisionTest</c> can hold this mapper
+    /// and <c>GitHubWebhookProcessor.MapIssue</c> to the same answer — two mappers onto one record is
+    /// where a field gets added to one and forgotten in the other.</para>
+    /// </summary>
+    internal static GitHubIssue ToIssue(Issue issue) => new()
     {
         Number = issue.Number,
         Title = issue.Title,
