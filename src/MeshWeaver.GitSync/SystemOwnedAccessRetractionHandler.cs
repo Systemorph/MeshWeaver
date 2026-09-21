@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
@@ -39,16 +38,19 @@ namespace MeshWeaver.GitSync;
 ///
 /// <para><b>What survives, deliberately:</b> <c>Viewer</c>/<c>Commenter</c> entitlements (a
 /// purchase, a redeemed coupon, an admin-issued grant — the only door into a gated plugin), every
-/// <c>Denied</c> assignment (that IS the gating), <c>system-security</c> itself (the identity
-/// the importer writes under — retracting it would make the space unwritable by anything), and
-/// the space's LAST administrator (#1120): the last-admin invariant
-/// (<c>SpaceAdminInvariantValidator</c> — "a space must always have at least one admin")
-/// outranks the sweep, so when no grant outside the doomed set still confers Admin, one admin
-/// grant is spared — the earliest-created, i.e. the space's original owner — and logged at
-/// Warning. The delete pipeline would refuse exactly that delete anyway; detecting it up front
-/// turns a guaranteed rejection (formerly a fail-level "FAILED to retract") into the expected,
-/// stated outcome. The spared grant converges like the rest of the sweep: the next time the
-/// sync is (re)wired after another admin exists, it is retracted.</para>
+/// <c>Denied</c> assignment (that IS the gating), and <c>system-security</c> itself (the identity
+/// the importer writes under — retracting it would make the space unwritable by anything).</para>
+///
+/// <para>🚨 <b>The space's last administrator does NOT survive, and the pre-spare that used to hold
+/// one back is gone</b> (#5140). It existed because the last-admin invariant
+/// (<c>SpaceAdminInvariantValidator</c> — "a space must always have at least one admin") refused
+/// exactly that delete (#1120), which made issuing it a guaranteed rejection; the invariant now
+/// exempts a system-owned partition, because its administrator is the System identity, which holds
+/// <c>Permission.All</c> WITHOUT an assignment node. Keeping the pre-spare alongside that exemption
+/// would have been worse than either alone: the sweep would still never issue the delete, so the
+/// grant survived with nothing reporting it, and the stated escape — "retracted the next time the
+/// sync is wired once another admin exists" — could never occur, because the write boundary refuses
+/// that second Admin. That circularity is what made the documented end state unreachable.</para>
 ///
 /// <para>Best-effort by design (<c>FailsCreateOnError</c> stays false): a partition that cannot be
 /// swept must not block its own sync from being configured. Every retraction is logged at Warning
@@ -122,50 +124,26 @@ public sealed class SystemOwnedAccessRetractionHandler(
         if (doomed.Length == 0)
             return Observable.Return(Unit.Default);
 
-        // 🚨 The last-admin invariant OUTRANKS the sweep (#1120). SpaceAdminInvariantValidator
-        // refuses to delete a partition's last non-denied Admin assignment — a space must always
-        // keep at least one admin who can manage it (the System identity holds Permission.All
-        // WITHOUT an assignment node, so it does not count). Attempting that delete is therefore
-        // a guaranteed rejection: a known-valid guard outcome, not a fault. Detect it up front —
-        // when no grant OUTSIDE the doomed set still confers Admin, spare exactly one doomed
-        // admin grant (deterministically the earliest-created: the space's original owner) and
-        // retract the rest. The spared grant self-heals like the rest of the sweep: it is
-        // retracted the next time the sync is (re)wired once another admin exists.
-        var doomedPaths = doomed
-            .Select(c => c.Node.Path)
-            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-        var adminSurvives = candidates.Any(c =>
-            !doomedPaths.Contains(c.Node.Path)
-            && string.Equals(c.Node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType,
-                StringComparison.OrdinalIgnoreCase)
-            && AccessAssignmentGuard.GrantsAdmin(c.Assignment));
-
-        var spared = adminSurvives
-            ? default
-            : doomed
-                .Where(c => AccessAssignmentGuard.GrantsAdmin(c.Assignment))
-                .OrderBy(c => c.Node.CreatedDate)
-                .ThenBy(c => c.Node.Path, StringComparer.Ordinal)
-                .FirstOrDefault();
-
-        if (spared.Node is not null)
-        {
-            logger?.LogWarning(
-                "[SystemOwned] keeping '{Path}' — '{Subject}' is the last administrator of "
-                + "'{Partition}' and a space must always have at least one admin. The grant still "
-                + "confers write access to a system-owned space; it is retracted the next time the "
-                + "sync is wired once another admin exists.",
-                spared.Node.Path, spared.Assignment?.AccessObject ?? "?", partition);
-        }
-
+        // 🚨 EVERY doomed grant goes, the partition's last administrator included — and the
+        // pre-spare that used to hold one back is GONE (#5140).
+        //
+        // It was there because the last-admin invariant refused exactly that delete
+        // (SpaceAdminInvariantValidator, #1120), so issuing it was a guaranteed rejection and
+        // detecting it up front turned a fail-level "FAILED to retract" into a stated outcome.
+        // That reasoning was sound while the refusal stood. It no longer does: the invariant now
+        // exempts a system-owned partition, whose administrator is the System identity — which
+        // holds Permission.All WITHOUT an assignment node, which is why no grant has to survive
+        // to keep the partition manageable.
+        //
+        // Leaving the pre-spare in place would have made the exemption INERT, and in the worst way:
+        // the sweep would still never issue the delete, so the grant would survive with nothing
+        // reporting it, and each pass would spare it again. "Self-heals the next time the sync is
+        // wired once another admin exists" could never happen either, because the write boundary
+        // refuses that second Admin. That circularity is what made the documented end state
+        // unreachable, and removing this is the half that actually opens it.
         var doomedList = doomed
             .Select(c => c.Node.Path)
-            .Where(p => spared.Node is null
-                || !string.Equals(p, spared.Node.Path, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-
-        if (doomedList.Length == 0)
-            return Observable.Return(Unit.Default);
 
         logger?.LogWarning(
             "[SystemOwned] retracting {Count} privileged grant(s) — the partition is now system-owned "
