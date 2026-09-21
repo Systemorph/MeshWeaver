@@ -1272,6 +1272,17 @@ read cap ineffective against a public ancestor. Role denies continue to remove r
 `PublicRead` remains a separate grant. This rule does not change the additive `NodeTypeGate`
 contract or the separate `Api` capability cap.
 
+🚨 **"Role denies continue to remove roles, while `PublicRead` remains a separate grant" is the whole
+reason a partition cannot be published with `PublicRead` and then have one segment taken back.** The
+table above is about a read CAP; a deeper Public/Anonymous role DENY under a `PublicRead` policy
+withholds nothing on this path and is honoured by the SQL fold, so the same node answers two ways —
+and a read cap that would suppress it darkens the segment's own reviewers along with the public.
+A partition that needs an exception is published through root Viewer GRANTS instead, which both folds
+resolve identically. Full account, the installer's shape decision, and why the legacy gate heal may
+never retire a deny it could not have written:
+[Protected Segments on a Public Partition](../ProtectedSegmentsOnAPublicPartition)
+([#4716](https://github.com/Systemorph/MeshWeaver/issues/4716)).
+
 **Regression evidence (2026-09-11).** On core baseline
 `3e731d947244b51b19f4c78b1114fc4273a9a840`, `PublicReadPolicyScopeTest` executed 14 cases against a
 real monolith mesh without the fixture's default Public Admin grant. Four failed: anonymous and

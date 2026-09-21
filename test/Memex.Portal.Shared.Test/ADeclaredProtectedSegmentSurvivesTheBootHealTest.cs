@@ -167,6 +167,19 @@ public class ADeclaredProtectedSegmentSurvivesTheBootHealTest(ITestOutputHelper 
         await WriteAsSystem(new MeshNode("theirs", $"{Stale}/{Inbox}")
             { NodeType = "Markdown", State = MeshNodeState.Active });
 
+        // The policy the partition already carries, WITHHOLDING public read — the live shape on
+        // memex.meshweaver.cloud (`Feedback/_Policy`, read 2026-09-21: content with no `publicRead`,
+        // written by `system-security` 1.6 s before the deny pair below). Without it `current` is null
+        // here, the heal's retire arm is never reached, and the assertion on the denies surviving
+        // passes for the wrong reason.
+        await WriteAsSystem(new MeshNode("_Policy", Stale)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            State = MeshNodeState.Active,
+            Content = new PartitionAccessPolicy { PublicRead = false },
+        });
+
         // The protection another component put there — the plugin machinery's ProtectedSegments arm.
         await WriteAsSystem(PackageInstaller.ViewerAssignment(
             $"{Stale}/{Inbox}", WellKnownUsers.Public, denied: true));

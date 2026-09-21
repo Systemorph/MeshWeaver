@@ -200,6 +200,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
 - [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
+- [Protected Segments on a Public Partition](ProtectedSegmentsOnAPublicPartition) — a partition that is public except for one inbox cannot be expressed with `PublicRead`: the C# evaluator and the SQL projection resolve a deeper deny under it differently, so the segment reads by exact path and is absent from every listing. The grant shape both folds agree on, why a read cap is a blackout rather than a gate, and why the boot heal may never retire a deny it could not have written
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
 
