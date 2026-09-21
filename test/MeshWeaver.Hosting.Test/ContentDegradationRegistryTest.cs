@@ -31,6 +31,16 @@ public class ContentDegradationRegistryTest
         var sentence = ContentDegradationRegistry.Describe(snapshot);
         sentence.Should().Contain("2 node type(s)").And.Contain("Crm/Client ×2").And.Contain("Store/Install ×1")
             .And.Contain("not loaded here", "the sentence says WHY, not only what");
+        // 🚨 The sentence used to name only two causes — a declined bundle and a missing assembly —
+        // and BOTH were falsified on two live portals while the third went unnamed: a dynamic
+        // NodeType this replica ADOPTED is never activated by the bake, so its content type is
+        // never registered here (Plugins#2178, #2180). An instrument that asserts two causes as
+        // fact sends its reader past the real one, so the commonest cause is named FIRST and the
+        // instrument that discriminates is named with it.
+        sentence.Should().Contain("ADOPTED rather than compiled",
+            "the commonest cause is the one the sentence used not to mention");
+        sentence.Should().Contain("bake-report DECIDES between them",
+            "naming three causes without naming what tells them apart is a longer way to mislead");
     }
 
     [Fact]

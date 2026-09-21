@@ -1,7 +1,7 @@
 ---
 Name: Dynamic Content Type Registration
 Category: Architecture
-Description: A dynamic NodeType's content CLR type registers only as a side effect of one of its instances activating in THIS process — so a type whose few instances live on another replica is untypeable here, with a usable assembly, a clean bake and a clean census. The mechanism, the measurements that separate it from a declined bundle, and the on-demand registration that closes it.
+Description: A dynamic NodeType's content CLR type registers only as a side effect of one of its instances activating in THIS process — so a type whose few instances live on another replica is untypeable here, with a usable assembly, a clean bake and a clean census. The mechanism, the measurements that separate it from a declined bundle, and why the obvious on-demand fix must not ship. NOT yet closed.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7"/><path d="M17.5 14v7"/></svg>
 ---
 

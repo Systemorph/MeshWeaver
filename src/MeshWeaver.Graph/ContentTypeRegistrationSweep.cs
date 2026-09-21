@@ -60,7 +60,7 @@ namespace MeshWeaver.Graph;
 ///
 /// <para>🚨 <b>That last clause used to end "…and a dynamic type with zero instances has no
 /// payload carrying its discriminator, so there is nothing to degrade", and the premise is false
-/// for a type with FEW instances</b> (Systemorph/MeshWeaver.Plugins#2178, #2180). A per-node hub is
+/// for a type with FEW instances</b> (Systemorph/MeshWeaver.Plugins#2178, Systemorph/MeshWeaver.Plugins#2180). A per-node hub is
 /// a single activation cluster-wide, so a type whose handful of instances all activate on ANOTHER
 /// replica registers there and nowhere else — while every other replica reads those nodes through
 /// its own stream cache and cannot bind the <c>$type</c>. Measured on two live portals 2026-09-21:
