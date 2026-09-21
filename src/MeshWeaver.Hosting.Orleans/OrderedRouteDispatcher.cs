@@ -43,7 +43,7 @@ namespace MeshWeaver.Hosting.Orleans;
 /// memex-cloud, 62 of 64 in-flight legs stacked behind one <c>cache/…</c> address for ~1.5 h while
 /// the peer pod — whose own cache channel is local and therefore fast — reported a deepest queue of
 /// 0 and read as "load". Every one of those 62 legs was waiting on a stream it has no ordering
-/// relationship with.
+/// relationship with.</para>
 ///
 /// <para>The identity is <see cref="MeshWeaver.Messaging.IDiagnosticKeyed.DiagnosticKey"/> — the
 /// stream id for every <c>StreamMessage</c> — read O(1) off the ENVELOPE by
@@ -57,7 +57,7 @@ namespace MeshWeaver.Hosting.Orleans;
 /// routing <see cref="IIoPool"/>'s cap, unchanged; the receiving <c>PodHubGrain</c> is still
 /// non-reentrant and still serialises its own hand-offs. What changes is only that legs with no
 /// ordering relationship no longer wait on each other — the pipelining a correct channel key allows
-/// and an over-coarse one forbade.</para></para>
+/// and an over-coarse one forbade.</para>
 ///
 /// <para>🚨 <b>Two deltas the narrowing really does carry, named rather than left to be found.</b>
 /// (1) Traffic to one destination that carries NO identity — lifecycle and control messages, a
@@ -145,17 +145,18 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
         lock (gate)
         {
             var deepest = 0;
-            // Allocated only here, and this runs once per saturation episode (the report latches) or
-            // from a test — never on the dispatch path.
-            var destinations = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var (channel, queue) in queues)
+            foreach (var queue in queues.Values)
             {
-                destinations.Add(channel.Destination);
                 var depth = 0;
                 foreach (var _ in queue.Pending) depth++;
                 if (depth > deepest) deepest = depth;
             }
-            return (queues.Count, destinations.Count, deepest);
+            // LINQ's own dedupe rather than a set of ours: this runs once per saturation episode (the
+            // report latches) or from a test, never on the dispatch path, so there is no reason for
+            // the diagnostic to introduce a collection shape a future reader has to reason about.
+            // Ordinal by default, which is what an address path needs.
+            var destinations = queues.Keys.Select(channel => channel.Destination).Distinct().Count();
+            return (queues.Count, destinations, deepest);
         }
     }
 
