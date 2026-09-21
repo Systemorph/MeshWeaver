@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 using System.Reactive.Linq;
@@ -286,8 +287,25 @@ public static class MarkdownOverviewLayoutArea
                     .WithShowProgress(false)
                 : Controls.Stack);
 
-    /// <summary>The e-Signature package's shared desk — the instance that serves every document.</summary>
-    internal const string SignatureDeskPath = "DeepSign/Workspace";
+    /// <summary>
+    /// The e-Signature package's shared desk, in PREFERENCE ORDER — the first one present on the
+    /// mesh renders the block.
+    ///
+    /// <para>🚨 <b>This is a list, not a constant, because the package was RENAMED and the old one
+    /// is still installed on live meshes.</b> <c>DeepSign/</c> no longer exists anywhere in
+    /// MeshWeaver.Plugins — it became <c>Signature/</c> — yet a single hard-coded
+    /// <c>"DeepSign/Workspace"</c> here kept pointing every document page at the retired desk while
+    /// the node menu (<c>Signature/RequestSignatureMenu</c>) wrote through the new one. A request
+    /// raised from the menu was then invisible in the block on the very page it was raised from,
+    /// and nothing errored: the probe found the stale desk node, so the section rendered — just
+    /// from the wrong package. Core's own <c>PublicationSealStarvation</c> had already recorded
+    /// GitSync reporting <i>"No files found under subdirectory 'DeepSign'"</i>.</para>
+    ///
+    /// <para>Order matters and legacy comes LAST: a mesh carrying both must render the maintained
+    /// package. Drop the legacy entry once no mesh reports <c>DeepSign/Workspace</c>.</para>
+    /// </summary>
+    internal static readonly ImmutableArray<string> SignatureDeskPaths =
+        ["Signature/Workspace", "DeepSign/Workspace"];
 
     /// <summary>The desk area rendering one document's signature block.</summary>
     internal const string SignatureArea = "Signature";
@@ -309,12 +327,59 @@ public static class MarkdownOverviewLayoutArea
     /// it lands — but do not read this line as a promise that it cannot land.</para>
     /// </summary>
     private static IObservable<UiControl?> SignaturesSection(LayoutAreaHost host, string nodePath)
-        => PluginSurfaceProbe
-            .Exists(host.Hub.ServiceProvider.GetService<IMeshService>(), SignatureDeskPath)
-            .Select(installed => installed
-                ? (UiControl?)Controls.LayoutArea(SignatureDeskPath, SignatureArea, nodePath)
-                    .WithShowProgress(false)
-                : Controls.Stack);
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+
+        // Each probe emits exactly once (true, or false at its 800 ms budget) and completes, so
+        // CombineLatest settles inside one budget however many desks are listed — it does not add
+        // them up. Preference order is the LIST order, never whichever probe answered first.
+        return Observable
+            .CombineLatest(SignatureDeskPaths.Select(path => PluginSurfaceProbe.Exists(mesh, path)))
+            .Select(present =>
+            {
+                var index = present.IndexOf(true);
+                return index >= 0
+                    ? (UiControl?)Controls
+                        .LayoutArea(SignatureDeskPaths[index], SignatureArea, nodePath)
+                        .WithShowProgress(false)
+                    : UnconfiguredSignatureBlock(host);
+            });
+    }
+
+    /// <summary>
+    /// What the signatures section renders when NO e-Signature package is on the mesh.
+    ///
+    /// <para>Deliberately a hand-woven block rather than an empty stack: a page that simply omits
+    /// the section teaches the reader that this document cannot be signed, when the truth is only
+    /// that nobody has installed a provider. It states that, names the signature level a provider
+    /// would give, and stops — it records nothing, offers no button, and is emphatically NOT a
+    /// tenth approval mechanism (the estate already has nine).</para>
+    ///
+    /// <para>The legend shows the badge a completed signature carries, so the standard is legible
+    /// before anyone has adopted one.</para>
+    /// </summary>
+    private static UiControl UnconfiguredSignatureBlock(LayoutAreaHost host)
+        => Controls.Stack.WithView(Controls.Html(
+            "<div style=\"border:1px solid var(--neutral-stroke-rest);border-radius:8px;" +
+            "padding:14px 16px;margin-top:12px;display:flex;gap:14px;align-items:flex-start\">" +
+            CertificateGlyph("var(--neutral-foreground-hint)") +
+            "<div><div style=\"font-weight:600;margin-bottom:2px\">" +
+            host.Localize("signature.unconfigured.title") +
+            "</div><div style=\"font-size:0.85rem;color:var(--neutral-foreground-hint)\">" +
+            host.Localize("signature.unconfigured.body") +
+            "</div></div></div>"));
+
+    /// <summary>
+    /// The seal-and-ribbon certificate mark a signature carries, with a check struck through it —
+    /// one glyph that reads as "signed AND attested", which a bare tick does not. Rendered green
+    /// (<c>--success</c>) for a signature at SES or above and in the hint colour when there is
+    /// nothing to attest yet.
+    /// </summary>
+    internal static string CertificateGlyph(string colour)
+        => $"<svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"{colour}\" " +
+           "stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">" +
+           "<circle cx=\"12\" cy=\"9\" r=\"6\"/><path d=\"M9.5 9l1.8 1.8L14.5 7.5\"/>" +
+           "<path d=\"M8.4 14.2L7 22l5-2.5L17 22l-1.4-7.8\"/></svg>";
 
     /// <summary>
     /// Returns the actual markdown body control (a <see cref="CollaborativeMarkdownControl"/>

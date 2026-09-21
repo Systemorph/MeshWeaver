@@ -128,9 +128,24 @@ recipient's own rules** — whether it's worth telling them and through which **
 
 | Type | Owner | Path | Purpose |
 |---|---|---|---|
-| `Notification` | system | `{entity}/_Notification/{id}` | the in-app bell item (always-on default channel) |
+| `Notification` | system | `{addressee}/_Notification/{id}` | the in-app bell item (always-on default channel) |
 | `NotificationChannel` | user | `{username}/_NotificationChannel/{id}` | a delivery channel the user has: `InApp` / `Email` / `Teams` (+ optional `target`) |
 | `NotificationRule` | user | `{username}/_NotificationRule/{id}` | a **plain-English** (or lightly structured) rule: which events go to which channel |
+
+🚨 **The ADDRESSEE owns the delivery location, not the entity the notification is about.** The path
+is `{addressee}/_Notification/{id}` — a person's user partition, or `Admin` for one addressed to the
+platform operators collectively — and the entity it concerns is a reference in `TargetNodePath`.
+This table said `{entity}/_Notification/{id}` long after that stopped being true; written that way
+the bell could not name a partition, and a platform-admin notification in `Admin` was never returned
+at all, because `Admin` is excluded from `public.searchable_schemas`. See
+[Addressed Notifications](/Doc/Architecture/AddressedNotifications) for the migration, and
+`Notification` in `MeshWeaver.Mesh.Contract` for the invariant as the type states it.
+
+⚠️ **A satellite is invisible to a `partitions:all` fan-out.** `Search('nodeType:Notification
+partitions:all')` answers `count: 0` with every partition listed as covered, because satellite
+namespaces are not part of a declared fan-out. Anchor on the namespace instead —
+`Search('namespace:{addressee}/_Notification nodeType:Notification')`. The same holds for
+`_Approval`, `_Thread`, `_Comment` and `_Activity`.
 
 `Notification` is registered in the `AddGraph()` chain (`AddNotificationType`) — the bell exists in
 every deployment. `NotificationChannel` / `NotificationRule` ride the
