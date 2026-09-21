@@ -38,6 +38,16 @@ the pull request, exactly as it did; what changes is that the other thirty-nine 
 found. A red is now a list of what is actually wrong, rather than the first thing that happened to
 be wrong.
 
+There is one genuine exception, and keeping it is the other half of the fix. A few steps at the
+very front are real prerequisites — fetching the repository's files, and the tools to read them.
+If one of those fails, the later checks have nothing to read, and letting them run anyway would
+produce a page of misleading errors and, for any check that happens to pass over an empty folder,
+a *false* pass. So those front steps announce that they succeeded, and every check asks for that
+announcement before it runs: a prerequisite failing still stops everything, with its own error as
+the answer, while a check failing stops nothing but itself. The platform's own list of about sixty
+checks, which guards the release pipeline and every script the content repositories fetch, had the
+same arrangement and got the same treatment.
+
 ## And it cannot come back quietly
 
 The defect was invisible on inspection — nothing in the configuration was incorrect, the *ordering*
