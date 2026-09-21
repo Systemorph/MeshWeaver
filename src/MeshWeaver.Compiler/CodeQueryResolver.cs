@@ -122,10 +122,29 @@ public static class CodeQueryResolver
 
     /// <summary>
     /// <paramref name="query"/>, followed by its mount-anchored form when anchoring changes it.
-    /// Both are emitted — never one instead of the other — for the same reason
-    /// <c>NodeCompileShaping.ResolveCodeIncludes</c> tries the anchored include path FIRST and
-    /// keeps the authored one as a fallback: which spelling resolves is a property of the mount,
-    /// not of the entry, and a query that matches nothing costs a query and changes no result.
+    /// Both are emitted — never one instead of the other — because which spelling resolves is a
+    /// property of the MOUNT, not of the entry, and offline nothing here can know which.
+    ///
+    /// <para>🚨 <b>This is a UNION, not a fallback, and the difference matters.</b> Every consumer
+    /// treats the query list as a union (<c>workspace.GetQuery</c> unions its queries;
+    /// <c>NodeSet.ResolveSources</c> adds each query's matches), so there is no precedence step to
+    /// make the anchored spelling win — unlike
+    /// <c>NodeCompileShaping.ResolveCodeIncludes</c>, which reads ONE node per include and therefore
+    /// really can try anchored first and fall back. Raised in review on this change; an earlier
+    /// version of this comment claimed fallback semantics and was wrong.</para>
+    ///
+    /// <para><b>What the union costs, stated rather than assumed.</b> A query naming nothing
+    /// contributes nothing: the probe folds matches into a dictionary keyed by node path
+    /// (<see cref="NodeCompileShaping.ApplyQueryChange"/>) and merges legs with
+    /// <c>GroupBy(n =&gt; n.Path)</c>, so the SAME node reached by both spellings is deduplicated.
+    /// The residual case is a mesh that holds the same content at BOTH mounts as two distinct sets
+    /// of nodes; those would then both enter the compilation and could collide (<c>CS0101</c>) or mix
+    /// revisions. That state is already pathological — it is two installations of one library — and
+    /// the alternative is worse: emitting ONLY the anchored spelling would silently break a
+    /// genuinely absolute cross-partition reference whose first segment happens to appear deeper in
+    /// the owning path. Precedence that is safe in both directions needs a real resolution step in
+    /// the runtime AND in the bake, which is a larger change than this fix and is not smuggled in
+    /// here.</para>
     /// </summary>
     private static IEnumerable<string> WithMountAnchoredSibling(string query, string selfPath)
     {
@@ -159,13 +178,29 @@ public static class CodeQueryResolver
     /// second copy of the rule is deliberate: a source query and an include that name the same node
     /// must not disagree about where it lives.</para>
     ///
-    /// <para><b>What it deliberately does NOT touch.</b> Anchoring is a no-op unless the value's
-    /// first segment appears in <paramref name="selfPath"/> BELOW the root, so: a root-mounted type
-    /// keeps behaving exactly as before (the whole reason the samples work in the Monolith); a
-    /// genuinely cross-partition reference stays verbatim (<c>shared=@Store/Core/Source</c> read
-    /// from <c>rbuergi/OperationRequest</c> — the #3903 shape — has no <c>Store</c> segment to
-    /// anchor to); and an already-absolute reference is never double-prefixed, because its first
-    /// segment is the mount root itself, which sits at index 0 and is excluded.</para>
+    /// <para><b>What it deliberately does NOT touch.</b> Two guards, and both are load-bearing:</para>
+    /// <list type="number">
+    ///   <item>🚨 <b>A value ALREADY ROOTED AT THIS MOUNT is never touched</b> — decided by
+    ///     <see cref="SharesMountRoot"/>, i.e. the value's first segment equals
+    ///     <paramref name="selfPath"/>'s. Without it, <c>NodeCompileShaping.AnchorIncludePath</c>'s
+    ///     deepest-segment walk DOUBLE-PREFIXES a perfectly good absolute path whenever the mount
+    ///     root repeats further down: for <c>selfPath = Space/Source/Nested/Space/Type</c> the
+    ///     already-rebased own-source value <c>Space/Source/Nested/Space/Type/Source</c> anchors on
+    ///     the SECOND <c>Space</c> and comes out as
+    ///     <c>Space/Source/Nested/Space/Source/Nested/Space/Type/Source</c> — a path that exists
+    ///     nowhere. It would not lose the correct query (that one is emitted too), but a query
+    ///     naming nothing is not free here: it is one more leg in
+    ///     <c>MeshNodeCompilationService.DirectSourceProbe</c>'s <c>CombineLatest</c>, and a leg
+    ///     that ERRORS makes the whole snapshot UNESTABLISHED, which refuses the compile
+    ///     (<see cref="SourceSnapshot"/>). Raised in review on this change.</item>
+    ///   <item>A genuinely cross-partition reference stays verbatim: <c>shared=@Store/Core/Source</c>
+    ///     read from <c>rbuergi/OperationRequest</c> — the #3903 shape — has no <c>Store</c> segment
+    ///     to anchor to, so <c>NodeCompileShaping.AnchorIncludePath</c> returns it unchanged and this method
+    ///     answers <c>null</c>.</item>
+    /// </list>
+    ///
+    /// <para>Between them, a root-mounted type keeps behaving exactly as before — which is the whole
+    /// reason the samples work in the Monolith.</para>
     /// </summary>
     /// <param name="query">One fully expanded query, as <see cref="Expand"/> emits it.</param>
     /// <param name="selfPath">The owning NodeType's mesh path — the mount anchor.</param>
@@ -173,22 +208,48 @@ public static class CodeQueryResolver
     {
         if (string.IsNullOrEmpty(selfPath)) return null;
 
-        var rewritten = query;
-        foreach (var key in MountAnchoredKeys)
-        {
-            if (TryGetTokenValue(rewritten, key) is not { } value) continue;
-            var anchored = NodeCompileShaping.AnchorIncludePath(value, selfPath);
-            if (string.Equals(anchored, value, System.StringComparison.Ordinal)) continue;
-            rewritten = ReplaceTokenValue(rewritten, key, anchored);
-        }
+        // The two tokens whose value names a mesh location. Spelled as two calls rather than held
+        // in a static array: a `static` collection is forbidden outright (NoStaticState.md), and a
+        // `string[]` is not immutable however it is initialised. Raised in review on this change.
+        var rewritten = AnchorTokenValue(query, "path:", selfPath);
+        rewritten = AnchorTokenValue(rewritten, "namespace:", selfPath);
 
         return string.Equals(rewritten, query, System.StringComparison.Ordinal) ? null : rewritten;
     }
 
-    /// <summary>The query tokens whose value names a mesh location and is therefore mount-relative.
-    /// An immutable lookup initialised once and never written — <c>NoStaticState.md</c>'s sanctioned
-    /// <c>static readonly</c>.</summary>
-    private static readonly string[] MountAnchoredKeys = ["path:", "namespace:"];
+    /// <summary>
+    /// <paramref name="query"/> with the value of <paramref name="key"/> anchored onto
+    /// <paramref name="selfPath"/>'s mount — or unchanged when the token is absent, already rooted
+    /// at that mount, or has nothing to anchor to.
+    /// </summary>
+    private static string AnchorTokenValue(string query, string key, string selfPath)
+    {
+        if (TryGetTokenValue(query, key) is not { } value) return query;
+        if (SharesMountRoot(value, selfPath)) return query;
+        var anchored = NodeCompileShaping.AnchorIncludePath(value, selfPath);
+        return string.Equals(anchored, value, System.StringComparison.Ordinal)
+            ? query
+            : ReplaceTokenValue(query, key, anchored);
+    }
+
+    /// <summary>
+    /// <c>true</c> when <paramref name="value"/> already begins at the same mount root as
+    /// <paramref name="selfPath"/> — their first path segments are equal — so it is already absolute
+    /// HERE and anchoring it could only duplicate the prefix.
+    /// </summary>
+    private static bool SharesMountRoot(string value, string selfPath)
+    {
+        var a = FirstSegment(value);
+        var b = FirstSegment(selfPath);
+        return a.Length > 0 && a.Equals(b, System.StringComparison.Ordinal);
+    }
+
+    /// <summary>The part of <paramref name="path"/> before the first <c>/</c>, or all of it.</summary>
+    private static string FirstSegment(string path)
+    {
+        var slash = path.IndexOf('/');
+        return slash < 0 ? path : path[..slash];
+    }
 
     /// <summary>Replaces the value of <paramref name="key"/> in <paramref name="query"/>, keeping
     /// every other token — including the trailing <c>scope:</c> / <c>nodeType:</c> filters — exactly
@@ -283,7 +344,7 @@ public static class CodeQueryResolver
                 name,
                 rawByName[name],
                 expandedByName[name],
-                TryGetCommonNamespaceRoot(expandedByName[name])));
+                TryGetCommonNamespaceRoot(expandedByName[name], selfPath)));
         return groups;
     }
 
@@ -297,8 +358,20 @@ public static class CodeQueryResolver
     /// <see cref="AnchorToMount"/> anchors would hand the GUI a group whose root is null and whose
     /// files therefore render as full paths, purely because the resolver now also asks for the
     /// spelling that actually resolves.</para>
+    ///
+    /// <para>🚨 The equivalence is the ACTUAL anchoring relationship — <c>anchored ==
+    /// AnchorIncludePath(authored, selfPath)</c> — never "one is a suffix of the other". A suffix
+    /// test folds roots that have nothing to do with each other: a root-mounted group holding
+    /// <c>@A/B</c> and <c>@B</c> would see <c>A/B</c> as the anchored form of the distinct root
+    /// <c>B</c>, report a single base, and relativise a genuinely mixed group against it. That is
+    /// why <paramref name="selfPath"/> has to reach this method at all. Raised in review on this
+    /// change.</para>
     /// </summary>
-    private static string? TryGetCommonNamespaceRoot(IReadOnlyList<string> expandedQueries)
+    /// <param name="expandedQueries">The group's fully expanded queries.</param>
+    /// <param name="selfPath">The owning NodeType's path — the anchor the relationship is decided
+    /// against.</param>
+    private static string? TryGetCommonNamespaceRoot(
+        IReadOnlyList<string> expandedQueries, string selfPath)
     {
         string? root = null;
         foreach (var query in expandedQueries)
@@ -307,23 +380,25 @@ public static class CodeQueryResolver
             if (ns is null) continue;
             if (root is null) { root = ns; continue; }
             if (string.Equals(root, ns, System.StringComparison.Ordinal)) continue;
-            if (IsMountAnchoredForm(ns, root)) { root = ns; continue; }
-            if (IsMountAnchoredForm(root, ns)) continue;
+            if (IsAnchoredFormOf(ns, root, selfPath)) { root = ns; continue; }
+            if (IsAnchoredFormOf(root, ns, selfPath)) continue;
             return null;
         }
         return root;
     }
 
     /// <summary>
-    /// <c>true</c> when <paramref name="candidate"/> is <paramref name="authored"/> prefixed by a
-    /// mount — i.e. the authored value with whole segments in front of it. The segment-boundary
-    /// check is what keeps <c>Northwind/Source</c> from reading as the anchored form of
-    /// <c>wind/Source</c>.
+    /// <c>true</c> when <paramref name="candidate"/> is exactly what anchoring
+    /// <paramref name="authored"/> onto <paramref name="selfPath"/>'s mount produces — the one
+    /// relationship under which two spellings name the same root.
     /// </summary>
-    private static bool IsMountAnchoredForm(string candidate, string authored) =>
-        candidate.Length > authored.Length + 1
-        && candidate.EndsWith(authored, System.StringComparison.Ordinal)
-        && candidate[candidate.Length - authored.Length - 1] == '/';
+    private static bool IsAnchoredFormOf(string candidate, string authored, string selfPath) =>
+        !string.IsNullOrEmpty(selfPath)
+        && !SharesMountRoot(authored, selfPath)
+        && string.Equals(
+            candidate,
+            NodeCompileShaping.AnchorIncludePath(authored, selfPath),
+            System.StringComparison.Ordinal);
 
     /// <summary>
     /// Heuristic path-level matcher over expanded queries: <c>path:X</c> matches the

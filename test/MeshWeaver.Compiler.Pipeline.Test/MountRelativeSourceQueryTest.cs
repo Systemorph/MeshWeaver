@@ -261,4 +261,75 @@ public class MountRelativeSourceQueryTest
             .AnchorToMount("path:Store/Core/Source nodeType:Code", "rbuergi/OperationRequest")
             .Should().BeNull();
     }
+
+    /// <summary>
+    /// 🚨 A value already rooted at this mount is never anchored — raised in review on this change.
+    /// When the mount root REPEATS further down the owning path, the deepest-segment walk would
+    /// anchor on the second occurrence and emit a path that exists nowhere. It would not lose the
+    /// correct query (both are emitted), but a query naming nothing is one more leg in the compile's
+    /// source probe, and a leg that ERRORS makes the whole snapshot unestablished and refuses the
+    /// compile.
+    /// </summary>
+    [Fact]
+    public void AMountRootThatRepeatsDeeperIsNotDoublePrefixed()
+    {
+        const string repeatingSelf = "Space/Source/Nested/Space/Type";
+
+        // Exactly ONE query: the own-source query is already rooted at this mount, so there is
+        // nothing to anchor and no second query to pay for.
+        CodeQueryResolver
+            .ExpandAll(null, CodeQueryResolver.DefaultSources, repeatingSelf)
+            .Should().Equal($"namespace:{repeatingSelf}/Source scope:subtree nodeType:Code");
+
+        CodeQueryResolver
+            .AnchorToMount($"namespace:{repeatingSelf}/Source scope:subtree", repeatingSelf)
+            .Should().BeNull();
+    }
+
+    /// <summary>
+    /// The same guard on the <c>@</c> shorthand: an entry that already names this mount's root is
+    /// left alone even when that root appears again deeper in the owning path.
+    /// </summary>
+    [Fact]
+    public void ARepeatingMountRootIsNotAnchoredForTheAtShorthandEither()
+    {
+        CodeQueryResolver
+            .Expand("shared=@Space/Shared/Source", "Space/Source/Nested/Space/Type")
+            .Should().Equal(
+                "path:Space/Shared/Source nodeType:Code",
+                "namespace:Space/Shared/Source scope:subtree nodeType:Code");
+    }
+
+    /// <summary>
+    /// 🚨 The group-root fold accepts only the ACTUAL anchoring relationship, never "one root is a
+    /// suffix of the other" — raised in review on this change. A root-mounted group holding
+    /// <c>@A/B</c> and <c>@B</c> is genuinely mixed: reading <c>A/B</c> as the anchored form of
+    /// <c>B</c> would report a single base and relativise both against it.
+    /// </summary>
+    [Fact]
+    public void GroupRoot_DoesNotFoldASuffixThatIsNotAnAnchoredForm()
+    {
+        CodeQueryResolver.GroupAll(
+                ["shared=@A/B", "shared=@B"],
+                CodeQueryResolver.DefaultSources,
+                "Acme/Project",
+                CodeQueryResolver.DefaultSourceGroupName)
+            .Should().ContainSingle().Which.BaseNamespace.Should().BeNull(
+                "'A/B' and 'B' are two different roots that merely share a suffix");
+    }
+
+    /// <summary>
+    /// And the same under a mount, where the suffix coincidence is easiest to hit: the prefixed
+    /// spelling of one root must not be read as the anchored form of an unrelated one.
+    /// </summary>
+    [Fact]
+    public void GroupRoot_DoesNotFoldAMountedSuffixCoincidence()
+    {
+        CodeQueryResolver.GroupAll(
+                ["shared=@Northwind/A/B", "shared=@B"],
+                CodeQueryResolver.DefaultSources,
+                MirroredProduct,
+                CodeQueryResolver.DefaultSourceGroupName)
+            .Should().ContainSingle().Which.BaseNamespace.Should().BeNull();
+    }
 }

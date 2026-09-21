@@ -81,28 +81,55 @@ Because `Expand` is the single funnel every consumer goes through — the runtim
 and `SourceCoverage` — producer and consumer cannot fork on which files count. That invariant is
 what `NodeTypeSourceFingerprint` depends on, so the fix had to land there and nowhere else.
 
-### The authored spelling is kept, never replaced
+### The authored spelling is kept, never replaced — and that is a UNION, not a fallback
 
-Both queries are emitted. Which one resolves is a property of the **mount**, not of the entry — the
-same reason `ResolveCodeIncludes` tries the anchored include path first and keeps the authored one as
-a fallback. A query that matches nothing costs a query and changes no result.
+Both queries are emitted, because which one resolves is a property of the **mount**, not of the
+entry, and nothing offline can know which.
+
+🚨 **It is a union, and the difference is worth stating.** Every consumer treats the query list as a
+union — `workspace.GetQuery` unions its queries, `NodeSet.ResolveSources` adds each query's matches —
+so there is no precedence step that makes the anchored spelling win. `ResolveCodeIncludes` genuinely
+can try anchored first and fall back, but only because it reads **one node per include**; a
+set-valued query cannot express the same thing by adding a list member.
+
+What the union costs, stated rather than assumed:
+
+- The **same node** reached by both spellings is deduplicated — the probe folds matches into a
+  dictionary keyed by node path and merges its legs with `GroupBy(n => n.Path)`.
+- The residual case is a mesh holding the same content at **both** mounts as two *distinct* sets of
+  nodes. Those would both enter the compilation and could collide (`CS0101`) or mix revisions. That
+  state is already pathological — one library installed twice — and the alternative is broader:
+  emitting *only* the anchored spelling would silently break a genuinely absolute cross-partition
+  reference whose first segment happens to appear deeper in the owning path (`@Store/Core/Source`
+  read from a type at `Acme/Store/Thing` would be rewritten to `Acme/Store/Core/Source`, and the
+  working reference lost).
+- Precedence that is safe in both directions needs a real resolution step in the runtime **and** in
+  the bake. That is a larger change than this rule, and it is deliberately not folded into it.
 
 ### What is deliberately NOT anchored
 
-Anchoring is a no-op unless the value's first segment appears in the owning type's path **below the
-root**, which excludes exactly the cases where a rewrite would do damage:
+Two guards, and both are load-bearing:
 
-- **A root-mounted type** — the Monolith and every unprefixed deployment keep the queries they had.
-  This is the control on the other side of the change.
-- **A genuinely cross-partition reference** — `shared=@Store/Core/Source` read from
-  `rbuergi/OperationRequest` has no `Store` segment to anchor to, so it stays verbatim. Rewriting it
-  would turn a working reference into a missing one.
-- **An already-absolute reference** — its first segment *is* the mount root, which sits at index 0
-  and is excluded from the walk, so nothing is ever double-prefixed.
+1. **A value already rooted at this mount is never touched** — its first path segment equals the
+   owning type's. This is what stops a *double prefix* when the mount root repeats further down:
+   for `selfPath = Space/Source/Nested/Space/Type`, the already-rebased own-source value
+   `Space/Source/Nested/Space/Type/Source` would otherwise anchor on the **second** `Space` and come
+   out as `Space/Source/Nested/Space/Source/Nested/Space/Type/Source`. The correct query would still
+   be emitted, but a query naming nothing is not free: it is one more leg in the compile's source
+   probe, and **a leg that errors makes the whole snapshot unestablished and refuses the compile**.
+2. **A genuinely cross-partition reference stays verbatim** — `shared=@Store/Core/Source` read from
+   `rbuergi/OperationRequest` has no `Store` segment to anchor to. Rewriting it would turn a working
+   reference into a missing one.
+
+Between them, a **root-mounted type** keeps exactly the queries it had — the Monolith and every
+unprefixed deployment are unchanged, which is the control on the other side of the rule.
 
 A group whose entries anchor keeps a usable `CodeQueryGroup.BaseNamespace`: a root and its anchored
 form are the same root resolved two ways, so the source listing still shows files relative to it
-rather than falling back to full paths.
+rather than falling back to full paths. 🚨 **That fold is the *actual* anchoring relationship
+(`candidate == AnchorIncludePath(authored, selfPath)`), never "one root is a suffix of the other"** —
+a suffix test folds unrelated roots, so a group holding `@A/B` and `@B` would report a single base
+and relativise a genuinely mixed group against it.
 
 ## 🚨 Four reasons a NodeType reports `CS0246`, and they need different answers
 
