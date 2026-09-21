@@ -45,7 +45,9 @@ public class BootstrapController(
 
         var user = (string.IsNullOrWhiteSpace(username) ? email.Split('@')[0] : username)
             .Trim().ToLowerInvariant();
-        var request = new UserOnboardingRequest(user, email.Trim(), name ?? user);
+        // The first global administrator: no learning path pinned — they are setting the
+        // instance up, not learning it (UserOnboardingDefaults.PinnedPathsFor).
+        var request = new UserOnboardingRequest(user, email.Trim(), name ?? user, IsPlatformBootstrap: true);
 
         logger.LogInformation("Bootstrap: materialising first admin '{User}' ({Email})", user, email);
 
