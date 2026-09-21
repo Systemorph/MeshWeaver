@@ -98,6 +98,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Request a Hub Sends to Itself](SelfAddressedRequests) — node CRUD is issued on the hub that executes it, so routing and the reply leg cannot lose it; what that leaves, and why an empty queue at the timeout proves nothing when the handler answers from a detached observable
 - [Router Traffic Detection](RouterTrafficDetection) — the detector has two sites; the receiver names the two addresses, the origin names the call site, and a ratchet per tree keeps the seams adopted
 - [No Static State](NoStaticState)
+- [Open Vocabularies Are String Constants](OpenVocabulariesAsStringConstants) — a persisted or module-extended vocabulary is `const string`, never an `enum`; it stays open for anyone to extend with their own constants, and resolution is a durable chain of rule nodes rather than a switch
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
 - [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
 - [Removing Hand-Woven Concurrency Gates](RemovingHandWovenGates)
@@ -216,6 +217,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Activity Control Plane](ActivityControlPlane)
 - [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
 - [Activity Operations](ActivityOperations)
+- [The Communication Hub](CommunicationHub) — one participant registry, one message-type family (approvals, notifications, information requests) and the master-plus-copies fan-out that keeps every inbox query anchored to one schema
 - [Notifications](Notifications)
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
 - [Agentic AI](AgenticAI)
@@ -263,6 +265,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Node types
 
 - **Start here:** [Adding a New Node Type](AddingANewNodeType)
+- [NodeType Supersession](NodeTypeSupersession) — a retired NodeType names its successor and how its content maps; an instance re-types itself when its hub next activates, which removes the migration script, converges LAZILY and therefore still needs a sweep, and requires the migrating activation to recycle itself
 - [Creatable Types](CreatableTypes) — what may be created under a node: the one provider the Create form asks, what a parent NodeType restricts, what it extends, and why a parent that declares nothing must never narrow the menu
 - [Retiring a NodeType](RetiringANodeType) — the prune keeps the definition and deletes its sources
 - [Dangling NodeTypes](DanglingNodeTypes) — a node whose type resolves to nothing, and the two write paths that allowed it
