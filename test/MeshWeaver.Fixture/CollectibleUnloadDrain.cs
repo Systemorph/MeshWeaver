@@ -3,28 +3,64 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Fixture;
 
+/// <summary>
+/// Why the drain measured NOTHING, when it did not. An outcome carrying one of these is not a
+/// verdict on any unload: no collection was driven and no signal was observed. It is kept apart from
+/// <see cref="CollectibleUnloadOutcome.Collected"/> because the two used to print the SAME sentence
+/// (#4654): "all retired contexts collected after 0 round(s)" was written both when every retired
+/// context had been collected and when there was nothing to collect, so a trace line that read as a
+/// clean unload could equally be a teardown that never looked.
+/// </summary>
+public enum CollectibleUnloadNotMeasured
+{
+    /// <summary>
+    /// The drain was handed no <see cref="CollectibleContextUnloads"/>: the teardown threw before it
+    /// resolved the tracker, or the mesh registered none. Whether anything was retired is unknown.
+    /// </summary>
+    NoTracker,
+
+    /// <summary>The tracker had no retired context outstanding — nothing to drive, nothing to observe.</summary>
+    NothingPending,
+}
+
 /// <summary>What waiting for a mesh's retired collectible contexts ended with.</summary>
-/// <param name="Rounds">Collection rounds driven (0 when nothing was pending).</param>
+/// <param name="Rounds">Collection rounds driven (0 when nothing was measured).</param>
 /// <param name="RetainedContexts">Contexts that a full collection could not free — rooted by
 /// something live. Empty unless <see cref="Retained"/>.</param>
 /// <param name="Fault">The fault of an unload that was abandoned, when one was.</param>
+/// <param name="NotMeasured">Set when the drain measured nothing; then none of the other fields is a
+/// reading, and <see cref="Collected"/> is <c>false</c> — "nothing was pending" is not "collected".</param>
 public sealed record CollectibleUnloadOutcome(
-    int Rounds, IReadOnlyList<string> RetainedContexts, Exception? Fault)
+    int Rounds, IReadOnlyList<string> RetainedContexts, Exception? Fault,
+    CollectibleUnloadNotMeasured? NotMeasured = null)
 {
-    /// <summary>Every retired context was collected.</summary>
-    public bool Collected => Fault is null && RetainedContexts.Count == 0;
+    /// <summary>The drain drove collections and observed the signal — the other fields are a reading.</summary>
+    public bool Measured => NotMeasured is null;
+
+    /// <summary>
+    /// Every retired context was collected — MEASURED, never vacuous: an outcome with nothing pending
+    /// or no tracker reads <c>false</c> here and says so in <see cref="ToString"/>.
+    /// </summary>
+    public bool Collected => Measured && Fault is null && RetainedContexts.Count == 0;
 
     /// <summary>Some retired context is still referenced after full collections freed nothing.</summary>
     public bool Retained => RetainedContexts.Count > 0;
 
     /// <inheritdoc />
     public override string ToString() =>
-        Fault is not null
-            ? $"unload FAULTED after {Rounds} round(s): {Fault.GetType().Name}: {Fault.Message}"
-            : Retained
-                ? $"{RetainedContexts.Count} context(s) RETAINED after {Rounds} round(s) freed nothing: "
-                  + string.Join(", ", RetainedContexts)
-                : $"all retired contexts collected after {Rounds} round(s)";
+        NotMeasured switch
+        {
+            CollectibleUnloadNotMeasured.NoTracker =>
+                "no unload was measured — the drain was given no CollectibleContextUnloads tracker",
+            CollectibleUnloadNotMeasured.NothingPending =>
+                "nothing was pending — no unload was measured",
+            _ => Fault is not null
+                ? $"unload FAULTED after {Rounds} round(s): {Fault.GetType().Name}: {Fault.Message}"
+                : Retained
+                    ? $"{RetainedContexts.Count} context(s) RETAINED after {Rounds} round(s) freed nothing: "
+                      + string.Join(", ", RetainedContexts)
+                    : $"all retired contexts collected after {Rounds} round(s)",
+        };
 }
 
 /// <summary>
@@ -54,12 +90,17 @@ public static class CollectibleUnloadDrain
     /// <summary>
     /// Drives collections until every context retired on <paramref name="unloads"/> is collected,
     /// one has faulted, or the rest are shown to be retained; then observes the completion signal.
+    /// With no tracker, or nothing pending on it, the drain measures nothing and the outcome SAYS
+    /// so (<see cref="CollectibleUnloadOutcome.NotMeasured"/>) — it never reports a collection it
+    /// did not drive.
     /// </summary>
     public static async ValueTask<CollectibleUnloadOutcome> WaitUntilCollectedAsync(
         CollectibleContextUnloads? unloads)
     {
-        if (unloads is null || unloads.Pending == 0)
-            return new CollectibleUnloadOutcome(0, [], null);
+        if (unloads is null)
+            return new CollectibleUnloadOutcome(0, [], null, CollectibleUnloadNotMeasured.NoTracker);
+        if (unloads.Pending == 0)
+            return new CollectibleUnloadOutcome(0, [], null, CollectibleUnloadNotMeasured.NothingPending);
 
         // 🚨 Leave the caller's frame BEFORE collecting (measured, Plugins#1605). The drain is called
         // from a teardown that has just disposed the mesh, and that frame's stack slots still hold it:
