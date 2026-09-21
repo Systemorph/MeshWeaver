@@ -99,9 +99,8 @@ deny) and never grants — see [Access Control](/Doc/Architecture/AccessControl)
 ## A gated page under a public root: the public-ancestor card
 
 A **public root over gated content** is a shape the platform ships on purpose — a store listing, a
-course catalog, a reporting space whose cover is the marketing surface and whose data is not. Until
-2026-09-21 a link into one of those shared as the bare site card, which is the least useful thing it
-could say.
+course catalog, a reporting space whose cover is the marketing surface and whose data is not. A link
+into one of those used to share as the bare site card, which is the least useful thing it could say.
 
 Measured on `www.meshweaver.cloud`, 2026-09-20:
 
@@ -127,8 +126,11 @@ gate DOES admit and builds the card from that:
   (`seo.gatedCard.accessRoute`) when the gated partition declares a `RedirectOnDenied`, because that
   declaration is the owner saying a route in exists. Without one, no call to action: advice that
   leads nowhere is worse than none.
-- **`og:image`** — the ancestor's card, `/api/og/{ancestor}.png`, which the same gate already serves
-  anonymously, so the unfurler can actually fetch it.
+- **`og:image`** — the ancestor's share image, exactly as a page of its own would declare it: its
+  AUTHORED image when it has one, else the drawn `/api/og/{ancestor}.png`. Either way the same gate
+  already serves it anonymously, so the unfurler can actually fetch what the head declares — and as
+  on a public page, `og:image:type` and 1200×630 are declared only for the drawn card, because an
+  authored banner's dimensions are unknown here.
 - **`noindex, follow`** — the page's content is gated, so it is not a page to rank; the links stay
   crawlable.
 

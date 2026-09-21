@@ -104,8 +104,9 @@ public sealed record SeoPageData(MeshNode Node, string? Description, string? Ima
 /// <para>🚨 <b>Why this discloses nothing.</b> The tail of <see cref="Title"/> is the request path's
 /// own segments — they are in the URL the sharer pasted into the chat, so rendering them back tells
 /// the reader nothing they are not already looking at. Everything else belongs to the PUBLIC
-/// ancestor and is already served to anyone who asks: its name, its description, and the card at
-/// <c>/api/og/{ancestor}.png</c> that the same gate already serves anonymously. The withheld node's
+/// ancestor and is already served to anyone who asks: its name, its description, and its share image
+/// — whatever it authored, else its drawn <c>/api/og/{ancestor}.png</c> — which the same gate already
+/// serves anonymously, so an unfurler can fetch what the head declares. The withheld node's
 /// own <see cref="MeshNode.Name"/>, description, icon and content are never read — see
 /// <see cref="SeoResolver.ComposeAncestorCard"/>, which cannot read them because it is never given
 /// them.
