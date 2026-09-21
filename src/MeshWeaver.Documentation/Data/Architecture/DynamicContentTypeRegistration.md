@@ -152,10 +152,18 @@ Getting a dynamic type's hub configuration means `IMeshNodeHubFactory.ResolveHub
 A NodeType record is ONE row the whole deployment shares. Letting a read seam take that path means
 every non-owning replica that happens to read a node independently compiles and re-stamps the
 record — which is precisely the mid-roll cross-stamp `NodeTypeLiveRecordCensus` was built to
-DETECT as a fault, and the hazard behind the leaving-hub and per-replica-compile rules. Measured:
-with the seam wired that way, `ANodeTypesSourcesWaitForItsBundleTest` failed with *"Expected
-AdoptedVerified … but found Compiled"* — a held, correctly-adopted type driven into a compile by
-nothing but a read.
+DETECT as a fault, and the hazard behind the leaving-hub and per-replica-compile rules. **That
+argument is a reading of the code, and it is the whole case.**
+
+🚨 **It was nearly propped up with a measurement that does not hold, which is worth recording.**
+With the seam wired, `ANodeTypesSourcesWaitForItsBundleTest` failed *"Expected AdoptedVerified …
+but found Compiled"* while clean `main` ran 861/861 green — the exact shape the hazard predicts, and
+it read as proof. It is not: the same test failed again on a tree with the seam REMOVED and the
+same 862-test assembly as `main`, so the diff could not reach it. One green control run is not a
+control. The test is intermittent, the attribution is withdrawn, and the failure is filed on its
+own — an assertion that an ADOPTED type is never driven through a COMPILE, failing intermittently,
+is either a test-isolation defect or the very race this page is about, and guessing which is how a
+wrong root cause gets published.
 
 **So registration belongs with the component already sanctioned to activate dynamic types on this
 replica: the pre-warmer.** Its `AlreadyBaked` branch is where the skip happens, it runs once per

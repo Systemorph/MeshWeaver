@@ -76,8 +76,8 @@ namespace MeshWeaver.Graph;
 /// flips it to <c>Pending</c> to force a recompile) and arms the rebind watcher. A read seam that
 /// did this would let every non-owning replica independently compile and re-stamp one record that
 /// the whole deployment shares — the cross-stamp <c>NodeTypeLiveRecordCensus</c> exists to DETECT.
-/// Measured: an adopt-only branch wired that way turned an <c>AdoptedVerified</c> type into
-/// <c>Compiled</c> (<c>ANodeTypesSourcesWaitForItsBundleTest</c>). Registration belongs with the
+/// That is a reading of the code and it is the whole case: a test failure that looked like
+/// confirmation was withdrawn when the same test failed with the seam removed. Registration belongs with the
 /// component already sanctioned to activate dynamic types on this replica — the pre-warmer, whose
 /// <c>AlreadyBaked</c> branch is where the skip happens — not with whoever reads a node. See
 /// <c>Doc/Architecture/DynamicContentTypeRegistration</c>.</para>
