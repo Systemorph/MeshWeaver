@@ -474,10 +474,15 @@ maps do not exist:
   *may THIS candidate image roll to THAT instance*, which is meaningless for an installation that
   never receives our images. PartnerRe's `memex` runs its own build (core `293bfff` on
   2026-09-21) from its own ACR. Expressing that needs the `registries` table to account for
-  PartnerRe's current ACR, which it does not — it names `memexaksacrqoqqdqnhlaksg.azurecr.io`
-  while the live overlay pins `memexaksacr43rzd6faaix36.azurecr.io`, and that staleness is what
-  has held `lock-pinned-digests` red since 2026-09-15. Declaring another party's registry is not a
-  statement this repository can verify on its own.
+  PartnerRe's current ACR, **which it now does**: the declaration was moved to
+  `memexaksacr43rzd6faaix36.azurecr.io` (the estate was rebuilt in PartnerRe's own subscription and
+  tenant on 2026-09-17 and the old entry named a registry that no longer exists), and the table
+  gained the arm that names such a line instead of leaving it to be found through the refusal it
+  causes — [ArtifactRetentionInterlock → the declaration is checked BOTH ways](/Doc/Architecture/ArtifactRetentionInterlock).
+  That staleness is what had held `lock-pinned-digests` red from 2026-09-17 (the 09-15 and 09-16
+  reds were a different cause: the ramp-up portal stopped answering `/api/version` as it was torn
+  down). So this decision no longer waits on the registry table. Declaring another party's registry
+  is still not a statement this repository can verify on its own.
 
 Whichever is chosen, **it is not optional and it is not the operator's** — provisioning the three
 inputs against today's tree buys a different red, not a verdict.
