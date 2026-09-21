@@ -351,6 +351,36 @@ public record PackageManifest
     /// </summary>
     public ImmutableList<string> PublicSegments { get; init; } = [];
 
+    /// <summary>
+    /// The partition's declared PROTECTED child segments (the root content's
+    /// <c>protectedSegments</c>) — the segments that must stay CLOSED to the Public/Anonymous
+    /// subjects even on a partition that is otherwise published in full. The inverse of
+    /// <see cref="PublicSegments"/>: that one names the only public surfaces of an otherwise gated
+    /// partition, this one names the only gated surfaces of an otherwise public one. Underscore
+    /// satellites are allowed and are the normal case — a submission inbox lives at
+    /// <c>{partition}/_Submissions</c>.
+    ///
+    /// <para>🚨 <b>Read here because the ACCESS SHAPE keys on it, and leaving it unread published a
+    /// submission inbox (MeshWeaver#4716).</b> This was dead metadata in core — the same defect class
+    /// <c>preInstalled</c>, <c>publicSegments</c> and <c>contactEmail</c> each had (#920) — while the
+    /// Store's <c>PluginGate</c> (in-mesh source in MeshWeaver.Plugins, invisible to any build or
+    /// grep over this repository) authored and honoured it. Two consequences followed, and both are
+    /// core's:</para>
+    /// <list type="number">
+    ///   <item>a partition declaring one still got the fully-public shape
+    ///     (<c>_Policy · PublicRead = true</c>), under which a Public/Anonymous deny is INERT on the
+    ///     C# read path — so the protection the Store applied was none there
+    ///     (<c>PublicReadIsNotSuppressedByADenyTest</c>); and</item>
+    ///   <item>the legacy-gate heal on
+    ///     <see cref="PackageInstaller.EnsureDeclaredAccess"/>'s fully-public branch read those very
+    ///     denies as pre-#902 damage and RETIRED them on the next boot, republishing the segment.</item>
+    /// </list>
+    /// <para>With the declaration visible, such a partition is published through root
+    /// Public+Anonymous Viewer GRANTS instead — the one mechanism the C# evaluator and the SQL
+    /// projection resolve identically — and the declared denies are never retired.</para>
+    /// </summary>
+    public ImmutableList<string> ProtectedSegments { get; init; } = [];
+
     // ── install-record metadata (null on catalog entries; set when written to the registry) ──
 
     /// <summary>The git ref (commit/branch) this package was installed from. Null until installed.</summary>
