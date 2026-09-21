@@ -175,6 +175,12 @@ Use the **`curl` single-file download above, not `dotnet tool install -g dotnet-
 installer fails under qemu emulation with `There was an error reflecting type '…DotNetCliTool'`,
 and the resulting `dotnet-dump: command not found` looks like a PATH problem rather than what it is.
 
+**Faster, and the route for anything `dotnet-dump` cannot express:** build a small ClrMD
+(`Microsoft.Diagnostics.Runtime`) console app on the Mac and run *it* in the same `linux/amd64`
+container — the DAC loads natively there, each pass takes seconds, and nothing is installed under
+emulation. Sighting #18's *fact 6* section carries the worked recipe (mount under `$HOME`, check the
+image's runtime against `_runtimes.txt`, the `docker run` line and the ClrMD calls).
+
 ## Free triage before you start a container
 
 `strings` on the raw core answers two questions in seconds, with no DAC and no emulation:
@@ -1428,7 +1434,7 @@ excludes nothing). Not done in this sighting.
 
 Runtime tally: `10.0.12` is now **3** of the family's sightings (#15, #16, #17).
 
-### 2026-09-21: sighting #18 — the fault surfaces in MANAGED code, the process aborts (134), and there is **NO collectible ALC at all**
+### 2026-09-21: sighting #18 — the fault surfaces in MANAGED code, the process aborts (134), and the corrupt slot is a DANGLING static base of a COLLECTIBLE generic instantiation *(corrected 2026-09-21: the first reading said "no collectible ALC at all" — three are resident, none unloading)*
 
 `MeshWeaver.Futu-1773.dmp` (1,159,008,256 bytes, pid 1773; MeshWeaver.Plugins run
 [`35564711328`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35564711328), job
@@ -1438,6 +1444,12 @@ suite. Platform set `3.0.0-ci.9067`. Artifact `teardown-stragglers-35564711328-1
 
 **This one is different from the seventeen before it in four measured ways, and it is the first with a
 managed fault site.** Read on a Mac with the ELF walk above plus ClrMD in a `linux/amd64` container.
+🚨 The first reading of this dump published two claims that the second reading — *fact 6*, its own
+section below — falsified: *"exactly one ALC, no collectible ALC at all"* and *"133 modules, not one
+name loaded twice"*. Both were a **roots** census and a **module-name** count; the managed handle
+census finds three collectible contexts. The rows below carry the corrected readings, and the two
+sections after the fault analysis (*What this eliminates*, *What it does NOT establish*) are rewritten
+against them.
 
 | | **#18** `MeshWeaver.Futu-1773.dmp` |
 |---|---|
@@ -1450,8 +1462,8 @@ managed fault site.** Read on a Mac with the ELF walk above plus ClrMD in a `lin
 | faulting instruction | `48 8b 40 48` = `mov rax,(%rax,0x48)` with **`RAX = 0x3001000000`**; preceded by `48 8b 07` = `mov (%rdi),%rax` with **`RDI = 0x7fea1704ccf8`**, followed by `ff 10` = `call *(%rax)` and `44 8b f8` = `mov %eax,%r15d` — a virtual dispatch returning an `int` |
 | frame | **`System.Reactive.Subjects.ReplaySubject<__Canon>+ReplayBase+Subscription.Dispose()` + 0x3ac** (`nativeCode=0x7fea1ea51420`), i.e. **JIT-compiled managed code**, not `libcoreclr`. Every prior sighting faulted inside `libcoreclr` |
 | thread | tid `0x74d` = 1869 — the hub's own **`MessageService.DrainLoop`** thread, carrying 97 managed frames, running application teardown. Nine of the previous sightings faulted on threads with no managed frame at all |
-| the corrupt word | `RDI = 0x7fea1704ccf8` is the **MethodTable of `Autofac.Core.Resolving.Pipeline.MiddlewareDeclaration`** (ClrMD `GetTypeByMethodTable`), in `Autofac.dll`'s loader heap and in **none of the 47 GC segments**. The word at it reads `0x0000003001000000` — that MethodTable's own `m_dwFlags` (`0x01000000` = *contains GC pointers*) and `m_BaseSize` (`0x30`), **read out of the core, not inferred from the register**. `[0x3001000000 + 0x48]` is `CR2` |
-| **ALC census** | ClrMD roots: **exactly one** `AssemblyLoadContext` — `DefaultAssemblyLoadContext`, `_state = 0` (Alive), a StrongHandle. **133 modules, not one name loaded twice.** Trace log: `alc=1` at **all 73** of pid 1773's checkpoints (and all 493 in the file), `asm` flat at 115→130, **36** `DISPOSE_UNLOADS_COLLECTED … after 0 round(s)`, **zero** `DISPOSE_ALC_RETAINED`. 🚨 **Two of those three trace readings say less than they were read to say.** The 36 `… after 0 round(s)` lines were written by a drain that had *nothing pending* (or no tracker) — before the `DISPOSE_UNLOADS_NOT_MEASURED` split (below, *The fix — teardown finishes when the unload has finished*) that case printed the SAME tag and sentence as a measured, collected unload — so they are 36 teardowns that measured **no** unload, not 36 clean ones. And `alc=` is `MonolithMeshTestBase.TestMemTrace` counting `AssemblyLoadContext.All`, which **drops a context the moment `Unload()` is requested** (measured: `RetiredContextCollectedSignalTest.WithOnePending_…` — the retired context is alive, `Pending = 1`, and already absent from `All`), so `alc=1` cannot see a context mid-unload. What the census still establishes is the **ClrMD** reading: one ALC rooted, no duplicate module — a fact about the dump, independent of both trace lines |
+| the corrupt word | `RDI = 0x7fea1704ccf8` is the **MethodTable of `Autofac.Core.Resolving.Pipeline.MiddlewareDeclaration`** (ClrMD `GetTypeByMethodTable`), in `Autofac.dll`'s loader heap and in **none of the 47 GC segments**. The word at it reads `0x0000003001000000` — that MethodTable's own `m_dwFlags` (`0x01000000` = *contains GC pointers*) and `m_BaseSize` (`0x30`), **read out of the core, not inferred from the register**. `[0x3001000000 + 0x48]` is `CR2`. 🚨 Fact 6 (below) shows this word is not a corrupt *value* in a static: it is the MethodTable word of a **live 48-byte `MiddlewareDeclaration` object at `0x7fd7490bba38`**, and that address is where the static *base* of `EqualityComparer<IScheduledObserver<IEnumerable<LineOfBusiness>>>` still points |
+| **ALC census** *(re-measured under fact 6)* | ClrMD `EnumerateHandles()`: **three** `MeshWeaver.Graph.Configuration.NodeAssemblyLoadContext` objects (`0x7fd741eb72c0`, `0x7fd749aea470`, `0x7fd74200c248`), each held by `WeakLong` + `Dependent` handles only, and their three `LoaderAllocator`s (`0x7fd741eb7438`, `0x7fd749aea5e8`, `0x7fd74200c3c0`) each held by a **`Strong`** handle; `_state = 0` (Alive) on all three and on `DefaultAssemblyLoadContext`. 🚨 The first reading's *"exactly one ALC — `DefaultAssemblyLoadContext`, a StrongHandle; 133 modules, not one name loaded twice"* was a **roots** census: a collectible ALC object is not strong-held (its `LoaderAllocator` is), and the NodeType-compile modules `v7-g1a85d9b-91bfb0d1a3b8.dll` and `v14-g1a85d9b-8357da3c5da2.dll` each carry their own `LineOfBusiness` typedef (`0x7fea21777c20`, `0x7fea21657de0`, beside the non-collectible one in `MeshWeaver.FutuRe.Test.dll`, `0x7fea15e27cb8`) under a *different module name*, so a name count sees no duplicate. Trace log: `alc=1` at **all 73** of pid 1773's checkpoints (and all 493 in the file), `asm` flat at 115→130, **36** `DISPOSE_UNLOADS_COLLECTED … after 0 round(s)`, **zero** `DISPOSE_ALC_RETAINED`. 🚨 **Two of those three trace readings say less than they were read to say.** The 36 `… after 0 round(s)` lines were written by a drain that had *nothing pending* (or no tracker) — before the `DISPOSE_UNLOADS_NOT_MEASURED` split (below, *The fix — teardown finishes when the unload has finished*) that case printed the SAME tag and sentence as a measured, collected unload — so they are 36 teardowns that measured **no** unload, not 36 clean ones. And `alc=` is `MonolithMeshTestBase.TestMemTrace` counting `AssemblyLoadContext.All`, which **drops a context the moment `Unload()` is requested** (measured: `RetiredContextCollectedSignalTest.WithOnePending_…` — the retired context is alive, `Pending = 1`, and already absent from `All`), so `alc=1` cannot see a context mid-unload — and it does not account for the three resident contexts either, whose `_state = 0` says `Unload()` was never requested on them (**not reconciled**; see *not established*). That **none of the three is unloading** therefore rests on the DAC's `_state` reading alone, not on any trace line |
 | phase | died **inside the CURRENT instance's teardown**: `TEST_END GroupAnalysis_LayoutAreas_ShouldRenderCatalog outcome=Passed` 05:42:40.493 → `DISPOSE_START` → `DISPOSE_CLIENTS_DONE` → `DISPOSE_HOSTED_SERVICES_STOPPED` → `DISPOSE_INVOKED elapsed=4ms` 05:42:40.498 → one `MEM_WATCHDOG` at 05:42:41.964 → **nothing**. No `DISPOSE_IOPOOL_DRAIN_START`. There is no next instance |
 | GC | ClrMD `heap.IsServer = False` — **workstation** GC, as in every prior sighting |
 | truncation | `total: 36, succeeded: 36, failed: 0` over a 59-test suite, and `MeshWeaver.FutuRe.Test.HOST_CRASHED (exit=134)` written into the trx by `record-host-crash.py`. The summary line is a floor, not a count |
@@ -1492,9 +1504,14 @@ end to end, `Subscription.Dispose()` inlines `ReplayBase.Unsubscribe` → `Immut
 +0x113  jne  0x…17bd                       ; ← TAKEN. the guard is CORRECT: (%rdi) is not that MT
 ```
 
-and the taken branch is the fault block at `+0x39d`. **So the corrupt slot is a GC-reference static —
-by the code shape, `EqualityComparer<IScheduledObserver<IEnumerable<LineOfBusiness>>>.Default` — and it
-held a MethodTable pointer where an object reference belonged.**
+and the taken branch is the fault block at `+0x39d`. **So the slot the code read is a GC-reference
+static — by the code shape, `EqualityComparer<IScheduledObserver<IEnumerable<LineOfBusiness>>>.Default`
+— and what it read was a MethodTable pointer where an object reference belonged.** Fact 6 below
+confirms the type through the DAC and shows the slot itself is not corrupt: the *base* it was read
+through is. One aside on the guard: the expected MT `0x7fea18956a90` is
+`ObjectEqualityComparer<IScheduledObserver<MeshNode>>` — a PGO-chosen class from a *different*
+instantiation of the shared method — so `jne` is taken for a correct comparer of this `T` too; the
+fault is still the static base, not the guard.
 
 Everything else on the path is intact, read through the DAC:
 
@@ -1516,13 +1533,129 @@ The disposal chain itself is ours and is named: `VirtualDataSource.SetupDataSour
 `RetryWhen → RefCount.Eager → ReplaySubject…Subscription` chain in the stack, with `LineOfBusiness` as
 the virtual collection's element type. It is the *victim*: it is simply the code that read the static.
 
+#### Fact 6 on this dump — the static base is DANGLING, read two ways that agree
+
+Fact 6 of the #4654 reading order (*where does a non-zero faulting pointer land — a GC segment or a
+loader heap?*) was run on this dump after the rows above were first written. Read-only, no re-run.
+Native reads with Python over the raw ELF on the Mac; managed reads with a ~60-line ClrMD
+(`Microsoft.Diagnostics.Runtime`) console app built on the host and run in a `linux/amd64` container
+(recipe at the end of this section). The pointer is
+[#4654 (comment)](https://github.com/Systemorph/MeshWeaver/issues/4654#issuecomment-5763407184); the
+finding is here.
+
+**Reaching V, the type whose static was read.** The JIT code from `+0x0a8` encodes the
+generic-dictionary walk, so it was followed from the `ImmutableList` in `R13`: `[R13]` → `+0x30`
+(`m_pPerInstInfo`) → `[·]` → slot `+0x20` → `[+0x18]` → `[+0x18]` → `[+0x18]` → `[+0x20]` =
+**`V = 0x7fea2187fe30`**, the argument to the static-base helper at `0x7fea1d51e7b0`. The helper's own
+bytes decode the layout: `mov rax,[rdi+0x20]` (MT → `m_pAuxiliaryData`), `mov rax,[rax-0x18]`
+(`DynamicStaticsInfo.m_pGCStatics`), `test cl,1` (the not-initialised bit). Everything in the table
+was read **twice** — by that layout straight off the core, and through the DAC — and the two agree.
+
+| | reading (both methods) |
+|---|---|
+| **What V is** | ClrMD `GetTypeByMethodTable(0x7fea2187fe30)` = **`EqualityComparer<IScheduledObserver<IEnumerable<LineOfBusiness>>>`** — the type the code shape predicted. `[aux-8] == V`, `m_pNonGCStatics = 0`, `m_pGCStatics = 0x7fd7490bba38`, not-initialised bit **clear**. `IsCollectible = True` for V, for the `IScheduledObserver<…>[]` in `R12` and for its element type; all share `LoaderAllocatorHandle = 0x7fd6dc02f478` → `System.Reflection.LoaderAllocator` **`0x7fd74200c3c0`**, the `v7-…` compile's. `LineOfBusiness` is not a compiled-in type: it is the NodeType node `FutuRe/LineOfBusiness` |
+| **(i) first slot of V's real static base** | `StaticFields` = one field, `<Default>k__BackingField`; `GetAddress(domain)` = **`0x7fd7490bba38`**, the same address the runtime's `m_pGCStatics` holds. `[0x7fd7490bba38]` = **`0x7fea1704ccf8`** = the MethodTable of `Autofac.Core.Resolving.Pipeline.MiddlewareDeclaration` (`HighFrequencyHeap 0x7fea17040000–0x7fea17050000`, on no GC segment) — exactly the value in `RDI` |
+| **(ii) where the base lies** | a **GC region** — `Generation1`, `0x7fd749000028–0x7fd7493ffec8` — contained in no native heap. And **not inside any statics box**: `Segment.EnumerateObjects()` and `Heap.FindPreviousObjectOnSegment` both put a **live, valid, 48-byte `MiddlewareDeclaration` object starting at exactly `0x7fd7490bba38`** (neighbours: `ResolvePipeline`, four more `MiddlewareDeclaration`s, a `Free` block, a `System.String`, `DelegateMiddleware`, `ResolvePipelineBuilder+<>c__DisplayClass17_0` — an ordinary Autofac allocation run). The "corrupt static" is that object's **MethodTable word**, read through a static base that points at an object header |
+
+**Controls — what a healthy static base looks like in this process.** Non-collectible: the guard's
+own base type `EqualityComparer<IScheduledObserver<MeshNode>>` (`0x7fea18956520`) and four
+`ObjectEqualityComparer<…>` base types all have `m_pGCStatics` on the **`Pinned`** segment
+`0x7fd73c000028–0x7fd73c01e2c0` inside a 32,664-byte `System.Object[]`, and `[base]` is a valid
+comparer object. Collectible (the case that matters):
+`ImmutableList<IScheduledObserver<IEnumerable<AmountType>>>.Empty` has `m_pGCStatics = 0x7fd74359a470`
+= element 0 of a **32-byte 1-element `System.Object[]` at `0x7fd74359a460`** on a Generation2 region,
+and that box is **slot 86 of its `LoaderAllocator.m_slots`**. So a collectible instantiation's statics
+box is a small `object[]` on an ordinary region, rooted from the managed `LoaderAllocator`'s `m_slots`.
+
+**The decisive read — `m_slots`.** `LoaderAllocator 0x7fd74200c3c0.m_slots` (320 slots,
+`m_slotsUsed = 234`, 86 null = exactly the unused tail, so **no used slot was freed**) holds a 1-element
+`Object[]` statics box for **`EqualityComparer<IScheduledObserver<IEnumerable<X>>>.Default` for every
+other NodeType X in that compile** — AmountType (slot 157), ExchangeRate (169), Country (172), Currency
+(195), BusinessUnit (222), TransactionMapping (228) — and for `EqualityComparer<IEnumerable<LineOfBusiness>>`
+(182) and `ImmutableList<IScheduledObserver<IEnumerable<LineOfBusiness>>>.Empty` (185). **It holds no
+box for V.** Nothing in any of the three allocators' `m_slots` points into `0x7fd7490bb000–0x7fd7490bc000`.
+
+**What this establishes.**
+
+- **Fact 6's discriminator as worded comes out negative on both branches.** Not *loader heap*: the base
+  is in a GC region. Not *a correct box whose slot was overwritten*: there is no box there at all. It is
+  a **dangling static base** — `DynamicStaticsInfo.m_pGCStatics` of a collectible generic instantiation
+  still holds the address of a statics box that no longer exists; the region was reclaimed and re-issued
+  to ordinary allocation, and a `MiddlewareDeclaration` was allocated at exactly that address.
+- **It is not reachable through a completed unload.** V's context is Alive, its `LoaderAllocator` is
+  strong-held and still roots the sibling boxes; only V's box is missing. The best-supported reading is
+  a **runtime statics-rooting defect for a collectible generic instantiation** on the .NET 9+
+  statics-in-GC-heap design: the box for
+  `EqualityComparer<IScheduledObserver<IEnumerable<LineOfBusiness>>>.Default` was allocated and its
+  address stored in `m_pGCStatics`, but it was never (or no longer) held in `m_slots`, so the next GC
+  collected it and the type kept dereferencing the old address.
+- **The reading-order addition is sharper than "GC segment vs loader heap".** For the type the fault
+  touched, read `[[MT+0x20]-0x18]` and ask the DAC what **object** sits there. Non-collectible: inside
+  the Pinned-segment `Object[]`. Collectible: a 1-element `Object[]` that appears in its
+  `LoaderAllocator.m_slots`. Anything else is a dangling base, and one `m_slots` scan says whether the
+  allocator ever held it.
+- **#18 now has a mechanism, and it is not the #12–#16 mechanism** (those had contexts mid-unload and a
+  zeroed word in a disposed hub's garbage). It is a cleaner upstream case than the first reading
+  stated: one live collectible context, a named instantiation, the sibling instantiations of the same
+  compile as in-dump controls, and no unload in flight.
+
+**What it does NOT establish.**
+
+- **Why the box is absent from `m_slots`** — never registered vs. registered and later dropped — and
+  **when** it was collected. `m_slots` has no freed gap, which leans toward "never registered", but a
+  dump has no history.
+- **Whether collectible boxes are pinned by a handle** (they sit on ordinary regions, so something must
+  keep `m_pGCStatics` valid across compaction). Pinned handles were not enumerated against the sibling
+  boxes.
+- **Breadth.** A full-heap walk for every collectible type's base crashed ClrMD itself
+  (`NullReferenceException` in `ClrType.Equals` on two Generation2 segments, then a fatal
+  `AccessViolationException` inside the tool) — the tool failing, not a verdict. Only V and the
+  AmountType control are measured.
+- **The trace log's `alc=1` against three resident contexts.** `alc=` counts `AssemblyLoadContext.All`
+  (`MonolithMeshTestBase.TestMemTrace`), which drops a context the moment `Unload()` is requested
+  (`RetiredContextCollectedSignalTest`) — yet all three read `_state = 0`, so `Unload()` was never
+  requested on them. Whether the three were constructed after the last checkpoint that carried `alc=`,
+  or `All` had dropped them for another reason, was not measured; do not cite `alc=1` as "no
+  collectible context" again.
+- Anything about the production dump (`coredump.1.1789671392`); its three fields are unchanged by this.
+
+**Running fact 6 on a Linux dump from this Mac — the ClrMD-in-container recipe.** The `dotnet-dump`
+route in *You do need a container for the managed side* works but is slow under emulation and dies on
+a large dump inside its own scan. A **host-built ClrMD console app runs unchanged inside the amd64
+container** and each DAC pass takes seconds:
+
+- The docker context here is **colima**, so the dump must live under `$HOME` (not the scratchpad) to be
+  mountable.
+- `mcr.microsoft.com/dotnet/sdk:10.0` for `linux/amd64` carried runtime **10.0.12** when this was run —
+  the patch the dump is from — so the DAC matched without `ignoreMismatch`. Check the image's
+  `dotnet --list-runtimes` against the artifact's `_runtimes.txt` first; on a mismatch pass
+  `CreateRuntime(dac, ignoreMismatch: true)` as the 2026-09-11 managed-view entry did.
+- No `dotnet-dump` install under emulation is needed at all.
+
+```bash
+gh api repos/Systemorph/MeshWeaver.Plugins/actions/artifacts/10623333196/zip > stragglers.zip     # 200 MB → MeshWeaver.Futu-1773.dmp
+# ucontext: mmap scan for gregs[RDI]==0x7fea1704ccf8 && gregs[RAX]==0x3001000000 && TRAPNO==14 (Python; one hit at file offset 0x42e7f328)
+# code + dictionary chain + DynamicStaticsInfo: Python over the PT_LOAD table (capstone for the disassembly of 0x7fea1ea51420 +0x0a8..+0x113, +0x39d..+0x3b2)
+# the probe: `dotnet new console -n probe` + `dotnet add package Microsoft.Diagnostics.Runtime`, built on the host with `dotnet build -c Release`
+docker run --rm --platform linux/amd64 -v $HOME/segv-dump/18:/dump -v $HOME/segv-dump/probe:/probe \
+  mcr.microsoft.com/dotnet/sdk:10.0 dotnet /probe/bin/Release/net10.0/probe.dll /dump/MeshWeaver.Futu-1773.dmp
+# ClrMD: DataTarget.LoadDump → ClrVersions[0].CreateRuntime() → GetTypeByMethodTable / ClrType.StaticFields[i].GetAddress /
+#   ClrType.IsCollectible + LoaderAllocatorHandle / Heap.GetSegmentByAddress / Segment.EnumerateObjects(carefully) /
+#   Heap.FindPreviousObjectOnSegment / Runtime.EnumerateHandles / ReadObjectField("m_slots").AsArray()
+```
+
 #### What this eliminates
 
-- **A collectible-ALC overlap.** Not "unmeasured" — *absent*. One ALC, alive; 133 modules, none
-  duplicated; `alc=1` at every checkpoint; zero retained contexts; and the death is inside the current
-  instance's own dispose, with no next instance started. The 2026-09-11 diagnosis and the fixes built
-  on it (core #4042/#4046/#4048/#4053, Plugins#1677/#1680) are all present in this build and **could
-  not have prevented this occurrence**, because the state they sequence never existed.
+- **A collectible-ALC UNLOAD overlap — but not collectible ALCs.** The first reading of this dump said
+  *absent: one ALC, 133 modules, none duplicated*; fact 6 re-measured it as **three** resident
+  `NodeAssemblyLoadContext`s, all Alive, `LoaderAllocator`s strong-held, none unloading (census row
+  above). What **is** eliminated is the #12–#16 mechanism: no context is mid-unload (the DAC's
+  `_state = 0` on all three — the trace's 36 `after 0 round(s)` lines measured no unload at all, see the
+  census row), and the death is inside the current instance's own dispose with no next instance
+  started. The 2026-09-11 diagnosis and the fixes built on it (core #4042/#4046/#4048/#4053,
+  Plugins#1677/#1680) are all present in this build and **could not have prevented this occurrence**,
+  because they sequence an unload and no unload was in flight — the static base was dangling while its
+  context lived.
 - **First-party or third-party native code.** The process maps **19** `.so` files: `ld-linux`, `libc`,
   `libcrypto`, `libdl`, `libgcc_s`, `libicudata/i18n/uc`, `libm`, `libpthread`, `librt`, `libssl`,
   `libstdc++`, `libhostfxr`, `libhostpolicy`, `libclrjit`, `libcoreclr`, `libSystem.Native`,
@@ -1538,26 +1671,33 @@ the virtual collection's element type. It is the *victim*: it is simply the code
 
 #### What it does NOT establish
 
-- **Who wrote the bad value.** A static that is written once by a type initializer held a MethodTable
-  pointer. Whether that arrived via a mis-resolved generic-dictionary static base, a relocation that
-  updated the wrong slot, or something else is **not** determined by this dump.
+- **Who wrote the bad value** is the wrong question after fact 6: nobody wrote a MethodTable pointer
+  into a static — the static *base* points at an ordinary object. What stays open is why V's box is
+  absent from `m_slots` and when it was collected; whether collectible boxes are handle-pinned; and the
+  `alc=1`-vs-three-contexts reconciliation — all listed under fact 6 above.
 - **How many other slots are corrupt.** A hand ELF heap walk reached ~2.0 M objects across the 47
   segments, but needed ~13 k resynchronisations, so it is not a reliable corrupt-slot counter and no
   count is claimed from it. What *is* established is narrower and still useful: the objects on the
   fault path are individually intact, and the walk does not collapse — this is not wholesale
   corruption. `VerifyHeap` was unavailable: ClrMD threw `ArgumentOutOfRangeException` inside its own
-  scan (the tool failing, not a verdict — see sighting #1's note on the same trap).
-- **Whether #18 and #12–#16 share a root.** They share *a* fingerprint at the level of "a word that
-  should be a pointer is not one", and nothing finer. #18 is closest to **#11** (GitSync,
-  `GetCodeInfo`): no collectible context, a pointer that is stale rather than zero.
+  scan (the tool failing, not a verdict — see sighting #1's note on the same trap), and the ClrMD
+  full-heap walk under fact 6 died the same way.
+- **Whether #18 and #12–#16 share a root — now answered in the negative for the MECHANISM, and open
+  for the fingerprint.** #18 is a dangling collectible static base while its context lives; #12–#16 had
+  contexts mid-unload and a zeroed word in a disposed hub's garbage. Whether a dangling collectible
+  static base can also produce the `signo 11 / addr (nil)` shape is unknown. Closest earlier sighting
+  is still **#11** (GitSync, `GetCodeInfo`): a pointer that is stale rather than zero.
 
 #### Why this matters upstream
 
 Every previous sighting could be answered with *"you were unloading collectible assemblies."* This one
-cannot. It is a clean-room instance — one ALC, no third-party native code, no `unsafe` anywhere in the
-process's own assemblies, an intact object graph, a **named** corrupt slot (a generic type's GC static)
-and a **managed** fault site with a full stack. That is materially better evidence than sixteen GC-thread
-dumps, and it is what an upstream report should be built on.
+cannot — nothing was unloading. It is a clean-room instance: one live collectible context named
+(`LoaderAllocator 0x7fd74200c3c0`), a named instantiation whose `m_pGCStatics` points at a statics box
+that no longer exists, the sibling instantiations of the same compile as in-dump controls (their boxes
+are in `m_slots`; V's is not), no third-party native code, no `unsafe` anywhere in the process's own
+assemblies, an intact object graph, and a **managed** fault site with a full stack — every reading
+taken twice, by the JIT helper's layout off the core and by the DAC, agreeing. That is materially
+better evidence than sixteen GC-thread dumps, and it is what an upstream report should be built on.
 
 #### Comparison with the production crash, Systemorph/MeshWeaver#4654 — NOT established as the same defect
 
@@ -1582,14 +1722,18 @@ processes do not share their GC implementation or their native surface, so a sha
 argued, not assumed.
 
 **Verdict: the identity claim is unsupported by anything that discriminates, and it cannot be settled
-from CI.** The next reading is #4654's own dump, and it needs exactly five facts, in this order:
+from CI.** The next reading is #4654's own dump, and it needs exactly six facts, in this order:
 `Unwind: exception type` (zero or not — #18 shows this family can produce a *managed* death, so the
 2026-08-26 lesson that a `139` may be an unhandled managed exception is live again); `si_code`/`si_addr`
 from `NT_SIGINFO`; the fault `ucontext` by the `CR2 == si_addr` rule, with `SVR::` symbols; whether the
 dereferenced MethodTable word reads **zero** or a plausible-but-wrong pointer; and the ALC census read
-as *managed* state through ClrMD, never from `AssemblyLoadContext.All`. A production dump that shows a
+as *managed* state through ClrMD, never from `AssemblyLoadContext.All`; and, when the dereferenced word
+is non-zero, **fact 6** — resolve the base the faulting code read through (`[[MT+0x20]-0x18]` for a
+GC static) and ask the DAC what *object* sits there, then whether its `LoaderAllocator.m_slots` holds
+that box (#18's section above is the worked example and the recipe). A production dump that shows a
 zeroed MethodTable word in `SVR::gc_heap` with collectible contexts mid-unload joins the family; one
-that shows anything else is a second defect and must not be filed under this one.
+that shows a dangling collectible static base joins #18; one that shows anything else is a second
+defect and must not be filed under this one.
 
 ### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sightings #15 and #16 crashed ON `10.0.12`
 
