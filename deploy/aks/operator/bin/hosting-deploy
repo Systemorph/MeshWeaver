@@ -112,13 +112,25 @@ sets=(
 # (2026-08-31). Every record with an imagePullSecret and no pin (pearl, build) had this exposure.
 # HelmValues emits a fixed shape (top-level keys at column 0, children indented by two, strings
 # always double-quoted), so the key is found by its position under `portal:`. An empty `image: ""`
-# does not count as an image.
+# does not count as an image. Pure bash on purpose: an awk regex with POSIX classes passed on the
+# macOS awk and matched NOTHING on the ubuntu runner's mawk — a guard whose answer depends on which
+# awk the image happens to ship is not a guard.
 values_carry_portal_image() {
-  awk '
-    /^[^[:space:]#]/ { in_portal = ($0 ~ /^portal:[[:space:]]*$/); next }
-    in_portal && /^  image:[[:space:]]*"?[^"[:space:]]/ { found = 1 }
-    END { exit found ? 0 : 1 }
-  ' "$1"
+  local line value in_portal=false
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|' '*|$'\t'*|'#'*) ;;
+      *) # a top-level key: we are inside portal: only when the line is exactly `portal:`
+         value="${line#portal:}"; value="${value//[[:space:]]/}"
+         if [[ "$line" == portal:* && -z "$value" ]]; then in_portal=true; else in_portal=false; fi
+         continue ;;
+    esac
+    if $in_portal && [[ "$line" == '  image:'* ]]; then
+      value="${line#  image:}"; value="${value//[[:space:]]/}"; value="${value//\"/}"
+      [ -n "$value" ] && return 0
+    fi
+  done < "$1"
+  return 1
 }
 if [ -z "$image" ] && ! values_carry_portal_image "$values"; then
   # 🚨 THREE ANSWERS, not two (MeshWeaver#4722) — and this one is the most expensive to get wrong
