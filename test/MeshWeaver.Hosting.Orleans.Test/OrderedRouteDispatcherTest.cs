@@ -29,6 +29,23 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para><see cref="UnorderedPoolDispatch_StartsEveryLegConcurrently"/> is the negative control: it
 /// pins the behaviour of the shape this replaced (one <c>SubscribeThroughPool</c> per delivery),
 /// which starts every leg at once and therefore cannot preserve any order.</para>
+///
+/// <para><b>On the bounds in this file.</b> Every positive wait is
+/// <see cref="MeshWeaver.Fixture.TestTimeouts.Quick"/> — this dispatcher is in-memory with no mesh
+/// and no cluster, so "a local settle" is exactly what it is, and the bound then scales with the
+/// runner instead of guessing at it. The outer <c>Timeout</c> is a literal <c>120_000</c> rather
+/// than <see cref="MeshWeaver.Fixture.TestTimeouts.TestMilliseconds"/> only because an attribute
+/// argument must be a constant; the value has to DOMINATE the inner wait (<c>Quick</c> ×
+/// <c>OuterMargin</c> 2 at the CI factor) or the xunit kill pre-empts it and the failure cannot say
+/// what it was waiting for. It is deliberately NOT 30 s: that is the framework's own write bound
+/// (<c>LateResponseWatchBound</c> 30 s + <c>VerdictBoundGrace</c> 1 s), so a test bounded there
+/// always gives up one second before the framework can explain itself — see
+/// <c>TestTimeoutLiteralRatchetGuard</c>.</para>
+///
+/// <para>The two NEGATIVE windows stay short literals on purpose: a bounded absence spends its
+/// WHOLE window every run, so scaling one to the runner would spend a CI-sized budget proving that
+/// nothing happened — and what the absence is evidence FOR is established by the positive half that
+/// follows it.</para>
 /// </summary>
 public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(output)
 {
@@ -48,7 +65,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
             return gate.Take(1).Subscribe(observer);
         });
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 120_000)]
     public async Task SameDestination_SubscribesLegsInOrder_OneAtATime()
     {
         using var pool = new IoPool(8);
@@ -60,7 +77,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
             dispatcher.Enqueue(Destination, orderingKey: null, GatedLeg(i, starts, gates[i]), () => { });
 
         // Leg 0 starts…
-        (await starts.Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken)).Should().Be(0);
+        (await starts.Take(1).Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken)).Should().Be(0);
 
         // …and NOTHING else does while leg 0 is still in flight. No positive signal exists for
         // "the second leg did not start", so the bounded absence IS the assertion.
@@ -71,16 +88,16 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         {
             gates[i].OnNext(Unit.Default);
             gates[i].OnCompleted();
-            (await starts.Skip(i + 1).Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken)).Should().Be(i + 1,
+            (await starts.Skip(i + 1).Take(1).Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken)).Should().Be(i + 1,
                 "each leg is subscribed only after the one ahead of it has completed, in arrival order");
         }
 
         gates[^1].OnCompleted();
-        var order = await starts.Take(3).ToList().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
+        var order = await starts.Take(3).ToList().Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
         order.Should().Equal([0, 1, 2], "the destination's FIFO must preserve the routing grain's arrival order");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 120_000)]
     public async Task DifferentDestinations_NeverWaitOnEachOther()
     {
         using var pool = new IoPool(8);
@@ -92,7 +109,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         dispatcher.Enqueue(Destination, orderingKey: null, GatedLeg(0, starts, blocked), () => { });
         dispatcher.Enqueue(OtherDestination, orderingKey: null, GatedLeg(1, starts, free), () => { });
 
-        var seen = await starts.Take(2).ToList().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
+        var seen = await starts.Take(2).ToList().Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
         seen.Should().Contain(1,
             "a stalled destination must not hold up any other destination's routing");
         seen.Should().HaveCount(2);
@@ -119,7 +136,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
     /// <para>Before the fix this test times out on <c>starts.Take(2)</c>: leg 1 is never subscribed,
     /// because it is queued behind a leg of a stream it has no ordering relationship with.</para>
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 120_000)]
     public async Task IndependentStreamsOnOneDestination_NeverWaitOnEachOther()
     {
         using var pool = new IoPool(8);
@@ -131,7 +148,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         dispatcher.Enqueue(Multiplexer, "sync/stream-a", GatedLeg(0, starts, blocked), () => { });
         dispatcher.Enqueue(Multiplexer, "sync/stream-b", GatedLeg(1, starts, free), () => { });
 
-        var seen = await starts.Take(2).ToList().Timeout(10.Seconds())
+        var seen = await starts.Take(2).ToList().Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
         seen.Should().HaveCount(2,
             "two frames of two DIFFERENT streams share a destination HUB, not an ordering "
@@ -162,7 +179,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
     /// the destination to (destination, stream) is only sound because it narrows to exactly the
     /// domain that guard operates on — which is what this test asserts.</para>
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 120_000)]
     public async Task FramesOfOneStream_OnAMultiplexer_StillSubscribeInOrderOneAtATime()
     {
         const string OneStream = "sync/the-only-stream";
@@ -174,7 +191,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         for (var i = 0; i < gates.Length; i++)
             dispatcher.Enqueue(Multiplexer, OneStream, GatedLeg(i, starts, gates[i]), () => { });
 
-        (await starts.Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken))
+        (await starts.Take(1).Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken))
             .Should().Be(0);
 
         // No positive signal exists for "the second frame did not start", so the bounded absence IS
@@ -191,14 +208,14 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         {
             gates[i].OnNext(Unit.Default);
             gates[i].OnCompleted();
-            (await starts.Skip(i + 1).Take(1).Timeout(10.Seconds())
+            (await starts.Skip(i + 1).Take(1).Timeout(TestTimeouts.Quick)
                     .Await(TestContext.Current.CancellationToken))
                 .Should().Be(i + 1, "the next frame of a stream is subscribed only after the one "
                     + "ahead of it has completed");
         }
 
         gates[^1].OnCompleted();
-        var order = await starts.Take(3).ToList().Timeout(10.Seconds())
+        var order = await starts.Take(3).ToList().Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
         order.Should().Equal([0, 1, 2],
             "a stream's channel must preserve the routing grain's arrival order — the routing grain's "
@@ -213,7 +230,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
     /// overtake each other. Deliberately asserted rather than argued: the pairing is invisible from
     /// outside unless something reads it.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 120_000)]
     public async Task ChannelKeyIsAPair_NotAConcatenation()
     {
         using var pool = new IoPool(8);
@@ -225,7 +242,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         dispatcher.Enqueue("cache/a", "b/c", GatedLeg(0, starts, blocked), () => { });
         dispatcher.Enqueue("cache/a/b", "c", GatedLeg(1, starts, free), () => { });
 
-        var seen = await starts.Take(2).ToList().Timeout(10.Seconds())
+        var seen = await starts.Take(2).ToList().Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
         seen.Should().HaveCount(2,
             "these are two different destinations and two different streams; only a key built by "
@@ -236,7 +253,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         free.OnCompleted();
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 120_000)]
     public async Task DrainedDestination_IsReleased_SoTheSiloHoldsNoPerAddressState()
     {
         using var pool = new IoPool(8);
@@ -246,10 +263,10 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         var completed = new Subject<Unit>();
 
         dispatcher.Enqueue(Destination, orderingKey: null, GatedLeg(0, starts, gate), () => completed.OnNext(Unit.Default));
-        await starts.Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
+        await starts.Take(1).Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
         dispatcher.ActiveChannels.Should().Be(1);
 
-        var drained = completed.Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
+        var drained = completed.Take(1).Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
         gate.OnCompleted();
         await drained;
 
@@ -259,7 +276,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
             .Select(_ => dispatcher.ActiveChannels)
             .Where(count => count == 0)
             .FirstAsync()
-            .Timeout(10.Seconds())
+            .Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
         released.Should().Be(0,
             "a destination holds a FIFO entry only while it has work in flight — a silo that has "
@@ -271,7 +288,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
     /// own <c>SubscribeThroughPool</c> leg. All three legs start while none has completed, i.e. the
     /// pool imposes no order at all, which is what let two frames of one sync stream swap places.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 120_000)]
     public async Task UnorderedPoolDispatch_StartsEveryLegConcurrently()
     {
         using var pool = new IoPool(8);
@@ -283,7 +300,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
             subscriptions.Add(pool.SubscribeThroughPool(GatedLeg(i, starts, gates[i]))
                 .Subscribe(_ => { }, _ => { }));
 
-        var seen = await starts.Take(3).ToList().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
+        var seen = await starts.Take(3).ToList().Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
         seen.Should().HaveCount(3,
             "the unordered dispatch subscribes all three legs even though none has completed — "
             + "there is no per-destination ordering, which is the defect OrderedRouteDispatcher fixes");

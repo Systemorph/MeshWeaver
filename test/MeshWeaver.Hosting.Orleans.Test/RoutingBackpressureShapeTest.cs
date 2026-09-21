@@ -5,6 +5,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
+using MeshWeaver.Fixture;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -47,7 +48,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class RoutingBackpressureShapeTest
 {
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// The bounded poll window. <see cref="TestTimeouts.Quick"/> rather than a literal: these legs are
+    /// in-memory <see cref="Subject{T}"/>s with no mesh and no cluster, which is exactly the "local
+    /// settle" that bound names, and it scales with the runner instead of guessing at it.
+    /// </summary>
+    private static readonly TimeSpan Budget = TestTimeouts.Quick;
 
     /// <summary>Mirrors <c>RoutingGrain.SaturationThreshold</c> — the value every prod report printed.</summary>
     private const int Legs = 64;
