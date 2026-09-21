@@ -156,7 +156,7 @@ internal static class ReleasePostCondition
     /// surface at all. It is the first half of the story this method tells.
     /// </param>
     /// <param name="logger">Where the violation and the remedy's outcome are published.</param>
-    internal static IObservable<(string? ReleasePath, string? Diagnosis)> Restore(
+    internal static IObservable<(string? ReleasePath, LogMessage? Diagnosis)> Restore(
         IMessageHub hub,
         string nodeTypePath,
         NodeCompilationResult result,
@@ -167,7 +167,7 @@ internal static class ReleasePostCondition
     {
         var before = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         if (Violation(before, result, firstAttempt.ReleasePath) is not { } violation)
-            return Observable.Return<(string?, string?)>((firstAttempt.ReleasePath, null));
+            return Observable.Return<(string?, LogMessage?)>((firstAttempt.ReleasePath, null));
 
         // 🚨 WHY THE FIRST CREATE FAILED, on the line an operator reads (#5057). This was the missing
         // half of #781's own diagnosis: the settle's create is best-effort and logged its refusal at
@@ -203,7 +203,7 @@ internal static class ReleasePostCondition
             // keeps that fact from becoming an assumption the next operator pays for.
             .DefaultIfEmpty(NodeTypeBuildState.ReleaseCreateOutcome.Failed(
                 "the re-cut produced no answer at all — an inner observable completed without emitting"))
-            .Select<NodeTypeBuildState.ReleaseCreateOutcome, (string? ReleasePath, string? Diagnosis)>(recut =>
+            .Select<NodeTypeBuildState.ReleaseCreateOutcome, (string? ReleasePath, LogMessage? Diagnosis)>(recut =>
             {
                 if (recut.ReleasePath is { } restored)
                 {
@@ -211,7 +211,7 @@ internal static class ReleasePostCondition
                         "[ReleasePostCondition] {HubPath}: release restored at {ReleasePath} — the "
                         + "node no longer advertises a build no release names",
                         nodeTypePath, restored);
-                    return ((string?)restored, (string?)RestoredDiagnosis(violation, firstFailure, restored));
+                    return ((string?)restored, (LogMessage?)RestoredEntry(violation, firstFailure, restored));
                 }
 
                 // 🚨 THE LINE THE INCIDENT WAS FILED FROM, and it now SAYS WHY (#5057). It used to
@@ -222,7 +222,7 @@ internal static class ReleasePostCondition
                     + "re-cut{Because}. The node advertises a build no release names; instances will "
                     + "keep binding '{Stale}' until a release is created for it.",
                     nodeTypePath, violation, recut.Because, before!.LatestReleasePath);
-                return ((string?)null, (string?)FailedDiagnosis(violation, firstFailure, recut));
+                return ((string?)null, (LogMessage?)ViolatedEntry(violation, firstFailure, recut));
             });
     }
 
@@ -248,6 +248,48 @@ internal static class ReleasePostCondition
     internal static string RestoredDiagnosis(string violation, string firstAttemptClause, string restored) =>
         $"Release post-condition (#781): {violation}.{firstAttemptClause} Restored at {restored} "
         + "from the bytes this compile produced — no recompile.";
+
+    /// <summary>Catalog key for <see cref="RestoredDiagnosis"/>.</summary>
+    internal const string RestoredKey = "activity.compile.releasePostCondition.restored";
+
+    /// <summary>Catalog key for <see cref="FailedDiagnosis"/>.</summary>
+    internal const string ViolatedKey = "activity.compile.releasePostCondition.violated";
+
+    /// <summary>
+    /// The repaired verdict as an activity entry a GERMAN viewer can read.
+    ///
+    /// <para>🚨 <b>A transcript entry is keyed or it is English forever</b> (<c>LogMessage</c>, #3236;
+    /// review on #5057). The entry is written server-side with NO viewer in scope and read later by
+    /// viewers whose languages differ, so the sentence must be resolved at RENDER time off
+    /// <c>AccessContext.Locale</c> — the English text stays as the fallback, which is what keeps an
+    /// old persisted row and a key that later leaves the catalog rendering exactly as they do now.
+    /// The ARGUMENTS stay English on purpose: a node path, a release path, a store version and an
+    /// exception's own message are not translatable, and inventing German for an exception message
+    /// would be worse than leaving it.</para>
+    /// </summary>
+    /// <param name="violation">The violation, as <see cref="Violation"/> worded it.</param>
+    /// <param name="firstAttemptClause"><see cref="FirstAttemptClause"/>.</param>
+    /// <param name="restored">Where the re-cut landed.</param>
+    internal static LogMessage RestoredEntry(
+        string violation, string firstAttemptClause, string restored) =>
+        new LogMessage(RestoredDiagnosis(violation, firstAttemptClause, restored), LogLevel.Warning)
+            .WithKey(RestoredKey,
+                ("violation", violation), ("firstAttempt", firstAttemptClause), ("path", restored));
+
+    /// <summary>
+    /// The unrepaired verdict as an activity entry a German viewer can read — same rule as
+    /// <see cref="RestoredEntry"/>, and <c>Error</c> because this build has no release.
+    /// </summary>
+    /// <param name="violation">The violation, as <see cref="Violation"/> worded it.</param>
+    /// <param name="firstAttemptClause"><see cref="FirstAttemptClause"/>.</param>
+    /// <param name="recut">What the re-cut amounted to.</param>
+    internal static LogMessage ViolatedEntry(
+        string violation, string firstAttemptClause,
+        NodeTypeBuildState.ReleaseCreateOutcome recut) =>
+        new LogMessage(FailedDiagnosis(violation, firstAttemptClause, recut), LogLevel.Error)
+            .WithKey(ViolatedKey,
+                ("violation", violation), ("firstAttempt", firstAttemptClause),
+                ("reason", recut.Because));
 
     /// <summary>
     /// The compile <c>_Activity</c> line for a violation the re-cut could NOT repair — the sentence

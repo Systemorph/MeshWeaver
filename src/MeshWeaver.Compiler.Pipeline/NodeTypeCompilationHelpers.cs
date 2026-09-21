@@ -4468,7 +4468,7 @@ internal static class NodeTypeCompilationHelpers
                             ? ReleasePostCondition.Restore(
                                 hub, hubPath, outcome.Result!, outcome.PendingNode,
                                 resolvedActivityPath, firstAttempt, logger)
-                            : Observable.Return<(string? ReleasePath, string? Diagnosis)>(
+                            : Observable.Return<(string? ReleasePath, LogMessage? Diagnosis)>(
                                 (firstAttempt.ReleasePath, null)))
                         // 🚨 #4469 — THE JOIN POINT. A failure on an unresolved NAME asks the
                         // partition's import bookkeeping whether it lost the file that would have
@@ -4598,9 +4598,12 @@ internal static class NodeTypeCompilationHelpers
                             .WithKey("activity.compile.releaseCreated", ("path", newReleasePath)));
                     // The post-condition's verdict belongs on the OFFICIAL diagnosis surface, not
                     // only in a log sink — a stale release is invisible everywhere else (#781).
+                    // 🚨 KEYED, so a German viewer reads it in German (#3236 / review on #5057). The
+                    // entry arrives carrying its own catalog key, args and level — it used to be
+                    // wrapped in a bare `new LogMessage(string, …)` here, which renders its English
+                    // interpolation to every viewer forever.
                     if (settle.Diagnosis is { } diagnosis)
-                        activityMessages.Add(new LogMessage(diagnosis,
-                            newReleasePath is null ? LogLevel.Error : LogLevel.Warning));
+                        activityMessages.Add(diagnosis);
                     NodeTypeCompilationActivity.Complete(hub, resolvedActivityPath,
                         ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
                         activityMessages.ToImmutable(), logger!);

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Compiler;
@@ -258,16 +259,54 @@ public static class NodeTypeBuildState
             // Bounded — a hung owner must never block the compile's terminal write;
             // on timeout/fault emit null so the parent never advertises a phantom
             // Release path (mirrors RunCompile's activity-create guard).
-            return Observable.Using(
-                    () => !string.IsNullOrEmpty(requestedBy) && accessService is not null
-                        ? accessService.SwitchAccessContext(new AccessContext
-                        {
-                            ObjectId = requestedBy,
-                            Name = requestedBy
-                        })
-                        : System.Reactive.Disposables.Disposable.Empty,
-                    _ => meshService.CreateNode(node).Take(1))
-                .Select(_ => ReleaseCreateOutcome.Landed(releasePath))
+            return Bounded(
+                Observable.Using(
+                        () => !string.IsNullOrEmpty(requestedBy) && accessService is not null
+                            ? accessService.SwitchAccessContext(new AccessContext
+                            {
+                                ObjectId = requestedBy,
+                                Name = requestedBy
+                            })
+                            : System.Reactive.Disposables.Disposable.Empty,
+                        _ => meshService.CreateNode(node).Take(1))
+                    .Select(_ => System.Reactive.Unit.Default),
+                releasePath, scheduler: null, logger);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath}", nodeTypePath);
+            return Observable.Return(ReleaseCreateOutcome.Failed(
+                $"the Release node could not be composed at all: {ex.GetType().Name}: {ex.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// The BOUNDED WAIT around one create, and the classification of however it ends — extracted so a
+    /// test drives the production chain rather than only its ingredients.
+    ///
+    /// <para>🚨 <b>Why this is a seam and not an inline expression (review on #5057).</b> The
+    /// load-bearing change is that the bound FAULTS instead of substituting, and asserting that
+    /// through a hand-built <see cref="TimeoutException"/> handed to <see cref="Describe"/> proves
+    /// nothing about the chain: reverting
+    /// <c>Timeout(CreateBound)</c> to <c>Timeout(CreateBound, Observable.Return(&lt;no reason&gt;))</c>
+    /// would leave every such test green. Pure over its source and its
+    /// <paramref name="scheduler"/> — the same shape the fleet-watch dead-man's switch uses — so a
+    /// <c>HistoricalScheduler</c> drives the expiry with no mesh, no clock and no sleep, and the
+    /// substituting revert is caught by the outcome carrying no reason.</para>
+    /// </summary>
+    /// <param name="create">The create, as a single signal that it LANDED.</param>
+    /// <param name="releasePath">The path being minted — named in every outcome.</param>
+    /// <param name="scheduler">The clock the bound is measured on; null uses the default.</param>
+    /// <param name="logger">Where an exception's stack is published.</param>
+    internal static IObservable<ReleaseCreateOutcome> Bounded(
+        IObservable<System.Reactive.Unit> create,
+        string releasePath,
+        IScheduler? scheduler,
+        ILogger? logger) =>
+        create
+            .Take(1)
+            .Select(_ => ReleaseCreateOutcome.Landed(releasePath))
                 // 🚨 A BOUND THAT FAULTS, never one that SUBSTITUTES (#5057). This was
                 // `Timeout(bound, Observable.Return<string?>(null))` — the expiry replaced the
                 // sequence with the same `null` a refusal produced, wrote NO log line of any kind,
@@ -277,8 +316,8 @@ public static class NodeTypeBuildState
                 // exactly this bound, expiring, reported by nothing but the gap between two lines
                 // that happened to be adjacent. Faulting routes it into the catch below, where it
                 // becomes a reason like every other failure.
-                .Timeout(CreateBound)
-                .Catch<ReleaseCreateOutcome, Exception>(ex =>
+            .Timeout(CreateBound, scheduler ?? DefaultScheduler.Instance)
+            .Catch<ReleaseCreateOutcome, Exception>(ex =>
                 {
                     // 🚨 A COLLISION AT OUR OWN ID IS SUCCESS (#3407). ReleasePostCondition re-cuts
                     // when latestReleasePath still names an earlier build; when the retry lands in
@@ -314,28 +353,30 @@ public static class NodeTypeBuildState
                         releasePath);
                     return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath)));
                 });
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex,
-                "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath}", nodeTypePath);
-            return Observable.Return(ReleaseCreateOutcome.Failed(
-                $"the Release node could not be composed at all: {ex.GetType().Name}: {ex.Message}"));
-        }
-    }
 
     /// <summary>
     /// One create failure as one operator-readable line. A <see cref="TimeoutException"/> is named
     /// for what it IS — the bound expired and the owning hub never answered — because "TimeoutException:
     /// The operation has timed out" tells a reader nothing about which operation or what it waited for.
     /// Pure.
+    ///
+    /// <para>🚨 <b>And the expiry says the node MAY EXIST, naming where.</b> The bound stops this
+    /// process WAITING; it does not stop the create, whose message is already on the bus, so the
+    /// owning hub writes the node whether or not anyone is still listening. Measured on the control
+    /// instance over <c>Hosting/InstanceRequest/Release/*</c> (200 nodes, a floor — the listing
+    /// truncated): the interval from the id's own minute-second stamp to the node's creation is a
+    /// median <b>0.7 s</b> with <b>8 of 200 (4%) beyond this bound</b>, out to <b>17.8 s</b>. So
+    /// "did not land within the bound" and "was not created" are DIFFERENT facts, and a reader told
+    /// the first who acts on the second goes looking for bytes that are already published. The path
+    /// is in the sentence for exactly that reason: it is the one place to look.</para>
     /// </summary>
     /// <param name="ex">The exception the create failed with.</param>
     /// <param name="releasePath">The path the attempt was minting.</param>
     internal static string Describe(Exception ex, string releasePath) =>
         ex is TimeoutException
-            ? $"the create at '{releasePath}' did not land within {CreateBound} — the owning hub did "
-              + "not answer, so whether the node exists is UNKNOWN from here, not no"
+            ? $"the create did not land within {CreateBound} — the bound stops this process WAITING, "
+              + "not the create, so the node may well exist and nothing here advanced the pointer to "
+              + $"it: LOOK AT '{releasePath}' before concluding the release is missing"
             : $"the create at '{releasePath}' failed: {ex.GetType().Name}: {ex.Message}";
 
     /// <summary>

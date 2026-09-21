@@ -237,6 +237,51 @@ when a create fails — the same silently-wrong state with no reporter above it.
 itself, because the bake is unwatched *by design*, which is exactly why the reason has to be in its
 log rather than inferred from a release that never appeared.
 
+### 🚨 What the reportable expiry immediately revealed: the bound stops the WAIT, not the CREATE
+
+Once the expiry had a name, one read settled what it means — and it is not what "timed out" reads as.
+`Timeout` disposes this process's subscription to the `CreateNode` response. **The request is already
+on the bus**, so the owning hub writes the node whether or not anyone is still listening. A release
+id is `{yyyyMMddHHmmss}-{8 chars of SHA256(Collection/ContentPath)}`, so the id records when the
+attempt STARTED and the node's `createdDate` records when it LANDED — the gap between them is
+measurable from the store, with no instrumentation at all.
+
+Measured on the control instance over `Hosting/InstanceRequest/Release/*`, 200 nodes (**a floor** —
+the listing truncated at the limit):
+
+| | |
+|---|---|
+| median id-mint → landed | **0.7 s** |
+| beyond the 10 s bound | **8 of 200 (4%)** |
+| slowest | **17.8 s** (`20260920222136-3V8XoerZ`, landed 2026-09-20T22:21:53Z — minutes after the incident burst) |
+
+So a refusal reading *"the release could not be re-cut"* was, 4% of the time, emitted over a release
+node **that exists**. The pointer was never advanced to it, and the type went on advertising a build
+whose release was sitting right there.
+
+🚨 **And the retry compounds it, because the id encodes the SECOND.** Two nodes in the same sample:
+
+```
+20260917173651-dU1GWMZG   landed 2026-09-17T17:37:06.550Z
+20260917173701-dU1GWMZG   landed 2026-09-17T17:37:15.169Z
+```
+
+Identical content hash — so, by the id's own construction, identical bytes — with ids **exactly 10
+seconds apart**: the bound. The first attempt's wait expired, the re-cut minted a *new* id for the
+same build, and **both landed**. `AdoptOnOwnCollision` cannot rescue this: it adopts only a create
+REFUSED for `NodeAlreadyExists`, which requires the same id, and #3407's reasoning explicitly rests
+on the collision happening *in the same second*. A retry one bound later collides with nothing, so a
+second node is created and nothing adopts either.
+
+**The remedy this points at — deliberately not taken here.** The re-cut should reuse the abandoned
+attempt's release path rather than mint a fresh one: the same id turns the late landing into a
+`NodeAlreadyExists` refusal, which the adoption mechanism already resolves correctly, and the
+duplicate stops being minted. That is a behavioural change to release-id minting with a genuine
+in-flight race to design against, and it needs a control that drives expiry → retry → adopt. It is
+not something to bolt onto a diagnosability fix, and **widening the bound is not the alternative**:
+a tail that reaches 17.8 s would only move the same failure further out while making it rarer and
+therefore harder to catch.
+
 ### The control
 
 `ReleaseRecutReportsWhyItFailedTest` drives the pure sentence composition

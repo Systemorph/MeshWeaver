@@ -1,4 +1,8 @@
 using System;
+using System.Linq;
+using System.Reactive;
+using System.Reactive.Concurrency;
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -35,20 +39,121 @@ public class ReleaseRecutReportsWhyItFailedTest
         "a release request was consumed and this compile succeeded, yet latestReleasePath still "
         + "names an EARLIER build";
 
+    // ───────────── the PRODUCTION CHAIN, driven by a clock (review on #5057) ─────────────
+    //
+    // 🚨 The cases below exist because the ones further down do NOT cover the load-bearing change.
+    // `Timeout(CreateBound)` faulting instead of SUBSTITUTING is the whole fix, and a test that hands
+    // a hand-built TimeoutException to `Describe` would stay green through a revert to
+    // `Timeout(CreateBound, Observable.Return(<an outcome with no reason>))`. These drive
+    // `Bounded` — the real `.Timeout(…).Catch(…)` chain — on a HistoricalScheduler, so the expiry is
+    // the scheduler's, not a sleep's, and the substituting revert is caught by the outcome arriving
+    // with nothing to say.
+
+    /// <summary>Runs <paramref name="drive"/> against the production chain and returns its one outcome.</summary>
+    private static NodeTypeBuildState.ReleaseCreateOutcome? Run(
+        Action<Subject<Unit>, HistoricalScheduler> drive)
+    {
+        var create = new Subject<Unit>();
+        var clock = new HistoricalScheduler();
+        NodeTypeBuildState.ReleaseCreateOutcome? seen = null;
+        using var subscription = NodeTypeBuildState
+            .Bounded(create, ReleasePath, clock, logger: null)
+            .Subscribe(outcome => seen = outcome, _ => { });
+        drive(create, clock);
+        return seen;
+    }
+
+    /// <summary>
+    /// 🚨 THE REVERT DETECTOR. The clock passes the bound with no answer from the create, and the
+    /// outcome must carry a REASON naming the bound. A substituting fallback emits an outcome with no
+    /// reason at all — `Because` then reports that the attempt said nothing — so this assertion is
+    /// what a revert to <c>Timeout(bound, other)</c> cannot satisfy.
+    /// </summary>
+    [Fact]
+    public void AnElapsedCreate_ReportsTheBound_ThroughTheRealChain()
+    {
+        var outcome = Run((_, clock) => clock.AdvanceBy(NodeTypeBuildState.CreateBound.Add(TimeSpan.FromTicks(1))));
+
+        Assert.NotNull(outcome);
+        Assert.False(outcome!.Succeeded);
+        Assert.True(outcome.Attempted);
+        Assert.NotNull(outcome.Failure);
+        Assert.Contains(NodeTypeBuildState.CreateBound.ToString(), outcome.Failure!);
+        Assert.DoesNotContain("reported no reason", outcome.Because);
+    }
+
+    /// <summary>
+    /// The other side: a create that answers INSIDE the bound is a plain success, with no failure
+    /// wording and the path intact. A fix that reported every outcome as a failure would satisfy the
+    /// case above and be worse than the defect.
+    /// </summary>
+    [Fact]
+    public void ACreateThatLandsInsideTheBound_Succeeds_ThroughTheRealChain()
+    {
+        var outcome = Run((create, clock) =>
+        {
+            clock.AdvanceBy(NodeTypeBuildState.CreateBound - TimeSpan.FromSeconds(1));
+            create.OnNext(Unit.Default);
+        });
+
+        Assert.NotNull(outcome);
+        Assert.True(outcome!.Succeeded);
+        Assert.Equal(ReleasePath, outcome.ReleasePath);
+        Assert.Null(outcome.Failure);
+    }
+
+    /// <summary>
+    /// 🚨 #3407 through the chain rather than only through <c>AdoptOnOwnCollision</c> in isolation: a
+    /// create refused because the path is already taken has SUCCEEDED, so the pointer advances.
+    /// </summary>
+    [Fact]
+    public void AnAlreadyExistsRefusal_IsAdopted_ThroughTheRealChain()
+    {
+        var outcome = Run((create, _) => create.OnError(
+            CreateNodeResponse.Fail("taken", NodeCreationRejectionReason.NodeAlreadyExists)
+                .ToException(ReleasePath)));
+
+        Assert.NotNull(outcome);
+        Assert.True(outcome!.Succeeded);
+        Assert.Equal(ReleasePath, outcome.ReleasePath);
+    }
+
+    /// <summary>
+    /// Any other refusal leaves the pointer un-advanced AND says why — advertising a release path
+    /// whose node does not exist would be worse than the bug being fixed.
+    /// </summary>
+    [Fact]
+    public void AnyOtherRefusal_FailsWithItsReason_ThroughTheRealChain()
+    {
+        var outcome = Run((create, _) => create.OnError(
+            new InvalidOperationException("cross-hub write PARTIALLY refused")));
+
+        Assert.NotNull(outcome);
+        Assert.False(outcome!.Succeeded);
+        Assert.Contains("cross-hub write PARTIALLY refused", outcome.Failure!);
+    }
+
     // ───────────────── the channel the incident names: a bound that expired ─────────────────
 
     /// <summary>
     /// 🚨 THE CASE. A timeout is named for what it is — the bound, and that the create's fate is
     /// UNKNOWN rather than known-not-to-have-happened, which is the difference between "re-issue it"
     /// and "go and look".
+    ///
+    /// <para>Measured on the control instance over <c>Hosting/InstanceRequest/Release/*</c> (200
+    /// nodes, a floor — the listing truncated): 8 of 200 creates landed AFTER this bound, out to
+    /// 17.8 s, against a median of 0.7 s. The bound stops the WAIT, not the create, so the sentence
+    /// must send the reader to the path rather than let them conclude the release is missing.</para>
     /// </summary>
     [Fact]
-    public void ATimeout_NamesTheBoundItWaitedOut()
+    public void ATimeout_NamesTheBoundAndSendsTheReaderToThePath()
     {
         var reason = NodeTypeBuildState.Describe(new TimeoutException("timed out"), ReleasePath);
         Assert.Contains(NodeTypeBuildState.CreateBound.ToString(), reason);
         Assert.Contains(ReleasePath, reason);
-        Assert.Contains("UNKNOWN", reason);
+        // Not "was not created": the create outlives the wait, so the node may well exist.
+        Assert.Contains("may well exist", reason);
+        Assert.DoesNotContain("was not created", reason);
     }
 
     /// <summary>Any other fault names its exception type and message — never a bare class name.</summary>
@@ -154,6 +259,43 @@ public class ReleaseRecutReportsWhyItFailedTest
         Assert.Contains("no recompile", sentence);
         Assert.DoesNotContain("VIOLATED", sentence);
         Assert.DoesNotContain("has no release", sentence);
+    }
+
+    // ───────────────── the transcript entry is KEYED, or it is English forever ─────────────────
+
+    /// <summary>
+    /// 🚨 Both activity entries carry a catalog key and their arguments, so a German viewer reads a
+    /// German sentence (<c>LogMessage</c>, #3236). The English text stays as the FALLBACK — that is
+    /// what keeps an old persisted row, and a key that later leaves the catalog, rendering as they do
+    /// today. Without this case the keying could be dropped and every sentence assertion above would
+    /// stay green while the transcript silently went English-only again.
+    /// </summary>
+    [Fact]
+    public void BothActivityEntries_AreKeyed_WithTheEnglishTextAsFallback()
+    {
+        var clause = ReleasePostCondition.FirstAttemptClause(
+            NodeTypeBuildState.ReleaseCreateOutcome.Failed("refused"));
+
+        var restored = ReleasePostCondition.RestoredEntry(Violation, clause, ReleasePath);
+        Assert.Equal(ReleasePostCondition.RestoredKey, restored.MessageKey);
+        Assert.Equal(
+            ReleasePostCondition.RestoredDiagnosis(Violation, clause, ReleasePath), restored.Message);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, restored.LogLevel);
+
+        var recut = NodeTypeBuildState.ReleaseCreateOutcome.Failed("the owning hub did not answer");
+        var violated = ReleasePostCondition.ViolatedEntry(Violation, clause, recut);
+        Assert.Equal(ReleasePostCondition.ViolatedKey, violated.MessageKey);
+        Assert.Equal(
+            ReleasePostCondition.FailedDiagnosis(Violation, clause, recut), violated.Message);
+        // Error, not Warning: this build has no release.
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Error, violated.LogLevel);
+
+        // 🚨 Every placeholder the catalog entries spell is supplied, or a German render shows the
+        // literal token. These are the ONLY names the two catalog values use.
+        Assert.NotNull(restored.MessageArgs);
+        Assert.Equal(["firstAttempt", "path", "violation"], restored.MessageArgs!.Keys.Order());
+        Assert.NotNull(violated.MessageArgs);
+        Assert.Equal(["firstAttempt", "reason", "violation"], violated.MessageArgs!.Keys.Order());
     }
 
     /// <summary>A settle that attempted nothing says exactly that, in both sentences.</summary>
