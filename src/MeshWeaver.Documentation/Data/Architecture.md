@@ -385,6 +385,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
 - [Guards and Unknown States](GuardsAndUnknownStates)
 - [Mesh Admission](MeshAdmission)
+- [Disposed Scopes and Dying Hubs — one symptom, five roots](DisposedScopeAndDyingHubs) — every `ObjectDisposedException` on an Autofac `LifetimeScope` looks identical in a log and comes from one of five unrelated roots; the discriminators, which are fixed, and the swept inventory of deferred resolve sites
 - [Mesh Lifecycle — Build Up & Tear Down](MeshLifecycle)
 - [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
 - [The Portal Heap Is Hubs](PortalHeapIsHubs)

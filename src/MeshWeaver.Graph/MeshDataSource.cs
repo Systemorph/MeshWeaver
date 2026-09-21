@@ -913,6 +913,18 @@ public static class MeshDataSourceExtensions
             return;
         }
 
+        // 🚨 RESOLVED HERE, AND THE RELEASE HAPPENS BEFORE THE LOG (#5064). Control only reaches
+        // this line when `meshHub.IsDisposing` is already true — the guard above returned
+        // otherwise — so the error arm below runs on a hub whose Autofac LifetimeScope is being
+        // closed underneath it, and resolving the logger THERE throws
+        // `ObjectDisposedException: … this LifetimeScope … has already been disposed`. That throw
+        // lands inside an Rx error handler, which rethrows: `lease.Dispose()` never ran, and the
+        // collectible AssemblyLoadContext stayed held for the process lifetime — precisely the ALC
+        // leak this whole mechanism exists to bound. Two corrections, both structural: resolve
+        // while the scope is as alive as it will ever be, and release the lease FIRST so no
+        // diagnostic can prevent the cleanup it describes.
+        var logger = meshHub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
+
         // ReplaySubject(1)-backed and COMPLETING, so this subscription releases itself as soon as
         // the report arrives (and a subscriber attaching after teardown finished still gets it) —
         // the same self-releasing shape UnloadNodeAssemblyContexts relies on, so nothing is rooted.
@@ -923,10 +935,10 @@ public static class MeshDataSourceExtensions
             _ => lease.Dispose(),
             ex =>
             {
-                meshHub.ServiceProvider.GetService<ILogger<MeshDataSource>>()?.LogWarning(ex,
+                lease.Dispose();
+                logger?.LogWarning(ex,
                     "Teardown signal faulted before the NodeType assembly lease was released — "
                     + "releasing it now so the collectible context is not held for the process lifetime");
-                lease.Dispose();
             });
     }
 

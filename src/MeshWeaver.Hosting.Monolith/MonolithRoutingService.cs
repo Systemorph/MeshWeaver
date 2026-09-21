@@ -29,8 +29,17 @@ internal class MonolithRoutingService(
         streams[address] = callback;
         // Unregister is a synchronous dictionary removal — no actual async, so no
         // IO-pool bridge needed. Hand back a plain IDisposable.
+        //
+        // 🚨 A registration removes WHAT IT REGISTERED, never "whatever is registered at this
+        // address now". Registration is last-writer-wins, so removing by KEY lets a departing
+        // registration erase a LATER one at the same address — and the local route is what makes
+        // in-process delivery work, so that takes the address dark with no exception and nothing
+        // to grep. Found while tracing #5136 (a hosted hub handed out after its disposal had
+        // begun); no production occurrence of the erase itself is on record, because nothing
+        // currently re-registers an address while its predecessor's teardown is still running.
+        // It is asserted here so that stays a property of this method rather than of its callers.
         return System.Reactive.Disposables.Disposable.Create(
-            () => streams.TryRemove(address, out _));
+            () => streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback)));
     }
 
 
