@@ -158,6 +158,27 @@ race, the reactivated hub re-ran its source query against a half-invalidated sta
   *"requested by itself — a rebind or self-heal recycle"* and nothing more: one sentence covering
   three states. The poster always knows why; only the log did not.
 
+  🚨 **And for two releases the operator surfaces could not honour that rule** (#4782): `Recycle` took
+  a path and nothing else, so an absolute in `AGENTS.md` was unsatisfiable from the places an operator
+  actually reaches for. An instruction the named surface cannot obey trains readers to skip the rule
+  rather than to follow it, which is a worse outcome than not having stated it. Closed in two steps —
+  `MeshOperations.Recycle(path, reason)` (#4952, an **overload**, because a defaulted parameter
+  replaces the signature an already-built in-mesh module compiled against), then the surfaces:
+  `POST /api/mesh/recycle` takes `reason` on its own `RecycleBody`, and `mw recycle <path> --reason "…"`
+  carries it.
+
+  Two properties of that plumbing are deliberate and easy to undo by accident:
+
+  - **A new record, not a widened `PathBody`.** `/compile` and `/diagnostics` bind the same shape and
+    have no use for a reason, and a field that means nothing on two of three routes is a field callers
+    guess about.
+  - **The framework's sentence is KEPT and the operator's APPENDED**, never substituted — they answer
+    different questions, and a reader working backwards from a `[QUIESCE-START]` wants both. A blank
+    reason is refused at exactly one place (`MeshOperations.RecycleReason`, parameterised over `null`,
+    `""` and `"   "`), so the wire and the CLI deliver what they were given rather than normalising it:
+    two deciders would mean the wrong one is the one nobody reads. A `Reason` that is present and empty
+    prints as nothing and is **worse** than the fallback, because it looks like a caller who answered.
+
 A recycle is announced to the subscribers it is about to orphan. `Dispose()` makes that announcement
 as its FIRST statement, **while the hub is whole**, because the teardown itself is silent by
 construction — a dying owner reaching up the hub tree for a last word resurrects the activation it is

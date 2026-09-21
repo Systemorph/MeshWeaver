@@ -122,8 +122,13 @@ public static class MeshApiEndpoints
         group.MapPost("/copy", (HttpContext http, IMessageHub rootHub, CopyBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Copy(body.SourcePath, body.TargetNamespace, body.Force)));
 
-        group.MapPost("/recycle", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
-            RunString(http, rootHub, ct, ops => ops.Recycle(body.Path)));
+        // 🚨 RecycleBody, not the shared PathBody (MeshWeaver#4782). `reason` belongs to recycle
+        // alone — /compile and /diagnostics bind the same shape and have no use for one, and a field
+        // that means nothing on two of three routes is a field callers guess about. `Reason` is
+        // nullable with a default, so `{"path":"…"}` — what `mw recycle` has always posted — binds
+        // with Reason null, which is the value that selects the framework's self-describing fallback.
+        group.MapPost("/recycle", (HttpContext http, IMessageHub rootHub, RecycleBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.Recycle(body.Path, body.Reason)));
 
         group.MapPost("/compile", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Compile(body.Path)));
@@ -470,6 +475,14 @@ public static class MeshApiEndpoints
     public record MoveBody(string SourcePath, string TargetPath);
     public record CopyBody(string SourcePath, string TargetNamespace, bool Force = false);
     public record PathBody(string Path);
+
+    /// <summary>
+    /// <c>POST /api/mesh/recycle</c>. Separate from <see cref="PathBody"/> so that only this route
+    /// carries <c>Reason</c> — the operator's own <i>why</i>, which lands in the target's
+    /// <c>DisposeRequest.Reason</c> beside the framework's sentence rather than replacing it
+    /// (MeshWeaver#4782). Optional: a body of <c>{"path":"…"}</c> binds with <c>Reason</c> null.
+    /// </summary>
+    public record RecycleBody(string Path, string? Reason = null);
     public record ExecuteScriptBody(string Path, int? TimeoutSeconds);
     public record RenderAreaBody(string Path, string? Area = null, string? Id = null, int? TimeoutSeconds = null);
     public record RenderMarkdownBody(string Markdown, string? NodePath = null);
