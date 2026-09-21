@@ -1434,10 +1434,11 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, 
             # file, with nothing anywhere saying so.
             #
             # So the exemption is held to the ONE question that can falsify it — does a portal
-            # answer there? — using the probe seam this function already takes. Costs one HTTPS
-            # call per exempted installation (three in the fleet today), and only for one that
-            # names a host: an entry for something with no ingress host cannot be falsified this
-            # way and is left to the roster's own stale-entry check. The reading is the COMMIT, not
+            # answer there? — using the probe seam this function already takes. It costs one HTTPS
+            # call per exempted installation THAT NAMES A HOST, which in the committed fleet is
+            # ZERO: after `pearl`'s line goes the only exemption left is `partnerre`, whose overlay
+            # still reads `host: "TODO"` and yields no host at all, so it is skipped here and left
+            # to the roster's own stale-entry check. The reading is the COMMIT, not
             # the absence of an error: `derive-combo-instances.py` passes a probe that answers
             # nothing (`_no_probe`), so the combo lane stays free of a call to every portal in the
             # fleet and this arm is inert there by construction — one lane does the network.

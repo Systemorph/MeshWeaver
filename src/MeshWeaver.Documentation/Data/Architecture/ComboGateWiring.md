@@ -293,7 +293,7 @@ are the whole of what is missing.
 
 | Name | Kind | Value | Where it comes from |
 |---|---|---|---|
-| `COMBO_VERIFY_SOURCES` | variable | space-separated `name=url`, e.g. `plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the module source repositories the verifier materialises. 🚨 **Not derivable from the overlays, and that is a property of the data rather than of the effort spent**: it maps a registry *source NAME* carried by an install record to the repository that source's modules come from, and only the registry holds that mapping (`ComboAssembly.SourceRepositories`, consumed at `InstanceComboAssembler.cs:310`). It is plain data, not a credential. |
+| `COMBO_VERIFY_SOURCES` | variable | space-separated `name=url`, e.g. `Plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the module source repositories the verifier materialises — it maps a registry *source NAME* carried by an install record to the repository that source's modules come from (`ComboAssembly.SourceRepositories`, consumed at `InstanceComboAssembler.cs:310`). Plain data, not a credential. 🚨 **This row used to claim the mapping was "not derivable from the overlays, and that is a property of the data rather than of the effort spent". It is derivable — see below.** |
 | `COMBO_VERIFY_KEYS` | secret | `{"<instance>":"mwi_…"}`, one per **derived** instance | 🚨 **ISSUED, never recovered.** An `mwi_` instance-registry key is stored hash-only (`InstanceKeys` persists `Hash(raw)`), so an existing key cannot be read back — a NEW key is issued per instance, additively, and separately revocable. |
 | `COMBO_VERIFY_TOKENS` | secret | `{"<instance>":"mw_…"}`, one per **derived** instance | an API token of a **global admin** on that instance. #3891 made this removable — see below — but the lander still uses it, so it is required until that switch lands. |
 
@@ -303,12 +303,16 @@ derived roster before it asks for credentials, and names the instance any map is
 `memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
 is the failure mode a derivation removes rather than a tidiness argument.
 
-🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Measured
-2026-09-15 over all three deployments repositories, the fleet declares **four live** installations:
-`build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud) and `memex`
-(memex.systemorph.com) in `Systemorph/Memex`, **and a second `memex`** (partnerre.meshweaver.cloud)
-in `Systemorph/PartnerRe.Memex` — with `pearl` and `partnerre` excluded by their `not-installed`
-declarations in `.github/acr-retention/instances.json`.
+🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Re-measured
+2026-09-21 over all three deployments repositories, the fleet declares **five live** installations:
+`build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud), `memex`
+(memex.systemorph.com) and `pearl` (pearl.meshweaver.cloud) in `Systemorph/Memex`, **and a second
+`memex`** (partnerre.meshweaver.cloud) in `Systemorph/PartnerRe.Memex`. `partnerre` is the ONLY
+remaining exclusion in `.github/acr-retention/instances.json`.
+
+(It read *four* until 2026-09-21, because `pearl` carried a `not-installed` line that had been true
+when it was written and was not any more — see the stale-exemption section above. That is the
+measurement changing, not the rule.)
 
 Upstream that duplicate is **legal and correct**: since [#3438](https://github.com/Systemorph/MeshWeaver/issues/3438)
 (2026-09-15) an installation's identity is `gh_repo:id`, because a `Hosting__Deployment` is unique
@@ -415,30 +419,48 @@ installations". Three independent layers refuse a zero — the script, the prefl
 and the `verdict` job's `COUNT < 1` arm — and `check-combo-verify.py` plus
 `derive-combo-instances.py --self-test` drive all of them on every pull request.
 
+### 🚨 MEASURED: `COMBO_VERIFY_SOURCES` IS derivable from the overlays — the row above was wrong
+
+The claim that only the registry holds the source→repository mapping is false, and it was stated
+with the confidence of a property (*"a property of the data rather than of the effort spent"*),
+which is the shape that stops anyone re-checking it. The mapping is in the fleet's own overlays, in
+the same files the roster is derived from — `deployments/aks/memex-cloud/values.memexcloud.public.yaml`,
+`pluginCatalog.sources`:
+
+```yaml
+  sources:
+    - name: "Plugins"      repoPath: "https://github.com/Systemorph/MeshWeaver.Plugins"
+    - name: "Education"    repoPath: "https://github.com/Systemorph/MeshWeaver.Education"
+    - name: "Reinsurance"  repoPath: "https://github.com/Systemorph/MeshWeaver.Reinsurance"
+    - name: "Crm"          repoPath: "https://github.com/Systemorph/MeshWeaver.Crm"
+```
+
+`name` is exactly the `PackageCoordinate.SourceName` an install record stamps (measured: `Plugins/Chat`
+on memex.meshweaver.cloud carries `"source": "Plugins"`) and `repoPath` is exactly the URL
+`--source <name>=<url>` wants. `Systemorph/Memex`'s `check-record-renders-overlay.py` already holds
+that block to the record's `pluginRepos` by index, name, repository URL and ref **in both
+directions**, so it is kept honest by a gate rather than by nobody.
+
+**So `COMBO_VERIFY_SOURCES` is the same shape of pin `vars.COMBO_VERIFY_INSTANCES` was**, and
+deriving it would leave only the two issued-never-recovered credentials for an operator — the
+irreducible half. It is less dangerous than the roster pin was: a stale source map fails LOUD (the
+assembler refuses by name, *"no repository is known for source 'X'"*, the verdict is
+`NotVerifiable`, and the lane reds) rather than silently verifying a short set. That is why it is
+worth doing and why it is not urgent — and it unblocks nothing on its own, because the refusal below
+comes first.
+
 ### 🚨 MEASURED: the three inputs are necessary and NOT sufficient — the roster refuses first
 
 This section used to open *"provisioning the three remaining `COMBO_*` inputs makes this lane green
-today"*. **That is false, and it was never observed to be true**: the preflight asserts the inputs
-BEFORE it derives the roster, so the derivation has never once run in CI — every run of this lane
-has died one step earlier. Run by hand against the credential CI uses, it refuses:
+today"* — **while the section above described the derivation refusing.** The page contradicted
+itself, and the wrong half is the one an operator would act on.
 
-```
-::error::the combo-verification roster could not be derived:
-  • two live installations are both named `memex` (Systemorph/Memex
-    deployments/aks/memex/values.memex.public.yaml and Systemorph/PartnerRe.Memex
-    deployments/aks/memex/values.memex.yaml). … this lane's credential maps
-    (COMBO_VERIFY_KEYS, COMBO_VERIFY_TOKENS) are keyed by NAME: both would be handed the
-    same instance key and admin token, and one's verdict would land on the other's
-    Admin/UpdatePolicy. Rename one installation, or key the maps by the qualified repo:id
-    and say so here.
-```
-
-The refusal is **correct** — it is the duplicate-host harm arriving through the other door — and it
-became reachable when the fleet gained a second deployments repository: `Systemorph/PartnerRe.Memex`
-carries `deployments/aks/memex/values.memex.yaml` declaring `Hosting__Deployment: "memex"` at
-`partnerre.meshweaver.cloud`, alongside this fleet's own `memex`. The nightly lock sees the same
-installation and names it `Systemorph/PartnerRe.Memex:memex`, so the collision is real under CI's
-own credential, not an artefact of a narrow scan.
+It is wrong because the preflight asserts the credentials **BEFORE** it derives the roster, so the
+derivation has never once run in CI: every run of this lane has died one step earlier, and nobody
+could have seen the duplicate-`memex` refusal without running it by hand. Re-measured 2026-09-21
+against the repository set CI's own credential reaches, and confirmed independently by the nightly
+lock naming the same installation `Systemorph/PartnerRe.Memex:memex` in its 01:19Z run — so the
+collision is real under CI's credential, not an artefact of a narrow scan.
 
 **So the remainder is provisioning PLUS one decision**, and the decision is cheapest now, while the
 maps do not exist:
