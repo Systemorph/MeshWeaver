@@ -509,7 +509,13 @@ rather than to the caller's impatience). Making a *silent* starvation produce th
 query-layer change, not a fold change: `MeshQuery` already **detects** it (`InitialStallProbe`, 20 s,
 whose own warning says *"Fix the stalled provider; never bump the consumer's timeout"*) and
 deliberately only logs. Turning that probe into a terminal would change every query in the mesh and is
-a platform decision in its own right — it is tracked, not slipped in under a symptom fix.
+a platform decision in its own right — it is tracked, not slipped in under a symptom fix. **And the
+blast radius is the argument, not caution:** the other shape the fan-in has for an unanswered
+provider — count it empty and NAME it on the frame — is exactly the permissive seed the three bullets
+above rule out, so delivering one to this fold would be a hole, not a diagnosis. What a CONSUMER can
+do instead is refuse to convert a named-silent frame into a verdict of its own; path resolution now
+does that, and [HubInitializationFailure](../HubInitializationFailure) →
+"Resolving the node is a READ" carries the worked case (issue #1186) with the measurements.
 
 **The gate stays unbounded, deliberately.** `AccessControlPipeline` carries no `Timeout` (see its "No
 Timeout here" comment) and this change does not add one. Bounding the shared gate would change the
