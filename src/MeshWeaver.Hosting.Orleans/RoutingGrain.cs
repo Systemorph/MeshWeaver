@@ -604,7 +604,11 @@ internal class RoutingGrain(
             // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally. See
             // ClassifyDeliveryException: a silo leaving mid-roll and a directory mid-handoff are
             // TRANSIENT, and telling the sender otherwise tears down mirrors that would have resumed.
-            var errorType = ClassifyDeliveryException(ex, IsServiceScopeDisposed);
+            // 🚨 And it must be THE POD-HUB classifier, not the general one: the general one's
+            // deactivated-activation arm defaults to the terminal answer for a caller that cannot
+            // consult the activation-failure registry, which made it INERT on this leg — see
+            // ClassifyPodHubDeliveryException.
+            var errorType = ClassifyPodHubDeliveryException(ex, IsServiceScopeDisposed);
             // 🚨 A container that is already gone is not an incident to page on — it is this process
             // exiting, and the delivery it could not carry is being retried against a live pod by a
             // sender that now (correctly) reads ShuttingDown. Error there filed #2638 for a pod that
@@ -1946,6 +1950,54 @@ internal class RoutingGrain(
         || IsScopeTeardown(ex, scopeDisposed)
             ? ErrorType.ShuttingDown
             : ErrorType.Failed;
+
+    /// <summary>
+    /// The same classification for the POD-HUB leg, where the one ambiguity
+    /// <see cref="IsDeactivatedActivation"/> guards against <b>cannot arise</b> — issue #2299.
+    ///
+    /// <para><b>The defect this closes.</b> <see cref="ClassifyDeliveryException"/> defaults
+    /// <c>activationErrorRecorded</c> to <c>true</c> — "assume the worse case" — so a caller that
+    /// cannot consult <see cref="GrainActivationFailureRegistry"/> leaves the verdict TERMINAL.
+    /// <see cref="BuildPodHubRoute"/> is such a caller, and it passed the default: the
+    /// deactivated-activation arm was therefore unreachable on this leg, and the very shape it was
+    /// written for — Orleans' <c>… after "DeactivateOnIdle was called." to invalid activation.
+    /// Rejecting now.</c> — kept being reported as <see cref="ErrorType.Failed"/>. That is the
+    /// verdict production printed verbatim on this leg, and #2299's own evidence is almost entirely
+    /// this shape (947 occurrences, all of the newest samples). So the predicate existed, was
+    /// correct, and was inert exactly where the fault lives.</para>
+    ///
+    /// <para><b>Why <c>false</c> is a FACT here, not an assumption.</b> The registry is documented
+    /// as holding the last activation failure "for each per-node-hub grain" and is written only by
+    /// <c>MessageHubGrain</c>. The ambiguity it resolves is a per-node hub in a PERSISTENT
+    /// activation-fault loop — a NodeType whose compile cannot materialise a hub configuration, so
+    /// the activation faults instantly and every delivery lands in a deactivation window. A
+    /// <see cref="PodHubGrain"/> has no NodeType, no configuration to materialise and no such loop:
+    /// its <c>OnActivateAsync</c> deliberately never throws (the refusal is the CALL's answer,
+    /// <see cref="PodHubNotHereException"/>), so it never records an activation error and never
+    /// could. An "invalid activation" rejection from this grain is therefore always the idle
+    /// deactivation it requested of itself, which is a lifecycle transition by construction — the
+    /// bar <see cref="ClassifyDeliveryException"/> sets.</para>
+    ///
+    /// <para><b>What the corrected verdict buys.</b> The consumers that carry their own recovery
+    /// machinery (<c>SynchronizationStream</c>'s resubscribe latch, <c>MeshNodeStreamCache</c>'s
+    /// transient-owner rule) RIDE OUT <see cref="ErrorType.ShuttingDown"/> and TEAR DOWN on
+    /// <see cref="ErrorType.Failed"/>. The newest #2299 sample's sender is an agent thread, so the
+    /// terminal verdict ended one agent round that the address's next claim would have served.</para>
+    ///
+    /// <para>🚨 <b>Nothing else is widened.</b> Every other arm is evaluated unchanged, and a
+    /// rejection that is not one of the recognised shapes stays terminal — so a genuine defect on
+    /// this leg is still reported as one. This does NOT address the re-activation bounce that
+    /// PRODUCES the rejection (the throw-away activation a non-owning silo creates, refuses and
+    /// deactivates); that is a lifecycle question recorded on #2299 and is deliberately not
+    /// answered by a classifier.</para>
+    /// </summary>
+    /// <param name="ex">The exception the pod-hub delivery attempt faulted with.</param>
+    /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
+    /// <see cref="IsScopeTeardown"/>.</param>
+    /// <returns>The <see cref="ErrorType"/> the sender's NACK should carry.</returns>
+    internal static ErrorType ClassifyPodHubDeliveryException(
+        Exception ex, Func<bool>? scopeDisposed = null) =>
+        ClassifyDeliveryException(ex, scopeDisposed, activationErrorRecorded: false);
 
     /// <summary>
     /// 🚨 <b>The TARGET GRAIN deactivated while the message was in flight — issue #2299.</b> Orleans

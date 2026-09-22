@@ -58,7 +58,7 @@ IsScopeTeardown`, and `Failed` for everything else. What production actually del
 | `…is not stable to perform the lookup… Retry later.` / `hop limit is reached` / `on invalid silo` | the grain directory is mid-handoff | `IsDirectoryUnstable` (#1742 / #2357 / #3139) |
 | `Unable to connect to S10.244.2.223:11111:148812047 …` — `HostUnreachable`, `ConnectionRefused` | nothing is listening at that pod incarnation | `IsDepartedSiloRejection` |
 | `The target silo is no longer active: target was …:146524552, but this silo is …:146534005` | the pod restarted and reclaimed its address | `IsDepartedSiloRejection` |
-| `…for 2 times after "DeactivateOnIdle was called." to invalid activation. Rejecting now.` | the target **grain** deactivated while the message was in flight | its own predicate — a separate change |
+| `…for 2 times after "DeactivateOnIdle was called." to invalid activation. Rejecting now.` | the target **grain** deactivated while the message was in flight | `IsDeactivatedActivation`, gated on a discriminator — and for one release that gate made it unreachable on the leg that produces it; see below |
 
 The first row was already recognised. The middle two are this page's subject. The fourth is a
 different statement — about an activation on a live silo, not about the silo — and is handled
@@ -73,6 +73,94 @@ were all this. Adding a retry here would have been inventing a second cure for a
 one already covers — `IsTransientFailure`'s `OrleansMessageRejectionException` type test matches both
 shapes, so they had been retried with a fresh resolve six times since PR #2314. Only the verdict was
 wrong.
+
+## 🚨 The fifth instance of that shape: a SAFE DEFAULT made the fourth row's predicate inert
+
+The shape above has a variant that is harder to see, because the classifier *can* read its input —
+it was simply never handed it.
+
+`IsDeactivatedActivation` is deliberately not a bare text match. The same rejection means two
+opposite things, and `GrainActivationFailureRegistry` documents the other one: a **per-node hub** in a
+*persistent* activation-fault loop — a NodeType whose compile cannot materialise a hub configuration
+— has an alive window of about zero, so every delivery lands in a deactivation window and Orleans
+answers with this exact sentence. That grain never recovers, and demoting it would hide a real defect
+behind a transient NACK. So the text is a NECESSARY condition and the registry is the discriminator:
+
+```csharp
+internal static bool IsDeactivatedActivation(Exception ex, bool activationErrorRecorded) =>
+    !activationErrorRecorded && /* the text test */;
+
+internal static ErrorType ClassifyDeliveryException(
+    Exception ex, Func<bool>? scopeDisposed = null, bool activationErrorRecorded = true) => …;
+```
+
+The default is `true` — *assume the worse case* — so a caller that cannot consult the registry leaves
+the verdict terminal, exactly as this page's own rule demands.
+
+**And the pod-hub leg was such a caller.** `BuildPodHubRoute`'s terminal arm called
+`ClassifyDeliveryException(ex, IsServiceScopeDisposed)` — two arguments — so on that leg the arm could
+never fire, while `BuildGrainRoute` passed
+`activationErrorRecorded: !string.IsNullOrEmpty(activationError)` and worked. The evidence says which
+leg matters: the rejection names `IPodHubGrain.Deliver`, and #2299 is almost entirely this shape — 947
+recorded occurrences, every one of the newest samples, each logged as *"surfacing **Failed**
+DeliveryFailure to sender …"*. The predicate shipped, its unit facts were green, and production kept
+printing the pre-fix verdict in one word.
+
+> 🚨 **A predicate gated on a discriminator that defaults to the safe answer is INERT at every call
+> site that does not pass the discriminator — and the site that produces the fault may be one of
+> them.** There is nothing to grep for, because the defect is an argument that was not written: the
+> predicate reads correct, and the call site compiles.
+
+### Why `false` is a FACT on this leg, not a guess
+
+Passing it on a leg that merely *lacks* a registry would be a guess. Here it is a statement about the
+grain:
+
+1. **The registry is per-node-hub by contract** — "the LAST activation failure observed for each
+   per-node-hub grain" — and only `MessageHubGrain` writes it.
+2. **A `PodHubGrain` has nothing to fail at activation**: no NodeType, no hub configuration to
+   materialise, and a class contract that it must *not* throw from `OnActivateAsync` because the
+   refusal is the CALL's answer (`PodHubNotHereException`). It cannot enter the loop the discriminator
+   separates, so it never records an error and never could.
+3. **Therefore the only way a pod-hub activation becomes invalid is the idle deactivation it requested
+   of itself** when it answered "not here" — a lifecycle transition by construction, which is this
+   page's bar.
+
+`ClassifyPodHubDeliveryException` states that once, with the argument attached, and the leg calls it.
+
+### What the corrected verdict does NOT fix
+
+The **bounce that produces the rejection**. With `[PreferLocalPlacement]`, a delivery to a pod-hub
+address with no live owner activation is placed on the *caller's* silo, which holds no local route for
+it; `PodHubGrain.Deliver` then requests its own idle deactivation **and** throws. The throw answers
+*that* message terminally; every message arriving in the deactivation window is answered by **Orleans**
+instead, transiently, and the router's six re-resolving retries can each place another throw-away
+activation whose own window bounces the next arrivals. That is self-sustaining, and it is a lifecycle
+question rather than a classification one:
+
+| candidate | what it costs |
+|---|---|
+| stop requesting deactivation in `Deliver`, so the grain's own TERMINAL refusal is the only answer | the throw-away activation lingers instead of being reaped promptly. It holds no route and no stream, and the claim path still converges because `Attach` requests deactivation on its own non-owning path — but the ceiling becomes *silos × addresses recently mis-routed to them* rather than zero |
+| bound that ceiling with Orleans' own reaper — a collection-age limit on the grain type, which can only affect UN-pinned activations (the owner's is pinned indefinitely, a released address carries a finite tombstone) | the age must stay at or above the collection quantum; it is a bound stated from source rather than a timer anyone wrote |
+| refuse to re-send the delivery on this rejection for this leg alone, since prefer-local guarantees the retry re-places the squatter | loses the retries that DO succeed because the owner's claim landed between attempts — a reduction in a symptom's volume, not a removal of its cause. Recorded so it is not mistaken for one |
+
+The first two belong together and want one measurement on a real cluster: is an inert activation cheap
+enough that idle collection alone is an acceptable reaper. None of the three is a classification
+change, which is why the classification landed on its own.
+
+### What is pinned, and what is not
+
+`PodHubDeactivatedActivationClassificationTest` pins the **decision** from both sides, with both
+production texts quoted verbatim: the pod-hub classifier answers `ShuttingDown`, the general
+classifier with its own defaults still answers `Failed` for the identical exception, and the verdict
+flips on `activationErrorRecorded` alone — so the discriminator cannot be collapsed into an
+unconditional text match. It also pins that the container probe is forwarded and that a rejection
+carrying no recognised phrase stays terminal on this leg too.
+
+🚨 **It does not pin the WIRING.** Reverting `BuildPodHubRoute` to the general classifier leaves every
+fact green: the facts are about the two classifiers, and the leg's choice is one line with one call
+site. That is stated rather than implied, because the defect this section describes *was* an un-pinned
+argument at a call site.
 
 ## The bar, and why a timeout deliberately fails it
 
