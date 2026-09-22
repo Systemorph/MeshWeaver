@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# A stand-in `helm` for hosting-migrate's tests. Only `get manifest` is answered: from
+# $HOSTING_MIGRATE_FIXTURE/manifest.yaml when it exists, else the real CLI's "release: not found".
+# Every invocation is recorded in $HOSTING_MIGRATE_STUB_LOG. It asserts nothing about helm itself.
+set -uo pipefail
+log="${HOSTING_MIGRATE_STUB_LOG:?the helm stub needs HOSTING_MIGRATE_STUB_LOG}"
+fixture="${HOSTING_MIGRATE_FIXTURE:?the helm stub needs HOSTING_MIGRATE_FIXTURE}"
+printf 'helm %s\n' "$*" >> "$log"
+[ "${1:-} ${2:-}" = "get manifest" ] || { echo "helm stub: unexpected invocation: $*" >&2; exit 1; }
+[ -f "$fixture/manifest.yaml" ] || { echo "Error: release: not found" >&2; exit 1; }
+cat "$fixture/manifest.yaml"
