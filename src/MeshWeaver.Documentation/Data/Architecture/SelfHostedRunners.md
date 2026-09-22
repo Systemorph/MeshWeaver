@@ -233,48 +233,65 @@ selected-visibility variable, a fallback other than `'ubuntu-latest'`, and an in
 does not reach `MW_RUNNER`/`MW_RUNNER_DOCKER`. Its self-test takes `--root` and mutates every real
 runner expression back to `ubuntu-latest`, demanding a fire for each.
 
-### 🚨 The other half of the visibility setting: FORK pull requests
+### 🚨 FORK pull requests, and which setting actually holds the line
 
-The `private` visibility on `MW_RUNNER`/`MW_RUNNER_DOCKER` is described above as a **cost** mechanism.
-It is also, silently, the **only** thing keeping untrusted fork code off runners that hold org-scoped
-credentials — and the person who flips it for cost reasons has no way to know that.
+Core is **public**, so it is the one repository in the fleet that can receive a pull request carrying a
+stranger's code. That makes "can untrusted code reach a runner holding org-scoped credentials?" a real
+question here and a latent one everywhere else — and the answer is **not** the variable visibility
+described above, which is what this section said when it was first written.
 
-Measured over the fleet: **core is the only repository that can receive a fork pull request at all.**
-It is public with `allow_forking: true` and carries 5 forks; every satellite and Memex is private with
-`allow_forking: false` and zero forks, and the org sets
-`members_can_fork_private_repositories: false`. So a `pull_request` job in a satellite cannot be
-running a stranger's code, while one in core can.
+Measured over the fleet:
 
-**Two distinct org settings hold the line, not one, and they fail the same way:**
+| | |
+|---|---|
+| core | **public**, `allow_forking: true`, **5 forks** |
+| every satellite + Memex | private, `allow_forking: false`, 0 forks |
+| org | `members_can_fork_private_repositories: false` |
 
-| variable | visibility | what actually keeps core off it |
-|---|---|---|
-| `MW_RUNNER`, `MW_RUNNER_DOCKER` | `private` | a **public** repository cannot see a `private` org variable at all |
-| `MW_RUNNER_GATE`, `MW_RUNNER_HEAVY` | `selected` | core is **not in the selection** — the list is the satellites plus Crm and FundReporting |
+**The control is the RUNNER GROUP.** The org has exactly one, and it refuses public repositories
+outright:
 
-So every `runs-on: ${{ vars.MW_RUNNER… || 'ubuntu-latest' }}` in core falls through to the hosted
-runner, which is why the current state is safe. But the second row is a *different* one-click change
-from the first — adding `Systemorph/MeshWeaver` to a selection rather than flipping a visibility — and
-neither is mentioned by the other's rationale.
+```
+orgs/Systemorph/actions/runner-groups
+  1  Default   visibility=all   allows_public_repositories=false   default=true
+```
 
-🚨 **No gate in CI can see either.** `check-reusable-workflow-runners.py` guards the *expression*,
-which is the half that lives in the repository; the *visibility* lives outside it. From inside a run a
-public repository sees a hidden variable as **empty**, which is indistinguishable from absent, and
-`GITHUB_TOKEN` carries no permission that reads org variables (neither org App holds one either). So
-the invariant "untrusted fork code never reaches the ARC scale sets" rests on an organisation setting
-that nothing in this repository can assert.
+So a **public** repository cannot use these runners *at all*, whatever any variable resolves to and
+whatever a workflow's `runs-on` asks for. That is the property the invariant rests on, and it is the
+right shape: it is enforced by the forge on the runner side, not by an expression on the repository
+side.
 
-**What the gate CAN see, if this is ever made enforceable:** `runner.environment` is available to a
-job at run time (`github-hosted` / `self-hosted`), so the shape that works is a **pre-checkout
-refusal** — the first step of a `pull_request`-triggered job fails RED when
-`github.event.pull_request.head.repo.fork == true` and the runner is not hosted. It must **fail**, not
-skip: a `needs:`/`if:` exemption converts *blocked* into *merge-ready*, because a skipped required
-context counts as SATISFIED under both protection mechanisms. Whether to adopt that, or instead assert
-the visibility from a credential that can read it, is a runner-policy decision rather than a defect
-fix — tracked on [#4786](https://github.com/Systemorph/MeshWeaver/issues/4786).
+**What the variable visibility does instead** is decide what core's own `runs-on` expressions resolve
+to — see the fallback semantics above. Flipping `MW_RUNNER`/`MW_RUNNER_DOCKER` to `all` would make
+core's jobs *name* a self-hosted label, and the runner group would then refuse to serve them: a stuck
+or failing queue, which is a **liveness** problem rather than a disclosure one. Worth knowing before
+flipping it for cost reasons, but it is not the fork boundary.
 
-**So: if you are flipping `MW_RUNNER`/`MW_RUNNER_DOCKER` to `all`, or adding core to a `selected`
-list, for cost or convenience — forks are the other half, and nothing will tell you.**
+🚨 **`MW_RUNNER_GATE` / `MW_RUNNER_HEAVY` are caller guidance only in this repository** — measured, 4
+occurrences, all of them comments or input descriptions, and **zero** `runs-on:` uses. Adding core to
+their `selected` lists would therefore move no core job anywhere. They matter for the rule above —
+`check-reusable-workflow-runners.py` refuses a selected-visibility variable inside a core lane — and
+not as part of the fork boundary.
+
+**Two things a reader should not conclude from this.**
+
+1. 🚨 **A pre-checkout refusal inside a `pull_request` job would not be enforceable.** On a
+   `pull_request` event the workflow definition comes from the pull request's own merge ref, so a fork
+   can delete such a step, run commands before it, or change `runs-on` itself. A first step protects an
+   *unchanged* workflow, which is not the threat. Anything of that shape has to live in a
+   **base-owned** workflow the fork cannot alter. Given the runner group already refuses public
+   repositories, there is nothing for an in-job refusal to add.
+2. **The residual is real but narrow, and it is about ASSERTING the setting rather than adding a
+   guard.** `allows_public_repositories` and the group's `visibility` are organisation-level, and
+   nothing inside a run can read them: `GITHUB_TOKEN` carries no such permission and neither org App
+   holds one. So the invariant is held by a setting no gate in CI can see — the same shape as every
+   other split between a guard and the thing it protects. Whether that is worth a scheduled assertion
+   from a credential that *can* read it is a runner-policy judgement, tracked on
+   [#4786](https://github.com/Systemorph/MeshWeaver/issues/4786).
+
+**So if you are widening runner access for cost or convenience, the setting to think about is the
+runner group's `allows_public_repositories`, not the variables — and nothing in CI will tell you it
+moved.**
 
 **What a job needs when it moves.** The runner image (Systemorph/Memex
 `deployments/aks/ci-runners/runner-image/Dockerfile`) is not GitHub's hosted image. It carries git,
