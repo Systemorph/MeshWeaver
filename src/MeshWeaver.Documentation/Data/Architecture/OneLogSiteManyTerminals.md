@@ -81,6 +81,28 @@ A frozen `lastSeen` therefore has three causes and only one of them is good news
 the fingerprint moved, or the ingestion that folds sightings is itself down. Say which one you
 established.
 
+## And before any of that: ask where the log statement SITS
+
+A count is only a count of *failures* if the line that produced it was written after the outcome was
+decided. Often it is not. A handler that logs at `Error` and *then* runs the branch which retries,
+recovers or reclassifies emits one line per **attempt** — so the counter measures the log statement's
+position in the code, not the defect.
+
+That makes the count unsound in **both** directions, which is worse than merely useless:
+
+- a **fixed** root keeps the counter climbing for ever if anything still produces one transient
+  attempt, so a recurrence check that reopens on the counter can never let the issue stay closed;
+- a **live** root is not established by a high count either, because the attempts may all have been
+  repaired by the very branch that runs after the line.
+
+The tell is in the message itself. A line that says *"it still carries its request and is picked up
+again"* — or anything else naming its own recovery — is reporting an attempt, and its count is a
+census of retries. Read it that way before treating it as damage, and prefer a per-terminal reading
+of the retained samples: which code path was reached is a fact the line CAN establish, because the
+inner exception is produced at the point it names.
+
+Full account of the general shape: [A Fault Does Not State the Verdict](../AFaultDoesNotStateTheVerdict).
+
 ## Related
 
 - [The Recursive-Delete Drain](../RecursiveDeleteDrain) — the same reading problem inside ONE
