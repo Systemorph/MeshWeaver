@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # hosting-backup --database <db> --server <pg> --store-uri <uri> --object <name>
+#                [--vault <key vault> --password-secret <vault object>]
 #
 # Dump one instance's database and upload it. Reports size and digest.
+#
+# The server's admin password is read from the vault by NAME (`hosting::pg_password`, Memex#132):
+# the plan passes the record's keyVault and operator.environment.AZ_POSTGRES_PASSWORD_SECRET as the
+# two flags, and this identity reads the object exactly as hosting-kv-ensure does. No environment
+# this step can be given carries a secret; a PGPASSWORD set by hand is honoured when neither flag is.
 #
 # 🚨 IT NEVER CLAIMS VERIFICATION. This step dumps, checks the archive is non-empty, uploads with
 # --overwrite false, and prints what it measured. That is all. `verified=true` comes from
@@ -16,13 +22,15 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-backup"
 
-database="" server="" store_uri="" object=""
+database="" server="" store_uri="" object="" vault="" password_secret=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --database)  database="${2:-}";  shift 2 ;;
-    --server)    server="${2:-}";    shift 2 ;;
-    --store-uri) store_uri="${2:-}"; shift 2 ;;
-    --object)    object="${2:-}";    shift 2 ;;
+    --database)        database="${2:-}";        shift 2 ;;
+    --server)          server="${2:-}";          shift 2 ;;
+    --store-uri)       store_uri="${2:-}";       shift 2 ;;
+    --object)          object="${2:-}";          shift 2 ;;
+    --vault)           vault="${2:-}";           shift 2 ;;
+    --password-secret) password_secret="${2:-}"; shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -32,6 +40,10 @@ hosting::need_flag server "$server"
 hosting::need_flag store-uri "$store_uri"
 hosting::need_flag object "$object"
 hosting::safe_name database "$database"
+# The two vault names are interpolated into an az command line: validated HERE, before anything
+# is reported, like every other name — hosting::pg_password checks them again for by-hand callers.
+[ -z "$vault" ] || hosting::safe_name vault "$vault"
+[ -z "$password_secret" ] || hosting::safe_name password-secret "$password_secret"
 
 # The object NAME is reported even though the store URI already contains it: the record needs to say
 # WHICH archive it is waiting on, and reading that back out of a URL is guesswork.
@@ -43,7 +55,7 @@ if hosting::dry; then
   exit 0
 fi
 
-hosting::need_env PGPASSWORD "the admin password for the flexible server (mounted from Key Vault)"
+hosting::pg_password "$vault" "$password_secret"
 pg_user="${PGUSER:-memexadmin}"
 archive="/tmp/${database}.dump"
 

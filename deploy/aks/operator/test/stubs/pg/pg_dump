@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# A stand-in pg_dump (Memex#132 tests). Records whether PGPASSWORD reached it — as `set`/`unset`,
+# never the value — plus its argv, and writes a non-empty archive to --file so the script's own
+# zero-byte refusal does not fire. `HOSTING_PG_DUMP_FAIL=1` makes it fail.
+set -uo pipefail
+state="${HOSTING_PG_STATE:?the pg_dump stub needs HOSTING_PG_STATE}"
+printf 'pg_dump PGPASSWORD=%s argv=%s\n' "$([ -n "${PGPASSWORD:-}" ] && echo set || echo unset)" "$*" >> "$state/pg.log"
+[ "${HOSTING_PG_DUMP_FAIL:-0}" = "1" ] && { echo "pg_dump: error: connection failed" >&2; exit 1; }
+file=""
+while [ $# -gt 0 ]; do case "$1" in --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
+[ -n "$file" ] && printf 'PGDMP fake archive\n' > "$file"
+exit 0

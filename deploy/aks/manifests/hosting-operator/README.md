@@ -45,7 +45,17 @@ config:
     Hosting__Operator__Environment__1: "AZ_PORTAL_IDENTITY=<portal-identity>"
     Hosting__Operator__Environment__2: "AZURE_CLIENT_ID=<operatorIdentityClientId>"
     Hosting__Operator__Environment__3: "PAYWALL_URL=https://<control-host>/Deployments/{instance}/area/Suspended"
+    Hosting__Operator__Environment__4: "AZ_POSTGRES_PASSWORD_SECRET=memex-postgres-password"
 ```
+
+🚨 **The environment carries NAMES, never a credential — there is no `PGPASSWORD` entry** (Memex#132).
+It is a ConfigMap. `AZ_POSTGRES_PASSWORD_SECRET` is the Key Vault object's *name*; the plan hands it,
+with the record's `keyVault`, to every step that needs the flexible server's admin password
+(`hosting-kv-ensure --db-password-secret`, and `hosting-backup` / `hosting-restore` /
+`hosting-verify-restore --vault … --password-secret …`), and each reads the value itself with the
+identity it already runs as — the Job's workload identity, or the aks-ops lane's OIDC session. The
+one grant that needs is secret `get` on that object, which a Provision that composed a connection
+string has already exercised.
 
 🚨 **Only on the control instance.** `Hosting:Operator:Enabled` on a tenant portal would give that
 tenant's pod the ability to start a job that can delete any namespace on the cluster.
