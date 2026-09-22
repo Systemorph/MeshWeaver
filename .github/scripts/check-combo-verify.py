@@ -20,12 +20,23 @@ overlays between them. So `assert` asks whether the inputs that come from outsid
 all, and `roster` — which cannot run before the derivation — asks whether every instance the fleet
 ACTUALLY has carries both credentials. Splitting the assertion split the scenarios with it:
 
-  assert:
-  1. nothing provisioned                    → RED, naming secrets.COMBO_VERIFY_KEYS
-  2. one secret absent                      → RED, naming that secret
+🚨 AND THE SPLIT IS BY WHETHER PROVISIONING IS REVERSIBLE, not merely by what is knowable yet. The
+two per-instance credential MAPS are asserted in `roster`, after the derivation, because both are
+SPENT rather than fetched — an `mwi_` instance key is issued-never-recovered and an `mw_` admin token
+is minted per instance — so an operator sent to mint them before the roster is known to derive spends
+an irreversible credential on a roster that may not exist. `vars.COMBO_VERIFY_SOURCES` stays in
+`assert`: it is plain data, free to provision and free to correct. That is why scenarios 1 and 2
+below live where they do; before the split they were `assert` scenarios, and the workflow's own
+history is the argument — every run in it died in `assert`, so the derivation had never once executed
+in CI and the lane's red named absent secrets while the state that must change first was invisible.
+
+  assert:  (what is needed to REACH the derivation)
+  1. nothing provisioned                    → RED, naming secrets.FLEET_READER_APP_ID — the input
+                                              without which the derivation cannot even be attempted.
+  2. the source map absent                  → RED, naming vars.COMBO_VERIFY_SOURCES.
   3. everything provisioned                 → GREEN
 
-  roster:
+  roster:  (what is only answerable once the fleet's installations are known)
   4. the derivation emitted NOTHING         → RED. This is the one that matters most: an empty or
      (and the same for an EMPTY array)        absent roster yields an empty matrix, an empty matrix
                                               SKIPS the verify job, and GitHub paints a skipped job
@@ -34,11 +45,15 @@ ACTUALLY has carries both credentials. Splitting the assertion split the scenari
                                               🚨 A DERIVED zero paints exactly the green a DECLARED
                                               zero did, which is why this scenario did not move
                                               with the input it used to be about.
-  5. an instance with no admin token        → RED, naming the instance. Otherwise the shortfall
+  5. the key map absent entirely            → RED, naming secrets.COMBO_VERIFY_KEYS and carrying the
+                                              issued-never-recovered guidance. Asserted here so the
+                                              instruction to MINT arrives only once minting is useful.
+  6. the token map absent entirely          → RED, naming secrets.COMBO_VERIFY_TOKENS.
+  7. an instance with no admin token        → RED, naming the instance. Otherwise the shortfall
                                               surfaces deep inside the verify job as an HTTP 401
                                               that names no secret — the shape that made an absent
                                               MW_REGISTRY_KEY read as a script bug (Reinsurance#128).
-  6. every derived instance credentialled   → GREEN, and it emits the matrix it promised.
+  8. every derived instance credentialled   → GREEN, and it emits the matrix it promised.
 
 🚨 It resolves each step BY ID into the parsed workflow (`jobs.preflight.steps[?id]`) and asserts a
 sentinel is present, so if a step is renamed, reordered or moved into a script this fails LOUD
@@ -111,14 +126,16 @@ SCENARIOS = [
         "nothing provisioned",
         {name: "" for name in FULLY_PROVISIONED},
         1,
-        "secrets.COMBO_VERIFY_KEYS",
+        # The input without which the derivation cannot even be ATTEMPTED, so it is the one this
+        # scenario pins. Naming a credential map here would be asserting the old order.
+        "secrets.FLEET_READER_APP_ID",
     ),
     (
         "assert",
-        "one secret absent",
-        {**FULLY_PROVISIONED, "COMBO_VERIFY_TOKENS": ""},
+        "the source map absent",
+        {**FULLY_PROVISIONED, "COMBO_VERIFY_SOURCES": ""},
         1,
-        "secrets.COMBO_VERIFY_TOKENS",
+        "vars.COMBO_VERIFY_SOURCES",
     ),
     (
         "assert",
@@ -142,6 +159,25 @@ SCENARIOS = [
         {**FULLY_PROVISIONED, "INSTANCES": "[]"},
         1,
         "not a non-empty JSON array",
+    ),
+    (
+        # 🚨 THESE TWO MOVED HERE FROM `assert`, and that is the whole point of the reorder: the
+        # instruction to MINT an irreversible credential is now emitted only once the roster the
+        # credential is for has been derived. The message must still carry the provisioning
+        # guidance — asserting later must not mean saying less — so the expected text is the part a
+        # person acts on, not merely the secret's name.
+        "roster",
+        "the key map absent entirely",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_KEYS": ""},
+        1,
+        "ISSUED, never recovered",
+    ),
+    (
+        "roster",
+        "the token map absent entirely",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_TOKENS": ""},
+        1,
+        "secrets.COMBO_VERIFY_TOKENS",
     ),
     (
         "roster",

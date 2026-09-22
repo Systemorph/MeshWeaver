@@ -299,7 +299,7 @@ are the whole of what is missing.
 
 🚨 **"One per instance" is now answered by the lane, not by the reader.** The preflight prints the
 derived roster before it asks for credentials, and names the instance any map is missing
-(`combo-verify.yml:194-198`). The hand-written value this page used to carry named `memex` and
+(`combo-verify.yml:215-238`). The hand-written value this page used to carry named `memex` and
 `memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
 is the failure mode a derivation removes rather than a tidiness argument.
 
@@ -323,12 +323,52 @@ second's verdict would land on the FIRST's `Admin/UpdatePolicy`. So the derivati
 both declaring overlays, rather than emitting two rows called `memex`. Silently qualifying the name
 to `repo:id` would be worse — it would ask for credentials under a key nobody has provisioned.
 
-Resolving it is a decision, not a workaround: rename one installation, or key the maps by the
-qualified `repo:id` and record that here. Until then the lane is red on the roster rather than on
-the credentials, and it says which two overlays collide.
+Resolving it is a decision, not a workaround, and the refusal now names **three** ways out with
+their risk direction: rename one installation (its `Hosting__Deployment` is its inventory identity,
+so this moves whichever estate owns the one that changes); key the maps by the qualified `repo:id`
+and record that here (which then demands a credential for every installation named, including any in
+an estate this fleet holds none for); or declare one of them **out of this lane's scope** in
+`.github/acr-retention/instances.json`, the way `partnerre` already is — the shape that fits an
+installation which can never receive this candidate at all, because its overlay pins a registry
+declared `out-of-estate`. 🚨 That third option is the **looser** direction and the only one that can
+be silently wrong: it SHRINKS the denominator, so an installation excluded by mistake is one this
+lane reports nothing about while reading green — the very failure the derived roster replaced a
+hand-maintained list to prevent. It is taken on the registry fact, never on the name, and the fact
+goes in the declaration. `derive-combo-instances.py`'s self-test asserts the refusal keeps naming
+all three **and** that it keeps naming which one is looser; reverting the message fails exactly that
+one arm of the fifteen.
 
-The names are asserted at `combo-verify.yml:99-129` (the inputs) and `:169-205` (the per-instance
-half, which cannot run before the derivation); each `missing+=` line already names what to provision.
+### 🚨 The preflight asserts in the order that makes its red actionable
+
+"Until then the lane is red on the roster rather than on the credentials" is what this page has
+always said, and the workflow used to do the **opposite**: all three `COMBO_*` inputs were asserted
+in the first step, before the checkout and before the token mint, so every run died one step above
+the derivation. Measured over the whole history of workflow `352181036`: **the derivation had never
+once executed in CI** — more than a thousand runs, every one of them red on three absent secrets,
+while the state that has to change first (what the derivation says about the fleet's installations)
+was invisible to every reader of every run. Nobody could have known from a run that provisioning the
+credentials would not have made the lane green.
+
+The order now follows **whether provisioning is reversible**, which is the property that matters:
+
+| step | asserts | why there |
+|---|---|---|
+| `assert` (`combo-verify.yml:118-152`) | `AZURE_*`, `FLEET_READER_*`, `COMBO_VERIFY_SOURCES` | everything needed to *reach* the derivation, plus the one input that is plain data — free to provision and free to correct |
+| `derive` (`:172-183`) | — | the roster, which refuses loudly rather than emitting an empty one |
+| `roster` (`:185-239`) | `COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS` | both are **spent, not fetched** — an `mwi_` key is issued-never-recovered and an `mw_` admin token is minted per instance — so the instruction to mint one must not be emitted before the gate knows the roster it is for can be derived at all |
+
+Nothing became conditional and nothing can skip: no `if:` asks whether a secret is set, no step
+carries `continue-on-error:`, both maps are still asserted unconditionally in the same `preflight`
+job, an absent map still reds by NAME and still carries the whole provisioning guidance. Only the
+ORDER moved — and the whole-map red now arrives with the derived roster printed above it, so "one
+per instance" is a list the reader can act on rather than a phrase.
+
+`check-combo-verify.py` executes both blocks' real shell — extracted from the shipped YAML by step
+id, never retyped — over **nine** scenarios, and its own `--self-test` guts both blocks and requires
+that eight of the nine then fail. So an edit that moves an assertion without moving its scenario is
+red, and a preflight that asserts nothing cannot pass.
+
+Each `missing+=` and `absent+=` line names what to provision.
 The `verdict` job at `:283-350` separates *no candidate* from *the preflight failed* from
 *verification did not succeed*, so a red here reads as "verification never ran, provision X" rather
 than as "verification failed". **That half of the lane is not the defect.**
@@ -370,7 +410,7 @@ repository already uses**, and the derivation is now in the lane.
 extractor**, imported rather than copied, so the set this lane verifies and the set the nightly lock
 protects cannot disagree about what an installation is. It needs only the read-only **fleet-reader**
 GitHub App, whose two secrets this preflight already asserted; the preflight now also checks out the
-tree and mints that App's token (`combo-verify.yml:131-144`), which is the one structural change the
+tree and mints that App's token (`combo-verify.yml:148-160`), which is the one structural change the
 move required — the job previously had neither.
 
 `.github/acr-retention/instances.json` is the only thing that removes an installation from the
