@@ -120,6 +120,10 @@ gate admitted, and it is rendered **visibly** in the server response, not inside
 Googlebot renders with JavaScript on and may ignore noscript content. The document, head and body
 await the same per-request resolution, so they use one current source and access decision.
 
+Legacy Space content stored as a serialized JSON object is recovered before rendering, just as
+in the live Space view: `body` wins over `content`, including an explicitly empty body. A bare
+JSON document on a Markdown node remains authored text.
+
 ### Plain public documents finish on the server
 
 An anonymous visitor requesting an exact, authored Markdown page receives that HTML as the final
