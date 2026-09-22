@@ -138,6 +138,34 @@ public static class EmitPipeline
             .WithPlatform(Platform.AnyCpu);
 
     /// <summary>
+    /// The options a compile in THIS process actually RUNS with: <see cref="CreateCompilationOptions"/>
+    /// with Roslyn's <c>ConcurrentBuild</c> switched OFF. Every compilation this pipeline builds for
+    /// binding, diagnostics or emit uses these; the content key keeps rendering the canonical set.
+    ///
+    /// <para>🚨 <b>Why off: <c>ConcurrentBuild</c> (Roslyn's default, <c>true</c>) fans every emit out
+    /// onto the SHARED <see cref="System.Threading.ThreadPool"/>, whatever thread the emit was
+    /// started on.</b> Roslyn's parallel declaration/method compilation queues its work through
+    /// <c>Parallel.For</c> and <c>Task.Run</c> on <see cref="System.Threading.Tasks.TaskScheduler.Default"/>
+    /// with no degree-of-parallelism cap, so one compile occupies every pool worker it can get and a
+    /// handful of concurrent compiles holds the whole pool. That pool is the one Orleans grain turns,
+    /// the routing pool's subscribe legs and every reactive continuation need: a portal silo compiling
+    /// NodeTypes (a roll, a framework-stale sweep, a release request) stops delivering messages while
+    /// nothing is stuck — the "waiting for a pool slot ~60, subscribing ≤1" routing back-pressure
+    /// signature. Measured with a ThreadPool dispatch probe at 6 CPUs (the portal's CPU limit):
+    /// 6 concurrent emits held the probe's p99 at ~420 ms with <c>ConcurrentBuild</c> on, and at
+    /// ~0.2 ms off, with the same total wall time. See
+    /// <c>Doc/Architecture/CompileOffTheThreadPool</c> for the measurement.</para>
+    ///
+    /// <para><b>Why not in <see cref="CreateCompilationOptions"/>:</b> that factory is REFLECTED into
+    /// <see cref="GeneratedInputIdentity.OptionsFingerprint"/>, so changing it would change the content
+    /// key of every NodeType in the fleet and force a global recompile for a SCHEDULING decision.
+    /// <c>ConcurrentBuild</c> changes how Roslyn schedules its work, never the bytes it emits, so it
+    /// is set here, after the fingerprinted factory, and deliberately kept out of the key.</para>
+    /// </summary>
+    internal static CSharpCompilationOptions CreateRunCompilationOptions()
+        => CreateCompilationOptions().WithConcurrentBuild(false);
+
+    /// <summary>
     /// The canonical option set rendered for the CONTENT KEY (#1707 slice 4) — see
     /// <see cref="GeneratedInputIdentity.OptionsFingerprint"/>. It lives here, beside the three
     /// factories it renders, so an option added to one of them cannot be forgotten by the key:
@@ -155,7 +183,7 @@ public static class EmitPipeline
     /// <summary>
     /// Builds the single-tree emit compilation for the generated source: parse with the source
     /// path and UTF-8 encoding embedded (critical for PDB source linking) + the canonical
-    /// options.
+    /// options, run single-threaded (<see cref="CreateRunCompilationOptions"/>).
     /// </summary>
     internal static CSharpCompilation CreateEmitCompilation(
         string source,
@@ -171,7 +199,7 @@ public static class EmitPipeline
             assemblyName,
             syntaxTrees: [syntaxTree],
             references: references,
-            options: CreateCompilationOptions());
+            options: CreateRunCompilationOptions());
     }
 
     /// <summary>

@@ -172,6 +172,13 @@ internal class MeshNodeCompilationService(
     private readonly ConcurrentDictionary<string, Lazy<Task<CompileEmit>>> _inflightCompiles =
         new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Test seam (InternalsVisibleTo): runs on the emit's own thread with the compilation about to be
+    /// emitted, so a test can pin that the production compile path reaches Roslyn on a dedicated
+    /// thread with ConcurrentBuild off (Doc/Architecture/CompileOffTheThreadPool). Null in production.
+    /// </summary>
+    internal Action<CSharpCompilation>? OnEmitStarting { get; set; }
+
     // Query expansion lives in CodeQueryResolver (MeshWeaver.Compiler) so the NodeType
     // Configuration side menu can evaluate the *same* queries the compiler uses — the Sources /
     // Tests lists displayed in the UI are guaranteed to match the files compiled.
@@ -1019,7 +1026,9 @@ internal class MeshNodeCompilationService(
                     }
                 }
 
-                // 🚨 Compile on the ThreadPool via Task.Run, never inline and never the IoPool.
+                // 🚨 Start the compile off-hub via Task.Run, never inline and never the IoPool — its IO
+                // prefix may run on the pool, its CPU-bound Roslyn half does NOT: CompileAsyncCore hops
+                // that onto a CompileThread (Doc/Architecture/CompileOffTheThreadPool).
                 // For in-memory compilation CompileAsyncCore has NO await before the synchronous
                 // Roslyn Emit (CompileToMemory), so CompileAsync() runs the ENTIRE compile
                 // synchronously — the old `CompileAsync(...).ToObservable()` ran it on whatever
@@ -1590,7 +1599,9 @@ internal class MeshNodeCompilationService(
         return referencesObs.Select(references =>
         {
             var parseOptions = EmitPipeline.CreateParseOptions();
-            var compilationOptions = EmitPipeline.CreateCompilationOptions();
+            // Run options (ConcurrentBuild off): these inputs drive the diagnostics / language-service
+            // compilations, which must not fan out onto the shared ThreadPool either.
+            var compilationOptions = EmitPipeline.CreateRunCompilationOptions();
 
             var sourcesArray = strippedSources
                 .Select(s => (s.Path, s.Code))
@@ -2037,6 +2048,36 @@ internal class MeshNodeCompilationService(
         logger.LogInformation("Compiling assembly for {NodeName} ({Mode}, {NuGetRefs} NuGet refs)",
             nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory", nugetRefs.Length);
 
+        // 🚨 THE CPU-BOUND HALF RUNS ON A DEDICATED THREAD — never on the ThreadPool this async
+        // method happens to be on. Everything above is IO (NuGet restore, the debug source write) and
+        // may resume on any pool thread; everything in EmitCompiled is synchronous Roslyn work
+        // (parse, source generators, bind, emit) that holds its thread for the whole compile. This
+        // leaf is reached through OnThreadPool(Func<Task<T>>) — Task.Run — and the debug source write
+        // above is ON by default (EnableSourceDebugging), so before this hop EVERY production emit ran
+        // on a ThreadPool worker even though CompileThread's own doc said the compile leaf did not:
+        // the sync overload that uses CompileThread is not the one `() => CompileAsync(...)` binds to.
+        // With ConcurrentBuild also off (EmitPipeline.CreateRunCompilationOptions) a compile now costs
+        // one dedicated thread and zero pool workers. Doc/Architecture/CompileOffTheThreadPool.
+        return await CompileThread.Run(() => EmitCompiled(
+                node, nodeName, source, references, nugetAssemblyPaths, sourcePath, ct))
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The synchronous, CPU-bound half of <see cref="CompileAsyncCore"/>: parse, source generators,
+    /// emit and the disk/in-memory publish. Called ONLY on a <see cref="CompileThread"/> thread.
+    /// </summary>
+    private CompileEmit EmitCompiled(
+        MeshNode node,
+        string nodeName,
+        string source,
+        IEnumerable<MetadataReference> references,
+        IReadOnlyList<string> nugetAssemblyPaths,
+        string sourcePath,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
         // Parse + compile via the toolchain (EmitPipeline, #1707) — source path and encoding
         // embedded (critical for PDB source linking); canonical options; generators applied.
         var assemblyName = $"DynamicNode_{nodeName}";
@@ -2052,6 +2093,7 @@ internal class MeshNodeCompilationService(
                 parsePath: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
                 ct),
             nugetAssemblyPaths, logger, ct);
+        OnEmitStarting?.Invoke(compilation);
 
         string? actualPath;
         // The compile's own diagnostics, on the way to the activity. Empty is a real answer here —
