@@ -1709,7 +1709,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     break;
             }
             inFlight.Remove(attach);
-            podHubClaimSettled.TryRemove(address, out _);
+            // Value-matched: a successor registered under the same address has its own settled
+            // subject in this slot by now, and a predecessor's disposal must not take it out.
+            podHubClaimSettled.TryRemove(new KeyValuePair<Address, AsyncSubject<Unit>>(address, settled));
             attach.Dispose();
             // A round inside its attach window owns the release: it has not returned from Attach()
             // yet, and the CAS above guarantees it will see the DisposeRequested bit on its way out.
