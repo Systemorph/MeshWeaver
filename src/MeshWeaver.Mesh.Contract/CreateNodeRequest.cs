@@ -785,6 +785,14 @@ public enum NodeUpsertRejectionReason
     /// framework's to close separately.</para>
     /// </summary>
     AddressRecycling,
+
+    /// <summary>The owner's structured conflict verdict: a concurrent writer changed the base.
+    /// The framework has already attempted its bounded rebase; this response adds no retry.</summary>
+    Conflict,
+
+    /// <summary>The inner operation ended during hub teardown. Unlike an intake refusal,
+    /// this does not prove whether the write was applied before the response was lost.</summary>
+    HubTeardown,
 }
 
 /// <summary>
@@ -807,6 +815,12 @@ public static class NodeUpsertRejection
         UnauthorizedAccessException => NodeUpsertRejectionReason.Unauthorized,
         DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown } =>
             NodeUpsertRejectionReason.AddressRecycling,
+        { } teardown when HubDisposedBeforeResponseException.IsHubDisposedBeforeResponse(teardown)
+            || HubDisposingException.IsHubDisposal(teardown)
+            || HubDisposingException.IsDisposedContainer(teardown) => NodeUpsertRejectionReason.HubTeardown,
+        { } fault when ExceptionChain.Contains(fault, e =>
+            e is MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Conflict }) =>
+            NodeUpsertRejectionReason.Conflict,
         _ => NodeUpsertRejectionReason.Unknown,
     };
 }
