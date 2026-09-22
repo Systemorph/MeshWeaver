@@ -55,6 +55,12 @@ live `SynchronizationStream`s"**, and each one costs its own Autofac `ILifetimeS
 
 ## 2. What retires one — three paths, and only one of them applies here
 
+🚨 **This table is about the STREAM's lifetime. The registry-level account — which collection roots a
+`sync/` hub, what takes it out, and which `(RunLevel, IsDisposing)` states can persist there — is
+**§8 below**, written against the code after the retire-and-replace change, and it is the half that
+says which of these hubs *cannot* be removed versus *is removed only when X happens*.**
+
+
 | path | where | which population it reaches |
 |---|---|---|
 | the stream is disposed | `SynchronizationStream.Dispose()` disposes its own `Hub` | the 11 |
@@ -190,6 +196,99 @@ magnitude, not the mechanism.
 No referrer walk, no field traversal, no second dump — one extra line of a histogram the plan already
 produces. 🚨 It does **not** replace the referrer walk for the third row; it tells you whether you
 need one.
+
+## 8. The registry account: what roots a `sync/` hub, and what takes it out
+
+Sections 1–7 are about the STREAM. This section is about the HUB, read off
+`HostedHubsCollection` and `MessageHub` as they stand today. It answers the question the dump's
+histogram poses — *what can a `Started` `sync/` hub be?* — by construction rather than by inference,
+and it distinguishes **cannot be removed** from **is removed only when X happens**.
+
+### 8.1 One root, and it is the parent's registry
+
+A `sync/{clientId}` hub is a HOSTED hub. There is exactly one creation site (§1), and every hosted
+hub enters its parent's registry through one method:
+
+```csharp
+// src/MeshWeaver.Messaging.Hub/HostedHubsCollection.cs — Track
+private void Track(IMessageHub hub)
+{
+    messageHubs[hub.Address] = hub;
+    hub.RegisterForDisposal(h =>
+        messageHubs.TryRemove(new KeyValuePair<Address, IMessageHub>(h.Address, h)));
+}
+```
+
+`messageHubs` is an instance `ConcurrentDictionary<Address, IMessageHub>` on the collection, whose
+lifetime **is the parent hub's**. There is a second root beside it, `retiring`, a
+reference-keyed dictionary of hubs taken out from under their address but still tearing down; `Hubs`
+enumerates both, which is why a census walking `Hubs` sees a retired hub too.
+
+### 8.2 Three removals, all of them self-driven
+
+| # | what removes the entry | when it runs |
+|---|---|---|
+| 1 | `Track`'s own registrant | in the hub's **ShutDown** phase — `DisposeImpl` is reached from nowhere else, and it is what walks the composite the registrant sits in |
+| 2 | `RetireCorpse` | only from a lookup for that exact address, only with `HostedHubCreation.Always`, only at `RunLevel >= ShutDown`, only while the collection itself is not disposing. Moves the hub to `retiring` |
+| 3 | the `retiring` entry's own subscription | on that hub's `DisposalCompleted`, i.e. at `Dead` |
+
+**Nothing else removes a hosted hub from its parent's registry. There is no sweep, no idle eviction,
+no cap, and nothing anywhere asks "is this hub still needed".** Removal 1 is the hub disposing
+itself; removals 2 and 3 only move a hub that is *already* disposing. So the registry is a pure
+consequence of who calls `Dispose()`, and for a `sync/` hub that is: the stream's own
+`Dispose()`, the parent's teardown, or a routed `DisposeRequest` — §2's table.
+
+🚨 **Removal 2 is lookup-triggered, not self-triggered.** Retire-and-replace made the *hand-out* safe;
+it did not make the registry self-cleaning. A hub wedged at `ShutDown` that no `Always` lookup ever
+asks for again stays in `messageHubs` for the parent's life. That is #4883's wedge showing through,
+deliberately left there.
+
+### 8.3 The `(RunLevel, IsDisposing)` cross-tab — which cells can persist
+
+`IsDisposing` is `disposalStarted`, set as the FIRST statement of `Dispose()`, before it posts
+`ShutdownRequest(Quiescing)`. The `RunLevel` only moves when the action block dequeues that request.
+
+| cell | what it is | can it persist? |
+|---|---|---|
+| `Started`, **false** | nobody has asked this hub to die | **Yes, indefinitely — by construction, not by defect.** Removal 1 is the only route out and nothing has started it. Whether the hub is garbage is entirely a question about the stream that owns it |
+| `Started`, **true** | `Dispose()` ran; the turn was never dequeued | **Yes, unboundedly.** Invisible to a `RunLevel`-only histogram — it reads identically to the row above |
+| `Quiescing`, true | draining accepted work, off the block | Bounded by the quiesce budget **only if** the block can dequeue the next phase |
+| `DisposeHostedHubs`, true | joined on the hosted subtree | **Yes, unboundedly** — the join carries no deadline by design, so one child that never completes holds it forever |
+| `HostedHubsDisposed`, true | — | **No: empty by construction.** The level is declared and never assigned; the phase sequence goes `DisposeHostedHubs` → `ShutDown` |
+| `ShutDown`, true | past the flip, not yet past the registrant walk | Microseconds normally; **unbounded if the ShutDown turn wedges**, and then only a lookup takes it out (§8.2) |
+| `Dead`, true | terminal | Should not appear in `messageHubs` at all: `Dead` is assigned strictly after `DisposeImpl` has run removal 1. Present ⇒ the removal did not run |
+| anything, in `retiring` | retired predecessor | Until `DisposalCompleted` — so a wedged teardown keeps it, visible in `Hubs` and in the owner's disposal join |
+
+### 8.4 A second retention class the histogram cannot see: the registrant composite
+
+A hub's registered cleanups live in one `CompositeDisposable`:
+
+```csharp
+// src/MeshWeaver.Messaging.Hub/MessageHub.cs
+private readonly CompositeDisposable disposables = new();
+public IMessageHub RegisterForDisposal(IDisposable disposable)
+{
+    disposables.Add(GuardRegistrant(disposable));
+    return this;
+}
+```
+
+**It is append-only.** `CompositeDisposable.Add` never prunes, and no code path removes an entry. So
+every registrant a hub is handed is held — with everything its closure captured — for that hub's
+whole life. A registrant whose own subject is SHORTER-lived than the hub is therefore a monotone
+root, and it retains an object graph rather than a hub, which is why no `MessageHub` histogram can
+see it.
+
+`MessageHub.DisposalRegistrantCount` is the reading that can, and it is printed in both disposal
+diagnostics as `Registrants=`. **A hub whose registrant count climbs with the traffic it has served
+is retaining one object graph per unit of that traffic.**
+
+Two instances, both measured in `MeshWeaver.Data.Test`:
+
+| site | growth | status |
+|---|---|---|
+| `JsonSynchronizationStream.CreateExternalClient` registered the owner-protocol subscription on the SUBSCRIBING hub as well as on the stream | **+1 per remote stream ever opened**, holding the whole `SynchronizationStream` graph (measured: floor 4 → 6 over two streams, still 6 after both were disposed) | **Fixed.** The duplicate bought nothing, and by TWO routes rather than one: the stream's own composite rides its `sync/` sub-hub (a hosted hub of the subscribing hub, torn down in its `DisposeHostedHubs` phase), AND `Workspace.Dispose` disposes every cached remote stream — which its own comment says exists to release exactly this `SubscribeRequest` callback. A hub walks its OWN registrants only later, in `ShutDown`, so the duplicate was the third route and the last to fire. 🚨 The second route is a correction owed to running the negative control: with the sub-hub hook removed the coverage test still passes, so it asserts the OUTCOME and not a route. Pinned by `StreamRegistrantsLeaveTheSubscribingHubTest` |
+| the per-request handlers in `DataExtensions` and `MeshDataSource` register one cleanup per request on the OWNING hub — `HandleGetDataRequest`, `HandleSubscribeRequest`, `HandleDataChangeRequest`, `ApplyJsonMergePatchAndUpdate`, `ApplyMeshNodePatchInTurn`, `RegisterOwnerDisposingNack`, `HandleSaveMeshNode`, the unified-reference handlers | **+1 per request served** (measured: 4 → 14 over ten answered `GetDataRequest`s, with `PendingCallbacks=0` — every read had terminated and every registrant was still there) | **Open.** Each registrant holds the request delivery and its closures. The fix needs a detach-without-dispose registration — several of these registrants NACK when disposed, so a detach that disposes them would fire the NACK on a successful request — and it has to be swept across every site at once |
 
 ## Related
 
