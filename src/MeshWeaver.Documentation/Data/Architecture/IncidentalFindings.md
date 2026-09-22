@@ -84,6 +84,55 @@ nobody's flow, which looks discharged and behaves exactly like swallowing it. Th
 design: **one inbox per portal, never one queue per repository** (maintainer, 2026-09-12: *"we must
 start pooling such connections, e.g. by portal"*).
 
+### 🚨 The namespace is the whole trick — file into the USER's own partition
+
+**`Feedback/_Submissions` refuses a user credential, by design.** That is the system partition, and
+`FeedbackSubmitter.Submit` writes there under `ImpersonateAsSystem()` from inside the mesh — a path an
+MCP caller does not travel. A direct `create` there answers
+`Access denied: Create permission required`, and so does the bare `Feedback/{id}`. **Three separate
+agents read that refusal as "the documented route cannot be followed", because this page named the
+node type and not the namespace.**
+
+**The route that works is the caller's own partition — `{user}/Feedback/{id}`:**
+
+```
+tool:  create                     ← the argument is `node`, NOT `path`
+node:  { "$type": "MeshNode",
+         "namespace": "{user}/Feedback",
+         "path":      "{user}/Feedback/<slug>-<utc-stamp>",
+         "nodeType":  "Feedback/Feedback",
+         "name": "<one-line title>", "icon": "\ud83d\udce3",
+         "content": { "$type": "FeedbackContent",
+                      "message": "<evidence, exact identifiers, and what you did NOT establish>",
+                      "submittedBy": "{user}", "submittedByName": "<who, plus 'agent session'>",
+                      "timestamp": "<date -u +%Y-%m-%dT%H:%M:%SZ>",
+                      "mainNodePath": "", "mainNodeTitle": "", "mainNodeGist": "", "sidePanel": "",
+                      "extraContext": "<repro, suggested disposition>",
+                      "category": "bug" } }
+```
+
+Three mechanics that each cost someone a wasted attempt:
+
+- 🚨 **Omit `status` entirely.** `FeedbackStatus.New` is the enum default, so an absent key already
+  means submitted. Sending `"status": "New"` round-trips as *absent* and is not what makes it `New` —
+  and that the vocabulary is a persisted, serialised `enum` whose zero member is a real meaningful
+  value is itself a defect against policy `open-vocabulary-string-constants`.
+- 🚨 **Write node paths in the message as plain words, with no `@` prefix.** A create whose message
+  carries an `@`-prefixed reference hangs with no verdict — measured 5 of 5 attempts across three ids,
+  while six sibling filings in the same minutes landed, and a sixth attempt with the same text minus
+  the `@`s created instantly.
+- 🚨 **Read the node back by its exact path afterwards, and require `version: 1`.** The create tool's
+  answer is not the verdict: a hang answers after about 60 s with no verdict and looks exactly like
+  success.
+
+**Do not reach for `/feedback` in a thread instead.** Seeding a thread that nothing routes to is its
+own failure mode — creating a thread node activates nothing, so the filing parks unread.
+
+**`handedOverAt` is not a health check.** Hand-over is asynchronous and has been observed as much as
+fourteen hours after submission, so its absence on a fresh filing establishes nothing about whether
+triage is working. If triage is genuinely stalled, the evidence is the round's own refusal, not a
+missing stamp.
+
 **Agents skip the Draft stage.** The `/feedback` flow files a `Draft` and shows the author a preview
 with a Submit button, because a human must be able to vet words being sent in their name. An agent
 reporting its own finding has nothing to preview and usually no chat to preview it in, so it files
