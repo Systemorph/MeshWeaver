@@ -73,9 +73,12 @@ public static class MarkdownBody
     private static string? StringMember(object? content, string name) => content switch
     {
         JsonElement { ValueKind: JsonValueKind.Object } json
-            when json.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            when (json.TryGetProperty(name, out var value)
+                  || json.TryGetProperty(char.ToUpperInvariant(name[0]) + name[1..], out value))
+                 && value.ValueKind == JsonValueKind.String
             => value.GetString(),
-        JsonObject json when json[name] is JsonValue value && value.TryGetValue<string>(out var text)
+        JsonObject json when (json[name] ?? json[char.ToUpperInvariant(name[0]) + name[1..]]) is JsonValue value
+                             && value.TryGetValue<string>(out var text)
             => text,
         JsonElement or JsonNode or null => null,
         _ => content.GetType().GetProperty(char.ToUpperInvariant(name[0]) + name[1..])?.GetValue(content) as string,

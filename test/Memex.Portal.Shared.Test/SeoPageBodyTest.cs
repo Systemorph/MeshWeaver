@@ -39,6 +39,7 @@ public class SeoPageBodyTest
     [Theory]
     [InlineData("markdown")]
     [InlineData("json-content")]
+    [InlineData("json-content-pascal")]
     [InlineData("body")]
     [InlineData("json-body")]
     [InlineData("string")]
@@ -65,6 +66,7 @@ public class SeoPageBodyTest
     {
         "markdown" => new MarkdownContent { Content = source, PrerenderedHtml = stale },
         "json-content" => Json(new { content = source, prerenderedHtml = stale }),
+        "json-content-pascal" => Json(new { Content = source, PrerenderedHtml = stale }),
         "body" => new Cover(source, stale),
         "json-body" => Json(new { body = source, prerenderedHtml = stale }),
         "string" => source,
@@ -85,6 +87,7 @@ public class SeoPageBodyTest
     [Theory]
     [InlineData("markdown", "")]
     [InlineData("json-content", "")]
+    [InlineData("json-content-pascal", "")]
     [InlineData("body", "")]
     [InlineData("json-body", "")]
     [InlineData("string", "")]

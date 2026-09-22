@@ -139,7 +139,9 @@ normal document load. Where interaction is needed, the visible server-rendered a
 the initial response and the circuit replaces it on hydration.
 
 The interactive Space view follows the same source-first priority and preserves an explicitly
-empty body. Navigation derives HTML for its current snapshot without persisting that result: a
+empty body. The generic Overview/Data markdown body uses the shared renderer on each live node
+emission too, keeping its source, HTML and node path together when embedded content needs Blazor.
+Navigation derives HTML for its current snapshot without persisting that result: a
 delayed cache write must not overwrite the HTML after another author has edited the source.
 The landing page and its descendants request the existing `showHeader=false` presentation, so
 the authored hero and headings survive hydration without an additional Space title. The SEO head
