@@ -24,9 +24,9 @@ public record Space
     public string? Description { get; init; }
 
     /// <summary>
-    /// Long-form markdown body shown on the Space's Overview. Leave empty to fall
-    /// back to the default welcome message; fill it to author the page yourself
-    /// (mission statement, team intros, curated links, etc.).
+    /// Long-form markdown body shown on the Space's Overview. Null uses the default
+    /// welcome message; an empty string is an explicitly cleared page. Fill it to author
+    /// the page yourself (mission statement, team intros, curated links, etc.).
     /// </summary>
     public string? Body { get; init; }
 

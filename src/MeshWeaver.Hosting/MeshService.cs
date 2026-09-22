@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Persistence.Query;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -367,7 +368,7 @@ internal sealed class MeshService(
         => _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context);
 
     public IObservable<string?> GetPreRenderedHtml(string path)
-        => _query
-            .Query<MeshNode>(new MeshQueryRequest { Query = $"path:{path}", Limit = 1 })
-            .Select(c => c.Items.FirstOrDefault()?.PreRenderedHtml);
+        // This is an exact-node read for a page, not discovery. The query index can trail a
+        // completed edit; reading the owner keeps the first response on the live source too.
+        => hub.GetMeshNode(path).Select(MarkdownBody.Render);
 }
