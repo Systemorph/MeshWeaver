@@ -314,6 +314,28 @@ sort:name-desc          # Name descending
 sort:lastModified-desc  # Most recently modified first
 ```
 
+#### The default when you write no `sort:`
+
+**A query with no `sort:` and no free-text term is ordered newest first** — as if it carried
+`sort:lastModified-desc`. A free-text query is ranked by relevance instead, and a change feed
+(`source:activity`, `source:accessed`) keeps its own recency ranking. An authored `sort:` always wins.
+
+The reason is the cap. `limit:` (and the tool surfaces' own caps) keep the FIRST N rows of whatever
+order the result is in, and a filtered query — `nodeType:X`, `path:Y scope:descendants`,
+`partitions:all nodeType:Hosting/InstanceAction` — has no relevance signal to rank on. Before the
+default, that order was whatever the backend enumerated: path-alphabetical on the in-memory walk,
+heap order on Postgres. A reader diagnosing an outage then read the newest row of a truncated page as
+the newest row there is, and it was six days stale (MeshWeaver #4950). Ordered newest first, a
+truncated page is still partial, but it is the part the question was about; unordered, it is a
+misleading answer that looks complete. Read `truncated: true` against this the way a `count: 0` is
+read against `coverage.partitions` — see
+[Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal).
+
+The rule is resolved once, on the contract (`ParsedQuery.EffectiveOrderBy`), and applied at every
+place that takes a window — the per-provider load cap and the merge — because each clips
+independently. The contract and the per-backend halves are in
+[Query Result Scoring](/Doc/Architecture/QueryResultScoring).
+
 #### SQL-Function Selectors
 
 Sort selectors accept a small allow-listed set of SQL-style functions — useful when ordering by a derived value rather than a raw column:

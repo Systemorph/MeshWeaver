@@ -33,9 +33,9 @@ Every `path:` / `namespace:` / `nodeType:` / `source:` query in the mesh flows t
 <line x1="370" y1="204" x2="420" y2="164" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
 <rect x="420" y="100" width="150" height="88" rx="8" fill="#f57c00"/>
 <text x="495" y="126" text-anchor="middle" fill="#fff" font-weight="bold">ClipMergedInitial</text>
-<text x="495" y="148" text-anchor="middle" fill="#fff" font-size="11">1. OrderBy (user intent)</text>
+<text x="495" y="148" text-anchor="middle" fill="#fff" font-size="11">1. EffectiveOrderBy</text>
 <text x="495" y="164" text-anchor="middle" fill="#fff" font-size="11">2. Score desc</text>
-<text x="495" y="180" text-anchor="middle" fill="#fff" font-size="11">3. Insertion order</text>
+<text x="495" y="180" text-anchor="middle" fill="#fff" font-size="11">3. Path tiebreak</text>
 <line x1="570" y1="144" x2="620" y2="144" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#arr)"/>
 <rect x="620" y="100" width="118" height="88" rx="8" fill="#43a047"/>
 <text x="679" y="130" text-anchor="middle" fill="#fff" font-weight="bold">Sorted Results</text>
@@ -66,11 +66,17 @@ When `Scores` is `null`, the aggregator pairs **every** item in that batch with 
 
 Dimensions are applied in this order:
 
-1. **`ParsedQuery.OrderBy` (when present).** User intent always wins. A query like `... sort:LastModified-desc` sorts by `MeshNode.LastModified` descending via `QueryEvaluator.OrderResults`. Score acts as a tiebreaker within equivalence classes.
-2. **Score descending.** When `OrderBy` is absent, score is the sole sort key. Highest score lands at index 0. LINQ's `OrderByDescending` is stable, so equal scores preserve insertion order.
-3. **Insertion order** as the final tiebreaker.
+1. **`ParsedQuery.EffectiveOrderBy` (when it resolves).** The author's `sort:` when one was written — intent always wins — and otherwise, for a query with **no free-text term** and the default `source:`, `ParsedQuery.DefaultFilterOrdering`: `lastModified` descending, newest first. A query like `... sort:LastModified-desc` sorts by `MeshNode.LastModified` descending via `QueryEvaluator.OrderResults`; a query like `nodeType:InstanceAction limit:25` sorts the same way without saying so. `ParsedQuery.OrderBy` keeps meaning "what the author asked", so a surface can print the applied ordering and say whether it was authored or defaulted.
+2. **Score descending.** When no ordering resolves — a free-text term, or a change feed (`source:activity` / `source:accessed`, ranked by their provider) — score is the sole sort key. Highest score lands at index 0.
+3. **Path ascending** as the final tiebreaker (`PathTiebreak`). This is what makes the order TOTAL, which is what `Skip`/`Limit` need to be paging rather than sampling — insertion order, which this used to name, is the order two providers' emissions happened to merge in, and even one provider's scope walk emits in read-completion order.
 
 After sorting, `Skip` and `Limit` clip the window. The `select:` projection runs last — projected dicts and anonymous types are emitted only at this boundary.
+
+### Why a filter-only query defaults to newest first
+
+**A capped result is a partial answer, and which part survives the cap is decided by the order it was clipped over.** A filtered query has no relevance signal, so before the default each clip site took its window over whatever its backend enumerated: path-alphabetical on the in-memory walk, heap order on Postgres (no `ORDER BY` before `LIMIT`). The failure that motivated the rule (MeshWeaver #4950): two `truncated: true` pages whose newest row was six days old, over a set whose actual newest rows explained the outage — the rows were simply not in the first 25, and nothing in the response distinguished "these are the newest" from "these are the first the heap gave up". Ordered newest first, a truncated page is still partial but it is the RIGHT part; unordered, it is a misleading answer that looks complete. This is the same rule as the coverage denominator: a zero is read against `coverage.partitions` ([Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal)), and a cap is read against the order.
+
+**The default is resolved ONCE, on the contract, and read at EVERY clip site.** `StorageAdapterMeshQueryProvider` clips to `Skip + Limit` before the merge ever sees a row, and so does the Postgres generator's `LIMIT`; a default applied only in `ClipMergedInitial` would re-sort a subset those sites had already chosen in the old order. So the in-memory provider and the merge both read `EffectiveOrderBy`, and the Postgres `ORDER BY` branch (MeshWeaver.Plugins, `PostgreSqlSqlGenerator`) reads the same property once it moves to a platform pin that carries it — until then a Postgres portal's filter-only page is still heap-clipped and merely re-sorted newest first by the merge, which is the difference between "an ordered partial answer" and "the right partial answer". `FilterOnlyQueryClipsNewestFirstTest` pins both core halves, and its controls pin what the default must not touch: an authored `sort:`, a free-text term.
 
 ## Per-Provider Scoring Conventions
 

@@ -231,12 +231,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 // "Skip and Limit paginate without overlap" case fails 11/120 with 36 CPU
                 // burners and 0/120 idle, with every page COUNT correct (3+3+1=7) and one path
                 // duplicated — the signature of a re-ordering, not of a growing set.
+                //
+                // 🚨 EffectiveOrderBy, never OrderBy: a filter-only query (no sort:, no free text)
+                // resolves to newest-first ON THE CONTRACT (ParsedQuery.DefaultFilterOrdering), and
+                // it has to be applied HERE, before the load cap — a merge-layer sort over rows this
+                // provider already clipped in path order would order the wrong subset (#4950).
                 IEnumerable<object> sorted;
-                if (parsedQuery.OrderBy != null)
+                var effectiveOrderBy = parsedQuery.EffectiveOrderBy;
+                if (effectiveOrderBy != null)
                 {
-                    sorted = (parsedQuery.OrderBy.Descending
-                        ? matchedNodes.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
-                        : matchedNodes.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property)))
+                    sorted = (effectiveOrderBy.Descending
+                        ? matchedNodes.OrderByDescending(n => GetSortableValue(n, effectiveOrderBy.Property))
+                        : matchedNodes.OrderBy(n => GetSortableValue(n, effectiveOrderBy.Property)))
                         .ThenBy(PathTiebreak, StringComparer.Ordinal);
                 }
                 else if (!string.IsNullOrEmpty(parsedQuery.TextSearch))
@@ -259,6 +265,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 }
                 else
                 {
+                    // Reached only for a non-default source: with no sort: and no text term,
+                    // EffectiveOrderBy is null solely when the query is a change feed
+                    // (source:activity / source:accessed), whose ranking is the joined satellite's
+                    // and is not this provider's to decide. Path keeps the clip a partition.
                     sorted = matchedNodes.OrderBy(PathTiebreak, StringComparer.Ordinal);
                 }
 
