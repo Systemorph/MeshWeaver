@@ -35,9 +35,11 @@ namespace MeshWeaver.Messaging;
 ///
 /// <para>The carrier is the hub's PARENT, the same one <c>NackThroughParent</c> and the
 /// refused-reply path already use ("our own Post would re-enter this same gate and be dropped").
-/// One hop, not a walk: on this route the parent is the hub that is disposing us and it cannot
-/// reach its own <c>ShutDown</c> until we have completed, so it is still routing. In a whole-TREE
-/// teardown the parent is going too — and then so is the receiver, which is about to drop
-/// everything anyway.</para>
+/// Nested subtree teardown may already have closed that parent's post gate while the receiver
+/// lives in another subtree. In that case the carrier is the first ancestor still accepting
+/// posts, reached through the existing parent chain without resolving or activating a hub.
+/// The original sender identity includes the same host qualifiers as ordinary upward routing;
+/// it is never replaced with the carrier's address. If no ancestor can carry the release, the post
+/// reports the ordinary shutdown refusal.</para>
 /// </summary>
 public interface IReleasesRemoteState;

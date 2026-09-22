@@ -3072,21 +3072,25 @@ public class MessageService : IMessageService
             // holding its own Autofac lifetime scope and TypeRegistry — until the process ended.
             // (SubscriberTeardownReleasesTheOwnerSyncHubTest pins both directions.)
             //
-            // The parent is the carrier and ONE hop is the whole rule: on this route the parent is
-            // the hub disposing us, and it cannot reach its own ShutDown until every hosted hub has
-            // signalled DisposalCompleted (see MessageHub.CarriesAcceptedWorkOfAHostedHub), so it
-            // is demonstrably still routing. In a whole-TREE teardown the parent is going too — and
-            // then so is the receiver, which is about to drop everything anyway, so there is
-            // nothing left to leak and nothing to escalate to.
-            if (message is IReleasesRemoteState
-                && ParentHub is { } releaseParent
-                && releaseParent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            // A nested subtree can be disposing while the receiver is in another, LIVE subtree.
+            // Its immediate parent is then also in DisposeHostedHubs: limiting the carrier to one
+            // hop drops the release again (#3432). Each parent's own post guard forwards through
+            // its construction-captured ParentHub until a routing ancestor is reached. A true
+            // root has ParentHub=null, so a whole-tree teardown terminates with the ordinary
+            // refusal, without resolving Configuration.ParentHub from a dying scope. Keep the
+            // original sender and the SAME host qualification as HierarchicalRouting's upward
+            // hop: a bare sender identifies different state from the live subscription's sender.
+            if (message is IReleasesRemoteState && ParentHub is { } releaseParent)
             {
                 try
                 {
-                    releaseParent.Post(message, _ => opt);
+                    var releaseOptions = releaseParent.Address.Type != AddressExtensions.MeshType
+                        ? opt with { Sender = opt.Sender.WithHost(releaseParent.Address) }
+                        : opt;
+                    var forwarded = releaseParent.Post(message, _ => releaseOptions);
                     postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
-                    return delivery;
+                    if (forwarded is not null)
+                        return forwarded;
                 }
                 catch (Exception ex)
                 {
