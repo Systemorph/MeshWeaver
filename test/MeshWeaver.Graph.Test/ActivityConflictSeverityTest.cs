@@ -1,4 +1,6 @@
+using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -71,6 +73,59 @@ public class ActivityConflictSeverityTest
         // cannot be reached. Quietening them would turn this fix into the defect it removes.
         => MeshNodeExtensions.IsConcurrentWriteConflict(Nack(code, "refused"))
             .Should().BeFalse();
+
+    [Theory]
+    [InlineData(MeshNodeErrorCode.Conflict, true)]
+    [InlineData(MeshNodeErrorCode.AccessDenied, false)]
+    [InlineData(MeshNodeErrorCode.Validation, false)]
+    [InlineData(MeshNodeErrorCode.NotFound, false)]
+    [InlineData(MeshNodeErrorCode.OwnerUnreachable, false)]
+    [InlineData(MeshNodeErrorCode.Unknown, false)]
+    public void UpsertWireResponse_PreservesTheExistingConflictPolicy(MeshNodeErrorCode code, bool conflict)
+    {
+        var failure = new InvalidOperationException("wrapped", new AggregateException(Nack(code, Total)));
+        var reason = NodeUpsertRejection.Classify(failure);
+        reason.Should().Be(conflict ? NodeUpsertRejectionReason.Conflict : NodeUpsertRejectionReason.Unknown);
+        var json = JsonSerializer.Serialize(CreateOrUpdateNodeResponse.Fail(Total, reason));
+        var reply = JsonSerializer.Deserialize<CreateOrUpdateNodeResponse>(json)!;
+        var translated = MeshNodeExtensions.ActivityUpsertFailure(reply, "rbuergi/_UserActivity/rbuergi");
+        MeshNodeExtensions.IsConcurrentWriteConflict(translated).Should().Be(conflict);
+    }
+
+    [Fact]
+    public void AStructuredRecyclingRefusal_RemainsAnActivityTeardown()
+    {
+        var reply = CreateOrUpdateNodeResponse.Fail("recycling", NodeUpsertRejectionReason.AddressRecycling);
+        HubDisposingException.IsHubDisposal(MeshNodeExtensions.ActivityUpsertFailure(reply, "rbuergi/activity"))
+            .Should().BeTrue();
+        HubDisposingException.IsHubDisposal(MeshNodeExtensions.ActivityUpsertFailure(
+            CreateOrUpdateNodeResponse.Fail("recycling", NodeUpsertRejectionReason.Unknown), "rbuergi/activity"))
+            .Should().BeFalse("text alone is never evidence of a teardown");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void InnerTeardown_RetainsItsPolicyThroughTheUpsertResponse(int shape)
+    {
+        var address = new Address("rbuergi/activity");
+        Exception inner = shape switch
+        {
+            0 => new HubDisposingException(address, "activity write"),
+            1 => new HubDisposedBeforeResponseException("activity", address, "update", address.ToString()),
+            _ => new ObjectDisposedException("Autofac.LifetimeScope", "nested lifetimes cannot be created")
+        };
+        var reason = NodeUpsertRejection.Classify(new AggregateException(inner));
+        reason.Should().Be(NodeUpsertRejectionReason.HubTeardown,
+            "a lost response during teardown is distinct from an intake refusal that applied nothing");
+        var reply = JsonSerializer.Deserialize<CreateOrUpdateNodeResponse>(JsonSerializer.Serialize(
+            CreateOrUpdateNodeResponse.Fail(inner.Message, reason)))!;
+        HubDisposingException.IsHubDisposal(MeshNodeExtensions.ActivityUpsertFailure(reply, address.ToString()))
+            .Should().BeTrue();
+        NodeUpsertRejection.Classify(new ObjectDisposedException("unrelated resource"))
+            .Should().Be(NodeUpsertRejectionReason.Unknown);
+    }
 
     [Fact]
     public void AnUnrelatedFault_StaysLoud()

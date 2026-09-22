@@ -231,7 +231,6 @@ public static class MeshNodeExtensions
         // The tracking hub is hosted off the mesh ROOT and resolves the shared,
         // registered mesh-root cache (cache/{meshRootId}). See ActivityTrackingHub.
         var activityHub = hub.GetActivityTrackingHub();
-        var workspace = activityHub.GetWorkspace();
         // The tracking hub's own JSON options (WithGraphTypes) know UserActivityRecord —
         // the caller's hub may not, so use the tracking hub's for typed round-trip.
         var jsonOptions = activityHub.JsonSerializerOptions;
@@ -278,164 +277,82 @@ public static class MeshNodeExtensions
             "TrackActivity ENTER: userId={UserId} activityPath={Path} type={ActivityType} via activityHub={ActivityHub}",
             req.UserId, activityPath, req.ActivityType, activityHub.Address);
 
-        // workspace.GetMeshNodeStream is backed by the mesh ROOT's shared
-        // IMeshNodeStreamCache (resolved by DI fallback from the tracking hub) —
-        // repeat tracks for the same activity path reuse the warm handle. Used ONLY
-        // to WRITE (stream.Update) the node when it already exists — never to probe an
-        // absent path (see the GetQuery read below).
-        var stream = workspace.GetMeshNodeStream(activityPath);
-
-        // First-time creation resolves IMeshService / IStorageAdapter from the mesh ROOT —
-        // IMeshService is AddScoped, so resolving from a leaf scope would target a hub with
-        // no CreateNodeRequest handler. The ONBOARD-FIRST gate below probes the user's
-        // partition root (a read never creates a schema) and skips the write when it's absent.
+        // Creation and folding are ONE owner-side operation. The query index can retain a
+        // positive row while its node has no live base; using that row to choose stream.Update
+        // selected the unsafe update path implicated in #1174. The upsert owns existence +
+        // hydration, and its
+        // serialized folds carry rules rather than a count calculated from a stale caller read.
+        var record = new UserActivityRecord
+        {
+            Id = encodedPath,
+            NodePath = req.NodePath,
+            UserId = req.UserId,
+            ActivityType = req.ActivityType,
+            FirstAccessedAt = now,
+            LastAccessedAt = now,
+            AccessCount = 1,
+            NodeName = req.NodeName,
+            NodeType = req.NodeType,
+            Namespace = req.Namespace
+        };
+        var saveNode = MeshNode.FromPath(activityPath) with
+        {
+            NodeType = "UserActivity",
+            Name = req.NodeName ?? encodedPath,
+            MainNode = req.UserId,
+            State = MeshNodeState.Active,
+            Content = record
+        };
+        var request = new CreateOrUpdateNodeRequest(saveNode)
+            .WithFolds<UserActivityRecord>(jsonOptions, folds => folds
+                .Sum(r => r.AccessCount, 1)
+                .KeepExisting(r => r.FirstAccessedAt)
+                .Max(r => r.LastAccessedAt, now)) with
+        {
+            RequestedBy = callerCtx?.ObjectId
+        };
         var storage = meshRoot.ServiceProvider.GetService<IStorageAdapter>();
-        var meshService = meshRoot.ServiceProvider.GetService<IMeshService>();
+        var issuingHub = activityHub.NodeOperationIssuingHub();
+        var target = activityHub.NodeOperationTarget();
 
-        // 🚨 Read existence via GetQuery (empty-on-absent), NEVER a point
-        // GetMeshNodeStream(path).Take(1) probe. On a FIRST-time track the activity node
-        // does not exist; a point-subscribe to that absent path routes to a RoutingGrain
-        // NotFound + SYNC_STREAM OnError. Because TrackLogin sits on the COLD-LOGIN hot path
-        // (every cold page load through UserContextMiddleware.TrackLogin), that failing
-        // subscribe re-storms the router. A GetQuery over the exact path returns an EMPTY set
-        // when the node is absent (the documented empty-on-absent behaviour) — no NotFound, no
-        // resubscribe, nothing to storm — and returns typed Content when present.
-        //
-        // The increment is still folded onto the LIVE node inside the owner-serialised Update
-        // below (FoldOntoLive), so the query's eventual consistency only ever decides
-        // create-vs-update — never the AccessCount. The create-vs-update race is coalesced by
-        // the CreateNode catch below, which folds the increment in via stream.Update.
-        // 🚨 Build (and subscribe) the whole read+write pipeline UNDER the caller's identity.
-        // WrapWithPerUserRls (SyncedQueryDataSourceExtensions) captures AccessService.Context
-        // EAGERLY at the GetQuery(...) call — on the workspace's hub (the tracking hub) — so the
-        // per-user RLS filter must see the caller's identity AT THAT CALL, not only at the write's
-        // subscribe. RunAs enters the scope BEFORE invoking the work factory, so
-        // GetQuery is called with the caller's context established on the tracking hub's
-        // AccessService (fail-closed when callerCtx is null: no context ⇒ empty userId ⇒ the RLS
-        // wrap yields no rows for the exact-path existence probe, and the subsequent write posts
-        // context-null and is rejected by PostPipeline). The inner per-write AsCaller calls
-        // still re-establish the identity on each write's own emission thread —
-        // AsyncLocal does not flow across Rx scheduler hops, so the outer scope alone is not enough.
-        var pipeline = AsCaller(
-            () => workspace
-            .GetQuery($"UserActivity|{activityPath}", $"path:{activityPath} nodeType:UserActivity select:path,id,namespace,name,nodeType,content")
-            .Take(1)
-            .Select(nodes => nodes.FirstOrDefault(n =>
-                string.Equals(n.NodeType, "UserActivity", StringComparison.OrdinalIgnoreCase)))
-            .SelectMany(existing =>
+        // ONBOARD FIRST: an absent user's root must never be created by navigation/login
+        // tracking. This authoritative root read creates neither an activity hub nor a schema.
+        // Re-enter the caller's identity at each Subscribe across the root-probe emission hop.
+        var rootProbe = AsCaller(() => storage != null
+                ? storage.Read(req.UserId, jsonOptions).Take(1)
+                : Observable.Return<MeshNode?>(null))
+            .Catch<MeshNode?, Exception>(probeEx =>
             {
-                var existingRecord = existing.ContentAs<UserActivityRecord>(jsonOptions);
-                var record = new UserActivityRecord
+                logger?.LogDebug(probeEx,
+                    "TrackActivity root probe failed for {UserId} — treating as not onboarded.",
+                    req.UserId);
+                return Observable.Return<MeshNode?>(null);
+            });
+        var pipeline = rootProbe.SelectMany(userRoot =>
+        {
+            if (userRoot is null)
+            {
+                logger?.LogDebug(
+                    "TrackActivity SKIP create for {Path}: user '{UserId}' has no partition root yet " +
+                    "(not onboarded). Activity tracking must not create a partition ahead of onboarding.",
+                    activityPath, req.UserId);
+                return Observable.Empty<MeshNode>();
+            }
+
+            logger?.LogDebug("TrackActivity UPSERT: {Path}", activityPath);
+            return AsCaller(() => issuingHub.Observe(request, options =>
                 {
-                    Id = encodedPath,
-                    NodePath = req.NodePath,
-                    UserId = req.UserId,
-                    // Honour the request's ActivityType — Login events from the
-                    // auth middleware fold in here alongside Read events from
-                    // navigation. Same persistence path, different filter axis.
-                    ActivityType = req.ActivityType,
-                    FirstAccessedAt = existingRecord?.FirstAccessedAt ?? now,
-                    LastAccessedAt = now,
-                    AccessCount = (existingRecord?.AccessCount ?? 0) + 1,
-                    NodeName = req.NodeName,
-                    NodeType = req.NodeType,
-                    Namespace = req.Namespace
-                };
-                var saveNode = MeshNode.FromPath(activityPath) with
+                    options = options.WithTarget(target);
+                    return callerCtx is null ? options : options.WithAccessContext(callerCtx);
+                })
+                .SelectMany(reply =>
                 {
-                    NodeType = "UserActivity",
-                    Name = req.NodeName ?? encodedPath,
-                    MainNode = req.UserId,
-                    State = MeshNodeState.Active,
-                    Content = record
-                };
-
-                // 🚨 Fold the increment onto the LIVE node INSIDE the Update lambda, not a
-                // separately-read snapshot. The owner serializes Updates, so each lambda sees
-                // the freshest AccessCount and two concurrent tracks can't lose an increment.
-                MeshNode FoldOntoLive(MeshNode live)
-                {
-                    var liveRec = live.ContentAs<UserActivityRecord>(jsonOptions);
-                    return live with
-                    {
-                        NodeType = "UserActivity",
-                        Name = req.NodeName ?? encodedPath,
-                        MainNode = req.UserId,
-                        State = MeshNodeState.Active,
-                        Content = record with
-                        {
-                            AccessCount = (liveRec?.AccessCount ?? 0) + 1,
-                            FirstAccessedAt = liveRec?.FirstAccessedAt ?? record.FirstAccessedAt,
-                        },
-                        Version = live.Version,
-                    };
-                }
-
-                // Each write runs under the acting user via AsCaller/RunAs: the scope is
-                // entered at the inner Subscribe (where the write primitive captures
-                // AccessContext) and left on that same Subscribe rather than on whatever
-                // thread the write happens to terminate on,
-                // so cross-hub RLS lets it land. See ActivityRunner for the canonical shape.
-                if (existing != null)
-                {
-                    // 🚨 `record.AccessCount` is the count derived from the EVENTUALLY-CONSISTENT
-                    // query snapshot above — it is NOT the count this write lands. The value that
-                    // is written comes from FoldOntoLive, which re-reads AccessCount off the LIVE
-                    // node inside the owner-serialised Update. Naming it `count=` made two
-                    // concurrent tracks that merely READ the same stale snapshot look like two
-                    // writers racing the same increment (#3001's second hypothesis, which the
-                    // owner's three-way merge in fact already prevents). Say which number it is.
-                    logger?.LogDebug(
-                        "TrackActivity UPDATE: {Path} querySnapshotCount={SnapshotCount} "
-                        + "(the written count is folded off the live node inside the Update)",
-                        activityPath, record.AccessCount);
-                    return AsCaller(() => stream.Update(FoldOntoLive));
-                }
-
-                var rootProbe = AsCaller(() => storage != null
-                        ? storage.Read(req.UserId, jsonOptions).Take(1)
-                        : Observable.Return<MeshNode?>(null))
-                    .Catch<MeshNode?, Exception>(probeEx =>
-                    {
-                        logger?.LogDebug(probeEx,
-                            "TrackActivity root probe failed for {UserId} — treating as not onboarded.",
-                            req.UserId);
-                        return Observable.Return<MeshNode?>(null);
-                    });
-
-                return rootProbe.SelectMany(userRoot =>
-                {
-                    if (userRoot is null)
-                    {
-                        logger?.LogDebug(
-                            "TrackActivity SKIP create for {Path}: user '{UserId}' has no partition root yet " +
-                            "(not onboarded). Activity tracking must not create a partition ahead of onboarding.",
-                            activityPath, req.UserId);
-                        return Observable.Empty<MeshNode>();
-                    }
-
-                    if (meshService != null)
-                    {
-                        logger?.LogDebug("TrackActivity CREATE: {Path}", activityPath);
-                        return AsCaller(() => meshService.CreateNode(saveNode))
-                            // Race coalesce: a concurrent track for the same path beat us to
-                            // CreateNode — fold our increment in via Update instead of throwing.
-                            .Catch<MeshNode, InvalidOperationException>(ex =>
-                            {
-                                if (!IsAlreadyExistsRace(ex))
-                                    return Observable.Throw<MeshNode>(ex);
-                                logger?.LogDebug(
-                                    "TrackActivity CREATE to UPDATE race for {Path}: another concurrent track won; folding via Update.",
-                                    activityPath);
-                                return AsCaller(() => stream.Update(FoldOntoLive));
-                            });
-                    }
-
-                    return storage != null
-                        ? AsCaller(() => storage.Write(saveNode, jsonOptions))
-                        : Observable.Empty<MeshNode>();
-                });
-            }));
+                    var result = reply.Message;
+                    if (result.Success && result.Node is not null)
+                        return Observable.Return(result.Node);
+                    return Observable.Throw<MeshNode>(ActivityUpsertFailure(result, activityPath));
+                }));
+        });
 
         // The write is DETACHED from this request on purpose — TrackLogin sits on the cold-login
         // hot path and must not stall behind a node write — so the delivery is Processed below
@@ -494,8 +411,8 @@ public static class MeshNodeExtensions
                     //
                     // 🚨 The cost/value trade-off, stated because a level change owes one. What is
                     // lost is one AccessCount increment and a sub-second LastAccessedAt — a counter
-                    // that FoldOntoLive re-folds off the live node on the very next activity, so it
-                    // self-corrects. What Error cost instead: this line is the fingerprint's outer
+                    // whose next activity folds onto the live node again; a missed increment
+                    // remains lost. What Error cost instead: this line is the fingerprint's outer
                     // text, so every lost race minted a production incident and reopened an
                     // unrelated fixed ticket (#1910) — an Error nobody can act on, about a write the
                     // platform deliberately retried and deliberately bounded. Debug keeps it
@@ -522,15 +439,18 @@ public static class MeshNodeExtensions
         return delivery.Processed();
     }
 
-    /// <summary>
-    /// True for the specific "Node already exists" signal raised by
-    /// <c>MeshService.CreateNode</c> when persistence rejects a duplicate
-    /// path. Distinguishes the concurrent-track race from genuine
-    /// <see cref="InvalidOperationException"/>s (validation failures,
-    /// missing parent, etc.) which must still surface as errors.
-    /// </summary>
-    private static bool IsAlreadyExistsRace(InvalidOperationException ex)
-        => ex.Message.StartsWith("Node already exists:", StringComparison.Ordinal);
+    /// <summary>Preserves structured upsert refusals for activity's existing failure policy.</summary>
+    internal static Exception ActivityUpsertFailure(CreateOrUpdateNodeResponse response, string path)
+        => response.RejectionReason switch
+        {
+            NodeUpsertRejectionReason.Conflict => new MeshNodeStreamException(
+                new MeshNodeError(MeshNodeErrorCode.Conflict, path, response.Error ?? "Node upsert failed")),
+            NodeUpsertRejectionReason.AddressRecycling or NodeUpsertRejectionReason.HubTeardown =>
+                new HubDisposingException(new Address(path), response.Error ?? "Node upsert failed"),
+            NodeUpsertRejectionReason.Unauthorized or NodeUpsertRejectionReason.ValidationFailed =>
+                new UnauthorizedAccessException(response.Error ?? "Access denied"),
+            _ => new InvalidOperationException(response.Error ?? "Node upsert failed")
+        };
 
     /// <summary>
     /// True when the failure carries the owner's <see cref="MeshNodeErrorCode.Conflict"/> NACK at
