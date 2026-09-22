@@ -140,6 +140,56 @@ hosting::die_refused() {
   hosting::die "REFUSED, not absent: this operator's ClusterRole does not permit reading $* — so whether it exists is UNKNOWN, and nothing was ruled out. Grant it in MeshWeaver deploy/aks/manifests/hosting-operator/operator-rbac.yaml; it reaches the cluster through Systemorph/Memex's helm-release lane, never from this Job. Refused: ${HOSTING_PROBE_ERR}"
 }
 
+# ── the Postgres admin password is resolved by NAME, never carried as a value (Memex#132) ──────
+#
+#   hosting::pg_password <vault> <object>
+#
+# Sets and exports PGPASSWORD for the pg_dump / psql / pg_restore that follow, read from Key Vault
+# object <object> in vault <vault> with the identity this operator already holds — the SAME
+# `az keyvault secret show --query value` hosting-kv-ensure makes to compose an instance's
+# connection string, so no new grant is involved and the read is one this identity has already
+# been trusted with. The value lands in this process only: never printed, never on an argv (az
+# writes it to STDOUT, which is captured), never reported.
+#
+# 🚨 WHY A NAME. The only environment a plan step has is `Hosting:Operator:Environment` (the Job) or
+# the bundle's `environment` map (the aks-ops lane) — both rendered from the control record into a
+# ConfigMap, or a workflow_dispatch input: PLAINTEXT by construction. Every database action
+# therefore failed at step 1 (`PGPASSWORD is empty or unset … supplied by
+# Hosting:Operator:Environment`) rather than put the server's admin password there — and that
+# sentence named a channel that cannot carry a secret. The record already carries the object's NAME
+# (`operator.environment.AZ_POSTGRES_PASSWORD_SECRET`) and the vault's name (`keyVault`); the plan
+# hands both to the script as `--vault` / `--password-secret`, exactly as it does to
+# hosting-kv-ensure, and this resolves them on either executor.
+#
+# Both flags, or neither: with neither, a PGPASSWORD already in the environment is honoured (the
+# by-hand shape — an operator at a shell with the password exported), and its absence is refused
+# naming the flags, not the ConfigMap. The two names are validated here as plain identifiers
+# because they are interpolated into an az command line — the same boundary hosting::safe_name
+# guards everywhere else. ABSENT and REFUSED are two different sentences (MeshWeaver#4722): a
+# vault that refused this identity has ruled nothing out about the object. An EMPTY value is refused
+# as loudly as an unreadable one: psql with an empty PGPASSWORD prompts, and a Job that prompts
+# hangs to its deadline saying nothing that names this step. A dry run must not call this — it reads
+# a secret, and a rehearsal reads none (hosting-kv-ensure's rule).
+hosting::pg_password() {
+  local vault="${1:-}" object="${2:-}" rc
+  if [ -z "$vault" ] && [ -z "$object" ]; then
+    [ -n "${PGPASSWORD:-}" ] && return 0
+    hosting::die "no Postgres admin password: pass --vault <Key Vault name> --password-secret <vault object name> — the plan supplies both from the control record (keyVault, and operator.environment.AZ_POSTGRES_PASSWORD_SECRET, e.g. memex-postgres-password), and this script reads the value from the vault as the identity it already runs as. The operator's environment is a ConfigMap and cannot carry the value (Memex#132); PGPASSWORD in the environment is honoured only when set by hand."
+  fi
+  [ -n "$vault" ] && [ -n "$object" ] \
+    || hosting::die "--vault and --password-secret go together: the vault to read from and the object holding the server's admin password (got --vault '${vault}' --password-secret '${object}')"
+  hosting::safe_name vault "$vault"
+  hosting::safe_name password-secret "$object"
+  hosting::probe output az keyvault secret show --vault-name "$vault" --name "$object" --query value -o tsv; rc=$?
+  case "$rc" in
+    2) hosting::die "REFUSED, not absent: the identity this step runs as may not read Key Vault object ${object} in vault ${vault}, so whether it exists is UNKNOWN. Grant it secret GET on that vault (hosting-kv-ensure reads the same object with the same identity when it composes a connection string, so a Provision that did that already holds the grant). Refused: ${HOSTING_PROBE_ERR}" ;;
+    1) hosting::die "could not read Key Vault object ${object} from vault ${vault} — absent, or holding an EMPTY value. It must hold the admin password of the flexible server (the record's operator.environment.AZ_POSTGRES_PASSWORD_SECRET names it; hosting-kv-ensure composes connection strings from the same object). Nothing has been dumped, restored or destroyed. az said: ${HOSTING_PROBE_ERR:-nothing}" ;;
+  esac
+  PGPASSWORD="$HOSTING_PROBE_OUT"; HOSTING_PROBE_OUT=""
+  export PGPASSWORD
+  hosting::log "Postgres admin password read from vault ${vault} object ${object} (value never shown)"
+}
+
 # ── the plugin registry's key-lifecycle surface (MeshWeaver#2802) ───────────────────────────────
 
 # A registry BASE URL: https, a hostname, an optional port — no path, no query, nothing else. It is

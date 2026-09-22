@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# A stand-in `az` for the Postgres steps' behaviour tests (Memex#132): hosting-backup,
+# hosting-restore and hosting-verify-restore read the server's admin password from Key Vault BY
+# NAME, and this records every invocation VERBATIM — argv is how the test proves the value never
+# travels on a command line — and answers from a small state:
+#
+#   HOSTING_PG_STATE            directory: az.log (every argv)
+#   HOSTING_PG_PASSWORD_OBJECT  the one object whose `keyvault secret show --query value` answers
+#   HOSTING_PG_PASSWORD         the value it answers (default: an obviously fake sentinel);
+#                               set it EMPTY to exercise the empty-object refusal
+#   HOSTING_PG_REFUSE=1         every vault read is Forbidden (the REFUSED answer, never absent)
+#
+# `storage blob upload/download` succeed and are recorded; everything else is unexpected. Not a
+# mock of az: nothing here asserts az's own behaviour — only which objects the scripts read, in
+# which order relative to pg_dump, and what they never print.
+set -uo pipefail
+state="${HOSTING_PG_STATE:?the az stub needs HOSTING_PG_STATE}"
+printf 'az %s\n' "$*" >> "$state/az.log"
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret show")
+    [ "${HOSTING_PG_REFUSE:-0}" = "1" ] && { echo "ERROR: (Forbidden) Caller is not authorized to perform action on resource." >&2; exit 1; }
+    name="" query=""
+    while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --query) query="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    if [ "$query" = "value" ] && [ "$name" = "${HOSTING_PG_PASSWORD_OBJECT:-}" ]; then
+      printf '%s\n' "${HOSTING_PG_PASSWORD-fake-server-password-NEVER-PRINTED}"; exit 0
+    fi
+    echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
+  "storage blob upload")   exit 0 ;;
+  "storage blob download")
+    file=""
+    while [ $# -gt 0 ]; do case "$1" in --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    printf 'fake archive\n' > "$file"; exit 0 ;;
+esac
+echo "az stub: unexpected invocation: $*" >&2
+exit 1

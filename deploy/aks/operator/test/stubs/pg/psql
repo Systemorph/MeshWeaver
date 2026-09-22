@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# A stand-in psql (Memex#132 tests). Records whether PGPASSWORD reached it (set/unset, never the
+# value) and answers the two query shapes the scripts use: a version, and a count of 0.
+set -uo pipefail
+state="${HOSTING_PG_STATE:?the psql stub needs HOSTING_PG_STATE}"
+printf 'psql PGPASSWORD=%s argv=%s\n' "$([ -n "${PGPASSWORD:-}" ] && echo set || echo unset)" "$*" >> "$state/pg.log"
+# Answers as a quiesced, restored database: no live sessions, a schema with tables and mesh_nodes.
+case "$*" in
+  *"SHOW server_version"*) echo "16.4" ;;
+  *pg_stat_activity*)      echo "0" ;;
+  *information_schema*)    echo "12" ;;
+  *"count(*)"*)            echo "1" ;;
+  *)                       echo "" ;;
+esac
+exit 0

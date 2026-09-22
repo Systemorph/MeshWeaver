@@ -801,6 +801,96 @@ rm -rf "$_im_state"
 unset _im_out _im_rc _im_log _im_az _im_images _im_state
 
 echo
+echo "── hosting-backup / restore / verify-restore: the admin password is read BY NAME (Memex#132) ──"
+# The only environment a plan step has is a ConfigMap (the Job) or a workflow_dispatch input (the
+# aks-ops lane) — plaintext by construction — so every database action failed at step 1 with
+# "PGPASSWORD is empty or unset … supplied by Hosting:Operator:Environment", naming a channel that
+# cannot carry a secret. The plan now passes the record's keyVault and the vault object's NAME, and
+# hosting::pg_password reads the value as the identity the step already runs as — the read
+# hosting-kv-ensure already makes. Asserted: the order (vault before pg_dump), that the value
+# reaches pg_dump/psql/pg_restore through the environment and NEVER an argv or the output, and
+# the three refusals — absent, REFUSED-not-absent, and no channel at all.
+PG_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/pg" && pwd)"
+pg() {  # pg [env…] -- <command and args…>; sets $_pg_out $_pg_rc $_pg_az $_pg_log $_pg_state
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _pg_state="$(mktemp -d)"
+  _pg_out="$(env -u PGPASSWORD "${envs[@]}" PATH="$PG_STUBS:$PATH" HOSTING_PG_STATE="$_pg_state" "$@" 2>&1)"; _pg_rc=$?
+  _pg_az="$(cat "$_pg_state/az.log" 2>/dev/null || true)"
+  _pg_log="$(cat "$_pg_state/pg.log" 2>/dev/null || true)"
+}
+PG_BACKUP=(hosting-backup --database acmedb --server pg.postgres.database.azure.com --store-uri https://store.test/backups/acme-1 --object acme-1)
+PG_BY_NAME=(--vault Systemorph --password-secret memex-postgres-password)
+
+# The happy path: read by name, then dump with the value in the environment, never in an argv.
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- "${PG_BACKUP[@]}" "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -eq 0 ] && ok "backup with --vault/--password-secret runs to the upload" || bad "backup by name" "exited ${_pg_rc}: ${_pg_out}"
+case "$_pg_az" in *"keyvault secret show --vault-name Systemorph --name memex-postgres-password --query value"*) ok "…reading the object by NAME from the named vault" ;; *) bad "reads the object by name" "az saw: ${_pg_az}" ;; esac
+case "$_pg_log" in *"pg_dump PGPASSWORD=set"*) ok "…and pg_dump ran with PGPASSWORD set from it" ;; *) bad "pg_dump got the password" "pg saw: ${_pg_log}" ;; esac
+case "$_pg_out" in *NEVER-PRINTED*) bad "the password is never printed" "it was: ${_pg_out}" ;; *) ok "the password is never printed" ;; esac
+case "$_pg_az$_pg_log" in *NEVER-PRINTED*) bad "…and never on an az or pg command line" "argv: ${_pg_az} ${_pg_log}" ;; *) ok "…and never on an az or pg command line" ;; esac
+_pg_first="$(printf '%s\n%s' "$_pg_az" "$_pg_log" | grep -n "keyvault secret show\|pg_dump " | head -1)"
+case "$_pg_first" in *"keyvault secret show"*) ok "the vault is read BEFORE pg_dump runs" ;; *) bad "vault read precedes pg_dump" "first: ${_pg_first}" ;; esac
+case "$_pg_out" in *"::hosting:: size="*"::hosting:: sha256="*) ok "…and the run still reports size and sha256" ;; *) bad "reports size and sha256" "said: ${_pg_out}" ;; esac
+rm -rf "$_pg_state"
+
+# Restore and verify-restore take the same two flags and make the same read.
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-restore --database acmedb --server pg.test --store-uri https://store.test/backups/acme-1 "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -eq 0 ] && ok "restore with --vault/--password-secret runs pg_restore" || bad "restore by name" "exited ${_pg_rc}: ${_pg_out}"
+case "$_pg_log" in *"pg_restore PGPASSWORD=set"*) ok "…with PGPASSWORD set for pg_restore" ;; *) bad "pg_restore got the password" "pg saw: ${_pg_log}" ;; esac
+rm -rf "$_pg_state"
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-verify-restore --database acmedb --server pg.test "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -eq 0 ] && ok "verify-restore with --vault/--password-secret queries the database" || bad "verify-restore by name" "exited ${_pg_rc}: ${_pg_out}"
+case "$_pg_log" in *"psql PGPASSWORD=set"*) ok "…with PGPASSWORD set for psql" ;; *) bad "psql got the password" "pg saw: ${_pg_log}" ;; esac
+rm -rf "$_pg_state"
+
+# The three refusals — each BEFORE anything is dumped, each saying which it is.
+pg HOSTING_PG_PASSWORD_OBJECT=other -- "${PG_BACKUP[@]}" "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -ne 0 ] && ok "an ABSENT password object refuses" || bad "absent object refuses" "exited 0: ${_pg_out}"
+case "$_pg_out" in *"could not read Key Vault object memex-postgres-password from vault Systemorph"*) ok "…naming the object and the vault" ;; *) bad "names object and vault" "said: ${_pg_out}" ;; esac
+[ -z "$_pg_log" ] && ok "…before pg_dump ran" || bad "nothing dumped on refusal" "pg saw: ${_pg_log}"
+rm -rf "$_pg_state"
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password HOSTING_PG_PASSWORD= -- "${PG_BACKUP[@]}" "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -ne 0 ] && ok "an EMPTY password object refuses (psql with an empty PGPASSWORD prompts and hangs)" || bad "empty object refuses" "exited 0: ${_pg_out}"
+[ -z "$_pg_log" ] && ok "…before pg_dump ran" || bad "nothing dumped on empty" "pg saw: ${_pg_log}"
+rm -rf "$_pg_state"
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password HOSTING_PG_REFUSE=1 -- "${PG_BACKUP[@]}" "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -ne 0 ] && ok "a vault that REFUSES this identity refuses the step" || bad "refused read refuses" "exited 0: ${_pg_out}"
+case "$_pg_out" in *"REFUSED, not absent"*"UNKNOWN"*) ok "…saying REFUSED, not absent — the object was not ruled out (MeshWeaver#4722)" ;; *) bad "refused is not absent" "said: ${_pg_out}" ;; esac
+rm -rf "$_pg_state"
+pg -- "${PG_BACKUP[@]}"
+[ "$_pg_rc" -ne 0 ] && ok "no flags and no PGPASSWORD refuses" || bad "no channel refuses" "exited 0: ${_pg_out}"
+case "$_pg_out" in *"--vault"*"--password-secret"*"AZ_POSTGRES_PASSWORD_SECRET"*) ok "…naming the two flags and the record key that supplies the object name" ;; *) bad "names the flags" "said: ${_pg_out}" ;; esac
+case "$_pg_out" in *"Hosting:Operator:Environment"*) bad "…and no longer sends the reader to the ConfigMap for a secret" "said: ${_pg_out}" ;; *) ok "…and no longer sends the reader to the ConfigMap for a secret" ;; esac
+[ -z "$_pg_az" ] && ok "…having read nothing from the vault" || bad "no vault read without flags" "az saw: ${_pg_az}"
+rm -rf "$_pg_state"
+pg -- "${PG_BACKUP[@]}" --vault Systemorph
+[ "$_pg_rc" -ne 0 ] && ok "--vault without --password-secret refuses" || bad "one flag refuses" "exited 0: ${_pg_out}"
+case "$_pg_out" in *"go together"*) ok "…saying the two go together" ;; *) bad "says go together" "said: ${_pg_out}" ;; esac
+rm -rf "$_pg_state"
+
+# The by-hand shape: PGPASSWORD exported at a shell, no flags — honoured, and the vault not read.
+pg PGPASSWORD=hand-typed-NEVER-PRINTED -- "${PG_BACKUP[@]}"
+[ "$_pg_rc" -eq 0 ] && ok "PGPASSWORD set by hand with no flags is honoured" || bad "by-hand PGPASSWORD" "exited ${_pg_rc}: ${_pg_out}"
+[ -z "$_pg_az" ] || case "$_pg_az" in *keyvault*) bad "…without reading the vault" "az saw: ${_pg_az}" ;; esac
+case "$_pg_az" in *keyvault*) ;; *) ok "…without reading the vault" ;; esac
+case "$_pg_out$_pg_az$_pg_log" in *NEVER-PRINTED*) bad "…and still never printed or on an argv" "seen: ${_pg_out}" ;; *) ok "…and still never printed or on an argv" ;; esac
+rm -rf "$_pg_state"
+
+# A dry run reads no secret — the rehearsal rule hosting-kv-ensure already keeps.
+pg HOSTING_DRY_RUN=true HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- "${PG_BACKUP[@]}" "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -eq 0 ] && ok "a dry-run backup with the flags succeeds" || bad "dry-run backup" "exited ${_pg_rc}: ${_pg_out}"
+[ -z "$_pg_az" ] && [ -z "$_pg_log" ] && ok "…reading no secret and dumping nothing" || bad "dry run reads nothing" "az: ${_pg_az} pg: ${_pg_log}"
+rm -rf "$_pg_state"
+
+# The two names are interpolated into an az command line: validated like every other name.
+refuses_hard "backup refuses a --password-secret with a metacharacter" "is not a plain name" \
+  "${PG_BACKUP[@]}" --vault Systemorph --password-secret 'p;id'
+refuses_hard "backup refuses a --vault with a metacharacter" "is not a plain name" \
+  "${PG_BACKUP[@]}" --vault 'V`id`' --password-secret p
+unset _pg_out _pg_rc _pg_az _pg_log _pg_state _pg_first
+
+echo
 echo "── the ::hosting:: contract the mesh parses ──────────────────────"
 emits "dry-run backup announces the object" "::hosting:: object=arch-1" \
   env HOSTING_DRY_RUN=true hosting-backup --database d --server s --store-uri https://x/y/z --object arch-1

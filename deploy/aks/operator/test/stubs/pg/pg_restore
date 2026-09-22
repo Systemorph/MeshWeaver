@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# A stand-in pg_restore (Memex#132 tests). `--list` answers as if the archive had a table of
+# contents; a restore records whether PGPASSWORD reached it (set/unset, never the value).
+set -uo pipefail
+state="${HOSTING_PG_STATE:?the pg_restore stub needs HOSTING_PG_STATE}"
+case "$*" in *--list*) exit 0 ;; esac
+printf 'pg_restore PGPASSWORD=%s argv=%s\n' "$([ -n "${PGPASSWORD:-}" ] && echo set || echo unset)" "$*" >> "$state/pg.log"
+exit 0
