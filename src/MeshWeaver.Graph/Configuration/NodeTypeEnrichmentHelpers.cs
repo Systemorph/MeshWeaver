@@ -2569,13 +2569,18 @@ internal static class NodeTypeEnrichmentHelpers
             // JsonException`, once per emission for the watcher's life: the incident fingerprint
             // #5008 removed from the probe and the slow path, re-emitted here, so the incident
             // could never go quiet however the instance was repaired. The collision was already
-            // reported once, with both sides named, by whoever armed this watcher. Same one-sided
-            // predicate as ProbeCollision; a real declaration (or degraded content that might be
-            // one) still reaches ContentAs with the logger, so a genuine conversion fault on a
-            // NodeType stays loud.
-            if (t is not null && NodeTypeDeclarationProbe.IsProvablyNotADeclaration(t, jsonOptions))
-                return (null, false);
-            var def = t?.ContentAs<NodeTypeDefinition>(jsonOptions, logger);
+            // reported once, with both sides named, by whoever armed this watcher. The split is
+            // IsProvablyNotADeclaration's own first clause — a node that DECLARES a NodeType other
+            // than `NodeType` — so a real declaration (or one that leaves NodeType unset) still
+            // converts WITH the logger and a genuine conversion fault on a NodeType stays loud.
+            // Deciding on the declared type rather than calling the probe keeps this to ONE
+            // conversion per emission, the contract stated above: a convertible occupant (untyped
+            // JSON) still yields its definition exactly as before, and an unconvertible one is the
+            // probe's conviction, now reached without a second pass.
+            var declaresAnotherType = t is not null
+                && !string.IsNullOrEmpty(t.NodeType)
+                && !string.Equals(t.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase);
+            var def = t?.ContentAs<NodeTypeDefinition>(jsonOptions, declaresAnotherType ? null : logger);
             return (def, def is not null
                 && NodeTypeCompilationHelpers.HasUsableBuild(t!, def, guards));
         }
