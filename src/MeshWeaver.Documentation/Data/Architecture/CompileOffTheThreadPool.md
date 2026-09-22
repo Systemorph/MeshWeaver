@@ -91,7 +91,11 @@ What was NOT established: the portal's own ThreadPool metrics for those windows 
 was unavailable, so no `Logs`/Prometheus read was taken), and therefore how much of each window's
 starvation the compiles account for. Other CPU on a rolling survivor — re-activating the grains of the
 pods being replaced — competes for the same cores and is not addressed here. The Compile `IIoPool`'s
-blocking leaves (the language service) still run on pool workers by that pool's design.
+blocking leaves (the language service) still run on pool workers by that pool's design. And nothing
+bounds how many DISTINCT NodeTypes compile at once — the service single-flights per type only — so a
+burst of hundreds now costs hundreds of dedicated threads (it cost as many pool-injected threads
+before); a bound needs an `IIoPool` lane over dedicated threads, since the Compile pool's gate
+deadlocked the compile against itself and its leaves run on the pool.
 
 ## Related
 
