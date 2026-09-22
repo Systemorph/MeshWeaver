@@ -151,7 +151,18 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             var created = CreateHub(a, config);
             if (created.Hub is not null)
             {
-                messageHubs[a] = created.Hub;
+                // 🚨 Through Track, never a bare `messageHubs[a] = created.Hub` (#4741). `Build`
+                // already registered this hub through Add — inside the constructor, before its
+                // message processing started — and a hub can be DISPOSED in that window: a
+                // HubAdded subscriber that tears it down, an ancestor's cascade, a probe hub
+                // created and disposed in one breath. Its pump then starts, runs the queued
+                // shutdown to Dead and RUNS ITS OWN REMOVAL — all before this thread has returned
+                // from Build. A bare re-put here then resurrected the corpse under its address
+                // with nothing left to remove it, and every stream message and user action routed
+                // to that address was delivered into a dead hub and discarded with no line at all.
+                // Track re-arms the removal: on a hub whose disposal has begun, RegisterForDisposal
+                // disposes the registrant immediately, so the corpse comes straight back out.
+                Track(created.Hub);
                 try { _hubAdded.OnNext(created.Hub); } catch { /* never throw on notification */ }
             }
             return created;
@@ -213,10 +224,40 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// <param name="hub">The hub to add; indexed by its <c>Address</c>.</param>
     public void Add(IMessageHub hub)
     {
-        messageHubs[hub.Address] = hub;
-        hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
+        Track(hub);
         CloseScopeWhenDisposed(hub);
         try { _hubAdded.OnNext(hub); } catch { /* never throw on notification */ }
+    }
+
+    /// <summary>
+    /// The ONE way a hub enters <see cref="messageHubs"/>: the insert and the removal that undoes
+    /// it are armed together, so an insert can never outlive its own removal.
+    ///
+    /// <para>🚨 <b>Re-armed on EVERY insert, and value-matched (#4741).</b> The same hub is
+    /// inserted twice on the creation path — by <see cref="Add"/> from inside <c>Build</c>, and by
+    /// <see cref="GetHubWithOutcome"/>'s creation Lazy once <c>Build</c> has returned — and a hub
+    /// can be disposed between the two: its pump starts at the end of <c>Build</c>, runs the queued
+    /// shutdown to Dead and fires the removal <see cref="Add"/> armed, and the Lazy's insert then
+    /// put the corpse back under its address with nothing left to take it out. Every stream message
+    /// and every user action routed to that address afterwards found a registered hub, was
+    /// delivered into it and was discarded there — no refusal, no drop, no line — which is the
+    /// silent shape #4741 measured: a click on a reaped stream that produced NOTHING for the whole
+    /// wait. Arming the removal again on the second insert closes it without a liveness check
+    /// that could itself race: <see cref="IMessageHub.RegisterForDisposal(IDisposable)"/> disposes
+    /// a registrant at once when the hub's disposal has already begun, so a corpse comes straight
+    /// back out, and a live hub simply carries one redundant removal.</para>
+    ///
+    /// <para>The removal takes the hub out only while it is still THIS hub under that address. A
+    /// key-only <c>TryRemove(address)</c> would evict whatever is registered there when a late
+    /// removal fires — a SUCCESSOR built after the first hub went — and a live hub silently gone
+    /// from the registry is a routing miss that mints another.</para>
+    /// </summary>
+    /// <param name="hub">The hub to register under its own address.</param>
+    private void Track(IMessageHub hub)
+    {
+        messageHubs[hub.Address] = hub;
+        hub.RegisterForDisposal(h =>
+            messageHubs.TryRemove(new KeyValuePair<Address, IMessageHub>(h.Address, h)));
     }
 
     /// <summary>

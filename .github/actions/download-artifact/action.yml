@@ -4,6 +4,9 @@ inputs:
   store:
     description: Empty or gha for GitHub; file:/mounted/shared/path for our runners.
     default: ''
+  expected-store-id:
+    description: Required for file stores; pass the store-id resolved once for this run, not this job's own identity.
+    default: ''
   name:
     description: Exact name; omit to select all artifacts or use pattern.
     default: ''
@@ -26,6 +29,9 @@ inputs:
     description: Run which produced the artifacts.
     default: ${{ github.run_id }}
 outputs:
+  store-id:
+    description: Verified filesystem identity; empty for GitHub storage.
+    value: ${{ steps.own.outputs.store-id }}
   download-path:
     description: Absolute extraction directory.
     value: ${{ steps.own.outputs.download-path || steps.github.outputs.download-path }}
@@ -51,6 +57,7 @@ runs:
       env:
         CI_ARTIFACT_ACTION_PATH: ${{ github.action_path }}
         CI_ARTIFACT_STORE: ${{ inputs.store }}
+        CI_ARTIFACT_EXPECT_STORE_ID: ${{ inputs.expected-store-id }}
         CI_ARTIFACT_NAME: ${{ inputs.name }}
         CI_ARTIFACT_PATTERN: ${{ inputs.pattern }}
         CI_ARTIFACT_PATH: ${{ inputs.path }}
@@ -59,6 +66,7 @@ runs:
         CI_ARTIFACT_RUN_ID: ${{ inputs.run-id }}
       run: |
         args=(--store "$CI_ARTIFACT_STORE" --repository "$CI_ARTIFACT_REPOSITORY"
+          --expect-store-id "$CI_ARTIFACT_EXPECT_STORE_ID"
           --run-id "$CI_ARTIFACT_RUN_ID" --path "$CI_ARTIFACT_PATH"
           --merge-multiple "$CI_ARTIFACT_MERGE")
         # Failed-job reruns still consume artifacts from successful earlier attempts. Bound the

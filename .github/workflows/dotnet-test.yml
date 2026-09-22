@@ -2285,6 +2285,20 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-ci-artifact-actions.py
 
+    - name: "The artifact graph binds every transfer to its first producer's store"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: python3 .github/scripts/test-ci-artifact-bindings.py
+
+    - name: "The artifact-store resolver refuses a wrong share before publishing outputs"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: python3 .github/scripts/test-ci-artifact-resolver.py
+
+    - name: "Publication and ledger reuse use the declared artifact store"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: |
+        python3 .github/scripts/test_publication_artifact_store.py
+        python3 .github/scripts/test_module_build_ledger_store.py
+
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
     # is the only thing between "no per-instance credential was provisioned" and a lane that

@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# hosting-migrate --namespace <ns> --release <release> --image <registry>/<path>/memex-migration:<tag>
+#
+# Run the database migration for a TARGET image as its own run-once Job, OUTSIDE the portal, and
+# wait for it to finish — the step a Roll runs BEFORE it moves the portal image. The rule
+# (maintainer, 2026-09-21; Systemorph/Memex docs/delivery-model.md): a schema change ships as a new
+# image, and every path that moves the image runs that tag's migration first, as a separate Job.
+#
+# 🚨 WHY THIS EXISTS. A Roll was `kubectl set image` and nothing else. A target that expects a newer
+# db_version then dies on DbVersionGate ~3 s after start, behind old pods that keep answering 200 —
+# measured on memex-cloud 2026-09-19 rolling 3.0.0-ci.8411 → 8955: CrashLoopBackOff, no migration
+# Job in the namespace, and a record that said the roll was made. helm renders its migration Job
+# only on `helm upgrade` (`memex-migration-<revision>`) and the in-pod self-updater mints its own
+# (`memex-migration-su-<tag>`); the control lane's Roll — the routine path for every instance that
+# reports to a control instance — had neither (Doc/Architecture/SelfUpdateSchemaWall, option b1).
+#
+# THE JOB IS THE RELEASE'S OWN. It is read from `helm get manifest` — the migration Job the chart
+# rendered for this release, with its wait-for-postgres gate, its rehearsal init container, its
+# budget (activeDeadlineSeconds), its envFrom (memex-migration-config / -secrets and any Key Vault
+# synced Secret) and its pull Secret — and ONLY the image of the containers that run the migration
+# image is moved to --image. Nothing is re-derived here, so a chart change to how the migration runs
+# reaches this step without an edit. A release that renders no migration Job is a REFUSAL: a roll
+# that cannot migrate must not move the image.
+#
+# IDEMPOTENT per tag. The Job is `memex-migration-roll-<tag>`: succeeded → reported, not re-run;
+# failed → deleted and run again (a retried roll must not read the last failure as its verdict);
+# still running → waited on.
+#
+# Output contract (the ::hosting:: lines the mesh reads):
+#   migration_job=<name>     the Job this run created or found
+#   migration=completed      the Job reported succeeded ≥ 1 — the ONLY success
+# A failed Job, a vanished Job or one still running past its own budget exits non-zero, naming the
+# Job and quoting the tail of its log.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-migrate"
+
+namespace="" release="" image=""
+interval="${HOSTING_MIGRATE_INTERVAL:-5}" grace="${HOSTING_MIGRATE_GRACE:-120}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    --release)   release="${2:-}";   shift 2 ;;
+    --image)     image="${2:-}";     shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::need_flag release "$release"
+hosting::need_flag image "$image"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name release "$release"
+# A plain reference to the MIGRATION image, never the portal's: it lands in a Job spec, and a portal
+# image there would run the portal as a Job and report whatever that did as the migration.
+[[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9./_-]*/memex-migration:[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+  || hosting::die "--image '${image}' is not a plain memex-migration image reference (registry/…/memex-migration:tag) — refusing"
+command -v jq >/dev/null 2>&1 \
+  || hosting::die "jq is not installed in this image — the release's manifest and the Job's status are JSON"
+
+# The Job's name: DNS-1123, at most 63 characters, one per tag.
+tag="${image##*:}"
+suffix="$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+job="memex-migration-roll-${suffix}"
+job="${job:0:63}"
+while [[ "$job" == *- ]]; do job="${job%-}"; done
+
+hosting::log "image     ${image}"
+hosting::log "release   ${release} → namespace ${namespace}"
+hosting::log "job       ${job}"
+
+# ── the release's own migration Job ─────────────────────────────────────────────────────────────
+hosting::probe output helm get manifest "$release" --namespace "$namespace"
+case $? in
+  2) hosting::die_refused "release ${release}'s manifest in ${namespace} (helm reads it from the release Secrets), which holds the migration Job this step runs" ;;
+  1) hosting::die "release ${release} in ${namespace} has no readable manifest — there is no migration Job to run, so the image must not move. helm said: ${HOSTING_PROBE_ERR}" ;;
+esac
+manifest="$HOSTING_PROBE_OUT"
+
+# YAML → JSON through kubectl itself (the image carries no YAML parser), then pick the Job the chart
+# labels as the migration.
+# A here-string, never a pipe: a pipe runs hosting::probe in a subshell and HOSTING_PROBE_OUT dies with it.
+hosting::probe output kubectl -n "$namespace" create --dry-run=client -o json -f - <<< "$manifest"
+case $? in
+  2) hosting::die_refused "the kinds in release ${release}'s manifest (a client-side dry run still resolves them against the API)" ;;
+  1) hosting::die "release ${release}'s manifest could not be parsed: ${HOSTING_PROBE_ERR}" ;;
+esac
+rendered="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -c '
+  (if .kind == "List" then .items[] else . end)
+  | select(.kind == "Job" and .metadata.labels["app.kubernetes.io/component"] == "memex-migration")' | head -1)"
+[ -n "$rendered" ] \
+  || hosting::die "release ${release} in ${namespace} renders no migration Job (kind Job, label app.kubernetes.io/component=memex-migration) — nothing establishes the schema, so the image must not move"
+
+# Rename, and move ONLY the containers that run the migration image. wait-for-postgres (busybox)
+# and anything else keep their images; the rehearsal init container runs the migration image and
+# must rehearse the SAME build it then executes.
+body="$(printf '%s' "$rendered" | jq -c --arg name "$job" --arg img "$image" '
+  def retarget: if (.image // "" | test("/memex-migration:")) then .image = $img else . end;
+  .metadata = { name: $name, labels: (.metadata.labels // {}) }
+  | .spec.template.spec.containers |= map(retarget)
+  | if .spec.template.spec.initContainers then .spec.template.spec.initContainers |= map(retarget) else . end
+  | del(.status)')"
+moved="$(printf '%s' "$body" | jq --arg img "$image" '[.spec.template.spec.containers[]?, .spec.template.spec.initContainers[]? | select(.image == $img)] | length')"
+[ "${moved:-0}" -ge 1 ] \
+  || hosting::die "release ${release}'s migration Job runs no memex-migration image — nothing to retarget, refusing to run something else as the migration"
+budget="$(printf '%s' "$body" | jq -r '.spec.activeDeadlineSeconds // 660')"
+hosting::log "budget    ${budget}s (the Job's activeDeadlineSeconds) + ${grace}s to schedule and pull"
+
+# ── PRESENT / ABSENT / REFUSED for this tag's Job ──────────────────────────────────────────────
+job_state=""
+read_job_state() {
+  hosting::probe any kubectl -n "$namespace" get job "$job" -o json
+  case $? in
+    2) hosting::die_refused "job/${job} in ${namespace}, which says whether this tag's migration already ran" ;;
+    1) job_state="absent"; return 0 ;;
+  esac
+  job_state="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '
+    if (.status.succeeded // 0) >= 1 then "succeeded"
+    elif ((.status.conditions // []) | any(.type == "Failed" and .status == "True")) then "failed"
+    else "active" end')"
+}
+
+log_tail() {
+  hosting::probe any kubectl -n "$namespace" logs "job/${job}" --all-containers --tail=20
+  case $? in
+    0) printf '%s' "$HOSTING_PROBE_OUT" ;;
+    2) printf '(the log is not readable by this operator: %s)' "$HOSTING_PROBE_ERR" ;;
+    *) printf '(no log: %s)' "$HOSTING_PROBE_ERR" ;;
+  esac
+}
+
+read_job_state
+case "$job_state" in
+  succeeded)
+    hosting::log "migration ${job} already SUCCEEDED for ${tag} — not run again"
+    hosting::say migration_job "$job"
+    hosting::say migration completed
+    exit 0 ;;
+  failed)
+    hosting::log "migration ${job} FAILED before — deleting it and running it again"
+    hosting::do kubectl -n "$namespace" delete job "$job" --wait=true >&2 ;;
+  active)
+    hosting::log "migration ${job} is already running — waiting on it" ;;
+esac
+if [ "$job_state" != "active" ]; then
+  hosting::do kubectl -n "$namespace" create -f - <<< "$body" >&2 \
+    || hosting::die "could not create ${job} in ${namespace}"
+fi
+hosting::say migration_job "$job"
+
+if hosting::dry; then
+  hosting::log "dry run: the Job was not created, so there is nothing to wait for"
+  exit 0
+fi
+
+# ── wait: succeeded is the ONLY success ─────────────────────────────────────────────────────────
+limit=$(( budget + grace )) waited=0
+while :; do
+  read_job_state
+  case "$job_state" in
+    succeeded) break ;;
+    failed)
+      hosting::die "migration ${job} FAILED for ${image} — the schema did not move, so the portal image must not either. Last lines: $(log_tail)" ;;
+    absent)
+      hosting::die "migration ${job} disappeared while it was being waited on (deleted, or reaped) — nothing establishes that the schema moved, so the image must not" ;;
+  esac
+  [ "$waited" -ge "$limit" ] \
+    && hosting::die "migration ${job} has not completed after ${waited}s (its budget is ${budget}s) — refusing to move the image. Last lines: $(log_tail)"
+  sleep "$interval"
+  waited=$(( waited + interval ))
+  [ "$interval" -gt 0 ] || waited=$(( waited + 1 ))
+done
+
+hosting::log "migration ${job} SUCCEEDED after ~${waited}s"
+done_line="$(log_tail | grep -m1 'Database migration completed' || true)"
+[ -n "$done_line" ] && hosting::log "$done_line"
+hosting::say migration completed

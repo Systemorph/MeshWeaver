@@ -19,6 +19,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Runtime;
+using Orleans.Runtime.Placement;
 using Orleans.Streams;
 
 namespace MeshWeaver.Connection.Orleans;
@@ -1341,6 +1342,34 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal IObservable<Unit>? PodHubClaimSettled(Address address) =>
         podHubClaimSettled.TryGetValue(address, out var settled) ? settled : null;
 
+    private IObservable<bool> AttachPodHubOnOwner(IPodHubGrain grain)
+    {
+        var localSilo = serviceProvider.GetService<ILocalSiloDetails>();
+        if (localSilo is null)
+            return grain.Attach().ToObservable();
+
+        // PreferLocalPlacement prefers the silo PERFORMING placement. A stale directory entry
+        // can keep recreating the grain on the previous silo without running placement again
+        // (#2299/#5177). Carry the actual owner so a refused Attach can MigrateOnIdle to it.
+        // Orleans snapshots RequestContext synchronously when the call is issued. Restore the
+        // ambient hint immediately; it must not affect another grain call in this execution flow.
+        // The caller's Defer already owns laziness. Invoke here, before its claimActivity window
+        // closes; another Defer would let disposal overtake the actual Attach invocation.
+        var previous = RequestContext.Get(IPlacementDirector.PlacementHintKey);
+        try
+        {
+            RequestContext.Set(IPlacementDirector.PlacementHintKey, localSilo.SiloAddress);
+            return grain.Attach().ToObservable();
+        }
+        finally
+        {
+            if (previous is null)
+                RequestContext.Remove(IPlacementDirector.PlacementHintKey);
+            else
+                RequestContext.Set(IPlacementDirector.PlacementHintKey, previous);
+        }
+    }
+
     /// <summary>
     /// Claims <paramref name="address"/> for THIS process, so the rest of the cluster can deliver to
     /// it with a directed grain call instead of a stream publish (#1742).
@@ -1446,7 +1475,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         void ReleaseClaim(IPodHubGrain? selectedGrain = null)
         {
             // Fire-and-forget: teardown is best-effort, and an activation that outlives its owner is
-            // recovered anyway — Deliver on a silo with no local route steps aside (see PodHubGrain).
+            // reclaimed by a later owner's Attach on a silo with no local route (see PodHubGrain).
             // Wrapped because this runs during teardown, where the cluster client may already be
             // gone: releasing a claim that nobody can hear is a no-op, never a throw out of Dispose.
             try
@@ -1562,7 +1591,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         // counts as a claim because the remote runtime may have accepted it.
                         attachCallEntered = true;
                         Volatile.Write(ref claimAttempted, 1);
-                        return grain.Attach().ToObservable();
+                        return AttachPodHubOnOwner(grain);
                     }
                     finally
                     {

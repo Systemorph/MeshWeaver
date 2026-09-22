@@ -183,6 +183,29 @@ describes. Declaring early is harmless and is the correct order — the roll is 
 neither the declaration's merge nor a green config-repo run is evidence that self-update works.
 The evidence is the instance detecting a newer tag and handing it over.
 
+🚨 **"The roll is the other half" is not the whole of it, and the gap has a name: a `Roll` renders
+nothing.** The declaration reaches a pod through the portal ConfigMap, and only a *render* writes that
+— a `Reconcile`, or the config repo's `helm-release` lane. A `Roll` `InstanceAction` is
+`kubectl set image`: measured on the live plan, 2026-09-21, it is four steps — mirror the images,
+ensure the pull secret, `kubectl set image`, hand the rollout to the control plane. So it moves the
+image and leaves the ConfigMap exactly as the last render left it. **If a record gained the key after
+its last render, a roll alone gives the instance an image that can read the key and a ConfigMap that
+does not carry it — and the refusal is then byte-identical to before, which is the hardest possible
+thing to attribute.**
+
+The two consumers demonstrated both sides within hours of each other:
+
+| instance | record carries the key | last render of its ConfigMap | running image | both halves? |
+|---|---|---|---|---|
+| `pearl` | yes, from v76 | helm **revision 6**, values *"rendered from the record"*, and that run's own audit reports the live `memex-portal-config` with `liveOnlyKeys: []`, `manifestOnlyKeys: []`, `differingKeys: []` | `746b4e48`, which has `830c8c402` as an ancestor | **yes** |
+| `build` | yes, from v31 — later the same day | its Provision, helm **revision 2**, nine days *before* the record gained the key | `c84c6c05`, which predates `830c8c402` | no — it needs both |
+
+`pearl` arrived there by luck of sequencing: the `Reconcile` that carried the key was filed to run a
+database migration, not for this. So the order to state is **declare → `Roll` → `Reconcile`** (a
+`Reconcile` keeps the running image, so it is safe to put last), and what confirms it is the positive
+`Information` line naming the presented pairing — never the disappearance of the refusal, which an
+unrendered ConfigMap reproduces exactly.
+
 The value is the registry record's `validationUrl`, copied verbatim
 (`https://memex.meshweaver.cloud/api/instances/token`); a bare host means the same thing. **Only the
 host is ever read**, and it is read whole: a non-default port is part of it, and a value carrying

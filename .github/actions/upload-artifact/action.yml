@@ -4,6 +4,9 @@ inputs:
   store:
     description: Empty or gha for GitHub; file:/mounted/shared/path for our runners.
     default: ''
+  expected-store-id:
+    description: Required for file stores; pass the store-id resolved once for this run, not this job's own identity.
+    default: ''
   name:
     description: Unique artifact name within this run and attempt.
     default: artifact
@@ -26,6 +29,9 @@ inputs:
     description: Include hidden files only when explicitly requested.
     default: 'false'
 outputs:
+  store-id:
+    description: Verified filesystem identity; empty for GitHub storage.
+    value: ${{ steps.own.outputs.store-id }}
   artifact-id:
     description: GitHub artifact ID; empty for the own store (use artifact-locator).
     value: ${{ steps.github.outputs.artifact-id }}
@@ -60,6 +66,7 @@ runs:
       env:
         CI_ARTIFACT_ACTION_PATH: ${{ github.action_path }}
         CI_ARTIFACT_STORE: ${{ inputs.store }}
+        CI_ARTIFACT_EXPECT_STORE_ID: ${{ inputs.expected-store-id }}
         CI_ARTIFACT_NAME: ${{ inputs.name }}
         CI_ARTIFACT_PATH: ${{ inputs.path }}
         CI_ARTIFACT_MISSING: ${{ inputs.if-no-files-found }}
@@ -70,6 +77,7 @@ runs:
       run: |
         python3 "$CI_ARTIFACT_ACTION_PATH/../../scripts/ci-run-artifacts.py" upload \
           --store "$CI_ARTIFACT_STORE" --repository "$GITHUB_REPOSITORY" \
+          --expect-store-id "$CI_ARTIFACT_EXPECT_STORE_ID" \
           --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
           --name "$CI_ARTIFACT_NAME" --path "$CI_ARTIFACT_PATH" \
           --if-no-files-found "$CI_ARTIFACT_MISSING" --retention-days "$CI_ARTIFACT_RETENTION" \

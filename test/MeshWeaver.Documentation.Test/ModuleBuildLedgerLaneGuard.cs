@@ -53,7 +53,9 @@ public class ModuleBuildLedgerLaneGuard
         // rotting. And the store is resolved ONCE here, so two pack legs cannot disagree about where
         // a ledger record's bundle lives.
         Assert.Contains("$ARTIFACT_STORE_PY\" --self-test", select, StringComparison.Ordinal);
-        Assert.Contains("resolve --declared \"$DECLARED\"", select, StringComparison.Ordinal);
+        Assert.Contains("uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main", select, StringComparison.Ordinal);
+        Assert.Contains("expected-store-id: ${{ inputs.artifact-store-id }}", select, StringComparison.Ordinal);
+        Assert.Contains("--artifact-store \"$MW_ARTIFACT_STORE\" --expect-store-id \"$ARTIFACT_STORE_ID\"", select, StringComparison.Ordinal);
         Assert.Contains("module-build-key.py --root repo", select, StringComparison.Ordinal);
         Assert.Contains("module-build-ledger.py decide", select, StringComparison.Ordinal);
         // The flag is a three-way case with a RED default arm — an unreadable value never means "off".
@@ -133,12 +135,11 @@ public class ModuleBuildLedgerLaneGuard
         // 🚨 THE REUSE WINDOW IS THE ARTIFACT'S RETENTION — and since 2026-09-17 that is ONE
         // expression with TWO readers rather than two independent literals that nothing related:
         // the ten upload slots' `retention-days:` and the `--retention-days` the Built record
-        // states. 7 days while the GitHub artifact IS the durable copy; 1 day once an object store
-        // holds it (`artifact-store`) and the artifact is only this run's handoff between jobs.
+        // states. Both transports retain seven days: publication reuse also reads the named copy.
         // A record that outlived the artifact it names would make `decide` answer "reuse" for bytes
         // that are gone — a red in the pack leg instead of the rebuild it should have chosen.
-        const string retention =
-            "${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}";
+        const string retention = "${{ env.ARTIFACT_RETENTION }}";
+        Assert.Contains("ARTIFACT_RETENTION: '7'", pack, StringComparison.Ordinal);
         Assert.Equal(10, Regex.Matches(pack, Regex.Escape("retention-days: " + retention)).Count);
         Assert.Contains("ART_RETENTION: " + retention, pack, StringComparison.Ordinal);
         Assert.Contains("--retention-days \"$ART_RETENTION\"", pack, StringComparison.Ordinal);
@@ -240,21 +241,18 @@ public class ModuleBuildLedgerLaneGuard
     /// 🚨 THE SAME-RUN HANDOFFS — three artifacts that exist only to cross a job boundary inside ONE
     /// run, and are 30% of the fleet's GitHub Actions storage bill because a 1-day artifact is billed
     /// for four to seven days (retention plus GitHub's deletion lag — Doc/Architecture/
-    /// CiArtifactStorage). Each has exactly one producer and one consumer, and since 2026-09-17 each
-    /// has TWO paths: the GitHub artifact when no object store is named, and the store when one is.
+    /// CiArtifactStorage). Each has exactly one producer and one consumer, behind the SAME backend
+    /// selecting wrapper. Named manifests preserve lane scope and successful earlier attempts.
     ///
-    /// <para>Both must exist for every one of them. A producer that lost its store path would send
-    /// the consumer looking for bytes nobody wrote; a producer that lost its ARTIFACT path would
-    /// break every caller without our infra — the public repo above all — and neither shows up in a
-    /// green run of the other mode. The store key must carry the run ATTEMPT too: a re-run that read
-    /// the previous attempt's handoff would compile against bytes this attempt did not produce.</para>
+    /// <para>A failed-job rerun does not rerun successful producers. The named adapter therefore
+    /// selects the latest manifest no newer than the consuming attempt, without crossing lanes.
+    /// The adapter's executable filesystem tests prove that selection; this guard proves the lane
+    /// actually reaches it rather than reverting to hand-built per-attempt object keys.</para>
     /// </summary>
     [Fact]
-    public void SameRunHandoffs_HaveBothPaths_AndTheStoreKeyCarriesTheRunAttempt()
+    public void SameRunHandoffs_UseTheSharedTransport_WithLaneScopedNames()
     {
         var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
-        const string off = "(needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')";
-        const string on = "needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'";
 
         foreach (var (name, producer, consumer) in new[]
                  {
@@ -267,20 +265,13 @@ public class ModuleBuildLedgerLaneGuard
             var c = JobBody(consumer);
             Assert.Contains($"name: {name}-" + "${{ needs.select.outputs.lane }}", p, StringComparison.Ordinal);
             Assert.Contains($"name: {name}-" + "${{ needs.select.outputs.lane }}", c, StringComparison.Ordinal);
-            Assert.Contains($"--key \"$STORE_RUN_PREFIX/{name}.tar\"", p, StringComparison.Ordinal);
-            Assert.Contains($"--locator \"$ARTIFACT_STORE/$STORE_RUN_PREFIX/{name}.tar\"", c, StringComparison.Ordinal);
+            Assert.Contains("uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main", p, StringComparison.Ordinal);
+            Assert.Contains("uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main", c, StringComparison.Ordinal);
         }
 
-        // Every artifact path is gated OFF by the store, every store path ON — so exactly one runs.
-        Assert.Equal(3, Regex.Matches(text, Regex.Escape(off)).Count - CountInPack(text, off));
-        Assert.True(Regex.Matches(text, Regex.Escape(on)).Count >= 3,
-            "each same-run handoff needs a store branch guarded by the store being named");
-
-        // 🚨 run id AND attempt — a deterministic key is what lets the consumer fetch without any
-        // locator being plumbed through, and the attempt is what stops a re-run reading stale bytes.
-        const string prefix = "STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}";
-        foreach (var job in new[] { "prepare", "build-workspace", "pack" })
-            Assert.Contains(prefix, JobBody(job), StringComparison.Ordinal);
+        Assert.DoesNotContain("STORE_RUN_PREFIX", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("uses: actions/upload-artifact@", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("uses: actions/download-artifact@", text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -314,15 +305,27 @@ public class ModuleBuildLedgerLaneGuard
         var withStore = Regex.Matches(text, @"\n      ARTIFACT_STORE: \$\{\{ needs\.select\.outputs\.artifact-store \}\}").Count;
         var withIdentity = Regex.Matches(text, @"\n      ARTIFACT_STORE_ID: \$\{\{ needs\.select\.outputs\.artifact-store-id \}\}").Count;
         Assert.Equal(withStore, withIdentity);
-        Assert.Equal(3, withStore);
+        Assert.Equal(1, withStore); // Only pack still invokes raw durable/named helpers; handoffs use actions.
 
         // 🚨 THE COUNT IS THE GUARD. Every launch of the helper's put/get verbs carries the flag —
         // asserting only that the flag appears SOMEWHERE would go on passing while a new call site,
         // or an edited old one, moved bytes unchecked.
-        var operations = Regex.Matches(text, @"""\$ARTIFACT_STORE_PY"" (?:put|get) --store").Count;
-        var asserted = Regex.Matches(text, @"--expect-store-id ""\$ARTIFACT_STORE_ID""").Count;
-        Assert.True(operations > 0, "the lane must still move bytes through ci-artifact-store.py");
-        Assert.Equal(operations, asserted);
+        var operations = Regex.Matches(text,
+            @"(?m)^ +python3 ""\$(?:ARTIFACT_STORE_PY|RUN_ARTIFACTS_PY)"" (?:put|get|download) --store[^\n]*\n(?: +--[^\n]*\n)*");
+        Assert.Equal(3, operations.Count);
+        foreach (Match operation in operations)
+            Assert.Contains("--expect-store-id \"$ARTIFACT_STORE_ID\"", operation.Value, StringComparison.Ordinal);
+
+        var transfers = text.Split("\n      -", StringSplitOptions.None)
+            .Where(step => Regex.IsMatch(step, @"uses: Systemorph/MeshWeaver/\.github/actions/(?:upload|download)-artifact@main"))
+            .ToArray();
+        Assert.Equal(26, transfers.Length);
+        foreach (var transfer in transfers)
+        {
+            Assert.Contains("store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}", transfer, StringComparison.Ordinal);
+            Assert.Contains("expected-store-id: ${{ needs.select.outputs.artifact-store-id }}", transfer, StringComparison.Ordinal);
+            Assert.DoesNotContain("continue-on-error: true", transfer, StringComparison.Ordinal);
+        }
 
         // And the script must still OFFER the flag at the pin this lane fetches: a build-logic ref
         // that predates it would fail every store step on an unknown argument.
@@ -332,10 +335,17 @@ public class ModuleBuildLedgerLaneGuard
         Assert.Contains("_verify_written", helper, StringComparison.Ordinal);
     }
 
-    /// <summary>Occurrences of <paramref name="needle"/> inside the pack job — the retention
-    /// expression uses the same text, and it is not one of the three handoff guards.</summary>
-    private static int CountInPack(string text, string needle) =>
-        Regex.Matches(JobBody("pack"), Regex.Escape(needle)).Count;
+    /// <summary>Own-store runs must not restore or create GitHub cache storage.</summary>
+    [Fact]
+    public void EveryGitHubCache_IsDisabledInOwnStoreMode()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var caches = text.Split("\n      -", StringSplitOptions.None)
+            .Where(step => step.Contains("uses: actions/cache@", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(6, caches.Length);
+        foreach (var cache in caches)
+            Assert.Contains("needs.select.outputs.artifact-store == 'gha'", cache, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// One reader for all three lane guards — and one that names the line it refuses on rather

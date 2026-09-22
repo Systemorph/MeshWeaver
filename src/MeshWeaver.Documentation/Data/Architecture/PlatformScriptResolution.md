@@ -119,6 +119,53 @@ Measured across the fleet on 2026-09-08, one file forked three ways, none of the
 gate. A bare delete leaves three lying instructions and no way to run the gate at all — which is how
 the copy comes back. Land the loader and repoint the docs in the same change.
 
+## The one copy a repo may NOT delete yet — `scripts/gen-manifests.py`
+
+Everything above assumes the end state is "no copy". One vendored script is still **required** by a
+lane: `node-repo-resolve-locks.yml` regenerates a conflicting pull request's `manifest.lock`s with
+the *caller's* `scripts/gen-manifests.py --resolve` and refuses a repository that has none (the
+platform's canonical runs only the post-check). So that copy decides whether a merge is reported
+resolvable, and — for a repository still on `centralized-gen-manifests: false` — it is the
+`--check` verdict too. It is exactly the file whose vendoring the resolver guard's own header cites
+as the precedent for why guards exist: *six copies drifted to five vintages and each fix landed in
+one of them.*
+
+That precedent repeated (MeshWeaver#4777). #4775 fixed three ways `--resolve` reported
+`✓ … the merge can be committed` over a question it had not answered — a failed git read coerced to
+`""`, a suffix classifier at three sites, an `ls-files --exclude-standard` read past — and four
+copies were re-copied with it. Two could not be: MeshWeaver.Education predates the config contract
+(no `scripts/gen-manifests.config.json`, a module-level `SKIP`) and the canonical refuses to guess
+which directories are packages; MeshWeaver.Plugins loads `project-closure.py` eagerly at import
+where the canonical loads it lazily. Both still carry all three. And within days the four were
+three canonical commits behind again — a re-copy is a snapshot, not a subscription.
+
+**The guard now compares this copy too** — `check-resolver-copy.py --subject gen-manifests`, run by
+`node-repo-validate` right after it fetches and self-tests the canonical — at the code level, with
+the same function-level report (`copy LACKS _unmerged_paths`, `resolve differs`). Measured on every
+satellite's `main` the day it landed: Education 706 code lines from the canonical, Plugins 507, the
+four re-copied repositories 138 each (the three post-#4775 commits) — a drift figure is a
+measurement with a date on it, and every run of the lane re-prints the current one, so read the
+annotation, not this paragraph, before acting.
+
+🚨 **It is advisory by declaration, and deliberately carries no flip date.** The resolver guard's
+flip was safe because a resolver copy is *deletable*: a repository that cannot keep up removes the
+file and the lanes resolve for it. A gen-manifests copy is not — the resolve lane refuses without
+it — so a red on drift would be a red on **every canonical change**, fleet-wide, for a file nobody
+may delete; the canonical moved four times in the three days after #4775. A dated flip here is the
+"whole fleet red at midnight" shape, not a ratchet. The flip is therefore a *change*, not a date:
+when `node-repo-resolve-locks.yml` resolves with the platform's canonical (which needs every caller
+to have declared its config first), the copy becomes optional, the no-copy notice becomes the end
+state exactly as for the resolver, and the subject can be given a `red_from`. Until then the guard
+does the job the precedent lacked: every run *answers* "did the fix reach this copy?" in its
+annotations, instead of a person remembering to ask. `--red-from` is refused for this subject so a
+workflow argument cannot schedule the flip by accident; what stays red on every run is a canonical
+that cannot be read or parsed and a copy that cannot be parsed.
+
+A pin older than the guard's second subject fetches a guard without it. The lane names that
+(`::notice:: gen-manifests copy NOT compared: the guard fetched at <ref> predates its gen-manifests
+subject`) rather than skipping — "not compared" and "compared and clean" must never print the same
+sentence.
+
 ## Adopting it in a repo
 
 1. **Read the repo's lane shas** out of `ci.yml`. One sha across all lanes, or several? That decides

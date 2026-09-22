@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "A release refused at the source — the farewell that ends an owner-side hub was dropped by the hub posting it"
-Abstract: "An UnsubscribeRequest is the only thing that ever ends an owner-side per-subscriber stream and its sync/{id} hub. It is posted from the SUBSCRIBING hub by a disposable registered on the client-side sync/{id} hub, so on the hub-teardown route — a circuit close, a DisposeRequest, a recycle — it runs while the subscribing hub is in DisposeHostedHubs BY CONSTRUCTION, and the teardown post guard refused it at the only door it has. The owner was never told: one RunLevel=Started hub per subscription, each holding its own Autofac scope and TypeRegistry, for the life of the process. Why the guard is right for events and wrong for a release, the one-hop carrier, and the two-arm negative control."
+Abstract: "An UnsubscribeRequest is the only thing that ever ends an owner-side per-subscriber stream and its sync/{id} hub. It is posted from the SUBSCRIBING hub by a disposable registered on the client-side sync/{id} hub, so on the hub-teardown route — a circuit close, a DisposeRequest, a recycle — it runs while the subscribing hub is in DisposeHostedHubs BY CONSTRUCTION, and the teardown post guard refused it at the only door it has. The owner was never told: one RunLevel=Started hub per subscription, each holding its own Autofac scope and TypeRegistry, for the life of the process. Why the guard is right for events and wrong for a release, the surviving ancestor that carries it, and the teardown regression controls."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#2f6f5e'/><path d='M4 12h9' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round'/><path d='M10 9l3 3-3 3' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/><path d='M16.5 6v12' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round'/><circle cx='20' cy='12' r='1.6' fill='white'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -127,33 +127,38 @@ So the third column gets the marker interface `IReleasesRemoteState`
 it. Implementing it is a narrow claim — *no other mechanism in the system ever reclaims what this
 message releases* — and deliberately NOT a way to make an ordinary event survive a teardown.
 
-## 5. The carrier is the parent, and one hop is the whole rule
+## 5. The carrier is the first ancestor whose post gate is still open
 
-The remedy is the primitive this file already has, applied to a third case. `NackThroughParent`
-states it: *"our own Post would re-enter this same gate and be dropped"* — so hand it to the parent,
-which is alive. The refused-reply path does exactly that, and the release now does too:
+Each teardown post guard hands the release to its construction-captured `MessageService.ParentHub`.
+A parent already at `DisposeHostedHubs` applies the same rule, until an ancestor whose post gate is
+still open carries it. No service is resolved and no hub is activated. The original options are retained, with the same sender host qualifiers that normal upward routing
+would add, and the actual delivery verdict propagates back to the caller. At the root, the captured
+parent is null and the release reports the ordinary shutdown refusal. Do not walk
+`Configuration.ParentHub` here: it can resolve through a disposed scope, and on a root it can
+resolve the root itself, so a whole-tree teardown would loop forever.
 
-```csharp
-if (message is IReleasesRemoteState
-    && ParentHub is { } releaseParent
-    && releaseParent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
-{
-    releaseParent.Post(message, _ => opt);
-    postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
-    return delivery;
-}
+A single parent hop is insufficient. Consider a live root hosting an owner and a separate subtree:
+
+```text
+root (Started)
+  owner (Started) → owner-side sync stream
+  subtree (DisposeHostedHubs)
+    subscriber (DisposeHostedHubs)
+      client-side sync stream (ShutDown → UnsubscribeRequest)
 ```
 
-**Why one hop is enough, by construction rather than by a bound.** On this route the parent IS the
-hub disposing us, and it cannot reach its own `ShutDown` until every hosted hub has signalled
-`DisposalCompleted` (see `MessageHub.CarriesAcceptedWorkOfAHostedHub`), so it is demonstrably still
-routing. In a whole-*tree* teardown the parent is going too — and then so is the receiver, which is
-about to drop everything anyway, so there is nothing left to leak and nothing to escalate to.
+The subscriber's immediate parent is tearing down, but the owner is still serving. The previous
+one-hop condition refused that release. Its premise that a disposing parent meant the receiver was
+also being disposed was false: parentage describes the sender's lifetime, not the remote owner's.
+Nested layout streams and a whole subscribing subtree must release their owner's streams just as a
+single subscribing hub does.
 
-**`opt` is passed through unchanged, which is load-bearing.** `UnsubscribeRequest` is
-`ICorrelatedBySender`: the owner keys its per-subscriber stream on the subscriber that OPENED it, and
-that subscribe was posted from this same `workspace.Hub`. Re-stamping the sender as the parent would
-leave the owner holding a subscription opened by one hub and released by another.
+**Sender correlation includes the routing hosts.** `UnsubscribeRequest` is `ICorrelatedBySender`:
+the subscribe was posted from the same `workspace.Hub`, and normal upward routing adds each
+non-mesh parent to its sender address. The teardown handoff must add those same qualifiers for the
+hops it bypasses. Keeping only the bare sender drops correlation information; replacing it with the
+carrier identifies someone else. The test compares the release sender to an actual live delivery
+from the same subscriber, including all host qualifiers.
 
 ## 6. What this is NOT
 
@@ -169,7 +174,7 @@ leave the owner holding a subscription opened by one hub and released by another
 
 ## 7. The negative control — both directions, no window
 
-Two tests, and neither can pass on no evidence.
+Two test classes pin both direct and nested teardown; neither can pass on no evidence.
 
 **`SubscriberTeardownReleasesTheOwnerSyncHubTest`** (`test/MeshWeaver.Layout.Test`) builds a
 population and drains it: three remote layout-area streams on one subscribing hub, each with its
@@ -197,6 +202,14 @@ FIRST and dropped at the source, so once the sink has handled the release there 
 could still deliver it. A negative assertion with a window would have to choose one, and on CI
 `TestTimeouts.Quick` exceeds the 30 s `methodTimeout`.
 
+The nested cases dispose ancestors of the subscriber while leaving the owner live.
+`AReleaseCrossesEveryTearingDownAncestor` fails on the old code with a `Failed` post verdict;
+`DisposingANestedSubtreeDrainsTheSurvivingOwnersPopulation` requires all three owner-side streams to
+reach `DisposalCompleted`. Both direct and nested framework cases assert that the original sender
+reaches the owner unchanged, and ordinary unmarked events remain refused. The full-tree control
+requires teardown to complete and the release to return `Failed` / `ShuttingDown` when no carrier
+survives.
+
 ## Rules
 
 1. **A message that is the only thing which frees state elsewhere implements
@@ -204,9 +217,9 @@ could still deliver it. A negative assertion with a window would have to choose 
    keeps the historical refusal.
 2. **Never re-derive "is my hub past the gate?" at a call site.** The guard's predicate lives in one
    place; a second copy in another assembly is two lists that have to stay in step.
-3. **When a farewell must leave a disposing hub, the carrier is the parent** — the same one
-   `NackThroughParent` and the refused-reply path use. One hop, and no walk: past the parent, the
-   receiver is going down too.
+3. **When a farewell must leave a disposing hub, use the first ancestor whose post gate remains
+   open.** A nested subtree can be dying while the receiver is still live elsewhere. Preserve the
+   original sender and report a refusal when there is no surviving carrier.
 4. **A leak fix asserts that the population DRAINS**, with a stated denominator, and shows that it
    does not before the change. A test that watches one object cannot tell "the release arrived" from
    "that one happened to go away".

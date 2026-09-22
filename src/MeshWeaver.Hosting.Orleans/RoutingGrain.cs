@@ -1970,10 +1970,9 @@ internal class RoutingGrain(
     ///
     /// <para>🚨 <b>Nothing else is widened.</b> Every other arm is evaluated unchanged, and a
     /// rejection that is not one of the recognised shapes stays terminal — so a genuine defect on
-    /// this leg is still reported as one. This does NOT address the re-activation bounce that
-    /// PRODUCES the rejection (the throw-away activation a non-owning silo creates, refuses and
-    /// deactivates); that is a lifecycle question recorded on #2299 and is deliberately not
-    /// answered by a classifier.</para>
+    /// this leg is still reported as one. The delivery-driven re-activation bounce recorded on
+    /// #2299 is prevented at its source in <see cref="PodHubGrain.Deliver"/>; this classifier still
+    /// covers a real owner handoff or a silo departure while a delivery is in flight.</para>
     /// </summary>
     /// <param name="ex">The exception the pod-hub delivery attempt faulted with.</param>
     /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see

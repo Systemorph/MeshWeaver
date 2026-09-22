@@ -249,6 +249,22 @@ on:
           on a re-run says so in its own log and summary; this is `plan`'s baseline.
         value: ${{ jobs.plan.outputs.platform-set }}
     inputs:
+      artifact-store-id:
+        description: >-
+          Physical store identity resolved by the caller's first producer. Pass the same value
+          through the complete artifact graph; an independent consumer resolution is not a proof.
+          Required for file: storage; the caller resolves its identity once before any handoff.
+        required: false
+        type: string
+        default: ''
+      artifact-store:
+        description: >-
+          Named artifact store shared by every producer and consumer. Default gha preserves
+          unmigrated callers; org variables never implicitly select the named backend.
+          file:/mounted/shared/path moves all artifacts to our runners; an unavailable store fails.
+        required: false
+        type: string
+        default: 'gha'
       test-image:
         description: The mw-plugin-test image reference (the caller's vars.MW_TEST_IMAGE).
         required: true
@@ -604,6 +620,8 @@ jobs:
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
+      artifact-store: ${{ steps.store.outputs.store }}
+      artifact-store-id: ${{ steps.store.outputs.store-id }}
       shards: ${{ steps.plan.outputs.shards }}
       matrix: ${{ steps.plan.outputs.matrix }}
       mount: ${{ steps.affected.outputs.mount }}
@@ -619,6 +637,13 @@ jobs:
       platform-set: ${{ steps.digests.outputs.platform-set }}
       baseline: ${{ steps.digests.outputs.baseline }}
     steps:
+      - name: Resolve and bind the artifact store
+        id: store
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.artifact-store || 'gha' }}
+          expected-store-id: ${{ inputs.artifact-store-id }}
+          require-expected-store-id: 'true'
       - uses: actions/checkout@v7
         with:
           # The affected computation diffs against the PR base — it needs the base commits.
@@ -1715,8 +1740,10 @@ jobs:
           sparse-checkout: ${{ inputs.stage-modules }}
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           pattern: ${{ inputs.module-artifacts }}
           path: ${{ runner.temp }}/ext-bundles
           merge-multiple: true
@@ -2256,8 +2283,10 @@ jobs:
       # the file through the API. An absent consumer and a stale checkout look identical.
       - name: Upload this shard's gate log (the tester's stdout)
         if: always() && env.GATE_LOG != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           name: gate-log-${{ github.sha }}-shard-${{ matrix.shard }}
           path: ${{ env.GATE_LOG }}
           retention-days: 3
@@ -2283,8 +2312,10 @@ jobs:
       # stale checkout look identical, which is the mistake #4578 made and #4585 had to undo.
       - name: Upload this shard's bake
         if: always() && inputs.upload-bake && env.OWN_BAKE != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           name: bake-${{ github.sha }}-shard-${{ matrix.shard }}
           path: ${{ env.OWN_BAKE }}
           retention-days: 3
@@ -2303,8 +2334,10 @@ jobs:
 
       - name: Upload core dumps (if the gate crashed)
         if: always() && inputs.capture-coredumps
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           name: gate-coredumps-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/coredumps
           if-no-files-found: ignore
@@ -2384,9 +2417,10 @@ jobs:
       # download error. The gate's INPUTS are asserted by the caller's preflight and by the plan.)
       - name: Collect every shard's gate log
         if: steps.expect.outputs.fold == 'true'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           pattern: gate-log-${{ github.sha }}-shard-*
           path: ${{ runner.temp }}/shard-logs
       # 🚨 The fold's own verdict is DEFERRED, not swallowed: the merged log is uploaded first, then
@@ -2422,8 +2456,10 @@ jobs:
       # whatever the shard count.
       - name: Upload the folded gate log for the caller's own ratchets
         if: always() && steps.fold.outputs.artifact != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           name: gate-log-${{ github.sha }}
           path: ${{ runner.temp }}/gate.log
           retention-days: 3
@@ -2434,15 +2470,19 @@ jobs:
       # `bake-<sha>` is what MeshWeaver.Education's `e2e-install` and `e2e-mesh` download.
       - name: Collect every shard's bake
         if: inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           pattern: bake-${{ github.sha }}-shard-*
           merge-multiple: true
           path: ${{ runner.temp }}/bake
       - name: Upload the merged bake
         if: inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
           name: bake-${{ github.sha }}
           path: ${{ runner.temp }}/bake
           retention-days: 3

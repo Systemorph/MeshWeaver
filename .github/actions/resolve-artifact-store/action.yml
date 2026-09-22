@@ -1,0 +1,62 @@
+name: Resolve the CI artifact store
+description: Bind a run to one physical store; a declared own store never falls back to GitHub.
+inputs:
+  store:
+    description: Empty or gha for GitHub; file:/mounted/shared/path for our shared runners.
+    default: ''
+  expected-store-id:
+    description: The first producer's identity when joining an existing graph; empty only at a graph root.
+    default: ''
+  require-expected-store-id:
+    description: True for reusable consumers; reject file storage without the caller's identity.
+    default: 'false'
+outputs:
+  store:
+    description: The effective explicit backend, gha or file:/mounted/shared/path.
+    value: ${{ steps.resolve.outputs.store }}
+  store-id:
+    description: The resolved physical store identity, to pass unchanged to every transfer.
+    value: ${{ steps.resolve.outputs.store-id }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve and validate the run's artifact store
+      id: resolve
+      shell: bash
+      env:
+        CI_ARTIFACT_ACTION_PATH: ${{ github.action_path }}
+        CI_ARTIFACT_STORE: ${{ inputs.store }}
+        CI_ARTIFACT_EXPECT_STORE_ID: ${{ inputs.expected-store-id }}
+        CI_ARTIFACT_REQUIRE_STORE_ID: ${{ inputs.require-expected-store-id }}
+      run: |
+        python3 - <<'PY'
+        import argparse
+        import importlib.util
+        import os
+        from pathlib import Path
+        import sys
+
+        path = Path(os.environ['CI_ARTIFACT_ACTION_PATH']) / '../../scripts/ci-artifact-store.py'
+        spec = importlib.util.spec_from_file_location('ci_artifact_store_resolver', path)
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        declared = os.environ['CI_ARTIFACT_STORE'].strip()
+        expected = os.environ['CI_ARTIFACT_EXPECT_STORE_ID']
+        try:
+            require_identity = os.environ.get('CI_ARTIFACT_REQUIRE_STORE_ID', 'false').lower()
+            if require_identity not in ('true', 'false'):
+                raise helper.Red('require-expected-store-id must be true or false')
+            if declared.startswith('file:') and require_identity == 'true' and not expected:
+                raise helper.Red('file: reusable consumers require expected-store-id from the first producer')
+            if declared not in ('', 'gha') and not declared.startswith('file:'):
+                raise helper.Red('named artifacts require file:/mounted/shared/path or explicit gha')
+            if declared.startswith('file:') and not Path(declared[5:]).is_absolute():
+                raise helper.Red('artifact store must name an existing absolute mounted directory')
+            if declared.startswith('file:') and expected:
+                helper.make_store(declared).require_store_id(expected)
+            sys.exit(helper.resolve_cmd(argparse.Namespace(
+                declared=declared, require=declared.startswith('file:'), az='az')))
+        except (helper.Red, OSError, ValueError) as exc:
+            print(f'::error::artifact store resolution failed: {exc}', file=sys.stderr)
+            sys.exit(1)
+        PY
