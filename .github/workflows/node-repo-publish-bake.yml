@@ -1781,27 +1781,71 @@ jobs:
           "$BAKE_CARRY_TARGET"
           "${{ steps.identity.outputs.identity }}"
           "${{ inputs.bake-source }}"
-      # 🚨 A PYTHON WITH `venv` + `pip`, because publish-bake-bundles.sh builds its own venv and
-      # installs its PINNED Azure SDKs into it (the script owns that install on purpose — see its
-      # header: a workflow-side install would leave a satellite whose ref is newer than its pin
-      # running a script whose dependency nobody installed). The self-hosted ARC image ships
-      # python3 3.12 WITHOUT ensurepip/venv, so from the moment every private repo's jobs moved to
-      # `aks-silos*` (2026-09-17) this step died with "The virtual environment was not created
-      # successfully because ensurepip is not available … apt install python3.12-venv" and NO
-      # satellite could publish: MeshWeaver.Crm run 35199593887 and MeshWeaver.Manufacturing run
-      # 35205340142 both failed here while every other job in the run was green. `setup-python`
-      # brings its own interpreter WITH pip on any runner — hosted or ours — so the script's venv
-      # works everywhere; on a hosted runner the tool cache already carries it, so it costs nothing
-      # there. Not `sudo apt-get install python3-venv`: that needs root and the archive, and would
-      # silently be the only thing standing between the fleet and a failed publication.
-      # Delete this step when the runner image bakes python3-venv (Systemorph/Memex
-      # deployments/aks/ci-runners/runner-image/Dockerfile) — the script asserts its own pins
-      # afterwards (`sdk-check`), so a wrong interpreter is RED here, never a later "unreadable".
-      - name: Python with venv + pip for the publish script
+      # 🚨 THE PYTHON THIS JOB USES MUST BUILD A VENV, and the three steps below PROVE it can
+      # rather than assuming it. publish-bake-bundles.sh builds its own venv and installs its
+      # PINNED Azure SDKs into it (the script owns that install on purpose — see its header: a
+      # workflow-side install would leave a satellite whose ref is newer than its pin running a
+      # script whose dependency nobody installed). An UNCONDITIONAL `actions/setup-python` stood
+      # here from 2026-09-17 because the self-hosted ARC image shipped python3 WITHOUT ensurepip,
+      # which took every satellite's publish down (MeshWeaver.Crm run 35199593887,
+      # MeshWeaver.Manufacturing run 35205340142). The image bakes `python3-venv` now
+      # (Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile, meshweaver-ci-runner
+      # 20260917-3c61f83) and the `ubuntu-latest` fallback above always had it (runner-images'
+      # install-python.sh), so on both runners this job can land on today the step is dead weight.
+      #
+      # 🚨 …but "the two runners we know about are fine" is not a guarantee, and this is the one
+      # place where losing that bet is fleet-wide. `runs-on` here is
+      # `${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}`: the value is an ORG VARIABLE resolved
+      # from the CALLER at queue time, and check-reusable-workflow-runners.py validates only the
+      # EXPRESSION SHAPE — it cannot see which image that label selects, so a re-pointed scale set,
+      # a rolled-back runner image or a third label reaches this job with nothing red. Dropping
+      # setup-python therefore has to REPLACE its guarantee, not merely remove it:
+      #
+      #   1. PROVE it — actually create a venv on the interpreter this job will use. A capability
+      #      probe, never a version check: `python3 --version` was green on the runner that took
+      #      the fleet down, because ensurepip is a separate package.
+      #   2. HEAL it — only if the probe failed, bring an interpreter that has pip. This is the old
+      #      step, now on the path that measured a defect instead of on every run.
+      #   3. ASSERT it — re-probe the healed interpreter and fail RED before anything is written.
+      #      Nothing has been published at this point, so the existing publication stays sealed;
+      #      the alternative is the script dying at its own `python3 -m venv` with the run's real
+      #      cause four steps upstream.
+      #
+      # So a good runner pays a sub-second probe, a bad one publishes anyway and says so loudly,
+      # and a runner that cannot be healed is a named red here rather than a silent outage.
+      - name: Prove this runner's python3 can build a venv
+        id: venv-probe
         if: steps.scope.outputs.scope != 'none'
+        run: |
+          set -uo pipefail
+          probe="${RUNNER_TEMP}/publish-bake-venv-probe"
+          rm -rf "$probe"
+          if python3 -m venv "$probe" >"${RUNNER_TEMP}/venv-probe.log" 2>&1 && [ -x "$probe/bin/pip" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "python3 -m venv works here ($(python3 --version 2>&1)) — publish-bake-bundles.sh can build its pinned SDK venv."
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::This runner's python3 cannot build a venv, so the baked-in guarantee does NOT hold on runner '${RUNNER_NAME:-unknown}' (the label MW_RUNNER_DOCKER resolved to). Healing with actions/setup-python for this run; the runner image needs python3-venv (Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile)."
+            sed -n '1,20p' "${RUNNER_TEMP}/venv-probe.log" || true
+          fi
+          rm -rf "$probe"
+      - name: Heal — an interpreter with pip, only because the probe failed
+        if: steps.scope.outputs.scope != 'none' && steps.venv-probe.outputs.ok != 'true'
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Assert the healed interpreter builds a venv
+        if: steps.scope.outputs.scope != 'none' && steps.venv-probe.outputs.ok != 'true'
+        run: |
+          set -euo pipefail
+          probe="${RUNNER_TEMP}/publish-bake-venv-probe-healed"
+          rm -rf "$probe"
+          if ! python3 -m venv "$probe" || [ ! -x "$probe/bin/pip" ]; then
+            echo "::error::No interpreter on this runner can build a venv, so publish-bake-bundles.sh cannot install its pinned Azure SDKs and NOTHING would be published — the 2026-09-17 fleet-wide outage (MeshWeaver.Crm run 35199593887, MeshWeaver.Manufacturing run 35205340142). Failing before anything is written, so the existing publication stays sealed. Fix the runner image selected by MW_RUNNER_DOCKER (it must carry python3-venv), or pin this lane to a runner that does."
+            exit 1
+          fi
+          rm -rf "$probe"
+          echo "The healed interpreter builds a venv ($(python3 --version 2>&1)); publication may proceed."
       - name: Publish bundles to every portal target
         id: publish
         if: steps.scope.outputs.scope != 'none'
