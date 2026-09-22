@@ -121,7 +121,7 @@ title merges the readings and loses the only thing that separates them.
 |---|---|---|
 | **Head-of-line** | `deepest per-channel queue` ≥ 1 | frames of ONE stream stacking up. Structural, routing's own. Before the channel key was narrowed to `(destination, stream)` this read `deepest per-destination queue` 23–62 and meant something quite different — see [Ordered Route Channels](../OrderedRouteChannels) |
 | **Load** | `deepest 0`, many channels over few destinations | dispatch volume, or a silo that has lost the CPU. Usually not a routing defect at all |
-| **Alerting policy** | any crossing, reported at `Critical` | the crossing is reported *before* anything can know whether it is a fault |
+| **Alerting policy** | the SHAPE decides the level | `deepest >= 1` is reported at `Critical` and files an incident — a leg is waiting on a LEG, which is actionable. `deepest = 0` is reported at `Warning`: still logged, with every field it had before and still paired with the `cleared after … ms` line, but it opens no ticket. The red-log path files per `Critical` fingerprint, so an unconditional Critical meant every ordinary busy moment became an issue — measured 17 load crossings against 4 head-of-line ones |
 
 🚨 **A line that still spells `deepest per-destination queue` came from an older image.** It is the
 only way to tell which side of the channel-key change produced a given sample, which matters in any

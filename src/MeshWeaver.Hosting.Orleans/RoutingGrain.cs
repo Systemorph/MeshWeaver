@@ -183,7 +183,8 @@ internal class RoutingGrain(
 
     /// <summary>
     /// In-flight route count at which routing is declared to be falling behind and reported at
-    /// <see cref="LogLevel.Critical"/> (once, until it recovers). Well above any healthy burst —
+    /// the level <see cref="SaturationLevel"/> gives it (once, until it recovers — the LATCH is
+    /// unconditional, only the LEVEL depends on the shape). Well above any healthy burst —
     /// routes terminate in milliseconds — and well below the 541-deep queue prod reached.
     /// </summary>
     internal const int SaturationThreshold = 64;
@@ -263,7 +264,9 @@ internal class RoutingGrain(
         // precisely because the turn is the last point at which the send order is authoritative.
         if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
         {
-            ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+            // 🚨 The slot is claimed HERE but the crossing is REPORTED AFTER the enqueue below —
+            // see the report call at the end of this branch for why the order is load-bearing.
+            var inFlight = Interlocked.Increment(ref inFlightRoutes);
             // 🚨 THE ORDERED CHANNEL IS (destination, payload identity) — issue #5009. A
             // stream-routed address is a MULTIPLEXER: the node-stream cache hub fronts one
             // sync/{streamId} sub-hub per observed node, so keying the FIFO on the address alone
@@ -287,6 +290,14 @@ internal class RoutingGrain(
                     ReportDrained(Interlocked.Decrement(ref inFlightRoutes));
                     slot?.Dispose();
                 });
+            // 🚨 REPORTED AFTER THE ENQUEUE, AND THAT ORDER DECIDES THE LEVEL.
+            // ReportSaturation classifies the crossing from orderedDispatcher.QueueSnapshot(), and
+            // the snapshot can only see legs that are ALREADY queued. Reporting before the Enqueue
+            // above therefore samples a depth that excludes the very leg that is crossing: when the
+            // crossing leg is the first extra frame on a channel that already has one executing,
+            // the sample reads 0 — head-of-line blocking, classified as load, and the Critical
+            // suppressed at exactly the boundary it exists to catch.
+            ReportSaturation(inFlight, addressPath);
         }
         else
             Dispatch(BuildGrainRoute(delivery, address, addressPath, streamProvider, grainFactory),
@@ -379,7 +390,7 @@ internal class RoutingGrain(
         Volatile.Write(ref saturationSinceTicks, startedUtc.Ticks);
         var episode = Interlocked.Increment(ref saturationEpisode);
         var (channels, destinations, deepest) = orderedDispatcher.QueueSnapshot();
-        logger.LogCritical(
+        logger.Log(SaturationLevel(deepest),
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
             + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
             + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
@@ -437,6 +448,39 @@ internal class RoutingGrain(
             ? "none in flight"
             : $"{(long)oldest.Value.Age.TotalMilliseconds} ms — {oldest.Value.Label}";
     }
+
+    /// <summary>
+    /// The level this crossing deserves, decided by the SHAPE the snapshot reports — the one
+    /// discriminator this counter can actually observe.
+    ///
+    /// <para>🚨 <b>A gauge crossing is not an incident.</b> Nothing throttles, queues or refuses at
+    /// <see cref="SaturationThreshold"/>: <see cref="Dispatch"/> hands every route to the pool
+    /// unconditionally and <see cref="RouteMessage"/> still returns <c>Forwarded</c>. The line's own
+    /// text has always said so — <i>"0 means nothing is waiting on anything, so read it as load"</i> —
+    /// while the level said the opposite, and the red-log ticketing path files an incident per
+    /// <see cref="LogLevel.Critical"/> fingerprint. So every ordinary busy moment opened a ticket.</para>
+    ///
+    /// <para><b>Measured 2026-09-21</b> across the crossings carried in the open incidents from this
+    /// site: <b>17 with <c>deepest = 0</c></b> (nothing blocked — breadth, or a CPU-starved silo) against
+    /// <b>4 with a genuine head-of-line queue</b>. Roughly four in five Criticals reported that nothing
+    /// was stuck. Combined with the per-activation identity split they became 46 open issues from ONE
+    /// log statement, 42 of them duplicates.</para>
+    ///
+    /// <para><b>The rule:</b> <c>deepest >= 1</c> means a leg is waiting on a LEG — head-of-line
+    /// blocking on one channel, which is actionable and stays <see cref="LogLevel.Critical"/>.
+    /// <c>deepest == 0</c> means nothing waits on anything, which is load, and is reported at
+    /// <see cref="LogLevel.Warning"/>: still logged, with every field it had before, and still paired
+    /// with <see cref="ReportDrained"/>'s duration — but it no longer files a ticket.</para>
+    ///
+    /// <para>🚨 This is a permanent level decision with a cost/value argument, NOT a debugging tweak:
+    /// <c>Critical</c> is what the ticketing path acts on, so it has to mean "act now". Nothing is
+    /// hidden — the load crossings keep their line, and the head-of-line shape, which is the one worth
+    /// waking someone for, is unchanged.</para>
+    /// </summary>
+    /// <param name="deepest">Legs queued behind the executing leg of the deepest channel.</param>
+    /// <returns><see cref="LogLevel.Critical"/> for head-of-line, <see cref="LogLevel.Warning"/> for load.</returns>
+    internal static LogLevel SaturationLevel(int deepest) =>
+        deepest >= 1 ? LogLevel.Critical : LogLevel.Warning;
 
     private void ReportDrained(int inFlight)
     {
