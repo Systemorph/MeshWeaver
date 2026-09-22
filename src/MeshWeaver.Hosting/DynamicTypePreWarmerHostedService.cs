@@ -239,9 +239,12 @@ public sealed class DynamicTypePreWarmerHostedService(
         // It does not wait for the seeding: a stamp the seeding lands is a change event it sees.
         if (census is not null)
             // 🚨 The PROCESS start, not this service's — the same boundary the bind-time yield
-            // splits on (NodeTypeBuildIdentity.OwnedByANewerGeneration), so a stamp the census
-            // reports as since-boot is exactly one the bind path refuses to heal. ProcessBoot.
-            _liveCensus = DynamicTypePreWarmer.ObserveLiveRecordCensus(mesh, ProcessBoot.StartedAtUtc, logger)
+            // splits on (NodeTypeBuildIdentity.OwnedByANewerGeneration), read off the same
+            // registered ProcessBootClock, so a stamp the census reports as since-boot is exactly
+            // one the bind path refuses to heal. A mesh that registered no clock keeps the
+            // service's own start as before.
+            _liveCensus = DynamicTypePreWarmer.ObserveLiveRecordCensus(
+                    mesh, mesh.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc ?? startedAt, logger)
                 .Subscribe(
                     census.RecordLiveRecords,
                     ex =>

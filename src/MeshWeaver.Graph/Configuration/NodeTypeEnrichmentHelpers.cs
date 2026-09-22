@@ -1078,6 +1078,38 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     private const int MaxRecompileAttempts = 1;
 
+    /// <summary>What the bind path does with a record whose build is for another framework.</summary>
+    internal enum FrameworkStaleAction
+    {
+        /// <summary>Flip the type Pending and rebuild for the live framework — the ordinary post-roll heal.</summary>
+        Recompile,
+
+        /// <summary>The recompile budget is spent: show the framework-stale overlay and its version-gated self-heal.</summary>
+        Overlay,
+
+        /// <summary>A NEWER generation stamped the record after this process started: leave it, overlay, never recompile.</summary>
+        Yield,
+    }
+
+    /// <summary>
+    /// 🚨 The framework-stale decision, pure, so the contract the bind path acts on is held without
+    /// a hub (the <c>StaleAssemblySelfHealWatcherTest</c> shape). <paramref name="bootedAt"/> is the
+    /// registered <see cref="ProcessBootClock"/>'s instant, or null on a mesh that registered none —
+    /// and null can never yield: an absent boundary is the benign side, the heal as it always was.
+    /// Yield outranks the budget: a record a newer generation owns is not this process's to heal
+    /// however many attempts remain, because each attempt would re-key it backwards.
+    /// </summary>
+    internal static FrameworkStaleAction DecideFrameworkStale(
+        NodeTypeDefinition judged, string liveFrameworkVersion, DateTimeOffset? bootedAt, int recompileAttempts)
+    {
+        if (bootedAt is { } boot
+            && NodeTypeBuildIdentity.OwnedByANewerGeneration(judged, liveFrameworkVersion, boot))
+            return FrameworkStaleAction.Yield;
+        return recompileAttempts >= MaxRecompileAttempts
+            ? FrameworkStaleAction.Overlay
+            : FrameworkStaleAction.Recompile;
+    }
+
     /// <summary>
     /// Decides what an activating instance BINDS, given the NodeType node the wait settled on.
     ///
@@ -1631,23 +1663,34 @@ internal static class NodeTypeEnrichmentHelpers
                                 chosen, node, nodeType, meshConfiguration, compilationService, meshHub,
                                 logger, recompileAttempts);
                         }
-                        // 🚨 YIELD, never heal, when the stamp is a NEWER generation's (#4632's
-                        // other half). The authoritative record is judged where it was read; the
-                        // mirror only where storage could not answer.
+                        // The authoritative record is judged where it was read; the mirror only
+                        // where storage could not answer.
                         var judged = !ReferenceEquals(chosen, typeNode)
                             && chosen.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions) is { } authoritativeDef
                                 ? authoritativeDef
                                 : def;
-                        if (NodeTypeBuildIdentity.OwnedByANewerGeneration(
-                                judged, NodeTypeCompilationHelpers.FrameworkVersion, ProcessBoot.StartedAtUtc))
-                            return YieldToNewerGeneration(judged);
-                        return RecompileForLiveFramework();
+                        return ActOnFrameworkStale(judged);
                     });
             }
-            if (NodeTypeBuildIdentity.OwnedByANewerGeneration(
-                    def, NodeTypeCompilationHelpers.FrameworkVersion, ProcessBoot.StartedAtUtc))
-                return YieldToNewerGeneration(def);
-            return RecompileForLiveFramework();
+            return ActOnFrameworkStale(def);
+
+            // 🚨 ONE decision, three actions, and the decision is pure (DecideFrameworkStale) so its
+            // contract is held without a hub: YIELD when a NEWER generation stamped the record
+            // after this process started (#4632's other half), OVERLAY once the recompile budget is
+            // spent, RECOMPILE otherwise — the heal every ordinary platform roll relies on.
+            IObservable<MeshNode> ActOnFrameworkStale(NodeTypeDefinition judged) =>
+                DecideFrameworkStale(
+                    judged, NodeTypeCompilationHelpers.FrameworkVersion,
+                    meshHub.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc, recompileAttempts) switch
+                {
+                    FrameworkStaleAction.Yield => YieldToNewerGeneration(judged),
+                    FrameworkStaleAction.Overlay => OverlayFrameworkStale(),
+                    _ => TriggerRecompileAndRetry(
+                        node, nodeType, meshConfiguration, compilationService, meshHub,
+                        logger, recompileAttempts,
+                        reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
+                        requireUsableBuild: true),
+                };
 
             // 🚨 A replica on ANOTHER image stamped this record AFTER this process started: a newer
             // platform generation owns the type now, mid-roll, and this replica is the one draining.
@@ -1668,7 +1711,8 @@ internal static class NodeTypeEnrichmentHelpers
                     + "recompiling for the live framework {Live} (that would re-key the record backwards). "
                     + "Overlaying '{InstancePath}' as framework-stale instead",
                     nodeType, owned.CompiledFrameworkVersion ?? "(null)", owned.LastCompileSucceededAt,
-                    ProcessBoot.StartedAtUtc, NodeTypeCompilationHelpers.FrameworkVersion, node.Path);
+                    meshHub.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc,
+                    NodeTypeCompilationHelpers.FrameworkVersion, node.Path);
                 var (yieldIntro, yieldCta, yieldGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
                 return Observable.Return(
                     WithOverlaySelfHeal(
@@ -1681,33 +1725,25 @@ internal static class NodeTypeEnrichmentHelpers
                         meshHub, nodeType, typeNode.Version, logger));
             }
 
-            IObservable<MeshNode> RecompileForLiveFramework()
+            IObservable<MeshNode> OverlayFrameworkStale()
             {
-                if (recompileAttempts >= MaxRecompileAttempts)
-                {
-                    logger?.LogWarning(
-                        "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
-                        nodeType, def.CompiledFrameworkVersion ?? "(null)",
-                        NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
-                    // Version-gated self-heal: when the operator's recompile lands
-                    // (a Version-advancing write with a framework-matching build),
-                    // every instance stuck on this prompt recycles itself.
-                    var (staleIntro, staleCta, staleGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
-                    return Observable.Return(
-                        WithOverlaySelfHeal(
-                            WithCompilationErrorOverlay(node, nodeType,
-                                "Built against a previous framework version",
-                                guidance: staleGuidance,
-                                intro: staleIntro,
-                                callToAction: staleCta,
-                                activityPath: def.LastCompilationActivityPath),
-                            meshHub, nodeType, typeNode.Version, logger));
-                }
-                return TriggerRecompileAndRetry(
-                    node, nodeType, meshConfiguration, compilationService, meshHub,
-                    logger, recompileAttempts,
-                    reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
-                    requireUsableBuild: true);
+                logger?.LogWarning(
+                    "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
+                    nodeType, def.CompiledFrameworkVersion ?? "(null)",
+                    NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
+                // Version-gated self-heal: when the operator's recompile lands
+                // (a Version-advancing write with a framework-matching build),
+                // every instance stuck on this prompt recycles itself.
+                var (staleIntro, staleCta, staleGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
+                return Observable.Return(
+                    WithOverlaySelfHeal(
+                        WithCompilationErrorOverlay(node, nodeType,
+                            "Built against a previous framework version",
+                            guidance: staleGuidance,
+                            intro: staleIntro,
+                            callToAction: staleCta,
+                            activityPath: def.LastCompilationActivityPath),
+                        meshHub, nodeType, typeNode.Version, logger));
             }
         }
 

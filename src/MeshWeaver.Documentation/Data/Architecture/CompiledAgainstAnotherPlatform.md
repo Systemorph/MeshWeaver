@@ -224,14 +224,17 @@ the new replica was healing them forward, every activation on both flipped the s
 in turn, and the roll's second replica sat in *"NodeType bake in progress"* for a quarter of an hour.
 
 The rule is one pure function, and both consumers read through it:
-`NodeTypeBuildIdentity.OwnedByANewerGeneration(record, liveFramework, ProcessBoot.StartedAtUtc)` —
+`NodeTypeBuildIdentity.OwnedByANewerGeneration(record, liveFramework, bootedAt)` —
 foreign to this process **and** stamped after this process started. The census folds its
 `ForeignSinceBoot` count through the same time half (`StampedAfter`); the bind path, on that
 verdict, **yields**: it leaves the record exactly as the newer generation wrote it, logs which
 generation owns the type and when it stamped, and shows the framework-stale overlay with its
 version-gated self-heal — which on a draining replica means until the pod is gone, and that is the
-point. The boundary is the PROCESS start (`ProcessBoot`), not a hosted service's, so the census and
-the bind path cannot split on different instants. A foreign stamp from BEFORE boot is still healed
+point. The boundary is the PROCESS start, read once at service registration into a mesh-scoped
+`ProcessBootClock` (never a static touched from a hub turn), so the census and the bind path
+cannot split on different instants; a mesh that registered no clock never yields. The bind path's
+three-way decision (`DecideFrameworkStale`: Yield / Overlay / Recompile) is pure and held by
+`FrameworkStaleDecisionTest`. A foreign stamp from BEFORE boot is still healed
 (the ordinary post-roll state), and a stamp with no time is never treated as since-boot — the same
 absent-reading rule the census has always applied. `OwnedByANewerGenerationTest` holds the reader
 against the incident's own mixed population and asserts, record by record, that what the census

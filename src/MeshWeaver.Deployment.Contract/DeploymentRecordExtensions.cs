@@ -142,6 +142,15 @@ public static class DeploymentRecordExtensions
     public static DeploymentContent WithAutoRecycleOnStaleBuild(this DeploymentContent d, bool? enabled = true) =>
         d with { AutoRecycleOnStaleBuild = enabled };
 
+    /// <summary>
+    /// Let this instance PATCH its own portal Deployment on a detected release — the chart's
+    /// <c>selfUpdate.canPatch</c>, one value for the self-patch Role and <c>SelfUpdate__CanPatch</c>.
+    /// The fleet hands over; the control instance, whose hand-over is a write into its own mesh,
+    /// states <see langword="true"/>.
+    /// </summary>
+    public static DeploymentContent WithSelfPatch(this DeploymentContent d, bool? enabled = true) =>
+        d with { SelfPatch = enabled };
+
     // ── plugin catalog ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>

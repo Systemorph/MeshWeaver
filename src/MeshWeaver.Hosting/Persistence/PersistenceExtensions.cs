@@ -1,3 +1,4 @@
+using MeshWeaver.Graph.Configuration;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
@@ -852,6 +853,10 @@ public static class PersistenceExtensions
         // an empty instrument wearing a green tick.
         services.TryAddSingleton<NodeTypeBakeReportRegistry>();
         services.TryAddSingleton<SourceDiscoveryRegistry>();
+        // 🚨 The "since boot" boundary the live record census and the bind path's mid-roll yield
+        // both split on — read from the OS HERE, on the startup thread, never on a hub turn
+        // (ProcessBootClock). One instance per mesh, so the two readers cannot disagree.
+        services.TryAddSingleton(ProcessBootClock.ReadFromProcess());
         // 🚨 …and the third, for the same reason and in the same place (#4063): what this identity
         // has SEALED, and which module-bearing repositories the publication seal is currently
         // freezing. The boot publication sweep and every green-build delivery record into it; the
