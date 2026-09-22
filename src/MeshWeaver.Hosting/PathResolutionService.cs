@@ -796,29 +796,14 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// <c>true</c>. Indeterminate probes (<c>null</c>: a provider that can't answer,
     /// a 5s timeout, or an errored probe) never confirm absence — they fail OPEN to
     /// synthesis, so a probe hiccup can never turn a real partition's root into a 404.
+    ///
+    /// <para>The vote itself lives in <see cref="PartitionExistenceProbe"/>: the bake sweep asks the
+    /// identical question for a different reason (#5073), and two copies of "what does gone mean"
+    /// is one copy too many.</para>
     /// </summary>
-    private IObservable<bool> PartitionConfirmedAbsent(string partition)
-    {
-        if (_writablePartitionProviders.Count == 0)
-            return Observable.Return(false);
-
-        var probes = _writablePartitionProviders
-            .Select(p => p.PartitionExists(partition)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(5))
-                .Catch<bool?, Exception>(ex =>
-                {
-                    _logger?.LogDebug(ex,
-                        "PathResolution: partition existence probe for '{Partition}' via {Provider} failed; treating as indeterminate",
-                        partition, p.Name);
-                    return Observable.Return<bool?>(null);
-                }))
-            .ToList();
-
-        return Observable.CombineLatest(probes)
-            .Take(1)
-            .Select(results => results.Any(r => r == false) && !results.Any(r => r == true));
-    }
+    /// <param name="partition">The bare partition name being asked about.</param>
+    private IObservable<bool> PartitionConfirmedAbsent(string partition) =>
+        PartitionExistenceProbe.ConfirmedAbsent(_writablePartitionProviders, partition, _logger);
 
     /// <summary>
     /// Whether a hit's path IS the path that was asked for — the one case in which a FLOOR
