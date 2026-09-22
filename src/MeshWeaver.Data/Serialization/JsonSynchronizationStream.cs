@@ -1545,10 +1545,30 @@ public static class JsonSynchronizationStream
                 request.Reference, config => config.WithClientId(request.StreamId).WithSubscriber(request.Subscriber)
             );
 
+        // 🚨 A REFUSAL THAT NAMES NEITHER THE HUB NOR THE SUBSCRIBER IS NOT DIAGNOSABLE (#5120). This
+        // read `"No reducer defined for {TReference} from  {TReference}"` — the SAME type parameter
+        // twice (the "from" half was meant to be the REDUCED type, and the double space is the other
+        // half of the same copy-paste), and neither the hub that refused nor the subscriber that
+        // asked. Production carried one occurrence of it — a bare `MeshNodeReference` (no Path)
+        // subscribed to `portal/nodeops-{meshId}` — and the line answered none of the three questions
+        // a reader has: which hub, asked by whom, for what.
+        //
+        // The condition itself is a real and specific configuration fact: a hub that carries
+        // `AddData()` has a workspace, so `Workspace.SubscribeToClient` runs and reaches here, but
+        // only `AddMeshDataSource` registers the `MeshNodeReference` reducer — so the mesh's
+        // infrastructure hubs (`portal/nodeops-{meshId}`, `portal/reads-{meshId}`), which have a
+        // workspace and deliberately own NO mesh node of their own, accept the subscribe and then
+        // have nothing to reduce it with. Naming the hub is what turns that from a mystery into one
+        // lookup, and naming the subscriber is what identifies the caller that asked an address with
+        // no node for its node — which is the half this refusal exists to make findable.
         var reduced =
             fromWorkspace as ISynchronizationStream<TReduced>
             ?? throw new DataSourceConfigurationException(
-                $"No reducer defined for {typeof(TReference).Name} from  {typeof(TReference).Name}"
+                $"Hub '{hub.Address}' has no reducer from {typeof(TReference).Name} to "
+                + $"{typeof(TReduced).Name}, so it cannot serve stream {request.StreamId} for "
+                + $"subscriber '{request.Subscriber}'. Either the reference is addressed at the wrong "
+                + "hub, or this hub's configuration is missing the data source that registers that "
+                + "reducer."
             );
 
 

@@ -27,7 +27,20 @@ public class ObjectAsPrivatePayloadTest
     public void FailedReadReportsTheFailureWithoutPublishingContentOrExceptionText(
         bool node, bool runtimeType, int failure)
     {
+        // 🚨 THE CONTENT AND THE SUBJECT ARE TWO DIFFERENT STRINGS, and this test used to use ONE
+        // (Systemorph/MeshWeaver#4597). It passed the private text as the `what` argument and then
+        // asserted the log did not contain it — which reads as "content is not published" and is
+        // actually "the caller-supplied subject is dropped". Those are not the same claim, and only
+        // the first is this accessor's contract: `what` is documented as "a node path, a control
+        // name", `ContentAs<T>` passes `node.Path` into it, and the accessor's OTHER two report sites
+        // have always printed it as `{What}`. So a caller who puts content there was already
+        // publishing it through those branches, and dropping it here bought no privacy — it only made
+        // the one remaining line unattributable, which is the whole of #4597's open half.
+        //
+        // With the two separated the test says both things, and the privacy half is now tested
+        // against a string that is genuinely CONTENT rather than one the caller chose to name.
         const string privateText = "synthetic-private-correspondence";
+        const string subject = "acme/Drafts/QuarterlyNote";
         var json = JsonSerializer.Serialize(new { message = privateText });
         object value = node ? JsonNode.Parse(json)! : JsonSerializer.Deserialize<JsonElement>(json);
         var options = new JsonSerializerOptions();
@@ -35,8 +48,8 @@ public class ObjectAsPrivatePayloadTest
         var logger = new CapturingLogger();
 
         var result = runtimeType
-            ? value.As(typeof(Payload), options, logger, privateText)
-            : value.As<Payload>(options, logger, privateText);
+            ? value.As(typeof(Payload), options, logger, subject)
+            : value.As<Payload>(options, logger, subject);
 
         result.Should().BeNull();
         logger.Entries.Should().ContainSingle();
@@ -45,6 +58,9 @@ public class ObjectAsPrivatePayloadTest
         entry.Text.Should().NotContain(privateText);
         entry.Exception.Should().BeNull("converter exceptions may contain the entire private value");
         entry.Text.Should().Contain(nameof(Payload));
+        entry.Text.Should().Contain(subject,
+            "a recovery failure that names no subject cannot be followed up — #4597 carried exactly "
+            + "that for twelve days");
         entry.Text.Should().Contain(failure switch
         {
             0 => nameof(JsonException),
