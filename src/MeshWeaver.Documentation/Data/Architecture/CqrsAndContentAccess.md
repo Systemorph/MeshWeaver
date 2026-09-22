@@ -834,8 +834,10 @@ Folds remove the stale caller read; they do **not** add cluster-wide atomic arit
 cross-hub write still carries an RFC 7396 patch, with the existing conflict and rebase semantics.
 `ActivityTrackingUpsertTest` proves the real handler creates despite a stale positive index,
 then preserves the first-access timestamp and increments the stored count on later tracks.
-A structured conflict remains `NodeUpsertRejectionReason.Conflict` across the response boundary;
-activity tracking retains its existing conflict and teardown classification without adding retries.
+A structured conflict remains `FailureKind = NodeUpsertFailureKind.Conflict` across the response
+boundary. This open string vocabulary supplements the unchanged legacy rejection enum; unknown
+values remain named failures, and a teardown does not claim that nothing was written.
+Activity tracking retains its existing conflict and teardown classification without adding retries.
 
 Bulk upserts (e.g. node-tree copy) compose the per-node observable and merge with bounded concurrency so a wide subtree doesn't open every per-node hub simultaneously on the receiving side:
 

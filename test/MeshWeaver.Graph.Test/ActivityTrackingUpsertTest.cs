@@ -107,6 +107,23 @@ public class ActivityTrackingUpsertTest(ITestOutputHelper output) : MonolithMesh
         return node!.ContentAs<UserActivityRecord>(Mesh.GetActivityTrackingHub().JsonSerializerOptions)!;
     }
 
+    /// <summary>The actual hub serializer preserves open outcomes and the legacy reason.</summary>
+    [Fact]
+    public void UpsertFailureKinds_RoundTripThroughTheHubSerializer()
+    {
+        var options = Mesh.GetActivityTrackingHub().JsonSerializerOptions;
+        foreach (var kind in new[]
+                 { NodeUpsertFailureKind.Conflict, NodeUpsertFailureKind.HubTeardown, "Module.CustomOutcome" })
+        {
+            var response = CreateOrUpdateNodeResponse.Fail("owner refusal") with { FailureKind = kind };
+            var json = JsonSerializer.Serialize(response, options);
+            var restored = JsonSerializer.Deserialize<CreateOrUpdateNodeResponse>(json, options)!;
+            restored.FailureKind.Should().Be(kind);
+            restored.RejectionReason.Should().Be(NodeUpsertRejectionReason.Unknown,
+                "the additive vocabulary must not change what a legacy consumer reads");
+        }
+    }
+
     private sealed class StaleActivityProvider : IMeshQueryProvider
     {
         public bool Matches(IReadOnlyList<string> queryNamespaces) => queryNamespaces.Contains(User);

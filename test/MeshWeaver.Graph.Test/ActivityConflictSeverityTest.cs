@@ -85,8 +85,13 @@ public class ActivityConflictSeverityTest
     {
         var failure = new InvalidOperationException("wrapped", new AggregateException(Nack(code, Total)));
         var reason = NodeUpsertRejection.Classify(failure);
-        reason.Should().Be(conflict ? NodeUpsertRejectionReason.Conflict : NodeUpsertRejectionReason.Unknown);
-        var json = JsonSerializer.Serialize(CreateOrUpdateNodeResponse.Fail(Total, reason));
+        reason.Should().Be(NodeUpsertRejectionReason.Unknown);
+        var kind = NodeUpsertRejection.ClassifyFailureKind(failure);
+        kind.Should().Be(conflict ? NodeUpsertFailureKind.Conflict : null);
+        var json = JsonSerializer.Serialize(CreateOrUpdateNodeResponse.Fail(Total, reason) with
+        {
+            FailureKind = kind
+        });
         var reply = JsonSerializer.Deserialize<CreateOrUpdateNodeResponse>(json)!;
         var translated = MeshNodeExtensions.ActivityUpsertFailure(reply, "rbuergi/_UserActivity/rbuergi");
         MeshNodeExtensions.IsConcurrentWriteConflict(translated).Should().Be(conflict);
@@ -116,15 +121,32 @@ public class ActivityConflictSeverityTest
             1 => new HubDisposedBeforeResponseException("activity", address, "update", address.ToString()),
             _ => new ObjectDisposedException("Autofac.LifetimeScope", "nested lifetimes cannot be created")
         };
-        var reason = NodeUpsertRejection.Classify(new AggregateException(inner));
-        reason.Should().Be(NodeUpsertRejectionReason.HubTeardown,
+        var failure = new AggregateException(inner);
+        var reason = NodeUpsertRejection.Classify(failure);
+        reason.Should().Be(NodeUpsertRejectionReason.Unknown);
+        var kind = NodeUpsertRejection.ClassifyFailureKind(failure);
+        kind.Should().Be(NodeUpsertFailureKind.HubTeardown,
             "a lost response during teardown is distinct from an intake refusal that applied nothing");
         var reply = JsonSerializer.Deserialize<CreateOrUpdateNodeResponse>(JsonSerializer.Serialize(
-            CreateOrUpdateNodeResponse.Fail(inner.Message, reason)))!;
+            CreateOrUpdateNodeResponse.Fail(inner.Message, reason) with { FailureKind = kind }))!;
         HubDisposingException.IsHubDisposal(MeshNodeExtensions.ActivityUpsertFailure(reply, address.ToString()))
             .Should().BeTrue();
         NodeUpsertRejection.Classify(new ObjectDisposedException("unrelated resource"))
             .Should().Be(NodeUpsertRejectionReason.Unknown);
+        NodeUpsertRejection.ClassifyFailureKind(new ObjectDisposedException("unrelated resource"))
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void AnUnrecognisedFailureKindSurvivesTheWireAndStaysLoud()
+    {
+        var reply = JsonSerializer.Deserialize<CreateOrUpdateNodeResponse>(JsonSerializer.Serialize(
+            CreateOrUpdateNodeResponse.Fail("module refusal") with { FailureKind = "Module.CustomOutcome" }))!;
+        reply.FailureKind.Should().Be("Module.CustomOutcome");
+        var error = MeshNodeExtensions.ActivityUpsertFailure(reply, "rbuergi/activity");
+        error.Message.Should().Contain("Module.CustomOutcome");
+        MeshNodeExtensions.IsConcurrentWriteConflict(error).Should().BeFalse();
+        HubDisposingException.IsHubDisposal(error).Should().BeFalse();
     }
 
     [Fact]

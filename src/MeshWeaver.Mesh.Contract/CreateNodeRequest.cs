@@ -738,6 +738,14 @@ public record CreateOrUpdateNodeResponse(MeshNode? Node)
     /// <summary>Rejection reason if the upsert failed.</summary>
     public NodeUpsertRejectionReason? RejectionReason { get; init; }
 
+    /// <summary>
+    /// Open failure classification, when an inner write supplies a more specific outcome.
+    /// Values such as <see cref="NodeUpsertFailureKind.Conflict"/> supplement the legacy
+    /// <see cref="RejectionReason"/> without widening its wire enum. Unrecognised values remain
+    /// named failures; they must not be interpreted as a retry instruction or a known outcome.
+    /// </summary>
+    public string? FailureKind { get; init; }
+
     /// <summary>Success response for a newly-created node.</summary>
     public static CreateOrUpdateNodeResponse Created(MeshNode node, ActivityLog? log = null)
         => new(node) { WasCreated = true, Log = log };
@@ -786,13 +794,16 @@ public enum NodeUpsertRejectionReason
     /// </summary>
     AddressRecycling,
 
-    /// <summary>The owner's structured conflict verdict: a concurrent writer changed the base.
-    /// The framework has already attempted its bounded rebase; this response adds no retry.</summary>
-    Conflict,
+}
 
-    /// <summary>The inner operation ended during hub teardown. Unlike an intake refusal,
-    /// this does not prove whether the write was applied before the response was lost.</summary>
-    HubTeardown,
+/// <summary>Open vocabulary for an upsert's inner-write failure. Modules may supply other values.</summary>
+public static class NodeUpsertFailureKind
+{
+    /// <summary>The owner's conflict verdict after its bounded rebase; this adds no retry.</summary>
+    public const string Conflict = "Conflict";
+
+    /// <summary>The operation ended during teardown; whether the write was applied is unknown.</summary>
+    public const string HubTeardown = "HubTeardown";
 }
 
 /// <summary>
@@ -815,14 +826,27 @@ public static class NodeUpsertRejection
         UnauthorizedAccessException => NodeUpsertRejectionReason.Unauthorized,
         DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown } =>
             NodeUpsertRejectionReason.AddressRecycling,
-        { } teardown when HubDisposedBeforeResponseException.IsHubDisposedBeforeResponse(teardown)
-            || HubDisposingException.IsHubDisposal(teardown)
-            || HubDisposingException.IsDisposedContainer(teardown) => NodeUpsertRejectionReason.HubTeardown,
-        { } fault when ExceptionChain.Contains(fault, e =>
-            e is MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Conflict }) =>
-            NodeUpsertRejectionReason.Conflict,
         _ => NodeUpsertRejectionReason.Unknown,
     };
+
+    /// <summary>
+    /// Preserves a structured inner-write outcome beside the unchanged legacy reason.
+    /// A known legacy refusal takes precedence; an unclassified fault supplies no invented kind.
+    /// </summary>
+    /// <param name="error">The inner write's fault, or null.</param>
+    public static string? ClassifyFailureKind(Exception? error)
+    {
+        if (Classify(error) != NodeUpsertRejectionReason.Unknown)
+            return null;
+        if (HubDisposedBeforeResponseException.IsHubDisposedBeforeResponse(error)
+            || HubDisposingException.IsHubDisposal(error)
+            || HubDisposingException.IsDisposedContainer(error))
+            return NodeUpsertFailureKind.HubTeardown;
+        return ExceptionChain.Contains(error, e =>
+            e is MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Conflict })
+            ? NodeUpsertFailureKind.Conflict
+            : null;
+    }
 }
 
 /// <summary>

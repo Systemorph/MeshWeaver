@@ -441,16 +441,23 @@ public static class MeshNodeExtensions
 
     /// <summary>Preserves structured upsert refusals for activity's existing failure policy.</summary>
     internal static Exception ActivityUpsertFailure(CreateOrUpdateNodeResponse response, string path)
-        => response.RejectionReason switch
+    {
+        if (response.FailureKind == NodeUpsertFailureKind.Conflict)
+            return new MeshNodeStreamException(
+                new MeshNodeError(MeshNodeErrorCode.Conflict, path, response.Error ?? "Node upsert failed"));
+        if (response.FailureKind == NodeUpsertFailureKind.HubTeardown)
+            return new HubDisposingException(new Address(path), response.Error ?? "Node upsert failed");
+        if (response.FailureKind is { } unknown)
+            return new InvalidOperationException($"Node upsert failed ({unknown}): {response.Error}");
+        return response.RejectionReason switch
         {
-            NodeUpsertRejectionReason.Conflict => new MeshNodeStreamException(
-                new MeshNodeError(MeshNodeErrorCode.Conflict, path, response.Error ?? "Node upsert failed")),
-            NodeUpsertRejectionReason.AddressRecycling or NodeUpsertRejectionReason.HubTeardown =>
+            NodeUpsertRejectionReason.AddressRecycling =>
                 new HubDisposingException(new Address(path), response.Error ?? "Node upsert failed"),
             NodeUpsertRejectionReason.Unauthorized or NodeUpsertRejectionReason.ValidationFailed =>
                 new UnauthorizedAccessException(response.Error ?? "Access denied"),
             _ => new InvalidOperationException(response.Error ?? "Node upsert failed")
         };
+    }
 
     /// <summary>
     /// True when the failure carries the owner's <see cref="MeshNodeErrorCode.Conflict"/> NACK at
