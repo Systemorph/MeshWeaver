@@ -472,6 +472,57 @@ change-feed resubscribe latch **stay armed** and the subscriber rehydrates after
 > `HubDisposalFailureClassificationTest` (Messaging.Hub.Test, the classification, including
 > the reflection-wrapped case).
 
+## The other creation window: a hub disposed while it is still being BUILT
+
+The window above is a live hub accepting work during its teardown. This one is the mirror
+image — a hub torn down before its construction has returned — and its cost was a **user
+action that vanished without a line** (#4741).
+
+**How a hosted hub enters its parent's registry, twice.** `MessageHubConfiguration.Build`
+constructs the hub, then immediately calls `HostedHubsCollection.Add` — which inserts it under
+its address, arms the removal (`RegisterForDisposal(h => remove)`) and raises the first
+`HubAdded` — then runs the synchronous buildup actions, then `StartMessageProcessing`. Only
+after `Build` returns does `GetHubWithOutcome`'s creation `Lazy` insert the same hub a second
+time and raise `HubAdded` again. So a `HubAdded` subscriber is handed a hub whose buildup has
+not run and whose init request has not been posted.
+
+**The pump does not wait for `Build`.** A `Dispose()` issued in that gap — from a `HubAdded`
+subscriber, an ancestor's cascade, a probe hub created and disposed in one breath — posts a
+`ShutdownRequest` that is drained the moment it lands, bypasses every init gate, and takes an
+empty hub to `Dead` in about a millisecond: `Quiescing` waits only for pending callbacks,
+`DisposeHostedHubs` joins no children, `ShutDown` runs the hub's `disposables` — **including the
+registry removal `Add` armed** — and signals `DisposalCompleted`. All of that can complete
+while the constructing thread is still inside `Build`.
+
+**What the second insert then did.** The Lazy's bare `messageHubs[a] = created.Hub` put the
+corpse back under its address, and nothing was left to take it out: the only removal had
+already fired. From then on the parent-chain walk in `RouteStreamMessage` *found* a registered
+hub for that stream, delivered into it, and the dead hub's intake discarded the message — no
+`REFUSING …` line (that is the miss path, and there was no miss), no `Dropping …` warning, no
+line at all. `AnAgedOutStreamSaysSoRatherThanClaimingItWasNeverServed` measured exactly that
+shape: a click on a reaped stream, 36 s, *"The observable emitted nothing at all"* — 1 in 32
+full-assembly runs locally, and the same family's `AStreamTheOwnerReaped_IsNamedAsSuch` on CI.
+Every test in that family disposes the hub the first `HubAdded` handed it, so every one of them
+was exposed.
+
+**The rule: an insert never outlives its own removal.** Both inserts now go through one
+`Track(hub)`, which inserts and then re-arms the removal on the hub. That is race-free without a
+liveness check that could itself race: `RegisterForDisposal` disposes a registrant *at once* on
+a hub whose disposal has already begun, so a corpse re-inserted after its removal fired comes
+straight back out, and a live hub merely carries one redundant removal. The removal is also
+value-matched (`TryRemove(KeyValuePair)`), so a late removal can only ever take out the hub it
+was armed for — never a successor built under the same address.
+
+> Deterministic repro and control: `AHubDisposedWhileBeingBuiltLeavesTheRegistryTest`
+> (Messaging.Hub.Test). The dispose is issued from the first `HubAdded`; the constructing
+> thread is parked in the hub's own synchronous buildup action — on that thread, outside any
+> `Post` — until the hub is `Dead`, so `Build` returns to the Lazy holding a corpse every time.
+> With the bare re-put restored the registry assertion fails (*"Expected <null> … but found
+> MessageHub"*, park released at `RunLevel=Dead` after 1 ms); with `Track` it passes. Parking
+> inside the `InitializeHubRequest` post instead was measured and rejected: the teardown guard
+> skips the post pipeline once the hub is past `DisposeHostedHubs`, so that park raced the very
+> shutdown it waited for.
+
 ---
 
 ## A recycle owes its subscribers a goodbye — and can only say it BEFORE the teardown
