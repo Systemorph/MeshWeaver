@@ -400,6 +400,26 @@ comment already gave: a non-convertible type node is their normal input, and rep
 input as a fault is how that line became the *fingerprint's own text* — which is why the incident
 could never go quiet however often the underlying defect was fixed.
 
+🚨 **That sweep missed one caller, and it was the one that runs longest** (#5264). Both refusals —
+the probe's and `NonDeclarationOverlay` — arm `ArmOverlaySelfHeal` with a null gate, so the overlay
+recycles itself once a real declaration lands at the path. That watcher subscribes to the
+**occupant's** stream, so every emission it sees is the Store plugin root — and it read each one
+through `ContentAs<NodeTypeDefinition>` **with** the logger. The result, measured on the control
+instance on 2026-09-22: one `EnrichWithNodeType: path 'Feedback' is occupied …` line from the
+refusal, then `As<NodeTypeDefinition> for Feedback could not recover value: JsonException` at
+`Error`, once per occupant emission, for the watcher's whole life — the same fingerprint again,
+arriving 45 s after the collision line. The watcher now applies the same one-sided
+`IsProvablyNotADeclaration` before converting: a proven occupant is "not usable" without comment,
+and a real declaration (or degraded content that might be one) still reaches `ContentAs` with the
+logger, so a genuine conversion fault on a NodeType stays loud. Pinned by
+`OverlaySelfHealWatcherTest.CollisionOverlay_OccupantEmissions_AreNotLoggedAsConversionFaults_AndARealDeclarationStillHeals`
+(3 Error lines against the unfixed watcher, 0 with the fix; the positive half proves the watcher
+still recycles once a declaration arrives).
+
+**What this does NOT do: repair the instance.** An instance that names the bare `Feedback` still gets
+the overlay — correctly — until its `nodeType` is rewritten to `Feedback/Feedback` through the repair
+path below. The write-side refusal (above) stops new ones only on an image that carries it.
+
 ## The repair path both decisions had to leave open
 
 `patch` refuses `nodeType` outright, so a **full-node `update` naming a type that does resolve** is
