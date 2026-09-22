@@ -298,6 +298,50 @@ exactly **one** node mesh-wide names the bare path — the instance the incident
 quotes. Refusing the bare form costs nothing that works, and that reading is what
 `AnInstanceOfARealDeclaration_IsStillAccepted` pins in `NodeTypePathOccupancyTest`.
 
+### 🚨 A STATIC CLAIM ENDS THE QUESTION — and this is the whole safety argument
+
+The predicate refuses writes, so the thing it may never refuse is the platform's own node types.
+Measured read-only across both meshes:
+
+| bare value | control instance | memex-cloud | what `get @<value>` returns |
+|---|---|---|---|
+| `Feedback` | 22 over 107 readable partitions | 1 over 129 | a `Store/Plugin` node (`PluginContent`) |
+| `Agent` | 43 | 48 | a **`Space`** node |
+| `Skill` | 121 | 120 | a **`Space`** node |
+
+**164 of those 168 instances name a bare path occupied by a `Space`** — and `Agent`/`Skill` are the
+platform's own documented values, with no declaration for either anywhere in the control instance's
+untruncated 155-row `nodeType:NodeType` sweep. They work anyway, and the reason is the ordering:
+
+> **`FindStaticNode` is consulted BEFORE persistence, and a statically-claimed path returns
+> `Registered` without ever reaching the content test.**
+
+`Feedback` differs because **no provider claims it** — its declaration is a dynamic plugin NodeType
+at `Feedback/Feedback` — so it falls through to persistence and meets the plugin root.
+`Agent`/`Skill` are claimed by the AI engine's provider, which ships in MeshWeaver.Plugins and which
+core cannot see at all.
+
+🚨 **The activation boundary proves this empirically, which is stronger than reading the provider's
+source.** It applies the *identical* content test to the *identical* persisted rows, and has since
+#2245. Across the incident's five occurrences it names **only `Feedback`** — never `Agent`, never
+`Skill`, despite 164 constantly-activated instances. Were the persisted `Space` row what activation
+resolved, those instances would be logging collisions continuously.
+
+**So the static winner is never content-tested.** A revision that did test it would have refused 164
+of 168 live instances on roll — caught in review, and now pinned by a control that serves exactly
+that shape through a custom `IStaticNodeProvider`. Note the trap in building that control: a first
+attempt used `Markdown`, whose static node clears the predicate on its own, so it passed with and
+without the change and measured nothing.
+
+**Residual risk, unsoftened.** On a host where the AI engine is NOT loaded, `FindStaticNode("Agent")`
+is null, the persisted `Space` row decides, and those writes ARE convicted — that is every core test
+mesh and any portal without the module. What makes it acceptable is that the failure is a **loud,
+self-describing refusal and never a silent stranding**: the write returns
+`NodeType 'Agent' is not registered: 'Agent' is a 'Space' node`, and the update path also logs
+`DanglingNodeTypeGuard: blocked update … names a path that is OCCUPIED`. The strings to watch are
+`is not registered:` with `is a 'Space' node`. A host missing the engine announces itself on the
+first such write, with the occupant named and the remedy in the message.
+
 ### 🚨 The probe must not be able to WRITE
 
 `Resolve` reads the row to test its content, and the obvious call — `IStorageAdapter.Read` — is
