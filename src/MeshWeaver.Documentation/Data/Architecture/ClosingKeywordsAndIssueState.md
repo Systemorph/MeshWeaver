@@ -177,16 +177,27 @@ taken out of the readiness count by a merge in two days.
 
 ### The self-test, and its control
 
-`check-closing-keywords.py --self-test` classifies **52 bodies** (29 red, 23 green) — the three
-real bodies as the API returned them, every negation and possessive shape, the `Closes #A, #B`
-trap, a keyword in a code span / a fence / an HTML comment, `Refs #N`, a body with no reference at
-all, and both arms of every escape rule.
+`check-closing-keywords.py --self-test` classifies a body per case and **prints the count and the
+red/green split** — that line is in every run of the gate's job, and it is the number to read
+rather than one copied into this page, which goes stale on the next case anybody adds. What the
+cases cover: the three real bodies as the API returned them, every negation and possessive shape
+(including the two-sentences-back and `not only does this fix` cases that must NOT fire), the four
+reference spellings GitHub accepts, a keyword in a heading and in a table cell, `unfixed`/
+`prefixes` as non-keywords, the `Closes #A, #B` trap, a keyword in a code span / a fence / an HTML
+comment, `Refs #N`, a body with no reference at all, and **both arms of every escape rule**.
 
 🚨 **A self-test that passes against a detector which has stopped detecting proves nothing**, so
-four **neutered-detector controls** run afterwards, each disabling exactly one arm — the negation
+**neutered-detector controls** run afterwards, each disabling exactly one arm — the negation
 function, the severity label set, the possessive group, the escape's refusals. The assertion is
 that the case list then goes RED. A neutered arm that still passes every case means the cases do
 not cover it, and the self-test fails saying so.
+
+The same reasoning covers the gate's **cost**, which is one API read per distinct local issue: the
+resolver is memoised per run and the self-test counts what it was asked (one issue named four
+times under three shapes must be resolved once), and a body naming more distinct issues than the
+cap is refused **up front** rather than discovered by the job being killed at its five-minute
+limit — a killed job has no verdict, which is indistinguishable from the gate not running. Both of
+those assertions are themselves controlled: removing the memo, or the cap, turns the self-test red.
 
 ## What this does not establish
 

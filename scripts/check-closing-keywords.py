@@ -165,6 +165,15 @@ EMPTY_AFFIRMATIONS = frozenset(
 
 BLOCKING_LABELS = ("sev:B", "sev:H")
 
+# 🚨 A BOUND ON THE WORK, because the resolver is a subprocess per SUBJECT and the job is capped at
+# five minutes. Matches are deduplicated and resolutions are memoised by issue number, so the cost
+# is the count of DISTINCT local subjects — but nothing in a pull-request body bounds THAT, and a
+# gate that is killed at its cap produces no verdict, which reads as "the gate did not run". Over
+# the cap it exits RED naming the count, the same "could not read my subject" shape the Undecidable
+# path uses. The worst of the 99 merged bodies measured (two days to 2026-09-22T11:17Z) resolves
+# TWO subjects, so this sits ~30x above anything real and cannot become a wall.
+MAX_RESOLVED_SUBJECTS = 60
+
 
 class Undecidable(Exception):
     """The gate could not READ its subject.
@@ -402,6 +411,30 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
         notes.append("No closing keyword binds any issue reference in this body.")
     closed_here = {r.number for r in refs if r.local and not r.negation}
 
+    # 🚨 The bound, asserted BEFORE any work starts rather than discovered by being killed at the
+    # job's cap. `subjects` is the real cost — one resolution per distinct local issue number,
+    # however many times and in however many shapes the body names it.
+    subjects = {r.number for r in refs if r.local}
+    if len(subjects) > MAX_RESOLVED_SUBJECTS:
+        raise Undecidable(
+            f"this body binds closing keywords to {len(subjects)} distinct issues in {repo}, over "
+            f"the cap of {MAX_RESOLVED_SUBJECTS}. Each distinct issue costs one API read, and a "
+            "job killed at its five-minute cap produces no verdict at all — which is "
+            "indistinguishable from the gate not running. Refusing up front instead. If a pull "
+            "request really does close this many issues, say so on the thread and raise the cap "
+            "deliberately; do not widen it to make one run pass."
+        )
+
+    # Memoised per run: bounded by DISTINCT subjects, not by matches and not by problem-kind. A
+    # `None` answer (the number names nothing here) is cached too — an absent issue must not be
+    # asked about twice.
+    resolved: dict[int, dict | None] = {}
+
+    def resolve_once(number: int) -> dict | None:
+        if number not in resolved:
+            resolved[number] = resolve(repo, number)
+        return resolved[number]
+
     for n, reason in sorted(released.items()):
         if n not in closed_here:
             errors.append(
@@ -431,7 +464,7 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
         # again on the next run — two pushes for one defect, which is how a gate earns its
         # reputation as a wall. One code path also means an unresolvable reference is Undecidable
         # here exactly as it is everywhere else in this file.
-        issue = resolve(repo, ref.number) if ref.local else None
+        issue = resolve_once(ref.number) if ref.local else None
         also = ""
         if issue and not issue["is_pull_request"]:
             blocking_now = [lbl for lbl in issue["labels"] if lbl in BLOCKING_LABELS]
@@ -783,6 +816,55 @@ def self_test() -> int:
             failures.append(
                 f"{which}: expected an error naming {marker}, got {errors or 'nothing'}"
             )
+
+    # 🚨 THE WORK IS BOUNDED BY DISTINCT SUBJECTS, not by matches, not by problem-kind. Counted by
+    # a resolver that records what it was asked, because "it is memoised" is the kind of claim that
+    # stays true in prose long after a refactor has made it false.
+    asked: list[int] = []
+
+    def counting_resolve(repo: str, number: int) -> dict | None:
+        asked.append(number)
+        return _fake_resolve(repo, number)
+
+    repeated = (
+        "Closes #5057 and again closes #5057.\n"
+        "This does not close #5057 either, and Closes #5057's half too.\n"
+    )
+    evaluate(repeated, REPO, counting_resolve)
+    if asked != [5057]:
+        failures.append(
+            "one issue named four times under three shapes must be resolved ONCE; the resolver "
+            f"was asked for {asked}"
+        )
+
+    # …and over the cap the gate refuses UP FRONT rather than being killed at the job's timeout.
+    over = " ".join(f"Closes #{n}" for n in range(9000, 9000 + MAX_RESOLVED_SUBJECTS + 1))
+    asked.clear()
+    try:
+        evaluate(over, REPO, counting_resolve)
+        failures.append(
+            f"{MAX_RESOLVED_SUBJECTS + 1} distinct subjects must be refused up front, not resolved"
+        )
+    except Undecidable as exc:
+        if str(MAX_RESOLVED_SUBJECTS) not in str(exc):
+            failures.append(f"the cap refusal must name the cap, got: {exc}")
+        if asked:
+            failures.append(
+                f"the cap must be asserted BEFORE any resolution; {len(asked)} were made anyway"
+            )
+
+    # The control on the cap's own direction: exactly at the cap it still runs.
+    at_cap = " ".join(f"Closes #{n}" for n in range(9000, 9000 + MAX_RESOLVED_SUBJECTS))
+    asked.clear()
+    try:
+        evaluate(at_cap, REPO, counting_resolve)
+    except Undecidable as exc:
+        failures.append(f"a body exactly at the cap must still be evaluated, got: {exc}")
+    if len(asked) != MAX_RESOLVED_SUBJECTS:
+        failures.append(
+            f"a body exactly at the cap must resolve {MAX_RESOLVED_SUBJECTS} subjects, "
+            f"resolved {len(asked)}"
+        )
 
     # 🚨 One defect, one push. A reference condemned by its WORDING is still resolved, so a
     # possessive (or a negation) aimed at a release-blocking issue says so in the same message —
