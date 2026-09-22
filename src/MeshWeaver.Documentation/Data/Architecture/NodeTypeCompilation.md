@@ -1818,8 +1818,9 @@ nothing but the defect.
 
 **7. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
 first poisoned emit every compile-gated assertion spends its entire window and then fails — on
-2026-09-22, 11 tests failed and 9 of them burned a full 50 s / 60 s / 90 s / 120 s window — so 138 of
-813 tests consume the 900 s cap. The last test
+2026-09-22, 11 tests failed and 9 of them burned a full 50 s / 60 s / 90 s / 120 s window — so the
+900 s cap is spent on **138 recorded test starts** (two instruments agree: 138 `TEST_START` events and
+136 per-test log files in the straggler artifact) out of the **813** the suite totals when healthy. The last test
 to *start* (`NodeTypeRecompileAlcLeakTest.RecompilingANodeType_ReleasesEverySupersededLoadContext`,
 13:05:33Z) was 24 s into a 120 s window when `SIGTERM` arrived; it was not stuck. Read `exit 124` here
 as *"the process stopped being able to emit at 12:52:40Z"*, and look for the first `PROCESS CANNOT EMIT`,
