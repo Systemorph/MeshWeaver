@@ -436,22 +436,50 @@ public class OAuthConnectController(
                 if (superseded.Length == 0)
                     return Observable.Return(System.Reactive.Unit.Default);
 
+                // 🚨 Name the rows — twice, and the two lines say different things. The 401 a
+                // superseded holder gets is logged by the validator under the token's HASH
+                // PREFIX, which is the last segment of these paths, so a path here and that
+                // warning correlate on one string. Without the paths, "superseding 1 previous
+                // token(s)" cannot be tied to the 401 it caused, and the alternation #5074 reports
+                // (two processes of one installation sharing a client_id and evicting each
+                // other's credential) is unattributable inside the log window.
+                //
+                // This first line is INTENT: the candidate set, before any delete has run.
+                // DeleteToken answers false for a path that was already gone (a concurrent
+                // exchange got there first) and faults on a refusal (the per-path catch below
+                // keeps that token live), so what was actually removed is known only after the
+                // Concat completes — the second line, below, reports that. A reader tying a 401
+                // to a removal uses the second line; the first says what this exchange set out
+                // to do, which is what a refusal is measured against.
                 logger.LogInformation(
                     "OAuth: superseding {Count} previous token(s) for user {UserId}, client label {Label} — "
+                    + "candidates {SupersededPaths}, keeping {KeptPath}; "
                     + "a re-authorization replaces the client's credential rather than adding one",
-                    superseded.Length, userId, label);
+                    superseded.Length, userId, label, string.Join(", ", superseded), keepPath);
 
                 // Self-paced (Concat, never Merge): one delete at a time, the same shape the expiry
-                // sweep uses, so a client that re-authorized many times drains gently.
+                // sweep uses, so a client that re-authorized many times drains gently. Each
+                // delete's own bool is what it REMOVED (true) or found already absent (false);
+                // a fault is caught per path and counts as not removed.
                 return Observable.Concat(superseded.Select(path => tokens.DeleteToken(path)
-                        .Catch<bool, Exception>(ex =>
+                        .Select(removed => (Path: path, Removed: removed))
+                        .Catch<(string Path, bool Removed), Exception>(ex =>
                         {
                             logger.LogWarning(ex,
                                 "OAuth: could not supersede previous token {Path} — it stays live until "
                                 + "the next authorization or its expiry", path);
-                            return Observable.Return(false);
+                            return Observable.Return((Path: path, Removed: false));
                         })))
-                    .LastOrDefaultAsync()
+                    .ToList()
+                    .Do(outcomes =>
+                    {
+                        var removed = outcomes.Where(o => o.Removed).Select(o => o.Path).ToArray();
+                        logger.LogInformation(
+                            "OAuth: superseded {RemovedCount} of {Count} previous token(s) for user {UserId}, "
+                            + "client label {Label} — removed {RemovedPaths}; kept {KeptPath}",
+                            removed.Length, outcomes.Count, userId, label,
+                            removed.Length == 0 ? "(none)" : string.Join(", ", removed), keepPath);
+                    })
                     .Select(_ => System.Reactive.Unit.Default);
             })
             .Catch<System.Reactive.Unit, Exception>(ex =>
