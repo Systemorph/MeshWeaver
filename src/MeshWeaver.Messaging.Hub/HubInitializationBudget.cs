@@ -22,20 +22,24 @@ namespace MeshWeaver.Messaging;
 ///
 /// <para><b>The ladder.</b> Exactly one value is configured per hub — its
 /// <c>MessageHubConfiguration.InitializationBudget</c>, which is either an explicit
-/// <c>WithStartupTimeout</c> or <see cref="Root"/> for a hub with no parent. Everything nested
+/// <c>WithStartupTimeout</c> or <see cref="Root"/> for a hub nothing is waiting on. Everything nested
 /// inside it is DERIVED by <see cref="Nest"/>, which is strictly contracting, so the ordering holds
 /// by construction and cannot drift apart again:</para>
 ///
 /// <code>
-/// InitializationBudget            rung 1 — this hub's whole initialization, as its HOST bounds it
+/// InitializationBudget            rung 1 — this hub's whole initialization, as whatever is waiting
+///                                         on it bounds it
 ///   ├─ NestedInitializationBudget rung 2 — one wait inside it: the BuildupAction Concat, and the
 ///   │                                      DataContext time-box. Siblings over disjoint subjects.
-///   └─ a hosted hub's rung 1      rung 3 — Nest(rung 2), because this hub's rung-2 waits are what
-///                                          wait on the hosted hub reaching Started.
+///   └─ rung 1 of a hub born      rung 3 — Nest(rung 2), because this hub's rung-2 waits are what
+///      INSIDE this init                    wait on that hub reaching Started. HOSTED is not
+///                                          ENCLOSED: a per-node hub is hosted by the mesh root but
+///                                          activated on demand long after it started, so nothing
+///                                          waits on it and it takes Root unchanged.
 /// </code>
 ///
-/// <para>At the default that reads <b>120 s / 115 s</b> for a hub with no parent, <b>110 s / 105 s</b>
-/// for the hub it hosts, and so on down. The ROOT value is unchanged; only the derived rungs are
+/// <para>At the default that reads <b>120 s / 115 s</b> for a hub nothing is waiting on, <b>110 s / 105 s</b>
+/// for a hub born inside that one's initialization, and so on down. The ROOT value is unchanged; only the derived rungs are
 /// new. <b>No bound was widened and none was narrowed to make a symptom go away</b> — the change is
 /// that a hang is attributable, because the level nearest the stall is now the level that reports
 /// it.</para>
@@ -43,11 +47,11 @@ namespace MeshWeaver.Messaging;
 public static class HubInitializationBudget
 {
     /// <summary>
-    /// Rung 1 for a hub with no parent: the upper bound on how long any initialization may run
+    /// Rung 1 for a hub nothing is waiting on: the upper bound on how long any initialization may run
     /// before it is declared FAILED rather than wedging forever behind a closed gate. Generous on
     /// purpose — every legitimate init, including a cold storage read, completes well inside it;
     /// only a genuine hang trips it. A hub tightens it with <c>WithStartupTimeout</c>, and every
-    /// hub it hosts contracts from there through <see cref="Nest"/>.
+    /// hub born inside its initialization contracts from there through <see cref="Nest"/>.
     /// </summary>
     public static readonly TimeSpan Root = TimeSpan.FromSeconds(120);
 
