@@ -32,7 +32,7 @@ class ResolverTests(unittest.TestCase):
     def resolve(self, store, expected='', code=0, require=False, ambient=''):
         output = self.root / 'outputs'
         result = subprocess.run(['bash', '-euo', 'pipefail', '-c', ACTION.action_shell('resolve-artifact-store')],
-                                capture_output=True, text=True, timeout=30,
+                                capture_output=True, text=True, timeout=30, cwd=self.root,
                                 env={**os.environ, 'CI_ARTIFACT_ACTION_PATH': str(ROOT / '.github/actions/resolve-artifact-store'),
                                      'CI_ARTIFACT_STORE': store, 'CI_ARTIFACT_EXPECT_STORE_ID': expected,
                                      'CI_ARTIFACT_REQUIRE_STORE_ID': str(require).lower(),
@@ -69,6 +69,11 @@ class ResolverTests(unittest.TestCase):
     def test_unsupported_named_backend_is_refused(self):
         output, _ = self.resolve('azblob:account/container', code=1)
         self.assertEqual('', output)
+
+    def test_relative_store_is_refused_before_publishing_outputs(self):
+        output, result = self.resolve('file:share', code=1)
+        self.assertEqual('', output)
+        self.assertIn('absolute mounted directory', result.stderr)
 
     def test_reusable_requires_producer_identity_before_resolving_its_own_store(self):
         output, result = self.resolve(f'file:{self.share}', code=1, require=True)
