@@ -312,6 +312,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - **Start here:** [Plugins](Plugins) — node repos from git, no NuGet
 - [Plugin Manual](PluginAuthoring) — author · publish · install · own registry
 - [Plugin Registry](PluginRegistry) — memex re-serves plugins over REST
+- [The Plugin Registry Index's Per-Request Cost](PluginRegistryIndexCost) — the authenticated bundle index evaluates entitlement per package and queries the mesh per request (12–19 s to first byte for 8.7 KB), and that one cost reads as two unrelated incidents because it meets a 10 s auth budget and an unbounded assembly stage; why widening a client budget moved the symptom instead of fixing it
 - [Webhook Inbox](WebhookInbox) — external services deliver into {target}/_Inbox
 - [Plugin Packaging](PluginPackaging) — bundles, the framework identity, and the `Release` node that links a release to its assemblies per architecture
 - [Install Readability](InstallReadability) — the two doors an install can open, and the cover-grant deadlock detector
