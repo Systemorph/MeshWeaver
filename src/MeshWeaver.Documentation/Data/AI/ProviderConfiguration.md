@@ -156,10 +156,21 @@ deployment itself is faulting (HTTP 5xx). No local check can predict that — on
 answer reveals it — so the requirement is not "never fall back onto a throttled model", it is **fail
 legibly when the provider refuses**.
 
-`ProviderFailureClassifier` names the condition from the exception chain (typed
-`HttpRequestException.StatusCode`, else the conventional `Status: NNN` banner that Azure.Core and
-System.ClientModel both render), and `ThreadExecution` builds the prose at write time off the round's
-own `AccessContext.Locale`:
+`ProviderFailureClassifier` names the condition by walking the whole exception chain — the streaming
+pipeline wraps provider faults, so the typed transport exception is rarely the outermost one — and it
+has three probes, in order of authority: `HttpRequestException.StatusCode` (typed, and what the
+plain-HTTP providers raise), then **two different** message banners.
+
+🚨 There are two because the SDKs do not agree, and assuming one is what made every OpenAI/OpenRouter
+refusal fall through unclassified for a while. Azure.Core writes `Status: 429 (Too Many Requests)`;
+`System.ClientModel` writes `HTTP 402 (: )` — i.e. `HTTP {status} ({reason}: {code})`, which contains
+no `Status:` at all. Both are matched on **text** rather than on those exception types, deliberately,
+so this file needs no provider-SDK dependency and keeps working for any client rendering the same
+conventional banner. Parsing is anchored on the digits immediately after the marker and bounded to
+three of them, so a header dump's `HTTP/1.1`, a body that merely mentions a status, or a longer digit
+run (a token count, an id) yields nothing rather than a bogus code.
+
+`ThreadExecution` then builds the prose at write time off the round's own `AccessContext.Locale`:
 
 - **402** → `chat.modelQuotaExhausted`. Separate from 429 because **waiting does not help**: the
   account is out of credit, so the remedy is a top-up or a model on a provider that still has budget.
@@ -170,8 +181,9 @@ own `AccessContext.Locale`:
 - **A credential the provider REJECTS** → `chat.modelCredentialRejected`, naming the model and the
   status. This is a **permanent verdict, not a transient one**, which is what distinguishes it from
   every entry above: the key has to be replaced before any round on that model can succeed, so the
-  prose says so and deliberately does not offer "submit again later". See the gap note below — the
-  platform string exists; the engine-side classification that selects it is the counterpart half.
+  prose says so and deliberately does not offer "submit again later". ⚠️ **Not yet wired** — unlike
+  every other entry in this list, the platform string exists and the engine-side branch that selects
+  it does not. Read the gap note below before relying on this row.
 - **The stream ended abnormally** — no HTTP status is involved, so these are named ahead of the
   status switch, from the exception rather than from a code: the provider went silent mid-answer
   (`chat.modelStreamStalled`) or sent a payload the wire protocol cannot represent
