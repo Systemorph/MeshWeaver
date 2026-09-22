@@ -5,6 +5,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -184,13 +185,17 @@ public static class OverviewLayoutArea
                 => c2.GetString(),
             _ => null
         };
+        // Preserve the generic view's markdown surface: an unrelated typed Content/Body property
+        // alone does not make a data record a document. Once admitted, current source wins over HTML.
+        if (rawMarkdown is null && string.IsNullOrWhiteSpace(node.PreRenderedHtml))
+            return null;
         // The page header already renders node.Name as the H1. If the body ALSO opens with a top-level
         // heading that repeats the name (a common authoring habit — e.g. a course/markdown page starting
         // `# Agentic Engineering`), it shows the title TWICE. Strip that leading duplicate from both the
         // raw markdown and the pre-rendered HTML — only when it MATCHES the name, so a different first
         // heading is left untouched.
         var name = node.Name;
-        var html = node.PreRenderedHtml;
+        var html = MarkdownBody.Render(node);
         if (!string.IsNullOrEmpty(name))
         {
             rawMarkdown = StripLeadingTitleMarkdown(rawMarkdown, name);
@@ -201,7 +206,7 @@ public static class OverviewLayoutArea
         var hasRaw = !string.IsNullOrWhiteSpace(rawMarkdown);
         if (!hasHtml && !hasRaw)
             return null;
-        return new MarkdownControl(rawMarkdown ?? "") { Html = html }
+        return new MarkdownControl(rawMarkdown ?? "") { Html = html, NodePath = node.Path }
             .WithStyle("padding: 0 0 48px 0;");
     }
 

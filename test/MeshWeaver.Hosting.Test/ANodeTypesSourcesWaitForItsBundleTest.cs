@@ -134,12 +134,15 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         // Importing activates the type and can already dispatch its first compile. A source
         // fingerprint does not mean that compile has finished: seeding at that point races its
         // terminal stamp, which honestly changes provenance back to Compiled. Establish the
-        // completed initial build before replacing it with the adoption this test exercises.
+        // completed initial build and the import's handled release request before replacing them
+        // with the adoption this test exercises.
         var adoptedFingerprint = await FingerprintWhen(d =>
                 d.CurrentSourceFingerprint is { Length: > 0 }
                 && d.CompilationStatus is CompilationStatus.Ok
                 && d.BuildProvenance is BuildProvenance.Compiled
-                && !d.IsDirty,
+                && !d.IsDirty
+                && d.RequestedReleaseAt is { } requested
+                && d.LastReleaseRequestHandledAt >= requested,
             cancellationToken);
         Output.WriteLine($"live fingerprint at {CommitA[..8]}: {adoptedFingerprint}");
         StageBundle("widget-a.zip", adoptedFingerprint);

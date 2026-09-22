@@ -132,10 +132,12 @@ public interface IMeshService
     IObservable<T?> Select<T>(string path, string property);
 
     /// <summary>
-    /// Looks up a MeshNode at the exact path and emits its PreRenderedHtml.
-    /// Used during Blazor prerender for instant display. Returns an observable
-    /// of the latest <see cref="MeshNode.PreRenderedHtml"/> (or <c>null</c> when
-    /// no node exists or no HTML is cached). Subscribers compose with
+    /// Reads a MeshNode from its owner at the exact path and renders its current document source.
+    /// Used during Blazor prerender for instant display. Cached HTML is a fallback only
+    /// when the node carries no source, so an edit or an explicitly empty source cannot
+    /// be replaced by stale <see cref="MeshNode.PreRenderedHtml"/>. Emits <c>null</c> when
+    /// no node or document exists. The one-shot read avoids an eventually consistent query
+    /// snapshot after an edit. Subscribers compose with
     /// <c>Select</c>/<c>Subscribe</c> — no await, no <see cref="Task"/> bridge.
     /// </summary>
     IObservable<string?> GetPreRenderedHtml(string path);

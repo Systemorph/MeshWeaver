@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Memex.Portal.Shared.Seo;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -22,28 +23,58 @@ public class SeoPageBodyTest
         JsonSerializer.SerializeToElement(value);
 
     [Fact]
-    public void ANodeThatCarriesTheMirror_ServesItUnchanged()
+    public void ANodeWithoutSource_StillServesItsMirror()
     {
-        var node = Node(new MarkdownContent { Content = "# Ignored" }) with { PreRenderedHtml = "<p>mirrored</p>" };
+        var node = Node(null) with { PreRenderedHtml = "<p>mirrored</p>" };
         Assert.Equal("<p>mirrored</p>", new SeoPageData(node, null, null).Body);
     }
 
     [Fact]
-    public void AnEmptyMirror_FallsThroughToTheContent_LikeANullOne()
+    public void AnEmptyMirror_WithoutSource_FallsThroughToTheContentCache()
     {
-        var node = Node(new MarkdownContent { Content = "# Title", PrerenderedHtml = "<h1>Title</h1>" }) with { PreRenderedHtml = "" };
+        var node = Node(Json(new { prerenderedHtml = "<h1>Title</h1>" })) with { PreRenderedHtml = "" };
         Assert.Equal("<h1>Title</h1>", new SeoPageData(node, null, null).Body);
     }
 
-    [Fact]
-    public void TypedMarkdown_WithoutTheMirror_ServesItsOwnPrerenderedHtml()
+    [Theory]
+    [InlineData("markdown")]
+    [InlineData("json-content")]
+    [InlineData("json-content-pascal")]
+    [InlineData("body")]
+    [InlineData("json-body")]
+    [InlineData("string")]
+    [InlineData("json-string")]
+    [InlineData("json-object")]
+    [InlineData("json-value")]
+    public void AuthoredSource_WinsOverBothStaleHtmlCaches(string shape)
     {
-        // The exact shape the partitioned Postgres cross-schema read returns for a documentation
-        // page: typed content that carries prerenderedHtml, and a node-level mirror that is null.
-        var node = Node(new MarkdownContent { Content = "# Title", PrerenderedHtml = "<h1>Title</h1>" });
-        Assert.Null(node.PreRenderedHtml);
-        Assert.Equal("<h1>Title</h1>", new SeoPageData(node, null, null).Body);
+        const string source = "Current **page**";
+        const string stale = "<p>Outdated cache</p>";
+        var content = SourceContent(shape, source, stale);
+        var node = Node(content) with { PreRenderedHtml = stale };
+        var html = new SeoPageData(node, null, null).Body;
+
+        Assert.Contains("Current <strong>page</strong>", html);
+        Assert.DoesNotContain("Outdated", html);
+        // The content cache cannot win when the transient node-level mirror is absent either.
+        Assert.Equal(html, new SeoPageData(node with { PreRenderedHtml = null }, null, null).Body);
     }
+
+    private sealed record Cover(string Body, string? PrerenderedHtml);
+
+    private static object SourceContent(string shape, string source, string stale) => shape switch
+    {
+        "markdown" => new MarkdownContent { Content = source, PrerenderedHtml = stale },
+        "json-content" => Json(new { content = source, prerenderedHtml = stale }),
+        "json-content-pascal" => Json(new { Content = source, PrerenderedHtml = stale }),
+        "body" => new Cover(source, stale),
+        "json-body" => Json(new { body = source, prerenderedHtml = stale }),
+        "string" => source,
+        "json-string" => Json(source),
+        "json-object" => new JsonObject { ["body"] = source, ["prerenderedHtml"] = stale },
+        "json-value" => JsonValue.Create(source)!,
+        _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+    };
 
     [Fact]
     public void TypedMarkdown_WithNoPrerender_IsRenderedNow()
@@ -53,11 +84,39 @@ public class SeoPageBodyTest
         Assert.Contains("<strong>world</strong>", body);
     }
 
-    [Fact]
-    public void UntypedJson_PrerenderedHtmlMember_WinsOverMarkdown()
+    [Theory]
+    [InlineData("markdown", "")]
+    [InlineData("json-content", "")]
+    [InlineData("json-content-pascal", "")]
+    [InlineData("body", "")]
+    [InlineData("json-body", "")]
+    [InlineData("string", "")]
+    [InlineData("json-string", "")]
+    [InlineData("json-object", "")]
+    [InlineData("json-value", "")]
+    [InlineData("markdown", " \n\t")]
+    [InlineData("json-body", " \n\t")]
+    public void ClearingTheSource_DoesNotResurrectCachedContent(string shape, string source)
     {
-        var node = Node(Json(new { content = "# raw", prerenderedHtml = "<h1>ready</h1>" }));
-        Assert.Equal("<h1>ready</h1>", new SeoPageData(node, null, null).Body);
+        const string stale = "<h1>Deleted content</h1>";
+        var node = Node(SourceContent(shape, source, stale)) with { PreRenderedHtml = stale };
+        Assert.True(string.IsNullOrWhiteSpace(new SeoPageData(node, null, null).Body));
+    }
+
+    [Fact]
+    public void EditingTheSource_UsesTheInteractiveRenderer_WithoutRefreshingCachedHtml()
+    {
+        var original = MarkdownContent.Parse("Original page", "Space/Page", "Space/Page");
+        var node = Node(original) with { PreRenderedHtml = original.PrerenderedHtml };
+        Assert.Contains("Original page", new SeoPageData(node, null, null).Body);
+
+        const string changed = "## Current page\n\nSee [next](Next).\n\n<div class=\"hero\">Authored layout</div>";
+        node = node with { Content = original with { Content = changed } };
+        var html = new SeoPageData(node, null, null).Body;
+        Assert.Equal(MarkdownViewLogic.Render(changed, node.Path, node.Path).Html, html);
+        Assert.Contains("Current page", html);
+        Assert.Contains("class=\"hero\"", html);
+        Assert.DoesNotContain("Original page", html);
     }
 
     [Fact]
