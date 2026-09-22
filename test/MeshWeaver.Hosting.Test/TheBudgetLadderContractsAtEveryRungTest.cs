@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using MeshWeaver.Mesh.Services;
 using Xunit;
@@ -86,7 +86,11 @@ public class TheBudgetLadderContractsAtEveryRungTest
 
         // Iterate well past the four rungs the platform uses: a future rung 5 must be able to nest
         // inside rung 4 by the same rule, and this is what says the rule supports it.
-        var seen = new List<TimeSpan> { enclosing };
+        //
+        // 🚨 The SEED is in the set on purpose: the uniqueness assertion below is what catches a
+        // collapse between rung 1 and rung 2 — the exact 30 = 30 shape #1198 was — so dropping
+        // `Timeout` itself would quietly remove the pair this test exists for.
+        var seen = ImmutableList.Create(enclosing);
         for (var level = 0; level < 12; level++)
         {
             var nested = options.Nest(enclosing);
@@ -96,7 +100,7 @@ public class TheBudgetLadderContractsAtEveryRungTest
             nested.Should().BePositive(
                 $"level {level + 1} collapsed to zero or below; the contraction must stay inside "
                 + "the positive domain or a nested bound becomes an instant refusal");
-            seen.Add(nested);
+            seen = seen.Add(nested);
             enclosing = nested;
         }
 

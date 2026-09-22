@@ -3928,27 +3928,36 @@ public static class MeshExtensions
                 ex =>
                 {
                     var isTimeout = ex is TimeoutException;
-                    // 🚨 THE ACCUMULATOR IS THE AUTHORITY, `ex.Data` only a copy of it (#1198).
+                    // 🚨 BOTH SOURCES, UNION'd — neither one alone can be trusted to be complete
+                    // (#1198).
                     //
-                    // `ex.Data[DeletedPathsDataKey]` is stamped by exactly two sites — the commit
-                    // stage's own TimeoutAtStage arm and the drain-pass fold — and BOTH read
-                    // `SnapshotProgress()` to do it. So `ex.Data` can never hold a path this closure's
-                    // `deletedProgress` does not: every removal goes through `RecordDeleted`.
+                    // `ex.Data["DeletedPaths"]` is written by SEVERAL sites, and they are fed by the
+                    // same set of real removals: the commit stage's own TimeoutAtStage arm and the
+                    // drain-pass fold read `SnapshotProgress()` directly, the max-pass branch writes
+                    // the drain fold's accumulated total, and `HierarchicalPathDeletion` attaches its
+                    // OWN builder — which is appended in a `.Do(...)` on the same `deleteOne` emission
+                    // `RecordDeleted` appends from. (Two of those spell the key as a bare literal
+                    // rather than through DeletedPathsDataKey, which is why an inventory taken by
+                    // grepping the constant reads short.)
                     //
-                    // What `ex.Data` CAN be is absent. A terminal raised by a plain `.Timeout(...)`
-                    // that is not one of the six stages — `ConfirmDescendantGone`'s absence probe, a
-                    // leaf's own re-entrant NestedTimeout surfacing through this handler, i.e. exactly
-                    // the `stage=unattributed` case — carries no `Data` at all, and reading `partial`
-                    // off it alone printed `partial-deleted=0`. That zero is NOT A MEASUREMENT: it is
-                    // "not measured" wearing the same rendering as "none", which is the defect class
-                    // the `unanswered=` comment below spells out for its own field, and the ORIGINAL
-                    // #1198 occurrence is an instance of it — a bare
+                    // So neither side is provably a SUPERSET of the other: two builders fed off one
+                    // emission with no ordering between them means an in-flight removal can be in
+                    // either and not yet the other. Hence the union rather than a preference.
+                    //
+                    // What `ex.Data` CAN be is absent entirely. A terminal raised by a plain
+                    // `.Timeout(...)` that is not one of the six stages — `ConfirmDescendantGone`'s
+                    // absence probe, a leaf's own re-entrant NestedTimeout surfacing through this
+                    // handler, i.e. exactly the `stage=unattributed` case — carries no `Data` at all,
+                    // and reading `partial` off it alone printed `partial-deleted=0`. That zero is NOT
+                    // A MEASUREMENT: it is "not measured" wearing the same rendering as "none", which
+                    // is the defect class the `unanswered=` comment below spells out for its own
+                    // field, and the ORIGINAL #1198 occurrence is an instance of it — a bare
                     // `System.TimeoutException: The operation has timed out.` reported over a subtree
                     // whose real progress this closure knew.
                     //
-                    // Reading the accumulator closes it for EVERY terminal, not just for the two that
-                    // remembered to stamp: a torn subtree is reported as torn whatever raised the
-                    // fault. The union costs nothing and cannot under-report either side.
+                    // Reading the accumulator too closes it for EVERY terminal, not just for the ones
+                    // that stamped: a torn subtree is reported as torn whatever raised the fault. The
+                    // union costs nothing and cannot under-report either side.
                     var recordedProgress = SnapshotProgress();
                     var stampedProgress = ex.Data[DeletedPathsDataKey] as IReadOnlyList<string>
                         ?? Array.Empty<string>();
