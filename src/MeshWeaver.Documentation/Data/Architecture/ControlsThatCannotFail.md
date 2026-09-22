@@ -1,7 +1,7 @@
 ---
 Name: Controls That Cannot Fail
 Category: Architecture
-Description: A control whose green is guaranteed by construction is not a control. Fourteen measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, a generator whose failure mode is a success line, a guard handed an input that could not fail, a probe whose defect had already been fixed in its sibling method, and two counters over different populations printed as one measurement — and the one question that catches them all.
+Description: A control whose green is guaranteed by construction is not a control. Fifteen measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, a generator whose failure mode is a success line, a guard handed an input that could not fail, a probe whose defect had already been fixed in its sibling method, two counters over different populations printed as one measurement, and a guard over a root that does not exist — and the one question that catches them all.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/><path d="M12 8v8" opacity="0.25"/></svg>
 ---
 
@@ -53,7 +53,7 @@ instances. The family is larger, and it is worth recognising by shape.
 | **Two counters over different populations** | `78 adopted` beside `baked=5`, ten seconds apart | neither is wrong; the units, denominators and sources differ and nothing says so |
 | **One contract serving two consumers with opposite needs** | `[]` from a speculative compile: *no squiggles* to an editor, *approved* to a tool rendering `{ok}` | the code is right for one caller, so reviewing it on its own terms confirms it |
 
-## Fourteen measured instances
+## Fifteen measured instances
 
 The first six were found in a single day, across tests, CI, publication and ops. Instances 7 and 8
 were found **while writing this page** — one by its author, one by the session that supplied instances
@@ -761,6 +761,44 @@ says so in the same line that reports the verdict.
 > instruments as contradicting each other, make each one state what it counted.
 
 Full account: [Adoption and the Sweep Count Different Things](/Doc/Architecture/AdoptionAndTheSweepCountDifferentThings).
+
+### 15. A guard over a root that does not exist — and a detector nobody had asked to detect
+
+`NoLiteralNulInSourceGuard` is the only thing standing between a re-introduced literal U+0000 and an
+invisible production write failure — jsonb cannot hold a NUL, the write dies with `22P05` and a
+redacted DETAIL, and nothing upstream complains
+([#1449](https://github.com/Systemorph/MeshWeaver/issues/1449)). Its predicate is *"no scanned text
+file contains a NUL"*, which an empty universe satisfies, and it had three ways to reach one:
+
+- it declared six roots and skipped any that were absent through `Where(Directory.Exists)` — and
+  `content/` **does not exist in this repository**, so one declared root had been scanning nothing
+  since the day it was written;
+- it stated no denominator, so a filter that stopped matching (an extension list, an exclusion) would
+  have examined nothing and answered green;
+- it carried no control that its detector detects — neuter `IndexOf(NUL)` and the guard stays green
+  over the whole tree;
+- and two more surfaced in review: a file it could not READ was counted as clean, and the
+  extension allow-list skipped text the roots hold (`.svg`, `.allow`, `.bicep`, `.csv`, `.tpl`,
+  `.csx`, and every extensionless `Dockerfile` and shim) — so "the roots are covered" was itself a
+  claim the scan could not back.
+
+Measured on the tree as it stood: `src=3319 test=1374 samples=676 memex=119 clients=51` files
+examined, and `.github=146 tools=49 scripts=12 deploy=216` hand-authored text files it never looked
+at. The fix is the second half of the diagnostic, applied at every seam: every declared root must
+exist (an absent one is named, not skipped); every root must match at least one file, and the
+per-root counts are written to the test output on the SUCCESS path too, since xUnit prints an
+assertion message only on failure; an unreadable file is a scan failure, named, never a clean one;
+text is classified by SHAPE (an allow-listed extension, or none at all) so a binary checked in
+without an extension fails loudly; and a second test plants a NUL on line 3 of a `.json` and on
+line 2 of an extensionless `Dockerfile` in a throwaway tree, beside a NUL in a `.png` and one under
+`bin/`, and must report exactly those two over three examined files. Controls: detector neutered →
+the planted-NUL test fails (`Assert.Single() Failure: The collection was empty`) while the main
+guard stays green — which is the vacuity, caught; `content` re-declared → the main guard fails
+naming `content`. Denominator after the widening: **6,265** files over nine roots, 0 offenders.
+
+> A root list is a claim about coverage. `Directory.Exists` turns a false claim into a smaller
+> universe instead of a red — and a smaller universe is the one thing a "nothing bad is present"
+> predicate cannot see.
 
 ## What the whole family has in common
 
