@@ -360,6 +360,95 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             "normalising the reason must not cost the sender the attribution it travels with");
     }
 
+    private static readonly Address RecognisedAddress = new("recognised", "1");
+
+    /// <summary>
+    /// 🚨 Systemorph/MeshWeaver#4866 — the discard NACK told the sender to <i>"retry to get the
+    /// authoritative answer"</i> in a sentence no reader could tell was retryable.
+    ///
+    /// <para><b>The defect.</b> This site hand-wrote its refusal (<c>"Hub X was disposed
+    /// while …"</c>) instead of composing it through <see cref="ShutdownNack"/>, so it opened with
+    /// no <see cref="ShutdownNack.Banner"/>. Three independent classifiers decide retryability by
+    /// MESSAGE TEXT rather than by <see cref="ErrorType"/> —
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c>,
+    /// <c>AreaErrorClassifier.IsTransientHubFailure</c>/<c>IsHubRecycling</c> and
+    /// <c>OrleansRoutingService.ClassifyRoutedFailure</c> — and none of their markers appears in
+    /// that sentence. So the transient <see cref="ErrorType.ShuttingDown"/> the test above pins was
+    /// carried by an envelope the consumers do not read, and every consumer with recovery
+    /// machinery took the corpse's answer as FINAL: the cache did not re-probe, the layout area did
+    /// not re-arm, and the accepted work was genuinely lost rather than re-asked. That is the
+    /// difference between the 105 discards of #4866 being retryable noise and being 105 requests
+    /// nobody ever answers.</para>
+    ///
+    /// <para><b>Why this is not the ErrorType assertion again.</b>
+    /// <see cref="ShutdownNack.IsAnsweredByOwner"/> is deliberately NOT an ErrorType test — the
+    /// routing layer mints that same classification off the same text, so an ErrorType test answers
+    /// the question with the routing layer's echo of it. The banner is the only evidence that
+    /// identifies the speaker, and the drain was the one producer in this service not emitting it.
+    /// <c>OwnerAnswerRecognitionGuard</c> pins the same contract over every producer's sentence;
+    /// this test is the LIVE arm, over the delivery the production path actually discards.</para>
+    /// </summary>
+    [Fact]
+    public async Task ADiscardedDeferredDelivery_IsRecognisedAsTheOwnersAnswer()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            RecognisedAddress,
+            c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse))
+                .WithInitializationGate("recognised-gate-never-opens", _ => false)
+                .WithHandler<GatedRequest>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new GatedRequest(), o => o.WithTarget(RecognisedAddress))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        host.Post(new DisposeRequest { Reason = TheStatedReason },
+            o => o.WithTarget(RecognisedAddress));
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+        failure.Failure.Should().NotBeNull();
+        Output.WriteLine(failure.Failure!.Message ?? "(no message)");
+
+        ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, RecognisedAddress).Should().BeTrue(
+            "the hub that discarded the delivery IS the speaker, and every consumer that decides "
+            + "'retry the fresh activation' vs 'take this as final' reads the banner to know it — "
+            + "compose the refusal through ShutdownNack rather than widening the predicate");
+        ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, RecognisedAddress.Path)
+            .Should().BeTrue(
+                "a reader that resolved the node by PATH holds nothing else, and the two halves "
+                + "must answer identically or recognition is a coin toss on which one is at hand");
+
+        ShutdownNack.ExtractActivationTag(failure.Failure.Message).Should().NotBeNullOrEmpty(
+            "a consumer re-probing this address cannot otherwise tell ONE hub wedged in teardown "
+            + "from a recycle storm — those have opposite fixes (#2025), and every ShuttingDown "
+            + "NACK minted for a delivery the reader can re-probe carries the activation tag");
+
+        // NEGATIVE CONTROL — the predicate must still be able to say no, or the assertions above
+        // are satisfied by anything that mentions an address.
+        ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, new Address("recognised", "2"))
+            .Should().BeFalse(
+                "a DIFFERENT address is not this owner answering; if this passes the refusal is "
+                + "being recognised by something other than its own banner");
+
+        // POSITIVE CONTROLS — the facts the refusal already carried are ADDED to, never traded
+        // against, which is how a rewrite of this sentence reads as a fix while losing evidence.
+        failure.Failure.Message.Should().Contain("recognised-gate-never-opens",
+            "the gate that actually held the delivery (#3712/#3789) survives the rewording");
+        failure.Failure.Message.Should().Contain(TheStatedReason,
+            "and so does WHY the teardown happened, as its poster stated it");
+        failure.Failure.ErrorType.Should().Be(ErrorType.ShuttingDown,
+            "the envelope was never the broken half — it must stay transient too");
+    }
+
     /// <summary>
     /// Polls the public disposal diagnostics (which report <c>deferred=&lt;N&gt;</c> per hub,
     /// walking hosted hubs) until something is parked. The gated hub is the only hub in this test

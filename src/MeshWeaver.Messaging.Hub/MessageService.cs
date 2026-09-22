@@ -3345,11 +3345,31 @@ public class MessageService : IMessageService
                     + "this hub went down with work still parked behind its gates.",
                     Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
                     gatesAtDeferral, hub.RunLevel, disposal);
-            NackThroughParent(delivery,
-                $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
-                + $"(id={delivery.Id}) was still deferred; initialization gates closed at deferral: "
-                + $"[{gatesAtDeferral}] — the message was never processed. The teardown was {disposal}. "
-                + "The address may reactivate (recycle / restart); retry to get the authoritative answer.");
+            // 🚨 COMPOSED THROUGH ShutdownNack, never hand-written (#4866). This was the one
+            // ShuttingDown NACK this service minted without the seam, and the cost was invisible:
+            // the ENVELOPE said transient (NackThroughParent stamps ErrorType.ShuttingDown) while
+            // the TEXT said nothing of the kind, and the three classifiers that decide "re-probe
+            // the fresh activation" vs "take this answer as final" read the TEXT —
+            // MeshNodeStreamCache.IsTransientOwnerFailure, AreaErrorClassifier.IsTransientHubFailure
+            // /IsHubRecycling and OrleansRoutingService.ClassifyRoutedFailure. "Hub X was disposed
+            // while …" matches none of their markers and carries no ShutdownNack.Banner, so
+            // ShutdownNack.IsAnsweredByOwner answered "the routing layer refused you". Every
+            // consumer with recovery machinery therefore took a recycling hub's answer as terminal
+            // and did NOT ask again — so a delivery this hub ACCEPTED and threw away was genuinely
+            // lost, which is what makes the line above an Error rather than teardown noise. The
+            // sentence ends "retry to get the authoritative answer" and the readers it says that to
+            // could not tell it was retryable.
+            //
+            // 🚨 ActivationTag() rides here for the same reason it rides on the late-turn site: a
+            // consumer re-probing this address must tell ONE hub wedged in teardown from a recycle
+            // storm (#2025), and the per-DELIVERY id right after it varies on every retry against
+            // the SAME activation.
+            NackThroughParent(delivery, ShutdownNack.RetryForTheAuthoritativeAnswer(
+                Address,
+                $"RunLevel={hub.RunLevel}, {ActivationTag()}",
+                $"{delivery.Message.GetType().Name} (id={delivery.Id}) was still deferred; "
+                + $"initialization gates closed at deferral: [{gatesAtDeferral}] — the message was "
+                + $"never processed. The teardown was {disposal}"));
         });
 
         // No buffers to Complete — ScheduleNotify drops post-shutdown messages and the
