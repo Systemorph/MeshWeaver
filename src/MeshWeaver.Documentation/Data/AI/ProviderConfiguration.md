@@ -221,6 +221,13 @@ loaded platform does not define is what that guard is defending against.
 
 ### The gap this table currently has: a rejected credential
 
+> 🕐 **This subsection is provisional and names its own expiry.** It describes a half-landed pair — the
+> platform string exists here, the engine-side branch does not yet. **Delete it the moment
+> `ProviderFailureClassifier` gains a 401 predicate and the switch gains its arm**, and fold
+> `chat.modelCredentialRejected` into the list above as an ordinary entry. Left standing past that
+> point it becomes an actively false claim about a repository this page cannot see, which is the
+> failure mode the subsection above warns about — so do not re-measure it here, measure it there.
+
 A provider that **rejects the credential** answers `401` (Anthropic renders it `PermissionDenied`).
 Measured against `MeshWeaver.Plugins@main`, nothing claims it: `ProviderFailureClassifier` has
 predicates for 402, 404, 429 and 5xx and none for 401; the `providerStatus` switch in
