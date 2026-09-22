@@ -3576,17 +3576,29 @@ public static class PackageInstaller
                 .ToArray();
             if (unknown.Length == 0 || persistence is null)
                 return Observable.Return(System.Reactive.Unit.Default);
+            // 🚨 The SHARED verdict, not `persistence.Exists` — occupancy is not registration
+            // (MeshWeaver#5008/#2231). A Store plugin's root sits at the bare path `Feedback` while
+            // its declaration is `Feedback/Feedback`, so an `Exists` probe passed a package whose
+            // nodes named the bare path, and every instance it installed then bound the plugin
+            // root's hub configuration instead of a type's. This is the installer's own copy of the
+            // rule; the singular and bulk create boundaries carry the same one, and a copy that
+            // disagrees is how an install lands what a create refuses.
             return unknown
-                .Select(t => persistence.Exists(t).Take(1).Select(exists => (Type: t, Exists: exists)))
+                .Select(t => NodeTypeResolution.Resolve(hub, t).Take(1)
+                    .Select(verdict => (Type: t, Verdict: verdict)))
                 .ToObservable().Merge().ToList()
                 .SelectMany(results =>
                 {
-                    var missing = results.Where(r => !r.Exists).Select(r => r.Type).ToArray();
+                    var missing = results.Where(r => !r.Verdict.Resolves).ToArray();
                     return missing.Length == 0
                         ? Observable.Return(System.Reactive.Unit.Default)
+                        // Name the occupant where there is one: "not registered" would send the
+                        // packager off to create a node that is already sitting at that path.
                         : Observable.Throw<System.Reactive.Unit>(new InvalidOperationException(
                             $"Install of '{manifest.Id}' failed: NodeType(s) not registered: "
-                            + string.Join(", ", missing)));
+                            + string.Join(", ", missing.Select(m => m.Verdict.Occupant is { } occupant
+                                ? $"{m.Type} ({occupant})"
+                                : m.Type))));
                 });
         }
 

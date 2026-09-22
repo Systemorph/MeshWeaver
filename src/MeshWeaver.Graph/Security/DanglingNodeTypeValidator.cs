@@ -68,20 +68,47 @@ public sealed class DanglingNodeTypeValidator : INodeValidator
         if (!NodeTypeResolution.ChangesNodeType(node.NodeType, context.ExistingNode?.NodeType))
             return Observable.Return(NodeValidationResult.Valid());
 
-        return NodeTypeResolution.Resolves(_hub, node.NodeType)
-            .Select(resolves =>
+        return NodeTypeResolution.Resolve(_hub, node.NodeType)
+            .Select(verdict =>
             {
-                if (resolves)
+                if (verdict.Resolves)
                     return NodeValidationResult.Valid();
-                _logger.LogWarning(
-                    "DanglingNodeTypeGuard: blocked update of '{Path}' — NodeType '{NodeType}' "
-                    + "(was '{ExistingNodeType}') resolves to no node, so the instance would have "
-                    + "no per-node hub and would read as Unavailable forever.",
-                    node.Path, node.NodeType, context.ExistingNode?.NodeType);
+                // 🚨 Two different negatives, two different remedies, and the CONSEQUENCE differs
+                // too (#5008/#2231) — a review finding on that change, because the first revision
+                // kept the no-hub wording for both. "Nothing is there" leaves the node with no
+                // per-node hub at all; "the path is occupied" binds the OCCUPANT's configuration
+                // and serves an error overlay, so the row still reads. Saying the first for the
+                // second also sends the reader off to create a node that already exists.
+                if (verdict.Occupant is { } occupant)
+                    _logger.LogWarning(
+                        "DanglingNodeTypeGuard: blocked update of '{Path}' — NodeType '{NodeType}' "
+                        + "(was '{ExistingNodeType}') names a path that is OCCUPIED by a node which "
+                        + "is not a NodeType declaration ({Occupant}), so the instance would bind "
+                        + "that node's hub configuration and serve an error overlay instead of its "
+                        + "type's views. Name the declaration's real path — creating a node there "
+                        + "does not help.",
+                        node.Path, node.NodeType, context.ExistingNode?.NodeType, occupant);
+                else
+                    _logger.LogWarning(
+                        "DanglingNodeTypeGuard: blocked update of '{Path}' — NodeType '{NodeType}' "
+                        + "(was '{ExistingNodeType}') resolves to no node, so the instance would have "
+                        + "no per-node hub and would read as Unavailable forever.",
+                        node.Path, node.NodeType, context.ExistingNode?.NodeType);
                 return NodeValidationResult.Invalid(
-                    NodeTypeResolution.RejectionMessage(node.Path, node.NodeType!),
+                    NodeTypeResolution.RefusalFor(verdict, node.Path, node.NodeType!),
                     NodeRejectionReason.InvalidNodeType);
             })
+            // 🚨 AN EMPTY PROBE IS NOT A VERDICT EITHER, and this leg used to fail OPEN on it: an
+            // empty `Validate` meets NodeUpdatePipeline's `DefaultIfEmpty(null)` and reads as
+            // VALIDATION SUCCESS, so a storage adapter that completes without answering let the
+            // NodeType change straight through. The Catch below already refuses a FAULTED probe for
+            // exactly this reason; silence is the same non-answer wearing different clothes.
+            // Review finding on the #5008 change. DefaultIfEmpty sits before Catch so a genuine
+            // fault still takes the fault branch and keeps its exception text.
+            .DefaultIfEmpty(NodeValidationResult.Unavailable(
+                NodeTypeResolution.ProbeFailedMessage(node.Path, node.NodeType!,
+                    new InvalidOperationException(
+                        "the NodeType existence probe completed without producing an answer"))))
             // 🚨 A faulted probe is NOT a verdict, and it must not read as one. Refusing is right —
             // a write here could strand the node permanently — but the message says which of the
             // two it is, so nobody goes off creating a type that may already exist.
