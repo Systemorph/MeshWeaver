@@ -776,17 +776,25 @@ file contains a NUL"*, which an empty universe satisfies, and it had three ways 
 - it stated no denominator, so a filter that stopped matching (an extension list, an exclusion) would
   have examined nothing and answered green;
 - it carried no control that its detector detects — neuter `IndexOf(NUL)` and the guard stays green
-  over the whole tree.
+  over the whole tree;
+- and two more surfaced in review: a file it could not READ was counted as clean, and the
+  extension allow-list skipped text the roots hold (`.svg`, `.allow`, `.bicep`, `.csv`, `.tpl`,
+  `.csx`, and every extensionless `Dockerfile` and shim) — so "the roots are covered" was itself a
+  claim the scan could not back.
 
 Measured on the tree as it stood: `src=3319 test=1374 samples=676 memex=119 clients=51` files
 examined, and `.github=146 tools=49 scripts=12 deploy=216` hand-authored text files it never looked
-at. The fix is the second half of the diagnostic, applied three times: every declared root must
-exist (an absent one is named, not skipped), every root must match at least one file and the count
-is printed with the verdict, and a second test plants a NUL on line 3 of a `.json` in a throwaway
-tree beside a NUL in a `.png` and one under `bin/` — and must report exactly `sub/node.json:3` over
-two examined files. Controls: detector neutered → the planted-NUL test fails
-(`Assert.Single() Failure: The collection was empty`) while the main guard stays green — which is
-the vacuity, caught; `content` re-declared → the main guard fails naming `content`.
+at. The fix is the second half of the diagnostic, applied at every seam: every declared root must
+exist (an absent one is named, not skipped); every root must match at least one file, and the
+per-root counts are written to the test output on the SUCCESS path too, since xUnit prints an
+assertion message only on failure; an unreadable file is a scan failure, named, never a clean one;
+text is classified by SHAPE (an allow-listed extension, or none at all) so a binary checked in
+without an extension fails loudly; and a second test plants a NUL on line 3 of a `.json` and on
+line 2 of an extensionless `Dockerfile` in a throwaway tree, beside a NUL in a `.png` and one under
+`bin/`, and must report exactly those two over three examined files. Controls: detector neutered →
+the planted-NUL test fails (`Assert.Single() Failure: The collection was empty`) while the main
+guard stays green — which is the vacuity, caught; `content` re-declared → the main guard fails
+naming `content`. Denominator after the widening: **6,265** files over nine roots, 0 offenders.
 
 > A root list is a claim about coverage. `Directory.Exists` turns a false claim into a smaller
 > universe instead of a red — and a smaller universe is the one thing a "nothing bad is present"
