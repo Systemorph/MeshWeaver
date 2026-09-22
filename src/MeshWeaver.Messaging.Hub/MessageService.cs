@@ -3077,13 +3077,17 @@ public class MessageService : IMessageService
             // hop drops the release again (#3432). Each parent's own post guard forwards through
             // its construction-captured ParentHub until a routing ancestor is reached. A true
             // root has ParentHub=null, so a whole-tree teardown terminates with the ordinary
-            // refusal, without resolving Configuration.ParentHub from a dying scope. Preserve
-            // opt, especially Sender: the release identifies the subscription that sender opened.
+            // refusal, without resolving Configuration.ParentHub from a dying scope. Keep the
+            // original sender and the SAME host qualification as HierarchicalRouting's upward
+            // hop: a bare sender identifies different state from the live subscription's sender.
             if (message is IReleasesRemoteState && ParentHub is { } releaseParent)
             {
                 try
                 {
-                    var forwarded = releaseParent.Post(message, _ => opt);
+                    var releaseOptions = releaseParent.Address.Type != AddressExtensions.MeshType
+                        ? opt with { Sender = opt.Sender.WithHost(releaseParent.Address) }
+                        : opt;
+                    var forwarded = releaseParent.Post(message, _ => releaseOptions);
                     postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
                     if (forwarded is not null)
                         return forwarded;

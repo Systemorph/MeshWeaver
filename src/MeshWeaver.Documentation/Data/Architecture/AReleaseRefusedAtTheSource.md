@@ -131,8 +131,8 @@ message releases* — and deliberately NOT a way to make an ordinary event survi
 
 Each teardown post guard hands the release to its construction-captured `MessageService.ParentHub`.
 A parent already at `DisposeHostedHubs` applies the same rule, until an ancestor whose post gate is
-still open carries it. No service is resolved and no hub is activated. The original options travel
-unchanged, and the actual delivery verdict propagates back to the caller. At the root, the captured
+still open carries it. No service is resolved and no hub is activated. The original options are retained, with the same sender host qualifiers that normal upward routing
+would add, and the actual delivery verdict propagates back to the caller. At the root, the captured
 parent is null and the release reports the ordinary shutdown refusal. Do not walk
 `Configuration.ParentHub` here: it can resolve through a disposed scope, and on a root it can
 resolve the root itself, so a whole-tree teardown would loop forever.
@@ -153,10 +153,12 @@ also being disposed was false: parentage describes the sender's lifetime, not th
 Nested layout streams and a whole subscribing subtree must release their owner's streams just as a
 single subscribing hub does.
 
-**`opt` is passed through unchanged, which is load-bearing.** `UnsubscribeRequest` is
-`ICorrelatedBySender`: the owner keys its per-subscriber stream on the subscriber that OPENED it, and
-that subscribe was posted from this same `workspace.Hub`. Re-stamping the sender as the parent would
-leave the owner holding a subscription opened by one hub and released by another.
+**Sender correlation includes the routing hosts.** `UnsubscribeRequest` is `ICorrelatedBySender`:
+the subscribe was posted from the same `workspace.Hub`, and normal upward routing adds each
+non-mesh parent to its sender address. The teardown handoff must add those same qualifiers for the
+hops it bypasses. Keeping only the bare sender drops correlation information; replacing it with the
+carrier identifies someone else. The test compares the release sender to an actual live delivery
+from the same subscriber, including all host qualifiers.
 
 ## 6. What this is NOT
 

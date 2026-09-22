@@ -38,7 +38,8 @@ namespace MeshWeaver.Messaging;
 /// Nested subtree teardown may already have closed that parent's post gate while the receiver
 /// lives in another subtree. In that case the carrier is the first ancestor still accepting
 /// posts, reached through the existing parent chain without resolving or activating a hub.
-/// The original sender identity is preserved. If no ancestor can carry the release, the post
+/// The original sender identity includes the same host qualifiers as ordinary upward routing;
+/// it is never replaced with the carrier's address. If no ancestor can carry the release, the post
 /// reports the ordinary shutdown refusal.</para>
 /// </summary>
 public interface IReleasesRemoteState;
