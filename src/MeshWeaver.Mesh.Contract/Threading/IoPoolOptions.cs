@@ -83,6 +83,19 @@ public static class IoPoolNames
     /// <summary>CPU-bound compilation (Roslyn compile/script). Wave 3.</summary>
     public const string Compile = "Compile";
 
+    /// <summary>
+    /// The CPU lane: purely CPU-bound Roslyn leaves — a NodeType's generators + bind + emit, and the
+    /// language service's <c>GetDiagnostics</c> — run through <see cref="IIoPool.InvokeBlocking{T}"/>
+    /// on at most <see cref="IoPoolOptions.CompileCpu"/> DEDICATED threads, never ThreadPool workers.
+    /// <para>🚨 Separate from <see cref="Compile"/> on purpose. That pool also runs kernel SCRIPTS (user
+    /// code that may activate a NodeType and wait for its compile) and assembly loads; putting the
+    /// emit behind the same gate is the nested-gate deadlock the compile leaf already hit once. A
+    /// leaf on this lane must do NOTHING but compute: no pool call, no mesh read, no wait on another
+    /// leaf — which makes nesting impossible by construction. See
+    /// <c>Doc/Architecture/CompileOffTheThreadPool</c>.</para>
+    /// </summary>
+    public const string CompileCpu = "CompileCpu";
+
     /// <summary>External process execution (<c>Process.Start</c>). Wave 3.</summary>
     public const string Process = "Process";
 
@@ -274,6 +287,15 @@ public sealed record IoPoolOptions
     /// <summary>Concurrent compilations. CPU-bound; defaults to the processor count.</summary>
     public int Compile { get; init; } = Environment.ProcessorCount;
 
+    /// <summary>
+    /// Concurrent CPU-lane leaves (<see cref="IoPoolNames.CompileCpu"/>): Roslyn emits and
+    /// diagnostics, each on a dedicated thread. Defaults to the processor count — the most such
+    /// leaves that can make progress at once — so a burst of hundreds of distinct NodeType compiles
+    /// queues here instead of becoming hundreds of threads, while the OS time-slices the lane
+    /// fairly against the ThreadPool the grain turns run on.
+    /// </summary>
+    public int CompileCpu { get; init; } = Environment.ProcessorCount;
+
     /// <summary>Concurrent external processes. Heavy; defaults to 4.</summary>
     public int Process { get; init; } = 4;
 
@@ -335,6 +357,7 @@ public sealed record IoPoolOptions
             IoPoolNames.AgentStore => AgentStore,
             IoPoolNames.Routing => Routing,
             IoPoolNames.Compile => Compile,
+            IoPoolNames.CompileCpu => CompileCpu,
             IoPoolNames.Process => Process,
             _ => Default,
         };

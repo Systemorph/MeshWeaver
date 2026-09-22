@@ -52,6 +52,12 @@ internal class MeshNodeCompilationService(
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
         ?? IoPool.Unbounded;
 
+    // The CPU lane (IoPoolNames.CompileCpu): the Roslyn half of every compile, on a bounded set of
+    // DEDICATED threads. Unbounded fallback only when no registry is wired (DI-less tests).
+    private readonly IIoPool _cpuLane =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.CompileCpu)
+        ?? IoPool.Unbounded;
+
     // 🚨 Offload the compile to the ThreadPool via Task.Run — NOT the IoPool. Two reasons the
     // IoPool ("the correct abstraction") fails for this leaf:
     //   1. Its SemaphoreSlim gate serialises the compile against itself (activity-driven +
@@ -1224,7 +1230,8 @@ internal class MeshNodeCompilationService(
             .Take(1)
             .SelectMany(inputs => inputs is null
                 ? Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>())
-                : OnThreadPool(() => CompileDiagnostics.DiagnoseInputs(inputs)))
+                // Pure Roslyn compute -> the bounded CPU lane, off the ThreadPool (CompileOffTheThreadPool).
+                : _cpuLane.InvokeBlocking(_ => CompileDiagnostics.DiagnoseInputs(inputs)))
             // 🚨 BOUNDED with the same clock as the emit leg — this runs on the FAILURE path,
             // where a hang is worst: the compile has already failed and this is what stands
             // between that failure and its terminal Error write. Unbounded, a stalled
@@ -2048,24 +2055,31 @@ internal class MeshNodeCompilationService(
         logger.LogInformation("Compiling assembly for {NodeName} ({Mode}, {NuGetRefs} NuGet refs)",
             nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory", nugetRefs.Length);
 
-        // 🚨 THE CPU-BOUND HALF RUNS ON A DEDICATED THREAD — never on the ThreadPool this async
-        // method happens to be on. Everything above is IO (NuGet restore, the debug source write) and
-        // may resume on any pool thread; everything in EmitCompiled is synchronous Roslyn work
-        // (parse, source generators, bind, emit) that holds its thread for the whole compile. This
-        // leaf is reached through OnThreadPool(Func<Task<T>>) — Task.Run — and the debug source write
-        // above is ON by default (EnableSourceDebugging), so before this hop EVERY production emit ran
-        // on a ThreadPool worker even though CompileThread's own doc said the compile leaf did not:
-        // the sync overload that uses CompileThread is not the one `() => CompileAsync(...)` binds to.
-        // With ConcurrentBuild also off (EmitPipeline.CreateRunCompilationOptions) a compile now costs
-        // one dedicated thread and zero pool workers. Doc/Architecture/CompileOffTheThreadPool.
-        return await CompileThread.Run(() => EmitCompiled(
-                node, nodeName, source, references, nugetAssemblyPaths, sourcePath, ct))
+        // 🚨 THE CPU-BOUND HALF RUNS ON THE CPU LANE — a dedicated thread, BOUNDED. Everything above
+        // is IO (NuGet restore, the debug source write) and may resume on any pool thread; everything
+        // in EmitCompiled is synchronous Roslyn work (generators, bind, emit) that holds its thread
+        // for the whole compile. Before #5327 it ran on whatever ThreadPool worker the debug write's
+        // await resumed on; #5327 moved it to CompileThread, which is off the pool but UNBOUNDED — one
+        // new thread per distinct NodeType compiling at once, hundreds on a roll. The CompileCpu lane
+        // keeps it off the pool AND caps it at IoPoolOptions.CompileCpu (processor count); the rest
+        // queue. EmitCompiled does nothing but compute and write its own artifact — no pool call, no
+        // mesh read — so it can never wait on another lane leaf (the nested-gate deadlock the Compile
+        // pool hit). Doc/Architecture/CompileOffTheThreadPool.
+        return await _cpuLane
+            .InvokeBlocking(laneCt =>
+            {
+                // The lane's token (pool drain) AND the compile's own bound (BoundLeg) both stop Roslyn.
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, laneCt);
+                return EmitCompiled(
+                    node, nodeName, source, references, nugetAssemblyPaths, sourcePath, linked.Token);
+            })
+            .Await(ct)
             .ConfigureAwait(false);
     }
 
     /// <summary>
     /// The synchronous, CPU-bound half of <see cref="CompileAsyncCore"/>: parse, source generators,
-    /// emit and the disk/in-memory publish. Called ONLY on a <see cref="CompileThread"/> thread.
+    /// emit and the disk/in-memory publish. Called ONLY on a CPU-lane thread (<see cref="IoPoolNames.CompileCpu"/>).
     /// </summary>
     private CompileEmit EmitCompiled(
         MeshNode node,

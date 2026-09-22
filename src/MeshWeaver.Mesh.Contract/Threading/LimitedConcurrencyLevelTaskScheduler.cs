@@ -19,6 +19,14 @@ namespace MeshWeaver.Mesh.Threading;
 /// on. This is the "compatible with how Orleans wants us to pool" property:
 /// reuse the framework's pool, just govern it.</para>
 ///
+/// <para>🚨 <b>Except for CPU-bound work, where borrowing is the defect.</b> A capped borrower still
+/// HOLDS up to <c>maxDegreeOfParallelism</c> pool workers for as long as each leaf computes, and the
+/// pool's minimum is <c>ProcessorCount</c> — so a CPU pool capped at the processor count occupies
+/// every worker the grain turns need. With <c>dedicatedThreads</c> the same cap is enforced over
+/// threads this scheduler starts itself (one per concurrent drain loop, exiting when the queue is
+/// empty): the bound is identical, and the ThreadPool is not touched at all
+/// (<c>IoPoolNames.CompileCpu</c>, <c>Doc/Architecture/CompileOffTheThreadPool</c>).</para>
+///
 /// <para>The <c>_tasks</c> queue is an INSTANCE field guarded by <c>lock(_tasks)</c>
 /// — not static, so it dies with the owning <see cref="IoPool"/> and never bleeds
 /// across meshes/tests. A mutable <see cref="LinkedList{T}"/> is required because
@@ -36,11 +44,18 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
     // Number of ThreadPool work items currently dispatched (running or queued to run).
     private int _delegatesQueuedOrRunning;
 
-    public LimitedConcurrencyLevelTaskScheduler(int maxDegreeOfParallelism)
+    // True: each drain loop runs on a thread started here, never a ThreadPool worker.
+    private readonly bool _dedicatedThreads;
+
+    /// <summary>Name of the threads a dedicated-thread scheduler starts — visible in dumps.</summary>
+    internal const string DedicatedThreadName = "mw-cpu-lane";
+
+    public LimitedConcurrencyLevelTaskScheduler(int maxDegreeOfParallelism, bool dedicatedThreads = false)
     {
         if (maxDegreeOfParallelism < 1)
             throw new ArgumentOutOfRangeException(nameof(maxDegreeOfParallelism));
         _maxDegreeOfParallelism = maxDegreeOfParallelism;
+        _dedicatedThreads = dedicatedThreads;
     }
 
     protected override void QueueTask(Task task)
@@ -60,7 +75,24 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
 
     private void NotifyThreadPoolOfPendingWork()
     {
-        ThreadPool.UnsafeQueueUserWorkItem(_ =>
+        if (_dedicatedThreads)
+        {
+            // A drain loop of its own: the same loop, on a thread the pool never lends out. Background
+            // so an idle-but-draining loop can never hold the process open; UnsafeStart because each
+            // task carries its own captured ExecutionContext into TryExecuteTask.
+            new Thread(_ => DrainQueue(), maxStackSize: 0)
+            {
+                IsBackground = true,
+                Name = DedicatedThreadName,
+            }.UnsafeStart();
+            return;
+        }
+
+        ThreadPool.UnsafeQueueUserWorkItem(_ => DrainQueue(), null);
+    }
+
+    private void DrainQueue()
+    {
         {
             // Process tasks until the queue drains, then relinquish this slot.
             while (true)
@@ -80,7 +112,7 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
 
                 TryExecuteTask(item);
             }
-        }, null);
+        }
     }
 
     // Never inline. Inlining would run the (blocking) task on whatever thread

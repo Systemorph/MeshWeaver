@@ -161,6 +161,23 @@ public sealed class IoPool : IIoPool, IDisposable
     /// overload exists so a test whose leaf can only end by cancellation need not spend the grace.
     /// </param>
     public IoPool(int maxConcurrency, TimeSpan drainTimeout, TimeSpan drainGrace)
+        : this(maxConcurrency, drainTimeout, drainGrace, dedicatedThreads: false) { }
+
+    /// <summary>
+    /// As <see cref="IoPool(int, TimeSpan, TimeSpan)"/>, choosing where <see cref="InvokeBlocking{T}"/>
+    /// leaves run.
+    /// </summary>
+    /// <param name="maxConcurrency">Maximum number of operations allowed to run concurrently; must be at least 1.</param>
+    /// <param name="drainTimeout">How long <see cref="Drain"/> waits at each of its joins AFTER cancelling.</param>
+    /// <param name="drainGrace">How long <see cref="Drain"/> waits for in-flight work BEFORE cancelling.</param>
+    /// <param name="dedicatedThreads">
+    /// <c>true</c>: <see cref="InvokeBlocking{T}"/> leaves run on at most <paramref name="maxConcurrency"/>
+    /// threads this pool starts itself, never on ThreadPool workers — for CPU-bound leaves, whose
+    /// whole cost is the time they HOLD a thread (<see cref="IoPoolNames.CompileCpu"/>). Only the
+    /// blocking entry point changes; the async entry points still start on the ThreadPool, so a
+    /// dedicated-thread pool is meant for <see cref="InvokeBlocking{T}"/> alone.
+    /// </param>
+    public IoPool(int maxConcurrency, TimeSpan drainTimeout, TimeSpan drainGrace, bool dedicatedThreads)
     {
         if (maxConcurrency < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
@@ -176,7 +193,7 @@ public sealed class IoPool : IIoPool, IDisposable
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             TaskContinuationOptions.None,
-            new LimitedConcurrencyLevelTaskScheduler(maxConcurrency));
+            new LimitedConcurrencyLevelTaskScheduler(maxConcurrency, dedicatedThreads));
         // 🚨 STARTED HERE, NOT AT TEARDOWN — see StartCanceller. Every field the thread touches is
         // assigned above; it parks on _cancelRequestedLatch and does nothing until Drain()/Dispose()
         // raises it.

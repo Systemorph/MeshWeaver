@@ -41,6 +41,19 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
         string sourcePath,
         string proposedCode,
         CancellationToken ct)
+        => Diagnose(await CreateCompilationAsync(inputs, sourcePath, proposedCode, ct).ConfigureAwait(false), ct);
+
+    /// <summary>
+    /// The IO half of <see cref="GetDiagnosticsAsync"/>: resolves any proposed NuGet references and
+    /// builds the speculative compilation (parse only — nothing is bound yet). Split from
+    /// <see cref="Diagnose"/> so a caller can run the CPU-bound half on the dedicated CPU lane
+    /// (<c>IoPoolNames.CompileCpu</c>, <c>Doc/Architecture/CompileOffTheThreadPool</c>).
+    /// </summary>
+    public async Task<CSharpCompilation> CreateCompilationAsync(
+        CompilationInputs inputs,
+        string sourcePath,
+        string proposedCode,
+        CancellationToken ct)
     {
         // Strip #r from the proposed source so Roslyn doesn't reject it with CS7011.
         // Resolve any new package refs and append them to the cached reference set —
@@ -106,12 +119,20 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
                 SourceText.From(code), inputs.ParseOptions, path: path));
         }
 
-        var compilation = CSharpCompilation.Create(
+        return CSharpCompilation.Create(
             inputs.AssemblyName,
             syntaxTrees: trees,
             references: effectiveReferences,
             options: inputs.CompilationOptions);
+    }
 
+    /// <summary>
+    /// The CPU-bound half of <see cref="GetDiagnosticsAsync"/>: binds <paramref name="compilation"/>
+    /// and reports its user-actionable diagnostics (framework-generated trees filtered out).
+    /// Synchronous and pure — no IO, no pool call — so it is a valid CPU-lane leaf.
+    /// </summary>
+    public static IReadOnlyList<DiagnosticInfo> Diagnose(CSharpCompilation compilation, CancellationToken ct)
+    {
         var diags = compilation.GetDiagnostics(ct);
         if (diags.IsDefaultOrEmpty) return Array.Empty<DiagnosticInfo>();
 
