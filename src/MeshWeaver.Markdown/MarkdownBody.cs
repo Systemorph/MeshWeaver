@@ -62,6 +62,7 @@ public static class MarkdownBody
             {
                 string text => text,
                 JsonElement { ValueKind: JsonValueKind.String } json => json.GetString(),
+                JsonValue value when value.TryGetValue<string>(out var text) => text,
                 _ => null,
             };
             // The Space view recovers legacy serialized objects before reading body/content.

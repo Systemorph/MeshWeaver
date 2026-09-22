@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Memex.Portal.Shared.Seo;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -26,7 +27,7 @@ public class LegacySpacePrerenderTest
             [field] = source,
             ["prerenderedHtml"] = "<p>Stale content cache</p>",
         });
-        foreach (var content in new object[] { json, JsonSerializer.SerializeToElement(json) })
+        foreach (var content in new object[] { json, JsonSerializer.SerializeToElement(json), JsonValue.Create(json)! })
         {
             var node = Space(content);
             Assert.Equal(expected, MarkdownBody.Render(node));
@@ -41,7 +42,7 @@ public class LegacySpacePrerenderTest
     public void SpaceBody_WinsOverContent_InEveryObjectShape(string body, string expected)
     {
         var json = JsonSerializer.Serialize(new { body, content = "Other markdown", prerenderedHtml = "Stale" });
-        foreach (var content in new object[] { json, JsonSerializer.SerializeToElement(json), JsonSerializer.Deserialize<JsonElement>(json) })
+        foreach (var content in new object[] { json, JsonSerializer.SerializeToElement(json), JsonValue.Create(json)!, JsonSerializer.Deserialize<JsonElement>(json) })
         {
             var node = Space(content);
             Assert.Equal(expected, MarkdownBody.Render(node));
@@ -53,7 +54,7 @@ public class LegacySpacePrerenderTest
     public void SerializedSpaceWithoutSource_UsesItsHtmlFallback()
     {
         const string json = """{"description":"Metadata only","prerenderedHtml":"<p>Content cache</p>"}""";
-        foreach (var content in new object[] { json, JsonSerializer.SerializeToElement(json) })
+        foreach (var content in new object[] { json, JsonSerializer.SerializeToElement(json), JsonValue.Create(json)! })
         {
             var node = Space(content);
             Assert.Equal("<p>Stale mirror</p>", MarkdownBody.Render(node));
@@ -74,7 +75,7 @@ public class LegacySpacePrerenderTest
     [InlineData("Markdown", "{\"body\":\"Literal **JSON**\"}", "<p>{&quot;body&quot;:&quot;Literal <strong>JSON</strong>&quot;}</p>\n")]
     public void LiteralText_IsNotReinterpreted(string nodeType, string text, string expected)
     {
-        foreach (var content in new object[] { text, JsonSerializer.SerializeToElement(text) })
+        foreach (var content in new object[] { text, JsonSerializer.SerializeToElement(text), JsonValue.Create(text)! })
         {
             var node = Space(content) with { NodeType = nodeType };
             Assert.Equal(expected, MarkdownBody.Render(node));
