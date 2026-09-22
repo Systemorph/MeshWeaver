@@ -423,7 +423,7 @@ The mapping is settled by `kubectl get ingress -A`, which names the host per nam
 
 ## Worked examples
 
-Four findings from one sweep, each showing a different half of the method.
+Findings from live sweeps, each showing a different half of the method.
 
 ### 1 · A single framework fault was a symptom — count the warnings on the TARGET
 
@@ -494,6 +494,56 @@ example 1. Three issues filed as unrelated were one degradation.
 > **Generalise:** if the event is inside retention, read the log *at the moment of the write*
 > before theorising from the state left behind. Related: [Durable But Unreadable](../DurableButUnreadable).
 
+### 5 · The census answered a question two wrongful closes had turned on
+
+A NodeType in a **private partition** had been reported broken, closed on a `get` returning
+`Not found` — read as *"the type is gone"* — and re-filed unchanged four weeks later with the
+identical compiler error. Every instrument a session can run says *"I cannot tell"*, each for its
+own reason: the mandated sweep is RLS-filtered and the partition is not in its coverage, `get` and
+`search` answer identically for denied and absent, and `recycle`'s refusal is byte-identical to the
+refusal for a path that cannot exist. The thread ran for dozens of comments on that.
+
+`/health`'s **outcome census** settles it, because it is composed as the system:
+
+```
+🚨 OUTCOME CENSUS (sweep completed): 1 NodeType(s) have NO usable assembly on this replica …
+   CompileError×1 in <that partition>.
+   Denominator: 230 of 230 enumerated type(s) reported an outcome; 0 reached NO verdict …
+```
+
+Eight calls, sampling both replicas (two framework identities mid-roll), one identical sentence.
+Against it, the same credential's sweep: **1 at `Error` over N readable NodeTypes and M = 111
+readable partitions — and that partition is not among the 111.** Same portal, seconds apart. The
+zero was a coverage fact; the census is a compile fact.
+
+Two controls made it a measurement rather than a hope. **Positive:** one partition (`Crm`) appears
+in *both* answers — it is the single row the RLS sweep can see at `Error` and one of the census's
+two `previouslybroken` partitions — so the census's partition labels demonstrably track real types.
+**Negative:** the same call against the *other* portal names two entries in a different partition
+and none in this one, so the census is not a thing that names every partition it enumerates.
+
+> **Generalise:** when a partition is outside your read coverage, stop reaching for another
+> RLS-filtered instrument — they all answer the same "I cannot tell" in different words. Go to the
+> one reading composed by the process. And pair it: a census that only ever says one thing is
+> indistinguishable from a constant.
+
+### 🚨 Two ways to misuse the census's own numbers
+
+**Do not gate a fix on `previouslybroken`.** It is decided by the **shared record**, across every
+partition at once, so it stays non-zero while any unrelated type is in it — a repaired type leaves
+the *no-usable-assembly* list while `previouslybroken=2` reads exactly as before. The reading that
+answers *"is my type servable here now?"* is the **outcome census's no-usable-assembly list**,
+sampled more than once because consecutive calls land on different replicas. (The same distinction
+separates a repair from a delete: after a repair the partition leaves the list and the type keeps
+answering; after a delete the census's `total` drops.)
+
+**Do not subtract your sweep's `N` from the census's `total`.** They are different populations: the
+census counts **dynamic** NodeType records, while your sweep returns everything your grant reaches
+*including* the static built-ins that carry no `version` (`Build`, `Partition`, `Release`, `Space`,
+`User`, `VUser`, `WebhookEvent`, `OAuthCode`, `ModuleBuild`). The difference is still worth stating
+— *"roughly N dynamic types sit outside my read coverage"* — as an order of magnitude, never as an
+exact count you derived by arithmetic on two instruments that do not agree on what they are counting.
+
 ## The traps, in one table
 
 | Trap | Looks like | Costs you |
@@ -508,6 +558,9 @@ example 1. Three issues filed as unrelated were one degradation.
 | Loki `since=` on 2.6.1 | "nothing in 168 h" | a false zero over the last **1 h** |
 | `count_over_time(…[24h])` summed across buckets | "124 in the window" | 17× over-count; the burst was before `start` |
 | Counting failures with no success line | "154 failures" | a count read as a rate, with no denominator |
+| Another RLS-filtered instrument on a partition outside your coverage | "three tools all say Not found" | three restatements of one denial, read as a deletion |
+| Gating a fix on `previouslybroken` | "still broken" / "now clean" | a shared-record count over every partition at once, not your type |
+| Census `total` minus your sweep's `N` | "K types I cannot see" | two populations — dynamic records vs everything your grant returns |
 
 ## What a verdict must contain
 
