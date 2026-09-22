@@ -273,9 +273,12 @@ public IMessageHub RegisterForDisposal(IDisposable disposable)
 }
 ```
 
-**It is append-only.** `CompositeDisposable.Add` never prunes, and no code path removes an entry. So
-every registrant a hub is handed is held — with everything its closure captured — for that hub's
-whole life. A registrant whose own subject is SHORTER-lived than the hub is therefore a monotone
+**A plain registration is append-only.** `CompositeDisposable.Add` never prunes, and nothing removes
+an entry added through `RegisterForDisposal`, so such a registrant is held — with everything its
+closure captured — for that hub's whole life. The ONE way out before the hub dies is a DETACHABLE
+registration (`RegisterForDisposalDetachable`, or `SubscribeHeldUntilTerminal` built on it): its handle
+removes the entry without disposing it, and it is to be used only once the registrant's disposal can
+no longer do anything (see the table below). A PLAIN registrant whose own subject is SHORTER-lived than the hub is therefore a monotone
 root, and it retains an object graph rather than a hub, which is why no `MessageHub` histogram can
 see it.
 
@@ -283,12 +286,18 @@ see it.
 diagnostics as `Registrants=`. **A hub whose registrant count climbs with the traffic it has served
 is retaining one object graph per unit of that traffic.**
 
-Two instances, both measured in `MeshWeaver.Data.Test`:
+Two classes, both measured in `MeshWeaver.Data.Test`:
 
 | site | growth | status |
 |---|---|---|
 | `JsonSynchronizationStream.CreateExternalClient` registered the owner-protocol subscription on the SUBSCRIBING hub as well as on the stream | **+1 per remote stream ever opened**, holding the whole `SynchronizationStream` graph (measured: floor 4 → 6 over two streams, still 6 after both were disposed) | **Fixed.** The duplicate bought nothing, and by TWO routes rather than one: the stream's own composite rides its `sync/` sub-hub (a hosted hub of the subscribing hub, torn down in its `DisposeHostedHubs` phase), AND `Workspace.Dispose` disposes every cached remote stream — which its own comment says exists to release exactly this `SubscribeRequest` callback. A hub walks its OWN registrants only later, in `ShutDown`, so the duplicate was the third route and the last to fire. 🚨 The second route is a correction owed to running the negative control: with the sub-hub hook removed the coverage test still passes, so it asserts the OUTCOME and not a route. Pinned by `StreamRegistrantsLeaveTheSubscribingHubTest` |
-| the per-request handlers in `DataExtensions` and `MeshDataSource` register one cleanup per request on the OWNING hub — `HandleGetDataRequest`, `HandleSubscribeRequest`, `HandleDataChangeRequest`, `ApplyJsonMergePatchAndUpdate`, `ApplyMeshNodePatchInTurn`, `RegisterOwnerDisposingNack`, `HandleSaveMeshNode`, the unified-reference handlers | **+1 per request served** (measured: 4 → 14 over ten answered `GetDataRequest`s, with `PendingCallbacks=0` — every read had terminated and every registrant was still there) | **Open.** Each registrant holds the request delivery and its closures. The fix needs a detach-without-dispose registration — several of these registrants NACK when disposed, so a detach that disposes them would fire the NACK on a successful request — and it has to be swept across every site at once |
+| the per-request handlers in `DataExtensions` and `MeshDataSource` register one cleanup per request on the OWNING hub — `HandleGetDataRequest`, `HandleSubscribeRequest`, `HandleDataChangeRequest`, `ApplyJsonMergePatchAndUpdate`, `ApplyMeshNodePatchInTurn`, `RegisterOwnerDisposingNack`, `HandleSaveMeshNode`, the unified-reference handlers | **+1 or +2 per request served**, measured over ten answered requests each from a floor of 3: `DataChangeRequest` → 23, `PatchDataRequest` (generic path) → 23, one-shot `GetDataRequest` → 13, `UpdateUnifiedReferenceRequest` → 13 | **Fixed.** A registrant now leaves the hub at the moment its own disposal can no longer do anything, which changes no behaviour: a subscription at its TERMINAL (`hub.SubscribeHeldUntilTerminal(source, subscribe)`), a teardown NACK once its once-only answer gate is CLAIMED (`IMessageHub.RegisterForDisposalDetachable` — the handle removes the registrant WITHOUT disposing it, one shared flag deciding against a racing teardown). A request still in flight when the hub goes down is torn down and NACKed exactly as before. Pinned by `PerRequestRegistrantsLeaveTheOwnerHubTest` (red 4 of 4 on the unfixed build with the readings above; green on the fix) and `PatchAckTotalityTest`'s flush-leg assertion |
+
+🚨 **Still held by design, and NOT a leak this fix touches:** a `GetDataRequest` over a LIVE workspace
+reference keeps shipping every change to its requester, so its subscription — and its registrant —
+live until the owner goes down. Whether anything should end such a read earlier (the requester's own
+`Observe` completes on the first answer) is a separate question, not measured here. A read that ends
+EMPTY on a healthy hub also stays registered on purpose: its caller is still owed the teardown NACK.
 
 ## Related
 

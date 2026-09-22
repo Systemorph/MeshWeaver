@@ -197,6 +197,32 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
 
     /// <summary>
+    /// Couples a synchronous cleanup to the hub's lifetime ONLY until the returned handle is
+    /// disposed. Disposing the handle DETACHES the registrant — removes it from the hub's disposal
+    /// composite WITHOUT disposing it — so a registrant whose subject is shorter-lived than the hub
+    /// (a per-request watcher, a one-shot subscription) stops being held once its disposal has
+    /// become a no-op. If the hub disposes first, the registrant is disposed exactly as
+    /// <see cref="RegisterForDisposal(IDisposable)"/> would, and a later detach does nothing.
+    ///
+    /// <para>🚨 Why this exists (#3432): the composite <see cref="RegisterForDisposal(IDisposable)"/>
+    /// adds to is append-only, so every per-request registrant was held — with everything its
+    /// closure captured — for the hub's whole life: one per request served, forever. Detach only at
+    /// the moment the registrant's own disposal can no longer do anything (its subscription has
+    /// terminated, its once-only answer gate has been claimed); detaching earlier would drop a
+    /// teardown answer the registrant still owes.</para>
+    ///
+    /// <para>The default implementation keeps the registrant for the hub's life (the handle is a
+    /// no-op) — the behaviour before this member existed.</para>
+    /// </summary>
+    /// <param name="disposable">The resource to dispose when the hub shuts down, unless detached first.</param>
+    /// <returns>A handle whose disposal detaches the registrant without disposing it.</returns>
+    IDisposable RegisterForDisposalDetachable(IDisposable disposable)
+    {
+        RegisterForDisposal(disposable);
+        return Disposable.Empty;
+    }
+
+    /// <summary>
     /// Registers a REACTIVE dispose action — a cleanup that <b>returns
     /// <see cref="IObservable{T}"/></b> (Unit). Use this (never a void
     /// <see cref="Action{T}"/> that self-subscribes) whenever the cleanup itself does
