@@ -149,8 +149,8 @@ return Observable
         if (InfrastructureFault.IsTransient(ex) && TryRetireAfterTransientInitializationFault(ex))
             return Observable.Return(request.Processed());      // retired, not latched — see below
         var reason = ex is TimeoutException
-            ? "a BuildupAction did not complete within …s (a hung dependency or stuck compile)"
-            : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
+            ? $"BuildupAction {DescribeBuildupAction(actions, pendingAction)} did not complete within …s — …"
+            : $"BuildupAction {DescribeBuildupAction(actions, pendingAction)} faulted ({ex.GetType().Name}: {ex.Message})";
         EnterInitializationFailedState(new InvalidOperationException(reason, ex));
         OpenGate(MessageHubConfiguration.InitializeGateName);   // ALWAYS open — a closed gate is the wedge
         return Observable.Return(request.Failed($"Hub '{Address}' initialization failed — {reason}"));
@@ -247,8 +247,18 @@ A BuildupAction that **hangs** (never emits, never completes, never throws) used
 deferral timeout. That gap is closed: `.Timeout(Configuration.StartupTimeout ??
 DefaultInitializationTimeout)` converts "did not complete within the budget" into a
 `TimeoutException` that the same `.Catch` turns into the FAILED state, and the resulting
-`DeliveryFailure` names the hang explicitly (*"a BuildupAction did not complete within Ns (a hung
-dependency or stuck compile)"*) rather than reporting a generic deferral.
+`DeliveryFailure` names the hang explicitly rather than reporting a generic deferral — and it names
+**which** action: *"BuildupAction 3 of 3 (DataExtensions.StartDataSourcesAndOpenGate) did not
+complete within Ns — the actions before it had signalled; …"*. The position is the index the
+sequential `Concat` was on when the bound fired, and the name is the method behind the delegate
+(a method group names itself; a lambda names the compiler's closure method, which still identifies
+the registration site). The sentence used to read *"a BuildupAction did not complete within Ns (a
+hung dependency or stuck compile)"* — two candidates, neither measured, and no way to tell which of
+the hub's actions was pending. That was unanswerable by construction for the commonest hang: the
+`DataContext` time-box is the same length as this one and starts milliseconds later, so this outer
+bound always fires first, disposes the `Concat`, and unsubscribes the inner bound before it can
+print its per-source diagnosis ([What the DataContext Init Time-Box Bounds](../DataContextInitializationTimeout)).
+Naming the pending action is the part this layer can say (issue #2886).
 
 A hub may tighten the budget via `Configuration.StartupTimeout`. **This bound is a liveness
 guarantee, not a fix** — it makes the failure observable and fast. When it fires, go and fix the
