@@ -517,27 +517,38 @@ readable partitions — and that partition is not among the 111.** Same portal, 
 zero was a coverage fact; the census is a compile fact.
 
 Two controls made it a measurement rather than a hope. **Positive:** one partition (`Crm`) appears
-in *both* answers — it is the single row the RLS sweep can see at `Error` and one of the census's
-two `previouslybroken` partitions — so the census's partition labels demonstrably track real types.
-**Negative:** the same call against the *other* portal names two entries in a different partition
-and none in this one, so the census is not a thing that names every partition it enumerates.
+in *both* system-side answers — it is the single row the RLS sweep can see at `Error`, and one of
+the two partitions the **bake PLAN** lists as `previouslybroken` — so a system-side partition label
+demonstrably tracks a type the RLS sweep can independently name. **Negative:** the same call against
+the *other* portal names two entries in a different partition and none in this one, so the census is
+not a thing that names every partition it enumerates.
+
+🚨 **Note which half each of those came from, because the two readings disagree here and the
+disagreement is the point.** `previouslybroken in BinaryClickerV2/…, Crm/…` is the plan's per-state
+breakdown; `CompileError×1 in BinaryClickerV2` is the outcome census, grouped by terminal status. So
+`Crm` is `previouslybroken` **and** has a usable assembly — an older build it still serves — while
+`BinaryClickerV2` is in both, a type that never had a good build to fall back on. A reader who took
+`previouslybroken` for the outcome would have called `Crm` unservable, which it is not.
 
 > **Generalise:** when a partition is outside your read coverage, stop reaching for another
 > RLS-filtered instrument — they all answer the same "I cannot tell" in different words. Go to the
 > one reading composed by the process. And pair it: a census that only ever says one thing is
 > indistinguishable from a constant.
 
-### 🚨 Two ways to misuse the census's own numbers
+### 🚨 Two ways to misuse `bake-report`'s numbers
 
-**Do not gate a fix on `previouslybroken`.** It is decided by the **shared record**, across every
-partition at once, so it stays non-zero while any unrelated type is in it — a repaired type leaves
-the *no-usable-assembly* list while `previouslybroken=2` reads exactly as before. The reading that
-answers *"is my type servable here now?"* is the **outcome census's no-usable-assembly list**,
-sampled more than once because consecutive calls land on different replicas. (The same distinction
-separates a repair from a delete: after a repair the partition leaves the list and the type keeps
-answering; after a delete the census's `total` drops.)
+**Do not gate a fix on `previouslybroken` — it is a PLAN number, not an outcome.** That is the whole
+reason it is the wrong thing to gate on, and it is easy to miss because both numbers arrive in one
+`bake-report` line. It is decided by the **shared record**, across every partition at once, so it
+stays non-zero while any unrelated type is in it: a repaired type leaves the *no-usable-assembly*
+list while `previouslybroken=2` reads exactly as before, and a `previouslybroken` partition may be
+serving an older build perfectly well. The reading that answers *"is my type servable here now?"* is
+the **outcome census's no-usable-assembly list**, sampled more than once because consecutive calls
+land on different replicas. (The same distinction separates a repair from a delete: after a repair
+the partition leaves the list and the type keeps answering; after a delete the enumerated `total`
+drops.)
 
-**Do not subtract your sweep's `N` from the census's `total`.** They are different populations: the
+**Do not subtract your sweep's `N` from the enumerated `total`.** They are different populations: the
 census counts **dynamic** NodeType records, while your sweep returns everything your grant reaches
 *including* the static built-ins that carry no `version` (`Build`, `Partition`, `Release`, `Space`,
 `User`, `VUser`, `WebhookEvent`, `OAuthCode`, `ModuleBuild`). The difference is still worth stating
@@ -559,8 +570,8 @@ exact count you derived by arithmetic on two instruments that do not agree on wh
 | `count_over_time(…[24h])` summed across buckets | "124 in the window" | 17× over-count; the burst was before `start` |
 | Counting failures with no success line | "154 failures" | a count read as a rate, with no denominator |
 | Another RLS-filtered instrument on a partition outside your coverage | "three tools all say Not found" | three restatements of one denial, read as a deletion |
-| Gating a fix on `previouslybroken` | "still broken" / "now clean" | a shared-record count over every partition at once, not your type |
-| Census `total` minus your sweep's `N` | "K types I cannot see" | two populations — dynamic records vs everything your grant returns |
+| Gating a fix on `previouslybroken` | "still broken" / "now clean" | a PLAN number — a shared-record count over every partition at once, not your type's outcome |
+| Enumerated `total` minus your sweep's `N` | "K types I cannot see" | two populations — dynamic records vs everything your grant returns |
 
 ## What a verdict must contain
 
