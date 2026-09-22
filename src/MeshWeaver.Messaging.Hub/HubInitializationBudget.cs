@@ -31,8 +31,8 @@ namespace MeshWeaver.Messaging;
 ///                                         on it bounds it
 ///   ├─ NestedInitializationBudget rung 2 — one wait inside it: the BuildupAction Concat, and the
 ///   │                                      DataContext time-box. Siblings over disjoint subjects.
-///   └─ rung 1 of a hub born      rung 3 — Nest(rung 2), because this hub's rung-2 waits are what
-///      INSIDE this init                    wait on that hub reaching Started. HOSTED is not
+///   └─ rung 1 of a hub born       rung 3 — Nest(rung 2), because this hub's rung-2 waits are what
+///      INSIDE this init                     wait on that hub reaching Started. HOSTED is not
 ///                                          ENCLOSED: a per-node hub is hosted by the mesh root but
 ///                                          activated on demand long after it started, so nothing
 ///                                          waits on it and it takes Root unchanged.

@@ -751,7 +751,8 @@ public sealed class MessageHub : IMessageHub
             // raises no exception, so convert "never completes within the budget" into a
             // TimeoutException the SAME .Catch handles. Generous default (every legit init, incl. a
             // NodeType compile, finishes well inside it); a hub may tighten it via
-            // Configuration.StartupTimeout, and every hub THIS one hosts contracts from there.
+            // Configuration.StartupTimeout, and every hub born inside THIS one's initialization
+            // contracts from there.
             .Timeout(BuildupTimeout)
             .Select(_ =>
             {

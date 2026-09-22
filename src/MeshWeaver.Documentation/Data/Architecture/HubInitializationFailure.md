@@ -257,7 +257,8 @@ hung dependency or stuck compile)"* — two candidates, neither measured, and no
 the hub's actions was pending. Naming the pending action is the part this layer can say (issue #2886).
 
 🚨 **The budget is a RUNG, not a constant** — `Configuration.NestedInitializationBudget`, one
-step inside whatever bounds this hub, and every hub THIS one hosts takes a step inside that again
+step inside whatever bounds this hub, and every hub born INSIDE this one's initialization takes a
+step inside that again
 ([The Initialization Budget Ladder](../InitializationBudgetLadder)). While every level was
 independently written as the same 120 s, which level reported a hang was decided by scheduling: when
 the enclosing one won it errored the inner hub's streams and that hub's initialization ended as a

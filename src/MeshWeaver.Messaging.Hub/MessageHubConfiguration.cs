@@ -688,8 +688,8 @@ public record MessageHubConfiguration
     /// <summary>
     /// 🚨 <b>Rung 1 of the initialization ladder — this hub's WHOLE initialization, as the hub that
     /// hosts it bounds it.</b> Either the explicit <c>WithStartupTimeout</c>, or one rung inside the
-    /// host's <see cref="NestedInitializationBudget"/>, or <see cref="HubInitializationBudget.Root"/>
-    /// for a hub nobody hosts.
+    /// host's <see cref="NestedInitializationBudget"/> when this hub was born inside that host's own
+    /// initialization, or <see cref="HubInitializationBudget.Root"/> when nothing is waiting on it.
     ///
     /// <para>It is DERIVED rather than a constant of its own precisely because it is nested: the
     /// host's own initialization waits on this hub reaching <c>Started</c> (a data source waits on
