@@ -370,15 +370,25 @@ held permit is — it is what makes the silo release over every OTHER leaf too. 
 abandonment must be **reported**: a leaf that settles on its token and then says nothing has traded
 a loud teardown residual for a silent one, which is the same defect with better manners.
 
-Two of the four entry points already do this projection for you, and knowing which is the whole
-rule: **`InvokeObservable`** composes `source(ct).LastAsync().ObserveCompletion(report, ct)`, and
+**Some entry points already do this projection for you, and knowing which is the whole rule.**
+`InvokeObservable` composes `source(ct).LastAsync().ObserveCompletion(report, ct)`, and
 `ObserveCompletion` cancels its task on that token — so every Octokit.Reactive call in
-`OctokitGitHubRepoClient` is safe however its lambda treats `ct`. **`InvokeStream`** enumerates as
-`source(ct).WithCancellation(ct)`, handing the token to the enumerator itself. **`InvokeBlocking`**
-holds no gate permit and is joined on its own `_blockingIdle` signal. **`Invoke` alone has no
-projection**, which is why it is the one `PooledLeafObservesItsTokenGuard` scans: it holds `src/` at
-zero for a lambda that never references its own token parameter, asserts its detector in both
-directions, and asserts its own denominator — a zero over no sites scanned is not a reading.
+`OctokitGitHubRepoClient` is safe however its lambda treats `ct`. `InvokeStream` (and `RunStream`,
+which forwards to it) enumerates as `source(ct).WithCancellation(ct)`, handing the token to the
+enumerator itself. `InvokeBlocking` (and `RunBlocking`) holds no gate permit and is joined on its own
+`_blockingIdle` signal. **`Invoke` has no projection, and `IoPoolExtensions.Run` composes straight
+onto it**, so those two are where a discarded token is unrecoverable — and they are what
+`PooledLeafObservesItsTokenGuard` scans. It holds `src/` at zero for a lambda that never references
+its own token parameter, asserts its detector in both directions, and asserts its own denominator:
+a zero over no sites scanned is not a reading.
+
+🚨 **And it states what it cannot see.** It is a LEXICAL scan of the LAMBDA form, so a leaf passed as
+a METHOD GROUP or a delegate variable — `_httpPool.Invoke(ReadIndex)`, `pool.Invoke(io)` — is
+outside it by construction, because deciding those means resolving the callee's body. That boundary
+is pinned by a test rather than left to a comment (a comment cannot fail), and a non-lambda argument
+is deliberately not failed: the sites using that form are correct today, and turning a correct form
+red to protect a lexical scan is the wrong trade. Real coverage for it is a call-graph pass or a
+Roslyn analyzer, not a wider regex.
 
 ---
 
