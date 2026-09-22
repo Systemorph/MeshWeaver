@@ -1360,7 +1360,10 @@ public static class DataExtensions
     /// <param name="request">The in-flight patch request to NACK on disposal.</param>
     /// <param name="hubPath">The hub's path (error payload).</param>
     /// <param name="tryClaimAck">Claims the shared once-only ack gate; false ⇒ already acked.</param>
-    private static void RegisterOwnerDisposingNack(
+    /// <returns>The detach handle (#3432): the caller disposes it the moment it claims the ack gate
+    /// itself, because from then on this registrant can post nothing and would otherwise be held,
+    /// with the request, for the hub's whole life.</returns>
+    private static IDisposable RegisterOwnerDisposingNack(
         IMessageHub hub,
         IMessageDelivery<PatchDataRequest> request,
         string hubPath,
@@ -1385,7 +1388,7 @@ public static class DataExtensions
         // radius one registrant; capturing eagerly is what keeps this registrant out of it.
         var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
         var parent = hub.Configuration.ParentHub;
-        hub.RegisterForDisposal(_ =>
+        return hub.RegisterForDisposalDetachable(Disposable.Create(() =>
         {
             if (!tryClaimAck())
                 return;
@@ -1437,7 +1440,7 @@ public static class DataExtensions
             // here, live, because that is the guard's whole subject.)
             if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 parent.Post(resp, o => o.ResponseFor(request));
-        });
+        }));
     }
 
     /// <summary>
@@ -1634,7 +1637,7 @@ public static class DataExtensions
         Func<TEcho, IObservable<bool>?> flush,
         TimeSpan flushTimeout,
         Action<bool, MeshNodeError?> ackOnce,
-        Action<IDisposable> registerForDisposal,
+        Func<IDisposable, IDisposable> registerForDisposal,
         string hubPath,
         Func<bool> ownerIsShuttingDown,
         ILogger? logger = null,
@@ -1782,6 +1785,10 @@ public static class DataExtensions
                     // The watcher itself posts at most ONE verdict for the flush leg — the bound and
                     // the flush's terminal race only inside the millisecond the bound expires, and the
                     // claim above decides it, so the caller's latch is never what keeps the count at one.
+                    // Detaches the leg's registration once the flush has terminated (#3432): by then
+                    // the bound is disposed too (Finally below), so the registrant can cancel nothing.
+                    // A flush still running when the owner goes down is disposed with it, as before.
+                    var legDetach = new SingleAssignmentDisposable();
                     var flushSub = durable
                         .Take(1)
                         .Finally(bound.Dispose)
@@ -1789,6 +1796,7 @@ public static class DataExtensions
                         {
                             if (ClaimVerdict()) ackOnce(true, null);
                         })
+                        .Finally(legDetach.Dispose)
                         .Subscribe(
                             _ =>
                             {
@@ -1819,7 +1827,7 @@ public static class DataExtensions
                     noteStage?.Invoke("PATCH_FLUSH_SUBSCRIBED");
                     // ONE registration for the leg, as before: the flush subscription and the bound
                     // timer live and die together with the owner hub.
-                    registerForDisposal(new CompositeDisposable(flushSub, bound));
+                    legDetach.Disposable = registerForDisposal(new CompositeDisposable(flushSub, bound));
                 },
                 ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));
 
@@ -2218,9 +2226,13 @@ public static class DataExtensions
         var ackLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.PatchAck");
         var ackPosted = 0;
+        // Detaches the owner-disposing NACK once the gate is claimed here (#3432) — see
+        // RegisterOwnerDisposingNack's return value.
+        var ownerNackDetach = new SingleAssignmentDisposable();
         void AckOnce(bool success, MeshNodeError? error = null)
         {
             if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+            ownerNackDetach.Dispose();
             var resp = new PatchDataResponse(success, hub.Version);
             if (error is not null)
                 resp = resp with { Error = error.Message, NodeError = error };
@@ -2229,7 +2241,7 @@ public static class DataExtensions
             // here or the verdict is lost with the door shut behind it.
             PostPatchVerdict(hub, request, resp, lateVerdicts, ackLogger);
         }
-        RegisterOwnerDisposingNack(hub, request, hubPath,
+        ownerNackDetach.Disposable = RegisterOwnerDisposingNack(hub, request, hubPath,
             () => System.Threading.Interlocked.Exchange(ref ackPosted, 1) == 0);
 
         stream
@@ -2394,15 +2406,19 @@ public static class DataExtensions
                     // (see ApplyMeshNodePatchInTurn). Armed through the totality seam so a stream
                     // that ENDS before the commit is observed, or a flush that ends without
                     // emitting, still posts exactly one terminal (#3033).
+                    // Held on the hub only until the echo watcher terminates (#3432) — its flush
+                    // leg, which may outlive it, carries its own registration.
+                    var postDetach = new SingleAssignmentDisposable();
                     var postSub = ArmPatchAckWatcher(
                         stream
                             .Skip(1)
                             .Take(1)
-                            .Timeout(TimeSpan.FromSeconds(5)),
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .Finally(postDetach.Dispose),
                         committed => hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!),
                         TimeSpan.FromSeconds(10),
                         AckOnce,
-                        d => hub.RegisterForDisposal(d),
+                        hub.RegisterForDisposalDetachable,
                         hubPath,
                         // 🚨 Stand aside for the disposal NACK only while a route is ARMED to receive it
                         // (#3197). The deferral used to rest on "the disposal NACK is coming, and soon" — an
@@ -2415,7 +2431,7 @@ public static class DataExtensions
                         () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
                         hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"),
                         noteStage: stage => hub.NoteRequestStage(request.Id, stage));
-                    hub.RegisterForDisposal(postSub);
+                    postDetach.Disposable = hub.RegisterForDisposalDetachable(postSub);
 
                     // Route via the hub's DataChangeRequest pipeline — the workspace
                     // writes through the data-source stream (which owns the typed
@@ -2478,9 +2494,13 @@ public static class DataExtensions
         var ackLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.PatchAck");
         var ackPosted = 0;
+        // Detaches the owner-disposing NACK once the gate is claimed here (#3432) — see
+        // RegisterOwnerDisposingNack's return value.
+        var ownerNackDetach = new SingleAssignmentDisposable();
         void AckOnce(bool success, MeshNodeError? error = null)
         {
             if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
+            ownerNackDetach.Dispose();
             // The verdict leg of the trail (MeshWeaver#2543): which arm produced the terminal.
             hub.NoteRequestStage(request.Id,
                 success ? "PATCH_ACK ok" : $"PATCH_ACK nack={error?.Code}");
@@ -2521,6 +2541,9 @@ public static class DataExtensions
         // 30068597014 / 30079395006 (post-recycle store frozen at the pre-recycle
         // version despite a fast Success ack). Write-echo detection is identity-based,
         // never emission-count-based (PR #584 rule).
+        // Held on the hub only until the echo watcher terminates (#3432) — its flush leg, which
+        // may outlive it, carries its own registration.
+        var postDetach = new SingleAssignmentDisposable();
         var postSub = ArmPatchAckWatcher(
             stream
                 .Where(c => ChangeContainsStampedWrite(
@@ -2533,7 +2556,8 @@ public static class DataExtensions
                 // expiry the AckOnce guard means this NACK only fires if no terminal was
                 // posted yet (e.g. commit emission lost in a teardown) — the caller's
                 // retry machinery takes over; never a silent hang.
-                .Timeout(TimeSpan.FromSeconds(20)),
+                .Timeout(TimeSpan.FromSeconds(20))
+                .Finally(postDetach.Dispose),
             // Durable flush (persist + publish the cache-eviction feed event), then ack; no hook
             // registered → ack on the in-memory commit. Armed through the totality seam so a
             // stream that ENDS before the echo arrives, or a flush that ends without emitting,
@@ -2548,7 +2572,7 @@ public static class DataExtensions
             },
             TimeSpan.FromSeconds(10),
             AckOnce,
-            d => hub.RegisterForDisposal(d),
+            hub.RegisterForDisposalDetachable,
             hubPath,
             // 🚨 Stand aside for the disposal NACK only while a route is ARMED to receive it
             // (#3197). The deferral used to rest on "the disposal NACK is coming, and soon" — an
@@ -2561,13 +2585,13 @@ public static class DataExtensions
             () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
             hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"),
             noteStage: stage => hub.NoteRequestStage(request.Id, stage));
-        hub.RegisterForDisposal(postSub);
+        postDetach.Disposable = hub.RegisterForDisposalDetachable(postSub);
         // Registered AFTER postSub so the composite disposes the watcher FIRST, then this NACK
         // claims the gate — an unacked in-flight patch always gets a terminal, never silence.
         // The watcher's own completion arm stands aside for a shutting-down owner precisely so
         // that this registrant — the ShutDown-phase seam, whose Dispatch reaches the waiter and
         // whose timing lets the re-enqueue land on a FRESH activation — is the one that claims it.
-        RegisterOwnerDisposingNack(hub, request, hubPath,
+        ownerNackDetach.Disposable = RegisterOwnerDisposingNack(hub, request, hubPath,
             () => System.Threading.Interlocked.Exchange(ref ackPosted, 1) == 0);
 
         // Resolve the target id SYNCHRONOUSLY from the reduced stream's Current (Id is immutable)
@@ -2657,6 +2681,8 @@ public static class DataExtensions
                         // node then NotFounds on the deferred attempt against the LOADED store.
                         if (!deferred && (collection is null || collection.Instances.Count == 0))
                         {
+                            // Held on the hub only until the deferred read terminates (#3432).
+                            var deferDetach = new SingleAssignmentDisposable();
                             var deferSub = primary
                                 .Where(ci => ci.Value?.Collections.GetValueOrDefault(collectionName)
                                     is { Instances.Count: > 0 })
@@ -2688,6 +2714,7 @@ public static class DataExtensions
                                         + "loading — the patch was NOT applied; safe to retry "
                                         + "against the fresh activation"));
                                 })
+                                .Finally(deferDetach.Dispose)
                                 .Subscribe(
                                     _ => RunMergeTurn(deferred: true),
                                     // 🚨 NOT NotFound (#667): the store never initialized within the
@@ -2702,7 +2729,7 @@ public static class DataExtensions
                                         "owner activation has not loaded its state within the bound — "
                                         + "the patch was NOT applied; safe to retry once the "
                                         + "activation has loaded")));
-                            hub.RegisterForDisposal(deferSub);
+                            deferDetach.Disposable = hub.RegisterForDisposalDetachable(deferSub);
                             hub.NoteRequestStage(request.Id, "PATCH_MERGE_DEFERRED cold-store");
                             return null; // no write this turn — the deferred attempt commits
                         }
@@ -3050,7 +3077,9 @@ public static class DataExtensions
         logger?.LogDebug("HandleSubscribeRequest: Hub={Hub}, Sender={Sender}, AccessContext.ObjectId={ObjectId}, Reference={Ref}",
             hub.Address, request.Sender, accessContext?.ObjectId, request.Message.Reference);
 
-        var subscription = RunReadValidators(hub, request.Message.Reference)
+        // Held on the hub only while the validation is in flight (#3432): once it has answered, the
+        // client subscription it opened is owned by the workspace, not by this registrant.
+        hub.SubscribeHeldUntilTerminal(RunReadValidators(hub, request.Message.Reference), validated => validated
             .Subscribe(validationResult =>
             {
                 if (!validationResult.IsValid)
@@ -3079,9 +3108,8 @@ public static class DataExtensions
                 hub.GetWorkspace().SubscribeToClient(request);
                 logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
                     request.Sender, hub.Address);
-            });
+            }));
 
-        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 
@@ -3105,7 +3133,10 @@ public static class DataExtensions
         dcLogger?.LogDebug("[DataChange] RECEIVED: {Time:HH:mm:ss.fff} hub={Hub}, updates={Updates}, creates={Creates}, deletes={Deletes}",
             DateTime.UtcNow, hub.Address, changeRequest.Updates.Count, changeRequest.Creations.Count, changeRequest.Deletions.Count);
 
-        var subscription = RunChangeValidators(hub, changeRequest)
+        // Both subscriptions below are held on the hub only until they terminate (#3432): a
+        // DataChangeRequest used to leave TWO permanent registrants per write, each holding the
+        // request and its closures for the hub's whole life.
+        hub.SubscribeHeldUntilTerminal(RunChangeValidators(hub, changeRequest), validated => validated
             .Subscribe(validationResult =>
             {
                 if (!validationResult.IsValid)
@@ -3125,11 +3156,11 @@ public static class DataExtensions
                 // Activity-per-change — a hosted hub whose only job was to latch that completion.
                 // Every hub now reports its REAL log, including the activity hub, which used to be
                 // handed a synthetic "Succeeded" because an Activity there would have recursed.
-                var changeSubscription = hub.GetWorkspace()
+                hub.SubscribeHeldUntilTerminal(hub.GetWorkspace()
                     .RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy })
                     .Select(log => isSatellite || string.IsNullOrEmpty(hubPath)
                         ? log
-                        : log with { AffectedPaths = log.AffectedPaths.Add(hubPath) })
+                        : log with { AffectedPaths = log.AffectedPaths.Add(hubPath) }), change => change
                     .Subscribe(
                         log =>
                         {
@@ -3141,11 +3172,9 @@ public static class DataExtensions
                         ex => hub.Post(
                             new DataChangeResponse(hub.Version,
                                 new ActivityLog(ActivityCategory.DataUpdate).Fail(ex.Message)),
-                            o => o.ResponseFor(request)));
-                hub.RegisterForDisposal(changeSubscription);
-            });
+                            o => o.ResponseFor(request))));
+            }));
 
-        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 
@@ -3228,6 +3257,15 @@ public static class DataExtensions
         // at that point. Same rule (and same reason) as RegisterOwnerDisposingNack.
         var parentHub = hub.Configuration.ParentHub;
 
+        // 🚨 The registration below is DETACHED once the read has both terminated AND claimed its
+        // answer (#3432). Before, it was held for the hub's whole life: +1 permanent registrant per
+        // GetDataRequest ever served, each holding the delivery and its closures. After a claimed
+        // terminal its disposal can do nothing — the subscription is over and TryClaimSilentTerminal
+        // fails — so detaching it then changes no behaviour. A read that is still LIVE (a workspace
+        // stream keeps shipping) or that ended UNCLAIMED (an empty completion on a healthy hub, whose
+        // caller is owed the disposal NACK) stays registered, exactly as before.
+        var detach = new SingleAssignmentDisposable();
+
         var subscription = RunReadValidators(hub, request.Message.Reference)
             .SelectMany(validationResult =>
             {
@@ -3275,6 +3313,12 @@ public static class DataExtensions
                 HubDisposingException.IsHubDisposal(ex) || HubDisposingException.IsDisposedContainer(ex)
                     ? Observable.Throw<GetDataResponse>(ex)
                     : Observable.Return(new GetDataResponse(null, 0) { Error = DescribeReadFault(ex) }))
+            // Runs after the observer's terminal arm below has decided the answer (or on dispose).
+            .Finally(() =>
+            {
+                if (Volatile.Read(ref state) != 0)
+                    detach.Dispose();
+            })
             .Subscribe(
                 response =>
                 {
@@ -3334,7 +3378,7 @@ public static class DataExtensions
         // ever delivered and the caller is owed the same answer. Disposal runs in the ShutDown
         // phase, where this hub's own Post is gated closed — NackSilentRead falls back to the
         // parent, exactly as RegisterOwnerDisposingNack does.
-        hub.RegisterForDisposal(Disposable.Create(() =>
+        detach.Disposable = hub.RegisterForDisposalDetachable(Disposable.Create(() =>
         {
             subscription.Dispose();
             if (TryClaimSilentTerminal())
@@ -4119,12 +4163,12 @@ public static class DataExtensions
             _ => Observable.Return(UpdateUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}"))
         };
 
-        var subscription = observable
+        // Held on the hub only until it has answered (#3432).
+        hub.SubscribeHeldUntilTerminal(observable
             .Catch<UpdateUnifiedReferenceResponse, Exception>(ex =>
-                Observable.Return(UpdateUnifiedReferenceResponse.Fail(ex.Message)))
-            .Subscribe(result => hub.Post(result, o => o.ResponseFor(request)));
+                Observable.Return(UpdateUnifiedReferenceResponse.Fail(ex.Message))),
+            answer => answer.Subscribe(result => hub.Post(result, o => o.ResponseFor(request))));
 
-        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 
@@ -4361,12 +4405,12 @@ public static class DataExtensions
             _ => Observable.Return(DeleteUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}"))
         };
 
-        var subscription = observable
+        // Held on the hub only until it has answered (#3432).
+        hub.SubscribeHeldUntilTerminal(observable
             .Catch<DeleteUnifiedReferenceResponse, Exception>(ex =>
-                Observable.Return(DeleteUnifiedReferenceResponse.Fail(ex.Message)))
-            .Subscribe(result => hub.Post(result, o => o.ResponseFor(request)));
+                Observable.Return(DeleteUnifiedReferenceResponse.Fail(ex.Message))),
+            answer => answer.Subscribe(result => hub.Post(result, o => o.ResponseFor(request))));
 
-        hub.RegisterForDisposal(subscription);
         return request.Processed();
     }
 

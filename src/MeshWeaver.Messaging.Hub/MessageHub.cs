@@ -2428,6 +2428,49 @@ public sealed class MessageHub : IMessageHub
         => RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() => disposeAction(this)));
 
     /// <summary>
+    /// Couples a synchronous cleanup to the hub's lifetime until the returned handle is disposed,
+    /// which DETACHES it — removes it from the composite without disposing it. See
+    /// <see cref="IMessageHub.RegisterForDisposalDetachable"/> and <see cref="DisposalRegistrantCount"/>.
+    /// </summary>
+    /// <param name="disposable">The resource to dispose when the hub shuts down, unless detached first.</param>
+    /// <returns>A handle whose disposal detaches the registrant without disposing it.</returns>
+    public IDisposable RegisterForDisposalDetachable(IDisposable disposable)
+    {
+        var entry = new DetachableRegistrant(GuardRegistrant(disposable));
+        // A hub already disposing disposes the entry on Add (late registrants never leak), after
+        // which Detach() reports false and the handle does nothing.
+        disposables.Add(entry);
+        return System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            // Claim first, THEN remove: CompositeDisposable.Remove disposes what it removes, and the
+            // claim is what makes that disposal a no-op. A teardown racing the detach claims the
+            // same flag, so the registrant runs at most once and only if the teardown won.
+            if (entry.Detach())
+                disposables.Remove(entry);
+        });
+    }
+
+    /// <summary>
+    /// A registrant that runs its cleanup at most once, and not at all once detached. The single
+    /// flag is shared by <see cref="Dispose"/> (the hub's teardown) and <see cref="Detach"/> (the
+    /// registrant's subject ended), so whichever comes first decides.
+    /// </summary>
+    private sealed class DetachableRegistrant(IDisposable inner) : IDisposable
+    {
+        private int settled;
+
+        /// <summary>Claims the registrant without running it. False when the teardown got there first.</summary>
+        public bool Detach() => Interlocked.Exchange(ref settled, 1) == 0;
+
+        /// <summary>Runs the cleanup unless it was detached (or already ran).</summary>
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref settled, 1) == 0)
+                inner.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Registers a reactive cleanup returning <see cref="IObservable{T}"/> (Unit) for I/O-performing
     /// teardown. Held in an immutable list, composed into one chain at dispose and subscribed so its
     /// async leaves run on the mesh IO pool.
