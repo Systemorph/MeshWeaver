@@ -205,13 +205,20 @@ Three things this change deliberately does **not** do. Each is a scope call, not
    image` over it finds only prose. `deploy-drift.yml` compares git against the record, and the
    fleet watch excludes `ImageDrift`. So "the cluster runs a tag nobody committed" is detected by
    nothing. Whether it belongs here is #4640's open item 3.
-3. **A completed run publishes its ConfigMap findings to a public Actions log.** The comparator
-   never prints an inline-env or Secret value; it does print both sides of a ConfigMap finding, and
-   a ConfigMap is non-secret by definition. Measured on the first real run the entire disclosure was
-   one value, `'Job'` — but it is a live property now that runs complete, and it is a wider surface
-   than the workflow's own *"that would publish the deployment inventory"* warning implies. The
-   tracking issue carries **counts only** for this reason. Whether ConfigMap values should be
-   withheld the way inline-env values already are is an open call on #4640.
+3. **A completed run publishes its ConfigMap findings to a public Actions log — CLOSED: values are
+   withheld** (MeshWeaver#4685). The comparator never printed an inline-env or Secret value; it did
+   print both sides of a ConfigMap finding, on the ground that a ConfigMap is non-secret by
+   definition. Measured on the first real run the entire disclosure was one value, `'Job'` — but the
+   surface is data-dependent (a `DIFFERS ConfigMap MEMEX_HOST` prints a production FQDN), and the
+   ConfigMap is rendered from the record's `config:`, which is the deployment inventory the
+   workflow's own header refuses to publish. So a ConfigMap finding now names the key and each
+   side's **length** — `36 chars` vs `35 chars` still tells a GUID from its placeholder — and never
+   the bytes; no hash prefix either, because for a guessable value that is a confirmation oracle,
+   not a redaction. `test-chart-drift-compare.sh` asserts one case per class that used to print a
+   value (`DIFFERS`, `CHART-ONLY`, unowned `CLUSTER-ONLY`) with fixture strings that occur nowhere
+   else in the output, and asserts the length line positively, so the withholding cannot pass by
+   printing nothing. The operator who acts on a finding reads the values on the cluster, where they
+   were always readable; the tracking issue keeps carrying **counts only**.
 
 ## The generalisable rule
 

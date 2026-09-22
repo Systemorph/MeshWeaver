@@ -298,6 +298,30 @@ else
   echo "  ok   a key that is live, helm-owned and still rendered is not reported"
 fi
 
+# 🔒 NO CONFIGMAP VALUE REACHES THE LOG (MeshWeaver#4685). The comparator prints which key differs
+# and how long each side is — never the bytes: this repository's Actions logs are public and the
+# ConfigMap is rendered from the deployment record's `config:`, the inventory chart-drift.yml refuses
+# to publish. One case per class that used to print a value: DIFFERS (Pad__18, seeded live-only
+# bytes), CHART-ONLY (PluginCatalog__RegistryUrl) and unowned CLUSTER-ONLY (Ops__Contact). The values
+# are fixture strings that occur nowhere else in the output, so "absent" is a real assertion — and
+# the length line is asserted positively, so the withholding cannot pass by printing nothing.
+expect_class "DIFFERS" "ConfigMap Pad__18"
+for leaked in 'v18-cluster-only-bytes' 'https://registry.example' 'ops@example'; do
+  if echo "$out" | grep -qF "$leaked"; then
+    echo "::error::a ConfigMap VALUE reached the log: '$leaked'. Values are withheld (MeshWeaver#4685);"
+    echo "         the finding names the key and each side's length only."
+    fail=1
+  else
+    echo "  ok   the ConfigMap value '$leaked' is withheld from the log"
+  fi
+done
+if echo "$out" | grep -A1 'DIFFERS *ConfigMap Pad__18' | grep -q 'chart <value withheld: 3 chars> vs live <value withheld: 22 chars>'; then
+  echo "  ok   a DIFFERS ConfigMap finding states each side's LENGTH"
+else
+  echo "::error::the DIFFERS ConfigMap Pad__18 finding does not state both sides' lengths (3 vs 22 chars)."
+  fail=1
+fi
+
 # The count the report now carries so nobody re-derives it by hand next run.
 if echo "$out" | grep -q '4 of the CLUSTER-ONLY finding(s) are PENDING DELETIONS'; then
   echo "  ok   the summary counts the pending deletions"
