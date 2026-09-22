@@ -118,13 +118,14 @@ name: Chart Drift
 # state — it is the reading that made the case, not a standing claim.
 #
 # 🔒 WHAT A COMPLETED RUN PUBLISHES, since this repository is PUBLIC and its Actions logs are too.
-# The comparator never prints an inline-env or Secret value (see its header). It DOES print the two
-# sides of a ConfigMap finding, and a ConfigMap is non-secret by definition — measured on the first
-# real run, the whole disclosure was one value, `'Job'`. It is nonetheless a larger surface than
-# this file's "do NOT move the overlays into this public repo — that would publish the deployment
-# inventory" implies, and it is a live property now that runs complete. Whether ConfigMap values
-# should be withheld like inline-env values is an open call recorded in MeshWeaver#4640; the
-# `report` job below deliberately carries COUNTS ONLY for the same reason.
+# The comparator prints NO value of any kind: not an inline-env's, not a Secret's, and — since
+# MeshWeaver#4685 — not a ConfigMap's either. It used to print both sides of a ConfigMap finding on
+# the ground that a ConfigMap is non-secret by definition (measured on the first real run, the whole
+# disclosure was one value, `'Job'`), but the ConfigMap is rendered from the record's `config:`,
+# which is exactly the deployment inventory the paragraph above refuses to publish, and the surface
+# was data-dependent (a `DIFFERS ConfigMap MEMEX_HOST` would have printed a production FQDN). A
+# ConfigMap finding now names the key and each side's LENGTH, never the bytes; the `report` job
+# below carries COUNTS ONLY for the same reason.
 #
 # 🚨 A WARNING THAT USED TO SIT HERE WAS WRONG, AND IT IS THE REASON THIS PARAGRAPH IS DATED. It
 # read: "ConfigMap Authentication__Microsoft__ClientId is still `CHANGE_ME_aad_application_client_id`
