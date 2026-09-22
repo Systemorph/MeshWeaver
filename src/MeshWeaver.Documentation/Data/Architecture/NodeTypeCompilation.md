@@ -1761,7 +1761,17 @@ general claim — true of the shallow phase only. Once it deepens, `public class
 one top-level, non-generic, member-less class, no recursion anywhere in the compilation — cannot emit
 either, and the guard `AsNestedTypeDefinitionImpl` makes has read TRUE where it must read FALSE.
 
-**3. The pair is sharper than either half.** `SAME-FRAME` says the shared copy cannot emit the
+**3. The fault is ACQUIRED, and it deepens — neither is an inference.** In the third occurrence
+`OverlaySelfHealInstanceRecycleTest.OverlaidInstance_SelfRecycles_WhenTypeCompilesGreen` **passed** at
+12:52:07.654Z, and what that test asserts is exactly the missing positive: a NodeType reaching
+`CompilationStatus == CompilationStatus.Ok` *with a usable build*, whose instance then renders a
+marker. So this process emitted successfully 33 seconds before its first poisoned emit at 12:52:40Z —
+it did not start unable to emit, and no image or mount arrived broken. The second occurrence supplies
+the other half from inside one process: `flat=EMITS` for six failures, then `flat=SAME-FRAME` for
+fifty-two. **Acquired, then progressive.** That is the shape a tier-up produces and not the shape a
+bad file produces, which is why the residual below is worth spending a measurement on.
+
+**4. The pair is sharper than either half.** `SAME-FRAME` says the shared copy cannot emit the
 smallest possible compilation; `PRIVATE-COPY-EMITS` says a cold copy of the same compiler can, then and
 there. Of the three candidates leg 5 leaves open — the image, its mapping, or the native code produced
 for it — only the third can get *worse while the process runs*. An image does not rot and a mapping
@@ -1782,7 +1792,7 @@ experiment is ONE copy held loaded across repeated emits, armed once per PROCESS
 `BELOW-ROSLYN` and read by the later ones — one pair of loads, N emits — and the cost model is part of
 the change, not an afterthought.
 
-**4. The platform set is not the variable.** The three occurrences sit on three different sets, and
+**5. The platform set is not the variable.** The three occurrences sit on three different sets, and
 `git diff 6b3fda2a4..620a4893a -- src/MeshWeaver.Compiler src/MeshWeaver.Compiler.Pipeline` is **empty**
 across the pair that brackets the newest of them; `Microsoft.CodeAnalysis.CSharp` (5.9.0) and
 `global.json` are unchanged over the same range. A pass-then-fail across a ceiling move is therefore
@@ -1790,7 +1800,7 @@ not evidence about the ceiling — measured on PR #2231, which ran the same suit
 (`total: 813, failed: 0`, run `35700505749`, set `3.0.0-ci.9141`) four hours before it was killed at
 `3.0.0-ci.9168` with no diff of its own in between.
 
-**5. The rate, with its denominator, and why `main` cannot supply the control.** Since
+**6. The rate, with its denominator, and why `main` cannot supply the control.** Since
 2026-09-21T00:00Z the unit ran **102** times across the workflow: 75 `success`, 22 `cancelled`
 (superseded pushes), 2 still running, **3 `failure` — and all three are this defect**. 🚨 A
 `cancelled` shard can *carry* the defect (this thread's 2026-09-12 correction is exactly that
@@ -1806,7 +1816,7 @@ fail. **The population across unrelated branches is the control**, and it attrib
 pull request: `fix/incident-fold-dedupe`, `fix/hosting-bake-probe` and `fix/ai-stream-cancel` share
 nothing but the defect.
 
-**6. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
+**7. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
 first poisoned emit every compile-gated assertion spends its entire window and then fails — on
 2026-09-22, 11 tests failed and 9 of them burned a full 50 s / 60 s / 90 s / 120 s window — so 138 of
 813 tests consume the 900 s cap. The last test
@@ -1815,7 +1825,7 @@ to *start* (`NodeTypeRecompileAlcLeakTest.RecompilingANodeType_ReleasesEverySupe
 as *"the process stopped being able to emit at 12:52:40Z"*, and look for the first `PROCESS CANNOT EMIT`,
 never for the last test name.
 
-**7. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
+**8. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
 design produces, and neither half points anywhere: `TeardownStragglerCapturer` *was* loaded — its module
 initializer ran, which the 120 records prove — but its first-chance filter is
 `IsTeardownDisposedStraggler` (Autofac `LifetimeScope` and `MemoryCache` shapes only), so an emit `NRE`
