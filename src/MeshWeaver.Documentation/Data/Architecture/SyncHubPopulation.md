@@ -273,9 +273,12 @@ public IMessageHub RegisterForDisposal(IDisposable disposable)
 }
 ```
 
-**It is append-only.** `CompositeDisposable.Add` never prunes, and no code path removes an entry. So
-every registrant a hub is handed is held — with everything its closure captured — for that hub's
-whole life. A registrant whose own subject is SHORTER-lived than the hub is therefore a monotone
+**A plain registration is append-only.** `CompositeDisposable.Add` never prunes, and nothing removes
+an entry added through `RegisterForDisposal`, so such a registrant is held — with everything its
+closure captured — for that hub's whole life. The ONE way out before the hub dies is a DETACHABLE
+registration (`RegisterForDisposalDetachable`, or `SubscribeHeldUntilTerminal` built on it): its handle
+removes the entry without disposing it, and it is to be used only once the registrant's disposal can
+no longer do anything (see the table below). A PLAIN registrant whose own subject is SHORTER-lived than the hub is therefore a monotone
 root, and it retains an object graph rather than a hub, which is why no `MessageHub` histogram can
 see it.
 

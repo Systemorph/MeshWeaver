@@ -203,7 +203,7 @@ public class PerRequestRegistrantsLeaveTheOwnerHubTest(ITestOutputHelper output)
     {
         var settled = await Observable.Interval(50.Milliseconds()).StartWith(0L)
             .Select(_ => RegistrantCount(host))
-            .Where(count => count <= floor)
+            .Where(count => count == floor)
             .Should().Within(5.Seconds())
             .Emit($"{Requests} answered {what}s must leave the owner's registrant count at its floor "
                 + $"({floor}); it read {RegistrantCount(host)} when the wait began — one retained registrant graph per "

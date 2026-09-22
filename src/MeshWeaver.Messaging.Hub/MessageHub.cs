@@ -2503,13 +2503,17 @@ public sealed class MessageHub : IMessageHub
     /// (<see cref="RegisterForDisposal(IDisposable)"/>) — i.e. the size of the composite that
     /// <c>DisposeImpl</c> walks in the ShutDown phase. Zero once the hub is down.
     ///
-    /// <para>🚨 <b>This is a RETENTION reading, not a tidiness one.</b> The composite is
-    /// append-only: <c>CompositeDisposable.Add</c> never prunes, and nothing else removes an
-    /// entry, so every registrant a hub is handed is held — with everything its closure captured
-    /// — for the hub's whole life. A registrant whose own subject is shorter-lived than the hub
-    /// (a per-request watcher, a per-stream subscription) is therefore a monotone root, and this
-    /// count is the only thing that can SEE it: a hub whose registrant count climbs with the
-    /// traffic it has served is retaining one object graph per unit of that traffic.</para>
+    /// <para>🚨 <b>This is a RETENTION reading, not a tidiness one.</b> An entry added through
+    /// <see cref="RegisterForDisposal(IDisposable)"/> is never removed —
+    /// <c>CompositeDisposable.Add</c> never prunes — so it is held, with everything its closure
+    /// captured, for the hub's whole life. Only an entry added through
+    /// <see cref="RegisterForDisposalDetachable"/> (or
+    /// <see cref="HubHeldSubscriptionExtensions.SubscribeHeldUntilTerminal{T}"/>) leaves before the
+    /// hub does, when its handle detaches it. A plain registrant whose own subject is
+    /// shorter-lived than the hub (a per-request watcher, a per-stream subscription) is therefore a
+    /// monotone root, and this count is the only thing that can SEE it: a hub whose registrant
+    /// count climbs with the traffic it has served is retaining one object graph per unit of that
+    /// traffic.</para>
     ///
     /// <para>A hub with a bounded set of registrants — the ordinary case, wired once at
     /// construction — reports a small number that never moves.</para>
@@ -3301,8 +3305,8 @@ public sealed class MessageHub : IMessageHub
               .Append(", ").Append(snapshot.CurrentMessageElapsedMs).Append("ms)");
         sb.Append(" PendingCallbacks=").Append(pending.Length)
           .Append('[').Append(FormatPendingCallbacks(pending)).Append(']')
-          // See DisposalRegistrantCount: append-only composite, so a number that climbs with the
-          // traffic this hub has served is one retained object graph per unit of that traffic.
+          // See DisposalRegistrantCount: plain registrants are never removed, so a number that
+          // climbs with the traffic this hub has served is one retained object graph per unit of it.
           .Append(" Registrants=").Append(DisposalRegistrantCount);
         return sb.ToString();
     }
@@ -3444,9 +3448,9 @@ public sealed class MessageHub : IMessageHub
               // DISPOSE_TIMEOUT — the case where the hub never even reached its quiescing
               // timeout, so the enriched QuiescingTimeoutDetail does not exist yet.
               .Append(FormatPendingCallbackFates(pending));
-        // 🚨 The RETENTION field (#3432). See DisposalRegistrantCount: the composite is
-        // append-only, so this number is the count of object graphs this hub is holding through
-        // registered cleanups — and a hub whose registrant count climbs with the traffic it has
+        // 🚨 The RETENTION field (#3432). See DisposalRegistrantCount: plain registrants are never
+        // removed (only detachable ones are), so this number is the count of object graphs this hub
+        // is holding through registered cleanups — and a hub whose registrant count climbs with the traffic it has
         // served is retaining one per unit of that traffic. Printed unconditionally so "I measured
         // it and it was small" and "I did not measure it" are two different lines.
         sb.Append(" Registrants=").Append(DisposalRegistrantCount);
