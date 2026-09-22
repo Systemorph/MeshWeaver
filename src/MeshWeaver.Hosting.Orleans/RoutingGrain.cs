@@ -379,7 +379,7 @@ internal class RoutingGrain(
         Volatile.Write(ref saturationSinceTicks, startedUtc.Ticks);
         var episode = Interlocked.Increment(ref saturationEpisode);
         var (channels, destinations, deepest) = orderedDispatcher.QueueSnapshot();
-        logger.LogCritical(
+        logger.Log(SaturationLevel(deepest),
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
             + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
             + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
@@ -437,6 +437,39 @@ internal class RoutingGrain(
             ? "none in flight"
             : $"{(long)oldest.Value.Age.TotalMilliseconds} ms — {oldest.Value.Label}";
     }
+
+    /// <summary>
+    /// The level this crossing deserves, decided by the SHAPE the snapshot reports — the one
+    /// discriminator this counter can actually observe.
+    ///
+    /// <para>🚨 <b>A gauge crossing is not an incident.</b> Nothing throttles, queues or refuses at
+    /// <see cref="SaturationThreshold"/>: <see cref="Dispatch"/> hands every route to the pool
+    /// unconditionally and <see cref="RouteMessage"/> still returns <c>Forwarded</c>. The line's own
+    /// text has always said so — <i>"0 means nothing is waiting on anything, so read it as load"</i> —
+    /// while the level said the opposite, and the red-log ticketing path files an incident per
+    /// <see cref="LogLevel.Critical"/> fingerprint. So every ordinary busy moment opened a ticket.</para>
+    ///
+    /// <para><b>Measured 2026-09-21</b> across the crossings carried in the open incidents from this
+    /// site: <b>17 with <c>deepest = 0</c></b> (nothing blocked — breadth, or a CPU-starved silo) against
+    /// <b>4 with a genuine head-of-line queue</b>. Roughly four in five Criticals reported that nothing
+    /// was stuck. Combined with the per-activation identity split they became 46 open issues from ONE
+    /// log statement, 42 of them duplicates.</para>
+    ///
+    /// <para><b>The rule:</b> <c>deepest >= 1</c> means a leg is waiting on a LEG — head-of-line
+    /// blocking on one channel, which is actionable and stays <see cref="LogLevel.Critical"/>.
+    /// <c>deepest == 0</c> means nothing waits on anything, which is load, and is reported at
+    /// <see cref="LogLevel.Warning"/>: still logged, with every field it had before, and still paired
+    /// with <see cref="ReportDrained"/>'s duration — but it no longer files a ticket.</para>
+    ///
+    /// <para>🚨 This is a permanent level decision with a cost/value argument, NOT a debugging tweak:
+    /// <c>Critical</c> is what the ticketing path acts on, so it has to mean "act now". Nothing is
+    /// hidden — the load crossings keep their line, and the head-of-line shape, which is the one worth
+    /// waking someone for, is unchanged.</para>
+    /// </summary>
+    /// <param name="deepest">Legs queued behind the executing leg of the deepest channel.</param>
+    /// <returns><see cref="LogLevel.Critical"/> for head-of-line, <see cref="LogLevel.Warning"/> for load.</returns>
+    internal static LogLevel SaturationLevel(int deepest) =>
+        deepest >= 1 ? LogLevel.Critical : LogLevel.Warning;
 
     private void ReportDrained(int inFlight)
     {
