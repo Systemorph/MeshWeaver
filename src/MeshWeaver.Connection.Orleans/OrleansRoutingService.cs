@@ -1056,7 +1056,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // (null) or cancelled attach must degrade to today's behavior, never hold outbound
         // traffic hostage. ContinueWith swallows the terminal state, so the stored task never
         // faults; once completed the DeliverMessage gate is a no-op (dispatch stays synchronous).
-        subscriptionReady[address] = subscriptionTask.ContinueWith(_ => { }, TaskScheduler.Default);
+        // Held in a local so the teardown below can remove exactly THIS entry rather than
+        // whatever is registered at the address by then — see the note on the disposal.
+        var readyGate = subscriptionTask.ContinueWith(_ => { }, TaskScheduler.Default);
+        subscriptionReady[address] = readyGate;
         // Observe the task's terminal state so a fault is NEVER an unobserved-task exception (the gated
         // attach RETURNS NULL — not a throw — when it gives up, so a fault here is genuinely unexpected).
         // Accessing t.Exception marks it observed; this is trace-only, teardown still awaits the handle below.
@@ -1075,8 +1078,20 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // disposing hub/grain scheduler). Fire-and-forget on the pool — teardown is best-effort.
         return Disposable.Create(() =>
         {
-            streams.TryRemove(address, out _);
-            subscriptionReady.TryRemove(address, out _);
+            // 🚨 A registration removes WHAT IT REGISTERED, never "whatever is registered at this
+            // address now". `streams[address] = callback` is last-writer-wins, so removing by KEY
+            // let a departing registration erase a LATER one at the same address — and the local
+            // route is the authority for "this process hosts that hub", so that takes the address
+            // dark with no exception and nothing to grep. Found while tracing #5136 (a hosted hub
+            // handed out after its disposal had begun); no production occurrence of the erase
+            // itself is on record, because nothing currently re-registers an address while its
+            // predecessor's teardown is still running — and it is exactly that property a future
+            // retire-and-replace would remove, so the invariant belongs here and not in a caller.
+            // (The pod-hub claim below is the OTHER half and is NOT claim-aware: `Detach` stamps a
+            // 10-minute terminal `Released` tombstone on the address, which a successor's `Attach`
+            // clears only if it runs after. See Doc/Architecture/DisposedScopeAndDyingHubs.)
+            streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback));
+            subscriptionReady.TryRemove(new KeyValuePair<Address, Task>(address, readyGate));
             // Release the cluster-wide claim FIRST: a hub that MOVES pods (a portal/{user} circuit
             // reconnecting is the everyday case) must not leave a pinned activation behind on the
             // pod it left, or the new owner's Attach lands on the old one and has to bounce off it.

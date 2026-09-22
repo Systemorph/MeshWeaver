@@ -64,8 +64,22 @@ public sealed class RoutingQuiescence : IDisposable
     // Instance state on a mesh-scoped singleton (never static), and a ConcurrentDictionary because
     // legs enter and leave from many threads — the one sanctioned mutable collection, as an
     // instance field.
-    private readonly ConcurrentDictionary<long, string> inFlightLabels = new();
+    private readonly ConcurrentDictionary<long, TrackedLeg> inFlightLegs = new();
     private long ticket;
+
+    /// <summary>
+    /// One tracked leg: what it is, and WHEN it was accepted.
+    ///
+    /// <para>🚨 The timestamp is the whole reason this is a struct and not the bare label it used to
+    /// be. The label answers <i>which</i> leg (#2833); the start answers <i>how long</i>, and only
+    /// the second separates a busy silo from a leaked slot — see
+    /// <see cref="OldestInFlight"/>.</para>
+    ///
+    /// <para><see cref="Stopwatch.GetTimestamp"/>, never a wall clock: this is an ELAPSED time on one
+    /// process, so it must not move when the clock is stepped. Same choice, for the same reason, as
+    /// <c>IoPool</c>'s own queue-wait measurement.</para>
+    /// </summary>
+    private readonly record struct TrackedLeg(string Label, long StartedTimestamp);
 
     /// <summary>Initializes a new instance of the <see cref="RoutingQuiescence"/> class.</summary>
     public RoutingQuiescence()
@@ -113,11 +127,11 @@ public sealed class RoutingQuiescence : IDisposable
     public IDisposable Track(string label)
     {
         var id = Interlocked.Increment(ref ticket);
-        inFlightLabels[id] = label;
+        inFlightLegs[id] = new TrackedLeg(label, Stopwatch.GetTimestamp());
         Push(1);
         return Disposable.Create(() =>
         {
-            inFlightLabels.TryRemove(id, out _);
+            inFlightLegs.TryRemove(id, out _);
             Push(-1);
         });
     }
@@ -130,10 +144,53 @@ public sealed class RoutingQuiescence : IDisposable
     /// <returns>Up to <paramref name="max"/> labels, and a count of any remainder.</returns>
     public (IReadOnlyList<string> Labels, int NotShown) InFlightSample(int max = 10)
     {
-        var all = inFlightLabels.Values.ToArray();
+        var all = inFlightLegs.Values.Select(leg => leg.Label).ToArray();
         return all.Length <= max
             ? (all, 0)
             : (all.Take(max).ToArray(), all.Length - max);
+    }
+
+    /// <summary>
+    /// The leg that has been in flight LONGEST, and for how long — or <c>null</c> when nothing is in
+    /// flight.
+    ///
+    /// <para>🚨 <b>This is the discriminator a saturation report cannot otherwise have, and the whole
+    /// reason it exists.</b> <c>RoutingGrain</c>'s in-flight COUNT cannot tell a busy silo from one
+    /// holding a slot that will never be released: 64 legs each a millisecond old and 64 legs one of
+    /// which is twenty minutes old produce the same count, the same queue snapshot and the same pool
+    /// gauges. The log site's own advice for telling them apart — <i>"a later line with a HIGHER
+    /// episode on this activation means this episode drained"</i> — needs a SECOND sample, and the
+    /// incident filer files per sample. So three readings (#5003, #5014, #5134) each captured a
+    /// crossing that "excludes nothing", which is the one reading that would have turned a load
+    /// ticket into a slot-leak ticket.</para>
+    ///
+    /// <para>An age answers it in ONE sample: every leg young is load the silo is absorbing; one leg
+    /// minutes old is a slot that is not coming back, and <see cref="TrackedLeg.Label"/> names it. And
+    /// it is answered by the state the process already holds — no timer, no poller and no watchdog,
+    /// which this type deliberately does not have (the silo stop is the only thing that ever waits on
+    /// it).</para>
+    ///
+    /// <para>O(n) over the legs currently in flight, called once per saturation EPISODE because the
+    /// report latches — the same cost argument as <c>OrderedRouteDispatcher.QueueSnapshot</c>, never
+    /// per route.</para>
+    /// </summary>
+    /// <returns>The oldest leg's label and age, or <c>null</c> when no leg is in flight.</returns>
+    public (string Label, TimeSpan Age)? OldestInFlight()
+    {
+        var oldest = long.MaxValue;
+        string? label = null;
+        // Enumerating a ConcurrentDictionary is a moving target — a leg may land or arrive mid-scan.
+        // That is correct for a diagnostic and needs no lock: whatever it names WAS in flight, and the
+        // age it reports is a lower bound on that leg's real age. The one thing it must not do is
+        // report an age for a leg it did not see, which is why the label and the timestamp are read
+        // as ONE value out of the dictionary rather than looked up twice.
+        foreach (var leg in inFlightLegs.Values)
+        {
+            if (leg.StartedTimestamp >= oldest) continue;
+            oldest = leg.StartedTimestamp;
+            label = leg.Label;
+        }
+        return label is null ? null : (label, Stopwatch.GetElapsedTime(oldest));
     }
 
     // 🚨 Tolerant of a straggler AFTER the mesh is gone. This singleton is disposed with the
