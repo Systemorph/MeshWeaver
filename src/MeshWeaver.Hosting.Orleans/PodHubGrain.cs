@@ -131,6 +131,29 @@ internal sealed class PodHubGrain(
     /// <inheritdoc />
     public Task Detach()
     {
+        // 🚨 A RELEASE REMOVES WHAT ITS REGISTRATION REGISTERED — the same rule the two registries
+        // behind it already keep (#4741 for the hosted-hub registry, #5159 for the local route), and
+        // the third and last place it was missing (#5136). RegisterStream's disposal removes its own
+        // local route, value-matched, BEFORE it releases this claim; so if this silo still has a live
+        // route for the address when the release arrives, it belongs to a SUCCESSOR that registered
+        // under the same address since (RegisterStream is last-writer-wins). This Detach is then the
+        // predecessor's, and it is stale. Honouring it would stamp the terminal Released tombstone on
+        // a LIVE hub — every delivery refused for ten minutes with the one verdict the owner-side
+        // eviction acts on, and the pin cut from indefinite to the tombstone's lifetime — which is
+        // strictly worse than the fault a retire-and-replace exists to cure. The grain is not
+        // reentrant, so this read is ordered against the successor's Attach and every Deliver: there
+        // is no moment at which the route is there and the successor is not.
+        Address address = AddressPath;
+        if (localRoutes?.TryGetLocalRoute(address) is not null)
+        {
+            logger.LogDebug(
+                "[POD-HUB] {Address}: a release arrived while this silo holds a live local route for it — "
+                + "a successor has registered under the address, so the release is the predecessor's and "
+                + "is not honoured. The claim stays as the successor's Attach left it.",
+                AddressPath);
+            return Task.CompletedTask;
+        }
+
         // 🚨 A RELEASE IS A FACT THE CLUSTER MUST KEEP, briefly. Deactivating on idle here (the
         // previous behaviour) threw that fact away: the next delivery to the address re-created the
         // activation on the CALLER's silo (prefer-local), which has no local route either, and the

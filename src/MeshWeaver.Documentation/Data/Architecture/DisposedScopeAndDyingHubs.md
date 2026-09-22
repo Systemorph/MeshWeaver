@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Disposed Scopes and Dying Hubs — one symptom, five roots"
-Abstract: "Every ObjectDisposedException whose top frame is Autofac's LifetimeScope.ThrowDisposedException looks the same in a log and comes from one of five unrelated roots: the host container going down ahead of the mesh, a continuation resolving from a scope its own pipeline closed, a hub teardown that wedges, a shutdown drain budget expiring over live work, and Orleans dropping deliveries at silo stop. This page separates them, records which are fixed, and carries the swept inventory of deferred resolve sites plus the reason the obvious fix for a dying-hub lookup is not safe today."
+Abstract: "Every ObjectDisposedException whose top frame is Autofac's LifetimeScope.ThrowDisposedException looks the same in a log and comes from one of five unrelated roots: the host container going down ahead of the mesh, a continuation resolving from a scope its own pipeline closed, a hub teardown that wedges, a shutdown drain budget expiring over live work, and Orleans dropping deliveries at silo stop. This page separates them, records which are fixed, carries the swept inventory of deferred resolve sites, and explains why a dying hub is retired from its registry only at ShutDown and why every removal a teardown makes must be value-matched."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#4527a0'/><path d='M7 7l10 10M17 7L7 17' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -31,7 +31,7 @@ Tags:
 | Root | What closed the scope | The tell in the log | Status |
 |---|---|---|---|
 | **R1 — the host container went down ahead of the mesh** | the generic host disposed the root provider while the mesh pump, Orleans directory and hosted-hub creation were still live | a burst across several pods inside one rolling deploy; frames in *upstream* code (Orleans `PlacementDirectorResolver`, `CodecProvider`) as often as in ours | **fixed** — `MeshTeardownHostedService` |
-| **R2 — a dying hub is handed out as the live hub** | nothing; the hub is alive but past accepting work | the same hub address answering `Hub … is shutting down — cannot register new response subject` to *unrelated* callers minutes apart, on a pod that is otherwise serving | **root identified, not fixed** (see below) |
+| **R2 — a dying hub is handed out as the live hub** | nothing; the hub is alive but past accepting work | the same hub address answering `Hub … is shutting down — cannot register new response subject` to *unrelated* callers minutes apart, on a pod that is otherwise serving | **fixed** — a hub at `ShutDown` is retired from the registry and a successor minted; every removal is value-matched (see below) |
 | **R3 — a continuation resolved from a scope its own pipeline closed** | the operation itself | an ordinary-hours failure with no deploy nearby; the frame is `System.Reactive.Linq.ObservableImpl.Do`/`SelectMany` calling a lambda in our code | **partly fixed** — see the inventory |
 | **R4 — a drain budget expired over live work** | the drain, deliberately, after saying so | `did not finish within 00:00:30 — … releasing over live work` / `route leg(s) did not land` | **instrumented, subject unidentified** |
 | **R5 — Orleans dropped a delivery at silo stop** | nothing — the silo refused placement | `SiloUnavailableException: Silo '…' is shutting down`, `ForwardCount=1` | **upstream behaviour** |
@@ -103,15 +103,19 @@ constructor before moving a resolve into a configuration or construction lambda.
 in the inventory below lands there and none of them lands in a `WithRoutes` or `WithInitialization`
 body.
 
-## R2 — a dying hub handed out as the live hub (root identified, NOT fixed)
+## R2 — a dying hub handed out as the live hub (fixed)
 
-`HostedHubsCollection.GetHubWithOutcome` answers a registry hit with
+`HostedHubsCollection.GetHubWithOutcome` answered a registry hit with
 `HostedHubOutcome.Available`, unconditionally. A hosted hub leaves that registry through a
 `RegisterForDisposal` callback that runs inside `MessageHub.DisposeImpl` — several phases *after*
-`Dispose()` set `IsDisposing`, and after the hub already refuses new work
-(`GetOrAddResponseSubject` answers `ObjectDisposedException` from `RunLevel >= ShutDown`). Between
-those two points the lookup reports a hub that can serve nothing, and the window is **not
-bounded**: a teardown that wedges never reaches the callback at all.
+`Dispose()` set `IsDisposing`, and several **statements** after the hub stops being able to serve:
+the ShutDown phase flips `RunLevel`, then runs `CancelCallbacks`, then the reactive dispose
+actions, and only then the registrant walk that carries the removal. From the flip on, the hub
+refuses every delivery at intake and a direct `Observe(...)` faults synchronously with
+`ObjectDisposedException` (`GetOrAddResponseSubject`, `RunLevel >= ShutDown`). A teardown that
+wedges anywhere between the flip and the removal — a registered cleanup blocking on a lock, a
+response continuation that never returns — never reaches the callback at all, so the window was
+**not bounded**.
 
 Measured shape: the mesh's single node-operation execution hub `portal/nodeops-{meshId}` —
 resolved through `NodeOperationExecutionHub` with `HostedHubCreation.Always` — was handed to **four**
@@ -120,53 +124,94 @@ that was healthy and serving other traffic throughout, each throwing out of the 
 500. A pod drain cannot account for that span — the Kubernetes grace ceiling ends one long before —
 so the mesh was not tearing down; one hosted hub had stopped working and was never evicted.
 
-### Why the two obvious fixes are both unsafe today
+### The fix: retire the corpse, mint a successor, keep the corpse in the join
 
-**Refusing the dying hub** (answer `null` + `HostShuttingDown`) reads correct and is not: **25** call
-sites (measured over `src/` and `memex/`, comments and declarations excluded) use the two-argument
-`GetHostedHub` overload, which is `null`-forgiving — it forwards to the three-argument form with
-`Always` and a `!` — and is dereferenced accordingly. Several assign the result straight into a
-non-nullable field or return it from a method whose return type is non-nullable
-(`Activity`, `PortalApplication`, `SessionHubFactory`, `PartitionStorageRouter`, `MeshNodeStreamCache`,
-`StaticRepoImporter`). Refusing would convert an attributable `ObjectDisposedException` into an
-unattributable `NullReferenceException` in code that works today, on the everyday recycle path.
+An `Always` lookup that finds a registered hub at `RunLevel >= ShutDown` no longer answers it. It
+**retires** the corpse — a value-matched removal from the registry, so a successor a concurrent
+lookup has already registered is never evicted — and falls through to the ordinary single-flight
+creation, which mints a fresh hub under the address. The retired hub moves into a second,
+reference-keyed set the collection still OWNS: `Hubs` enumerates it, the owner's stall detector
+still sees it, and `DisposeHubsReactive` **joins on it** exactly as on the registered hubs, because
+its Autofac scope is a child of the owner's and an owner that finished ahead of it would close that
+scope under a hub still walking its registrants — R1's straggler class, manufactured locally. It
+leaves that set on its own `DisposalCompleted`. The retirement is reported at **Warning**
+(`[HOSTED-RETIRE]`): the ordinary path never reaches it — a lookup landing in the microseconds
+between the flip and the removal is the only benign way there — and every other way is a teardown
+that has stopped making progress inside its ShutDown phase, which this line is now the first to
+name. Pinned by `AHubAtShutDownIsNotHandedOutTest`, which parks a hub's ShutDown turn inside a
+reactive dispose action (before the registrant walk), asserts the corpse is still registered, and
+measures both halves: the lookup answers a successor, and the owner's teardown does not complete
+until the corpse is released.
 
-**Retiring and replacing it** (mint a fresh hub at the address, keep the old one in the disposal
-join) is the self-healing answer and needs **three** removals to become value-conditional first,
-because a predecessor's teardown must not erase its successor:
+🚨 **The bound is `ShutDown`, deliberately, and not `IsDisposing`.** Between `Dispose()` and
+`ShutDown` the hub is still a live poster and a live router draining the work it *accepted* —
+`Quiescing`, then its children — and the intake gate already answers a new request there with a
+typed, transient `ShuttingDown` NACK the caller re-asks on after `DisposalCompleted`. That is the
+documented recycle shape ([Hub Disposal Model](../HubDisposalModel), *the creation window*), and
+it holds because a re-ask that lands on the still-dying instance costs one bounded retry. Minting a
+successor in those phases would put **two activations on one address with accepted writes still in
+flight on the first** — a successor loading a node the predecessor is about to persist — which is
+a lost-update race the platform has never had. At `ShutDown` nothing accepted remains: the
+callbacks are cancelled, the children are dead, and the only thing left is the corpse's own
+registrant walk — the same overlap the ordinary path has always had between that walk and `Dead`,
+now merely longer when the walk wedges. `Never` probes keep finding the corpse: they are the
+router's, and a delivery into it is refused with the transient NACK — the right answer for a
+*message*, and the wrong one for a *caller holding the reference*, which is what `Always` means.
 
-1. the hosted-hub registry entry — `messageHubs.TryRemove(address)` removes by KEY;
-2. the routing service's local route — `streams.TryRemove(address)`, same shape. **Done**, in both
-   `MonolithRoutingService` and `OrleansRoutingService` (plus `subscriptionReady`); a registration
-   now removes what it registered;
-3. the **pod-hub cluster claim** — and this one is not merely by-key, it is actively harmful.
-   `IPodHubGrain.Detach` stamps a *terminal* `Released` tombstone on the address for ten minutes,
-   which the router reads as `NotFound` + `TargetUnserved` — the verdict that triggers owner-side
-   stream eviction. A successor's `Attach` clears the tombstone only if it runs afterwards. So a
-   predecessor's `Detach` landing after a successor's `Attach` would get the **live** hub evicted
-   as a corpse: strictly worse than the 500 it set out to fix.
+### The three removals, all value-matched
 
-Item 3 is a grain-contract change with a cross-repo surface and is the remaining prerequisite.
-Until it lands, R2's root is documented and the symptom stands.
+Retire-and-replace is only safe once a predecessor's teardown cannot erase its successor, and a
+hosted hub's teardown removes itself from **three** registries:
 
-🚨 **An observation that may change this analysis and was not run down:**
-`HostedHubsCollection.Add` — the only method that registers both the disposal-time registry removal
-and `CloseScopeWhenDisposed` — appears **unreferenced in `src/`**. The single insertion path in
-use, the per-address `Lazy` factory inside `GetHubWithOutcome`, assigns `messageHubs[a]` directly
-and performs neither. If that is real rather than a call site the sweep missed, then a hosted hub
-never leaves the registry *at all* and its lifetime scope is never closed — which would be both a
-per-hub scope leak and a simpler, stronger root for R2 than the window described above. **Not
-established**: it contradicts the documented recycle flow and the scope-closing tests, so the
-likelier reading is a missed call site. Verify before building on it.
+1. the hosted-hub registry — `Track` arms `TryRemove(KeyValuePair(address, hub))` on every insert
+   (**#4741**);
+2. the routing service's local route — `RegisterStream`'s disposal removes what it registered, in
+   `OrleansRoutingService` and `MonolithRoutingService` alike, `subscriptionReady` included
+   (**#5159**). The Monolith's route-creation path also armed a *second*, key-only removal
+   (`UnregisterStream(address)`) on top of the hub's own registration; it is gone — it ran in the
+   same registrant walk and would have erased the successor's live route, taking the address dark
+   on that host with nothing to grep;
+3. the **pod-hub cluster claim** — `IPodHubGrain.Detach` stamped a *terminal* `Released` tombstone
+   on the address for ten minutes regardless of who held it, which the router reads as
+   `NotFound` + `TargetUnserved`, the verdict that triggers owner-side stream eviction. A
+   predecessor's `Detach` landing after a successor's `Attach` would have evicted the **live** hub
+   as a corpse: strictly worse than the 500 it set out to fix. The discriminator is the silo's own
+   route table: `RegisterStream`'s disposal removes its route *before* it releases the claim, so a
+   live local route present when the grain processes a `Detach` can only be a successor's, and the
+   grain — not `[Reentrant]`, so the read is ordered against the successor's `Attach` and every
+   `Deliver` — leaves the claim as the successor left it. No grain-contract change, so nothing to
+   roll in two releases. Pinned by `PodHubStaleReleaseTest` on the real two-silo cluster, both
+   sides: a stale release lands on a live successor (the delivery is forwarded and the pin stays
+   at `MaxValue`), and a release with no live route still tombstones (the #2426 remedy stands).
 
-🚨 **And note the limit of the instrument that produced it, because it applies to every
-"unreferenced" claim made this way.** In-mesh source compiles at RUNTIME in the portal and is
-invisible to a grep over `src/`, and a NodeType's `configuration` lambda is C# inside a JSON string,
-so it does not even match `grep --include='*.cs'`. The measured claim is therefore *"unreferenced in
-`src/` and `memex/`"*, which is strictly weaker than *"unreferenced"*. Anyone acting on it sweeps the
-node trees and the node JSON first. Cheapest way to settle it outright: a temporary log line in both
-`Add` and the `Lazy` factory, boot the Monolith, recycle one node, and see which one runs.
+The `podHubClaimSettled` test seam followed the same rule while it was open.
 
+### Why refusing the dying hub is still the wrong fix
+
+Answering `null` + `HostShuttingDown` reads correct and is not: **25** call sites (measured over
+`src/` and `memex/`, comments and declarations excluded) use the two-argument `GetHostedHub`
+overload, which is `null`-forgiving — it forwards to the three-argument form with `Always` and a
+`!` — and is dereferenced accordingly. Several assign the result straight into a non-nullable field
+or return it from a method whose return type is non-nullable (`Activity`, `PortalApplication`,
+`SessionHubFactory`, `PartitionStorageRouter`, `MeshNodeStreamCache`, `StaticRepoImporter`).
+Refusing would convert an attributable `ObjectDisposedException` into an unattributable
+`NullReferenceException` in code that works today. That is also why the lookup keeps answering the
+corpse while its *own collection* is disposing: no successor can be minted there, and the
+attributable throw is the honest answer.
+
+### What this does NOT fix
+
+The wedge itself. A hub that sits at `ShutDown` for 55 minutes is **#4883**'s shape — a registered
+cleanup blocking the ShutDown turn — and retiring it lets callers past it; it does not free the
+turn. The `[HOSTED-RETIRE]` line names the address and the phase, so the next occurrence points at
+the wedged hub instead of at whoever asked for it.
+
+*(An earlier revision of this page carried a lead that `HostedHubsCollection.Add` was unreferenced
+in `src/`, which would have meant a hosted hub never left the registry at all. It was settled by
+#4741: `Add` is called from `MessageHubConfiguration.Build`, the first statement after the hub is
+constructed. The general lesson stands — a grep over `src/` never sees in-mesh source or a
+NodeType's `configuration` lambda inside its JSON, so "unreferenced in `src/`" is strictly weaker
+than "unreferenced".)*
 ## R3 — a continuation resolving from a scope its own pipeline closed
 
 This one has nothing to do with shutdown. A handler resolves a service **inside** a reactive

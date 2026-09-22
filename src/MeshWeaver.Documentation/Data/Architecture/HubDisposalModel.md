@@ -523,6 +523,40 @@ was armed for — never a successor built under the same address.
 > skips the post pipeline once the hub is past `DisposeHostedHubs`, so that park raced the very
 > shutdown it waited for.
 
+## The third window: a hub at ShutDown, still registered
+
+The two windows above are about a hub accepting work, and a hub disposed before it was built.
+This one is a hub that is **past serving and still findable** (#5136). The removal `Add` arms
+runs inside the ShutDown phase's registrant walk — after `RunLevel` flipped, after
+`CancelCallbacks`, after the reactive dispose actions — and from the flip on the hub refuses
+every delivery at intake and faults a direct `Observe(...)` synchronously. A teardown that wedges
+anywhere in that phase (a registered cleanup blocking on a lock — #4883's shape) never reaches
+the removal, and `GetHubWithOutcome` answered the corpse as `Available` for as long as the wedge
+lasted: one `portal/nodeops-…` hub, four callers, 55 minutes, on a pod serving everything else.
+
+**The rule: an `Always` lookup never answers a hub at `ShutDown`.** It retires the corpse
+(value-matched, so a successor a concurrent lookup registered is untouched) and mints a successor
+through the ordinary single-flight creation. The corpse stays in the collection's disposal join
+until its own `DisposalCompleted` — its scope is a child of the owner's, and the owner must not
+close it under a registrant walk still running. The bound is `ShutDown` and not `IsDisposing` on
+purpose: below `ShutDown` the hub is still draining accepted work and the intake's transient
+`ShuttingDown` NACK is the designed answer (the first window above); a successor minted there
+would overlap accepted writes. `Never` probes — the router's — still find the corpse and are
+refused with that NACK, which is right for a message and wrong for a caller holding the
+reference. The retirement is one `Warning` line, `[HOSTED-RETIRE]`, and it is the first line
+that names a ShutDown-phase wedge by address. The three registries a teardown removes itself
+from are all value-matched now — the hosted-hub registry (#4741), the local route (#5159), and
+the pod-hub claim, whose `Detach` leaves a claim alone when the silo still holds a live route
+for the address, because that route can only be a successor's. Full account and the measured
+controls: [Disposed Scopes and Dying Hubs](../DisposedScopeAndDyingHubs), R2.
+
+> Deterministic repro and control: `AHubAtShutDownIsNotHandedOutTest` (Messaging.Hub.Test)
+> parks the ShutDown turn inside a reactive dispose action — invoked before the registrant walk
+> — asserts the corpse is still registered, and measures both the successor and the owner's
+> join. `PodHubStaleReleaseTest` (Hosting.Orleans.Test) drives the real grain on the two-silo
+> cluster: a stale release leaves a live successor served and pinned; a release with no live
+> route still tombstones.
+
 ---
 
 ## A recycle owes its subscribers a goodbye — and can only say it BEFORE the teardown
