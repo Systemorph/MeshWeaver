@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Persistence.Query;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -369,5 +370,5 @@ internal sealed class MeshService(
     public IObservable<string?> GetPreRenderedHtml(string path)
         => _query
             .Query<MeshNode>(new MeshQueryRequest { Query = $"path:{path}", Limit = 1 })
-            .Select(c => c.Items.FirstOrDefault()?.PreRenderedHtml);
+            .Select(c => MarkdownBody.Render(c.Items.FirstOrDefault()));
 }

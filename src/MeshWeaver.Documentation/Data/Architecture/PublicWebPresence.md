@@ -102,10 +102,17 @@ fix for the empty sitemap and the reason the body can be served.
 
 ### The body is in the first response
 
-`SeoPageData.Body` is the page text a crawler reads: the node's mirrored HTML when it carries one,
-else the content's own `prerenderedHtml`, else its markdown (`content` for a markdown node, `body`
-for a plugin cover) rendered through the portal's own pipeline, anchored on the node so links
-resolve as they do for a signed-in visitor. It is computed only for a node the gate admitted, and it
+`SeoPageData.Body` is the page text a crawler reads: the node's current markdown (`content` for a
+markdown node, `body` for a Space or plugin cover, or a bare string) rendered by
+`MarkdownBody.Render`, which calls `MarkdownViewLogic.Render`, the same renderer the interactive
+markdown view uses. The signed-in prerender read (`IMeshService.GetPreRenderedHtml`) uses this same
+source-first helper. Both pass the
+node path, so relative links and embeds resolve against the same page. An edit therefore reaches
+both views from the same source, even when the node still carries HTML generated before the edit
+or before a renderer update. An explicitly empty source renders empty; it never revives the old
+page. The node's mirrored HTML, then the content's `prerenderedHtml`, are fallbacks only for nodes
+that carry no markdown source. Neither cache records which source or renderer produced it, so
+neither can establish freshness. It is computed only for a node the gate admitted, and it
 is rendered **visibly** in the static server pass of the page, not inside `<noscript>`: Googlebot
 renders with JavaScript on and may ignore noscript content, and the visible article is what the
 interactive circuit replaces on hydration. The interactive page reads the same per-request stash

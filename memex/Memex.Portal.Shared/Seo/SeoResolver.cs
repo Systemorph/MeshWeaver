@@ -76,14 +76,15 @@ public sealed record SeoPageData(MeshNode Node, string? Description, string? Ima
     /// lessons, plugin covers — arrived at Googlebot with a rich head and no text at all, and the
     /// host had zero pages in Google's index.
     ///
-    /// <para>Resolution order: the prerendered HTML the node already carries; else the
-    /// <c>prerenderedHtml</c> member of its content; else its markdown (<c>content</c> for a
-    /// markdown node, <c>body</c> for a plugin cover) rendered now. Null when the node has no
+    /// <para>The authored markdown is the source of truth, rendered through the same renderer
+    /// as the interactive view. Cached HTML is a fallback only when the source is absent:
+    /// neither stored HTML field records which source or renderer produced it, so preferring
+    /// either can resurrect an old page after an edit. Null when the node has no
     /// document-shaped content (a data node, a pure layout-area page). Only ever produced for a
     /// node the <see cref="AnonymousGate"/> admitted, like every other member here — a gated
     /// chapter is refused before this is computed.</para>
     /// </summary>
-    public string? Body => PreRenderedHtml is { Length: > 0 } mirrored ? mirrored : SeoResolver.RenderBody(Node);
+    public string? Body => SeoResolver.RenderBody(Node);
 }
 
 /// <summary>
@@ -653,22 +654,14 @@ public static class SeoResolver
             .Catch<ShareableNode?, Exception>(_ => Observable.Return<ShareableNode?>(null));
 
     /// <summary>
-    /// The node's document body as HTML, for <see cref="SeoPageData.Body"/>: the content's own
-    /// <c>prerenderedHtml</c> when it carries one, else its markdown — <c>content</c> (a markdown
-    /// node) or <c>body</c> (a plugin cover) — rendered through the SAME pipeline the portal renders
-    /// it with, so the crawler reads what a visitor reads. Both content shapes (typed record,
-    /// untyped JSON) resolve through <see cref="ContentString"/>. Null for content that is not a
-    /// document. Pure: no hub, no IO.
+    /// The node's current document body as HTML, for <see cref="SeoPageData.Body"/>. Authored
+    /// markdown — <c>content</c>, <c>body</c>, or a bare string — always wins over cached HTML,
+    /// including an empty source after the author clears a page. The interactive view's
+    /// <see cref="MarkdownViewLogic.Render"/> owns the rendering and relative-link resolution.
+    /// Only a node without source falls back to its mirrored HTML or its content's
+    /// <c>prerenderedHtml</c>. Null for content that is not a document. Pure: no hub, no IO.
     /// </summary>
-    public static string? RenderBody(MeshNode node)
-    {
-        if (ContentString(node, "prerenderedHtml") is { Length: > 0 } prerendered)
-            return prerendered;
-        var markdown = FirstNonEmpty(ContentString(node, "content"), ContentString(node, "body"));
-        return markdown is null
-            ? null
-            : MarkdownContent.Parse(markdown, node.Path, node.Path).PrerenderedHtml;
-    }
+    public static string? RenderBody(MeshNode node) => MarkdownBody.Render(node);
 
     /// <summary>
     /// The page description for meta tags and the share card: the node's Description, else the
