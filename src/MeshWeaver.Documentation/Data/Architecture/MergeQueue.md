@@ -304,5 +304,10 @@ identical.
 
 ## Related
 
+🚨 **Before concluding a pull request is queued — or that it is stranded —** read
+[Reading CI Signals](../ReadingCiSignals) → *"`mergeable_state: clean` + `auto_merge: false` is a
+TWO-POLE ambiguity"*. The two states demand opposite actions, they are byte-identical over REST, and
+a `gh-readonly-queue` ref proves nothing in either direction; only the entry list answers it.
+
 [Reading CI Signals](../ReadingCiSignals) · [The Continuous Delivery Contract](../ContinuousDeliveryContract)
 · [The Cross-Repo Pair Gate](../CrossRepoPairGate) · [Writing Tests](../WritingTests)

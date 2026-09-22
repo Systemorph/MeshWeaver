@@ -199,11 +199,22 @@ public class OAuthConnectController(
             return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_request", error_description = "client_id and redirect_uri are required" }));
         }
 
-        // If user is not authenticated, redirect to login with return URL
+        // If user is not authenticated, redirect to login carrying THIS request as the return URL.
+        //
+        // 🚨 The returnUrl is a LOCAL path — `{Path}{QueryString}`, never `{Scheme}://{Host}{Path}…`.
+        // Every returnUrl SINK in the portal validates local-only (ReturnUrlPolicy.Sanitize here,
+        // LocalUrl.IsLocal in the GUI), because an unvalidated one is an open redirect. Those rules
+        // are correct and must not be relaxed; what was wrong was this SOURCE minting an absolute
+        // URL that no sink can accept. The login page's LocalOrNull then dropped it silently, the
+        // provider link was built with no returnUrl at all, and the user landed on "/" after signing
+        // in with the /authorize request gone — so no authorization code was ever issued and the MCP
+        // client waited forever for an "authentication successful" that could not arrive (#5074).
+        // The absolute form was also needless: the login page and this endpoint are the same origin.
+        // OnboardingMiddleware carries the same request the same way, for the same reason.
         if (User?.Identity?.IsAuthenticated != true)
         {
-            var authorizeUrl = $"{Request.Scheme}://{Request.Host}{Request.Path}{Request.QueryString}";
-            var loginUrl = $"/login?returnUrl={Uri.EscapeDataString(authorizeUrl)}";
+            var authorizePath = $"{Request.Path}{Request.QueryString}";
+            var loginUrl = $"/login?returnUrl={Uri.EscapeDataString(ReturnUrlPolicy.Sanitize(authorizePath))}";
             logger.LogInformation("OAuth /authorize: redirecting unauthenticated caller to {LoginUrl}", loginUrl);
             return Task.FromResult<IActionResult>(Redirect(loginUrl));
         }

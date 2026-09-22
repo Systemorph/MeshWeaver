@@ -551,6 +551,79 @@ answered by different contexts.
 run to run produces single greens by itself; one green run is what it looks like, not evidence it is
 gone.
 
+### 🚨 The SANCTIONED version of this — two greens on one sha, from one workflow, one of which ran nothing
+
+Green-tree reuse is this same shape **by design**, which is what makes it the easiest instance to
+misread as coverage. Measured on core sha `cb8a9b8fd6fe0ac9f9d824f1e8be8db56463fc13` — the *same*
+workflow, `MeshWeaver Build and Test`, twice:
+
+| run | event | elapsed | jobs | what it proves |
+|---|---|---|---|---|
+| #13632 | `merge_group` | **19 min 40 s** | 15 success / 6 skipped; all six `Run tests (shard N)` **success** | ran the suite |
+| #13634 | `push` | **3 min 31 s** | `Check for an already-green tree` success, then build, doc gate and every shard **skipped** | ran nothing |
+
+Both report `completed` / `success`, same workflow name, same commit. **Nothing in the run list and
+nothing in `conclusion` over REST separates them** — the rollup conclusion is one enum, so "nineteen
+minutes of evidence" and "a marker lookup" render identically.
+
+The workflow is not concealing it. The reuse job writes *"This run **did not execute the suite**"*
+into the step summary with the marker ref, the TTL and a link to the run that gathered the evidence;
+the `main is red` job refuses to take its bisect window from the run list for exactly this reason;
+and `Consolidate test results` carries a zero-evidence gate that fails on zero `.trx` unless the run
+was a reuse or an affected-tests `none`. **The whole gap is in the reader.**
+
+🚨 **So never cite a run's `success` as coverage without reading whether its shards ran.** One REST
+call answers it — `actions/runs/<id>/jobs` — and `Run tests (shard …) | skipped` is the entire tell.
+A reuse green is a true statement about the **tree** and says nothing about **this run**, so it can
+never serve as a positive control: not for a suite, and not for infrastructure the run would have
+exercised, such as artifact upload.
+
+🚨 **And do not reach for the first two same-sha greens you find — check they are the same workflow.**
+The same commit also carries `Continuous Delivery (main)` #9115 (`workflow_run`, **75 min**, the real
+delivery) and #9116 (`schedule`, **2 min 5 s**, a scheduled run with nothing to deliver). That pair is
+also two greens of one workflow name on one sha, but the short one is an idle *schedule*, not the
+green-tree short-circuit — a different mechanism that happens to look the same from the run list.
+Attributing it to reuse would be right about the symptom and wrong about the cause.
+
+### 🚨 `mergeable_state: clean` + `auto_merge: false` is a TWO-POLE ambiguity, not a state
+
+Same class as the reuse green above — a field pair that reads like an answer — and here the two
+readings demand **opposite** actions. A pull request that is not a draft, has 0 red, both required
+contexts `success`, `mergeable_state: clean` and `auto_merge: false` is in one of two states:
+
+- **Pole A — the arming was CONSUMED on entry to the merge queue.** It is queued, it merges within
+  minutes, and **no human action is needed or wanted.** Entry is what clears the flag.
+- **Pole B — the arming was LOST** (a force-push, a manual disarm, or a required check that went red
+  and disabled auto-merge without re-enabling when it later passed). It is finished and **nothing will
+  ever merge it.**
+
+**The two are byte-identical over REST.** Measured on three core PRs at once: all three read
+clean-and-unarmed while sitting at queue positions 1, 2 and 3, all `AWAITING_CHECKS`, and each one's
+enqueue timestamp matched its `auto_merge` flip one-for-one — so the flip that reads as "stranded" was
+the entry itself.
+
+🚨 **The cheap proxy does not work either.** A `gh-readonly-queue/main/pr-<N>-…` ref is not evidence of
+membership: **stale ones persist indefinitely** for long-merged PRs (`pr-2850`, `pr-2941`, `pr-2949`,
+`pr-4150` and `pr-4152` were all present in the listing and all long merged), and a *live* entry's
+branch also comes and goes as GitHub re-groups batches. Presence and absence are both uninformative.
+
+**Only the merge-queue ENTRY LIST separates the poles**, and it is one of the few things REST cannot
+express — which is exactly why a REST-only discipline walks into this:
+
+```bash
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  mergeQueue(branch:"main"){entries(first:20){nodes{position state enqueuedAt pullRequest{number}}}}}}'
+```
+
+One call, never in a loop. `gh pr merge --auto` answering *"already queued to merge"* is the cheaper
+confirmation of pole A when you only care about one PR.
+
+**Why the distinction is load-bearing and not pedantic.** In pole A, "merge it yourself" is wrong
+because it is already happening — and **a merge HOLD cannot be honoured by declining to merge**, since
+the queue needs no human; only `dequeuePullRequest` holds, and dequeuing one PR buys nothing while
+another sits ahead of it in the queue. In pole B the opposite holds: waiting achieves nothing and the
+PR rots until someone re-arms it. State which pole you measured, never which one is usual.
+
 ### 🚨 A green PRODUCER that SKIPPED its upload — the red lands four jobs downstream, naming an artifact
 
 The section above is about a consumer reading the *wrong* evidence. This is its mirror: the

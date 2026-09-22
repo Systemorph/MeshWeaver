@@ -198,6 +198,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
 - [Invitation-Only Onboarding](InvitationOnlyOnboarding)
+- [The Redirect-Target Contract](RedirectTargetContract) — every `returnUrl` sink validates local-only, so every source must mint local; a wrong source is refused rather than followed, which costs the whole flow and logs nothing
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
@@ -271,6 +272,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Retiring a NodeType](RetiringANodeType) — the prune keeps the definition and deletes its sources
 - [Dangling NodeTypes](DanglingNodeTypes) — a node whose type resolves to nothing, and the two write paths that allowed it
 - [Node Type Compilation](NodeTypeCompilation)
+- [Mount-Relative Source Queries](MountRelativeSourceQueries) — a cross-type `shared=@…` source reference is authored mount-relative, so the resolver asks for the mount-anchored spelling too; resolved verbatim under an import prefix it matched nothing while the type's own rebased query did, so the merged set stayed non-empty, no emptiness check could fire, and Roslyn reported a genuine-looking `CS0246` about present content. Also: the four `CS0246` shapes a reader has to tell apart from the source-discovery block
 - [Who Owns a NodeType Member](NodeTypeMemberOwnership) — the repo owns the definition, the mesh owns the compile state, and the mask that encodes it was pinned in ONE direction: four runtime-state members were missing from it, one spelled outside the naming convention meant to catch them. The three guards, and why a member the mesh writes may still have to stay unmasked
 - [Compile Cache Input Freshness](CompileCacheInputFreshness) — verify the captured input before reusing a DLL that finished after a source edit
 - [Execute-Time Interlock](ExecuteTimeInterlock) — a build proven stale is never armed
@@ -376,6 +378,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Name That Does Not Resolve Is Not Transient](ANameThatDoesNotResolveIsNotTransient) — the default pipeline retried a hostname that does not exist three times and logged each attempt at Error, so a URL in somebody's data manufactured a platform incident; the one socket error that is permanent, why the breaker must not count it either, and the control that keeps a nameserver hiccup retryable
 - [A Departed Silo Is Not a Delivery Defect](ADepartedSiloIsNotADeliveryDefect) — two incidents (191 and 3,959 occurrences) read as two defects for four weeks and are ONE root; which predicate sees which of the four rejection shapes, why the cure is the classifier and never a retry, and why an incident fingerprinted on a dependency's logger counts attempts rather than verdicts
 - [A Timed-Out Delivery Is Still Held by the Callee](ATimedOutDeliveryIsStillHeldByTheCallee) — a response timeout is a caller-side give-up timer, so the six-retry ladder sized for an instant rejection re-sent seven copies of every slow delivery and held a dispatch slot for 3 m 40 s; the three-predicate ladder that separates "is this transient" from "may we send it again", and the one caller that keeps the wider answer because it is idempotent
+- [Reading a Routing Saturation Report](ReadingARoutingSaturationReport) — the `[ROUTE]` back-pressure line is a gauge over three different facts, and for most of the tickets it produces the causal arrow runs the other way; which number answers which question, the two opposite pool states that printed the same number because the report showed the one gauge blind to the cause it named, and the oldest-leg age that separates load from a leaked slot in a single sample
 - [A Bulk Create Compensates Per Node](BulkCreateCompensation) — every row is durable before any post-creation handler runs, so one critical failure left the failed node AND every node after it, whose handlers never ran and which nothing can tell apart from a success; what the rollback removes, why it walks backwards, and the measured reason the stop is a fault and not a `Take(1)`
 - [Undetermined Is Not No](UndeterminedIsNotNo) — a read that did not answer is a THIRD state; the second door that shared the first door's failure domain, and the rule for what a gate does with "I could not determine"
 - [Reading a Silo Eviction](ReadingASiloEviction) — a heartbeat newer than the suspect votes is not proof the silo was healthy; the control arm that tells a correct eviction from a false positive
@@ -386,6 +389,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
 - [Guards and Unknown States](GuardsAndUnknownStates)
 - [Mesh Admission](MeshAdmission)
+- [Disposed Scopes and Dying Hubs — one symptom, five roots](DisposedScopeAndDyingHubs) — every `ObjectDisposedException` on an Autofac `LifetimeScope` looks identical in a log and comes from one of five unrelated roots; the discriminators, which are fixed, and the swept inventory of deferred resolve sites
 - [Mesh Lifecycle — Build Up & Tear Down](MeshLifecycle)
 - [Ordered Route Channels — the FIFO Key Is (Destination, Stream)](OrderedRouteChannels) — a stream-routed address is a multiplexer, so keying the router's ordering FIFO on the destination serialised a whole process's data-sync traffic into one lane with one in-flight cross-silo grain call; 62 of 64 dispatch slots queued behind one cache hub for 1.5 h while the peer pod's local lane read as load, and the identity that separates the streams was already stamped on the envelope
 - [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
