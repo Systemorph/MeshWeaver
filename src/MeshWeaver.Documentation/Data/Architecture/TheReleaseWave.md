@@ -201,7 +201,8 @@ and every open pull request keeps building on the last set main passed — befor
 reddened every open PR at once, four times in 24 h, 91 PR-hours exposed.
 
 Three properties are load-bearing and each has a self-test case that fails without it
-(`resolve-platform.py --self-test`, 58 cases):
+(`resolve-platform.py --self-test`, whose own summary line prints the suite's size — a total repeated
+in prose has nothing keeping it true, and this one had gone stale):
 
 - **Opt-in.** `choose(..., passed_ceiling=None)` — every caller that does not ask — takes exactly
   the path it took before. The self-test proves this as a PAIR on one fixture: the same runs and the
@@ -229,7 +230,7 @@ against the older set, for the very API the change was about. The consequence is
 honest fix requires the new API has no green path — so the `lag` notice now states it and tells the
 author to verify against the newer set outside the lane and say so in the pull request body.
 `resolve-platform.py`'s self-test asserts the sentence (`CANNOT PROVE`) rather than only that both
-ids appear; removing it fails exactly one of the 180 cases.
+ids appear; removing it fails exactly ONE case, which is the load-bearing fact.
 
 **This deliberately makes the deadlock VISIBLE rather than escapable, and that is the whole design.**
 The ceiling itself is untouched: a pull request that silently resolved a newer set than `main` has
