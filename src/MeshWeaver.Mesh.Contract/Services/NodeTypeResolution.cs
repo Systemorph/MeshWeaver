@@ -6,12 +6,18 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// 🚨 <b>THE one rule for "does this NodeType resolve?"</b> — a node at the type's PATH, found
-/// either as a static node (<see cref="StaticNodeProviderExtensions.FindStaticNode"/>) or in
-/// persistence (<see cref="IStorageAdapter.Exists"/>). Not a <c>TypeRegistry</c> fact, not a
-/// compiled assembly: see
+/// 🚨 <b>THE one rule for "does this NodeType resolve?"</b> — a NodeType DECLARATION at the type's
+/// PATH, found either as a static node (<see cref="StaticNodeProviderExtensions.FindStaticNode"/>)
+/// or in persistence. Not a <c>TypeRegistry</c> fact, not a compiled assembly: see
 /// <c>Doc/Architecture/ImportWriteOrdering</c> for why those two
 /// are deliberately not conflated.
+///
+/// <para>🚨 <b>"A node is there" is a DIFFERENT question, and answering this one with that one is
+/// Systemorph/MeshWeaver#5008/#2231.</b> They diverge the moment two things want one name — a
+/// Store plugin's root at the bare path <c>Feedback</c> against its declaration at
+/// <c>Feedback/Feedback</c> — and the divergence was invisible because only ACTIVATION applied the
+/// content test. <see cref="INodeTypeDeclarationProbe"/> is now the one test both sides apply; see
+/// <see cref="Resolve"/> for the ordering and why it may only ever say "definitely not".</para>
 ///
 /// <para><b>Why it is a shared helper rather than three copies.</b> The create path has applied
 /// this rule since forever; the UPDATE paths did not apply it at all, which made <c>update</c> a
@@ -56,21 +62,77 @@ public static class NodeTypeResolution
     /// Existence of the node at the type's path, by exactly the rule
     /// <c>MeshExtensions</c>' create path applies: an empty type resolves (untyped nodes are
     /// legal), then <see cref="StaticNodeProviderExtensions.FindStaticNode"/>, then
-    /// <see cref="IStorageAdapter.Exists"/>. With no storage adapter registered the answer is
+    /// <see cref="IStorageAdapter"/>. With no storage adapter registered the answer is
     /// <c>false</c> — identical to the create path, which refuses in that case rather than
     /// guessing.
     /// </summary>
-    public static IObservable<bool> Resolves(IMessageHub hub, string? nodeType)
+    public static IObservable<bool> Resolves(IMessageHub hub, string? nodeType) =>
+        Resolve(hub, nodeType).Select(v => v.Resolves);
+
+    /// <summary>
+    /// <see cref="Resolves"/> with the REASON attached, so a boundary that refuses can say what is
+    /// in the way instead of the generic "not registered".
+    ///
+    /// <para>🚨 <b>Occupancy is not registration.</b> This used to answer from
+    /// <see cref="IStorageAdapter.Exists"/> alone, and that is the whole of
+    /// Systemorph/MeshWeaver#5008/#2231: a Store plugin's root sits at the bare path
+    /// <c>Feedback</c> while its declaration is <c>Feedback/Feedback</c>, so a write naming the
+    /// bare path was ACCEPTED here on the plugin root and then REFUSED by activation, which has
+    /// applied the content test since #2245. The two boundaries now ask
+    /// <see cref="INodeTypeDeclarationProbe"/>, so they cannot drift.</para>
+    ///
+    /// <para>🚨 <b>The damage is narrower than this class's #2993 sentence, and saying it the
+    /// #2993 way overstates it.</b> A type resolving to NOTHING leaves a node with no per-node hub
+    /// at all. A type resolving to an OCCUPANT does not: the ROW still reads — measured, the
+    /// stranded production instance returns its full content through an ordinary read — while the
+    /// HUB binds the occupant's configuration, or the error overlay activation applies once it
+    /// detects the collision. So the node is not lost; its page serves the diagnostic instead of
+    /// the type's views and its typed requests are NACKed. What the two cases share is the part
+    /// that matters here: the write boundary accepted a NodeType the activation boundary will
+    /// not.</para>
+    ///
+    /// <para><b>Read, then Exists — in that order, and the fallback is not redundant.</b> One read
+    /// answers both questions on the common path. A <c>null</c> read is NOT taken as absence,
+    /// because <see cref="IStorageAdapter.Exists"/> is the predicate this boundary has always
+    /// used and the two can disagree (a provider that answers existence without handing over the
+    /// row); falling back preserves the previous ACCEPT decision exactly, so the only behaviour
+    /// this change adds is a refusal the probe positively convicts.</para>
+    ///
+    /// <para>A faulted probe propagates rather than being swallowed: every caller already
+    /// distinguishes "not registered" from "could not tell" (<see cref="ProbeFailedMessage"/>),
+    /// and turning a non-verdict into a verdict is the one thing that would send someone off to
+    /// create a type that already exists.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose static providers, storage adapter and declaration probe
+    /// answer the question.</param>
+    /// <param name="nodeType">The NodeType path being judged.</param>
+    /// <returns>The single verdict.</returns>
+    public static IObservable<NodeTypeVerdict> Resolve(IMessageHub hub, string? nodeType)
     {
         if (string.IsNullOrEmpty(nodeType))
-            return Observable.Return(true);
-        if (hub.ServiceProvider.FindStaticNode(nodeType) is not null)
-            return Observable.Return(true);
+            return Observable.Return(NodeTypeVerdict.Registered);
+        var probe = hub.ServiceProvider.GetService<INodeTypeDeclarationProbe>();
+        if (hub.ServiceProvider.FindStaticNode(nodeType) is { } staticNode)
+            return Observable.Return(Judge(staticNode, probe));
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-        return persistence is null
-            ? Observable.Return(false)
-            : persistence.Exists(nodeType).Take(1);
+        if (persistence is null)
+            return Observable.Return(NodeTypeVerdict.Absent);
+        return persistence.Read(nodeType, hub.JsonSerializerOptions)
+            .Take(1)
+            .SelectMany(node => node is not null
+                ? Observable.Return(Judge(node, probe))
+                : persistence.Exists(nodeType).Take(1).Select(exists =>
+                    exists ? NodeTypeVerdict.Registered : NodeTypeVerdict.Absent));
     }
+
+    /// <summary>
+    /// The one-sided application of the probe: a conviction refuses and carries the occupant;
+    /// everything else — including no probe registered — resolves.
+    /// </summary>
+    private static NodeTypeVerdict Judge(MeshNode candidate, INodeTypeDeclarationProbe? probe)
+        => probe?.DescribeNonDeclaration(candidate) is { } occupant
+            ? new NodeTypeVerdict(false, occupant)
+            : NodeTypeVerdict.Registered;
 
     /// <summary>
     /// The refusal every write boundary posts, so a caller reading it once has learned the rule
@@ -86,6 +148,72 @@ public static class NodeTypeResolution
 
     /// <summary>The catalog key whose English is <see cref="RejectionMessage"/>.</summary>
     public const string RejectionMessageKey = "activity.nodeType.notRegistered";
+
+    /// <summary>
+    /// The refusal for the case a bare "not registered" describes badly: SOMETHING is at the
+    /// type's path, it is just not a declaration. Saying "not registered" there sends the reader
+    /// off to create a node that is already sitting in the way, which is how
+    /// Systemorph/MeshWeaver#2231 spent a month reading as a lookup-ordering puzzle.
+    ///
+    /// <para>The wording is deliberately the same shape the ACTIVATION boundary already prints
+    /// (<c>NodeTypeEnrichmentHelpers</c>'s collision overlay), because they are one fact reported
+    /// at two moments and a reader who has met one has learned the other.</para>
+    /// </summary>
+    /// <param name="path">The node being written.</param>
+    /// <param name="nodeType">The NodeType path that is occupied.</param>
+    /// <param name="occupant">What is in the way, as
+    /// <see cref="INodeTypeDeclarationProbe.DescribeNonDeclaration"/> describes it.</param>
+    /// <returns>The refusal.</returns>
+    public static string OccupiedMessage(string path, string nodeType, string occupant) =>
+        $"NodeType '{nodeType}' is not registered: {occupant} — refusing to set it on '{path}'. "
+        + "A node exists at that path, but it is not a NodeType declaration, so the instance would "
+        + "bind that node's hub configuration instead of a type's: its page serves an error "
+        + "overlay rather than the type's views, and typed requests are refused. Name the "
+        + "declaration's real path, or move whatever occupies this one out of the way. Creating a "
+        + "node here will NOT help — the path is already taken.";
+
+    /// <summary>The catalog key whose English is <see cref="OccupiedMessage"/>.</summary>
+    public const string OccupiedMessageKey = "activity.nodeType.pathOccupied";
+
+    /// <summary>
+    /// <see cref="OccupiedMessage"/> paired with <see cref="OccupiedMessageKey"/>. The occupant
+    /// description travels as an ARGUMENT: the sentence around it is ours and translates, the
+    /// node path and NodeType inside it are data and do not.
+    /// </summary>
+    /// <param name="path">The node being written.</param>
+    /// <param name="nodeType">The NodeType path that is occupied.</param>
+    /// <param name="occupant">What is in the way.</param>
+    /// <returns>The localizable refusal.</returns>
+    public static LocalizableText Occupied(string path, string nodeType, string occupant) =>
+        LocalizableText.Keyed(OccupiedMessage(path, nodeType, occupant), OccupiedMessageKey,
+            ("path", path), ("nodeType", nodeType), ("occupant", occupant));
+
+    /// <summary>
+    /// <see cref="RejectionMessage"/> or <see cref="OccupiedMessage"/>, chosen by whether the
+    /// verdict named an occupant — so no call site has to remember there are two.
+    /// </summary>
+    /// <param name="verdict">The verdict from <see cref="Resolve"/>.</param>
+    /// <param name="path">The node being written.</param>
+    /// <param name="nodeType">The NodeType that does not resolve.</param>
+    /// <returns>The refusal text.</returns>
+    public static string RefusalFor(NodeTypeVerdict verdict, string path, string nodeType) =>
+        verdict.Occupant is { } occupant
+            ? OccupiedMessage(path, nodeType, occupant)
+            : RejectionMessage(path, nodeType);
+
+    /// <summary>
+    /// <see cref="Rejection"/> or <see cref="Occupied"/>, chosen the same way as
+    /// <see cref="RefusalFor"/>.
+    /// </summary>
+    /// <param name="verdict">The verdict from <see cref="Resolve"/>.</param>
+    /// <param name="path">The node being written.</param>
+    /// <param name="nodeType">The NodeType that does not resolve.</param>
+    /// <returns>The localizable refusal.</returns>
+    public static LocalizableText LocalizedRefusalFor(
+        NodeTypeVerdict verdict, string path, string nodeType) =>
+        verdict.Occupant is { } occupant
+            ? Occupied(path, nodeType, occupant)
+            : Rejection(path, nodeType);
 
     /// <summary>
     /// <see cref="RejectionMessage"/> paired with <see cref="RejectionMessageKey"/>, so a write

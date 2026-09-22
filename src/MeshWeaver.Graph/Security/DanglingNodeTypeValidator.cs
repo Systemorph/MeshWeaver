@@ -68,18 +68,23 @@ public sealed class DanglingNodeTypeValidator : INodeValidator
         if (!NodeTypeResolution.ChangesNodeType(node.NodeType, context.ExistingNode?.NodeType))
             return Observable.Return(NodeValidationResult.Valid());
 
-        return NodeTypeResolution.Resolves(_hub, node.NodeType)
-            .Select(resolves =>
+        return NodeTypeResolution.Resolve(_hub, node.NodeType)
+            .Select(verdict =>
             {
-                if (resolves)
+                if (verdict.Resolves)
                     return NodeValidationResult.Valid();
+                // 🚨 Two different negatives, two different remedies (#5008/#2231). "Nothing is
+                // there" is fixed by creating the type; "the path is occupied by something that is
+                // not a declaration" is not, and saying "not registered" for it sends the reader
+                // off to create a node that already exists.
                 _logger.LogWarning(
                     "DanglingNodeTypeGuard: blocked update of '{Path}' — NodeType '{NodeType}' "
-                    + "(was '{ExistingNodeType}') resolves to no node, so the instance would have "
-                    + "no per-node hub and would read as Unavailable forever.",
-                    node.Path, node.NodeType, context.ExistingNode?.NodeType);
+                    + "(was '{ExistingNodeType}') resolves to no NodeType declaration{Occupant}, so "
+                    + "the instance would have no per-node hub and would read as Unavailable forever.",
+                    node.Path, node.NodeType, context.ExistingNode?.NodeType,
+                    verdict.Occupant is { } occupant ? $" — {occupant}" : string.Empty);
                 return NodeValidationResult.Invalid(
-                    NodeTypeResolution.RejectionMessage(node.Path, node.NodeType!),
+                    NodeTypeResolution.RefusalFor(verdict, node.Path, node.NodeType!),
                     NodeRejectionReason.InvalidNodeType);
             })
             // 🚨 A faulted probe is NOT a verdict, and it must not read as one. Refusing is right —
