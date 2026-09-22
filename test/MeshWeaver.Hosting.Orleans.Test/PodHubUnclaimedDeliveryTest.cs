@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -49,6 +52,52 @@ public class PodHubUnclaimedDeliveryTest(TwoSiloCacheUpdateFixture fixture, ITes
         failures.Cast<PodHubNotHereException>().Should().OnlyContain(ex =>
             ex.Address == address.ToString() && !ex.Released,
             "absence of a local route is not an owner's terminal release");
+    }
+
+    /// <summary>
+    /// A successful claim pins its real activation indefinitely. If the local route disappears
+    /// without Detach reaching it, the next refusal must restore ordinary idle collection.
+    /// </summary>
+    [Fact]
+    public async Task LostLocalRoute_RefusalCancelsThePreviousOwnersPin()
+    {
+        var address = new Address("cache", $"lost-owner-pin-{Guid.NewGuid():N}");
+        var routes = (OrleansRoutingService)Services(0).GetRequiredService<IMessageHub>()
+            .ServiceProvider.GetRequiredService<IRoutingService>();
+        using var registration = routes.RegisterStream(address, (delivery, _) => Observable.Return(delivery));
+        var claimed = routes.PodHubClaimSettled(address);
+        Assert.NotNull(claimed);
+        await claimed.Timeout(Bound).Await(TestContext.Current.CancellationToken);
+        var grain = Grains(0).GetGrain<IPodHubGrain>(address.ToString());
+
+        // Inspect the REAL activation's collection contract, without sleeping for the production
+        // idle age or adding a shorter test-only collection policy. Orleans' registry is internal.
+        var directoryType = Assembly.Load("Orleans.Runtime").GetType("Orleans.Runtime.ActivationDirectory", true)!;
+        var directory = (IEnumerable<KeyValuePair<GrainId, IGrainContext>>)Services(0).GetRequiredService(directoryType);
+        var context = directory.Single(entry => entry.Key.Equals(grain.GetGrainId())).Value;
+        var keepAlive = context.GetType().GetProperty("KeepAliveUntil");
+        Assert.NotNull(keepAlive);
+        ((DateTime)keepAlive.GetValue(context)!).Should().Be(DateTime.MaxValue,
+            "the owner claim must really have pinned this activation");
+
+        // Remove only this unique route to model the release message being lost. Ordinary
+        // registration disposal would also send Detach and test the different tombstone path.
+        var streams = (ConcurrentDictionary<Address, AsyncDelivery>)typeof(OrleansRoutingService)
+            .GetField("streams", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(routes)!;
+        Assert.True(streams.TryRemove(address, out var callback));
+        try
+        {
+            var refusal = await Assert.ThrowsAsync<PodHubNotHereException>(() => grain.Deliver(Delivery(address, "lost-owner"))
+                .WaitAsync(Bound, TestContext.Current.CancellationToken));
+            refusal.Released.Should().BeFalse("no Detach reached this activation");
+            ((DateTime)keepAlive.GetValue(context)!).Should().Be(DateTime.MinValue,
+                "a vanished owner's keep-alive must not retain the refusal activation indefinitely");
+            Assert.Same(context, directory.Single(entry => entry.Key.Equals(grain.GetGrainId())).Value);
+        }
+        finally
+        {
+            streams.TryAdd(address, callback);
+        }
     }
 
     /// <summary>

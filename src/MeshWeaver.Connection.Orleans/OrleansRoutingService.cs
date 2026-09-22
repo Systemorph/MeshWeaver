@@ -1342,22 +1342,24 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal IObservable<Unit>? PodHubClaimSettled(Address address) =>
         podHubClaimSettled.TryGetValue(address, out var settled) ? settled : null;
 
-    private Task<bool> AttachPodHubOnOwner(IPodHubGrain grain)
+    private IObservable<bool> AttachPodHubOnOwner(IPodHubGrain grain)
     {
         var localSilo = serviceProvider.GetService<ILocalSiloDetails>();
         if (localSilo is null)
-            return grain.Attach();
+            return grain.Attach().ToObservable();
 
         // PreferLocalPlacement prefers the silo PERFORMING placement. A stale directory entry
         // can keep recreating the grain on the previous silo without running placement again
         // (#2299/#5177). Carry the actual owner so a refused Attach can MigrateOnIdle to it.
         // Orleans snapshots RequestContext synchronously when the call is issued. Restore the
         // ambient hint immediately; it must not affect another grain call in this execution flow.
+        // The caller's Defer already owns laziness. Invoke here, before its claimActivity window
+        // closes; another Defer would let disposal overtake the actual Attach invocation.
         var previous = RequestContext.Get(IPlacementDirector.PlacementHintKey);
         try
         {
             RequestContext.Set(IPlacementDirector.PlacementHintKey, localSilo.SiloAddress);
-            return grain.Attach();
+            return grain.Attach().ToObservable();
         }
         finally
         {
@@ -1589,7 +1591,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         // counts as a claim because the remote runtime may have accepted it.
                         attachCallEntered = true;
                         Volatile.Write(ref claimAttempted, 1);
-                        return AttachPodHubOnOwner(grain).ToObservable();
+                        return AttachPodHubOnOwner(grain);
                     }
                     finally
                     {
