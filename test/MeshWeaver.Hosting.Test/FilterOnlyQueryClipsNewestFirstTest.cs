@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -41,8 +42,8 @@ public class FilterOnlyQueryClipsNewestFirstTest
     /// Seven actions whose path order is the reverse of their recency: <c>Roll-01</c> is the
     /// alphabetically first AND the oldest, <c>Roll-07</c> the last and the newest.
     /// </summary>
-    private static readonly string[] Actions =
-        Enumerable.Range(1, 7).Select(i => $"Roll-{i:00}").ToArray();
+    private static readonly ImmutableArray<string> Actions =
+        [.. Enumerable.Range(1, 7).Select(i => $"Roll-{i:00}")];
 
     private static MeshNode Node(int index) => new(Actions[index - 1], "Ops/Actions")
     {
@@ -201,6 +202,60 @@ public class FilterOnlyQueryClipsNewestFirstTest
 
         page.Should().Equal(["Roll-07", "Roll-06", "Roll-05"],
             "two providers' rows are one set, clipped over the same order each provider clipped over");
+    }
+
+    /// <summary>
+    /// A batch that is NOT all <see cref="MeshNode"/>s keeps every item. The ordered branch strips
+    /// to nodes (<c>OfType&lt;MeshNode&gt;()</c>) and casts back, which is only the identity when
+    /// every item was a node; with the default ordering that branch is reachable for every
+    /// filter-only query, so a mixed <c>object</c> batch used to lose its non-node items silently
+    /// (Copilot review on #5192). Such a batch falls to the score + path order instead, and the
+    /// result carries all three items.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AMixedBatchKeepsEveryItemUnderTheDefaultOrdering()
+    {
+        object[] mixed = [Node(2), "not-a-node", Node(1)];
+        var query = (IMeshQueryCore)new MeshQuery([new MixedProvider(mixed)], hub: null!);
+
+        var change = await query.Query<object>(Request(FilterOnly, limit: 3), Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.Items.Should().HaveCount(3, "the default ordering must not drop the item it cannot sort");
+        change.Items.Should().Contain("not-a-node");
+        change.Items.OfType<MeshNode>().Select(n => n.Name!).OrderBy(n => n, StringComparer.Ordinal).Should().Equal(["Roll-01", "Roll-02"]);
+    }
+
+    /// <summary>A provider that answers an <c>object</c> query with a canned mixed batch, unscored.</summary>
+    private sealed class MixedProvider(object[] items) : IMeshQueryProvider
+    {
+        public string Name => "mixed";
+
+        public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
+
+        public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
+            => typeof(T) == typeof(object)
+                ? (IObservable<QueryResultChange<T>>)(object)Observable.Return(new QueryResultChange<object>
+                {
+                    ChangeType = QueryChangeType.Initial,
+                    Items = items,
+                    Timestamp = DateTimeOffset.UtcNow,
+                })
+                : Observable.Return(new QueryResultChange<T> { ChangeType = QueryChangeType.Initial, Timestamp = DateTimeOffset.UtcNow });
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+            => Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+            string basePath, string prefix, JsonSerializerOptions options,
+            AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+            string? contextPath = null, string? context = null)
+            => Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+
+        public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+            => Observable.Return<T?>(default);
     }
 
     /// <summary>A provider that answers every query with the same canned rows, in the given order, unscored.</summary>

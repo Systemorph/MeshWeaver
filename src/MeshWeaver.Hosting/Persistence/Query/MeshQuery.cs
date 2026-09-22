@@ -1071,8 +1071,16 @@ public class MeshQuery : IMeshQueryCore
         // newest-first on the contract (ParsedQuery.DefaultFilterOrdering, #4950). The same
         // property is what each provider clipped over before this merge saw a row, so the window
         // taken here is a window over the SAME order — not a re-sort of an arbitrarily clipped one.
+        //
+        // 🚨 Taken ONLY when EVERY item is a MeshNode. The guard used to be "T is MeshNode, or any
+        // item is one", which was reachable only when an author wrote sort: — now that a
+        // filter-only query resolves an ordering by default it runs for every such query, and on
+        // a mixed batch under T = object the OfType<MeshNode>() below would silently DROP the
+        // non-node items while a narrower T would fail the cast back. All-nodes means OfType
+        // drops nothing and (T)(object)node is the identity; anything else keeps the score + path
+        // total order in the else branch, which preserves every item (Copilot review, #5192).
         if (parsed.EffectiveOrderBy is { } orderBy
-            && (typeof(T) == typeof(MeshNode) || hits.Any(h => h.Item is MeshNode)))
+            && hits.Count > 0 && hits.All(h => h.Item is MeshNode))
         {
             // OrderBy is the FIRST sort dimension when present — user intent
             // beats provider scoring. Strip to items, sort, re-pair with
@@ -1099,10 +1107,11 @@ public class MeshQuery : IMeshQueryCore
         else
         {
             // No applicable OrderBy → score IS the sort dimension. Sort descending so the
-            // highest-relevance match lands first. Also the branch for a non-MeshNode T, where
-            // QueryEvaluator.OrderResults has nothing to read a sort key from: the score order
-            // is kept and the tiebreak (empty for non-nodes, so stable) keeps it a total order
-            // rather than the provider-arrival order the OrderBy branch used to leave behind.
+            // highest-relevance match lands first. Also the branch for a batch that is not all
+            // MeshNodes, where QueryEvaluator.OrderResults has nothing to read a sort key from
+            // on every item: the score order is kept and the tiebreak (empty for non-nodes, so
+            // stable) keeps it a total order over EVERY item, rather than the provider-arrival
+            // order the OrderBy branch used to leave behind.
             merged = hits.OrderByDescending(h => h.Score)
                 .ThenBy(PathTiebreak, StringComparer.Ordinal);
         }

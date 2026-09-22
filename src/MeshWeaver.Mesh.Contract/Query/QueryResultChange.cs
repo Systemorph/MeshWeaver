@@ -10,8 +10,9 @@ namespace MeshWeaver.Mesh;
 /// stronger match. The aggregator sorts the merged result by
 /// <see cref="ParsedQuery.EffectiveOrderBy"/> first (an authored <c>sort:</c>, or newest-first
 /// for a filter-only query) and by score descending when a free-text term makes relevance the
-/// ordering, so callers always get the most relevant hit at index 0
-/// without re-ranking on their side.</para>
+/// ordering, so index 0 is the first item in the APPLIED ordering — the most relevant hit for a
+/// free-text query, the newest for a filter-only one, the author's first for an explicit
+/// <c>sort:</c> — without callers re-ranking on their side.</para>
 ///
 /// <para><b>What each provider's score means.</b> The contract is that the
 /// scale is comparable ACROSS providers for a single query, not absolute:</para>
