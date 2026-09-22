@@ -227,11 +227,12 @@ Two traps this cluster produced, both worth a sentence:
   with no open record until a reader noticed. Write `Fixes the classification half of #N` (no
   keyword before the number) when a PR closes half a ticket, and reopen on the PR's own text when
   it has already happened.
-- **The same episode can hold two fingerprints.** The current identity keys on the exception type,
-  so one log site fills one fingerprint when the exception is captured and another when it is not;
-  the second row above was filed twice from one address, one window and one set of senders,
-  minutes apart. Read the address, the window and the senders across the open tickets of a
-  category before treating either count as its own population.
+- **The same episode can hold two fingerprints.** The identity is `hash(WHERE, WHAT, WHICH)`, and
+  the exception type is one of its inputs beside the call site and the masked message — so
+  capturing one log site WITH its exception and again WITHOUT it changes the inputs, and one
+  episode lands on two fingerprints; the second row above was filed twice from one address, one
+  window and one set of senders, minutes apart. Read the address, the window and the senders
+  across the open tickets of a category before treating either count as its own population.
 
 **So the procedure on a reopened auto-filed issue is:**
 
