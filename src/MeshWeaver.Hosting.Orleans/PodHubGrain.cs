@@ -3,6 +3,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Runtime;
+using Orleans.Runtime.Placement;
 using System.Reactive.Linq;
 
 namespace MeshWeaver.Hosting.Orleans;
@@ -15,16 +17,17 @@ namespace MeshWeaver.Hosting.Orleans;
 /// <list type="number">
 ///   <item><b>Only the owner pins it.</b> <see cref="Attach"/> is called from
 ///     <c>OrleansRoutingService.RegisterStream</c> on the silo that just created the local route,
-///     and <c>[PreferLocalPlacement]</c> places a not-yet-activated grain on the CALLER's silo — so
-///     the owner's call is what brings the activation to life in the right process. It then pins it
+///     with an owner placement hint. <c>[PreferLocalPlacement]</c> honours that hint, including when
+///     a claim migrates an activation off another silo. The owner then pins it
 ///     with <c>DelayDeactivation</c>, because prefer-local prefers the *caller*: a collected
 ///     activation would be re-created on whichever router called next, and every delivery to a
 ///     perfectly healthy hub would then land on the wrong process.</item>
 ///   <item><b>A silo that cannot serve it steps aside, loudly.</b> No throwing
 ///     <c>OnActivateAsync</c> (that hides the reason inside an Orleans activation failure): the call
-///     itself answers. <see cref="Deliver"/> throws <see cref="PodHubNotHereException"/> and
-///     requests deactivation so the true owner's next <see cref="Attach"/> can be placed correctly.
-///     <see cref="Attach"/> answers <c>false</c> and does the same, which is how an address MOVING
+///     itself answers. <see cref="Deliver"/> throws <see cref="PodHubNotHereException"/> without
+///     ending the activation, so queued deliveries receive that same verdict. A refused
+///     <see cref="Attach"/> requests migration to its owner's hinted silo and answers <c>false</c>.
+///     A legacy/client claim without that hint deactivates instead. That is how an address MOVING
 ///     between pods converges.</item>
 /// </list>
 ///
@@ -103,15 +106,15 @@ internal sealed class PodHubGrain(
         Address address = AddressPath;
         if (localRoutes?.TryGetLocalRoute(address) is null)
         {
-            // The activation landed on a silo that does not own the address — the previous owner's
-            // activation is still alive. Step aside so the caller's retry can be placed on itself.
+            // The activation landed on a silo that does not own the address. Relocate to the
+            // owner's hint so a stale directory entry cannot recreate it on this silo again.
             logger.LogInformation(
                 "[POD-HUB] Attach for {Address} landed on silo {Silo}, which has no local route for it "
                 + "({LocalRoutes} routing service resolved) — stepping aside so the owner's retry can "
                 + "claim it. Expected while a hub MOVES between pods.",
                 AddressPath, SiloIdentity ?? "(unknown)",
                 localRoutes is null ? "NO" : "a");
-            TryDeactivateOnIdle();
+            TryRelocateOnIdle();
             return Task.FromResult(false);
         }
 
@@ -165,20 +168,27 @@ internal sealed class PodHubGrain(
         if (route is null)
         {
             // Not an Orleans transient rejection, on purpose: DeliverToGrainWithRetry would retry
-            // it, prefer-local would place the retry on the caller again, and the loop would never
+            // it, but a delivery cannot establish an ownership claim, so the retry would not
             // converge. This is a definitive answer about a transport, and the router reads it as
             // "fall back" during the roll and as "NACK the sender" after it.
             logger.LogInformation(
                 "[POD-HUB] {Address} has no local route on silo {Silo} — the owner is gone, or its claim "
                 + "is not held there. Answering PodHubNotHere; the router decides what to do with it.",
                 AddressPath, SiloIdentity ?? "(unknown)");
-            TryDeactivateOnIdle();
+            // A delivery is not an ownership claim (#2299/#5177). Deactivating here forwards the
+            // calls already queued on this activation to a fresh one, whose first refusal also
+            // deactivates it. Orleans exhausts its forwarding budget and those callers receive an
+            // invalid-activation rejection instead of this refusal. Keep serving the verdict;
+            // Attach still steps aside when an actual owner asks to claim the address elsewhere.
+            // Cancel a previous owner's pin if its Detach did not arrive. Zero restores ordinary
+            // idle collection; it does not deactivate while queued deliveries still need an answer.
+            TryDelayDeactivation(TimeSpan.Zero);
             // 🚨 NAME THE SILO. This is the one fact the production refusal could not carry: a
             // router that says "no silo in this cluster is currently serving that hub" cannot tell
-            // "the owner answered no" from "prefer-local placed a throw-away activation on ME,
+            // "the owner answered no" from "prefer-local placed an unclaimed activation on ME,
             // because the directory has no entry at all". Those are different faults (#2938), and
-            // the second is the one that repeats forever — every refusal re-creates the activation
-            // on the caller's own silo. With the silo named, one log line separates them.
+            // the second used to re-create the activation on every refusal. With the silo named,
+            // one log line separates them without relying on activation churn to find the owner.
             throw new PodHubNotHereException(AddressPath, SiloIdentity);
         }
 
@@ -229,14 +239,24 @@ internal sealed class PodHubGrain(
         }
     }
 
-    private void TryDeactivateOnIdle()
+    private void TryRelocateOnIdle()
     {
         if (deactivated) return;
-        try { DeactivateOnIdle(); }
+        try
+        {
+            // A stale directory entry can recreate a deactivated grain on this same silo without
+            // running placement again. Migration updates that entry and forwards queued calls to
+            // the owner carried by Attach's scoped hint; deactivation alone cannot move it.
+            if (RequestContext.Get(IPlacementDirector.PlacementHintKey) is SiloAddress owner
+                && !owner.Equals(localSilo?.SiloAddress))
+                MigrateOnIdle();
+            else
+                DeactivateOnIdle();
+        }
         catch (InvalidOperationException ex)
         {
             logger.LogDebug(ex,
-                "[POD-HUB] {Address}: DeactivateOnIdle after the activation died — already achieved",
+                "[POD-HUB] {Address}: Relocation after the activation died — already achieved",
                 AddressPath);
         }
     }

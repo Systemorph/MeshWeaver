@@ -96,6 +96,30 @@ jobs:
       # inside `create-github-app-token` wearing "invalid app id" — the shape that makes a
       # provisioning task read as a workflow bug. The per-INSTANCE half cannot run yet: which
       # instances exist is derived two steps below, not declared.
+      #
+      # 🚨 WHAT IS ASSERTED HERE IS EXACTLY WHAT IS NEEDED TO REACH THE DERIVATION, AND NOTHING
+      # ELSE. All three `COMBO_*` inputs are asserted in the `roster` step, after the roster exists.
+      # Measured over this workflow's whole history: because they were asserted HERE, every run died
+      # one step above the derivation and the derivation had NEVER ONCE EXECUTED in CI — so the
+      # lane's red named absent inputs while the state that has to change first (whatever the
+      # derivation says about the fleet's installations) was invisible to every reader of every run.
+      #
+      # 🚨 AND THE RULE IS "NEEDED TO REACH THE DERIVATION", NOT "IRREVERSIBLE TO PROVISION". That
+      # distinction is the whole correction: an earlier attempt moved only the two credential MAPS
+      # (an `mwi_` key is issued-never-recovered, an `mw_` admin token is minted per instance — both
+      # SPENT rather than fetched, so demanding them before the roster exists spends them against a
+      # roster that may not derive) and kept `COMBO_VERIFY_SOURCES` here on the reasoning that it is
+      # plain data, free to provision and free to correct. Measured on the first run that reached
+      # this step afterwards: the preflight still died HERE, naming `vars.COMBO_VERIFY_SOURCES` and
+      # nothing else, and the derivation still did not run. Any unprovisioned input in this step
+      # defeats the whole reorder, whatever it costs to provision — so the test is reachability, and
+      # only `AZURE_*` (the login) and `FLEET_READER_*` (the token the derivation reads with) pass it.
+      #
+      # This is NOT a skip-trapdoor and nothing here became conditional: no `if:` asks whether a
+      # secret is set, no step carries `continue-on-error:`, both maps are still asserted
+      # unconditionally in the same `preflight` job, and an absent map still reds by NAME. Only the
+      # ORDER moved. `check-combo-verify.py` executes both blocks' real shell over the scenarios
+      # below and fails if either stops being able to say no.
       - name: Every external input, or a red build naming what to provision
         id: assert
         env:
@@ -104,9 +128,6 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
           FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
-          COMBO_VERIFY_SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
-          COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
-          COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
         run: |
           set -euo pipefail
           missing=()
@@ -115,9 +136,6 @@ jobs:
           [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID    the subscription holding ACR meshweaver (already provisioned for main-cd)")
           [ -n "${FLEET_READER_APP_ID:-}" ]     || missing+=("secrets.FLEET_READER_APP_ID        app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), whose installation token reads the module repositories AND the deployment overlays this lane derives its roster from — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
           [ -n "${FLEET_READER_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
-          [ -n "${COMBO_VERIFY_SOURCES:-}" ]   || missing+=("vars.COMBO_VERIFY_SOURCES        space-separated name=url for --source, e.g. plugins=https://github.com/Systemorph/MeshWeaver.Plugins. 🚨 NOT DERIVABLE FROM THE OVERLAYS: it maps a registry SOURCE NAME carried by an install record to the repository that source's modules come from, which only the registry holds (ComboAssembly.SourceRepositories). It is plain data, not a credential")
-          [ -n "${COMBO_VERIFY_KEYS:-}" ]      || missing+=("secrets.COMBO_VERIFY_KEYS        JSON object {instance name: mwi_… instance-registry key}, one per instance the fleet's deployment overlays DECLARE — the roster is derived, not listed, and once these are set this job prints it and names any instance a map is missing. 🚨 ISSUED, never recovered: InstanceKeys persists Hash(raw) alone, so an existing key cannot be read back — issue a new one per instance, additive and separately revocable")
-          [ -n "${COMBO_VERIFY_TOKENS:-}" ]    || missing+=("secrets.COMBO_VERIFY_TOKENS      JSON object {instance name: mw_… API token of a GLOBAL ADMIN on that instance}, one per instance the fleet's deployment overlays DECLARE, like the keys above. Removable only by the diff that moves .github/scripts/combo-verify-instance.sh off POST /api/mesh/patch and onto /api/plugins/combo-verification, and only once the verify:combo grant (#3891) exists per instance")
 
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Combo verification cannot run — provision the following, then re-run:"
@@ -161,15 +179,16 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/derive-combo-instances.py --discover
 
-      # STEP TWO OF TWO. The roster now exists, so this asks the question the first step could not:
-      # does every instance the fleet ACTUALLY has carry both credentials? A name present in the
-      # roster but absent from either map would otherwise fail deep inside the verify job wearing an
-      # HTTP 401 that names no secret — the shape that made an absent MW_REGISTRY_KEY read as a
-      # script bug (Reinsurance#128).
+      # STEP TWO OF TWO. The roster now exists, so this asks the questions the first step could not:
+      # are the two credential MAPS present at all, and does every instance the fleet ACTUALLY has
+      # carry both? A name present in the roster but absent from either map would otherwise fail deep
+      # inside the verify job wearing an HTTP 401 that names no secret — the shape that made an
+      # absent MW_REGISTRY_KEY read as a script bug (Reinsurance#128).
       - name: Every derived instance has both credentials, or a red naming which
         id: roster
         env:
           INSTANCES: ${{ steps.derive.outputs.instances }}
+          COMBO_VERIFY_SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
           COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
           COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
         run: |
@@ -187,6 +206,25 @@ jobs:
           fi
           if ! jq -e 'all(.[]; has("name") and has("baseUrl"))' >/dev/null <<<"$INSTANCES"; then
             echo "::error::every derived instance needs a name and a baseUrl: $INSTANCES"
+            exit 1
+          fi
+
+          # 🚨 THE TWO CREDENTIAL MAPS ARE ASSERTED HERE, not in the step above, and only now that
+          # the roster exists — see that step's comment. Both are SPENT rather than fetched, so an
+          # operator sent to mint them before the fleet's installations are known spends an
+          # irreversible credential against a roster that may not be derivable at all. The
+          # per-instance loop below would already red on an absent map by naming its first instance;
+          # these two lines carry the PROVISIONING guidance that names what to mint and why it
+          # cannot be read back, so no information moved out of the preflight — only its order.
+          absent=()
+          [ -n "${COMBO_VERIFY_SOURCES:-}" ] || absent+=("vars.COMBO_VERIFY_SOURCES    space-separated name=url for --source, e.g. Plugins=https://github.com/Systemorph/MeshWeaver.Plugins. It maps a registry SOURCE NAME an install record stamps to the repository that source's modules come from. Plain data, not a credential. 🚨 IT IS DERIVABLE and should stop being a variable: the fleet's own overlays carry the table as pluginCatalog.sources, whose name field is exactly the PackageCoordinate.SourceName an install record stamps and whose repoPath field is exactly the url --source wants, and Systemorph/Memex's check-record-renders-overlay.py already holds that block to the deployment record by index, name, url and ref in both directions. Deriving it through the extractor the roster above already uses is the remaining step of #3848 problem 2; until then a stale map fails LOUD (the assembler refuses by name and the verdict is NotVerifiable, which reds this lane) rather than verifying a short set")
+          [ -n "${COMBO_VERIFY_KEYS:-}" ]   || absent+=("secrets.COMBO_VERIFY_KEYS      JSON object {instance name: mwi_… instance-registry key}, one entry per instance in the roster printed above — the roster is DERIVED from the fleet's deployment overlays, never listed, so the names come from it and not from a variable. 🚨 ISSUED, never recovered: InstanceKeys persists Hash(raw) alone, so an existing key cannot be read back — issue a NEW one per instance, additive and separately revocable, and never a rotation of a key something else is using")
+          [ -n "${COMBO_VERIFY_TOKENS:-}" ] || absent+=("secrets.COMBO_VERIFY_TOKENS    JSON object {instance name: mw_… API token of a GLOBAL ADMIN on that instance}, one per instance in the roster above, like the keys. Removable only by the diff that moves .github/scripts/combo-verify-instance.sh off POST /api/mesh/patch and onto /api/plugins/combo-verification, and only once the verify:combo grant (#3891) exists per instance")
+          if [ ${#absent[@]} -gt 0 ]; then
+            echo "::error::the roster derived cleanly, so these inputs are now the only thing missing — provision the following, then re-run:"
+            for a in "${absent[@]}"; do echo "  • $a"; done
+            echo "Until then EVERY self-update in the fleet rolls UNVERIFIED (issue #3544): the" >&2
+            echo "portal's combo gate has no verdict to consult and applies the update anyway." >&2
             exit 1
           fi
 
