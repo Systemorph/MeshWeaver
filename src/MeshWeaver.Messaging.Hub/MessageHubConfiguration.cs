@@ -667,6 +667,56 @@ public record MessageHubConfiguration
 
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
     internal TimeSpan? StartupTimeout { get; init; } //= new(0, 0, 30); // Default 10 seconds
+
+    /// <summary>
+    /// The HOST's <see cref="NestedInitializationBudget"/>, stamped by
+    /// <c>MessageHub.TryGetHostedHub</c> when this configuration is built for a hub created WHILE
+    /// its host's own initialization is still running — the only case in which the host can be
+    /// waiting on it. Null otherwise, hosted or not: a per-node hub is a hosted hub of the mesh
+    /// root, but routing activates it on demand long after the mesh hub reached <c>Started</c>, so
+    /// nothing encloses it and it takes the full root budget.
+    ///
+    /// <para>🚨 It is STAMPED at creation, never resolved from <see cref="ParentHub"/> on read. That
+    /// property answers out of the parent SCOPE's <c>IMessageHub</c> registration, which for a hub
+    /// built directly on a root provider resolves to the hub ITSELF — so deriving the ladder from it
+    /// recursed until the stack died (measured: <c>Stack overflow</c> / exit 134 on the whole test
+    /// host, zero tests run). The host is known at the one moment that matters, so the value is
+    /// carried rather than looked up.</para>
+    /// </summary>
+    internal TimeSpan? EnclosingInitializationBudget { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>Rung 1 of the initialization ladder — this hub's WHOLE initialization, as the hub that
+    /// hosts it bounds it.</b> Either the explicit <c>WithStartupTimeout</c>, or one rung inside the
+    /// host's <see cref="NestedInitializationBudget"/> when this hub was born inside that host's own
+    /// initialization, or <see cref="HubInitializationBudget.Root"/> when nothing is waiting on it.
+    ///
+    /// <para>It is DERIVED rather than a constant of its own precisely because it is nested: the
+    /// host's own initialization waits on this hub reaching <c>Started</c> (a data source waits on
+    /// the <c>sync/{clientId}</c> sub-hub that serves its stream), so a bound equal to the host's
+    /// cannot fire first and this hub's diagnosis is lost to a scheduling coin flip. See
+    /// <see cref="HubInitializationBudget"/> for the ladder and the incident it comes from.</para>
+    /// </summary>
+    public TimeSpan InitializationBudget =>
+        StartupTimeout
+        ?? (EnclosingInitializationBudget is { } enclosing
+            ? HubInitializationBudget.Nest(enclosing)
+            : HubInitializationBudget.Root);
+
+    /// <summary>
+    /// 🚨 <b>Rung 2 — ONE wait inside this hub's initialization.</b> Two shapes, and they are
+    /// SIBLINGS rather than nested, so they legitimately share a rung: the <c>BuildupAction</c>
+    /// <c>Concat</c> bounded in <c>MessageHub.HandleInitialize</c>, and the <c>DataContext</c>
+    /// time-box armed by <c>DataContext.OpenInitializationGate</c>. The buildup action that arms the
+    /// time-box completes as soon as it has armed it, so only one of the two is ever the wait that
+    /// is still open.
+    ///
+    /// <para>Everything this hub's initialization waits on that is itself a hub takes
+    /// <see cref="HubInitializationBudget.Nest"/> of THIS value as its own rung 1, which is what
+    /// makes a sub-hub's hang reportable by the sub-hub instead of by whichever clock happened to
+    /// be armed first.</para>
+    /// </summary>
+    public TimeSpan NestedInitializationBudget => HubInitializationBudget.Nest(InitializationBudget);
     // Default 60s. The previous 30s default was hitting CI consistently on
     // cross-hub forward chains (mesh hub → per-node hub → response) when the
     // per-node hub's cold-cache initialization took >30s on slow Linux runners
