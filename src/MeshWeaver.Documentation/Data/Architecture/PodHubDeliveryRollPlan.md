@@ -76,18 +76,40 @@ attached — investigate that before removing the fallback, never after.
 The address→silo map is **Orleans' own grain directory**. There is no second directory to write, to
 keep durable, or to lose:
 
-- `IPodHubGrain` is keyed by the address path and placed with `[PreferLocalPlacement]`, so the
-  activation lands on the silo whose `RegisterStream` created it. Orleans' single-activation
+- `IPodHubGrain` is keyed by the address path and placed with `[PreferLocalPlacement]`. The owner's
+  `Attach` carries Orleans' placement hint naming its silo, scoped to that call and restoring any
+  ambient hint immediately afterward. Orleans' single-activation
   guarantee then makes the grain directory the map, cluster-wide, with no custom placement director
   and no state of our own.
 - Its `Deliver` looks up `OrleansRoutingService.TryGetLocalRoute(address)` — the table that has
   always been the authority for "this process hosts that hub", is written **synchronously and
   unconditionally** by `RegisterStream`, and does not depend on Orleans streaming being ready at
   all. That is the property the stream leg never had.
-- **A silo that cannot serve the address fails LOUDLY and steps aside.** It calls
-  `DeactivateOnIdle()` so the next attach can be placed on the true owner, and throws
-  `PodHubNotHereException` — deliberately NOT a transient Orleans rejection, so
-  `DeliverToGrainWithRetry` does not retry it into a loop.
+- **A silo that cannot serve a delivery answers `PodHubNotHereException`.** It keeps the
+  activation available to answer the calls already queued there. A delivery does not establish
+  ownership, so it must not relocate the activation. When an actual owner calls `Attach` on a
+  silo without the local route, that claim calls `MigrateOnIdle()` with the owner's hint and
+  answers `false`; the owner's next claim then reaches the relocated activation. A legacy/client
+  claim without a different owner hint retains `DeactivateOnIdle()`.
+
+Calling `DeactivateOnIdle()` from `Deliver` created the reactivation loop recorded in
+[core #2299](https://github.com/Systemorph/MeshWeaver/issues/2299) and
+[core #5177](https://github.com/Systemorph/MeshWeaver/issues/5177): the first refusal forwarded
+the other queued deliveries to a new activation, whose first refusal deactivated it again.
+Orleans exhausted its forwarding budget and returned invalid-activation rejections instead of
+the explicit refusal. The router already re-resolved its grain reference on each retry; more
+retries could not correct this lifecycle decision. `PodHubUnclaimedDeliveryTest` drives a burst
+through a real two-silo cluster and also proves that a later owner on the other silo can claim
+the address and receive its next delivery. An unclaimed activation remains subject to Orleans'
+normal idle collection; only a successful owner claim pins it.
+
+The owner reclaim has a separate trap: deactivation alone does not invalidate every caller's
+cached silo address. Orleans can recreate the activation on that cached silo without invoking
+the placement director, so even a fresh grain reference and a placement hint do not move it.
+`MigrateOnIdle()` consults the hint and updates Orleans' directory and forwarding destination.
+The regression proves this through an existing non-owner activation, with both an absent
+ambient hint and a conflicting one, then delivers through the original grain reference and
+confirms a subsequent owner claim. No routing retry count or timeout changes are needed.
 
 Two lifecycle details that are the whole correctness argument:
 
@@ -95,10 +117,10 @@ Two lifecycle details that are the whole correctness argument:
   hub's activation onto whichever silo happens to call next (`PreferLocalPlacement` prefers the
   *caller's* silo, so a collected activation would migrate to a router). The activation's lifetime
   is deliberately tied to the owner's registration, not to traffic.
-- **Detach on disposal.** `RegisterStream`'s disposal deactivates the grain, so a hub that MOVES
-  silos — a `portal/{user}` circuit reconnecting to another pod is the everyday case — leaves no
-  activation stranded on the pod it left. `Attach` reports `false` when it lands on a silo that is
-  not the owner, and the owner retries, bounded, so the move converges instead of wedging.
+- **Detach on disposal.** `RegisterStream`'s disposal leaves a short-lived release tombstone,
+  allowing the router to distinguish an owner's explicit release from an address with no claim.
+  A subsequent `Attach` on a silo without the local route still steps aside, so a hub moving
+  between silos can be claimed on its new owner. A successful `Attach` clears the tombstone.
 
 `OrderedRouteDispatcher` stays: its FIFO is a correctness requirement of the delta protocol, and a
 call into a `[Reentrant]` grain does not restore ordering. What the transport swap does NOT change is
