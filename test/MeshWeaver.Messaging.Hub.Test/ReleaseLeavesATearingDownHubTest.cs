@@ -49,6 +49,7 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
 
     private readonly AsyncSubject<Unit> releaseArrived = new();
     private int ordinaryEventArrived;
+    private Address? releaseSender;
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -56,6 +57,7 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
             .WithTypes(typeof(StreamRelease), typeof(OrdinaryEvent))
             .WithHandler<StreamRelease>((_, delivery) =>
             {
+                releaseSender = delivery.Sender;
                 releaseArrived.OnNext(Unit.Default);
                 releaseArrived.OnCompleted();
                 return delivery.Processed();
@@ -72,10 +74,44 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
             .WithTypes(typeof(StreamRelease), typeof(OrdinaryEvent));
 
     [HubFact]
-    public async Task AReleaseLeavesWhileAnOrdinaryEventIsStillRefused()
+    public Task AReleaseLeavesWhileAnOrdinaryEventIsStillRefused()
+        => AssertReleaseLeaves(0);
+
+    [HubFact]
+    public Task AReleaseCrossesEveryTearingDownAncestor()
+        => AssertReleaseLeaves(2);
+
+    [HubFact]
+    public async Task AReleaseWithoutASurvivingCarrierIsRefusedAndTeardownCompletes()
+    {
+        var subscriber = GetClient();
+        var hosted = subscriber.GetHostedHub(new Address("releasing-child", "root-stop"),
+            c => c.WithPostingIdentity(PostingIdentity.System).WithTypes(typeof(StreamRelease)));
+        IMessageDelivery? verdict = null;
+        hosted.RegisterForDisposal(Disposable.Create(() =>
+            verdict = subscriber.Post(new StreamRelease(), o => o.WithTarget(CreateHostAddress()))));
+
+        Mesh.Dispose();
+
+        await Mesh.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "forwarding a release must terminate at the construction-captured null parent of the "
+            + "root, even though Configuration.ParentHub can resolve the root itself");
+        verdict.Should().NotBeNull("the child's release disposable must have run");
+        verdict!.State.Should().Be(MessageDeliveryState.Failed,
+            "a release with no surviving carrier must report refusal instead of an untrue success");
+        verdict.GetFailureErrorType(ErrorType.Unknown).Should().Be(ErrorType.ShuttingDown);
+    }
+
+    private async Task AssertReleaseLeaves(int nestedParents)
     {
         var sink = GetHost();
-        var subscriber = GetClient();
+        var subtree = GetClient();
+        var subscriber = subtree;
+        foreach (var index in Enumerable.Range(0, nestedParents))
+            subscriber = subscriber.GetHostedHub(
+                new Address("subscriber-parent", index.ToString()),
+                c => c.WithPostingIdentity(PostingIdentity.System)
+                    .WithTypes(typeof(StreamRelease), typeof(OrdinaryEvent)));
 
         // A hosted hub whose ShutDown runs both posts — the shape of a client-side sync/{id} hub
         // releasing its owner-side twin.
@@ -93,9 +129,9 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
             releaseVerdict = subscriber.Post(new StreamRelease(), o => o.WithTarget(sink.Address));
         }));
 
-        subscriber.Dispose();
+        subtree.Dispose();
 
-        await subscriber.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+        await subtree.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
             "the subscribing hub must finish its own teardown — both posts happen inside it, so "
             + "until it has completed neither verdict has been produced");
 
@@ -109,6 +145,9 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
         await releaseArrived.Should().Within(TestTimeouts.Convergence).Emit(
             "and carrying it must mean ARRIVAL: a verdict that says 'not refused' while the message "
             + "goes nowhere is the same silent loss wearing a better label");
+
+        releaseSender.Should().Be(subscriber.Address,
+            "the owner must release the ORIGINAL subscriber's state, not the ancestor's state");
 
         ordinaryVerdict.Should().NotBeNull();
         ordinaryVerdict!.State.Should().Be(MessageDeliveryState.Failed,

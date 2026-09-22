@@ -63,15 +63,27 @@ public class SubscriberTeardownReleasesTheOwnerSyncHubTest(ITestOutputHelper out
 
     [HubFact]
     public async Task DisposingTheSubscribingHubDrainsTheOwnerSidePopulation()
+        => await AssertSubtreeReleasesOwnerStreams(0);
+
+    [HubFact]
+    public async Task DisposingANestedSubtreeDrainsTheSurvivingOwnersPopulation()
+        => await AssertSubtreeReleasesOwnerStreams(1);
+
+    private async Task AssertSubtreeReleasesOwnerStreams(int nestedParents)
     {
-        var client = GetClient();
+        var subtree = GetClient();
+        var client = subtree;
+        foreach (var index in Enumerable.Range(0, nestedParents))
+            client = client.GetHostedHub(
+                new Address("nested-subscriber", index.ToString()),
+                c => c.WithPostingIdentity(PostingIdentity.System).AddLayoutClient(d => d));
         var ownerSyncHubs = await SubscribedOwnerSyncHubs(client);
 
         // The hub-teardown route: nobody disposes a stream. This is what a circuit close, a
         // DisposeRequest and a recycle all do.
-        client.Dispose();
+        subtree.Dispose();
 
-        await client.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+        await subtree.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
             "the subscribing hub must finish its own teardown — until it has, nothing can be said "
             + "about what that teardown did or did not tell the owner");
 
