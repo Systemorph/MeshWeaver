@@ -6,7 +6,8 @@ Description: >-
   branch decides. When a recovery path is added downstream, the fault's old claim becomes a false
   assertion that nothing in the pipeline can contradict: the red-log watcher captures Error and
   Critical only, so the Error's claim becomes the permanent record while the Warning that says the
-  process recovered is never captured at all. The result is an issue that can never stay closed.
+  process recovered is never captured at all — so the ticket it files is titled after an outcome that
+  did not happen.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
 ---
 
@@ -39,24 +40,46 @@ recovered path it is simply wrong.
 
 ## Why it is not cosmetic: the capture rule turns the claim into the record
 
-Two properties of the red-log pipeline (see [Log Watch Triage](../LogWatchTriage)) combine into the
-whole defect:
-
-1. **Only `fail:` and `crit:` are captured** — Error and Critical. A Warning is not collected, not
-   fingerprinted, and not ticketed.
-2. **The fingerprint is the NORMALIZED MESSAGE.** An incident's identity, and therefore the issue it
-   folds into, is the wording.
+**The load-bearing property is the capture rule, not the fingerprint** (see
+[Log Watch Triage](../LogWatchTriage)): **only `fail:` and `crit:` are captured** — Error and
+Critical. A Warning is not collected, not fingerprinted, and not ticketed.
 
 So on the recovered path:
 
-- the Error that claims the bad outcome **is** captured, fingerprinted, and filed;
+- the Error that claims the bad outcome **is** captured and filed;
 - the Warning that says the process recovered is **not captured at all**;
 - and there is no third line for anyone to compare them against.
 
-The false claim becomes the permanent, ticketed record of an event that went fine. Worse, because the
-fingerprint is the wording, it folds into the issue *about the bad outcome* — so that issue is
-reopened by events which are not instances of it, and **can never stay closed**. Closing it correctly,
-with evidence, does not help: the next benign blip reopens it.
+The false claim becomes the permanent, ticketed record of an event that went fine, and the pipeline
+holds no trace of the recovery that contradicts it. That asymmetry is the defect, and it does not
+depend on how incidents are folded.
+
+### What the wording does and does not do
+
+🚨 It is tempting — and wrong — to say "the fingerprint is the message". The identity
+(`StructuralLogIncidentIdentity.Compute`) is a hash over **three** parts: **WHERE** (the top
+application stack frame, or `(category, eventId)` when the burst names no frame), **WHAT** (the
+exception type by simple name), and **WHICH** (the masked **exception** message — the logged message
+only when there is no exception). The contract is explicit that the discriminating text is the
+exception's message, *never the reporter's prose*, and a `LogIncident` node's stored
+`normalizedMessage` field is not the identity. That distinction is worth holding precisely — a
+half-remembered version of it is inherited by every later reader.
+
+Two consequences worth getting right, because the obvious reading of each is wrong:
+
+- **When the fault is logged WITH its exception** (`LogError(ex, "{Message}", ex.Message)`), the
+  sentence *is* WHICH, so rewording it does move the identity. That is real, but it is one part of
+  three, not "the fingerprint".
+- **Rewording does NOT separate the recovered case from the refused one.** Both paths carry the same
+  exception type from the same frame, so they share an identity before and after. What distinguishes
+  them is that the deciding branch logs its **own** Error on the refusing path, with its own frame
+  and its own text.
+
+So the benefit is narrower than "the harmful case gets its own ticket", and it is still worth having:
+**the ticket a benign event opens now describes a transport fault rather than a held rollout.** An
+issue titled after the bad outcome stops being reopened by events that are not instances of it — not
+because the identity now discriminates, but because the wording no longer describes that outcome at
+all.
 
 ## The measured instance
 

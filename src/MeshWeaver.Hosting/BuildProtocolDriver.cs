@@ -846,13 +846,25 @@ public static class BuildProtocolDriver
                     // logged first.
                     //
                     // The cost of claiming it anyway was measured, and it is not cosmetic. The
-                    // red-log watcher fingerprints on the NORMALIZED MESSAGE and captures only
-                    // `fail:`/`crit:` — Error and Critical. The grant branch reports itself at
-                    // WARNING, so it is never captured. So every benign transport blip published
-                    // one red line asserting that pods refused readiness and a rollout was held,
-                    // with nothing in the pipeline able to contradict it: on memex-cloud,
-                    // 2026-09-19T06:32:23Z, one such line reopened the issue about held rollouts on
-                    // an image three framework builds NEWER than the door that fixed them.
+                    // red-log watcher captures only `fail:`/`crit:` — Error and Critical — and the
+                    // grant branch reports itself at WARNING, so it is never collected at all.
+                    // Every benign transport blip therefore published one red line asserting that
+                    // pods refused readiness and a rollout was held, with NOTHING in the pipeline
+                    // able to contradict it: on memex-cloud, 2026-09-19T06:32:23Z, one such line
+                    // reopened the issue about held rollouts on an image three framework builds
+                    // NEWER than the door that fixed them.
+                    //
+                    // On the identity that folds it (Doc/Architecture/LogWatchTriage, "One fault,
+                    // one ticket"): it is a hash over WHERE (the top application frame, or
+                    // (category, eventId) when the burst names none), WHAT (the exception type's
+                    // simple name) and WHICH (the masked EXCEPTION message — the logged message
+                    // only when there is no exception). This call passes the exception, so WHICH is
+                    // this literal and the wording IS load-bearing for folding. What the wording
+                    // does NOT do is separate the granting path from the refusing one: both carry
+                    // the same exception type from the same frame, so they share an identity either
+                    // way. The refusing path is distinguished by the door logging its OWN Error,
+                    // not by this one's identity. The change here is that the ticket a benign blip
+                    // opens now describes a transport fault instead of a held rollout.
                     //
                     // Nothing here reduces visibility. This stays an Error, it still names the node
                     // and the attempt count, it still says the sweep never ran, and the three

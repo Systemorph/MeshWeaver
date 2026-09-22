@@ -352,14 +352,23 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
     /// started catching the exception the sentence became a claim about a verdict decided AFTER it
     /// is logged — and in this very case the verdict is the opposite of what it claims.</para>
     ///
-    /// <para><b>Why it is not cosmetic, measured.</b> The red-log watcher fingerprints on the
-    /// normalized message and captures only <c>fail:</c>/<c>crit:</c>, so the Error above is
-    /// ticketed and the Warning this door writes to say it GRANTED is never captured at all. Every
-    /// benign transport blip therefore filed one red line asserting held rollouts, with nothing in
-    /// the pipeline able to contradict it: on <c>memex-cloud</c> at 2026-09-19T06:32:23Z one such
-    /// line reopened this issue on an image three framework builds NEWER than the door — its
-    /// <c>Queue(…)</c> diagnostic carried <c>handledWhileWaiting</c> and a <c>Trail:</c> block that
-    /// the 2026-09-06 samples do not have.</para>
+    /// <para><b>Why it is not cosmetic, measured.</b> The red-log watcher captures only
+    /// <c>fail:</c>/<c>crit:</c> — Error and Critical — so the Error above is ticketed and the
+    /// Warning this door writes to say it GRANTED is never collected at all. Every benign transport
+    /// blip therefore filed one red line asserting held rollouts, with nothing in the pipeline able
+    /// to contradict it: on <c>memex-cloud</c> at 2026-09-19T06:32:23Z one such line reopened this
+    /// issue on an image three framework builds NEWER than the door — its <c>Queue(…)</c> diagnostic
+    /// carried <c>handledWhileWaiting</c> and a <c>Trail:</c> block that the 2026-09-06 samples do
+    /// not have.</para>
+    ///
+    /// <para>🚨 <b>On the folding identity, stated precisely</b> (<c>Doc/Architecture/LogWatchTriage</c>,
+    /// "One fault, one ticket"): it is a hash over WHERE (the top application frame, else
+    /// <c>(category, eventId)</c>), WHAT (the exception type's simple name) and WHICH (the masked
+    /// EXCEPTION message, falling back to the logged message only when there is no exception) — not
+    /// "the normalized message". Here the fault is logged WITH its exception, so the wording is
+    /// WHICH; but it does NOT separate this case from the refusing one, since both carry the same
+    /// exception type from the same frame. What this test pins is therefore the CLAIM, not the
+    /// identity: the refusing case below is where the verdict may be asserted.</para>
     ///
     /// <para><b>Visibility is untouched, and this case proves it</b> — the fault is still reported,
     /// still names the node, and still says the sweep never ran.</para>
