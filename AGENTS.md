@@ -7,6 +7,10 @@ obey. Where one ends in `Full reference: [/name]`, the skill under `.claude/skil
 the worked examples, commands, war stories and incident history — load it when the task calls for
 it, not before.
 
+The shared skill source is `.claude/skills/`. Codex discovers that same directory through the
+tracked `.agents/skills` relative symlink. Edit the canonical files; never copy skills into a
+second tree. New skills become available to both clients through the directory link.
+
 | Skill | Load it when |
 |---|---|
 | [/worktree](.claude/skills/worktree/SKILL.md) | starting any change: branch, edit, build, push |
