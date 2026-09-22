@@ -20,13 +20,32 @@ namespace MeshWeaver.Messaging;
 /// <param name="address">Address of the host (parent) hub that owns this collection.</param>
 public class HostedHubsCollection(IServiceProvider serviceProvider, Address address) : IDisposable
 {
-    /// <summary>The currently registered hosted hubs (live snapshot of the registry's values).</summary>
-    public IEnumerable<IMessageHub> Hubs => messageHubs.Values;
+    /// <summary>
+    /// Every hub this collection still OWNS: the ones registered under their address, plus the ones
+    /// <see cref="RetireCorpse"/> has taken out of the registry but whose teardown has not finished
+    /// (see <see cref="retiring"/>). Diagnostics, the stall detector and the disposal join all read
+    /// this, so a retired hub stays visible to each of them until it is Dead.
+    /// </summary>
+    public IEnumerable<IMessageHub> Hubs => messageHubs.Values.Concat(retiring.Keys);
     /// <summary>Address of the host (parent) hub that owns this collection.</summary>
     public Address Host { get; } = address;
     private readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>();
 
     private readonly ConcurrentDictionary<Address, IMessageHub> messageHubs = new(AddressComparer.Instance);
+
+    /// <summary>
+    /// Hubs that have been RETIRED from <see cref="messageHubs"/> by <see cref="RetireCorpse"/> — taken
+    /// out from under their address so a successor can be minted there — but are still tearing down.
+    /// Keyed by reference: an address can hold one retiring predecessor and one live successor at the
+    /// same time, and two hubs are never the same hub.
+    ///
+    /// <para>A retired hub is still THIS collection's to join on. Its Autofac scope is a child of
+    /// the owner's, so if the owner's own teardown ran ahead of it the owner would close that scope
+    /// under a hub still resolving from it — the R1 straggler class, manufactured locally. So
+    /// <see cref="DisposeHubsReactive"/> waits on these exactly as it waits on the registered ones,
+    /// and an entry leaves only when its hub signals <c>DisposalCompleted</c>.</para>
+    /// </summary>
+    private readonly ConcurrentDictionary<IMessageHub, Unit> retiring = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// 🚨 <b>Why the owner is going down, so its children can say so (#3510).</b> Set by the owning
@@ -112,7 +131,40 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     public HostedHubResult GetHubWithOutcome(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
     {
         if (messageHubs.TryGetValue(address, out var hub))
-            return new HostedHubResult(hub, HostedHubOutcome.Available, null);
+        {
+            // 🚨 A registry hit is NOT unconditionally "available" (#5136). A hub that has reached
+            // ShutDown can serve nothing — its intake refuses every delivery and a direct
+            // Observe(...) faults synchronously with ObjectDisposedException — yet it leaves this
+            // registry only when its own removal registrant runs, several statements INTO that
+            // phase (CancelCallbacks, the reactive dispose actions, then the registrant walk). A
+            // teardown that wedges anywhere in between never reaches it, and the window is then
+            // unbounded: measured on a serving pod, ONE such hub was handed to four callers over
+            // 55 minutes, each faulting out of an HTTP endpoint as a 500. A caller that asked for a
+            // hub it can post NEW work to is answered with a successor instead; the corpse keeps
+            // tearing down, outside the registry and inside the disposal join (RetireCorpse).
+            //
+            // The bound is ShutDown, deliberately, and not IsDisposing. Between Dispose() and
+            // ShutDown the hub is still a live poster and router draining the work it ACCEPTED
+            // (Quiescing, then its children), and the intake gate already answers a new request
+            // with a typed, transient ShuttingDown NACK the caller re-asks on — the documented
+            // recycle shape (Doc/Architecture/HubDisposalModel, "the creation window"). Minting a
+            // successor there would put two activations on one address with accepted writes still
+            // in flight on the first. At ShutDown nothing accepted remains, so a successor overlaps
+            // only with the corpse's own registrant walk — the same overlap the ordinary path has
+            // always had between that walk and Dead. Never-create probes keep finding the corpse:
+            // they are the router's, and a delivery into it is refused with the transient NACK,
+            // which is the right answer for a message and the wrong one for a caller holding the
+            // reference. While THIS collection is disposing no successor can be minted, so the
+            // corpse is still the honest answer — the caller gets an attributable
+            // ObjectDisposedException rather than a null it was promised it would never see.
+            if (create != HostedHubCreation.Always
+                || hub.RunLevel < MessageHubRunLevel.ShutDown
+                || IsDisposing)
+                return new HostedHubResult(hub, HostedHubOutcome.Available, null);
+            // Value-matched and idempotent: a concurrent lookup may already have retired this
+            // corpse, in which case both fall through to the same single-flight creation below.
+            RetireCorpse(address, hub);
+        }
 
         // 🚨 Never-create lookups are PURE READS and must not touch any lock:
         // RouteStreamMessage probes this per stream message per parent-chain
@@ -258,6 +310,61 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         messageHubs[hub.Address] = hub;
         hub.RegisterForDisposal(h =>
             messageHubs.TryRemove(new KeyValuePair<Address, IMessageHub>(h.Address, h)));
+    }
+
+    /// <summary>
+    /// Takes a hub that has reached <see cref="MessageHubRunLevel.ShutDown"/> — and has not yet run
+    /// its own removal — out from under its address, so <see cref="GetHubWithOutcome"/> can mint a
+    /// successor there, while keeping it in this collection's disposal join until it is Dead.
+    ///
+    /// <para><b>Value-matched, like every removal on this registry</b> (#4741, #5159): the entry
+    /// goes only while it is still THIS hub, so a successor that a concurrent lookup has already
+    /// registered is never evicted, and the corpse's own late removal (armed by <see cref="Track"/>,
+    /// value-matched too) finds either nothing or the successor and touches neither.</para>
+    ///
+    /// <para><b>Still joined.</b> The corpse moves into <see cref="retiring"/>, which
+    /// <see cref="DisposeHubsReactive"/> waits on exactly as it waits on the registered hubs. It
+    /// leaves that set on its <c>DisposalCompleted</c> — a terminal that replays, so a hub that
+    /// reached Dead between the lookup and this subscription leaves at once, and a hub whose
+    /// teardown is genuinely wedged stays until the owner's stall detector names it, never silently
+    /// dropped from the join.</para>
+    ///
+    /// <para><b>Reported at Warning, on purpose.</b> The ordinary path never comes here: a hub's
+    /// removal runs a few statements after its RunLevel flips, and a lookup landing in those
+    /// microseconds is the only benign way to reach this line. Every other way is a teardown that
+    /// has stopped making progress inside its ShutDown phase, which is a defect this line is the
+    /// first to name — the stall detector reports it later, on its own budget.</para>
+    /// </summary>
+    /// <param name="address">The address the corpse is registered under.</param>
+    /// <param name="corpse">The hub found there, at <see cref="MessageHubRunLevel.ShutDown"/> or beyond.</param>
+    private void RetireCorpse(Address address, IMessageHub corpse)
+    {
+        if (!messageHubs.TryRemove(new KeyValuePair<Address, IMessageHub>(address, corpse)))
+            return;
+
+        retiring[corpse] = Unit.Default;
+        logger.LogWarning(
+            "[HOSTED-RETIRE] {Address} in Host {Host}: the registered hub is at RunLevel={RunLevel} and "
+            + "has not left the registry — its teardown has not reached its own removal. Retiring it so "
+            + "the next caller gets a successor; it stays in the disposal join until it is Dead (#5136).",
+            address, Host, corpse.RunLevel);
+
+        // A faulted terminal is still a terminal — the hub's ShutDown phase reported the fault at
+        // Error itself, and the hub is Dead either way — so the entry leaves on it too.
+        corpse.DisposalCompleted
+            .Take(1)
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger.LogDebug(ex,
+                    "[HOSTED-RETIRE] {Address}: the retired hub's disposal faulted; it is Dead and leaves the join",
+                    address);
+                return Observable.Return(Unit.Default);
+            })
+            .Subscribe(
+                _ => retiring.TryRemove(corpse, out _),
+                ex => logger.LogDebug(ex,
+                    "[HOSTED-RETIRE] {Address}: the retired hub's completion faulted past its own Catch",
+                    address));
     }
 
     /// <summary>
@@ -593,8 +700,13 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     {
         var totalStopwatch = Stopwatch.StartNew();
         var hubs = messageHubs.Values.ToArray();
-        logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]",
-            hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
+        // Retired predecessors (RetireCorpse) are already disposing on their own; they are not
+        // disposed again here — Dispose() would be a no-op on them anyway — but they ARE joined,
+        // because their scopes are children of the owner's and the owner must not close it under
+        // a teardown still resolving from it.
+        var retired = retiring.Keys.ToArray();
+        logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]; joining {retired} retired hub(s) still tearing down",
+            hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())), retired.Length);
 
         // Read ONCE for the whole wave: every child of this teardown shares one originating cause,
         // and re-invoking per child would let the answer drift mid-teardown.
@@ -681,7 +793,16 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 return Observable.CombineLatest(lateCompletions).Select(_ => Unit.Default).Take(1);
             });
 
-        var completionLegs = childCompletions.Append(inflightDrain).ToArray();
+        var retiredCompletions = retired.Select(h =>
+            h.DisposalCompleted
+                .Take(1)
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger.LogError(ex, "Retired hub {address} disposal faulted", h.Address);
+                    return Observable.Return(Unit.Default);
+                }));
+
+        var completionLegs = childCompletions.Concat(retiredCompletions).Append(inflightDrain).ToArray();
         IObservable<Unit> all = Observable
             .CombineLatest(completionLegs)
             .Select(_ => Unit.Default)

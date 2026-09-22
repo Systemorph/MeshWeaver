@@ -18,12 +18,6 @@ internal class MonolithRoutingService(
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
-    private void UnregisterStream(Address address)
-    {
-        streams.TryRemove(address, out _);
-    }
-
-
     public override IDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
@@ -260,7 +254,13 @@ internal class MonolithRoutingService(
                     logger.LogDebug("[ROUTE-CREATE] GetHostedHub returned {HubAddr} for {Address}",
                         createdHub?.Address.ToString() ?? "(null)", address);
 
-                    createdHub?.RegisterForDisposal(_ => UnregisterStream(createdHub.Address));
+                    // No second, key-only removal is armed here. The hub's own RegisterStream
+                    // registration removes what it registered (value-matched, above) when the hub
+                    // disposes; a removal by ADDRESS armed on top of it ran in the same registrant
+                    // walk and erased whatever was registered there by then — which, once a
+                    // successor can be minted while its predecessor is still tearing down
+                    // (HostedHubsCollection.RetireCorpse, #5136), is the successor's live route:
+                    // the address goes dark on this host with no exception and nothing to grep.
                     return createdHub;
                 }
                 finally
