@@ -59,6 +59,60 @@ public record ParsedQuery(
     public const string CrossPartitionQualifier = "partitions:all";
 
     /// <summary>
+    /// The ordering every clip site applies when the author wrote no <c>sort:</c> and the query
+    /// carries no free-text term: newest first.
+    /// </summary>
+    /// <remarks>
+    /// <para>🚨 <b>A capped result set is a partial answer, and which part survives the cap is
+    /// decided HERE.</b> A filtered query — <c>nodeType:X</c>, <c>path:Y scope:descendants</c>,
+    /// <c>partitions:all nodeType:Hosting/InstanceAction</c> — has no relevance signal to rank on,
+    /// so before this default the clip was taken over whatever order each backend happened to
+    /// enumerate: path-alphabetical on the in-memory walk, heap order on Postgres (no
+    /// <c>ORDER BY</c> at all before <c>LIMIT</c>). A reader diagnosing an outage asks "what
+    /// happened most recently", gets the first N rows of an arbitrary order, and reads the newest
+    /// row in that page as the newest row there is. Measured (#4950): two truncated pages whose
+    /// newest row was six days old, over a set whose actual newest rows explained the outage — the
+    /// rows were simply not in the first 25. Ordered newest-first, a truncated page is still
+    /// partial but it is the RIGHT part; unordered, it is a misleading answer that looks complete.
+    /// This is the same rule as the coverage denominator (<c>partitions:all</c>, the
+    /// <c>coverage.partitions</c> envelope): a zero or a cap is only readable against what the
+    /// read actually spanned.</para>
+    /// <para>The key is <c>lastModified</c> because it is the one field every backend resolves the
+    /// same way — a typed column on Postgres (<c>n.last_modified</c>), a node field on the
+    /// in-memory evaluator — and the one a diagnosing reader is asking about.</para>
+    /// </remarks>
+    public static readonly OrderByClause DefaultFilterOrdering = new("lastModified", Descending: true);
+
+    /// <summary>
+    /// The ordering a clip site APPLIES — resolved once, on the contract, so every backend clips
+    /// over the same order. Read this, never <see cref="OrderBy"/>, at any point that takes a
+    /// <c>Skip</c>/<c>Limit</c> window: the per-provider load cap
+    /// (<c>StorageAdapterMeshQueryProvider</c>, the Postgres <c>ORDER BY … LIMIT</c>) and the
+    /// merge (<c>MeshQuery.ClipMergedInitial</c>) each clip independently, and a default resolved
+    /// at only one of them leaves the others clipping an arbitrary order first.
+    /// </summary>
+    /// <remarks>
+    /// <list type="number">
+    ///   <item><see cref="OrderBy"/> when the author wrote <c>sort:</c> — intent always wins.</item>
+    ///   <item><see langword="null"/> when the query carries a free-text term
+    ///     (<see cref="TextSearch"/>): relevance IS the ordering there, and the providers' scores
+    ///     rank it (see <c>QueryResultChange.Scores</c>).</item>
+    ///   <item><see langword="null"/> for a non-default <see cref="Source"/>: <c>source:activity</c>
+    ///     and <c>source:accessed</c> are change feeds whose provider ranks by the joined
+    ///     satellite's recency, which is the right "newest" for that feed.</item>
+    ///   <item>Otherwise <see cref="DefaultFilterOrdering"/> — newest first.</item>
+    /// </list>
+    /// <para><see cref="OrderBy"/> keeps meaning "what the author asked for": a surface that
+    /// reports the applied ordering back to a reader prints this property and can say whether it
+    /// was authored or defaulted by comparing the two.</para>
+    /// </remarks>
+    public OrderByClause? EffectiveOrderBy =>
+        OrderBy
+        ?? (string.IsNullOrEmpty(TextSearch) && Source == QuerySource.Default
+            ? DefaultFilterOrdering
+            : null);
+
+    /// <summary>
     /// An empty query with no filters.
     /// </summary>
     public static ParsedQuery Empty => new(null, null);
