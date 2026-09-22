@@ -131,7 +131,15 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         await Sync.ReimportAtCommit(Space, CommitA, UserId)
             .Timeout(TestTimeouts.CrossSilo).Await(cancellationToken);
 
-        var adoptedFingerprint = await FingerprintWhen(d => d.CurrentSourceFingerprint is { Length: > 0 },
+        // Importing activates the type and can already dispatch its first compile. A source
+        // fingerprint does not mean that compile has finished: seeding at that point races its
+        // terminal stamp, which honestly changes provenance back to Compiled. Establish the
+        // completed initial build before replacing it with the adoption this test exercises.
+        var adoptedFingerprint = await FingerprintWhen(d =>
+                d.CurrentSourceFingerprint is { Length: > 0 }
+                && d.CompilationStatus is CompilationStatus.Ok
+                && d.BuildProvenance is BuildProvenance.Compiled
+                && !d.IsDirty,
             cancellationToken);
         Output.WriteLine($"live fingerprint at {CommitA[..8]}: {adoptedFingerprint}");
         StageBundle("widget-a.zip", adoptedFingerprint);
