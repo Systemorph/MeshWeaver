@@ -64,11 +64,25 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
         // ThreadPool work item to drain it.
         lock (_tasks)
         {
-            _tasks.AddLast(task);
+            var node = _tasks.AddLast(task);
             if (_delegatesQueuedOrRunning < _maxDegreeOfParallelism)
             {
                 ++_delegatesQueuedOrRunning;
-                NotifyThreadPoolOfPendingWork();
+                try
+                {
+                    NotifyThreadPoolOfPendingWork();
+                }
+                catch
+                {
+                    // Nothing will drain for this reservation (thread creation / start failed, e.g.
+                    // out of memory for a stack): give the slot back and withdraw the task, or the
+                    // count stays at the cap with no drain loop behind it and every later QueueTask
+                    // queues behind a loop that does not exist. The fault propagates to the caller
+                    // (TaskFactory.StartNew), which faults the leaf.
+                    --_delegatesQueuedOrRunning;
+                    _tasks.Remove(node);
+                    throw;
+                }
             }
         }
     }

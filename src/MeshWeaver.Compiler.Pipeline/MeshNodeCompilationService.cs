@@ -1231,7 +1231,7 @@ internal class MeshNodeCompilationService(
             .SelectMany(inputs => inputs is null
                 ? Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>())
                 // Pure Roslyn compute -> the bounded CPU lane, off the ThreadPool (CompileOffTheThreadPool).
-                : _cpuLane.InvokeBlocking(_ => CompileDiagnostics.DiagnoseInputs(inputs)))
+                : _cpuLane.InvokeBlocking(ct => CompileDiagnostics.DiagnoseInputs(inputs, ct)))
             // 🚨 BOUNDED with the same clock as the emit leg — this runs on the FAILURE path,
             // where a hang is worst: the compile has already failed and this is what stands
             // between that failure and its terminal Error write. Unbounded, a stalled
