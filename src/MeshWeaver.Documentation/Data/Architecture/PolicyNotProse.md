@@ -139,13 +139,15 @@ written.
 | `roll-migrates-first` | A schema change ships as a new image, and every roll runs that image's database migration FIRST — outside the portal, as its own run-once Job that must report succeeded — before the image moves. The operator half is `hosting-migrate`; the `Roll` plan calling it is the Plugins half. | in force | 2026-09-21 | maintainer |
 | `first-admin-no-learning-path` | The instance's FIRST global administrator is seeded with no learning path (`User.PinnedPaths` empty); an ordinary new user is seeded with the four documentation sections. The learning path is a create-time SEED, never a value a later onboarding write re-imposes. | in force | 2026-09-21 | maintainer |
 | `setup-secrets-three-valued` | The first-run setup dialog's secrets step shows a declared vault mapping whose object does not exist as its own state, `missing`, decided by the object's versions listing: `200` is exists, `404` is missing, anything else is `not checked` and never either answer. Missing rows sort first. | in force | 2026-09-21 | maintainer |
+| `severity-closes-on-verification` | A `sev:B` or `sev:H` issue closes on **post-roll production verification** of the running portal, never on the merge that lands its fix: a merge puts the fix on `main`, and what the label gates is whether the defect is gone from production. `sev:M`, `sev:L`, `chore`, `enhancement` and `documentation` issues close on a merge as before. Cited by the `Closing keywords (no accidental close)` gate, which refuses a body whose closing keyword targets an issue carrying either label. **Ratification owed** — filed for triage as `rbuergi/Feedback/20260922-ratify-severity-closes-on-verification-policy`, which carries the measurement that six merges closed a `sev:H` in the two days before the gate existed. | proposed | — | — |
 
 Cited by: [Release Process](../ReleaseProcess) ·
 [The Self-Update Schema Wall](../SelfUpdateSchemaWall) ·
 [Issue Taxonomy and the Release Readiness Gate](../IssueTaxonomy) ·
 [Adding a Data Sync Needs a Global Admin](../DataSyncApproval) ·
 [Thread Supervision](../ThreadSupervision) ·
-[Access Control](../AccessControl).
+[Access Control](../AccessControl) ·
+[Closing Keywords and Issue State](../ClosingKeywordsAndIssueState).
 
 > 🚨 **A `proposed` row is not a weaker `in force` — it is an honest one.** The first draft of this
 > register listed `release-blocker-gate` as `in force` while the standard that enforces it was still

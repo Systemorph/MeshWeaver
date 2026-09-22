@@ -3325,6 +3325,142 @@ jobs:
           --base "$base" \
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
+  closing-keywords:
+    name: "Closing keywords (no accidental close)"
+    # 🚨 THE GAP THIS CLOSES. GitHub's closing-keyword parser binds
+    # close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved to the ONE reference that
+    # follows it and reads nothing else — not the negation in front of it, not the possessive
+    # behind the number, not the paragraph that says the issue stays open. A pull-request body is
+    # prose for people with one substring in it that is an instruction to a machine.
+    #
+    # MEASURED — three misfires in this repository on 2026-09-22, each confirmed by GitHub's own
+    # `closingIssuesReferences` plus the issue timeline showing the merging app closing it within
+    # two seconds of the merge:
+    #   * #5201 → #5057 (`sev:H`). The body read "**Does not close #5057**", written to be explicit
+    #     that the issue stays open. Merged 10:45:11Z, closed 10:45:13Z, reopened by hand 10:47:22Z.
+    #   * #5174 → #2299. `Closes #2299's classification half` closed the whole issue, against the
+    #     body's own statement two sentences later. Merged 04:49:48Z, closed 04:49:49Z, reopened
+    #     06:20:44Z with the reason written out.
+    #   * #5190 → #2299 AGAIN, 57 minutes after that deliberate reopen — a DOCUMENTATION pull
+    #     request whose body narrated the first misfire in the past tense ("… closed #2299 …").
+    #
+    # Three checks, each with its own message: a NEGATED keyword, a close of an issue labelled
+    # `sev:H`/`sev:B` (those close on post-roll production verification, never on a merge — policy
+    # `severity-closes-on-verification`), and a POSSESSIVE reference claiming to close a PART.
+    #
+    # 🚨 THREE AND NOT TWO, because two would have missed one of the three. At the state each pull
+    # request had AT ITS MERGE: the negation check catches #5201 alone; the severity check catches
+    # #5201 and #5190; #5174 is caught by NEITHER, because #2299 was labelled `sev:M` when it
+    # merged and was relabelled `sev:H` only after the reopen, 91 minutes later.
+    #
+    # THE ESCAPE. `Verified-closing: #N — <reason>` in the body releases the severity check for
+    # that issue, so a pull request that legitimately closes a `sev:H` after the verification has
+    # happened is not walled out. It releases NOTHING else (a negation is a contradiction, not a
+    # thing to out-vote), and an escape naming an issue the body does not close is refused as
+    # stale. What it cannot check is whether the verification happened — see the script's docstring
+    # and Doc/Architecture/ClosingKeywordsAndIssueState.
+    #
+    # 🚨 NO SKIP-TRAPDOOR:
+    #   * the self-test runs FIRST and fails this job — an unproven gate is no gate, and it carries
+    #     four NEUTERED-DETECTOR controls so a detector that stopped detecting cannot ride green;
+    #   * the PREFLIGHT proves the credential can READ rather than asking whether one is set:
+    #     `labels/sev:H` and `labels/sev:B` must both resolve (an unknown label folds a label query
+    #     to green — the readiness gate already records that trap) and `labels/sev:DOESNOTEXIST`
+    #     must 404, so an endpoint answering 200 to everything cannot pass it;
+    #   * no path filter — a pull request that touches nothing else would otherwise "pass" by not
+    #     running, and the body is exactly what such a pull request has;
+    #   * no `continue-on-error:` and no `if:` asking whether a secret is set. The read uses the
+    #     built-in token, so this also runs on FORK pull requests. The one exemption is on the
+    #     EVENT: `merge_group` carries no pull-request body, and a pull request cannot reach the
+    #     queue without this job green, since it is a `needs:` of the required check;
+    #   * an unresolvable reference is UNDECIDABLE and reds naming why — "could not tell" and
+    #     "closes nothing" are never one colour.
+    #
+    # Base rate, measured over the 99 merged pull requests in the two days to 2026-09-22T11:17Z:
+    # 16 carry a closing keyword bound to a reference, SEVEN would be red — the three above plus
+    # four more that each closed a `sev:H` on merge (#4973→#1172, #4984→#4761, #5070→#4722,
+    # #5183→#5177) — and ZERO false positives. So it meets about one merge in fourteen, and six of
+    # those seven are the defect rather than the gate being noisy.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 1
+
+    - name: "Prove the closing-keyword gate is not vacuous (self-test)"
+      run: python3 scripts/check-closing-keywords.py --self-test
+
+    # No `if:` in this step. It asserts and fails; it does not decide whether to run. PRESENT is
+    # not VALID, so it proves the token can actually read — with a NEGATIVE control, because an
+    # endpoint that answered 200 to everything would make the severity check unfalsifiable.
+    - name: Assert the issue-label read, or fail naming what to provision
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -uo pipefail
+        if [ -z "${GH_TOKEN:-}" ]; then
+          echo "::error::The closing-keyword gate has no token to read issue labels with."
+          echo "  • GITHUB_TOKEN is built in; if it is empty, this job's \`permissions:\` block lost \`issues: read\`, or the workflow was invoked in a context that grants no token."
+          exit 1
+        fi
+        bad=0
+        for label in "sev:H" "sev:B"; do
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/labels/$label") || code=000
+          case "$code" in
+            200) echo "  ok   label $label exists and is readable" ;;
+            404) echo "::error::label '$label' does not exist in ${{ github.repository }} — create it (gh label create '$label'). An UNKNOWN label folds every label query to green, so this gate would pass on every pull request while checking nothing."; bad=1 ;;
+            401|403) echo "::error::label '$label' -> HTTP $code: the token cannot read issues here. This job needs \`issues: read\` in its permissions block."; bad=1 ;;
+            000) echo "::error::label '$label' -> could not reach api.github.com."; bad=1 ;;
+            *)   echo "::error::label '$label' -> HTTP $code."; bad=1 ;;
+          esac
+        done
+        # 🚨 THE NEGATIVE CONTROL. Without it, an endpoint (or a proxy) answering 200 to everything
+        # would satisfy the two probes above and the whole severity check would be unfalsifiable.
+        code=$(curl -sS -o /dev/null -w '%{http_code}' \
+          --connect-timeout 10 --max-time 30 \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/repos/${{ github.repository }}/labels/sev:DOESNOTEXIST") || code=000
+        if [ "$code" = "404" ]; then
+          echo "  ok   a label that does not exist answers 404 — the probe discriminates"
+        else
+          echo "::error::the negative control answered HTTP $code instead of 404. The label endpoint is not discriminating, so a 200 from it proves nothing and the severity check cannot be trusted."
+          bad=1
+        fi
+        [ "$bad" = "0" ] || { echo "::error::Refusing to report on evidence this job does not have."; exit 1; }
+
+    # The event body is frozen at run creation, even on reruns. Read the current body through REST
+    # and verify it still belongs to the event head. It stays file data throughout.
+    - name: Capture the pull-request body
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python3 scripts/test-read-current-pr-body.py
+        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
+        echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
+
+    - name: "Every closing keyword closes something a merge may close"
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python3 scripts/check-closing-keywords.py \
+          --repo "${{ github.repository }}" \
+          --pr-body-file "$RUNNER_TEMP/pr-body.md"
+
   collect-results:
     env:
       TESTS_MODE: ${{ needs.precheck.outputs.tests-mode }}
@@ -3375,7 +3511,15 @@ jobs:
     # (#3596 — 27 keys behind on 2026-09-07 with zero value drift, and a recurrence of the 70-key
     # case AGENTS.md already records). A gate that could not fail the required check would be a
     # notification, and a notification is exactly what this coupling already had.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync]
+    # closing-keywords is a NEEDS on the same principle, applied to the one input CI never read at
+    # all: the pull-request body's effect on ISSUE STATE. A closing keyword bound to the wrong
+    # issue produces no red anywhere — the merge succeeds, the fix is on main, and the issue reads
+    # CLOSED, which is the safe-looking direction nobody re-checks. Measured on 2026-09-22: three
+    # pull requests closed an issue their own bodies said stays open (#5201→#5057, #5174→#2299,
+    # #5190→#2299 again, 57 minutes after a deliberate reopen), and a `sev:H` reading closed leaves
+    # the release readiness count satisfied on evidence nobody has. A gate that could not fail the
+    # required check would be a notification, and a notification is what this had.
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -3805,6 +3949,22 @@ jobs:
         echo "::error::The 'i18n catalog (mirror sync handed over)' gate concluded '${{ needs.i18n-mirror-sync.result }}' — see that job, which names every catalog key this diff adds or re-words."
         echo "::error::A localization key has a SECOND home in MeshWeaver.Plugins (clients/react/src/i18n/). Its drift guard compares VALUES, but against a PINNED core commit rather than core's main — so adding a key here reds NOTHING anywhere and the mirror goes silently stale, leaving the React/RN clients rendering a raw key in both languages. Measured 2026-09-07: 27 keys behind, zero value drift, every guard green."
         echo "::error::Declare the handover in the PR BODY as 'Mirror-sync: <statement>' — naming the sync (npm run sync:i18n -- --ref <merged core sha>), the issue or pull request it is tracked on, or 'none — <reason>'. The sync runs in the OTHER repository and cannot be done from here, which is why the gate asks for the handover and not the result. Rationale: Doc/Architecture/Localization."
+        exit 1
+
+    # ── …and a CLOSING KEYWORD AIMED AT THE WRONG ISSUE decides it too ──────────────────────
+    # `!= 'success'` rather than `== 'failure'`, for the same reason as every gate above: a job
+    # that was skipped or cancelled produced no verdict, and no verdict must never read as passed.
+    # The event predicate is kept IDENTICAL to the gate's own `if:` so the two can never disagree —
+    # `pull_request` because this gate's subject IS the pull-request body, which a merge_group
+    # event does not carry. No fork/dependabot clause: the read uses the built-in token, so this
+    # gate runs there too.
+    - name: Fail if a closing keyword would close an issue a merge must not close
+      if: github.event_name == 'pull_request' && needs.closing-keywords.result != 'success'
+      run: |
+        echo "::error::The 'Closing keywords (no accidental close)' gate concluded '${{ needs.closing-keywords.result }}' — see that job, which names every closing keyword in this body and what it would close."
+        echo "::error::GITHUB'S PARSER READS THE KEYWORD AND THE NUMBER, AND NOTHING ELSE. Not the negation in front of it, not the possessive behind it, not the paragraph that says the issue stays open. Measured on 2026-09-22: '**Does not close #5057**' closed #5057 two seconds after the merge; 'Closes #2299's classification half' closed the whole of #2299 against its own body; and a DOCUMENTATION pull request narrating that misfire closed #2299 again, 57 minutes after a deliberate reopen."
+        echo "::error::A sev:B/sev:H issue closes on POST-ROLL PRODUCTION VERIFICATION, never on a merge — the merge puts the fix on main, and what the label gates is whether the defect is gone from the running portal (policy 'severity-closes-on-verification'). Use 'Refs #N' or 'see #N' to mention an issue without closing it, and close it after the roll."
+        echo "::error::If the verification has ALREADY happened, declare it per issue in the PR BODY: 'Verified-closing: #N — <what was verified, and where>'. That releases the severity check only; a negation is a contradiction to delete rather than out-vote, and a possessive is reworded ('Fixes the <half> of #N'). Rationale: Doc/Architecture/ClosingKeywordsAndIssueState."
         exit 1
 
     - name: Fail if the clients gate failed
