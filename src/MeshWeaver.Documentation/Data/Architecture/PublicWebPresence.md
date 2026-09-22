@@ -115,11 +115,28 @@ page. The node's mirrored HTML, then the content's `prerenderedHtml`, are fallba
 that carry no markdown source. Neither cache records which source or renderer produced it, so
 neither can establish freshness. SEO resolution refreshes the admitted node from its owner, then
 rechecks anonymous access before returning its current title and body. A signed-in caller's own
-read grant cannot turn a newly private page into public HTML. It is computed only for a node the gate admitted, and it
-is rendered **visibly** in the static server pass of the page, not inside `<noscript>`: Googlebot
-renders with JavaScript on and may ignore noscript content, and the visible article is what the
-interactive circuit replaces on hydration. The interactive page reads the same per-request stash
-the head resolved into, so the mesh is asked once per request.
+read grant cannot turn a newly private page into public HTML. It is computed only for a node the
+gate admitted, and it is rendered **visibly** in the server response, not inside `<noscript>`:
+Googlebot renders with JavaScript on and may ignore noscript content. The document, head and body
+await the same per-request resolution, so they use one current source and access decision.
+
+### Plain public documents finish on the server
+
+An anonymous visitor requesting an exact, authored Markdown page receives that HTML as the final
+page, without starting Blazor, Monaco or the reconnect UI. The same applies to authored Spaces in
+the configured landing subtree, and to Spaces that explicitly exclude their live contents
+catalog. `PublicPageResponse` makes the request decision and `PublicPageRendering` identifies
+supported document bodies in `MeshWeaver.Plugins`. There is **no separate static build**: each
+request reads the current node and renders its current source with the shared markdown renderer.
+An edit therefore reaches the next request without refreshing a second copy of the page.
+
+Public pages can still be interactive. Framework embeds, executable cells, Mermaid and math keep
+Blazor, as do custom node types, applications, layout-area routes, satellites, empty bodies and
+signed-in sessions. Query parameters that select another view also keep the interactive route;
+ordinary tracking parameters do not change presentation. Gated pages still go through their
+existing access and sign-in flow. Navigating from a circuit to an eligible static page performs a
+normal document load. Where interaction is needed, the visible server-rendered article remains
+the initial response and the circuit replaces it on hydration.
 
 The interactive Space view follows the same source-first priority and preserves an explicitly
 empty body. Navigation derives HTML for its current snapshot without persisting that result: a
