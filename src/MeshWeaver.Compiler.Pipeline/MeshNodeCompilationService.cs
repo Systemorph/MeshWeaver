@@ -172,6 +172,13 @@ internal class MeshNodeCompilationService(
     private readonly ConcurrentDictionary<string, Lazy<Task<CompileEmit>>> _inflightCompiles =
         new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Test seam (InternalsVisibleTo): runs on the emit's own thread with the compilation about to be
+    /// emitted, so a test can pin that the production compile path reaches Roslyn on a dedicated
+    /// thread with ConcurrentBuild off (Doc/Architecture/CompileOffTheThreadPool). Null in production.
+    /// </summary>
+    internal Action<CSharpCompilation>? OnEmitStarting { get; set; }
+
     // Query expansion lives in CodeQueryResolver (MeshWeaver.Compiler) so the NodeType
     // Configuration side menu can evaluate the *same* queries the compiler uses — the Sources /
     // Tests lists displayed in the UI are guaranteed to match the files compiled.
@@ -2086,6 +2093,7 @@ internal class MeshNodeCompilationService(
                 parsePath: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
                 ct),
             nugetAssemblyPaths, logger, ct);
+        OnEmitStarting?.Invoke(compilation);
 
         string? actualPath;
         // The compile's own diagnostics, on the way to the activity. Empty is a real answer here —
