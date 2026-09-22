@@ -2456,6 +2456,24 @@ public sealed class MessageHub : IMessageHub
     private volatile bool disposalStarted;
 
     /// <summary>
+    /// How many synchronous cleanups are currently registered on this hub
+    /// (<see cref="RegisterForDisposal(IDisposable)"/>) — i.e. the size of the composite that
+    /// <c>DisposeImpl</c> walks in the ShutDown phase. Zero once the hub is down.
+    ///
+    /// <para>🚨 <b>This is a RETENTION reading, not a tidiness one.</b> The composite is
+    /// append-only: <c>CompositeDisposable.Add</c> never prunes, and nothing else removes an
+    /// entry, so every registrant a hub is handed is held — with everything its closure captured
+    /// — for the hub's whole life. A registrant whose own subject is shorter-lived than the hub
+    /// (a per-request watcher, a per-stream subscription) is therefore a monotone root, and this
+    /// count is the only thing that can SEE it: a hub whose registrant count climbs with the
+    /// traffic it has served is retaining one object graph per unit of that traffic.</para>
+    ///
+    /// <para>A hub with a bounded set of registrants — the ordinary case, wired once at
+    /// construction — reports a small number that never moves.</para>
+    /// </summary>
+    public int DisposalRegistrantCount => disposables.Count;
+
+    /// <summary>
     /// True when this hub is part of a shutdown: its own <see cref="Dispose"/> has begun, OR an
     /// ANCESTOR's disposal has frozen hosted-hub creation across the subtree
     /// (<see cref="HostedHubsCollection.CloseCreation"/> cascades at the first instant of the
@@ -3239,7 +3257,10 @@ public sealed class MessageHub : IMessageHub
             sb.Append(" Executing(").Append(snapshot.CurrentMessage)
               .Append(", ").Append(snapshot.CurrentMessageElapsedMs).Append("ms)");
         sb.Append(" PendingCallbacks=").Append(pending.Length)
-          .Append('[').Append(FormatPendingCallbacks(pending)).Append(']');
+          .Append('[').Append(FormatPendingCallbacks(pending)).Append(']')
+          // See DisposalRegistrantCount: append-only composite, so a number that climbs with the
+          // traffic this hub has served is one retained object graph per unit of that traffic.
+          .Append(" Registrants=").Append(DisposalRegistrantCount);
         return sb.ToString();
     }
 
@@ -3380,6 +3401,12 @@ public sealed class MessageHub : IMessageHub
               // DISPOSE_TIMEOUT — the case where the hub never even reached its quiescing
               // timeout, so the enriched QuiescingTimeoutDetail does not exist yet.
               .Append(FormatPendingCallbackFates(pending));
+        // 🚨 The RETENTION field (#3432). See DisposalRegistrantCount: the composite is
+        // append-only, so this number is the count of object graphs this hub is holding through
+        // registered cleanups — and a hub whose registrant count climbs with the traffic it has
+        // served is retaining one per unit of that traffic. Printed unconditionally so "I measured
+        // it and it was small" and "I did not measure it" are two different lines.
+        sb.Append(" Registrants=").Append(DisposalRegistrantCount);
         sb.AppendLine();
 
         var hosted = hostedHubs.Hubs.ToArray();
