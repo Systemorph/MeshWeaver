@@ -283,6 +283,16 @@ public static class GraphConfigurationExtensions
                         sp.GetRequiredService<IMessageHub>(),
                         sp.GetService<ILoggerFactory>()
                             ?.CreateLogger<PartitionDropPostDeletionHandler>()));
+                // …and the verb for a partition that teardown never reached (#5073): deleting the
+                // Admin/Partition RECORD of a partition whose root is gone — or was re-healed as an
+                // ownerless shell — finishes its teardown with the same drop. A pre-#3436 delete
+                // left the schema, its rows and this record behind; the bootstrap then re-rooted it
+                // on the first child write, so every instrument reported it live and the bake sweep
+                // compiled its NodeTypes on every roll. Only for a STRANDED partition — a live,
+                // owned one keeps its store when its record is deleted. A DELETE VALIDATOR, not a
+                // post-deletion handler: the drop runs before the record goes, and a drop that
+                // fails refuses the delete so the record — the only retry handle — stays.
+                services.AddScoped<INodeValidator, Security.StrandedPartitionTeardownValidator>();
                 // …and the gate that refuses to start a mesh whose handler set does NOT cover an
                 // arbitrary partition root. Its probe carries a NodeType no registration can have
                 // enumerated, so a regression to per-type keying reds at boot instead of after

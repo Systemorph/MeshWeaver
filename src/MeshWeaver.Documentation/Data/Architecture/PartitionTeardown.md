@@ -346,9 +346,20 @@ alone. `scope:children` listings are partition-scoped and RLS-filtered — the `
 one, does not appear in an unscoped `nodeType:Space scope:children` even though its root exists — so
 a query's `count: 0` is not by itself evidence of absence.
 
-`V03_DropRogueSchemas` (MeshWeaver.Plugins, `src/Memex.Database.Migration/Migrations/`) is the
-precedent for the cleanup shape when a migration is warranted. A cleanup is a separate, deliberate
-decision from this fix, which only stops NEW orphans.
+**Finishing an orphan's teardown is the record delete.** A partition that no ordinary delete can
+reach — no root at all, or the bootstrap's ownerless `Space` shell over it — and that nobody owns
+(no grant under `{partition}/_Access`, no GitSync configuration) is torn down by deleting its
+RECORD, `delete @Admin/Partition/{partition}`: `StrandedPartitionTeardownValidator` runs the same
+provider drop and cache eviction the root delete runs, before the record goes and under the same
+tombstone, and a drop that fails refuses the delete so the record stays as the retry handle. It
+leaves the store of a partition that is somebody's alone (a real root, a surviving grant, a synced
+or static partition) and says so at Warning, so a record delete never drops somebody's schema; the
+full decision table is in [A Stale Index Row Confirms Itself](../AStaleIndexRowConfirmsItself) →
+*The verb*. Confirm the candidate is stranded (list 2 above, then `get @{partition}`) before
+deleting its record; a record delete that logs *"NOT stranded"* names what still owns it.
+
+`V03_DropRogueSchemas` (MeshWeaver.Plugins, `src/Memex.Database.Migration/Migrations/`) remains the
+precedent for a bulk cleanup when a migration is warranted.
 
 ## See also
 
