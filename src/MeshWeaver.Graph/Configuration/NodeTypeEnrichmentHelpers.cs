@@ -2561,7 +2561,26 @@ internal static class NodeTypeEnrichmentHelpers
         // degraded-content warning logs.
         (NodeTypeDefinition? Def, bool Usable) Evaluate(MeshNode? t)
         {
-            var def = t?.ContentAs<NodeTypeDefinition>(jsonOptions, logger);
+            // 🚨 A PROVEN NON-DECLARATION is this watcher's NORMAL INPUT on the collision overlay
+            // (#5264/#2231): the instance names a path something else occupies — the Store plugin
+            // root at `Feedback` — so the watched stream is that occupant and every emission of it
+            // is "not a NodeTypeDefinition". Handing it to ContentAs WITH the logger reported that
+            // at Error as `As<NodeTypeDefinition> for Feedback could not recover value:
+            // JsonException`, once per emission for the watcher's life: the incident fingerprint
+            // #5008 removed from the probe and the slow path, re-emitted here, so the incident
+            // could never go quiet however the instance was repaired. The collision was already
+            // reported once, with both sides named, by whoever armed this watcher. The split is
+            // IsProvablyNotADeclaration's own first clause — a node that DECLARES a NodeType other
+            // than `NodeType` — so a real declaration (or one that leaves NodeType unset) still
+            // converts WITH the logger and a genuine conversion fault on a NodeType stays loud.
+            // Deciding on the declared type rather than calling the probe keeps this to ONE
+            // conversion per emission, the contract stated above: a convertible occupant (untyped
+            // JSON) still yields its definition exactly as before, and an unconvertible one is the
+            // probe's conviction, now reached without a second pass.
+            var declaresAnotherType = t is not null
+                && !string.IsNullOrEmpty(t.NodeType)
+                && !string.Equals(t.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase);
+            var def = t?.ContentAs<NodeTypeDefinition>(jsonOptions, declaresAnotherType ? null : logger);
             return (def, def is not null
                 && NodeTypeCompilationHelpers.HasUsableBuild(t!, def, guards));
         }

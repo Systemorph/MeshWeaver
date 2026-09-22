@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -546,5 +547,70 @@ public class OverlaySelfHealWatcherTest
             current?.Dispose();
             return recycles;
         }
+    }
+
+    /// <summary>Stand-in for the Store plugin root's <c>PluginContent</c>: content typed as
+    /// something that is not a <see cref="NodeTypeDefinition"/>.</summary>
+    private sealed record PluginContentStandIn(string Name);
+
+    /// <summary>Records every log line with its level, so the test can say which ones were Error.</summary>
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> records = new();
+
+        public System.Collections.Generic.IReadOnlyCollection<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Records => records;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => records.Enqueue((logLevel, formatter(state, exception)));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The collision overlay's watcher must not re-emit the incident fingerprint</b>
+    /// (Systemorph/MeshWeaver#5264, #2231). An instance naming the bare path <c>Feedback</c> — which
+    /// the Store plugin root occupies — is refused on activation with ONE Error naming both sides,
+    /// and the refusal arms this watcher over the OCCUPANT's stream. Every emission of that stream is
+    /// "not a NodeTypeDefinition" by construction; passing it to <c>ContentAs</c> with the logger
+    /// reported <c>As&lt;NodeTypeDefinition&gt; for Feedback …</c> at Error once per emission, for the
+    /// watcher's whole life — the line the incident's log burst carries 45 s after the collision line.
+    ///
+    /// <para>The positive half keeps the watcher honest: once a REAL declaration lands at the path
+    /// (the collision resolved), the watcher still recycles exactly once.</para>
+    /// </summary>
+    [Fact]
+    public void CollisionOverlay_OccupantEmissions_AreNotLoggedAsConversionFaults_AndARealDeclarationStillHeals()
+    {
+        var recycler = new Recycler();
+        var logger = new RecordingLogger();
+        var typeStream = new Subject<MeshNode>();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, InstancePath, new JsonSerializerOptions(), recycler.Recycle, reportStuck: () => { },
+            NodeTypePath, typeVersionAtOverlay: null, logger);
+
+        MeshNode Occupant(long version) => new("SelfHealType", "TestData")
+        {
+            NodeType = "Store/Plugin",
+            Version = version,
+            Content = new PluginContentStandIn("Feedback"),
+        };
+
+        typeStream.OnNext(Occupant(1));
+        typeStream.OnNext(Occupant(2));
+        typeStream.OnNext(Occupant(3));
+
+        logger.Records.Where(r => r.Level >= Microsoft.Extensions.Logging.LogLevel.Error)
+            .Select(r => r.Message).ToArray()
+            .Should().BeEmpty(
+                "the occupant is the watcher's normal input on a collision overlay — the collision was "
+                + "reported once by the refusal, and a per-emission conversion Error is the fingerprint "
+                + "that kept #2231/#5264 reopening");
+        AssertNoDispose(recycler);
+
+        typeStream.OnNext(TypeNode(version: 4, usable: true));
+        AssertDisposedExactlyOnce(recycler);
     }
 }
