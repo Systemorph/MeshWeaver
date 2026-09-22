@@ -30,9 +30,18 @@ Two consequences follow directly from that shape:
   finished long ago.
 - **The sub-hub's bound and the DataContext's bound are cause and effect, not two views of one
   stall.** `InitializeDataSources` creates the sub-hubs a few microseconds before
-  `OpenInitializationGate` arms the time-box, so both 120 s bounds expire together — the sub-hub's
-  *"a BuildupAction did not complete within 120s"* first, the `DataContext` timeout milliseconds
-  later. In the event consolidated in Systemorph/MeshWeaver#1122 they were **5 ms apart**.
+  `OpenInitializationGate` arms the time-box, so the two bounds expire together — the sub-hub's
+  *"BuildupAction … did not complete"* first, the `DataContext` timeout milliseconds later. In the
+  event consolidated in Systemorph/MeshWeaver#1122 they were **5 ms apart**.
+
+  🚨 **That ordering used to be an accident, and now it is a construction.** Both were
+  independently written as `120 s`, and equal is not an ordering: the sub-hub's clock is armed on
+  its OWN action block after a scheduling hop, so under load the order inverts — the enclosing
+  time-box expires first, errors the streams the data source holds, and the sub-hub's init ends as
+  a recognised shutdown that records nothing. The level that knew which action hung then says
+  nothing at all. A hosted hub now takes a **strictly contracting** rung
+  ([The Initialization Budget Ladder](../InitializationBudgetLadder)), so the sub-hub is the level
+  that reports, every time and not most of the time.
 
 ## For a per-node hub it is one storage read
 
@@ -125,9 +134,13 @@ The failure path now walks `IDataSource.OpenStreams` — presence only — and e
   timeout risks trading a latch for a loop — a permanently stuck dependency would re-run a 120 s
   initialization on every delivery — and that needs its own decision, taken on the attributed
   evidence this change starts collecting.
-- **The sub-hub's own message** — *"a BuildupAction did not complete within 120s (a hung dependency
-  or stuck compile)"* — is still unattributed. It always fires a few milliseconds before the
-  attributed `DataContext` message for the same stall, so read that one.
+- **The sub-hub's own message is attributed too, and it is now the FIRST of the two to fire.** It
+  used to read *"a BuildupAction did not complete within 120s (a hung dependency or stuck
+  compile)"* — two candidates, neither measured — and it names the pending action by position and
+  by the method behind the delegate (*"BuildupAction 3 of 3 (DataExtensions.StartDataSourcesAndOpenGate)
+  …"*, issue #2886). Read BOTH for a stall: the sub-hub line says which action inside the sub-hub
+  never signalled, the `DataContext` line says which stream and which type-source leg the enclosing
+  wait was still on.
 
 ## Tests
 

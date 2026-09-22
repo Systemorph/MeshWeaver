@@ -35,7 +35,8 @@ namespace MeshWeaver.Graph.Test;
 /// must be able to fire FIRST, because it is the only one that knows WHICH read starved"</i>:
 /// <c>MessageService</c>'s per-message deferral budget 30 s (its default;
 /// <c>MessageHubConfiguration.WithDeferralTimeout</c>),
-/// <c>MessageHub.DefaultInitializationTimeout</c> 120 s,
+/// the hub's own initialization rung (<c>Configuration.NestedInitializationBudget</c>, 120 s at the
+/// top of the ladder and contracting per nesting level),
 /// <c>RoutingServiceBase</c> path resolution 30 s, <c>MessageHubGrain.FirstNodeResolutionTimeout</c>
 /// 30 s. The reader's 10 s therefore ALWAYS fires first, so no inner bound can ever deliver its
 /// diagnosis and every occurrence of Cause C wears Cause A's signature. Full elimination, and the

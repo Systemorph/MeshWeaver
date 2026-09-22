@@ -357,12 +357,16 @@ public sealed class MessageHub : IMessageHub
     public Exception? InitializationError { get; private set; }
 
     /// <summary>
-    /// Upper bound on how long a hub's BuildupActions may run before init is declared FAILED rather
-    /// than wedging forever behind a closed gate (see <see cref="HandleInitialize"/>). Generous on
-    /// purpose — every legitimate init, including a NodeType compile, completes well inside it; only a
-    /// genuine hang trips it. A hub can tighten it via <c>Configuration.StartupTimeout</c>.
+    /// Upper bound on how long this hub's BuildupActions may run before init is declared FAILED
+    /// rather than wedging forever behind a closed gate (see <see cref="HandleInitialize"/>).
+    ///
+    /// <para>🚨 It is <c>Configuration.NestedInitializationBudget</c> — rung 2 of the ladder in
+    /// <see cref="HubInitializationBudget"/> — never a constant of its own. A hub the parent's
+    /// initialization WAITS ON must give up strictly before the parent does, or the level that
+    /// knows which action hung is torn down before it can say so (Systemorph/MeshWeaver#1122,
+    /// #2886). A hub tightens its whole ladder with <c>Configuration.StartupTimeout</c>.</para>
     /// </summary>
-    private static readonly TimeSpan DefaultInitializationTimeout = TimeSpan.FromSeconds(120);
+    private TimeSpan BuildupTimeout => Configuration.NestedInitializationBudget;
 
     private readonly IMessageService messageService;
     /// <summary>
@@ -747,8 +751,8 @@ public sealed class MessageHub : IMessageHub
             // raises no exception, so convert "never completes within the budget" into a
             // TimeoutException the SAME .Catch handles. Generous default (every legit init, incl. a
             // NodeType compile, finishes well inside it); a hub may tighten it via
-            // Configuration.StartupTimeout.
-            .Timeout(Configuration.StartupTimeout ?? DefaultInitializationTimeout)
+            // Configuration.StartupTimeout, and every hub THIS one hosts contracts from there.
+            .Timeout(BuildupTimeout)
             .Select(_ =>
             {
                 logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
@@ -813,17 +817,15 @@ public sealed class MessageHub : IMessageHub
                 // 🚨 NAME what did not finish; never guess at it (#1122, and #2886 for this line).
                 // This sentence used to read "a BuildupAction did not complete within 120s (a hung
                 // dependency or stuck compile)" — two candidates, neither measured, and no way to
-                // tell WHICH of the hub's actions was the one still pending. It was unanswerable by
-                // construction for the commonest case: DataContext's own initialization bound is
-                // the same length as this one and starts a few milliseconds later, so on a hang
-                // this outer Timeout always fires first, disposes the Concat, and unsubscribes the
-                // inner bound before it can print its per-source diagnosis. Naming the pending
+                // tell WHICH of the hub's actions was the one still pending. Naming the pending
                 // action here is the part this layer CAN say; the action's own report, if it has
-                // one, is the next layer's to give when it is disposed incomplete.
+                // one, is the next layer's to give when it is disposed incomplete — and that layer
+                // can now GET there, because BuildupTimeout is a contracting rung rather than the
+                // flat constant every nesting level used to share (HubInitializationBudget).
                 var pending = Volatile.Read(ref pendingAction);
                 var reason = ex is TimeoutException
                     ? $"BuildupAction {DescribeBuildupAction(actions, pending)} did not complete within "
-                      + $"{(Configuration.StartupTimeout ?? DefaultInitializationTimeout).TotalSeconds:F0}s "
+                      + $"{BuildupTimeout.TotalSeconds:F0}s "
                       + "— the actions before it had signalled; a dependency it waits on hung, or a compile inside it never finished"
                     : $"BuildupAction {DescribeBuildupAction(actions, pending)} faulted ({ex.GetType().Name}: {ex.Message})";
                 logger.LogError(ex,
@@ -2300,7 +2302,17 @@ public sealed class MessageHub : IMessageHub
     {
         if (create != HostedHubCreation.Never && !messageProcessingStarted)
             ReportHubConstructionDuringBuild(address);
-        return hostedHubs.GetHubWithOutcome(address, config, create);
+        // 🚨 Stamp the enclosing rung of the initialization ladder (HubInitializationBudget). THIS
+        // hub's rung-2 waits — its BuildupAction Concat and its DataContext time-box — are what
+        // wait on the hub being created here, so that hub's whole initialization must give up
+        // strictly sooner or the level nearest a hang cannot report it (#1122, #1186, #2886).
+        // Applied AFTER the caller's transform so an explicit WithStartupTimeout still decides its
+        // own hub's rung 1, and here rather than in HostedHubsCollection because the host is an
+        // Address there, not a hub whose budget can be read.
+        return hostedHubs.GetHubWithOutcome(
+            address,
+            c => config(c) with { EnclosingInitializationBudget = Configuration.NestedInitializationBudget },
+            create);
     }
 
     /// <summary>
