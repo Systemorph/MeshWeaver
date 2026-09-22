@@ -99,17 +99,38 @@ has to re-read its node rather than on one that is stuck:
    RECYCLED first (`RecycleNode`, dispose-only, a no-op on a cold address: a wedged hub is torn down
    rather than written to), then the write counts the retry and records what was observed. Row
    `Relaunched`. A relaunch goes through the same dispatch pool as every other round.
-3. **At the bound** — the thread is SETTLED: the active cell goes `Error` with the diagnosis
-   FIRST (an `Error` cell makes the activation's recovery settle rather than resume the round the
-   supervisor just gave up on), then the thread is reset `Idle` with `summary` = `Error: …`, and
-   FILED into bug triage as a `Feedback/Feedback` submission, status `New`, naming the thread, the
-   agent, the model, the last error, the retries, and what was NOT established (the supervisor sees
-   only the node, never the process that owed it a round). Row `Failed`. On a portal without the
-   Feedback plugin the filing fails and the row SAYS so — never silently.
+3. **At the bound** — the thread is SETTLED into a TERMINAL state: the active cell goes `Error`
+   with the diagnosis FIRST (an `Error` cell makes the activation's recovery settle rather than
+   resume the round the supervisor just gave up on); every pending message is materialised as its
+   user cell and ANSWERED by one `Error` cell carrying the diagnosis, at the deterministic response
+   id the round itself would have used; then ONE thread write ingests that input as answered, resets
+   the thread `Idle` with `summary` = `Error: …`, and the thread is FILED into bug triage as a
+   `Feedback/Feedback` submission, status `New`, naming the thread, the agent, the model, the last
+   error, the retries, and what was NOT established (the supervisor sees only the node, never the
+   process that owed it a round). Row `Failed`. On a portal without the Feedback plugin the filing
+   fails and the row SAYS so — never silently. After a settle the thread is Idle with nothing
+   pending — Healthy to every later sweep. 🚨 A settle that left the input pending was not terminal:
+   `Idle + pending` is exactly the state the submission watcher claims, so the supervisor's own
+   write re-armed the round it had just given up on, every bound, for ever (Plugins#2229 defect C,
+   the mechanism under Plugins#2244 and Plugins#2262). The user sees their message and, under it,
+   the error; resubmitting is their call.
 
 The `supervisor*` fields on the thread are the `RequestedX`-shaped control plane
 ([Request via stream Update](/Doc/Architecture/RequestViaStreamUpdate)): written by the supervisor
-through `GetMeshNodeStream(path).Update`, read by the next sweep and by the thread's page.
+through `GetMeshNodeStream(path).Update`, read by the next sweep and by the thread's page. They
+describe ONE EPISODE — the supervision of the input pending when the supervisor first touched the
+thread — and a new user submission clears them (`Thread.ResetSupervision`, applied by the one
+funnel every submission takes), so the next input gets its own free wake, its own relaunches and,
+if it comes to that, its own filing. A filed thread is never relaunched again, whatever the cap is
+raised to; if it still classifies Parked or Stale — its terminal state never landed — it is settled
+once more, and filed no second time.
+
+Because the settle's thread write is what wakes a cold hub, and the woken hub's watcher claims the
+LOADED (still pending) state before that write lands, the hub's dispatch carries the other half of
+the contract: a fresh dispatch whose deterministic response cell already exists and is TERMINAL is
+a round that is over — it ingests its input as answered by that cell and settles `Idle`, never
+running the turn into it. Both writers converge on one state whichever lands first. The account,
+with the live measurements: `AI/SupervisorSettleLoop` (MeshWeaver.Plugins).
 
 **What it is not.** Not a watchdog that resubscribes around a bug — a live hub force-idles its own
 silent round in 90 s and drains its own queue the moment it activates, so what reaches a sweep is a
@@ -143,8 +164,11 @@ sweep's fault if it had one. The pool's census is written on every change (coale
 per two seconds); the supervisor's rows are written per sweep. Pinned end to end by
 `ThreadSupervisorMeshTest` against a Monolith mesh: a parked thread woken by one sweep and run, a
 fresh one left alone (the control), a stale thread relaunched and settled, an exhausted one settled
-with the diagnosis and its filing said to have failed, and with a cap of one the second thread
-queued on the node until the first settled.
+with the diagnosis and its filing said to have failed, an exhausted PARKED one whose input is
+answered by the diagnosis rather than run and which the next sweep leaves alone, a filed one whose
+input was still pending settled once more and filed no second time, a new submission on a settled
+thread opening a new episode, a fresh claim finding its response cell already terminal and ingesting
+without running, and with a cap of one the second thread queued on the node until the first settled.
 
 ## Reading it
 
@@ -152,7 +176,11 @@ queued on the node until the first settled.
   the wake it needed a `get`; now it needs nothing, and the next sweep lists it `Woken` if the
   creator died first.
 - `supervisorRetries: 2` and `summary` starting `Error:`: given up on; `supervisorFeedbackPath` is
-  the triage item, or null with the row saying the filing failed.
+  the triage item, or null with the row saying the filing failed. Its last `messages` entry is the
+  `Error` cell that answered the input, and `pendingUserMessages` is empty — a settled thread with
+  something still pending is one whose settle never landed, and the next sweep settles it again.
+- `supervisorRetries: 0` on a thread that was given up on: a new message was submitted since —
+  a new episode, judged on its own.
 - Many `Queued` rows and `Running` at the cap: the cap is the bound, not a fault — raise
   `maxConcurrentAgents` on `Admin/Threads` if the host has the headroom.
 - `lastSweepError` set: the sweep faulted (usually a query against a partition store); the clock
