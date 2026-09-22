@@ -142,7 +142,7 @@ markdown-backed Space), then source-absent cached HTML, then the default welcome
 `content.body` to replace the generic starter text. An empty string explicitly clears the page;
 an absent or null body uses the welcome placeholder on a fresh Space. Current source always wins
 over older prerendered HTML, so an edit or clear appears in both the first HTTP response and the
-interactive page. See [Public Web Presence](../Architecture/PublicWebPresence.md).
+interactive page. See [Public Web Presence](/Doc/Architecture/PublicWebPresence).
 
 ### Writing a good overview body
 
