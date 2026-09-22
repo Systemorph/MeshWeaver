@@ -66,28 +66,43 @@ public static class HubInitializationBudget
     /// when the enclosing bound is at or below <see cref="NestingReserve"/> — the short-bound shape
     /// tests configure — where subtracting the reserve would drive a rung to zero or negative.
     /// Contracting by a fraction instead keeps the ladder positive AND strictly decreasing at any
-    /// scale.
+    /// scale above <see cref="SmallestNestableBound"/>.
     /// </summary>
     public const double MinNestingFraction = 0.5;
 
     /// <summary>
+    /// The domain on which <see cref="Nest"/> is PROVABLY contracting, and therefore the smallest
+    /// bound it will nest inside. Below it the tick arithmetic stops being an ordering: halving
+    /// a single tick truncates to zero, so two rungs collapse onto the same instant — the
+    /// equal-bounds collision this type exists to make unrepresentable, in its worst form, since a
+    /// timer at <see cref="TimeSpan.Zero"/> fires at once. It is reachable without anyone writing a
+    /// silly number: the fraction floor halves per level, so a 2 s budget reaches it around the
+    /// twelfth level of nesting. Mirrors <c>MeshOperationOptions.Timeout</c>'s own 1 ms domain, for
+    /// the same stated reason.
+    /// </summary>
+    public static readonly TimeSpan SmallestNestableBound = TimeSpan.FromMilliseconds(1);
+
+    /// <summary>
     /// The bound for an initialization wait nested one level inside <paramref name="enclosing"/>.
-    /// Strictly contracting: <c>Nest(t) &lt; t</c> for every <c>t &gt; 0</c>, because
+    /// Strictly contracting: <c>Nest(t) &lt; t</c> for every <c>t</c> in the domain, because
     /// <see cref="NestingReserve"/> is positive and <see cref="MinNestingFraction"/> is below one.
     /// That inequality — not a convention, not a comment — is what makes the inner bound the one
-    /// that fires.
+    /// that fires, and <see cref="SmallestNestableBound"/> is where it stops being provable.
     /// </summary>
     /// <param name="enclosing">The bound this wait runs inside.</param>
     /// <returns>A bound strictly smaller than <paramref name="enclosing"/>.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">The enclosing bound is not positive, which is
-    /// the one domain on which the ladder cannot be made strictly decreasing.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The enclosing bound is below
+    /// <see cref="SmallestNestableBound"/> — the domain on which the ladder cannot be shown to be
+    /// strictly decreasing.</exception>
     public static TimeSpan Nest(TimeSpan enclosing) =>
-        enclosing > TimeSpan.Zero
+        enclosing >= SmallestNestableBound
             ? TimeSpan.FromTicks(Math.Max(
                 (enclosing - NestingReserve).Ticks,
                 (long)(enclosing.Ticks * MinNestingFraction)))
             : throw new ArgumentOutOfRangeException(nameof(enclosing), enclosing,
-                "An initialization budget must be positive: a nested bound that does not contract "
-                + "cannot fire before the bound that encloses it, and then the level that knows "
-                + "which wait starved never reports (Systemorph/MeshWeaver#1122).");
+                $"An initialization budget must be at least {SmallestNestableBound.TotalMilliseconds} ms "
+                + "— the domain on which this ladder is strictly decreasing. Below it the rungs "
+                + "collapse onto one instant, a nested bound can no longer fire before the bound that "
+                + "encloses it, and the level that knows which wait starved never reports "
+                + "(Systemorph/MeshWeaver#1122).");
 }

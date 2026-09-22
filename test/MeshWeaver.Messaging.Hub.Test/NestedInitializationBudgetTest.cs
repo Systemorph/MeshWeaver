@@ -96,6 +96,20 @@ public class NestedInitializationBudgetTest(ITestOutputHelper output) : HubTestB
             .And.BeLessThan(HubInitializationBudget.NestingReserve,
                 "and strictly decreasing at that scale too, or the ladder collapses onto one tick");
 
+        // The DOMAIN boundary, both sides. Below it the tick arithmetic stops being an ordering —
+        // halving one tick truncates to zero, two rungs land on the same instant, and a timer at
+        // TimeSpan.Zero fires at once. It is reachable by nesting alone (the fraction floor halves
+        // per level), so the refusal is pinned rather than assumed.
+        HubInitializationBudget.Nest(HubInitializationBudget.SmallestNestableBound)
+            .Should().BeGreaterThan(TimeSpan.Zero, "the smallest nestable bound is IN the domain")
+            .And.BeLessThan(HubInitializationBudget.SmallestNestableBound,
+                "and the ladder still contracts strictly at the very bottom of it");
+        Action belowTheDomain = () =>
+            HubInitializationBudget.Nest(HubInitializationBudget.SmallestNestableBound - TimeSpan.FromTicks(1));
+        belowTheDomain.Should().Throw<ArgumentOutOfRangeException>(
+            "a bound the ladder cannot be shown to contract inside is refused, not silently "
+            + "collapsed onto the rung enclosing it");
+
         var host = GetHost();
         // Settle the host first: the hosted hub is created BY the host's BuildupAction, so reading
         // the registry before the host answers reads it before there is anything to read — which is

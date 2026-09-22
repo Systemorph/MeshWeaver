@@ -2302,6 +2302,12 @@ public sealed class MessageHub : IMessageHub
     {
         if (create != HostedHubCreation.Never && !messageProcessingStarted)
             ReportHubConstructionDuringBuild(address);
+        // 🚨 A pure read allocates nothing extra. HierarchicalRouting probes this per stream
+        // message per parent-chain level with HostedHubCreation.Never, and that path was twice a
+        // measured CPU hot frame; wrapping `config` unconditionally would put one closure per
+        // probe on it for a transform that is only ever INVOKED when a hub is constructed.
+        if (create == HostedHubCreation.Never)
+            return hostedHubs.GetHubWithOutcome(address, config, create);
         // 🚨 Stamp the enclosing rung of the initialization ladder (HubInitializationBudget). THIS
         // hub's rung-2 waits — its BuildupAction Concat and its DataContext time-box — are what
         // wait on the hub being created here, so that hub's whole initialization must give up

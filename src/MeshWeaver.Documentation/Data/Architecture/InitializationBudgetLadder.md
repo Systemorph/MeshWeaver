@@ -65,6 +65,13 @@ absolute because what it covers is absolute: a hub construction, a post, and the
 turn reaching `HandleInitialize` on its own action block. The fraction floor only bites at the short
 budgets tests configure, where subtracting the reserve would drive a rung to zero.
 
+It carries `MeshOperationOptions`' **1 ms domain** as well as its formula, and for the same stated
+reason: below that, halving a tick truncates to zero, two rungs land on the same instant, and a
+timer at `TimeSpan.Zero` fires at once — the equal-bounds collision in its worst form. The domain is
+not academic, because the fraction floor halves per level: a configured 2 s budget reaches it around
+the twelfth level of nesting. `Nest` refuses a smaller enclosing bound rather than collapsing the
+ladder, and `NestedInitializationBudgetTest` pins both sides of that boundary.
+
 At the default this reads **120 s / 115 s** for a hub nobody hosts, **110 s / 105 s** for the hub it
 hosts, and so on down.
 
