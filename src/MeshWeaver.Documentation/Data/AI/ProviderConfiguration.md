@@ -161,19 +161,97 @@ legibly when the provider refuses**.
 System.ClientModel both render), and `ThreadExecution` builds the prose at write time off the round's
 own `AccessContext.Locale`:
 
+- **402** → `chat.modelQuotaExhausted`. Separate from 429 because **waiting does not help**: the
+  account is out of credit, so the remedy is a top-up or a model on a provider that still has budget.
+- **404** → `chat.modelNotFound`. A stale or mistyped model id in the deployment's configuration —
+  an actionable configuration fault, so it must never read as "submit again later".
 - **429** → `chat.modelRateLimited`, naming the model that actually served.
 - **5xx** → `chat.modelProviderError`, naming the model and the status.
+- **A credential the provider REJECTS** → `chat.modelCredentialRejected`, naming the model and the
+  status. This is a **permanent verdict, not a transient one**, which is what distinguishes it from
+  every entry above: the key has to be replaced before any round on that model can succeed, so the
+  prose says so and deliberately does not offer "submit again later". See the gap note below — the
+  platform string exists; the engine-side classification that selects it is the counterpart half.
+- **The stream ended abnormally** — no HTTP status is involved, so these are named ahead of the
+  status switch, from the exception rather than from a code: the provider went silent mid-answer
+  (`chat.modelStreamStalled`) or sent a payload the wire protocol cannot represent
+  (`chat.modelStreamFaulted`, e.g. an OpenAI-compatible gateway ending the stream with a
+  `finish_reason` the protocol does not define). Both carry a `PROVIDER_STREAM_*` warning so
+  monitoring can separate a recurring upstream stall from a one-off fault.
+- **The thread's own history could not be loaded** → `chat.historyLoadFailed`. Not a provider
+  condition at all, but it shares the discipline and is the reason it is listed here: a history load
+  that did not complete is **reported, never substituted**. Answering on an empty or holed history
+  would be a silent wrong answer under a `Completed` status, which is strictly worse than a failed
+  round — so the fault rides through to the terminal `Error` write.
 - **Substituted rounds add one sentence** (`chat.modelSubstitutionNote`) naming the requested model
   and the one used instead. This is the only place the swap is spelled out to the user, and it earns
   its place: the failure names a model they never picked, which is otherwise inexplicable.
 - **Anything unclassified keeps its own message verbatim** — for a tool fault or a bug in our code
-  that message *is* the diagnosis, and generic prose would erase it.
+  that message *is* the diagnosis, and generic prose would erase it. 🚨 Read the boundary precisely:
+  that rule is right for a fault carrying **no** recognisable transport status, and wrong for one
+  that does. Once the classifier has established that a provider answered with an HTTP status, the
+  SDK's raw banner is never the right text for a reader — so a status that no branch above claims is
+  a **gap in the branch table**, not an invitation to fall through.
 
 The raw transport text is never discarded, only relocated: it stays on the `LogError(ex, …)` that
 precedes the terminal write, alongside a `PROVIDER_REFUSED` warning carrying the status, the serving
 model and the requested one. What changed is what the *user* reads — previously `ex.Message` went
 straight into the cell's Text and Summary, which for these failures is the status line plus the
 response body plus the complete HTTP header block.
+
+### Where this code lives — and why the catalog key leads
+
+🚨 **The classifier and the switch that consumes it are NOT in this repository.** The AI engine is a
+module hosted in `MeshWeaver.Plugins` (`MeshWeaver.AI`, `MeshWeaver.AI.Anthropic`,
+`MeshWeaver.AI.OpenAI`, `MeshWeaver.AI.ClaudeCode`); core holds **only** the localization catalog
+these conditions render through, plus `LocalizationCatalog` itself
+(`src/MeshWeaver.Messaging.Hub/Localization/`). A grep of core's `src/` for `AgentChatClient`,
+`ProviderFailureClassifier` or `ThreadExecution` finds comments and XML-doc cross-references and no
+executable code at all, and core's solution declares no `MeshWeaver.AI*` project — so a search over
+this repository alone can neither confirm nor refute anything about how a provider failure is
+handled. Establish the subject's home before reading absence here as absence.
+
+That split sets the **order of the two halves, and it is inverted from the usual dependency rule**:
+the platform's catalog key lands FIRST and the engine-side branch follows. The engine tolerates the
+gap in that direction by construction — it checks `LocalizationCatalog.Keys.Contains(key)` before
+resolving and falls back to its own purpose-written English, because a module can ship a condition
+before the image carrying the string does. Rendering a raw `chat.…` token to a user is the failure
+that check exists to prevent. The reverse order has no such tolerance: a branch selecting a key the
+loaded platform does not define is what that guard is defending against.
+
+### The gap this table currently has: a rejected credential
+
+A provider that **rejects the credential** answers `401` (Anthropic renders it `PermissionDenied`).
+Measured against `MeshWeaver.Plugins@main`, nothing claims it: `ProviderFailureClassifier` has
+predicates for 402, 404, 429 and 5xx and none for 401; the `providerStatus` switch in
+`ThreadExecution` has cases for exactly those four ranges and a `_ => null` default; the Anthropic
+client maps 401 to no typed condition; and the only mention of `401` anywhere in `ThreadExecution` is
+a comment about the *CLI harness* path. So the round falls to the unclassified default and pastes the
+SDK's own sentence — `Response status code does not indicate success: 401 (PermissionDenied).` —
+into the user's cell: raw, English-only whatever the viewer's locale, and naming no remedy. That is
+precisely the defect the rest of this section exists to prevent, still live for the one condition an
+operator is most able to fix.
+
+Two things follow, and they are easy to conflate:
+
+- **The retry half is a different question from the legibility half, and only one of them is a
+  defect.** `AnthropicChatClient.SendWithRetryAsync` retries `500`, `502`, `503` and `429` only, so a
+  401 is already treated as terminal and goes straight to `EnsureSuccessStatusCode()` — correctly,
+  because a rejected credential is a permanent verdict and retrying it could never do anything but
+  waste the round. A report that a 401 is *retried* does not survive reading that set. What is wrong
+  is what the user is shown afterwards.
+- **Adding a retry would be the wrong fix twice over** — it is a band-aid, and it contradicts the
+  verdict the status carries. The fix is classification: name the condition, render
+  `chat.modelCredentialRejected`, keep the provider's own text on the `LogError` where an operator
+  reads it.
+
+**What this note does not establish.** Only `401` is measured, from production occurrences. Whether
+`403` and other 4xx statuses should also be named — and under which prose — is deliberately left
+open: `403` means different things at different providers (permission, region, content policy), and a
+confidently wrong name is worse for a reader than a generic one. `chat.modelProviderError` already
+interpolates its status and is the obvious home for a widened default, but its current wording ends
+in "Submit again later", which is true of a 5xx and false of most 4xx — so widening the branch is a
+wording decision, not a mechanical one, and it is not made here.
 
 ---
 
