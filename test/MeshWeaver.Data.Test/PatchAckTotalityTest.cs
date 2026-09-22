@@ -56,10 +56,18 @@ public class PatchAckTotalityTest
         public List<Ack> Acks { get; } = [];
         public List<IDisposable> Registered { get; } = [];
         public void AckOnce(bool success, MeshNodeError? error) => Acks.Add(new Ack(success, error));
-        public void Register(IDisposable d) => Registered.Add(d);
+        /// <summary>Stands in for <c>IMessageHub.RegisterForDisposalDetachable</c>: the handle
+        /// removes the registrant WITHOUT disposing it, as the hub's does.</summary>
+        public IDisposable Register(IDisposable d)
+        {
+            Registered.Add(d);
+            return Disposable.Create(() => Registered.Remove(d));
+        }
         public void Dispose()
         {
-            foreach (var d in Registered) d.Dispose();
+            // A snapshot, as the hub's composite takes one: disposing a leg runs its detach, which
+            // removes it from the list being walked.
+            foreach (var d in Registered.ToArray()) d.Dispose();
         }
     }
 
@@ -116,6 +124,10 @@ public class PatchAckTotalityTest
 
         h.Acks.Should().ContainSingle().Which.Should().Be(new Ack(true, null),
             "the durable flush is the ack's basis, and it is posted exactly once");
+        h.Registered.Should().BeEmpty(
+            "once the flush has terminated its leg can cancel nothing, so it must leave the hub — a "
+            + "registration that stayed would be one retained flush leg per patch the owner ever "
+            + "served, for the owner's whole life (#3432)");
     }
 
     /// <summary>No flush hook registered (a non-MeshNode data hub): the in-memory commit is the ack.</summary>

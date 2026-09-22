@@ -376,8 +376,9 @@ public static class MeshDataSourceExtensions
             // It cannot loop: a resolved claim is REMOVED from the registry, so the re-posted
             // request reads a high-water of 0 for that version and writes. If a NEWER claim exists
             // by then it defers once more against THAT one, which resolves in its turn.
-            var deferred = new System.Reactive.Disposables.SingleAssignmentDisposable();
-            deferred.Disposable = pending.Take(1).Subscribe(
+            // Held on the hub only until the claim resolves (#3432): a permanent registration here
+            // was one retained closure per deferred save for the hub's whole life.
+            hub.SubscribeHeldUntilTerminal(pending.Take(1), claim => claim.Subscribe(
                 persisted =>
                 {
                     if (persisted)
@@ -394,8 +395,7 @@ public static class MeshDataSourceExtensions
                 },
                 ex => logger?.LogWarning(ex,
                     "[SaveMeshNode] deferred write for {Path} (version={Version}) could not resolve its "
-                    + "flush claim", node.Path, node.Version));
-            hub.RegisterForDisposal(deferred);
+                    + "flush claim", node.Path, node.Version)));
             return request.Processed();
         }
         WriteSampledNode(persistence, hub, node, logger);
