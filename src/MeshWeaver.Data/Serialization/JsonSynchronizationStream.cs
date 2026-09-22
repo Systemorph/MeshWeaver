@@ -586,12 +586,16 @@ public static class JsonSynchronizationStream
         // was a monotone retention root on the subscribing hub, which is the long-lived one:
         //
         //   • It bought nothing because the hub teardown ALREADY reaches this subscription, and
-        //     strictly EARLIER. `reduced.RegisterForDisposal` hooks the stream's own
-        //     `streamDisposables` composite onto the stream's `sync/{id}` sub-hub
-        //     (SynchronizationStream.RegisterForDisposal), and that sub-hub is a HOSTED hub of
-        //     `hub` — so `hub.Dispose()` disposes it in the DisposeHostedHubs phase, which runs
-        //     BEFORE `hub` walks its own registrants in the ShutDown phase. The second
-        //     registration could therefore only ever fire on an already-disposed subscription.
+        //     strictly EARLIER — by TWO routes, which is measured rather than argued (see
+        //     StreamRegistrantsLeaveTheSubscribingHubTest). First, `reduced.RegisterForDisposal`
+        //     hooks the stream's own `streamDisposables` composite onto the stream's `sync/{id}`
+        //     sub-hub (SynchronizationStream.RegisterForDisposal), and that sub-hub is a HOSTED hub
+        //     of `hub` — so `hub.Dispose()` disposes it in the DisposeHostedHubs phase. Second,
+        //     `Workspace.Dispose` disposes every cached remote stream, and says in its own comment
+        //     that it exists to release exactly this SubscribeRequest callback. Both run BEFORE
+        //     `hub` walks its own registrants in the ShutDown phase, so the second registration was
+        //     the third route and the last to fire — it could only ever reach an already-disposed
+        //     subscription.
         //   • It cost one permanent entry on `hub` per remote stream EVER opened. A hub's
         //     registrant composite is append-only — `CompositeDisposable.Add` never prunes and
         //     nothing removes an entry — so the subscription, and through its closure the whole
@@ -602,8 +606,8 @@ public static class JsonSynchronizationStream
         //     area and per node read, that is one retained stream graph per stream ever opened.
         //
         // The stream's own composite is the correct and sufficient owner: it is disposed
-        // synchronously by `SynchronizationStream.Dispose()` (the stream-dispose route) and by the
-        // sub-hub's teardown (the hub-teardown route), and it lets go when the stream does.
+        // synchronously by `SynchronizationStream.Dispose()` (the stream-dispose route) and, on a
+        // hub teardown, by both routes above — and it lets go when the stream does.
         reduced.RegisterForDisposal(observeSubscription);
 
         // 🚨 The stream's hub is resolved ONCE here and reused for both owner-protocol
