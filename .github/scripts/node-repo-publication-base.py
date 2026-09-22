@@ -16,20 +16,61 @@ What DOES reset it — a full build, never an omitted publication:
     baseline would miss what that run published from the rewritten commits);
   * no successful run in the page read, too many unsettled runs to attest, an unavailable API, or
     an unreadable attestation.
+
+An explicit --artifact-store changes where attestations are read, never the run-identity check.
+Missing historical attestations conservatively rebuild. An unavailable/corrupt declared store is
+a hard failure, not a reason to consult GitHub artifact storage or silently launch another build.
 """
 import argparse
 import io
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import zipfile
 from urllib.parse import quote
 
 # Beyond this many unsettled runs since the last success, attesting each one costs more than the
 # full build it would save — and that many reds in a row is itself worth a full rebuild.
 MAX_UNSETTLED = 30
+
+
+class ArtifactStoreError(RuntimeError):
+    """A declared artifact store failed; this must not become a GitHub fallback or green build."""
+
+
+def store_command(store, repo, run_id, command, *arguments, expected_store_id=None):
+    """Use the named-artifact adapter without leaking its action outputs into this step's outputs.
+
+    Cross-run consumers deliberately omit --attempt: the source run's latest publication, not
+    this consumer's GITHUB_RUN_ATTEMPT, supplies the attestation. The adapter still chooses one
+    complete manifest per name, including a successful producer from an earlier partial rerun.
+    """
+    helper = Path(__file__).with_name("ci-run-artifacts.py")
+    identity = [] if expected_store_id is None else ["--expect-store-id", expected_store_id]
+    try:
+        result = subprocess.run(
+            [sys.executable, str(helper), command, "--store", store, "--repository", repo,
+             "--run-id", str(run_id), *identity, *arguments], capture_output=True, text=True, timeout=180,
+            check=True, env={k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"})
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise ArtifactStoreError(f"declared artifact store failed: {detail.strip()[:600]}") from exc
+    return result.stdout
+
+
+def store_listing(store, repo, run_id, name="", expected_store_id=None):
+    try:
+        listing = json.loads(store_command(store, repo, run_id, "list", "--name", name,
+                                           "--include-expired", "true", expected_store_id=expected_store_id))
+        if not isinstance(listing, list):
+            raise ValueError("artifact listing is not an array")
+        return listing
+    except (ValueError, TypeError) as exc:
+        raise ArtifactStoreError(f"declared artifact store returned an invalid listing: {exc}") from exc
 
 
 def baseline(runs, branch, ancestor, current_run=""):
@@ -117,10 +158,26 @@ def gh_json(path):
     return json.loads(out.stdout)
 
 
-def attested_inputs(repo, run_id):
+def attested_inputs(repo, run_id, artifact_store="", expected_store_id=None):
     """What a run attested in its `publication-inputs` artifact, or None when it has none (it never
-    reached the scope job). Read through the artifact API rather than `gh run download`, which
-    refuses a run that is still in flight — and in-flight runs are exactly the ones walked past."""
+    reached the scope job on the legacy single-store path). Read from the explicitly selected
+    named store, or through the GitHub artifact API rather than `gh run download`, which refuses
+    a run still in flight — and in-flight runs are exactly the ones walked past."""
+    if artifact_store and artifact_store != "gha":
+        artifacts = store_listing(artifact_store, repo, run_id, "publication-inputs", expected_store_id)
+        if not artifacts:
+            return None
+        if artifacts[0].get("expired"):
+            raise ValueError(f"run {run_id}'s publication-inputs artifact has expired")
+        with tempfile.TemporaryDirectory(prefix="publication-inputs-") as folder:
+            store_command(artifact_store, repo, run_id, "download", "--name", "publication-inputs",
+                          "--path", folder, "--attempt", str(artifacts[0]["attempt"]),
+                          expected_store_id=expected_store_id)
+            try:
+                with open(Path(folder) / "publication-inputs.json", encoding="utf-8") as stream:
+                    return json.load(stream)
+            except (OSError, ValueError) as exc:
+                raise ArtifactStoreError(f"run {run_id}'s stored publication attestation is invalid") from exc
     listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/artifacts?name=publication-inputs")
     live = [x for x in listing.get("artifacts", []) if not x.get("expired")]
     if not live:
@@ -140,7 +197,10 @@ def main():
     p.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     p.add_argument("--root", default=".")
     p.add_argument("--branch", default="main")
+    p.add_argument("--artifact-store", default="",
+                   help="explicit named artifact store; empty/gha keeps GitHub storage, no fallback when declared")
     p.add_argument("--self-test", action="store_true")
+    p.add_argument("--expect-store-id", default=None, help="physical store identity resolved by this run's first producer")
     a = p.parse_args()
     if a.self_test:
         self_test()
@@ -155,6 +215,12 @@ def main():
                 f"?branch={quote(a.branch, safe='')}&per_page=100")
     empty = dict(sha="", run="", url="", between=[])
     try:
+        own_store = bool(a.artifact_store and a.artifact_store != "gha")
+        if own_store:
+            # Assert the declared mount even when history has no reusable baseline. A mount
+            # outage is not an excuse to silently switch storage or launch a full build.
+            store_listing(a.artifact_store, a.repo, os.environ.get("GITHUB_RUN_ID", "1"),
+                          expected_store_id=a.expect_store_id)
         runs = gh_json(endpoint)["workflow_runs"]
         if not isinstance(runs, list):
             raise ValueError("workflow_runs is not a list")
@@ -168,8 +234,15 @@ def main():
         elif result["run"]:
             # Git source alone cannot see a repository variable overriding the platform ref.
             # Every run attests its actual resolved inputs in this run-scoped artifact.
-            reason = toolchain_verdict(current, attested_inputs(a.repo, result["run"]),
-                                       [(rid, attested_inputs(a.repo, rid)) for rid in result["between"]])
+            prior = attested_inputs(a.repo, result["run"], a.artifact_store, a.expect_store_id)
+            between = [(rid, attested_inputs(a.repo, rid, a.artifact_store, a.expect_store_id))
+                       for rid in result["between"]]
+            reason = toolchain_verdict(current, prior, between)
+            if own_store and any(inputs is None for _, inputs in between):
+                # An older workflow may have used GitHub storage. No own-store attestation is
+                # therefore NOT evidence that it never published, unlike the legacy single-store
+                # path. Do not read GitHub artifacts; rebuild conservatively through the chosen store.
+                reason = "a later publishing run has no attestation in the declared store — full build"
             if reason:
                 print(reason, file=sys.stderr)
                 result = empty
@@ -177,6 +250,9 @@ def main():
                 print(f"walked past {len(result['between'])} unsettled run(s) "
                       f"({', '.join(map(str, result['between']))}) — the history union from the "
                       "baseline carries their changes, so the next build covers them", file=sys.stderr)
+    except ArtifactStoreError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
         print(f"::warning::publication baseline unavailable ({type(exc).__name__}); full build", file=sys.stderr)
         result = empty
