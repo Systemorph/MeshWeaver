@@ -714,15 +714,19 @@ public sealed class MessageHub : IMessageHub
 
         var skipLogged = false;
         // 🚨 Which action the sequential Concat is ON, so the timeout below can NAME what did not
-        // finish (issue #2886). Written on each action's subscription and read once, in the Catch:
-        // Concat subscribes to action i+1 only after action i signalled, and Timeout's OnError is a
-        // notification serialised behind those same subscriptions, so nothing writes this
-        // concurrently with the read — a plain local, not a gate.
+        // finish (issue #2886). Semantics: the index of the LAST action the Concat subscribed to
+        // before the bound fired; -1 while none has been. Written on whichever thread delivered
+        // the previous action's completion, read on the Timeout's scheduler thread — so the write
+        // is an Interlocked exchange and the read a Volatile read: a FENCE, never a gate (a lock in
+        // a hub parks the action block, and a Subject would be a channel for one integer). The
+        // only ambiguity is a bound firing inside the transition from action i to i+1, microseconds
+        // wide, where either reading names an action adjacent to where the Concat stood when it was
+        // disposed; the timeout tears the whole chain down either way.
         var pendingAction = -1;
         return Observable
             .Concat(actions.Select((a, index) => Observable.Defer(() =>
             {
-                pendingAction = index;
+                Interlocked.Exchange(ref pendingAction, index);
                 if (!IsShuttingDown)
                     return a(this).DefaultIfEmpty(Unit.Default).Take(1);
                 if (!skipLogged)
@@ -816,11 +820,12 @@ public sealed class MessageHub : IMessageHub
                 // inner bound before it can print its per-source diagnosis. Naming the pending
                 // action here is the part this layer CAN say; the action's own report, if it has
                 // one, is the next layer's to give when it is disposed incomplete.
+                var pending = Volatile.Read(ref pendingAction);
                 var reason = ex is TimeoutException
-                    ? $"BuildupAction {DescribeBuildupAction(actions, pendingAction)} did not complete within "
+                    ? $"BuildupAction {DescribeBuildupAction(actions, pending)} did not complete within "
                       + $"{(Configuration.StartupTimeout ?? DefaultInitializationTimeout).TotalSeconds:F0}s "
                       + "— the actions before it had signalled; a dependency it waits on hung, or a compile inside it never finished"
-                    : $"BuildupAction {DescribeBuildupAction(actions, pendingAction)} faulted ({ex.GetType().Name}: {ex.Message})";
+                    : $"BuildupAction {DescribeBuildupAction(actions, pending)} faulted ({ex.GetType().Name}: {ex.Message})";
                 logger.LogError(ex,
                     "Hub {Address} initialization failed — {Reason}. Hub is now in FAILED state.{Recovery}",
                     Address, reason, TransientLatchNote(ex));
