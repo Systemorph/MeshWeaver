@@ -36,8 +36,9 @@ public interface IPodHubGrain : IGrainWithStringKey
     /// <returns>
     /// <c>true</c> when the activation is on the owning silo and is now pinned. <c>false</c> when it
     /// landed elsewhere — the previous owner's activation has not gone yet — in which case the
-    /// activation steps aside and the caller should retry, which is how a hub MOVING between pods
-    /// (a <c>portal/{user}</c> circuit reconnecting) converges instead of wedging.
+    /// activation migrates to the owner's scoped Orleans placement hint and the caller should
+    /// retry. This is how a hub MOVING between pods (a <c>portal/{user}</c> circuit reconnecting)
+    /// converges instead of wedging. A legacy/client caller without that hint deactivates instead.
     /// </returns>
     Task<bool> Attach();
 
@@ -54,7 +55,7 @@ public interface IPodHubGrain : IGrainWithStringKey
     /// <returns>The delivery, forwarded.</returns>
     /// <exception cref="PodHubNotHereException">
     /// This silo has no local route for the address. Deliberately NOT a transient Orleans rejection:
-    /// retrying would re-place the activation on the caller and loop. The router treats it as
+    /// retrying a delivery cannot establish ownership; an owner's Attach can relocate it. The router treats it as
     /// "nobody serves this address through the grain transport" and — for one release — falls back
     /// to the stream publish. With <see cref="PodHubNotHereException.Released"/> set, the owner
     /// itself said goodbye (<see cref="Detach"/>) and the router answers TERMINALLY instead — see
@@ -66,8 +67,8 @@ public interface IPodHubGrain : IGrainWithStringKey
 /// <summary>
 /// Thrown by <see cref="IPodHubGrain.Deliver"/> when the activation is on a silo that does not host
 /// the address's local route. It is a definitive "not through this transport, not here" — never a
-/// transient failure to retry — because <c>[PreferLocalPlacement]</c> would place the retry on the
-/// caller again and the loop would never converge.
+/// transient failure to retry — because retrying a delivery cannot establish ownership. The
+/// owner's <see cref="IPodHubGrain.Attach"/> is what can relocate an unclaimed activation.
 /// </summary>
 [global::Orleans.GenerateSerializer]
 public sealed class PodHubNotHereException : Exception
