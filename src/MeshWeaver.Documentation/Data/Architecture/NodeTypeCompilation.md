@@ -1765,6 +1765,15 @@ followable one: repeat the private emit until it tiers up.** Nothing here yet ex
 static reachable only from `MetadataWriter`'s call site, which is why that step is a measurement and
 not a conclusion.
 
+🚨 **Where it must NOT go is inside the probe as written.** `ProbeSharedEmitState` runs once per failed
+emit ATTEMPT, and `EmitToDiskWithRetry` makes `DiskEmitAttempts` of them per compile — measured on
+2026-09-22, **58 probe runs across 27 reported compile failures in one occurrence**. Tier-1 promotion
+needs tens of invocations plus a background compile, so a naive "loop until it tiers up" inside the
+leg multiplies a ~1 s probe by that factor **58 times over**, and turns a suite that dies at the
+900 s cap into one that dies there sooner and with less printed. The repeat belongs once per PROCESS
+(the first `BELOW-ROSLYN` arms it; later ones read what it recorded), and the cost model is part of
+the change, not an afterthought.
+
 **4. The platform set is not the variable.** The three occurrences sit on three different sets, and
 `git diff 6b3fda2a4..620a4893a -- src/MeshWeaver.Compiler src/MeshWeaver.Compiler.Pipeline` is **empty**
 across the pair that brackets the newest of them; `Microsoft.CodeAnalysis.CSharp` (5.9.0) and
