@@ -379,7 +379,7 @@ internal static class NodeTypeEnrichmentHelpers
     private static MeshNode NonDeclarationOverlay(
         MeshNode node, string nodeType, MeshNode occupantNode, IMessageHub meshHub, ILogger? logger)
     {
-        var collision = $"'{occupantNode.Path}' is a '{occupantNode.NodeType}' node";
+        var collision = NodeTypeDeclarationProbe.Describe(occupantNode);
         var msg = $"NodeType '{nodeType}' is not registered: {collision} (referenced by " +
                   $"instance '{node.Path}'). Point the instance's NodeType field at the " +
                   $"declaration's real path, or move whatever occupies '{nodeType}' out of " +
@@ -405,8 +405,7 @@ internal static class NodeTypeEnrichmentHelpers
             if (!NodeTypeDeclarationProbe.IsProvablyNotADeclaration(candidate, options))
                 return null;
         }
-        var occupant = candidates.First();
-        return $"'{occupant.Path}' is a '{occupant.NodeType}' node";
+        return NodeTypeDeclarationProbe.Describe(candidates.First());
     }
 
     /// <param name="afterIndeterminateProbe">

@@ -39,8 +39,22 @@ internal sealed class NodeTypeDeclarationProbe(IMessageHub hub) : INodeTypeDecla
     /// <inheritdoc />
     public string? DescribeNonDeclaration(MeshNode candidate) =>
         IsProvablyNotADeclaration(candidate, hub.JsonSerializerOptions)
-            ? $"'{candidate.Path}' is a '{candidate.NodeType}' node"
+            ? Describe(candidate)
             : null;
+
+    /// <summary>
+    /// The one wording for "what is sitting on this path". Every seam that reports the collision
+    /// says it this way — the write boundaries through
+    /// <see cref="DescribeNonDeclaration"/>, the activation probe through
+    /// <c>NodeTypeEnrichmentHelpers.ProbeCollision</c>, and the slow path's terminal branch — so
+    /// an operator who has met one has read them all. Three copies of this sentence is how the
+    /// boundaries start describing one fact differently, which is the smaller sibling of the
+    /// defect this whole class exists to close.
+    /// </summary>
+    /// <param name="occupant">The node on the NodeType's path.</param>
+    /// <returns>The occupant phrase, e.g. <c>'Feedback' is a 'Store/Plugin' node</c>.</returns>
+    internal static string Describe(MeshNode occupant) =>
+        $"'{occupant.Path}' is a '{occupant.NodeType}' node";
 
     /// <summary>
     /// The predicate itself, static so the activation boundary
