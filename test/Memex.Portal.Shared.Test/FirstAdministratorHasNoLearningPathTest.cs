@@ -4,11 +4,13 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// The first global administrator is pinned to no learning path; an ordinary user still is.
+/// The first global administrator is SEEDED with no learning path; an ordinary user still is —
+/// policy <c>first-admin-no-learning-path</c> (<c>Doc/Architecture/PolicyNotProse</c>). They are
+/// setting the instance up, not learning it.
 ///
-/// <para>Maintainer, 2026-09-21, onboarding on partnerre.meshweaver.cloud: <i>"the learning path i
-/// don't need for first onboarding of global admin."</i> They are setting the instance up, not
-/// learning it.</para>
+/// <para>These are the pure halves: the seed function and the request's default. What the seed
+/// does on a LIVE mesh — and, the case that matters, what a second onboarding of the same user
+/// does NOT do to pins added in between — is <see cref="OnboardingPinsAreSeededOnceTest"/>.</para>
 /// </summary>
 public class FirstAdministratorHasNoLearningPathTest
 {

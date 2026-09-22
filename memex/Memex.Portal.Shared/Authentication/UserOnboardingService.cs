@@ -42,6 +42,7 @@ namespace Memex.Portal.Shared.Authentication;
 public sealed class UserOnboardingService(
     IMeshService meshService,
     AccessService accessService,
+    IMessageHub hub,
     ILogger<UserOnboardingService>? logger = null,
     IIconGenerator? iconGenerator = null)
 {
@@ -72,6 +73,9 @@ public sealed class UserOnboardingService(
             // so an unshipped tag stores nothing rather than pinning the profile to a language we
             // would render in English anyway.
             Locale = Locales.TryMatch(request.Locale),
+            // The SEED — what a profile starts with. It reaches the store on the create leg only:
+            // UpsertProfile declares PinnedPaths as create-once, so on a user who already exists
+            // this value is discarded and the owner keeps the pins it holds.
             PinnedPaths = UserOnboardingDefaults.PinnedPathsFor(request.IsPlatformBootstrap),
         };
 
@@ -108,7 +112,7 @@ public sealed class UserOnboardingService(
         // unhandled → error storm → the portal climbed to OutOfMemory and wedged. See /async, CreateOrUpdateNode.
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
-            _ => meshService.CreateOrUpdateNode(partitionRootNode)
+            _ => UpsertProfile(partitionRootNode)
                 .Do(__ => logger?.LogInformation(
                     "Onboarding: upserted partition-root User '{Username}' to {Schema}.mesh_nodes",
                     username, username.ToLowerInvariant())))
@@ -117,6 +121,70 @@ public sealed class UserOnboardingService(
             // and stamp it onto the node's Icon — exactly like thread auto-naming runs AFTER a
             // thread is created. Skipped when the user supplied an avatar or no generator is wired.
             .Do(rootNode => MaybeGenerateAvatar(rootNode, fullDisplayName, avatarIcon));
+    }
+
+    /// <summary>
+    /// The partition-root upsert, carrying the ONE fold onboarding needs: <see cref="User.PinnedPaths"/>
+    /// is <b>seeded on the create leg and kept as the owner holds it on the update leg</b>
+    /// (<see cref="FoldRule.KeepExisting"/> — the create-once member, #4928).
+    ///
+    /// <para>🚨 Why a fold and not the plain <see cref="IMeshService.CreateOrUpdateNode"/>. The
+    /// full-instance upsert's update leg takes <c>Content</c> WHOLESALE
+    /// (<c>UpdateAccordingToSourceNode</c>: <c>Content = sourceNode.Content ?? state.Content</c>), so a
+    /// second <see cref="CreateUser"/> for a user who exists replaced their pins with the seed —
+    /// <c>[]</c> for the first administrator — and silently erased everything they had pinned since.
+    /// The recovery endpoint (<see cref="BootstrapController.FirstAdmin"/>) is documented as
+    /// re-runnable, and the onboarding page re-submits after a lagged existence check, so that leg
+    /// is not hypothetical. A client-side "exists → <c>stream.Update</c>, else create" split is not
+    /// the answer either: that is the exact shape <see cref="CreateUser"/>'s own comment records as
+    /// removed (the create's exists-check lagged a concurrent create → a patch onto a not-yet-
+    /// materialised node → error storm → OOM wedge). The fold is the owner-side form of that same
+    /// Update: the caller states the RULE, the owner applies it against the node as it holds it,
+    /// inside the one serialised merge — no read, no decision, no race.</para>
+    ///
+    /// <para>Every other member still lands wholesale, deliberately: the interactive form's
+    /// re-submission carries values the person just typed, and a re-run of the recovery endpoint
+    /// repairing a display name is what the existing-user leg is FOR. Only the pins are the user's
+    /// own curation after onboarding.</para>
+    ///
+    /// <para>Issued off the router (<see cref="MeshExtensions.NodeOperationIssuingHub"/>) exactly as
+    /// <c>MeshService.CreateOrUpdateNode</c> does, with the caller's identity stamped on the request
+    /// (<c>RequestedBy</c>) and on the delivery, because the response's Subscribe lands on an
+    /// emission thread where the impersonation scope's AsyncLocal is gone. Caller-read-free is not
+    /// cluster-atomic (see <see cref="ContentFolds"/>) — which is exactly enough here: nothing is
+    /// counted, a value is merely preserved.</para>
+    /// </summary>
+    /// <param name="partitionRootNode">The User node carrying the SEED content.</param>
+    /// <returns>The node as the owner stored it — created, or merged onto the existing profile.</returns>
+    private IObservable<MeshNode> UpsertProfile(MeshNode partitionRootNode)
+    {
+        // Captured at the call, which CreateUser makes INSIDE its Using scope — so this is the
+        // System identity the write runs under, pinned by value before any scheduler hop.
+        var captured = accessService.Context;
+        var request = new CreateOrUpdateNodeRequest(partitionRootNode)
+            .WithFolds<User>(hub.JsonSerializerOptions, f => f.KeepExisting(u => u.PinnedPaths))
+            with { RequestedBy = captured?.ObjectId };
+        var target = hub.NodeOperationTarget();
+        // Defer keeps the post cold — it fires on Subscribe, never on construction.
+        return Observable.Defer(() => hub.NodeOperationIssuingHub()
+                .Observe(request, o => captured is null
+                    ? o.WithTarget(target)
+                    : o.WithTarget(target).WithAccessContext(captured))
+                .SelectMany(d =>
+                {
+                    var r = d.Message;
+                    if (r.Success && r.Node is not null)
+                        return Observable.Return(r.Node);
+                    return Observable.Throw<MeshNode>(r.RejectionReason switch
+                    {
+                        NodeUpsertRejectionReason.Unauthorized or NodeUpsertRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        _ => new InvalidOperationException(r.Error ?? "Node upsert failed"),
+                    });
+                }))
+            // The SAME identity around every emission that the post was stamped with, so the
+            // subscriber's callbacks do not inherit whatever is ambient on the emission thread.
+            .CarryAccessContext(hub.ServiceProvider, captured);
     }
 
     /// <summary>
@@ -232,7 +300,10 @@ public sealed class UserOnboardingService(
     }
 }
 
-/// <summary>The learning path a new user is pinned to — and who is not.</summary>
+/// <summary>
+/// The learning path a new user is SEEDED with — and who is not. A seed, never a value re-imposed:
+/// <see cref="UserOnboardingService.CreateUser"/> applies it on the create leg only.
+/// </summary>
 public static class UserOnboardingDefaults
 {
     /// <summary>
@@ -243,13 +314,13 @@ public static class UserOnboardingDefaults
         ["Doc/Architecture", "Doc/DataMesh", "Doc/GUI", "Doc/AI"];
 
     /// <summary>
-    /// What to pin for this user.
+    /// What to seed for this user.
     ///
-    /// <para>🚨 <b>The first global administrator gets NO learning path.</b> Maintainer, 2026-09-21,
-    /// from an attempt to onboard on partnerre.meshweaver.cloud: <i>"the learning path i don't need
-    /// for first onboarding of global admin."</i> That person is setting the instance up, not
-    /// learning it — a Pinned tab full of doc landing pages in front of the setup work is noise at
-    /// the one moment it costs most. Ordinary users keep it.</para>
+    /// <para>🚨 <b>The first global administrator gets NO learning path.</b> That person is setting
+    /// the instance up, not learning it — a Pinned tab full of doc landing pages in front of the
+    /// setup work is noise at the one moment it costs most. Ordinary users keep it. Policy
+    /// <c>first-admin-no-learning-path</c> (<c>Doc/Architecture/FirstRunSetupOnAProvisionedInstance</c>,
+    /// "The first administrator learns nothing here").</para>
     /// </summary>
     /// <param name="isPlatformBootstrap">Whether this user is the instance's first global administrator.</param>
     public static ImmutableList<string> PinnedPathsFor(bool isPlatformBootstrap) =>
@@ -273,8 +344,27 @@ public sealed record UserOnboardingRequest(
     // Accept-Language header onto AccessContext.Locale. Resolved through Locales.TryMatch at the
     // point of use, so a tag this deployment does not ship stores nothing rather than pinning the
     // profile to a language we would only ever render in English anyway.
-    string? Locale = null,
-    // True when this user is the instance's FIRST global administrator — the bootstrap path
-    // (BootstrapController, and the first-user promotion in Onboarding.razor). Such a user is
-    // setting the instance up, not learning it, and is pinned to no learning path.
-    bool IsPlatformBootstrap = false);
+    string? Locale = null)
+{
+    /// <summary>
+    /// True when this user is the instance's FIRST global administrator — the bootstrap path
+    /// (<see cref="BootstrapController.FirstAdmin"/>, and the first-user promotion the onboarding
+    /// page decides). Such a user is setting the instance up, not learning it, and is
+    /// <b>seeded</b> with no learning path (<see cref="UserOnboardingDefaults.PinnedPathsFor"/>).
+    ///
+    /// <para>🚨 A CALLER's decision, not a form field — which is why it is an init-only property
+    /// and not a primary-constructor parameter. The primary constructor mirrors what the person
+    /// typed on the onboarding form; this flag is what the code orchestrating the onboarding
+    /// knows about the instance. Keeping it out of the constructor also keeps the record's
+    /// constructor signature — the one a module compiled earlier calls — exactly as it was
+    /// (<c>check-record-signatures.py</c>: adding a parameter, even with a default, replaces
+    /// that signature).</para>
+    ///
+    /// <para>It decides the SEED only. On a user who already exists the flag changes nothing:
+    /// <see cref="UserOnboardingService.CreateUser"/> keeps an existing profile's pins as they are
+    /// (the <c>KeepExisting</c> fold), so a re-run of the recovery endpoint — which is documented
+    /// as re-runnable — cannot erase what the administrator pinned after the original
+    /// onboarding.</para>
+    /// </summary>
+    public bool IsPlatformBootstrap { get; init; }
+}

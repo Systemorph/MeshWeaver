@@ -234,9 +234,10 @@ a send that did not happen.
 
 ### The objects that do not exist
 
-Maintainer, 2026-09-21: *"it should also show me secrets which don't actually exist."* Provenance and
-the object name are not enough; the third state is a mapping the record or repository **declares
-whose object is not in the vault**. The ramp-up gates cannot know this — they deliberately carry no
+*"It should also show me secrets which don't actually exist"* — policy `setup-secrets-three-valued`
+([Policy Not Prose](../PolicyNotProse) carries when and by whom). Provenance and the object name are
+not enough; the third state is a mapping the record or repository **declares whose object is not in
+the vault**. The ramp-up gates cannot know this — they deliberately carry no
 credential, so they assert that a mapping is *declared*, never that its object *exists*. The dialog
 runs on the instance, which mounts that vault with *Key Vault Secrets User*: a read right, which is
 exactly what an existence check needs. It asks the object's **versions listing**, so existence is
@@ -254,9 +255,26 @@ until a deploy tripped over it.
 
 ### The first administrator learns nothing here
 
-Maintainer, same day: *"the learning path i don't need for first onboarding of global admin."* An
-ordinary new user is pinned to four documentation sections; the first global administrator is pinned
-to none. They are setting the instance up, not learning it.
+*"The learning path I don't need for first onboarding of global admin"* — policy
+`first-admin-no-learning-path` ([Policy Not Prose](../PolicyNotProse)). An ordinary new user is
+**seeded** with four documentation sections in `User.PinnedPaths`; the first global administrator is
+seeded with none. They are setting the instance up, not learning it. The flag that says which is
+`UserOnboardingRequest.IsPlatformBootstrap`, set by the code that KNOWS it is materialising the first
+administrator — `BootstrapController.FirstAdmin` today — never by the person filling in a form.
+
+**A seed, not a value every onboarding re-imposes.** The recovery endpoint is documented as
+re-runnable ("already exists" is a successful step, because a re-run still wants the Admin grants),
+and the onboarding page re-submits after a lagged existence check. Both reach `CreateUser` for a user
+who already exists, and that write lands the profile through the full-instance upsert, whose update
+leg takes `Content` wholesale — so until this rule was pinned, a re-run replaced the pins with the
+seed: the four sections for an ordinary user, `[]` for the first administrator, silently erasing
+whatever they had pinned since (found in review, #5077). `CreateUser` therefore declares
+`PinnedPaths` as a **create-once member** on the upsert (`FoldRule.KeepExisting`, the shape #4928
+added for exactly this): the seed lands when the profile is created, and on an existing profile the
+owner keeps the pins it holds, whatever the request carries. Every other profile member still lands
+wholesale — a re-submitted form carries what the person just typed, and repairing a display name is
+what the existing-user leg is for. `OnboardingPinsAreSeededOnceTest` holds both sides: a first call
+seeds, and a second call after the user has pinned something leaves that pin exactly where it was.
 
 ## The plugin catalog in the wizard
 
