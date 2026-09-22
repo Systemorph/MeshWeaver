@@ -1460,12 +1460,13 @@ is `PRIVATE-COPY-EMITS`, twice in a row (the context is re-created per run). A R
 renames a type or reshapes `Create`/`Emit` turns the reflection into `UNAVAILABLE` — visibly, as a
 red test, not silently on the next occurrence.
 
-**What the next occurrence therefore prints, for the first time:** a `compiler=` reading on the
-same line as `canary=`, `dissect=` and `flat=`. The 2026-09-12 check stated the closing condition
-as exactly that reading; until it is read on an occurrence, every `BELOW-ROSLYN` on this thread is
-to be taken as "not the references and not the source", no more. The tiering residual stated
-below is unchanged: a single `PRIVATE-COPY-EMITS` does not separate fresh mapping from fresh native
-code, and the follow-up is to repeat the private emit until it tiers up.
+**It has been read.** The three occurrences of 2026-09-21/22 each print a `compiler=` reading on the
+same line as `canary=`, `dissect=` and `flat=`, and all three read `PRIVATE-COPY-EMITS` — the
+occurrence table and what the readings settle are under *"the first three `compiler=` readings"*
+further down this page. Every `BELOW-ROSLYN` on this page is therefore to be
+taken as "not the references and not the source", no more. The tiering residual stated below is
+unchanged and is now the only followable step: a `PRIVATE-COPY-EMITS` does not separate fresh mapping
+from fresh native code, and the follow-up is to repeat the private emit until it tiers up.
 
 #### The first `dissect=` readings, 2026-09-06 — and what they do and do not settle
 
@@ -1725,6 +1726,85 @@ live object in `WKS::gc_heap::find_first_object` — see
 `READS-HEALTHY` + `flat=EMITS` say the object graph the writer is walking is intact, which is the
 opposite of heap corruption. **Leg 5 is also the discriminator here**: `PRIVATE-COPY-EMITS` puts #890
 in the compiler's own image and separates the two; `PRIVATE-COPY-THREW` leaves them joinable.
+
+#### 2026-09-21 / 09-22 — the first three `compiler=` readings, and what they settle
+
+Leg 5's closing condition was *"the reading on an occurrence"*. Three occurrences carried it inside
+thirty hours, all in MeshWeaver.Plugins `Plugin Catalog CI`, all the job
+`portal-hosts (Hosting.Monolith.Test)`, all ending `exit 124` with no verdict:
+
+| occurrence | run / job | platform set (core) | `canary=` | `dissect=` | `flat=` | `compiler=` |
+|---|---|---|---|---|---|---|
+| 2026-09-21 13:36Z | [`35606133491`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35606133491) / `106355181093` | `3.0.0-ci.9088` (`88cd4b7b4`) | `BELOW-ROSLYN` ×40 | `READS-HEALTHY` ×40 | `SAME-FRAME@…get_ContainingTypeDefinition` ×40 | `PRIVATE-COPY-EMITS` ×40 |
+| 2026-09-21 22:41Z | [`35661949332`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35661949332) / `106544668720` | `3.0.0-ci.9108` (`b1aa8a9e5`) | ×58 | ×58 | `EMITS` ×6, **then** `SAME-FRAME@…` ×52 | ×58 |
+| 2026-09-22 11:37Z | [`35722501930`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35722501930) / `106742555061` | `3.0.0-ci.9168` (`620a4893a`) | ×58 | ×58 | `EMITS` ×58 | ×58 |
+
+**1. `PRIVATE-COPY-EMITS`, unanimously.** A second Roslyn, loaded from fresh bytes into its own
+collectible context and never executed in this process before, emits the very source the shared copy
+cannot — same process, same CLR, same heap, microseconds apart. So `BELOW-ROSLYN`'s closing sentence
+is void on all three: the fault travels with **this process's copy of the compiler**, and the
+`dotnet/runtime` venue is wrong. Every `BELOW-ROSLYN` earlier on this page is to be read as "not the
+references, not the mappings and not the source", no more — which is what the leg-5 section said it
+would take, now measured rather than predicted.
+
+**2. `flat=` is a phase, not a property of an occurrence — and that settles an open contradiction.**
+The second occurrence read `flat=EMITS` for its first six failures and `flat=SAME-FRAME` for the
+following fifty-two, **in one process**. So the 2026-09-08 (`SAME-FRAME`) versus 2026-09-10 (`EMITS`)
+disagreement recorded above is not two defects and not an unstable probe: it is one defect read at two
+depths. It also retires *"the mechanism is confined to `GetConsolidatedTypeParameters`' recursion"* as a
+general claim — true of the shallow phase only. Once it deepens, `public class MwFlatEmitCanary { }` —
+one top-level, non-generic, member-less class, no recursion anywhere in the compilation — cannot emit
+either, and the guard `AsNestedTypeDefinitionImpl` makes has read TRUE where it must read FALSE.
+
+**3. The pair is sharper than either half.** `SAME-FRAME` says the shared copy cannot emit the
+smallest possible compilation; `PRIVATE-COPY-EMITS` says a cold copy of the same compiler can, then and
+there. Of the three candidates leg 5 leaves open — the image, its mapping, or the native code produced
+for it — only the third can get *worse while the process runs*. An image does not rot and a mapping
+does not un-map itself six failures in. **The follow-up the leg-5 section already names is now the only
+followable one: repeat the private emit until it tiers up.** Nothing here yet excludes a corrupted
+static reachable only from `MetadataWriter`'s call site, which is why that step is a measurement and
+not a conclusion.
+
+**4. The platform set is not the variable.** The three occurrences sit on three different sets, and
+`git diff 6b3fda2a4..620a4893a -- src/MeshWeaver.Compiler src/MeshWeaver.Compiler.Pipeline` is **empty**
+across the pair that brackets the newest of them; `Microsoft.CodeAnalysis.CSharp` (5.9.0) and
+`global.json` are unchanged over the same range. A pass-then-fail across a ceiling move is therefore
+not evidence about the ceiling — measured on PR #2231, which ran the same suite green
+(`total: 813, failed: 0`, run `35700505749`, set `3.0.0-ci.9141`) four hours before it was killed at
+`3.0.0-ci.9168` with no diff of its own in between.
+
+**5. The rate, with its denominator, and why `main` cannot supply the control.** Since
+2026-09-21T00:00Z the unit ran **102** times across the workflow: 75 `success`, 22 `cancelled`
+(superseded pushes), 2 still running, **3 `failure` — and all three are this defect**. Every one of
+those 102 executions is a `pull_request` run: `Hosting.Monolith.Test` was **not selected on `main`
+even once** in that window (main's `portal-hosts` units were `Kernel.Test`, `network-133`, `Json.Test`,
+… — measured on runs `35719210050` and `35712737331`). So "it passes on `main`" is unavailable, and the
+reason is a **zero denominator, not a green**. A single local re-run on `main` cannot supply it either:
+at ~3 % per run it comes back clean whether or not the defect is live, which is a control that cannot
+fail. **The population across unrelated branches is the control**, and it attributes the failure to no
+pull request: `fix/incident-fold-dedupe`, `fix/hosting-bake-probe` and `fix/ai-stream-cancel` share
+nothing but the defect.
+
+**6. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
+first poisoned emit every compile-gated assertion spends its entire window and then fails — on
+2026-09-22, 11 tests failed and 9 of them burned a full 50 s / 60 s / 90 s / 120 s window — so 138 of
+813 tests consume the 900 s cap. The last test
+to *start* (`NodeTypeRecompileAlcLeakTest.RecompilingANodeType_ReleasesEverySupersededLoadContext`,
+13:05:33Z) was 24 s into a 120 s window when `SIGTERM` arrived; it was not stuck. Read `exit 124` here
+as *"the process stopped being able to emit at 12:52:40Z"*, and look for the first `PROCESS CANNOT EMIT`,
+never for the last test name.
+
+**7. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
+design produces, and neither half points anywhere: `TeardownStragglerCapturer` *was* loaded — its module
+initializer ran, which the 120 records prove — but its first-chance filter is
+`IsTeardownDisposedStraggler` (Autofac `LifetimeScope` and `MemoryCache` shapes only), so an emit `NRE`
+was never eligible; and the `NRE` is **caught** in `EmitPipeline.EmitCompilationToDirectory`, stamped
+with the canary verdict and turned into a compile failure on the node, so it never reaches
+`AppDomain.UnhandledException`. All 120 records on 2026-09-22 were `ObjectDisposedException`, zero were
+`NullReferenceException`.
+
+🚨 **Record-keeping correction:** the recurrence comment of 2026-09-21 cites run `35661935491`; that run
+carries no `Hosting.Monolith.Test` job. The occurrence is job `106544668720` in run `35661949332`.
 
 ### Framework-version freezing
 
