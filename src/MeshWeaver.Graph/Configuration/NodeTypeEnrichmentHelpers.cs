@@ -336,7 +336,64 @@ internal static class NodeTypeEnrichmentHelpers
     /// this method's normal input, and the caller logs the collision once with both sides. The
     /// unexplained <c>As&lt;NodeTypeDefinition&gt; for Feedback: value is PluginContent</c> line
     /// that WAS the only evidence is exactly what this replaces.</para>
+    ///
+    /// <para>🚨 The per-candidate predicate itself is
+    /// <see cref="NodeTypeDeclarationProbe.IsProvablyNotADeclaration"/>, shared with the WRITE
+    /// boundaries through <see cref="INodeTypeDeclarationProbe"/>. It used to be a second copy
+    /// here, and while the copies agreed the two boundaries did not — the write side asked
+    /// existence only, accepted the collision, and left activation to refuse an instance that was
+    /// already persisted (#5008/#2231). One predicate is what stops them drifting again.</para>
     /// </summary>
+    /// <summary>
+    /// <see cref="NodeTypeDeclarationProbe.IsProvablyNotADeclaration"/> over a possibly-null
+    /// emission — a stream that has not produced a node proves nothing, which is the one-sided
+    /// contract.
+    /// </summary>
+    private static bool IsProvenNonDeclaration(
+        MeshNode? typeNode, System.Text.Json.JsonSerializerOptions options) =>
+        typeNode is not null
+        && NodeTypeDeclarationProbe.IsProvablyNotADeclaration(typeNode, options);
+
+    /// <summary>
+    /// The refusal for an instance whose NodeType path is occupied by something that is not a
+    /// declaration, reached through the SLOW PATH rather than the existence probe — the routes
+    /// that bypass <see cref="ProbeCollision"/>: an <see cref="ProbeOutcome.Indeterminate"/> probe
+    /// (a 3 s lookup that did not answer on a busy replica) and a host that registers no
+    /// <see cref="IMeshQueryCore"/> at all.
+    ///
+    /// <para>🚨 <b>One fact, one sentence, whichever route found it.</b> The message is the
+    /// probe's word-for-word, because an operator who has met one has learned the other; the
+    /// difference between the two routes is the platform's business, not theirs. Before this, the
+    /// slow path produced no sentence at all: <see cref="IsCompileSettled"/> admits a node that is
+    /// not a declaration "in ANY readable shape" as SETTLED, so the instance bound the bare
+    /// default chain immediately — no type, no areas, nothing naming the cause — and the only
+    /// trace was the bare <c>As&lt;NodeTypeDefinition&gt; for Feedback: value is PluginContent</c>
+    /// line a predicate on the way emitted at Error (#5008/#2231). Measured: that route settled in
+    /// ~3 s (the probe's own budget) with a null <c>HubConfiguration</c>, NOT at
+    /// <see cref="SlowPathTimeout"/>.</para>
+    ///
+    /// <para>The self-heal gate is NULL, exactly as the probe's is: what is wrong here is that
+    /// something else holds the path, so the first usable state at it — whenever the collision is
+    /// resolved, by either side moving — is what should recycle this instance.</para>
+    /// </summary>
+    private static MeshNode NonDeclarationOverlay(
+        MeshNode node, string nodeType, MeshNode occupantNode, IMessageHub meshHub, ILogger? logger)
+    {
+        var collision = NodeTypeDeclarationProbe.Describe(occupantNode);
+        var msg = $"NodeType '{nodeType}' is not registered: {collision} (referenced by " +
+                  $"instance '{node.Path}'). Point the instance's NodeType field at the " +
+                  $"declaration's real path, or move whatever occupies '{nodeType}' out of " +
+                  $"the way. Activation cannot proceed.";
+        // Error, and it names both sides — same level and same wording as the probe's branch,
+        // because it is the same misconfiguration someone has to resolve.
+        logger?.LogError(
+            "EnrichWithNodeType: path '{NodeType}' is occupied by a node that is not a NodeType declaration ({Collision}) — instance '{InstancePath}' has no type to bind to; applying error overlay",
+            nodeType, collision, node.Path);
+        return WithOverlaySelfHeal(
+            WithCompilationErrorOverlay(node, nodeType, msg),
+            meshHub, nodeType, typeVersionAtOverlay: null, logger);
+    }
+
     private static string? ProbeCollision(
         IReadOnlyCollection<MeshNode> candidates,
         System.Text.Json.JsonSerializerOptions options)
@@ -345,13 +402,10 @@ internal static class NodeTypeEnrichmentHelpers
             return null;
         foreach (var candidate in candidates)
         {
-            if (string.IsNullOrEmpty(candidate.NodeType)
-                || string.Equals(candidate.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)
-                || candidate.ContentAs<NodeTypeDefinition>(options) is not null)
+            if (!NodeTypeDeclarationProbe.IsProvablyNotADeclaration(candidate, options))
                 return null;
         }
-        var occupant = candidates.First();
-        return $"'{occupant.Path}' is a '{occupant.NodeType}' node";
+        return NodeTypeDeclarationProbe.Describe(candidates.First());
     }
 
     /// <param name="afterIndeterminateProbe">
@@ -505,7 +559,16 @@ internal static class NodeTypeEnrichmentHelpers
         var healSub = typeStream
             // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized
             // JSON emissions; see ArmStaleAssemblySelfHeal's predicate note.
-            .Where(t => t?.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger) is { } stale
+            //
+            // 🚨 No logger, for the reason ProbeCollision states: this is a PREDICATE, and a type
+            // node whose content is not a declaration is its normal input — the path may be
+            // occupied by something else entirely (a Store/Plugin root at the bare `Feedback`).
+            // Passing the logger reported that normal input at Error as a bare, subject-free
+            // `As<NodeTypeDefinition> for Feedback: value is PluginContent` line naming neither
+            // the instance nor the reason. That line was the whole of #2231's evidence for a
+            // month, and it is why the incident could never go quiet: the collision IS reported,
+            // once and by name, by the terminal branch below.
+            .Where(t => t?.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions) is { } stale
                 && stale.CompilationStatus == CompilationStatus.Ok
                 && (string.IsNullOrEmpty(stale.LatestAssemblyCollection)
                     || string.IsNullOrEmpty(stale.LatestAssemblyPath))
@@ -524,8 +587,9 @@ internal static class NodeTypeEnrichmentHelpers
             // one Subscribe and delivers notifications under the subscriber's own identity; the
             // cold Update inside keeps its emission-time behaviour exactly.
             .SelectMany(_ => enrichAccessService.RunAsSystem(
+                // No logger, same reason as the predicate above — this lambda re-applies it.
                 () => typeStream.Update(curr =>
-                    curr.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger) is { } d
+                    curr.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions) is { } d
                     && d.CompilationStatus == CompilationStatus.Ok
                     && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
                         || string.IsNullOrEmpty(d.LatestAssemblyPath))
@@ -559,7 +623,24 @@ internal static class NodeTypeEnrichmentHelpers
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.CompilationStatus,
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyCollection ?? "(null)",
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyPath ?? "(null)"))
-            .Where(typeNode => IsBindableOrSettled(typeNode, meshHub.JsonSerializerOptions, guards))
+            // 🚨 A PROVEN NON-DECLARATION IS A NAMED REFUSAL, not a silent default bind — and this
+            // clause is ORDERED BEFORE IsBindableOrSettled deliberately, because that predicate
+            // already admits the shape. IsCompileSettled's first arm reads, verbatim: "Not a
+            // NodeTypeDefinition in ANY readable shape — a plain node at a path used as a type.
+            // Nothing to wait for; ApplyStreamResult applies the default config deliberately." So
+            // an instance whose NodeType names a path a Store/Plugin root occupies bound the bare
+            // default chain — no type, no areas, no diagnostic — which IS the condition
+            // Doc/Architecture/DanglingNodeTypes exists to describe, arrived at on purpose
+            // (#5008/#2231).
+            //
+            // 🚨 It is a REVERSAL of that branch for one case, and the ground is that the OTHER
+            // route through this same method already decided the opposite: when the existence
+            // probe answers, ProbeCollision (#2245) refuses by name and applies an error overlay.
+            // Two routes through one method giving opposite verdicts for one condition is the
+            // drift, and the probe's is the verdict that names the cause. The narrowing is the
+            // one-sided test, so anything uncertain still takes the old branch.
+            .Where(typeNode => IsProvenNonDeclaration(typeNode, meshHub.JsonSerializerOptions)
+                || IsBindableOrSettled(typeNode, meshHub.JsonSerializerOptions, guards))
             .Take(1);
 
         // 🚨 Fresh-pod wedge fix: DON'T cut short an in-flight compile with a fixed
@@ -585,7 +666,9 @@ internal static class NodeTypeEnrichmentHelpers
             // self-heal recycle the instance when the compile lands. An in-flight emission that
             // still names a loadable last-good build is BOUND, exactly like a settled one — see
             // IsBindableWhileCompiling.
-            .SelectMany(typeNode => RoutesToInFlightOverlay(typeNode, meshHub.JsonSerializerOptions, guards)
+            .SelectMany(typeNode => IsProvenNonDeclaration(typeNode, meshHub.JsonSerializerOptions)
+                ? Observable.Return(NonDeclarationOverlay(node, nodeType, typeNode!, meshHub, logger))
+                : RoutesToInFlightOverlay(typeNode, meshHub.JsonSerializerOptions, guards)
                 ? ConfirmInFlightAgainstStorage(meshHub, nodeType, typeNode, node.Path, logger)
                     .SelectMany(confirmed => RoutesToInFlightOverlay(confirmed, meshHub.JsonSerializerOptions, guards)
                         ? WithCompilationInProgressOverlay(node, nodeType, confirmed, meshHub, logger)

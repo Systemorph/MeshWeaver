@@ -1091,16 +1091,25 @@ public static class MeshExtensions
                         // UPDATE boundary (issue #2993). Two copies of this predicate is how a
                         // create that refuses and an update that accepts drift apart — and the
                         // difference only ever surfaces as an instance nobody can read.
-                        var typeExistsObs = NodeTypeResolution.Resolves(hub, node.NodeType);
+                        var typeExistsObs = NodeTypeResolution.Resolve(hub, node.NodeType);
 
-                        return typeExistsObs.SelectMany(typeExists =>
+                        return typeExistsObs.SelectMany(verdict =>
                         {
-                            if (!typeExists)
+                            if (!verdict.Resolves)
                             {
+                                // 🚨 When something is provably IN THE WAY, say so. The bare
+                                // "not registered" sends the reader off to create a node that is
+                                // already sitting at that path — which is how a Store plugin root
+                                // at `Feedback` (declaration: `Feedback/Feedback`) swallowed every
+                                // instance that named the bare path (#5008/#2231).
                                 Respond(CreateNodeResponse.FailWith(
-                                    LocalizableText.Keyed(
-                                        $"NodeType '{node.NodeType}' is not registered",
-                                        NodeTypeNotRegisteredKey, ("nodeType", node.NodeType ?? "")),
+                                    verdict.Occupant is { } occupant
+                                        ? NodeTypeResolution.Occupied(
+                                            node.Path, node.NodeType!, occupant)
+                                        : LocalizableText.Keyed(
+                                            $"NodeType '{node.NodeType}' is not registered",
+                                            NodeTypeNotRegisteredKey,
+                                            ("nodeType", node.NodeType ?? "")),
                                     NodeCreationRejectionReason.InvalidNodeType));
                                 return Observable.Empty<(string mode, MeshNode node)>();
                             }
@@ -2061,14 +2070,22 @@ public static class MeshExtensions
                     .Select(t => t!)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray();
+                // 🚨 THE SAME VERDICT AS THE SINGULAR CREATE, not a second predicate. This probed
+                // with `persistence.Exists` while claiming "the same recognition order as the
+                // singular create" — true until the singular path gained the content test, after
+                // which a CreateNodesRequest could still land an instance naming a path a
+                // Store/Plugin root occupies, exactly as the singular create refused it. A bulk
+                // writer that accepts what the singular one refuses is the #2993 drift wearing a
+                // different verb, and installers use the bulk one. Review finding on the #5008
+                // change; `NodeTypeResolution.Resolve` already consults the static provider first,
+                // so the fast path is kept by the predicate rather than duplicated here.
                 var probeTypes = typesToProbe
-                    .Select(type => hub.ServiceProvider.FindStaticNode(type) is not null
-                        ? Observable.Return((Type: type, Exists: true))
-                        : persistence.Exists(type).Select(exists => (Type: type, Exists: exists)))
+                    .Select(type => NodeTypeResolution.Resolve(hub, type)
+                        .Select(verdict => (Type: type, Verdict: verdict)))
                     .Concat()
-                    .Where(t => !t.Exists)
+                    .Where(t => !t.Verdict.Resolves)
                     .Take(1)
-                    .Select(t => ((string Type, bool Exists)?)t)
+                    .Select(t => ((string Type, NodeTypeVerdict Verdict)?)t)
                     .DefaultIfEmpty(null);
 
                 return bootstrap
@@ -2093,9 +2110,16 @@ public static class MeshExtensions
                             {
                                 var offender = toCreate.First(n => string.Equals(
                                     n.NodeType, missing.Type, StringComparison.Ordinal));
+                                // The occupant travels with the verdict, so the BULK refusal names
+                                // what is in the way exactly as the singular one does — otherwise a
+                                // caller learns the remedy or not depending on which verb they used.
                                 PostFail(
-                                    LocalizableText.Keyed($"NodeType '{missing.Type}' is not registered",
-                                        NodeTypeNotRegisteredKey, ("nodeType", missing.Type)),
+                                    missing.Verdict.Occupant is { } occupant
+                                        ? NodeTypeResolution.Occupied(
+                                            offender.Path, missing.Type, occupant)
+                                        : LocalizableText.Keyed(
+                                            $"NodeType '{missing.Type}' is not registered",
+                                            NodeTypeNotRegisteredKey, ("nodeType", missing.Type)),
                                     NodeCreationRejectionReason.InvalidNodeType, offender.Path);
                                 return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
                             }
@@ -6286,14 +6310,15 @@ public static class MeshExtensions
             // Total by construction, same rule and same reason as the write leg below
             // (MeshWeaver#2454 / #3674): this subscription is on the handler's DETACHED reply path,
             // so a probe that completed without an answer would post nothing at all and leave the
-            // caller to wait out its budget. `Resolves` ends in `IStorageAdapter.Exists`, whose
-            // implementations are free to complete empty — the routing proxy's is a request/response
-            // `Observe(...).Take(1)`, which is empty the moment the partition hub answers nothing.
-            DetachedReplyOutcome.Of(NodeTypeResolution.Resolves(hub, node.NodeType))
+            // caller to wait out its budget. `Resolve` ends in `IStorageAdapter.Read` (falling back
+            // to `Exists`), whose implementations are free to complete empty — the routing proxy's
+            // is a request/response `Observe(...).Take(1)`, which is empty the moment the partition
+            // hub answers nothing.
+            DetachedReplyOutcome.Of(NodeTypeResolution.Resolve(hub, node.NodeType))
                 .Subscribe(
                     outcome =>
                     {
-                        if (outcome is { HasValue: true, Value: true })
+                        if (outcome is { HasValue: true, Value.Resolves: true })
                         {
                             WriteThroughStream(existing);
                             return;
@@ -6331,13 +6356,18 @@ public static class MeshExtensions
                                 NodeUpsertRejectionReason.Unknown);
                             return;
                         }
+                        // 🚨 "Not registered" and "the path is TAKEN" are different remedies, and
+                        // only one of them is "create the type" (#5008/#2231). The verdict carries
+                        // the occupant when something is provably in the way, so say which.
+                        var verdict = outcome.Value;
                         logger.LogWarning(
                             "[CreateOrUpdate] REFUSED {Path}: NodeType '{NodeType}' is not registered "
-                            + "(it was '{ExistingNodeType}'). An update may not introduce a NodeType "
-                            + "that resolves to nothing.",
-                            node.Path, node.NodeType, existingNodeType);
+                            + "(it was '{ExistingNodeType}'){Occupant}. An update may not introduce a "
+                            + "NodeType that resolves to nothing.",
+                            node.Path, node.NodeType, existingNodeType,
+                            verdict.Occupant is { } occupied ? $" — {occupied}" : string.Empty);
                         PostFail(
-                            NodeTypeResolution.Rejection(node.Path, node.NodeType!),
+                            NodeTypeResolution.LocalizedRefusalFor(verdict, node.Path, node.NodeType!),
                             NodeUpsertRejectionReason.InvalidNodeType);
                     },
                     // The subscriber's OWN contract, never the probe's: the probe's fault arrives
