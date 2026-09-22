@@ -218,6 +218,31 @@ A run held back by the ceiling says so: `lag` on the `Chosen`, an output row, a 
 (pull requests follow main)` notice and a summary row, each naming BOTH set ids — so "why did my
 core fix not show up in my PR?" is answered from the run's own log.
 
+🚨 **And it says the harder half too: that the run cannot prove anything about the set it passed
+over.** Naming both ids says the lane is *behind*; it does not say what an author has to act on. When
+`main` is behind **because the set moved**, the lane holds the pull request on the set from *before*
+the break — so a pull request whose whole purpose is to fix that regression can go green having
+exercised none of it, and a fix that names any symbol the newer set introduced cannot compile in the
+lane at all. Measured on the pull request fixing one such outage: `CS0103` / `CS0117` / `CS1061`
+against the older set, for the very API the change was about. The consequence is a constraint on the
+*shape* of the fix imposed by the lane rather than by the problem — a set-move regression whose only
+honest fix requires the new API has no green path — so the `lag` notice now states it and tells the
+author to verify against the newer set outside the lane and say so in the pull request body.
+`resolve-platform.py`'s self-test asserts the sentence (`CANNOT PROVE`) rather than only that both
+ids appear; removing it fails exactly one of the 180 cases.
+
+**This deliberately makes the deadlock VISIBLE rather than escapable, and that is the whole design.**
+The ceiling itself is untouched: a pull request that silently resolved a newer set than `main` has
+passed would be testing against bytes `main` has never validated, which is the hole
+[#1826](https://github.com/Systemorph/MeshWeaver/issues/1826) /
+[#4265](https://github.com/Systemorph/MeshWeaver/issues/4265) record, and *refusing rather than
+falling back* stays the correct default. Whether the lane should additionally offer an explicit,
+per-pull-request **opt-in** to the newest sealed set when `main` is red on it is a separate and open
+question — an opt-in is a skip-trapdoor wearing a justification, reached for under exactly the
+pressure that makes people careless, and the fleet's own rule is that a gate never lets the caller
+decide whether it applies. That decision is tracked on
+[#4348](https://github.com/Systemorph/MeshWeaver/issues/4348) and is not taken here.
+
 ### Verifying where a set came FROM: `--verify-source`
 
 The second thing Plugins' fork carried, and the second option on the canonical. By default the chosen
