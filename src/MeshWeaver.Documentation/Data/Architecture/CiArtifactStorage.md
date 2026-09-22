@@ -387,9 +387,10 @@ So the lift is three steps, in order, and the third is not optional:
    reads the new spec (`file:/ci-artifacts`, or the `azblob:` one) and whose `Module bundle`
    consumers are green, the producer having run on the other pool. A green run on `gha` proves
    nothing about either route; that is the control above, on the other side of the variable.
-3. **Delete the eight overrides in the same change set**, one command per repository
-   (`gh variable delete MW_ARTIFACT_STORE --repo Systemorph/<repo>`), and only then close
-   [#4761](https://github.com/Systemorph/MeshWeaver/issues/4761).
+3. **Lift an override only for a verified private pilot.** The incident issue is closed, but its
+   closure is not evidence that the mount or the complete graph works. Keep each repository on
+   `gha` until its cross-pool proof and retention controller pass; leave public callers on their
+   existing GitHub backend. Removing an override is a rollout act, not a documentation cleanup.
 
 **Why nobody could see it: `put`'s success line could not be wrong.** The byte count and the sha256
 both came from the **source** file and `dst` was never stat-ed or read back, so the producer was
@@ -425,13 +426,21 @@ name**: two pods can then never agree about a node-local directory, one process 
 itself, and the refusal says *check volumeMounts* rather than *unify the shares* — a different fault
 with a different remedy.
 
-🚨 **The named-artifact layer inherits the constraint and is NOT yet protected by it.**
-`ci-run-artifacts.py` and the `upload-artifact` / `download-artifact` composites ride on the same
-`FileStore`, and their manifest lives *in the store* — so a consumer on the other pool cannot read
-it either, and for a pattern or whole-collection download an empty result is a valid success by
-design (it mirrors `actions/download-artifact`). Nothing wires those composites to a store yet;
-until `ci-artifacts` is one share, **do not hand a `store:` to them across pools**. Their
-single-name refusal now at least names which share it is standing on.
+🚨 **Named artifacts must check the producer's identity before looking for a manifest.**
+`ci-run-artifacts.py` and the `upload-artifact` / `download-artifact` composites use the same
+`FileStore`. The composites require `expected-store-id` in `file:` mode and the adapter validates
+it before every operation, including an empty pattern or collection download. A legitimate empty
+selection still succeeds, but an empty selection on the wrong share is RED, never evidence of a
+successful handoff. The `resolve-artifact-store` composite derives the identity at the first
+producer; subsequent jobs and reusable workflow calls carry that identity unchanged. A reusable
+workflow requires a caller identity in file mode before resolving its own mount, and compares it
+before publishing outputs. Reusable defaults stay `gha`, regardless of organization variables;
+only an explicitly migrated complete graph selects own storage. Tests execute
+the actions' actual shell and mutate graph bindings so that dropping the check cannot pass.
+
+This is code-level protection, not proof that the infrastructure is repaired. The Plugins override
+was still `gha` when inspected on 2026-09-22. The shared workflow and caller migration is staged;
+the live switch still requires the cross-pool and retention proof below.
 
 **The general form, for the third time on this volume class:** a *publish atomically, then swap*
 protocol is only atomic if the swap is a real rename **on that filesystem**, and a *shared* store is
@@ -441,33 +450,35 @@ copying on Azure Files ([#2190](https://github.com/Systemorph/MeshWeaver/issues/
 
 ### How the module bundle splits in two
 
-`node-repo-module-pack.yml` takes an `artifact-store` input. When it names a store:
+`node-repo-module-pack.yml` takes `artifact-store` and `artifact-store-id` inputs. In `file:` mode:
 
 - the **durable copy** goes to the store, keyed `modules/<repo>/<module>/<build-key>/<file>` — the
   ledger's build key is a content address, so identical bytes are written **once** however many runs
   want them, and `put` probes by sha256 before uploading anything;
 - the record gains `bundleStore.locator` beside `bundleArtifact`, **never instead of it**;
-- the **GitHub artifact stays**, at **1-day** retention, because a handoff between the jobs of one
-  run is all it still is. Its consumers — gate, compile-check, publish-bake — are untouched;
+- the **named artifact also goes to our store**, through the shared upload/download actions.
+  Named module bundles retain **7 days**: publication reuse reads them across runs without a
+  ledger key, so the durable ledger copy does not justify shortening that retention;
 - the reuse leg fetches from the store when the record names one *and* this run resolved the same
   store *and* the object is actually there (`module-build-ledger.py` asks the store, never the
-  record's word); otherwise it downloads the artifact exactly as it always has, and past that it
-  rebuilds.
+  record's word); otherwise it can use a verified named artifact on that same store. Missing
+  historical bytes permit a rebuild. A corrupt archive, unavailable declared store or wrong
+  physical identity fails RED. None of those cases falls back to GitHub artifact storage.
 
-### The same-run handoffs go too — `runs/`, keyed by run AND attempt
+### Same-run handoffs — named artifacts, keyed by run and attempt
 
 `platform-refs-<lane>`, `workspace-build-<lane>` and `module-pack-tool-<lane>` exist only to cross a
-job boundary inside one run. They declare the shortest retention GitHub allows and are still **30% of
-the fleet's storage bill**, because of the deletion lag above. Each has exactly one producer and one
-consumer, so each now has two paths: the GitHub artifact when no store is named, the store when one
-is — guarded by the same expression, so exactly one runs.
+job boundary inside one run. Their earlier GitHub copies contributed to the measured storage bill
+above. The shared actions now select exactly one backend: GitHub for an unset store or explicit
+`gha`, our mounted store for explicit `file:`. This also covers the workflow's other named
+artifacts: receipts, gate logs, test output and publication input attestations.
 
-Their key needs no plumbing: `runs/<repo>/<run id>/<attempt>/<name>.tar` is derivable by both ends.
-🚨 **The ATTEMPT is part of it**: a re-run that read the previous attempt's handoff would compile
-against bytes this attempt did not produce. `ModuleBuildLedgerLaneGuard` holds all three pairs and
-the key shape — a producer that lost its store path would send the consumer looking for bytes nobody
-wrote, and one that lost its artifact path would break every caller without our infra, and neither
-shows up in a green run of the other mode.
+Manifests and digest-verified archives live below `named/`, separated by repository, run, attempt
+and artifact name. The consumer chooses the newest available attempt no later than its own. This
+is required for GitHub's **re-run failed jobs** semantics: a successful producer is not rerun, and
+its previous-attempt artifact remains the correct input. A full rerun's newly uploaded artifact
+wins. Cross-run publication reads use the source run's attempt, not the consuming run's attempt.
+Lane-qualified names prevent two reusable calls in one run overwriting one another.
 
 The `platform-refs` fetch keeps its fallback semantics exactly: the runner's `/opt/platform` mount
 first, then whichever handoff this run used, and a refusal that now names both.
@@ -476,58 +487,50 @@ first, then whichever handoff this run used, and a refusal that now names both.
 `--retention-days` the ledger record states were two independent literals until 2026-09-17. They now
 read one expression, so **a record can never outlive the artifact it names**.
 
-## Where the bytes should live — blob, not a share
+## Supported backend and retention
 
-| | Azure Blob | Azure Files RWX mount |
-|---|---|---|
-| cost, 400 GB | ~$7.4/month (hot LRS) | ~$24/month (transaction-optimized) |
-| throughput for ~12 GB/h | trivial; same-region, no egress charge | fine, but a standard share caps at 300 MiB/s and is shared |
-| pruning | **native server-side lifecycle policy** | a CronJob, like `ci-nuget-cache-prune` |
-| credential | a role assignment on ONE container | **none** — ambient to every runner pod |
-| blast radius | scoped, revocable, per-repo federated | ambient: any CI pod can read or delete any repo's bundles |
-| debugging | `az storage blob download` from a laptop | needs cluster access |
-| works on a GitHub-hosted runner | yes | no |
+The named-artifact adapter currently supports **`file:` only**, alongside the compatible `gha`
+backend. The lower-level durable-object helper also has an `azblob:` implementation, but that is
+not a named-artifact backend and cannot be selected for this graph. This migration does not grant
+pull requests production bake credentials or add federated identities. An authenticated remote
+store would be a separate design, not a fallback when the mounted store fails.
 
-**Recommendation: Azure Blob.** Three times cheaper per GB, a lifecycle rule that cannot be
-forgotten because it is server-side, a credential that is scoped and revocable rather than ambient
-to every pod, and it is readable from a laptop when something needs explaining. The share's one
-advantage — no credential at all — is also its weakness.
-
-The `file:` backend exists anyway, and is the reason the seam is worth having: it is what an Azure
-Files mount would use, it needs no credential, and it is the backend the self-test exercises against
-a real directory.
+In own-store mode the migrated workflow graph disables `actions/cache` and setup-node's automatic
+package-manager cache as well as GitHub artifact uploads. Existing runner-local caches remain
+usable. GitHub still orchestrates these workflows and retains logs/checks; moving artifacts does
+not by itself move the build queue or eliminate every GitHub cost.
 
 ### Lifecycle
 
-Two prefixes, two lifetimes, so growth is bounded by a rule rather than a habit:
+The retention controller must understand the named manifest's expiry; it must not apply the old
+two-day handoff rule to every named artifact:
 
 | prefix | holds | delete after |
 |---|---|--:|
 | `modules/<repo>/<module>/<key>/` | the cross-run reuse copy | 14 days |
-| `runs/<repo>/<run id>/<attempt>/` | a handoff between jobs of one run | 2 days |
+| `named/` | named archives and manifests, including cross-run publication inputs | each manifest's expiry; module bundles 7 days |
+| `runs/` | legacy handoffs from the earlier workflow implementation | legacy 2-day rule, never applied to `named/` |
 
 ## What the migration still needs (maintainer)
 
-Neither of these is a repository change, so neither is in this design's PRs:
+1. **One backing share, proved across pools.** A producer on one runner pool and a consumer on the
+   other must report the same physical identity and read the same digest-verified bytes. Exercise
+   the real filesystem's locking and atomic replacement too; local-directory tests do not prove
+   SMB semantics. Provisioning is tracked in [Memex#420](https://github.com/Systemorph/Memex/issues/420).
+2. **Expiry-aware cleanup.** Install and verify bounded pruning for named manifests and archives
+   without deleting unexpired cross-run publication inputs or a transfer protected by its lock.
+3. **Land the compatibility foundation before its callers.** The shared actions, resolver and
+   helper CLI contracts must be on core `main` before workflows call them at `@main`; the shared
+   reusable workflows must land before the Plugins caller passes their new inputs.
+4. **Enable one private pilot and measure a real PR.** Only after the infrastructure proof, lift
+   that repository's `gha` override. Verify the complete graph, a partial rerun and cross-run reuse,
+   with no new GitHub artifact or Actions-cache writes. The queue's own rollout is separate.
+5. **Treat historical GitHub cleanup separately.** The existing inventory remains billable until
+   retention/deletion completes. Inspect the sweeper's current mode and protection set before any
+   cleanup change; this code migration does not authorize deleting existing retained artifacts.
 
-1. **A container and a role assignment.** A storage account (or a container on an existing one) plus
-   `Storage Blob Data Contributor` for the CI identity, scoped to that container, and a blob
-   lifecycle-management policy with the two rules above.
-2. **Federated credentials for non-`main` refs.** `github-actions-bake` today federates
-   `repo:Systemorph/<repo>:ref:refs/heads/main` only — in both the classic and the immutable-id
-   subject forms. Roughly half the module-bundle bytes are produced by `pull_request` runs, which
-   hold no federated credential at all, so until a `pull_request` subject is added the store can
-   only serve trunk runs. 🚨 Both subject formats, per repo — GitHub presents either, and which one
-   varies within the org at the same moment.
-
-Until both land, every caller leaves `artifact-store` unset and the lanes behave exactly as they
-did. That is the degrade rule doing its job, and it is why the seam can land first.
-
-3. **Arm the nightly sweeper.** Memex's `actions-cleanup.yml` is fixed, self-tested and still a dry
-   run on every scheduled night until the repository variable says otherwise:
-   `gh variable set MW_ACTIONS_CLEANUP --body arm --repo Systemorph/Memex`. It is the only lever on
-   this page that needs no credential and no container — it deletes what already exists, and it is
-   what ends the deletion lag.
+See [OwnPrArtifacts](../OwnPrArtifacts) for the staged rollout contract and evidence required before
+calling the private PR path enabled.
 
 ## See also
 

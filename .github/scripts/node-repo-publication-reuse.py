@@ -4,13 +4,41 @@
 The source selector proves an entry unaffected (test=false). The baseline resolver proves the
 toolchain inputs equal. This helper verifies run identity and artifact availability; absence
 keeps the normal build leg. It uses the module lane's existing reuse/receipt path, not a builder.
+An explicit --artifact-store reads named artifacts only from that store. GitHub still attests run
+identity; an unavailable declared store fails, never falls back to GitHub storage or a rebuild.
 """
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
+
+
+class ArtifactStoreError(RuntimeError):
+    """A declared artifact store failed; do not silently change storage or retain builds."""
+
+
+def stored_artifacts(store, repo, run_id, attempt=None, expected_store_id=None):
+    """List the source run's named artifacts, preserving expiry and partial-rerun semantics."""
+    command = [sys.executable, str(Path(__file__).with_name("ci-run-artifacts.py")), "list",
+               "--store", store, "--repository", repo, "--run-id", str(run_id),
+               "--include-expired", "true"]
+    if attempt is not None:
+        command.extend(["--attempt", str(attempt)])
+    if expected_store_id is not None:
+        command.extend(["--expect-store-id", expected_store_id])
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180, check=True,
+                                env={k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"})
+        listing = json.loads(result.stdout)
+        if not isinstance(listing, list):
+            raise ValueError("artifact listing is not an array")
+        return listing
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise ArtifactStoreError(f"declared artifact store failed: {detail.strip()[:600]}") from exc
 
 
 def annotate(entries, run, sha, artifacts):
@@ -65,12 +93,24 @@ def main():
     p.add_argument("--run", default="")
     p.add_argument("--sha", default="")
     p.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    p.add_argument("--artifact-store", default="",
+                   help="explicit named artifact store; empty/gha keeps GitHub storage, no fallback when declared")
     p.add_argument("--self-test", action="store_true")
+    p.add_argument("--expect-store-id", default=None, help="physical store identity resolved by this run's first producer")
     a = p.parse_args()
     if a.self_test:
         self_test()
         return 0
     entries = json.loads(a.matrix)
+    own_store = bool(a.artifact_store and a.artifact_store != "gha")
+    if own_store:
+        try:
+            # Check the declared mount even when no unchanged module needs a historical artifact.
+            stored_artifacts(a.artifact_store, a.repo, os.environ.get("GITHUB_RUN_ID", "1"),
+                             expected_store_id=a.expect_store_id)
+        except ArtifactStoreError as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
     if a.run and a.sha and any(e.get("test") is False for e in entries):
         try:
             if not a.run.isdigit() or not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
@@ -79,8 +119,16 @@ def main():
                 return json.loads(subprocess.run(["gh", "api", path, *args], capture_output=True,
                                                  text=True, timeout=60, check=True).stdout)
             run = api(f"repos/{a.repo}/actions/runs/{a.run}")
-            pages = api(f"repos/{a.repo}/actions/runs/{a.run}/artifacts?per_page=100", "--paginate", "--slurp")
-            entries = annotate(entries, run, a.sha, [art for page in pages for art in page["artifacts"]])
+            if own_store:
+                artifacts = stored_artifacts(a.artifact_store, a.repo, a.run, run.get("run_attempt"),
+                                             a.expect_store_id)
+            else:
+                pages = api(f"repos/{a.repo}/actions/runs/{a.run}/artifacts?per_page=100", "--paginate", "--slurp")
+                artifacts = [art for page in pages for art in page["artifacts"]]
+            entries = annotate(entries, run, a.sha, artifacts)
+        except ArtifactStoreError as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
         except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             print("::warning::publication artifacts unavailable; retaining normal builds", file=sys.stderr)
     build = [e for e in entries if not e.get("reuse") and e.get("ledger", {}).get("decision") != "reuse"]

@@ -49,6 +49,22 @@ name: Node repo compile-check (reusable)
 on:
   workflow_call:
     inputs:
+      artifact-store-id:
+        description: >-
+          Physical store identity resolved by the caller's first producer. Pass the same value
+          through the complete artifact graph; an independent consumer resolution is not a proof.
+          Required for file: storage; the caller resolves its identity once before any handoff.
+        required: false
+        type: string
+        default: ''
+      artifact-store:
+        description: >-
+          Named artifact store shared by every producer and consumer. Default gha preserves
+          unmigrated callers; org variables never implicitly select the named backend.
+          file:/mounted/shared/path moves all artifacts to our runners; an unavailable store fails.
+        required: false
+        type: string
+        default: 'gha'
       test-image:
         description: The platform image whose /app assemblies are the reference set.
         required: true
@@ -221,6 +237,13 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Resolve and bind the artifact store
+        id: store
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.artifact-store || 'gha' }}
+          expected-store-id: ${{ inputs.artifact-store-id }}
+          require-expected-store-id: 'true'
       # 🚨 A content checkout from ANOTHER repository needs a token that can read it. The caller's
       # GITHUB_TOKEN is scoped to the calling repository alone, so `repository: Systemorph/<sat>`
       # (private) answers 404 under it. When content-repository is set, the App credential is
@@ -355,8 +378,10 @@ jobs:
           fi
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
           pattern: ${{ inputs.module-artifacts }}
           path: ${{ runner.temp }}/ref-bundles
           merge-multiple: true
@@ -485,8 +510,10 @@ jobs:
           echo "baseline framework assemblies: $(find refs-baseline -maxdepth 1 -name 'MeshWeaver.*.dll' | wc -l) from /app of $IMAGE"
       - name: Download the baseline's module bundles
         if: ${{ inputs.judge-against-baseline && inputs.baseline-image-digest != '' && inputs.baseline-module-artifacts != '' }}
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
           pattern: ${{ inputs.baseline-module-artifacts }}
           path: ${{ runner.temp }}/ref-bundles-baseline
           merge-multiple: true
@@ -553,8 +580,10 @@ jobs:
       # gate whose result is already decided above, never a step the gate's own colour depends on.
       - name: Upload the verdict
         if: ${{ always() && inputs.verdict-artifact != '' }}
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
           name: ${{ inputs.verdict-artifact }}
           path: ${{ runner.temp }}/compile-check-verdict.json
           retention-days: 7

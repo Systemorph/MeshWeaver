@@ -679,35 +679,28 @@ on:
         required: false
         type: string
         default: ''
-      artifact-store:
-        description: >
-          Where the cross-run MODULE BUNDLE copy lives — the bytes a LATER run downloads when the
-          build ledger says a key is already built. Empty (the default) keeps them where they have
-          always been: a `module-bundle-<module>` GitHub artifact at 7-day retention, which is what
-          the public repo and any runner without our infra must keep using.
-
-            file:<dir>                              a writable share the runner pod mounts
-            azblob:<account>/<container>[/<prefix>]  Azure Blob via the ambient azure/login
-
-          🚨 WHY THIS INPUT EXISTS (maintainer, 2026-09-17: "we still incur cost for github actions
-          … please see that it goes to 0" · "when free capacity gone => defer to our infra"). Compute
-          already moved to our ARC runners and the org Actions budget is $0; storage is the last
-          billed line. Measured that day over the live artifact inventory: MeshWeaver.Plugins held
-          382 GB, of which 247 GB was `module-bundle-*` — and most of those bytes are DUPLICATES,
-          because a run that REUSES a bundle re-uploads the identical bytes under the same name for
-          its own consumers. 754 live copies of one module's bundle.
-
-          When a store is named, the durable copy goes there (content-addressed by the ledger's
-          build key, so identical bytes are written once) and the GitHub artifact stays — at
-          1-day retention, because it is then only a handoff between the jobs of ONE run. The
-          consumers (gate, compile-check, publish-bake) are untouched.
-
-          🚨 THE DEGRADE RULE: no store named ⇒ byte-for-byte today's behaviour. A store NAMED but
-          unusable on this runner is RED in the pack leg, never a quiet return to the old path —
-          see ci-artifact-store.py.
+      artifact-store-id:
+        description: >-
+          Physical store identity resolved by the caller's first producer. Pass the same value
+          through the complete artifact graph; an independent consumer resolution is not a proof.
+          Required for file: storage; the caller resolves its identity once before any handoff.
         required: false
         type: string
         default: ''
+      artifact-store:
+        description: >
+          Store for ALL named handoffs and the ledger's durable module bundles. Default gha
+          preserves unmigrated callers; org variables never implicitly select the named backend.
+          file:/mounted/shared/path uses the same mounted
+          share on every runner; declared-but-unavailable storage fails, never falls back.
+
+          Names retain their lane scope and a partial rerun can consume the successful producer
+          from an earlier attempt. Module artifacts retain seven days because publication reuse
+          reads them across runs. The ledger additionally keeps a content-addressed durable copy.
+          GitHub cache actions are disabled in own-store mode; existing runner mounts remain usable.
+        required: false
+        type: string
+        default: 'gha'
       publication-run:
         description: Successful publishing run paired with publication-base and identical resolved toolchain inputs; permits reusing unchanged gate dependencies.
         required: false
@@ -936,13 +929,7 @@ jobs:
       # Where this call's DURABLE module-bundle copy lives — `gha` (today's artifact) or an object
       # store spec. Resolved once here; every pack leg reads this rather than deciding again.
       artifact-store: ${{ steps.store.outputs.store }}
-      # 🚨 WHICH store that spec turned out to be, on THIS runner — the mount source, not the path
-      # (#4761). A `file:` spec is a directory name, and the two runner pools mount two different
-      # Azure Files shares at the same one, so a producer on `MW_RUNNER_DOCKER` wrote a 1.46 GB
-      # workspace build that the eight consumers on `MW_RUNNER` could never see. Every job below
-      # hands this back to `put`/`get` as --expect-store-id, so a runner on a different share is
-      # RED at the FIRST store operation of the run, naming the mechanism, instead of producing a
-      # handoff that reads as an absence eight jobs later.
+      # The actual backing share resolved once; every transfer asserts this identity (#4761).
       artifact-store-id: ${{ steps.store.outputs.store-id }}
       # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
       # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
@@ -1164,11 +1151,13 @@ jobs:
       # and a ledger record written against one store and read against another is a reuse that
       # fetches nothing. The resolution PRINTS its mode and why, into the job summary, so "it used
       # GitHub artifacts" is never something you have to infer from an absence.
-      - name: Resolve the artifact store
+      - name: Resolve and bind the artifact store
         id: store
-        env:
-          DECLARED: ${{ inputs.artifact-store }}
-        run: python3 "$ARTIFACT_STORE_PY" resolve --declared "$DECLARED"
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.artifact-store || 'gha' }}
+          expected-store-id: ${{ inputs.artifact-store-id }}
+          require-expected-store-id: 'true'
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -1231,6 +1220,7 @@ jobs:
           # to guess at — and it probes the store rather than trusting the record, exactly as it
           # already asks the API whether an artifact is still there.
           MW_ARTIFACT_STORE: ${{ steps.store.outputs.store }}
+          ARTIFACT_STORE_ID: ${{ steps.store.outputs.store-id }}
           SCOPE_MODULES: ${{ steps.scope.outputs.modules }}
           COUNT: ${{ steps.scope.outputs.count }}
           PUBLISH: ${{ inputs.publish }}
@@ -1267,6 +1257,7 @@ jobs:
               python3 build-logic/.github/scripts/module-build-ledger.py decide \
                 --keys "@$RUNNER_TEMP/keys.json" --matrix "@$RUNNER_TEMP/selection.json" \
                 --publish "$PUBLISH" --lane "$MW_LEDGER_LANE" --wait-max 2400 --poll 30 \
+                --artifact-store "$MW_ARTIFACT_STORE" --expect-store-id "$ARTIFACT_STORE_ID" \
                 --out-matrix "$RUNNER_TEMP/matrix.out.json" --out-build "$RUNNER_TEMP/build.out.json"
               echo "modules=$(jq -c . "$RUNNER_TEMP/matrix.out.json")" >> "$GITHUB_OUTPUT"
               echo "build=$(jq -c . "$RUNNER_TEMP/build.out.json")" >> "$GITHUB_OUTPUT"
@@ -1285,6 +1276,8 @@ jobs:
           BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
           PUBLICATION_RUN: ${{ inputs.publication-run }}
           PUBLICATION_BASE: ${{ inputs.publication-base }}
+          ARTIFACT_STORE: ${{ steps.store.outputs.store }}
+          ARTIFACT_STORE_ID: ${{ steps.store.outputs.store-id }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ -z "$BUILD_LOGIC_REF" ]; then
@@ -1293,7 +1286,8 @@ jobs:
             exit 0
           fi
           python3 build-logic/.github/scripts/node-repo-publication-reuse.py \
-            --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE"
+            --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE" \
+            --artifact-store "$ARTIFACT_STORE" --expect-store-id "$ARTIFACT_STORE_ID"
 
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
       # The `tests` job's matrix. The predicate is EXACTLY the one the pack job's `Ledger — this
@@ -1410,20 +1404,6 @@ jobs:
       # (the same "the checkout IS the platform" reading its bundle-identity block takes), and is
       # RED only when neither can be established.
       platform-version: ${{ steps.platform-version.outputs.version }}
-    env:
-      # The object-store seam (ci-artifact-store.py): where this run's same-run HANDOFFS go when a
-      # caller names a store. `select` resolved the store once; this job only reads it. With no
-      # store the two `if:`s below pick the GitHub artifact exactly as they always have.
-      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
-      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
-      # The identity `select` resolved (#4761). Every put and get below asserts it, so this job
-      # refuses to move bytes when its runner is standing on a different share than the run's.
-      ARTIFACT_STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
-      # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
-      # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
-      # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
-      # CiArtifactStorage; a handoff between the jobs of one run is dead when the run is.
-      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -1439,7 +1419,7 @@ jobs:
           path: build-logic
           sparse-checkout: .github/scripts
       - name: Restore the module-pack tool (per-platform-pin cache)
-        if: needs.select.outputs.build-modules != '[]'
+        if: needs.select.outputs.build-modules != '[]' && needs.select.outputs.artifact-store == 'gha'
         id: tool-cache
         uses: actions/cache@v6
         with:
@@ -1456,36 +1436,30 @@ jobs:
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
       - name: Hand the tool to the matrix
-        if: needs.select.outputs.build-modules != '[]' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
-        uses: actions/upload-artifact@v7
+        if: needs.select.outputs.build-modules != '[]'
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
           retention-days: 1
-      - name: Hand the tool to the matrix (object store)
-        if: needs.select.outputs.build-modules != '[]' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
-        run: |
-          set -euo pipefail
-          tar -C "$RUNNER_TEMP/pack-tool" -cf "$RUNNER_TEMP/module-pack-tool.tar" .
-          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
-            --expect-store-id "$ARTIFACT_STORE_ID" \
-            --key "$STORE_RUN_PREFIX/module-pack-tool.tar" --file "$RUNNER_TEMP/module-pack-tool.tar"
       - name: Restore the platform image tarball (per-digest cache)
-        if: inputs.platform-image-digest != ''
+        if: inputs.platform-image-digest != '' && needs.select.outputs.artifact-store == 'gha'
         id: image-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/platform-image
           key: platform-image-${{ inputs.platform-image-digest }}
       - name: Restore the platform image's assemblies from cache
-        if: inputs.platform-image-digest != ''
+        if: inputs.platform-image-digest != '' && needs.select.outputs.artifact-store == 'gha'
         id: refs-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/platform-refs
           key: platform-refs-${{ inputs.platform-image-digest }}
       - name: Restore the tester app (per-digest cache)
-        if: inputs.tester-image-digest != ''
+        if: inputs.tester-image-digest != '' && needs.select.outputs.artifact-store == 'gha'
         id: tester-cache
         uses: actions/cache@v6
         with:
@@ -1615,24 +1589,16 @@ jobs:
           [ "$n" -gt 50 ] || { echo "::error::the platform's /app holds $n assemblies — not a platform image; refusing to hand it over"; exit 1; }
           echo "platform hand-over: $n assemblies from $DIGEST, $(du -h "$out/platform-refs.tar.gz" | cut -f1) gzipped"
       - name: Upload the platform's /app for the matrix
-        if: inputs.platform-image-digest != '' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
-        uses: actions/upload-artifact@v7
+        if: inputs.platform-image-digest != ''
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: platform-refs-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/platform-refs-artifact
           retention-days: 1
-      - name: Upload the platform's /app for the matrix (object store)
-        if: inputs.platform-image-digest != '' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
-        run: |
-          set -euo pipefail
-          tar -C "$RUNNER_TEMP/platform-refs-artifact" -cf "$RUNNER_TEMP/platform-refs.tar" .
-          # The tar is deliberately UNCOMPRESSED (`-cf`, no `z`): the entry that carries the
-          # bytes, platform-refs.tar.gz, is already gzipped, so a second deflate pass buys nothing
-          # and costs upload minutes — and digest.txt beside it is a few dozen bytes. The object
-          # store applies no compression of its own.
-          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
-            --expect-store-id "$ARTIFACT_STORE_ID" \
-            --key "$STORE_RUN_PREFIX/platform-refs.tar" --file "$RUNNER_TEMP/platform-refs.tar"
+          # Already gzipped — a second deflate pass buys nothing and costs the upload minutes.
+          compression-level: 0
       # ───────── THE PLATFORM'S OWN VERSION — the denominator of the module FLOOR gate (#3554) ─────────
       # 🚨 A declared `content.minMeshVersion` was never checked against a platform build that
       # EXISTS. SemVer §11.4 ranks pre-release identifiers as TEXT, so `ci` < `rc` and
@@ -1735,20 +1701,6 @@ jobs:
     timeout-minutes: 30
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
-    env:
-      # The object-store seam (ci-artifact-store.py): where this run's same-run HANDOFFS go when a
-      # caller names a store. `select` resolved the store once; this job only reads it. With no
-      # store the two `if:`s below pick the GitHub artifact exactly as they always have.
-      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
-      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
-      # The identity `select` resolved (#4761). Every put and get below asserts it, so this job
-      # refuses to move bytes when its runner is standing on a different share than the run's.
-      ARTIFACT_STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
-      # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
-      # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
-      # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
-      # CiArtifactStorage; a handoff between the jobs of one run is dead when the run is.
-      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
     steps:
       - name: Resolve the content repository's credential
         id: content-repo
@@ -1790,14 +1742,14 @@ jobs:
           path: build-logic-login
           sparse-checkout: .github/scripts/acr-login.sh
       - name: Restore the platform image tarball (per-digest cache)
-        if: ${{ inputs.platform-image-digest != '' }}
+        if: inputs.platform-image-digest != '' && needs.select.outputs.artifact-store == 'gha'
         id: image-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/platform-image
           key: platform-image-${{ inputs.platform-image-digest }}
       - name: Restore the tester app (per-digest cache)
-        if: ${{ inputs.tester-image-digest != '' }}
+        if: inputs.tester-image-digest != '' && needs.select.outputs.artifact-store == 'gha'
         id: tester-cache
         uses: actions/cache@v6
         with:
@@ -2043,21 +1995,15 @@ jobs:
             python3 build-logic/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" --failure-file "$evidence" || true
           done < <(jq -r '.[] | select(.build == "container") | select(.ledger.key != null) | [.module, .project, .ledger.key] | @tsv' <<< "$MODULES")
       - name: Hand the workspace to the matrix
-        if: steps.build.outputs.built == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
-        uses: actions/upload-artifact@v7
+        if: steps.build.outputs.built == 'true'
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/module-build
           retention-days: 1
           if-no-files-found: error
-      - name: Hand the workspace to the matrix (object store)
-        if: steps.build.outputs.built == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
-        run: |
-          set -euo pipefail
-          tar -C "$RUNNER_TEMP/module-build" -cf "$RUNNER_TEMP/workspace-build.tar" .
-          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
-            --expect-store-id "$ARTIFACT_STORE_ID" \
-            --key "$STORE_RUN_PREFIX/workspace-build.tar" --file "$RUNNER_TEMP/workspace-build.tar"
 
   # ═══════════ THE PACK LEGS — N MODULES PER RUNNER, ONE VERDICT PER MODULE (2026-09-12) ═══════════
   # 🚨 A BATCH IS A RUNNER-SHARING DEVICE, NOT A COUPLING. Every step below that used to read
@@ -2100,12 +2046,10 @@ jobs:
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
       ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
-      # The identity `select` resolved (#4761). Every put and get below asserts it, so this job
-      # refuses to move bytes when its runner is standing on a different share than the run's.
       ARTIFACT_STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
-      # The same deterministic handoff prefix `prepare` and `build-workspace` wrote under — run id
-      # AND attempt, so a re-run never reads the previous attempt's bytes.
-      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
+      RUN_ARTIFACTS_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-run-artifacts.py
+      # Both named-artifact uploads and the ledger receipt read this reuse window.
+      ARTIFACT_RETENTION: '7'
       # The per-file static-asset assertion (#2384). 🚨 build-logic-ref, NOT platform-ref, for the
       # reason stated two lines above: the platform checkout may deliberately predate this lane, so
       # reading a gate the lane itself introduced out of THAT tree is a file-not-found on every
@@ -2416,8 +2360,8 @@ jobs:
                   holder=$(jq -r '.holder // ""' <<< "$ENTRY_LEDGER")
                   # The DURABLE copy on our own infra, when the record names one AND `select`
                   # resolved the same store (module-build-ledger.py refuses a locator from another
-                  # store rather than guessing). Empty ⇒ the GitHub artifact is the only copy and
-                  # the reuse leg downloads it exactly as it always has.
+                  # store rather than guessing). Empty ⇒ use the named artifact from the selected
+                  # backend; it may be on our own mount rather than GitHub.
                   store_loc=$(jq -r '.store.locator // ""' <<< "$ENTRY_LEDGER")
                   [ -n "$art_run" ] && [ -n "$art_name" ] || { echo "::error::the ledger said REUSE for $MODULE but named no bundle artifact — nothing to reuse; this is a select-step defect, not a build failure"; exit 1; }
                   echo "plan: REUSE $MODULE from run $art_run ($art_name, sha256 ${sha:-unrecorded}; holder $holder) — tests: $need_test, publish: $need_publish"
@@ -2469,9 +2413,8 @@ jobs:
       #      read in place;
       #   2. the run artifact `platform-refs-<lane>` that `prepare` handed over;
       #   3. neither ⇒ RED, naming both and the job that should have produced the artifact.
-      # The download is `continue-on-error` ONLY so that the verdict step below can say all of
-      # that by name instead of "Artifact not found" — the verdict step is unconditional within
-      # the pinned mode and is what goes RED. Which source was taken is in the job summary.
+      # A missing optional pattern reaches the verdict below; a corrupt archive or wrong store
+      # fails at the download itself. Which source was taken is in the job summary.
       #
       # 🚨 THE VOLUME'S LAYOUT IS READ FROM THE SCRIPT THAT WRITES IT — Systemorph/Memex
       # deployments/aks/ci-runners/ci-platform-refresh.py (and the README's "Platform kept between
@@ -2539,24 +2482,14 @@ jobs:
           done
           echo "mounted=false" >> "$GITHUB_OUTPUT"
       - name: Fetch the platform's /app (handed over by prepare)
-        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
+        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true'
         id: platform-artifact
-        continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: platform-refs-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/platform-refs-artifact
-      - name: Fetch the platform's /app (handed over by prepare) (object store)
-        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
-        id: platform-store
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/platform-refs-artifact"
-          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
-            --expect-store-id "$ARTIFACT_STORE_ID" \
-            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/platform-refs.tar" --out "$RUNNER_TEMP/platform-refs.tar"
-          tar -C "$RUNNER_TEMP/platform-refs-artifact" -xf "$RUNNER_TEMP/platform-refs.tar"
       - name: The platform reference set — which source, verified
         if: inputs.platform-image-digest != ''
         id: platform
@@ -2565,10 +2498,9 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
           MOUNTED: ${{ steps.platform-mount.outputs.mounted }}
           MOUNT_DIR: ${{ steps.platform-mount.outputs.dir }}
-          # Whichever fetch ran. A skipped step's `outcome` is the falsy empty string, so the
-          # `||` picks the one that executed — and when the mount hit, neither did and this is
-          # empty, which the refusal below renders as '<none>' rather than as a failure.
-          FETCHED: ${{ steps.platform-artifact.outcome || steps.platform-store.outcome }}
+          # The shared download action selects the declared storage backend. A platform mount
+          # hit needs neither backend and leaves the artifact fetch skipped.
+          FETCHED: ${{ steps.platform-artifact.outcome }}
         run: |
           set -euo pipefail
           if [ "$MOUNTED" = true ]; then
@@ -2577,7 +2509,7 @@ jobs:
           else
             tarball="$RUNNER_TEMP/platform-refs-artifact/platform-refs.tar.gz"
             if [ "$FETCHED" != success ] || [ ! -f "$tarball" ]; then
-              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): no complete set under /opt/platform/sha256-<tester hex>/ pairs it (the runner's platform mount, Memex#316 — the step above says why) AND the handoff prepare made for this run could not be fetched — the run artifact platform-refs-$LANE, or, when this caller names an object store, $STORE_RUN_PREFIX/platform-refs.tar in it (fetch outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
+              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): no complete set under /opt/platform/sha256-<tester hex>/ pairs it (the runner's platform mount, Memex#316 — the step above says why) AND the named artifact platform-refs-$LANE could not be fetched from the configured store (fetch outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) publishes it in this run. Failed-job reruns can read a successful earlier attempt, but not an expired artifact (retention 1 day); inspect that producer and the store failure before rerunning. This job runs no docker and holds no registry credential, by design."
               exit 1
             fi
             stampfile="$RUNNER_TEMP/platform-refs-artifact/digest.txt"
@@ -2693,20 +2625,13 @@ jobs:
       # The global workspace build's outputs — every container entry's assemblies, closure
       # manifests and the one build log. Container packs consume THIS; sdk entries ignore it.
       - name: Fetch the global workspace build
-        if: steps.plan.outputs.fetch_workspace == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
-        uses: actions/download-artifact@v8
+        if: steps.plan.outputs.fetch_workspace == 'true'
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/workspace-build
-      - name: Fetch the global workspace build (object store)
-        if: steps.plan.outputs.fetch_workspace == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/workspace-build"
-          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
-            --expect-store-id "$ARTIFACT_STORE_ID" \
-            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/workspace-build.tar" --out "$RUNNER_TEMP/workspace-build.tar"
-          tar -C "$RUNNER_TEMP/workspace-build" -xf "$RUNNER_TEMP/workspace-build.tar"
       # 🚨 `decision == build` on the build/pack/inspect trio is a MODE SWITCH on the ledger's
       # plan, not a skip-trapdoor: the reuse leg below runs in its place for the reuse modules, is
       # itself unconditional within its mode, verifies the bytes it fetched, and drops the same
@@ -2977,13 +2902,18 @@ jobs:
               # 🚨 THE DURABLE COPY FIRST, when there is one. `select` only put a locator here if
               # the record's store is the store THIS run resolved and the object is actually in it
               # (module-build-ledger.py asked), so a `get` that fails now is a fault to name, not a
-              # reason to go looking somewhere else: the GitHub artifact it would fall back to is
-              # the SAME bytes at 1-day retention, and quietly preferring it would hide a store
-              # that has started losing objects. `get` verifies the sha256 in the locator itself.
+              # reason to go looking somewhere else. A declared store never falls back to GitHub;
+              # `get` verifies the sha256 in the locator itself. Records without a durable locator
+              # use the selected backend's named artifact and retain source-run attempt semantics.
               if [ -n "${STORE_LOC:-}" ] && [ -n "${ARTIFACT_STORE:-}" ] && [ "$ARTIFACT_STORE" != gha ]; then
                 echo "reuse: fetching $MODULE from the object store — ${STORE_LOC%%#*}"
                 python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
                   --expect-store-id "$ARTIFACT_STORE_ID" --locator "$STORE_LOC" --out "$bundle"
+              elif [ -n "${ARTIFACT_STORE:-}" ] && [ "$ARTIFACT_STORE" != gha ]; then
+                python3 "$RUN_ARTIFACTS_PY" download --store "$ARTIFACT_STORE" \
+                  --expect-store-id "$ARTIFACT_STORE_ID" \
+                  --repository "$GITHUB_REPOSITORY" --run-id "$ART_RUN" --name "$ART_NAME" \
+                  --path "$RUNNER_TEMP/bundles/$MODULE"
               else
                 gh run download "$ART_RUN" -R "$GITHUB_REPOSITORY" -n "$ART_NAME" -D "$RUNNER_TEMP/bundles/$MODULE"
               fi
@@ -3015,20 +2945,13 @@ jobs:
       # across Plugins#1032). A missing artifact fails this download RED rather than quietly
       # rebuilding a maybe-different tool.
       - name: Fetch the module-pack tool (built once by prepare)
-        if: steps.plan.outputs.any_build == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
-        uses: actions/download-artifact@v8
+        if: steps.plan.outputs.any_build == 'true'
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
-      - name: Fetch the module-pack tool (built once by prepare) (object store)
-        if: steps.plan.outputs.any_build == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/pack-tool"
-          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
-            --expect-store-id "$ARTIFACT_STORE_ID" \
-            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/module-pack-tool.tar" --out "$RUNNER_TEMP/module-pack-tool.tar"
-          tar -C "$RUNNER_TEMP/pack-tool" -xf "$RUNNER_TEMP/module-pack-tool.tar"
 
       - name: Pack the module bundle
         id: pack
@@ -3331,83 +3254,103 @@ jobs:
       # `verify` still accounts that module by its missing receipt.
       - name: Upload the bundle artifact (slot 1)
         if: steps.bundles.outputs.s1 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s1 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s1 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 2)
         if: steps.bundles.outputs.s2 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s2 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s2 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 3)
         if: steps.bundles.outputs.s3 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s3 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s3 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 4)
         if: steps.bundles.outputs.s4 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s4 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s4 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 5)
         if: steps.bundles.outputs.s5 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s5 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s5 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 6)
         if: steps.bundles.outputs.s6 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s6 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s6 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 7)
         if: steps.bundles.outputs.s7 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s7 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s7 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 8)
         if: steps.bundles.outputs.s8 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s8 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s8 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 9)
         if: steps.bundles.outputs.s9 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s9 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s9 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 10)
         if: steps.bundles.outputs.s10 != ''
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-bundle-${{ steps.bundles.outputs.s10 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s10 }}/*.module.nupkg
-          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
           if-no-files-found: error
       # AFTER the uploads, never before: `Built` means "a later run can fetch this bundle", and the
       # record names the artifact the slot above just created — the uploads carry no
@@ -3423,8 +3366,8 @@ jobs:
       # of 382 GB were `module-bundle-*`, most of them duplicates, because a run that REUSES a
       # bundle re-uploads the identical bytes for its own consumers (754 live copies of one module).
       # When a store is named the durable copy goes there, keyed by the ledger's BUILD KEY — a
-      # content address — so identical bytes are written once however many runs want them, and the
-      # artifact drops to 1-day retention because a handoff is all it still is.
+      # content address — so identical bytes are written once however many runs want them. Named
+      # module artifacts ALSO retain seven days: publication reuse does not carry a ledger key.
       # Skipped when the ledger is off: without a record nothing reuses across runs, so there is
       # nothing for a durable copy to serve.
       - name: Shelve the durable bundle copy (object store)
@@ -3445,7 +3388,7 @@ jobs:
                 --key "modules/${GITHUB_REPOSITORY//\//_}/$MODULE/$KEY/$(basename "$BUNDLE")" \
                 --file "$BUNDLE" | tee "$out"
               loc=$(sed -n 's/^locator=//p' "$out" | tail -1)
-              [ -n "$loc" ] || { echo "::error::ci-artifact-store put printed no locator for $MODULE — the record would name no durable copy while the artifact drops to 1-day retention, which is how a reuse window disappears silently."; exit 1; }
+              [ -n "$loc" ] || { echo "::error::ci-artifact-store put printed no locator for $MODULE — refusing a Built record that cannot identify its durable copy."; exit 1; }
               bk set --module "$MODULE" "store_loc=$loc"
             )
             rc=$?
@@ -3460,12 +3403,12 @@ jobs:
           MW_LEDGER_URL: ${{ inputs.registry-url }}
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
-          # 🚨 ONE expression, two readers: the `retention-days:` on the ten upload slots below and
+          # 🚨 ONE value, two readers: the `retention-days:` on the ten upload slots above and
           # the `--retention-days` this record states. They were two independent literals until
           # 2026-09-17 and nothing related them; now both read ARTIFACT_RETENTION, so a record can
-          # never outlive the artifact it names. 7 days when the artifact IS the durable copy; 1 day
-          # when a store holds it and the artifact is only this run's handoff.
-          ART_RETENTION: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
+          # never outlive the artifact it names. Publication reuse reads named module artifacts
+          # across runs on BOTH backends, even when the ledger also has a durable copy.
+          ART_RETENTION: ${{ env.ARTIFACT_RETENTION }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -3550,8 +3493,10 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the built markers
         if: steps.marker.outputs.any == 'true'
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-built-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}
           path: ${{ runner.temp }}/built/*.json
           retention-days: 1
@@ -3810,8 +3755,10 @@ jobs:
       # in five leaves something to read instead of a re-run button.
       - name: Upload the failing suites' evidence
         if: ${{ inputs.publish && steps.tests.outputs.evidence == 'true' }}
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: test-evidence-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/test-evidence
           if-no-files-found: ignore
@@ -4066,8 +4013,10 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the staged publications
         if: ${{ inputs.publish && inputs.publish-mode == 'staged' && steps.stage.outputs.any == 'true' }}
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-publication-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}
           path: ${{ runner.temp }}/staged
           retention-days: 1
@@ -4198,8 +4147,10 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the receipts
         if: steps.receipt.outputs.any == 'true'
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-pack-receipt-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}
           path: ${{ runner.temp }}/receipts/*.json
           retention-days: 1
@@ -4682,8 +4633,10 @@ jobs:
           done
       - name: Upload the failing suites' evidence
         if: ${{ steps.tests.outputs.evidence == 'true' }}
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: test-evidence-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/test-evidence
           if-no-files-found: ignore
@@ -4722,8 +4675,10 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the test receipts
         if: steps.receipt.outputs.any == 'true'
-        uses: actions/upload-artifact@v7
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           name: module-tests-receipt-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}
           path: ${{ runner.temp }}/test-receipts/*.json
           retention-days: 1
@@ -4825,16 +4780,18 @@ jobs:
       # A pattern that matches nothing still reaches the verifier as ZERO evidence, which is
       # `bundles-built=false` for any non-empty selection — never a silent true.
       - name: Collect the receipts
-        uses: actions/download-artifact@v8
-        continue-on-error: true
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           pattern: module-pack-receipt-${{ needs.select.outputs.lane }}-*
           merge-multiple: true
           path: ${{ runner.temp }}/receipts
       - name: Collect the built markers
-        uses: actions/download-artifact@v8
-        continue-on-error: true
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           pattern: module-built-${{ needs.select.outputs.lane }}-*
           merge-multiple: true
           path: ${{ runner.temp }}/built
@@ -4842,9 +4799,10 @@ jobs:
       # a pattern matching nothing must REACH the verifier as zero evidence, never fail here — a
       # delegated suite with no receipt is precisely the finding.
       - name: Collect the test receipts
-        uses: actions/download-artifact@v8
-        continue-on-error: true
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           pattern: module-tests-receipt-${{ needs.select.outputs.lane }}-*
           merge-multiple: true
           path: ${{ runner.temp }}/test-receipts
@@ -4945,9 +4903,10 @@ jobs:
       # The verdict names the lanes it folded so "publication-wide" is checkable, not assumed.
       - name: Collect every receipt in this run (the publication spans calls)
         if: always()
-        uses: actions/download-artifact@v8
-        continue-on-error: true
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
           pattern: module-pack-receipt-*
           merge-multiple: true
           path: ${{ runner.temp }}/receipts-run

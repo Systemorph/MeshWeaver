@@ -21,6 +21,23 @@ public core and fork PRs. `file:/ci-artifacts` selects the stdlib adapter
 fallback to GitHub. The named adapter currently supports `file:` only; the lower-level object's
 `azblob:` support does not imply that named listing and extraction support it.
 
+The graph's first producer uses `.github/actions/resolve-artifact-store` to resolve `store` and
+the physical `store-id` once. Every own-store transfer requires that identity as
+`expected-store-id`; shared workflows receive it as `artifact-store-id`. A reusable workflow's
+resolver requires the caller identity in file mode before resolving its own mount, then compares
+it; an independently invented per-consumer identity is not proof. The same
+check precedes listing and zero-match downloads: an empty pattern on the wrong share is an error,
+not evidence that the producer had nothing to publish. Publication and ledger CLI readers carry
+`--artifact-store` and `--expect-store-id` through the same adapter.
+
+Reusable workflow inputs default to `gha` and never implicitly read `MW_ARTIFACT_STORE`. Only the
+complete graph's root caller chooses that variable. This preserves unmigrated callers even if
+an organization variable names our share. Supplying a file store without the new caller identity
+fails at entry, before any named transfer. SocialMedia's older durable-only module-pack selection
+is not a complete-graph migration; its `gha` override must stay until its caller is migrated too.
+Every transfer and reusable call also rejects a missing root output instead of interpreting it
+as the legacy empty/GitHub default, including steps that run under `always()` after a failure.
+
 Each artifact has a content-addressed archive and an atomically published manifest containing
 repository, run, attempt, name, digest, inventory and expiry. Independent names have independent
 manifests, so parallel jobs do not overwrite a shared index. An attempt cannot replace different
@@ -36,26 +53,14 @@ run selects that run's latest attempt, not the caller's unrelated attempt number
 crosses repository or run boundaries. Retention is recorded per artifact; a pruner must honor it
 instead of deleting all run inputs when a run finishes.
 
+Named module bundles retain **seven days** on both backends, including when the ledger also writes
+its durable `modules/` copy. Publication reuse needs the named bundle across runs and does not
+carry a ledger key. The `named/` prefix follows each manifest's expiry; the legacy `runs/` two-day
+prune must not touch it. Unreferenced staged archives are cleaned under the same attempt lock.
+
 Own-store uploads have no GitHub numeric artifact ID or download URL. The `artifact-locator`
 output is the own-store identity; `artifact-id` and `artifact-url` are empty. Code using GitHub's
 artifact REST endpoints or `gh run download` must be migrated along with workflow steps.
-
-For `file:` storage the upload/download actions require `expected-store-id`, resolved at the first
-producer with `resolve-artifact-store`. This is the existing filesystem helper's physical identity,
-not a marker minted by the workflow. Every consumer carries that identity unchanged; a reusable
-workflow validates a supplied caller identity before publishing its own outputs. Validation runs
-before selection, so even an empty pattern download fails on the wrong share. The actions expose
-the verified `store-id` separately from the archive's `artifact-locator`.
-
-The resolver defaults to `gha` only when no own store was declared. An unavailable `file:` store
-fails closed. The adapter's raw CLI accepts optional `--expect-store-id` for diagnostics, but the
-composites require it in file mode. These APIs are the compatibility foundation: their presence is
-not proof that callers have migrated or that the private pilot is enabled.
-
-Reusable consumers set `require-expected-store-id: 'true'` on the resolver. It then rejects a file
-store with no caller identity **before** resolving its own mount: independently identifying the
-consumer's mount would not prove it shares the producer's data. Legacy reusable callers remain on
-`gha`; an organization variable alone must not move half of their graph to a different backend.
 
 ## Rollout gates, not assumptions
 
@@ -70,7 +75,15 @@ The transport being present is not proof that a private PR uses it. Rollout requ
 3. The retention controller covers named manifests and immutable archives. Verify cleanup as
    well as upload; moving unbounded growth to our share is not an implementation of retention.
 4. A real PR completes its required checks with zero new GitHub artifact uploads. Existing
-   GitHub artifacts are separate historical data, not evidence of a new upload.
+   GitHub artifacts are separate historical data, not evidence of a new upload. The graph also
+   disables GitHub cache actions and automatic package-manager caching in own-store mode.
+
+The shared workflows and the Plugins caller must land before enabling the backend. Measured
+2026-09-22, Plugins still has the repository override `MW_ARTIFACT_STORE=gha` created on
+2026-09-19; its organization-selected value remains `file:/ci-artifacts`. The override is a
+stopgap for the two-share incident, not proof this transport is live. Keep it until the shared
+volume, retention controller, cross-pool byte/lock proof and the complete caller graph are all
+verified. No storage migration alone changes `MW_BUILD_QUEUE` or proves queue admission healthy.
 
 The actions are introduced before callers reference them at `@main`, because the runner resolves
 remote actions before evaluating their step conditions. Referencing an action not yet on `main`
