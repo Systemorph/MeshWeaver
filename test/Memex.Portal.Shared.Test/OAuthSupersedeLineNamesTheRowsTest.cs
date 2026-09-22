@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -110,7 +111,7 @@ public class OAuthSupersedeLineNamesTheRowsTest(ITestOutputHelper output) : Mono
                 code_challenge_method: "S256",
                 ct: TestContext.Current.CancellationToken)
             .ToObservable()
-            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var url = ((RedirectResult)redirect).Url;
         var code = Uri.UnescapeDataString(url[(RedirectUri + "?code=").Length..url.IndexOf("&state=", StringComparison.Ordinal)]);
@@ -124,7 +125,7 @@ public class OAuthSupersedeLineNamesTheRowsTest(ITestOutputHelper output) : Mono
                 code_verifier = verifier,
             }, TestContext.Current.CancellationToken)
             .ToObservable()
-            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var body = ((OkObjectResult)result).Value!;
         return (string)body.GetType().GetProperty("access_token")!.GetValue(body)!;
@@ -150,7 +151,7 @@ public class OAuthSupersedeLineNamesTheRowsTest(ITestOutputHelper output) : Mono
         var listing = TokenService();
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => listing.GetTokensForUser(UserId).Take(1))
-            .Should().Within(30.Seconds())
+            .Should().Within(TestTimeouts.Convergence)
             .Match(all => all.Any(t => t.Label == label && t.NodePath == TokenPath(first)),
                 cancellationToken: TestContext.Current.CancellationToken);
 

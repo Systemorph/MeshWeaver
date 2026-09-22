@@ -3,6 +3,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -70,11 +71,11 @@ public class TokenValidationNegativeStagesTest(ITestOutputHelper output) : Monol
                 State = MeshNodeState.Active,
                 Content = "not a token record",
             }, Mesh.JsonSerializerOptions)
-            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         written.Should().NotBeNull("the row must be in the store before validation reads it");
 
         var verdict = await Service().Validate(rawToken)
-            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         verdict.Status.Should().Be(
             TokenValidationStatus.Invalid,
@@ -103,7 +104,7 @@ public class TokenValidationNegativeStagesTest(ITestOutputHelper output) : Monol
         var prefix = ApiTokenService.HashToken(rawToken)[..12];
 
         var verdict = await Service().Validate(rawToken)
-            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         verdict.Status.Should().Be(
             TokenValidationStatus.Invalid,
