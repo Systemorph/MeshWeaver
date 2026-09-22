@@ -1701,9 +1701,16 @@ public class MessageService : IMessageService
         }
     }
 
+    // A synchronous handler can post its next turn before completing, so draining until empty
+    // can own a scheduler worker forever. PreferFairness only makes QUEUED drains reachable; it
+    // cannot preempt that running task (#3593/#4847). Yield after a batch to let peer hubs run,
+    // preserving the draining latch and the original scheduler across the handoff. This bounds
+    // worker ownership, not the message backlog or any handler's execution time.
+    private const int MaxSynchronousTurnsPerDrain = 64;
+
     private void DrainLoop()
     {
-        while (true)
+        for (var synchronousTurns = 0; synchronousTurns < MaxSynchronousTurnsPerDrain; synchronousTurns++)
         {
             QueuedTurn queued;
             lock (turnGate)
@@ -1724,8 +1731,8 @@ public class MessageService : IMessageService
 
             // Trampoline. A synchronous turn (Observable.Return chains — the norm)
             // completes inline during Subscribe, so we loop to the next turn on THIS
-            // pool task without re-scheduling: one task drains a whole run of sync turns,
-            // exactly as the old ActionBlock did. The previous one-StartNew-per-turn shape
+            // pool task without re-scheduling: one task drains a bounded batch of sync turns.
+            // The previous one-StartNew-per-turn shape
             // added a pool-queue wait per turn; under a saturated full-suite run that
             // accumulated into the ResubscribeOnOwnerDispose 20s timeout. Only a
             // genuinely-async turn returns before completing — then we stop and its
@@ -1768,6 +1775,18 @@ public class MessageService : IMessageService
             if (!loopNext)
                 return;   // async turn in flight — Terminal() re-schedules the drain
         }
+
+        lock (turnGate)
+        {
+            if (mainQueue.Count == 0)
+            {
+                draining = false;
+                return;
+            }
+        }
+        // Keep the latch: posts racing this handoff enqueue behind the same single drain.
+        // ScheduleDrainOne retains the configured scheduler and reports scheduling failures.
+        ScheduleDrainOne();
     }
 
     private void LogPumpError(Exception ex)
