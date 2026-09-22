@@ -98,6 +98,7 @@ node type and not the namespace.**
 ```
 tool:  create                     ← the argument is `node`, NOT `path`
 node:  { "$type": "MeshNode",
+         "id":        "<slug>-<utc-stamp>",
          "namespace": "{user}/Feedback",
          "path":      "{user}/Feedback/<slug>-<utc-stamp>",
          "nodeType":  "Feedback/Feedback",
@@ -110,6 +111,10 @@ node:  { "$type": "MeshNode",
                       "extraContext": "<repro, suggested disposition>",
                       "category": "bug" } }
 ```
+
+🚨 **`id` is required, and `path` is DERIVED — it must equal `namespace` + `/` + `id`.** A payload
+missing `id` cannot form the node at all, and one whose three fields disagree teaches a reader to send an
+inconsistent shape that happens to work until it does not.
 
 Three mechanics that each cost someone a wasted attempt:
 
@@ -135,9 +140,15 @@ missing stamp.
 
 **Agents skip the Draft stage.** The `/feedback` flow files a `Draft` and shows the author a preview
 with a Submit button, because a human must be able to vet words being sent in their name. An agent
-reporting its own finding has nothing to preview and usually no chat to preview it in, so it files
-**`status: New`** — submitted, not yet triaged — and says so plainly rather than claiming a human
-sent it.
+reporting its own finding has nothing to preview and usually no chat to preview it in, so it files as
+**`New`** — submitted, not yet triaged — and says so plainly rather than claiming a human sent it.
+
+🚨 **How `New` is expressed on the wire is the opposite of what it looks like: OMIT the key.**
+`FeedbackStatus.New` is the enum's zero member, so an absent `status` already *means* `New`, and sending
+`"status": "New"` round-trips as **absent** — it is not what makes the filing submitted. The payload
+section below is authoritative on the shape. (That a persisted, serialised `enum` has a real meaningful
+value as its zero member is itself a defect against policy `open-vocabulary-string-constants`, filed
+separately; this page only has to describe the behaviour.)
 
 ## It feeds TRIAGE, not a pile
 
