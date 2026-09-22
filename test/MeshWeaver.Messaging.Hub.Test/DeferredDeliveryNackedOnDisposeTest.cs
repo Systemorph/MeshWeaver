@@ -432,6 +432,17 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "from a recycle storm — those have opposite fixes (#2025), and every ShuttingDown "
             + "NACK minted for a delivery the reader can re-probe carries the activation tag");
 
+        // 🚨 …and it is the RIGHT tag. #2376's review found the drift in BOTH directions: one site
+        // embedded no identity at all, and another paired the marker with a per-DELIVERY id — which
+        // varies on every retry against the SAME activation, so it defeats the distinct-activation
+        // counter exactly as an absent tag does while being perfectly non-empty. The assertion
+        // above cannot see that one. FormatActivationTag keys on REFERENCE identity, so comparing
+        // against the hub instance is exact.
+        failure.Failure.Message.Should().Contain(ShutdownNack.FormatActivationTag(gated!),
+            "the tag must identify THIS activation — a future edit that puts delivery.Id where the "
+            + "activation marker belongs passes the not-empty check above and still leaves a "
+            + "re-probe rider counting a fresh activation on every retry (#2376)");
+
         // NEGATIVE CONTROL — the predicate must still be able to say no, or the assertions above
         // are satisfied by anything that mentions an address.
         ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, new Address("recognised", "2"))
