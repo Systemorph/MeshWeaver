@@ -48,7 +48,11 @@ namespace MeshWeaver.Compiler;
 /// BCL / <c>System.Collections.Immutable</c> / <c>System.Reflection.Metadata</c> resolve to the
 /// default context on purpose — so a single <c>PRIVATE-COPY-EMITS</c> separates the shared copy's
 /// image, mapping and native code from the CLR heap, but not "fresh mapping" from "fresh native
-/// code" by itself. The follow-up is to repeat the private emit until it tiers up
+/// code" by itself. 🚨 The follow-up is NOT to call this method again: it creates its own
+/// <see cref="AssemblyLoadContext"/> per invocation and unloads it in <c>finally</c>, so every call
+/// is another COLD copy and N calls measure the same tier-0 code N times. Tiering it needs ONE
+/// private copy held loaded while the emit is repeated inside it — the unload deferred to the end —
+/// which is a different entry point, not a loop at this one
 /// (<c>Doc/Architecture/NodeTypeCompilation</c>, leg 5).</para>
 ///
 /// <para><b>Cost and reach.</b> Two assembly loads (~15 MB of bytes read, two images), one tiny
@@ -198,8 +202,10 @@ internal static class PrivateRoslynCopy
                 + "emits the same source in the same process ⇒ the fault travels with THIS PROCESS'S copy "
                 + "of the compiler (its image, its mapping, or the native code produced for it), not with "
                 + "the CLR heap: BELOW-ROSLYN's 'below Roslyn' is void and the dotnet/runtime venue is "
-                + "wrong. Residual: one emit does not separate fresh mapping from fresh native code — "
-                + "repeat the private emit until it tiers up (Doc/Architecture/NodeTypeCompilation)";
+                + "wrong. Residual: one emit does not separate fresh mapping from fresh native code, "
+                + "and calling this leg again does not either — it unloads its context per call, so "
+                + "every call is another COLD copy. Tiering needs ONE copy held loaded across repeated "
+                + "emits (Doc/Architecture/NodeTypeCompilation)";
 
         var ids = ImmutableList<string>.Empty;
         if (result.GetType().GetProperty("Diagnostics")?.GetValue(result) is IEnumerable diagnostics)

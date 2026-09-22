@@ -1466,7 +1466,8 @@ occurrence table and what the readings settle are under *"the first three `compi
 further down this page. Every `BELOW-ROSLYN` on this page is therefore to be
 taken as "not the references and not the source", no more. The tiering residual stated below is
 unchanged and is now the only followable step: a `PRIVATE-COPY-EMITS` does not separate fresh mapping
-from fresh native code, and the follow-up is to repeat the private emit until it tiers up.
+from fresh native code, and the follow-up is to tier ONE private copy — not to call the leg again,
+which unloads its context per invocation and so only ever measures cold code.
 
 #### The first `dissect=` readings, 2026-09-06 — and what they do and do not settle
 
@@ -1709,8 +1710,12 @@ Two residuals, stated because the leg is only a control for what it does not sha
 `System.Collections.Immutable` and `System.Reflection.Metadata` still resolve to the Default context,
 and the private copy starts cold at tier 0 with no profile — so a `PRIVATE-COPY-EMITS` on a single
 emit does not by itself separate "fresh mapping" from "fresh native code". The follow-up is one more
-step, not another design: repeat the private emit until it tiers up. If it then fails, the fault is
-in what tiering produces; if it never does, it is in the shared image or its mapping.
+step, not another design: tier the private copy. If it then fails, the fault is in what tiering
+produces; if it never does, it is in the shared image or its mapping. 🚨 **That step is not "call
+`PrivateRoslynCopy.Emit` again".** It creates its own `AssemblyLoadContext` per invocation and unloads
+it in `finally`, so N calls are N cold copies and measure the same tier-0 code N times. Tiering needs
+ONE copy held loaded while the emit is repeated inside it, with the unload deferred to the end — a
+second entry point on the same class, not a loop at the existing one.
 
 🚨 **This also supersedes the split-arm `DOTNET_TieredPGO=0` run as the cheapest next measurement.**
 That experiment needs ~5 events in the control arm for a one-sided Fisher *p* ≈ 2⁻ᵃ to mean anything —
@@ -1761,17 +1766,20 @@ smallest possible compilation; `PRIVATE-COPY-EMITS` says a cold copy of the same
 there. Of the three candidates leg 5 leaves open — the image, its mapping, or the native code produced
 for it — only the third can get *worse while the process runs*. An image does not rot and a mapping
 does not un-map itself six failures in. **The follow-up the leg-5 section already names is now the only
-followable one: repeat the private emit until it tiers up.** Nothing here yet excludes a corrupted
+followable one: tier ONE private copy and re-emit inside it.** Nothing here yet excludes a corrupted
 static reachable only from `MetadataWriter`'s call site, which is why that step is a measurement and
 not a conclusion.
 
-🚨 **Where it must NOT go is inside the probe as written.** `ProbeSharedEmitState` runs once per failed
-emit ATTEMPT, and `EmitToDiskWithRetry` makes `DiskEmitAttempts` of them per compile — measured on
-2026-09-22, **58 probe runs across the 26 NRE compile failures of one occurrence**. Tier-1 promotion
-needs tens of invocations plus a background compile, so a naive "loop until it tiers up" inside the
-leg multiplies a ~1 s probe by that factor **58 times over**, and turns a suite that dies at the
-900 s cap into one that dies there sooner and with less printed. The repeat belongs once per PROCESS
-(the first `BELOW-ROSLYN` arms it; later ones read what it recorded), and the cost model is part of
+🚨 **Two things the obvious shape gets wrong.** *It measures nothing:* `PrivateRoslynCopy.Emit`
+creates its own `AssemblyLoadContext` per invocation and unloads it in `finally`, so calling it in a
+loop produces N cold copies — the same tier-0 code, N times — and can never tier anything. *And it is
+the most expensive shape available:* `ProbeSharedEmitState` runs once per failed emit ATTEMPT and
+`EmitToDiskWithRetry` makes `DiskEmitAttempts` of them per compile, so one occurrence is already
+**58 probe runs across its 26 NRE compile failures** (measured 2026-09-22) — each one two ~15 MB
+assembly loads and an unload. A loop at that call site multiplies that by the iteration count and
+turns a suite that dies at the 900 s cap into one that dies there sooner with less printed. The
+experiment is ONE copy held loaded across repeated emits, armed once per PROCESS by the first
+`BELOW-ROSLYN` and read by the later ones — one pair of loads, N emits — and the cost model is part of
 the change, not an afterthought.
 
 **4. The platform set is not the variable.** The three occurrences sit on three different sets, and
