@@ -1775,7 +1775,11 @@ not evidence about the ceiling — measured on PR #2231, which ran the same suit
 
 **5. The rate, with its denominator, and why `main` cannot supply the control.** Since
 2026-09-21T00:00Z the unit ran **102** times across the workflow: 75 `success`, 22 `cancelled`
-(superseded pushes), 2 still running, **3 `failure` — and all three are this defect**. Every one of
+(superseded pushes), 2 still running, **3 `failure` — and all three are this defect**. 🚨 A
+`cancelled` shard can *carry* the defect (this thread's 2026-09-12 correction is exactly that
+mistake), so the 22 were read rather than assumed: 18 logs are clean of both `canary=BELOW-ROSLYN`
+and `PROCESS CANNOT EMIT`, and 4 have no retrievable log. **3 of 96 determined, 6 undetermined** —
+the rate is a floor, and the floor is stated with what it could not see. Every one of
 those 102 executions is a `pull_request` run: `Hosting.Monolith.Test` was **not selected on `main`
 even once** in that window (main's `portal-hosts` units were `Kernel.Test`, `network-133`, `Json.Test`,
 … — measured on runs `35719210050` and `35712737331`). So "it passes on `main`" is unavailable, and the
