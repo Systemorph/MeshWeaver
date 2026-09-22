@@ -5985,7 +5985,7 @@ public static class MeshExtensions
                 PostFail(
                     LocalizableText.Keyed($"Persistence read failed: {ex.Message}",
                         "activity.node.upsert.readFailed", ("error", ex.Message)),
-                    NodeUpsertRejectionReason.Unknown);
+                    NodeUpsertRejectionReason.Unknown, NodeUpsertRejection.ClassifyFailureKind(ex));
             },
             () =>
             {
@@ -6153,7 +6153,7 @@ public static class MeshExtensions
                         PostFail(
                             LocalizableText.Keyed($"Inner CreateNode faulted: {ex.Message}",
                                 "activity.node.upsert.innerCreateFaulted", ("error", ex.Message)),
-                            NodeUpsertRejectionReason.Unknown);
+                            NodeUpsertRejectionReason.Unknown, NodeUpsertRejection.ClassifyFailureKind(ex));
                     },
                     () =>
                     {
@@ -6491,7 +6491,7 @@ public static class MeshExtensions
                                             ("path", node.Path), ("error", ex.Message))
                                         : LocalizableText.Keyed($"Inner UpdateNode faulted: {ex.Message}",
                                             "activity.node.upsert.innerUpdateFaulted", ("error", ex.Message)),
-                                    reason);
+                                    reason, NodeUpsertRejection.ClassifyFailureKind(ex));
                                 return;
                             }
                             hub.NoteRequestStage(request.Id, "UPSERT_UPDATE_COMPLETED_EMPTY");
@@ -6545,7 +6545,7 @@ public static class MeshExtensions
         // would translate a value code reads and logs — the same reason wire identifiers are never
         // translated — while giving no viewer a German sentence. The LOCALIZED surface is the
         // ActivityLog on the same response, which is what a viewer actually reads.
-        void PostFail(LocalizableText refusal, NodeUpsertRejectionReason reason)
+        void PostFail(LocalizableText refusal, NodeUpsertRejectionReason reason, string? failureKind = null)
         {
             hub.NoteRequestStage(request.Id, $"UPSERT_REPLY fail reason={reason}");
             var failLog = baseActivity.Append(
@@ -6555,7 +6555,10 @@ public static class MeshExtensions
                 Status = ActivityStatus.Failed,
             };
             hub.Post(
-                CreateOrUpdateNodeResponse.Fail(refusal.English, reason, failLog),
+                CreateOrUpdateNodeResponse.Fail(refusal.English, reason, failLog) with
+                {
+                    FailureKind = failureKind
+                },
                 o => o.ResponseFor(request));
         }
 

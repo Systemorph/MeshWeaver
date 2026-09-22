@@ -106,11 +106,13 @@ place without erroring** — the one silent-corruption shape here. Use the ancho
 (`MeshOperations.EditContent`: exact `oldText` → `newText`, re-verified against live text). A
 positional splice is legal only carrying a base fingerprint the owner checks.
 
-**Known gap — do not design around it, it is tracked.** `CreateOrUpdateNodeRequest` cannot express a
-fold (full-instance mode takes `Content` wholesale; its `Patch` mode is declared but **refused by the
-handler**, zero callers). So a caller needing *both* create-if-missing *and* a fold has no route, and
-the tempting fallback — decide create-vs-update from a query, then `stream.Update` — is the
-eventually-consistent-positive bug in section 2. That is core#4928, blocking core#1174.
+**Create-if-missing plus a fold:** use `CreateOrUpdateNodeRequest.WithFolds<T>` (#4980).
+The create leg uses the seed verbatim; the update leg applies `Sum`, `KeepExisting`, `Min` or
+`Max` to the live stored content. Carry the rule and operand, never a result computed from a
+query. `HandleTrackActivity` is the caller example: seed count one, `Sum(1)` thereafter, preserve
+first-access time, advance last-access time. This retires #1174's query-dependent create/update
+split. Folds retain the existing cross-mirror patch conflict semantics; they do not promise
+cluster-wide atomic arithmetic.
 
 ### The 3 rules this unifies
 
@@ -319,12 +321,11 @@ hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EX
     .Select(node => node.ContentAs<X>(hub.JsonSerializerOptions));
 ```
 
-The index **trails** the store, so "the index has seen it" implies "the store has it" — the point
-read opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a
-query for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely
-and use `CreateOrUpdateNodeRequest` — **unless the write is a FOLD** (a counter bump, or anything
-computed off the node's current value), which that verb cannot express today (core#4928). There is
-no correct shape for create-if-missing + fold yet, so say so rather than falling back to the query.
+An index row can still be stale after deletion or failed hydration: "the index has seen it"
+is not proof that storage currently holds it. A query can gate discovery, but the subsequent
+point read must still handle absence. Creating the node anyway? Skip the check entirely
+and use `CreateOrUpdateNodeRequest`. For a counter bump or another live-content fold, attach
+`WithFolds<T>` rules to the seed instead of deciding create-vs-update from the query.
 
 🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
 worked counter-example is a token chip that reads `content` out of a
