@@ -1732,19 +1732,21 @@ live object in `WKS::gc_heap::find_first_object` — see
 opposite of heap corruption. **Leg 5 is also the discriminator here**: `PRIVATE-COPY-EMITS` puts #890
 in the compiler's own image and separates the two; `PRIVATE-COPY-THREW` leaves them joinable.
 
-#### 2026-09-21 / 09-22 — the first three `compiler=` readings, and what they settle
+#### 2026-09-19 → 09-22 — the first four `compiler=` readings, and what they settle
 
-Leg 5's closing condition was *"the reading on an occurrence"*. Three occurrences carried it inside
-thirty hours, all in MeshWeaver.Plugins `Plugin Catalog CI`, all the job
-`portal-hosts (Hosting.Monolith.Test)`, all ending `exit 124` with no verdict:
+Leg 5's closing condition was *"the reading on an occurrence"*. **Four** occurrences carried it inside
+four days, all in MeshWeaver.Plugins `Plugin Catalog CI`, all the job
+`portal-hosts (Hosting.Monolith.Test)`, all ending `exit 124` with no verdict — on four different
+platform sets and four unrelated branches:
 
 | occurrence | run / job | platform set (core) | `canary=` | `dissect=` | `flat=` | `compiler=` |
 |---|---|---|---|---|---|---|
+| 2026-09-19 08:22Z | [`35430730563`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35430730563) / `105867058225` | `3.0.0-ci.8963` (`31be311dc`) | `BELOW-ROSLYN` ×52 | `READS-HEALTHY` ×52 | `EMITS` ×52 | `PRIVATE-COPY-EMITS` ×52 |
 | 2026-09-21 13:36Z | [`35606133491`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35606133491) / `106355181093` | `3.0.0-ci.9088` (`88cd4b7b4`) | `BELOW-ROSLYN` ×40 | `READS-HEALTHY` ×40 | `SAME-FRAME@…get_ContainingTypeDefinition` ×40 | `PRIVATE-COPY-EMITS` ×40 |
 | 2026-09-21 22:41Z | [`35661949332`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35661949332) / `106544668720` | `3.0.0-ci.9108` (`b1aa8a9e5`) | ×58 | ×58 | `EMITS` ×6, **then** `SAME-FRAME@…` ×52 | ×58 |
 | 2026-09-22 11:37Z | [`35722501930`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35722501930) / `106742555061` | `3.0.0-ci.9168` (`620a4893a`) | ×58 | ×58 | `EMITS` ×58 | ×58 |
 
-**1. `PRIVATE-COPY-EMITS`, unanimously.** A second Roslyn, loaded from fresh bytes into its own
+**1. `PRIVATE-COPY-EMITS`, unanimously — four for four.** A second Roslyn, loaded from fresh bytes into its own
 collectible context and never executed in this process before, emits the very source the shared copy
 cannot — same process, same CLR, same heap, microseconds apart. So `BELOW-ROSLYN`'s closing sentence
 is void on all three: the fault travels with **this process's copy of the compiler**, and the
@@ -1753,7 +1755,7 @@ references, not the mappings and not the source", no more — which is what the 
 would take, now measured rather than predicted.
 
 **2. `flat=` is a phase, not a property of an occurrence — and that settles an open contradiction.**
-The second occurrence read `flat=EMITS` for its first six failures and `flat=SAME-FRAME` for the
+The 2026-09-21 22:41Z occurrence read `flat=EMITS` for its first six failures and `flat=SAME-FRAME` for the
 following fifty-two, **in one process**. So the 2026-09-08 (`SAME-FRAME`) versus 2026-09-10 (`EMITS`)
 disagreement recorded above is not two defects and not an unstable probe: it is one defect read at two
 depths. It also retires *"the mechanism is confined to `GetConsolidatedTypeParameters`' recursion"* as a
@@ -1761,12 +1763,12 @@ general claim — true of the shallow phase only. Once it deepens, `public class
 one top-level, non-generic, member-less class, no recursion anywhere in the compilation — cannot emit
 either, and the guard `AsNestedTypeDefinitionImpl` makes has read TRUE where it must read FALSE.
 
-**3. The fault is ACQUIRED, and it deepens — neither is an inference.** In the third occurrence
+**3. The fault is ACQUIRED, and it deepens — neither is an inference.** In the newest occurrence
 `OverlaySelfHealInstanceRecycleTest.OverlaidInstance_SelfRecycles_WhenTypeCompilesGreen` **passed** at
 12:52:07.654Z, and what that test asserts is exactly the missing positive: a NodeType reaching
 `CompilationStatus == CompilationStatus.Ok` *with a usable build*, whose instance then renders a
 marker. So this process emitted successfully 33 seconds before its first poisoned emit at 12:52:40Z —
-it did not start unable to emit, and no image or mount arrived broken. The second occurrence supplies
+it did not start unable to emit, and no image or mount arrived broken. The 2026-09-21 22:41Z occurrence supplies
 the other half from inside one process: `flat=EMITS` for six failures, then `flat=SAME-FRAME` for
 fifty-two. **Acquired, then progressive.** That is the shape a tier-up produces and not the shape a
 bad file produces, which is why the residual below is worth spending a measurement on.
@@ -1792,7 +1794,7 @@ experiment is ONE copy held loaded across repeated emits, armed once per PROCESS
 `BELOW-ROSLYN` and read by the later ones — one pair of loads, N emits — and the cost model is part of
 the change, not an afterthought.
 
-**5. The platform set is not the variable.** The three occurrences sit on three different sets, and
+**5. The platform set is not the variable.** The four occurrences sit on four different sets, and
 `git diff 6b3fda2a4..620a4893a -- src/MeshWeaver.Compiler src/MeshWeaver.Compiler.Pipeline` is **empty**
 across the pair that brackets the newest of them; `Microsoft.CodeAnalysis.CSharp` (5.9.0) and
 `global.json` are unchanged over the same range. A pass-then-fail across a ceiling move is therefore
@@ -1801,22 +1803,30 @@ not evidence about the ceiling — measured on PR #2231, which ran the same suit
 `3.0.0-ci.9168` with no diff of its own in between.
 
 **6. The rate, with its denominator, and why `main` cannot supply the control.** Since
-2026-09-21T00:00Z the unit ran **102** times across the workflow: 75 `success`, 22 `cancelled`
-(superseded pushes), 2 still running, **3 `failure` — and all three are this defect**. 🚨 A
-`cancelled` shard can *carry* the defect (this thread's 2026-09-12 correction is exactly that
-mistake), so the 22 were read rather than assumed: 18 logs are clean of both `canary=BELOW-ROSLYN`
-and `PROCESS CANNOT EMIT`, and 4 have no retrievable log. **3 of 96 determined, 6 undetermined** —
-the rate is a floor, and the floor is stated with what it could not see. Every one of
-those 102 executions is a `pull_request` run: `Hosting.Monolith.Test` was **not selected on `main`
-even once** in that window (main's `portal-hosts` units were `Kernel.Test`, `network-133`, `Json.Test`,
-… — measured on runs `35719210050` and `35712737331`). So "it passes on `main`" is unavailable, and the
-reason is a **zero denominator, not a green**. A single local re-run on `main` cannot supply it either:
-at ~3 % per run it comes back clean whether or not the defect is live, which is a control that cannot
-fail. **The population across unrelated branches is the control**, and it attributes the failure to no
-pull request: `fix/incident-fold-dedupe`, `fix/hosting-bake-probe` and `fix/ai-stream-cancel` share
-nothing but the defect.
+2026-09-19T00:00Z the unit ran **201** times across the workflow: 153 `success`, 39 `cancelled`
+(superseded pushes), 1 still running, **8 `failure` — of which 4 are this defect** and the other 4
+carry no `canary=` and no `exit 124` at all. Over the narrower 2026-09-21T00:00Z window it is 102
+executions and 3 of 3 failures. 🚨 A `cancelled` shard can *carry* the defect (this thread's
+2026-09-12 correction is exactly that mistake), so the 22 cancelled of the narrow window were read
+rather than assumed: 18 logs clean of both `canary=BELOW-ROSLYN` and `PROCESS CANNOT EMIT`, 4 with no
+retrievable log ⇒ **3 of 96 determined, 6 undetermined there**. The rate is a floor either way.
+🚨 **And all 201 are `pull_request` runs.** The unit was **not selected on `main` once** in four days
+(main's `portal-hosts` units were `Kernel.Test`, `network-133`, `Json.Test`, … — measured on runs
+`35719210050` and `35712737331`). So "it passes on `main`" is a **zero denominator, not a green**, and
+a single local re-run on `main` cannot supply the control either: at ~2 % per run it comes back clean
+whether or not the defect is live, which is a control that cannot fail. **The population across
+unrelated branches is the control**, and it attributes the failure to no pull request. The four branches —
+`fix/4740-plugins-runner-timeouts`, `fix/incident-fold-dedupe`, `fix/hosting-bake-probe` and
+`fix/ai-stream-cancel` — share nothing but the defect.
 
-**7. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
+**7. Not observed in core's own CI in the same window — on a denominator too small to mean much.** The
+24 `MeshWeaver Build and Test` runs since 2026-09-20 carry 13 failed jobs between them, and none of
+those logs contains `PROCESS CANNOT EMIT`, `canary=BELOW-ROSLYN` or `exit 124`. Read it as
+*localising the observation*, not as an exoneration: 13 failures is thin, and core's suites do not
+drive in-process NodeType compilation at anything like the volume of the Plugins Monolith unit, so a
+zero here is close to what a healthy world and a sampling miss would both produce.
+
+**8. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
 first poisoned emit every compile-gated assertion spends its entire window and then fails — on
 2026-09-22, 11 tests failed and 9 of them burned a full 50 s / 60 s / 90 s / 120 s window — so the
 900 s cap is spent on **138 recorded test starts** (two instruments agree: 138 `TEST_START` events and
@@ -1826,7 +1836,7 @@ to *start* (`NodeTypeRecompileAlcLeakTest.RecompilingANodeType_ReleasesEverySupe
 as *"the process stopped being able to emit at 12:52:40Z"*, and look for the first `PROCESS CANNOT EMIT`,
 never for the last test name.
 
-**8. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
+**9. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
 design produces, and neither half points anywhere: `TeardownStragglerCapturer` *was* loaded — its module
 initializer ran, which the 120 records prove — but its first-chance filter is
 `IsTeardownDisposedStraggler` (Autofac `LifetimeScope` and `MemoryCache` shapes only), so an emit `NRE`
