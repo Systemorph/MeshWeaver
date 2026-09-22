@@ -550,6 +550,35 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/gen-manifests.py" --self-test
 
+      # 🚨 AND THE VENDORED COPY THE RESOLVE LANE STILL RUNS IS COMPARED TO THAT CANONICAL
+      # (MeshWeaver#4777). `node-repo-resolve-locks.yml` regenerates locks with the CALLER's
+      # `scripts/gen-manifests.py` for `--resolve` and uses the platform's only for the post-check,
+      # and it refuses a repo without a copy — so the copy decides whether a merge is reported
+      # resolvable, and for a repo below (`centralized-gen-manifests: false`) it is the verdict
+      # too. #4775 fixed three ways `--resolve` reported success over an unanswered question;
+      # four copies were re-copied with it, two could not be and still carry all three, and the
+      # four were three canonical commits behind again within days. The comparison is the resolver
+      # guard's (code level; docstrings and comments are not drift), and the finding names the
+      # functions that differ. ADVISORY BY DECLARATION, no flip date: a red on drift is a red on
+      # every canonical change for as long as the resolve lane requires the copy, and a dated flip
+      # would red the whole fleet on a timer for a file it may not delete (the resolver guard's
+      # flip was safe only because a resolver copy IS deletable). The flip is a change to the
+      # resolve lane, not a date. What stays RED: a canonical that cannot be read or parsed, and a
+      # copy that cannot be parsed. A pin older than the guard's `--subject` is NAMED, not skipped:
+      # the guard is fetched at this lane's scripts ref above, and an older one has no second
+      # subject — the sentence says so, so "not compared" cannot read as "compared and clean".
+      - name: "This repo's vendored gen-manifests.py matches the platform's canonical (advisory — the resolve lane still requires the copy)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          if ! grep -q -- '--subject' "$RUNNER_TEMP/check-resolver-copy.py"; then
+            echo "::notice::gen-manifests copy NOT compared: the guard fetched at ${SCRIPTS_REF} predates its gen-manifests subject (MeshWeaver#4777) — a pin at or after that change compares it"
+            exit 0
+          fi
+          python3 "$RUNNER_TEMP/check-resolver-copy.py" --subject gen-manifests --root . --canonical "$RUNNER_TEMP/gen-manifests.py"
+
       # manifest.lock calls itself CI-verified; this is what verifies it. A stale lock means a
       # module's recorded content hash — and the version derived from it — describes a tree that
       # no longer exists, which is exactly what a dependent's pin would be trusting.
