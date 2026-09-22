@@ -274,11 +274,10 @@ jobs:
             --required "$REQUIRED" --unrelated "$UNRELATED"
 
       # ─────────────── 3. THE STAGED EVIDENCE ───────────────
-      # 🚨 SCOPED TO THIS CALL'S LANE, and `continue-on-error` is on the DOWNLOAD alone for one
-      # reason: a pattern that matches nothing must REACH the checker as zero evidence, which is a
-      # named refusal there, instead of dying here with "no artifacts found" and no module names.
-      # The step immediately after judges the result unconditionally — that is what keeps this from
-      # being a skip-trapdoor (`verify` in the pack lane collects its receipts the same way).
+      # 🚨 SCOPED TO THIS CALL'S LANE. A zero-match pattern reaches the checker as zero evidence
+      # so it can refuse with the missing module names. The shared transport permits that empty
+      # collection, but corrupt bytes or a wrong store identity fail RED at the download itself.
+      # No transfer failure is swallowed (`verify` in pack collects receipts the same way).
       - name: Collect this call's staged publications
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
