@@ -148,7 +148,8 @@ MODULE_TAG_RE = re.compile(r"^.+/v\d+\.\d+\.\d+$")
 # Every flag this script understands. An unrecognised one is an ERROR, never a silent fall-through
 # to the writer: `--check-verisons` used to sail past both `if` arms, REWRITE the manifests and
 # exit 0 — a "check" that mutated the tree and reported success.
-KNOWN_ARGS = {"--check", "--check-versions", "--no-fetch", "--resolve", "--self-test"}
+KNOWN_ARGS = {"--check", "--check-versions", "--list-packages", "--no-fetch", "--resolve",
+              "--self-test"}
 
 SCHEMA = "mw-manifest/1"
 # The caller's allow-file. Named by MW_MANIFEST_CONFIG when the lane places it elsewhere; otherwise
@@ -207,7 +208,12 @@ def skip_set(root: Path) -> set[str]:
     """Directories that are NOT node packages — declared per repo, and kept equal to
     validate-repos.py's SKIP by the caller's check-skip-sets.py. A directory in one and not the
     other either gets validated as nodes it does not contain, or has a manifest.lock demanded for a
-    package it is not."""
+    package it is not.
+
+    🚨 The DECLARATION is not the whole rule — see `plugin_dirs`, which also drops every
+    dot-directory. A caller's guard that compares this set against its own enumerator's SKIP is
+    comparing declarations and will answer green over two enumerations that disagree; ask
+    `--list-packages` for the effective answer instead."""
     return config(root)["skip"]
 
 
@@ -226,6 +232,31 @@ def plugin_dirs(root: Path) -> list[Path]:
     return sorted((d for d in root.iterdir()
                    if d.is_dir() and d.name not in skip and not d.name.startswith(".")),
                   key=lambda d: d.name)
+
+
+def list_packages(root: Path) -> int:
+    """Prints the EFFECTIVE package enumeration — one name per line, sorted, nothing else.
+
+    🚨 This exists because a repo that enumerates its top-level packages TWICE cannot keep the two
+    in step by comparing declarations (#4774). `plugin_dirs` applies the declared `skip` AND an
+    implicit dot-directory rule; a caller's `check-skip-sets.py` that asserts
+    `validate-repos.SKIP == skip_set(root)` compares only the first half, so equal declared sets
+    over different effective enumerations answer green — the guard's own docstring calls that
+    "worse than the drift it exists to catch". Measured on five satellites' main: their second
+    enumerator has no dot rule, so an undeclared top-level `.foo` is skipped here and walked there.
+
+    The answer is machine-readable on purpose: a caller diffs its own enumerator's output against
+    this and needs no copy of either rule. stdout carries ONLY the names, so a reader of the
+    diff sees packages and never a banner; every diagnostic a failure needs is on stderr.
+    """
+    names = [d.name for d in plugin_dirs(root)]
+    for name in names:
+        print(name)
+    # The DENOMINATOR, on stderr so it cannot reach a diff: a caller comparing against an empty
+    # answer must be able to tell "this repo declares no packages" from "the enumeration found
+    # none", and an empty stdout alone cannot say which.
+    print(f"gen-manifests --list-packages: {len(names)} package(s) under {root}", file=sys.stderr)
+    return 0
 
 
 def declared_module(plugin: Path) -> str | None:
@@ -1776,6 +1807,48 @@ def self_test() -> int:
         if (read_existing(repo7 / "Mod" / "manifest.lock") or {}).get("version") != "1.0.9":
             failures.append("the remote arm rewrote the committed version — refusing means refusing")
 
+        # 8. 🚨 #4774: the ENUMERATION is the rule, not the declared skip set — and it is exported.
+        #
+        # `plugin_dirs` drops dot-directories on top of the declared `skip`, so a repo's SECOND
+        # enumerator (`validate-repos.py`) can declare the identical SKIP and still walk a
+        # directory this one skips. `check-skip-sets.py` compares the two DECLARATIONS and is
+        # therefore blind to it by construction. `--list-packages` is what a caller compares
+        # against instead, so the assertions below are on the EFFECTIVE answer.
+        #
+        # 🚨 Both directions, and a POSITIVE denominator: an assertion that `.example-check` is
+        # absent is satisfied by an enumeration that found nothing at all, so the real packages
+        # are asserted PRESENT in the same breath — and `Skipped` proves the declared half is
+        # still being applied, so the case cannot pass on the dot rule alone.
+        import contextlib
+        import io as _io
+
+        repo8 = tmp / "enumeration"
+        for d in ("Alpha", "Beta", "Skipped", ".example-check", ".platform-scripts"):
+            (repo8 / d).mkdir(parents=True)
+        (repo8 / "Alpha" / "index.json").write_text("{}\n")
+        (repo8 / "Beta" / "index.json").write_text("{}\n")
+        (repo8 / ".example-check" / "index.json").write_text("{}\n")
+        declare(repo8, skip=("scripts", "Skipped", ".git"))
+
+        enumerated = [d.name for d in plugin_dirs(repo8)]
+        if enumerated != ["Alpha", "Beta"]:
+            failures.append(
+                "plugin_dirs must enumerate exactly the real packages — an UNDECLARED "
+                "dot-directory is never one, and a DECLARED skip is still skipped; "
+                f"got {enumerated}")
+
+        exported = _io.StringIO()
+        with contextlib.redirect_stdout(exported):
+            rc8 = list_packages(repo8)
+        listed = exported.getvalue().split()
+        if rc8 != 0:
+            failures.append(f"--list-packages must exit 0 on a readable tree, got {rc8}")
+        if listed != enumerated:
+            failures.append(
+                "--list-packages must print the SAME enumeration plugin_dirs returns, one name "
+                f"per line and nothing else — a caller diffs this; enumerated {enumerated}, "
+                f"printed {listed}")
+
     if failures:
         print("✗ gen-manifests self-test:")
         for f in failures:
@@ -1789,7 +1862,9 @@ def self_test() -> int:
           "still moves FORWARD (#4781) — with the remedy split, since a VERIFIED remote means the "
           "committed number is hand-edited and NO remote means a release is invisible, and each "
           "arm is asserted not to speak the other's, and the per-repo config is REQUIRED — a missing one, a "
-          "typo'd key and an unusable project-closure.py each fail rather than defaulting")
+          "typo'd key and an unusable project-closure.py each fail rather than defaulting, and "
+          "--list-packages exports the EFFECTIVE enumeration (an undeclared dot-directory is not a "
+          "package, a declared skip still is not, and the two real ones are)")
     return 0
 
 
@@ -1836,6 +1911,8 @@ def main() -> int:
         return 0
     if "--self-test" in args:
         return self_test()
+    if "--list-packages" in args:
+        return list_packages(root)
     if "--resolve" in args:
         return resolve_conflicts(root, fetch)
     if "--check" in args:
