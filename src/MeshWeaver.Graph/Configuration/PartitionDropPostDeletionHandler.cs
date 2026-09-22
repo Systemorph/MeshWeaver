@@ -147,7 +147,7 @@ public sealed class PartitionDropPostDeletionHandler : INodePostDeletionHandler
     /// Drops <paramref name="partition"/>'s backing store on every <see cref="IPartitionStorageProvider"/>
     /// — THE drop, shared by the two teardowns so they cannot drift: the root delete (this handler)
     /// and the record delete of a partition whose root is already gone
-    /// (<see cref="StrandedPartitionRecordTeardownHandler"/>, #5073). Sequential (<c>Concat</c>)
+    /// (<see cref="Security.StrandedPartitionTeardownValidator"/>, #5073). Sequential (<c>Concat</c>)
     /// like provisioning, so concurrent DDL never races; a provider failure propagates — the delete
     /// pipeline surfaces it as a Warning on the activity. Emits exactly once.
     /// </summary>
@@ -200,7 +200,7 @@ public sealed class PartitionDropPostDeletionHandler : INodePostDeletionHandler
     /// <para>Runs only on a SUCCESSFUL teardown — a failed store drop leaves the partition (and
     /// therefore its caches) in place for a retry, which is the same reason the definition node
     /// stays. In-memory and synchronous; the cache is optional so a minimal fixture without one
-    /// simply has nothing to drop. Shared with <see cref="StrandedPartitionRecordTeardownHandler"/>
+    /// simply has nothing to drop. Shared with <see cref="Security.StrandedPartitionTeardownValidator"/>
     /// for the same reason <see cref="DropStores"/> is.</para>
     /// </summary>
     /// <param name="hub">Hub whose container holds the stream cache.</param>

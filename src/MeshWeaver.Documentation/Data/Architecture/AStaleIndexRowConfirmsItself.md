@@ -186,35 +186,50 @@ Nor should it: which partitions a mesh holds is not the bake's decision. What wa
 The record — `Admin/Partition/{partition}` — is the one artefact that outlives the data *by
 design*, it lives in the `Admin` partition, and a platform admin reaches it with the ordinary
 delete. Deleting it already meant "this partition is gone"; it simply did nothing.
-`StrandedPartitionRecordTeardownHandler` makes it do what the root delete would have done — the
-same `PartitionDropPostDeletionHandler.DropStores` on every provider, the same cache eviction,
-under the same tombstone the ordinary teardown holds so a concurrent child write cannot heal a root
-back mid-drop (#3451):
+`StrandedPartitionTeardownValidator` makes it do what the root delete would have done — the same
+`PartitionDropPostDeletionHandler.DropStores` on every provider, the same cache eviction, under the
+same tombstone the ordinary teardown holds so a concurrent child write cannot heal a root back
+mid-drop (#3451):
 
 ```
 delete @Admin/Partition/UWDeepfield
 ```
 
+It is a **delete validator**, not a post-deletion handler, and the difference is the ordering the
+ordinary teardown already insists on: the store drop runs *first*, and a drop that fails **refuses
+the delete**, so the record — the only handle by which the teardown can be retried — stays. The
+first draft was a post-deletion handler that wrote the record back on failure; its own test caught
+that a post-deletion handler runs inside the record's deletion scope, where the storage write guard
+refuses the write-back. (`OwnsPartitionProvisioningValidator`, the creation-side mirror, provisions
+the schema from a validator for the same reason.)
+
 🚨 **Only for a partition that is STRANDED**, and that is what keeps a platform admin a platform
-admin rather than a data superuser. The drop runs in exactly two shapes, both of which no owner can
-reach through the partition's own root:
+admin rather than a data superuser. Stranded is a **conjunction** — a root nobody can reach the
+partition through, *and* nobody who owns it:
 
-| Shape | What it is | Why nobody else can delete it |
+| Leg | What is asked | Why |
 |---|---|---|
-| **no root at all** | no durable row and no static root at the partition path | the ordinary delete needs a root |
-| **a healed shell** | a root carrying exactly the heal's fingerprint — `Space`, named after the partition, no content, created by System — with **no access grant** (durable or static) and no GitSync configuration | nobody was granted anything on it, and it can only have got that way by the bootstrap re-rooting an orphan |
+| **the root** | absent (no durable row, no static root), **or** exactly the heal's fingerprint — `Space`, named after the partition, no content, created by System | the ordinary delete needs a root; the shell can only have got there by the bootstrap re-rooting an orphan |
+| **and nobody owns it** | no access grant under `{partition}/_Access`, durable **or** static, and no GitSync configuration | asked for BOTH root shapes: the recursive delete that orphaned a partition enumerated `mesh_nodes` descendants only, and `_Access` rows live in a satellite table the fan-out never visits — so a rootless partition can still carry every grant it ever had, its grant holders still reach its nodes through the synthesized placeholder root, and they re-root it on their next write. Such a partition is somebody's |
 
-Anything else — a real root, an owner, a synced partition, a static partition — is live: the store
-is **not** touched, and the record delete is reported at Warning (a live partition's record
-disappearing is already a defect worth a line — it leaves the partition out of every listing and
-out of the routing prime; the remedy is to delete its root, which runs the structural teardown).
-Every probe fails **closed**: an unreadable root or grant listing reads as *live*. And the handler
-stands down while the partition's own deletion is in flight or on record, so the ordinary teardown
-— which deletes this same record as its second step — never drops twice.
+Anything else — a real root, an owner, a synced partition, a static partition — is not stranded:
+the record delete proceeds (it is the admin's record) but the store is **not** touched, and it says
+so at Warning (a live partition's record disappearing is already a defect worth a line — it leaves
+the partition out of every listing and out of the routing prime; the owner tears it down through
+its root, or the stale grants are removed first and the record deleted again). Every probe fails
+**closed**: an unreadable root or grant listing reads as *owned*. The verdict is taken inside the
+partition's deletion scope — the claim first, then the reading — so no recreate can land between
+the reading and the drop and be dropped on a verdict about a partition that no longer exists. The
+validator stands down while the partition's own deletion is in flight or on record, so the ordinary
+teardown — which deletes this same record as its second step — never drops twice, and only a
+*direct* delete of the record counts: a record removed as a leaf of a wider recursive delete is
+bookkeeping going, not a request to drop every stranded schema at once.
 
 `StrandedPartitionRecordTeardownTest` pins all of it: the rootless shape drops, the ownerless shell
-drops, a live plugin-like partition keeps its store, a shell with one grant keeps its store, the
-ordinary teardown records exactly one drop, and the shell fingerprint is asserted member by member.
+drops, a live plugin-like partition keeps its store, a shell with one grant keeps its store, a
+rootless partition with a surviving grant keeps its store, a drop that faults refuses the delete
+with the record intact and the tombstone lifted, the ordinary teardown records exactly one drop,
+and the shell fingerprint is asserted member by member.
 
 After the roll that carries it, the enumeration stops naming `UWDeepfield` the moment its record is
 deleted: the schema goes, the rows go with it, and the next boot's population cannot see them —

@@ -3,10 +3,12 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -29,11 +31,14 @@ namespace MeshWeaver.Graph.Test;
 /// schema — is inert on this very partition, and why "the enumeration outlives the partition".</para>
 ///
 /// <para><b>The verb.</b> The record outlives the data by design and lives in <c>Admin</c>, so a
-/// platform admin reaches it with the ordinary delete. <see cref="StrandedPartitionRecordTeardownHandler"/>
+/// platform admin reaches it with the ordinary delete. <see cref="StrandedPartitionTeardownValidator"/>
 /// makes that delete finish the teardown — the same provider drop and cache eviction the root
-/// delete runs — but ONLY for a partition that is stranded: no root at all, or the bootstrap's own
-/// ownerless <c>Space</c> shell. A live, owned partition keeps its store when its record is
-/// deleted, which is what keeps a platform admin a platform admin and not a data superuser.</para>
+/// delete runs, taken BEFORE the record goes, so a drop that fails refuses the delete and the
+/// record stays as the retry handle — but ONLY for a partition that is stranded: a root nobody can
+/// reach it through (none, or the bootstrap's own <c>Space</c> shell) AND nobody who owns it (no
+/// grant, no GitSync). A partition with a real root or a surviving grant keeps its store when its
+/// record is deleted, which is what keeps a platform admin a platform admin and not a data
+/// superuser.</para>
 ///
 /// <para>The store stand-in is the same shape <c>PartitionResurrectionTest</c> uses:
 /// <see cref="IPartitionStorageProvider"/> IS the extension point a backend implements, and
@@ -64,6 +69,9 @@ public class StrandedPartitionRecordTeardownTest(ITestOutputHelper output) : Mon
         /// <summary>The ordered ledger of provisioning / drop calls.</summary>
         public IReadOnlyList<string> Events => events.ToArray();
 
+        /// <summary>The partition whose drop FAULTS (a provider that cannot reach its store), or null.</summary>
+        public string? FaultDropFor { get; set; }
+
         /// <summary>Does this partition's backing store exist right now?</summary>
         public bool IsProvisioned(string @namespace) => provisioned.ContainsKey(@namespace);
 
@@ -84,6 +92,12 @@ public class StrandedPartitionRecordTeardownTest(ITestOutputHelper output) : Mon
         public IObservable<System.Reactive.Unit> DeletePartition(string @namespace)
             => Observable.Defer(() =>
             {
+                if (string.Equals(@namespace, FaultDropFor, StringComparison.OrdinalIgnoreCase))
+                {
+                    events.Enqueue($"drop-faulted:{@namespace}");
+                    return Observable.Throw<System.Reactive.Unit>(
+                        new InvalidOperationException("the store is unreachable"));
+                }
                 provisioned.TryRemove(@namespace, out _);
                 events.Enqueue($"drop:{@namespace}");
                 return Observable.Return(System.Reactive.Unit.Default);
@@ -209,15 +223,7 @@ public class StrandedPartitionRecordTeardownTest(ITestOutputHelper output) : Mon
         var ct = TestContext.Current.CancellationToken;
         var partition = await ProvisionWithRecord(ct);
         await WriteRow(HealedShell(partition), ct);
-        await WriteRow(new MeshNode("owner_Access", $"{partition}/_Access")
-        {
-            Name = "owner", NodeType = CreateNodesRequest.AccessAssignmentNodeType,
-            State = MeshNodeState.Active,
-            Content = new AccessAssignment
-            {
-                AccessObject = "owner", Roles = [new RoleAssignment { Role = "Admin" }],
-            },
-        }, ct);
+        await WriteRow(Grant(partition, "owner"), ct);
 
         await DeleteRecordAsSystem(partition, ct);
 
@@ -225,6 +231,86 @@ public class StrandedPartitionRecordTeardownTest(ITestOutputHelper output) : Mon
             "one grant means the partition's ownership is intact — the owner deletes it through its "
             + "root, and a record delete must not do it for them");
         Store.Events.Should().NotContain($"drop:{partition}");
+    }
+
+    /// <summary>
+    /// 🚨 OWNERSHIP DECIDES, NOT THE ROOT (review on #5203). The recursive delete that orphaned a
+    /// partition enumerated <c>mesh_nodes</c> descendants only — its <c>_Access</c> rows live in a
+    /// satellite table the fan-out never visits — so a rootless partition can still carry every
+    /// grant it ever had, and its grant holders still reach its nodes and re-root it on their next
+    /// write. Such a partition is somebody's: its record delete leaves the store alone.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task DeletingTheRecordOfARootlessPartitionSomebodyStillHoldsAGrantOn_LeavesItsStoreAlone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = await ProvisionWithRecord(ct);
+        await WriteRow(new MeshNode("Widget", partition)
+        {
+            Name = "Widget", NodeType = MeshNode.NodeTypePath, State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition { Configuration = "config => config" },
+        }, ct);
+        await WriteRow(Grant(partition, "owner"), ct);
+
+        await DeleteRecordAsSystem(partition, ct);
+
+        Store.IsProvisioned(partition).Should().BeTrue(
+            "a surviving grant makes the rootless partition somebody's — they reach its nodes through "
+            + "the placeholder root and re-root it on their next write — so the record delete must "
+            + "not drop their store");
+        Store.Events.Should().NotContain($"drop:{partition}");
+    }
+
+    /// <summary>
+    /// 🚨 A DROP THAT FAULTS REFUSES THE DELETE (review on #5203). The record is the only handle by
+    /// which this teardown can be retried; a provider that cannot reach its store must not leave
+    /// the partition with neither a root nor a record. The drop runs BEFORE the record goes — a
+    /// validator, not a post-deletion handler — so the failure is a refused delete: the record
+    /// stays, the store stays, the tombstone is lifted, and the reason is on the response.
+    ///
+    /// <para>The first draft did this as a post-deletion handler that wrote the record back on
+    /// failure, and this test caught it: a post-deletion handler runs inside the record's own
+    /// deletion scope, where <c>SubtreeDeletionGuardStorageAdapter</c> refuses the write-back.</para>
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task AFailedDrop_RefusesTheDelete_SoTheRecordStaysAsTheRetryHandle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = await ProvisionWithRecord(ct);
+        var recordPath = $"{PartitionNodeType.Namespace}/{partition}";
+        Store.FaultDropFor = partition;
+        try
+        {
+            var response = await Access
+                .RunAsSystem(() => ObserveNodeOperation(new DeleteNodeRequest(recordPath)
+                {
+                    ConfirmWarnings = true, DeletedBy = WellKnownUsers.System,
+                }))
+                .FirstAsync().Select(d => d.Message)
+                .Timeout(TestTimeouts.CrossSilo).Await(ct);
+            Output.WriteLine($"delete {recordPath} success={response.Success} error={response.Error}");
+            response.Success.Should().BeFalse(
+                "the drop failed, so the delete of the retry handle must be refused, not reported");
+            response.Error.Should().Contain("could not be dropped",
+                "the refusal names the cause an operator acts on");
+
+            Store.Events.Should().Contain($"drop-faulted:{partition}", "the drop was attempted");
+            Store.IsProvisioned(partition).Should().BeTrue("and it faulted, so the store is still there");
+
+            var record = await Persistence.Read(recordPath, Mesh.JsonSerializerOptions).Take(1)
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+            record.Should().NotBeNull(
+                "the partition must keep its record while its store exists, or nothing can ever "
+                + "retry the teardown");
+            Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>()
+                .IsRecentlyDeleted(partition).Should().BeFalse(
+                    "the partition was NOT torn down, so its tombstone must not stand — a standing one "
+                    + "would refuse every write into a partition that is still there");
+        }
+        finally
+        {
+            Store.FaultDropFor = null;
+        }
     }
 
     /// <summary>
@@ -271,20 +357,30 @@ public class StrandedPartitionRecordTeardownTest(ITestOutputHelper output) : Mon
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var shell = HealedShell("P");
-        StrandedPartitionRecordTeardownHandler.IsHealedShell(shell, "P").Should().BeTrue(
+        StrandedPartitionTeardownValidator.IsHealedShell(shell, "P").Should().BeTrue(
             "a Space named after its partition, no content, created by System, is the heal's residue");
-        StrandedPartitionRecordTeardownHandler.IsHealedShell(shell with { CreatedBy = "alice" }, "P")
+        StrandedPartitionTeardownValidator.IsHealedShell(shell with { CreatedBy = "alice" }, "P")
             .Should().BeFalse("a root a real user created is that user's partition");
-        StrandedPartitionRecordTeardownHandler.IsHealedShell(shell with { Name = "My Space" }, "P")
+        StrandedPartitionTeardownValidator.IsHealedShell(shell with { Name = "My Space" }, "P")
             .Should().BeFalse("a named Space was authored, not healed");
-        StrandedPartitionRecordTeardownHandler.IsHealedShell(shell with { NodeType = PluginLikeNodeType }, "P")
+        StrandedPartitionTeardownValidator.IsHealedShell(shell with { NodeType = PluginLikeNodeType }, "P")
             .Should().BeFalse("a root of any other type was written by an installer or an author");
-        StrandedPartitionRecordTeardownHandler.IsHealedShell(
+        StrandedPartitionTeardownValidator.IsHealedShell(
                 shell with { Content = new NodeTypeDefinition() }, "P")
             .Should().BeFalse("a root with content was authored");
     }
 
     // ——— helpers ———
+
+    private static MeshNode Grant(string partition, string subject) => new($"{subject}_Access", $"{partition}/_Access")
+    {
+        Name = subject, NodeType = CreateNodesRequest.AccessAssignmentNodeType,
+        State = MeshNodeState.Active,
+        Content = new AccessAssignment
+        {
+            AccessObject = subject, Roles = [new RoleAssignment { Role = "Admin" }],
+        },
+    };
 
     private static MeshNode HealedShell(string partition) => new(partition)
     {
