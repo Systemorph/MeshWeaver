@@ -466,6 +466,34 @@ public record NodeTypeDefinition
     public DateTimeOffset? LastReleaseRequestHandledAt { get; init; }
 
     /// <summary>
+    /// 🚨 The release path the LAST SUCCESSFUL compile's release create was minting when it did NOT
+    /// confirmably land — the stamped, readable form of "this node advertises a build no release
+    /// names" (issue #5057). <c>null</c> whenever a release exists for the build
+    /// <see cref="LastCompiledVersion"/> names.
+    ///
+    /// <para>Before this existed the state was SILENT: a settle whose release create expired its
+    /// bound (which stops this process waiting, not the create itself) or was refused stamped
+    /// <see cref="LatestReleasePath"/> with the PREVIOUS build's release and nothing else, so the
+    /// node read healthy from every field — <c>compilationStatus: Ok</c>, sources current, an
+    /// assembly built, a release path present — while the release cut for these bytes was either
+    /// missing or existed unpointed-at. Only a log line, at the moment of the settle, said so.</para>
+    ///
+    /// <para>This is the ONE place to look: the path names the id the attempt minted, so a reader
+    /// can tell "the node exists and the pointer never advanced" from "the create never landed"
+    /// with one read, and the next re-cut reuses this same id (so a late landing is adopted rather
+    /// than duplicated). Cleared by every stamp that lands a release. Mesh-owned, never authored —
+    /// masked by the sync seams like the rest of the compile state.</para>
+    /// </summary>
+    public string? UnreleasedBuildPath { get; init; }
+
+    /// <summary>
+    /// WHY <see cref="UnreleasedBuildPath"/> did not land, in one operator-readable line — the
+    /// reason the settle's re-cut reported (a bound that expired, a refusal, a fault). <c>null</c>
+    /// whenever <see cref="UnreleasedBuildPath"/> is. Mesh-owned, never authored.
+    /// </summary>
+    public string? UnreleasedBuildReason { get; init; }
+
+    /// <summary>
     /// Content-collection name where the latest compiled assembly for this NodeType
     /// lives (e.g. <c>"nodetype-cache"</c>). Pair with <see cref="LatestAssemblyPath"/>
     /// to fetch the bytes via <c>IContentCollection</c>. Set by the compile watcher

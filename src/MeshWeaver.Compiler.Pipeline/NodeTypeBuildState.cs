@@ -94,18 +94,38 @@ public static class NodeTypeBuildState
     /// landed and when no create was attempted, which <see cref="Attempted"/> separates.
     /// </param>
     /// <param name="Attempted">False only for <see cref="NotAttempted"/>.</param>
-    internal sealed record ReleaseCreateOutcome(string? ReleasePath, string? Failure, bool Attempted = true)
+    /// <param name="AttemptedPath">
+    /// 🚨 The path the attempt was MINTING, landed or not (#5057). A failed attempt still names
+    /// the id it chose, because the bound stops this process WAITING and not the create: the node
+    /// may land after the wait gave up, and the ONLY way a re-cut can adopt that late landing —
+    /// or be idempotent with a create still in flight — is to mint the SAME id. Carried out so
+    /// <c>ReleasePostCondition</c> can hand it back in as <c>reusePath</c>, and so the settle can
+    /// stamp it on the node as <c>UnreleasedBuildPath</c>: the one place to look. <c>null</c> only
+    /// for <see cref="NotAttempted"/> and for a failure that happened before any id existed.
+    /// </param>
+    internal sealed record ReleaseCreateOutcome(
+        string? ReleasePath, string? Failure, bool Attempted = true, string? AttemptedPath = null)
     {
         /// <summary>No create was made — this compile was not asked to release anything.</summary>
         internal static readonly ReleaseCreateOutcome NotAttempted = new(null, null, Attempted: false);
 
         /// <summary>The create landed at <paramref name="releasePath"/>.</summary>
         /// <param name="releasePath">The release that now exists.</param>
-        internal static ReleaseCreateOutcome Landed(string releasePath) => new(releasePath, null);
+        internal static ReleaseCreateOutcome Landed(string releasePath) =>
+            new(releasePath, null, AttemptedPath: releasePath);
 
-        /// <summary>The create was attempted and did not land, for <paramref name="reason"/>.</summary>
+        /// <summary>The create was attempted and did not land, for <paramref name="reason"/> —
+        /// before any release id existed (the node could not be composed at all).</summary>
         /// <param name="reason">Why, in one line an operator can act on.</param>
         internal static ReleaseCreateOutcome Failed(string reason) => new(null, reason);
+
+        /// <summary>The create at <paramref name="attemptedPath"/> was attempted and did not
+        /// confirmably land, for <paramref name="reason"/>. The path travels with the reason so a
+        /// re-cut can name the SAME id and a reader can look at the one place the node would be.</summary>
+        /// <param name="reason">Why, in one line an operator can act on.</param>
+        /// <param name="attemptedPath">The release path the attempt was minting.</param>
+        internal static ReleaseCreateOutcome Failed(string reason, string attemptedPath) =>
+            new(null, reason, AttemptedPath: attemptedPath);
 
         /// <summary>True when a release exists for these bytes.</summary>
         internal bool Succeeded => ReleasePath is not null;
@@ -122,13 +142,31 @@ public static class NodeTypeBuildState
                 : " — no create was attempted";
     }
 
+    /// <param name="hub">The hub the compile settled on.</param>
+    /// <param name="nodeTypePath">The NodeType whose release is being cut.</param>
+    /// <param name="result">The successful compile's result — the bytes the release names.</param>
+    /// <param name="pendingNode">The definition as observed at dispatch (release notes, requester).</param>
+    /// <param name="activityPath">The compile <c>_Activity</c>, or null when its create did not land.</param>
+    /// <param name="logger">Where an exception's stack is published.</param>
+    /// <param name="reusePath">
+    /// 🚨 The release path an EARLIER attempt for these SAME bytes was minting (#5057). When given
+    /// and <see cref="IsReusableAttempt"/> agrees it names this result's content, the Release node
+    /// is composed at THAT path instead of a fresh <c>{now}-{hash}</c> id — so a first attempt that
+    /// landed after its bound expired is met as <c>NodeAlreadyExists</c> and adopted, and one that
+    /// never landed is created at the id the stamped state already names. A fresh id could do
+    /// neither: it cannot collide with the late landing (the adoption needs the same id) and it is
+    /// a second create racing the first at a slow owner, which is why the re-cut expired too and
+    /// left the type advertising a build whose release existed unpointed-at. A path for OTHER bytes
+    /// is never reused — the guard mints fresh and says why.
+    /// </param>
     internal static IObservable<ReleaseCreateOutcome> TryCreateReleaseNode(
         IMessageHub hub,
         string nodeTypePath,
         NodeCompilationResult result,
         MeshNode pendingNode,
         string? activityPath,
-        ILogger? logger)
+        ILogger? logger,
+        string? reusePath = null)
     {
         try
         {
@@ -153,16 +191,36 @@ public static class NodeTypeBuildState
             // the process-local AssemblyLocation when the producer hasn't
             // populated the store fields yet (Null store path), and finally
             // to a fresh GUID so the version is never null.
-            var hashSrc = (!string.IsNullOrEmpty(result.Collection) && !string.IsNullOrEmpty(result.ContentPath))
-                ? $"{result.Collection}/{result.ContentPath}"
-                : result.AssemblyLocation ?? Guid.NewGuid().ToString();
-            using var sha = System.Security.Cryptography.SHA256.Create();
-            var hash = Convert.ToBase64String(
-                sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashSrc)))
-                .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
-            var version = $"{DateTime.UtcNow:yyyyMMddHHmmss}-{hash}";
-
+            var hash = ContentHashOf(result);
             var releaseNamespace = $"{nodeTypePath}/{GraphNodeTypeNames.ReleaseSegment}";
+
+            // 🚨 THE SAME ID AS THE ABANDONED ATTEMPT, when there was one for these bytes (#5057).
+            // See the reusePath parameter: a fresh id can neither adopt a late landing nor be
+            // idempotent with a create still in flight. The guard is the hash half of the id — the
+            // durable content reference — so a path can only ever be reused for its own bytes.
+            string version;
+            if (reusePath is not null && IsReusableAttempt(reusePath, releaseNamespace, hash))
+            {
+                version = reusePath[(releaseNamespace.Length + 1)..];
+                logger?.LogInformation(
+                    "CompileWatcher: re-cutting the release for {NodeTypePath} at the id its earlier "
+                    + "attempt was minting, {ReleasePath} — a late landing of that attempt is adopted "
+                    + "at this id, and one that never landed is created here, so no second node is "
+                    + "minted for the same bytes.",
+                    nodeTypePath, reusePath);
+            }
+            else
+            {
+                version = $"{DateTime.UtcNow:yyyyMMddHHmmss}-{hash}";
+                if (reusePath is not null)
+                    logger?.LogWarning(
+                        "CompileWatcher: the earlier attempt's release path {ReusePath} does not name "
+                        + "the bytes this compile produced for {NodeTypePath} (content hash {Hash}) — "
+                        + "NOT reused; minting a fresh id instead. A path is only ever reused for its "
+                        + "own bytes.",
+                        reusePath, nodeTypePath, hash);
+            }
+
             var releasePath = $"{releaseNamespace}/{version}";
 
             // Partition the compiler's combined {path → version} snapshot into
@@ -283,6 +341,58 @@ public static class NodeTypeBuildState
     }
 
     /// <summary>
+    /// The 8-character content hash half of a release id — <c>SHA256(Collection/ContentPath)</c>,
+    /// base64url, from the cross-silo DURABLE reference so two replicas compiling the same store
+    /// version mint the same suffix. Falls back to the process-local <c>AssemblyLocation</c> when
+    /// the producer has no store coordinates, and finally to a fresh GUID so it is never empty.
+    /// Pure over the result; the ONE derivation, shared by the mint and by
+    /// <see cref="IsReusableAttempt"/> so the two cannot drift.
+    /// </summary>
+    /// <param name="result">The compile whose bytes the id names.</param>
+    internal static string ContentHashOf(NodeCompilationResult result)
+    {
+        var hashSrc = (!string.IsNullOrEmpty(result.Collection) && !string.IsNullOrEmpty(result.ContentPath))
+            ? $"{result.Collection}/{result.ContentPath}"
+            : result.AssemblyLocation ?? Guid.NewGuid().ToString();
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        return Convert.ToBase64String(
+                sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashSrc)))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
+    }
+
+    /// <summary>The length of a release id: 14 digits of second stamp, a dash, 8 of content hash.</summary>
+    private const int ReleaseIdLength = 14 + 1 + 8;
+
+    /// <summary>
+    /// Whether <paramref name="attemptedPath"/> — the release path an earlier create attempt was
+    /// minting — may be REUSED for a re-cut of the bytes whose content hash is
+    /// <paramref name="contentHash"/> (#5057). Pure.
+    ///
+    /// <para>🚨 The guard is the hash half of the id, never the path's mere existence. The id is
+    /// <c>{yyyyMMddHHmmss}-{8 chars of SHA256(Collection/ContentPath)}</c>, so an equal suffix means
+    /// equal DURABLE content coordinates — the same store key, the same bytes. Reusing a path whose
+    /// suffix names OTHER bytes would adopt a release for a build this compile did not produce,
+    /// which is worse than the duplicate it prevents. The hash can itself contain <c>-</c> (base64url),
+    /// so the split is positional — the fixed-width second stamp — not "after the last dash".</para>
+    /// </summary>
+    /// <param name="attemptedPath">The earlier attempt's full release path.</param>
+    /// <param name="releaseNamespace">This NodeType's <c>{path}/Release</c> namespace.</param>
+    /// <param name="contentHash">This result's <see cref="ContentHashOf"/>.</param>
+    internal static bool IsReusableAttempt(string? attemptedPath, string releaseNamespace, string contentHash)
+    {
+        if (string.IsNullOrEmpty(attemptedPath) || string.IsNullOrEmpty(contentHash))
+            return false;
+        var prefix = releaseNamespace + "/";
+        if (!attemptedPath.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        var id = attemptedPath[prefix.Length..];
+        return id.Length == ReleaseIdLength
+            && id[14] == '-'
+            && id.AsSpan(0, 14).IndexOfAnyExceptInRange('0', '9') < 0
+            && string.Equals(id[15..], contentHash, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The BOUNDED WAIT around one create, and the classification of however it ends — extracted so a
     /// test drives the production chain rather than only its ingredients.
     ///
@@ -344,22 +454,32 @@ public static class NodeTypeBuildState
                 // attempt for this same compile. (Healthy re-cuts show in the release list as
                 // PAIRS a second or two apart sharing the suffix; the failing one was the single
                 // unpaired id.)
+                //
+                // 🚨 And since #5057 the SAME id is what a re-cut deliberately mints when its first
+                // attempt EXPIRED ITS BOUND rather than colliding in the same second: the bound
+                // stops the wait, not the create, so the first node may land after the wait gave
+                // up — and at the same id that late landing is this collision, adopted here,
+                // instead of a second node nobody points at.
                 if (AdoptOnOwnCollision(ex, releasePath) is { } adopted)
                 {
                     logger?.LogInformation(
                         "CompileWatcher: Release node at {ReleasePath} already exists — adopting "
-                        + "it. The re-cut collided with its own first attempt in the same second; "
-                        + "the id encodes the content hash, so this names the same bytes.",
+                        + "it. This is this same compile's own earlier attempt — either minted in "
+                        + "the same second, or landed after its bound expired and re-cut at the "
+                        + "same id — and the id encodes the content hash, so this names the same "
+                        + "bytes.",
                         adopted);
                     return Observable.Return(ReleaseCreateOutcome.Landed(adopted));
                 }
 
                 // The STACK stays here, where it exists; the one-line REASON travels out, to the
-                // ERROR line and the compile _Activity that report the consequence (#5057).
+                // ERROR line and the compile _Activity that report the consequence (#5057) — and
+                // so does the PATH, so the re-cut can name the same id and the stamp can name the
+                // place to look.
                 logger?.LogWarning(ex,
                     "CompileWatcher: failed to create Release node at {ReleasePath}",
                     releasePath);
-                return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath)));
+                return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath), releasePath));
             });
 
     /// <summary>

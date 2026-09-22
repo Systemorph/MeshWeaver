@@ -95,6 +95,13 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.LastReleaseRequestHandledAt"/>.</summary>
     public DateTimeOffset? LastReleaseRequestHandledAt { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.UnreleasedBuildPath"/> — the stamped form of
+    /// "this build has no release" (#5057). Mirrored for the same reason the release pointer is.</summary>
+    public string? UnreleasedBuildPath { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.UnreleasedBuildReason"/>.</summary>
+    public string? UnreleasedBuildReason { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.ReleaseNotes"/>.</summary>
     public string? ReleaseNotes { get; init; }
 
@@ -208,6 +215,8 @@ public record NodeTypeCompileState
                 RequestedReleaseForce = definition.RequestedReleaseForce,
                 RequestedReleaseBy = definition.RequestedReleaseBy,
                 LastReleaseRequestHandledAt = definition.LastReleaseRequestHandledAt,
+                UnreleasedBuildPath = definition.UnreleasedBuildPath,
+                UnreleasedBuildReason = definition.UnreleasedBuildReason,
                 ReleaseNotes = definition.ReleaseNotes,
                 LatestAssemblyCollection = definition.LatestAssemblyCollection,
                 LatestAssemblyPath = definition.LatestAssemblyPath,
@@ -241,6 +250,7 @@ public record NodeTypeCompileState
         && LatestReleasePath is null && RequestedReleasePath is null
         && RequestedReleaseAt is null && !RequestedReleaseForce && RequestedReleaseBy is null
         && LastReleaseRequestHandledAt is null && ReleaseNotes is null
+        && UnreleasedBuildPath is null && UnreleasedBuildReason is null
         && LatestAssemblyCollection is null && LatestAssemblyPath is null
         && LatestAssemblyMvid is null
         && CompiledSources is null && CurrentSourceVersions is null

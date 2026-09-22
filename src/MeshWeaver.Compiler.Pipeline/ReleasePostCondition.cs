@@ -135,11 +135,45 @@ internal static class ReleasePostCondition
     }
 
     /// <summary>
+    /// What a settle amounts to for the terminal stamp: the release path it should use (the one
+    /// this settle already cut, or the one re-cut from the bytes in hand), the diagnosis line for
+    /// the compile <c>_Activity</c> (<c>null</c> when there is nothing to report), and — when NO
+    /// release exists for this build — the stamped state that says so.
+    /// </summary>
+    /// <param name="ReleasePath">The release that now exists for these bytes, or <c>null</c>.</param>
+    /// <param name="Diagnosis">The compile <c>_Activity</c> line, or <c>null</c> when nothing is to report.</param>
+    /// <param name="UnreleasedBuildPath">
+    /// 🚨 The release path the failed attempt was minting, when the post-condition was violated
+    /// and the re-cut could not repair it (#5057) — stamped onto
+    /// <see cref="NodeTypeDefinition.UnreleasedBuildPath"/> so the state is READABLE on the node
+    /// instead of existing only as a log line at the moment of the settle. <c>null</c> whenever a
+    /// release exists, and whenever the settle was not a violation at all.
+    /// </param>
+    /// <param name="UnreleasedBuildReason">Why, in the re-cut's own words; <c>null</c> with the path.</param>
+    internal sealed record Settle(
+        string? ReleasePath,
+        LogMessage? Diagnosis,
+        string? UnreleasedBuildPath = null,
+        string? UnreleasedBuildReason = null);
+
+    /// <summary>
     /// The settle-path remedy. Emits the release path the terminal stamp should use: the one this
     /// settle already cut, or — when the post-condition is violated — the one re-cut from the bytes
-    /// the compile just produced, or <c>null</c> when even that could not land. The second element
-    /// is the diagnosis line for the compile <c>_Activity</c> (<c>null</c> when there is nothing to
-    /// report), so the official surface carries the story rather than only a log sink.
+    /// the compile just produced, or <c>null</c> when even that could not land. Beside it, the
+    /// diagnosis line for the compile <c>_Activity</c> (<c>null</c> when there is nothing to
+    /// report), so the official surface carries the story rather than only a log sink — and, when
+    /// this build ends with no release, the stamped state that says so.
+    ///
+    /// <para>🚨 <b>The re-cut mints the SAME id the first attempt was minting</b> (#5057). The
+    /// bound on the settle's own create stops this process waiting, not the create — measured on
+    /// the control instance, 4% of release creates land after it, out to 17.8 s — so the first
+    /// attempt's node may well land after the wait gave up. A re-cut at a FRESH id (a different
+    /// second) could neither adopt that late landing (the collision adoption needs the same id) nor
+    /// be idempotent with a create still in flight: it was a second create racing the first at a
+    /// slow owner, which is why it typically expired too, and a pair that both landed left two
+    /// release nodes for identical bytes. Re-cut at the same id, a late landing is met as
+    /// <c>NodeAlreadyExists</c> and adopted, and a create that never landed is made at the id the
+    /// stamped state already names.</para>
     ///
     /// <para>🚨 Never faults and always emits exactly once — the terminal Status write runs in this
     /// observable's OnNext, so a sequence that completed empty or errored would wedge the NodeType
@@ -156,7 +190,7 @@ internal static class ReleasePostCondition
     /// surface at all. It is the first half of the story this method tells.
     /// </param>
     /// <param name="logger">Where the violation and the remedy's outcome are published.</param>
-    internal static IObservable<(string? ReleasePath, LogMessage? Diagnosis)> Restore(
+    internal static IObservable<Settle> Restore(
         IMessageHub hub,
         string nodeTypePath,
         NodeCompilationResult result,
@@ -167,7 +201,7 @@ internal static class ReleasePostCondition
     {
         var before = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         if (Violation(before, result, firstAttempt.ReleasePath) is not { } violation)
-            return Observable.Return<(string?, LogMessage?)>((firstAttempt.ReleasePath, null));
+            return Observable.Return(new Settle(firstAttempt.ReleasePath, null));
 
         // 🚨 WHY THE FIRST CREATE FAILED, on the line an operator reads (#5057). This was the missing
         // half of #781's own diagnosis: the settle's create is best-effort and logged its refusal at
@@ -186,9 +220,16 @@ internal static class ReleasePostCondition
         var access = hub.ServiceProvider.GetService<AccessService>();
         var systemPending = pendingNode with { Content = before! with { RequestedReleaseBy = null } };
 
+        // 🚨 The SAME id as the settle's own attempt (#5057) — see the summary. Only an attempt
+        // that was made and did not land has an id to hand back; a landed one is not a violation,
+        // and one never made minted nothing.
+        var reusePath = firstAttempt is { Attempted: true, Succeeded: false }
+            ? firstAttempt.AttemptedPath
+            : null;
+
         return access
             .RunAsSystem(() => NodeTypeBuildState.TryCreateReleaseNode(
-                hub, nodeTypePath, result, systemPending, activityPath, logger))
+                hub, nodeTypePath, result, systemPending, activityPath, logger, reusePath))
             .Take(1)
             .Catch((Exception ex) =>
             {
@@ -203,7 +244,7 @@ internal static class ReleasePostCondition
             // keeps that fact from becoming an assumption the next operator pays for.
             .DefaultIfEmpty(NodeTypeBuildState.ReleaseCreateOutcome.Failed(
                 "the re-cut produced no answer at all — an inner observable completed without emitting"))
-            .Select<NodeTypeBuildState.ReleaseCreateOutcome, (string? ReleasePath, LogMessage? Diagnosis)>(recut =>
+            .Select(recut =>
             {
                 if (recut.ReleasePath is { } restored)
                 {
@@ -211,18 +252,31 @@ internal static class ReleasePostCondition
                         "[ReleasePostCondition] {HubPath}: release restored at {ReleasePath} — the "
                         + "node no longer advertises a build no release names",
                         nodeTypePath, restored);
-                    return ((string?)restored, (LogMessage?)RestoredEntry(violation, firstFailure, restored));
+                    return new Settle(restored, RestoredEntry(violation, firstFailure, restored));
                 }
 
                 // 🚨 THE LINE THE INCIDENT WAS FILED FROM, and it now SAYS WHY (#5057). It used to
                 // end at "could not be re-cut" — an Error naming the consequence, the stale path and
                 // the build, with the one fact needed to fix it discarded one frame below.
+                //
+                // And the state it describes is STAMPED, not only logged: the path the re-cut was
+                // minting (the first attempt's own, when it could be reused) and the reason travel
+                // to the terminal stamp as UnreleasedBuildPath / UnreleasedBuildReason, so the node
+                // stops reading healthy from every field while its build has no release.
+                var unreleased = recut.AttemptedPath ?? firstAttempt.AttemptedPath;
                 logger?.LogError(
                     "[ReleasePostCondition] {HubPath}: {Violation} — AND the release could not be "
                     + "re-cut{Because}. The node advertises a build no release names; instances will "
-                    + "keep binding '{Stale}' until a release is created for it.",
-                    nodeTypePath, violation, recut.Because, before!.LatestReleasePath);
-                return ((string?)null, (LogMessage?)ViolatedEntry(violation, firstFailure, recut));
+                    + "keep binding '{Stale}' until a release is created for it. Stamped on the node "
+                    + "as unreleasedBuildPath={Unreleased}.",
+                    nodeTypePath, violation, recut.Because, before!.LatestReleasePath,
+                    unreleased ?? "(no id was minted)");
+                return new Settle(
+                    null, ViolatedEntry(violation, firstFailure, recut),
+                    UnreleasedBuildPath: unreleased,
+                    UnreleasedBuildReason: recut.Failure is { Length: > 0 } reason
+                        ? reason
+                        : "the re-cut reported no reason, which is itself a defect in this pipeline");
             });
     }
 
