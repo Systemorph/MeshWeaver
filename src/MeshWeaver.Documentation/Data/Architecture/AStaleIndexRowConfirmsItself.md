@@ -1,7 +1,7 @@
 ---
 Name: A Stale Index Row Confirms Itself
 Category: Architecture
-Description: An index row and the listing that would disprove it come from one source, so absence is not merely unproven but unaskable. The storage providers are the only independent witness — and the answer is worth nothing unless it is asked before the work.
+Description: An index row and the listing that would disprove it come from one source, so absence is not merely unproven but unaskable. The storage providers are the only independent witness — and the answer is worth nothing unless it is asked before the work. And when the rows outlive the ROOT rather than the store, no witness can see it, because the platform re-roots the partition; what was missing there was a verb.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M8 11h6"/></svg>
 ---
 
@@ -139,15 +139,119 @@ A test that only asserts the *value* misses the second; a test that only asserts
 first. One case covering both is `OneContractBreakingProvider_CannotVoidTheAnswer`: it requires an
 answer **and** requires it to be the answering provider's.
 
+## The second defect: the rows outlive the ROOT, and the platform re-roots them
+
+The store witness answers exactly one question — *was the schema dropped?* — and that is the state
+a **completed** teardown leaves. It is not the state the incident's own partition is in.
+
+Measured on the control instance with the first fix already live (image `c55301f3`, replica booted
+2026-09-22 09:03Z):
+
+- `get @Admin/Partition/UWDeepfield` → the record **still exists** (`version: 4`, last modified
+  2026-07-09). `PartitionDropPostDeletionHandler` deletes that record as its second step, so the
+  teardown never ran for this partition — and nothing dropped its schema.
+- `/health` → `bake-report` on that replica still lists `frameworkstale in … UWDeepfield/…` among
+  230 enumerated types; the sweep completed with 0 timed out. The rows are in a store the sweep, as
+  System, can read, and the store witness — truthfully — confirms nothing absent.
+- `get @UWDeepfield` and `path:UWDeepfield` answer nothing from a viewer's seat — but so do they
+  for `BinaryClickerV2`, a partition with a live NodeType the same census names, so this separates
+  nothing (see [Search Coverage and Refusal](../SearchCoverageAndRefusal)).
+
+That is the **orphan** the delete pipeline names itself, at `Critical`, whenever a partition root
+is deleted with no teardown handler matching it: *"the schema is now ORPHANED … drop partition
+manually"*. Before the structural teardown existed (#3436) that was every partition root of a type
+other than `Space`/`User`; the schema, every row in it and the `Admin/Partition` record were all
+left behind.
+
+### Why no witness can see an orphan — by the platform's own definition
+
+There is no store to deny, so the first witness is silent. And a root-row witness — *"a partition
+is its top-level node; a listing that does not hold the root is a real negative"* — was tried on
+this change and retracted, because it contradicts a pinned invariant: `EnsurePartitionBootstrap`
+heals a missing root on the first child create into a partition whose store exists
+(`AMissingRootOverALivePartition_IsStillHealed`, #638/#902), and a System-attributed create counts.
+The compile watcher cutting a `Release` node for one of the surviving NodeType rows — measured on
+the control instance for `UWDeepfield/Section` — is exactly such a create. So the platform
+**re-roots** an orphan under System, with no access grant (there is no creator to grant), and the
+partition comes back as a `Space` shell that nobody can see, own or delete. From then on every
+instrument reports it live: the store is there, the root is there, the record is there, and the
+bake sweep compiles its NodeTypes on every roll, on every replica. "Hasn't existed in ages" and
+"exists to every instrument" are both true, and no probe the sweep could ask tells them apart.
+
+Nor should it: which partitions a mesh holds is not the bake's decision. What was missing was a
+**verb**.
+
+### The verb: deleting the partition's RECORD finishes its teardown
+
+The record — `Admin/Partition/{partition}` — is the one artefact that outlives the data *by
+design*, it lives in the `Admin` partition, and a platform admin reaches it with the ordinary
+delete. Deleting it already meant "this partition is gone"; it simply did nothing.
+`StrandedPartitionTeardownValidator` makes it do what the root delete would have done — the same
+`PartitionDropPostDeletionHandler.DropStores` on every provider, the same cache eviction, under the
+same tombstone the ordinary teardown holds so a concurrent child write cannot heal a root back
+mid-drop (#3451):
+
+```
+delete @Admin/Partition/UWDeepfield
+```
+
+It is a **delete validator**, not a post-deletion handler, and the difference is the ordering the
+ordinary teardown already insists on: the store drop runs *first*, and a drop that fails **refuses
+the delete**, so the record — the only handle by which the teardown can be retried — stays. The
+first draft was a post-deletion handler that wrote the record back on failure; its own test caught
+that a post-deletion handler runs inside the record's deletion scope, where the storage write guard
+refuses the write-back. (`OwnsPartitionProvisioningValidator`, the creation-side mirror, provisions
+the schema from a validator for the same reason.)
+
+🚨 **Only for a partition that is STRANDED**, and that is what keeps a platform admin a platform
+admin rather than a data superuser. Stranded is a **conjunction** — a root nobody can reach the
+partition through, *and* nobody who owns it:
+
+| Leg | What is asked | Why |
+|---|---|---|
+| **the root** | absent (no durable row, no static root), **or** exactly the heal's fingerprint — `Space`, named after the partition, no content, created by System | the ordinary delete needs a root; the shell can only have got there by the bootstrap re-rooting an orphan |
+| **and nobody owns it** | no access grant under `{partition}/_Access`, durable **or** static, and no GitSync configuration | asked for BOTH root shapes: the recursive delete that orphaned a partition enumerated `mesh_nodes` descendants only, and `_Access` rows live in a satellite table the fan-out never visits — so a rootless partition can still carry every grant it ever had, its grant holders still reach its nodes through the synthesized placeholder root, and they re-root it on their next write. Such a partition is somebody's |
+
+Anything else — a real root, an owner, a synced partition, a static partition — is not stranded:
+the record delete proceeds (it is the admin's record) but the store is **not** touched, and it says
+so at Warning (a live partition's record disappearing is already a defect worth a line — it leaves
+the partition out of every listing and out of the routing prime; the owner tears it down through
+its root, or the stale grants are removed first and the record deleted again). Every probe fails
+**closed**: an unreadable root or grant listing reads as *owned*. The verdict is taken inside the
+partition's deletion scope — the claim first, then the reading — so no recreate can land between
+the reading and the drop and be dropped on a verdict about a partition that no longer exists. The
+validator stands down while the partition's own deletion is in flight or on record, so the ordinary
+teardown — which deletes this same record as its second step — never drops twice, and only a
+*direct* delete of the record counts: a record removed as a leaf of a wider recursive delete is
+bookkeeping going, not a request to drop every stranded schema at once.
+
+`StrandedPartitionRecordTeardownTest` pins all of it: the rootless shape drops, the ownerless shell
+drops, a live plugin-like partition keeps its store, a shell with one grant keeps its store, a
+rootless partition with a surviving grant keeps its store, a drop that faults refuses the delete
+with the record intact and the tombstone lifted, the ordinary teardown records exactly one drop,
+and the shell fingerprint is asserted member by member.
+
+After the roll that carries it, the enumeration stops naming `UWDeepfield` the moment its record is
+deleted: the schema goes, the rows go with it, and the next boot's population cannot see them —
+while a replica that is still running keeps only what it already holds, which the store witness
+above now files as `Removed` on its next sweep.
+
 ## What this does NOT fix
 
-Stated plainly, because the issue reported two defects and this page closes one of them:
+Stated plainly, because the issue reported two defects and this page now covers both — what the
+sweep reads is validated against the store, and what no witness can see has a verb — and not the
+rest:
 
-- **The stale rows are still there.** Nothing prunes a NodeType catalog row when its partition is
-  dropped. `PartitionDropPostDeletionHandler` drops the partition's schema and its
-  `Admin/Partition/{id}` definition and stops there; no hook invalidates a catalog listing, a bake
-  report, or a pre-warm population. This change makes the rows **harmless to the readiness gate**,
-  not absent.
+- **The verb is an operator's.** Which partitions a mesh holds is a property of the mesh, so
+  nothing here decides for them: the orphan stays enumerated, and compiled, until an admin deletes
+  its record. `PartitionTeardown` → *Auditing a portal for orphans* is how to find them.
+- **A running replica's standing queries are not told.** A completed teardown removes the rows from
+  the store, so a fresh replica's population cannot see them; but `PartitionDropPostDeletionHandler`
+  evicts only the security-anchored synced queries (`SecurityQueries.PartitionAnchoredQueryIds`),
+  and a mesh-wide fold such as the live record census learns of a row only through a per-row change
+  event, which `DROP SCHEMA` does not emit. Whether a real teardown leaves such a row behind in a
+  fold — the recursive delete does emit a delete per row it can see — was **not measured**; it is
+  named here so the next reader does not have to rediscover the question.
 - **A partition dropped mid-sweep** is not covered: the probe is one reading taken before the first
   type is warmed. The window is small and the consequence is the pre-fix behaviour for that one
   sweep.
@@ -174,3 +278,5 @@ row you cannot see closes nothing, because the instrument and the population are
   what a drop actually removes
 - [Search Coverage and Refusal](../SearchCoverageAndRefusal) — stating a denominator with a zero
 - [NodeType Compilation](../NodeTypeCompilation) — what the bake sweep is for
+- [Partition Teardown](../PartitionTeardown) — the structural teardown, how to audit a portal for
+  the orphans that predate it, and the record delete that finishes one
