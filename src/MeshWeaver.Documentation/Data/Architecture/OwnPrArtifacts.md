@@ -40,6 +40,23 @@ Own-store uploads have no GitHub numeric artifact ID or download URL. The `artif
 output is the own-store identity; `artifact-id` and `artifact-url` are empty. Code using GitHub's
 artifact REST endpoints or `gh run download` must be migrated along with workflow steps.
 
+For `file:` storage the upload/download actions require `expected-store-id`, resolved at the first
+producer with `resolve-artifact-store`. This is the existing filesystem helper's physical identity,
+not a marker minted by the workflow. Every consumer carries that identity unchanged; a reusable
+workflow validates a supplied caller identity before publishing its own outputs. Validation runs
+before selection, so even an empty pattern download fails on the wrong share. The actions expose
+the verified `store-id` separately from the archive's `artifact-locator`.
+
+The resolver defaults to `gha` only when no own store was declared. An unavailable `file:` store
+fails closed. The adapter's raw CLI accepts optional `--expect-store-id` for diagnostics, but the
+composites require it in file mode. These APIs are the compatibility foundation: their presence is
+not proof that callers have migrated or that the private pilot is enabled.
+
+Reusable consumers set `require-expected-store-id: 'true'` on the resolver. It then rejects a file
+store with no caller identity **before** resolving its own mount: independently identifying the
+consumer's mount would not prove it shares the producer's data. Legacy reusable callers remain on
+`gha`; an organization variable alone must not move half of their graph to a different backend.
+
 ## Rollout gates, not assumptions
 
 The transport being present is not proof that a private PR uses it. Rollout requires all of:

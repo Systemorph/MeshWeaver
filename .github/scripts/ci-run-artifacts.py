@@ -4,6 +4,9 @@
 This layer uses ci-artifact-store.py's FileStore for archive transport. It supports only
 file: stores: an unsupported backend or an unavailable mount fails, never falls back.
 Outer actions choose GitHub storage for callers that have not opted into their own store.
+The actions require the run's resolved expected-store-id for file: transfers; the optional CLI
+--expect-store-id guards every operation, including empty collection selection, through FileStore's
+existing identity check. Omitting it is reserved for local diagnostics, not cross-runner handoffs.
 
 Each repository/run/name owns an independent directory under named/ (separate from the older
 runs/ prefix's blanket two-day cleanup). Archives are content-addressed;
@@ -197,7 +200,8 @@ def patterns(pattern: str) -> list[str]:
 class Artifacts:
     """One run's named-artifact namespace, backed by an already mounted FileStore."""
 
-    def __init__(self, store: str, repository: str, run_id: str, attempt: int):
+    def __init__(self, store: str, repository: str, run_id: str, attempt: int,
+                 expect_store_id: str | None = None):
         if not REPO_RE.fullmatch(repository or ""):
             raise Red("repository must be owner/name")
         if not re.fullmatch(r"[1-9][0-9]*", str(run_id)) or attempt < 1:
@@ -208,6 +212,10 @@ class Artifacts:
         if not root.is_absolute() or not root.is_dir():
             raise Red("artifact store must name an existing absolute mounted directory")
         self.store = STORE.make_store("file:" + str(root.resolve()))
+        self.expect_store_id = expect_store_id
+        # Check BEFORE even the writable-root probe: an empty collection on the wrong share
+        # must not be accepted as evidence that the producer published nothing (#4761).
+        self.store.require_store_id(self.expect_store_id)
         unavailable = self.store.reachable()
         if unavailable:
             raise Red(f"artifact store is unavailable: {unavailable}")
@@ -221,6 +229,7 @@ class Artifacts:
 
     def upload(self, name: str, files: dict[str, Path], compression: int = 6,
                retention: int = 7, overwrite: bool = False) -> dict:
+        self.store.require_store_id(self.expect_store_id)
         if not files:
             raise Red("cannot publish an empty artifact")
         if not 1 <= retention <= 90:
@@ -240,7 +249,7 @@ class Artifacts:
             key = f"{prefix}/objects/{self.attempt}/{digest}.tar.gz"
             no_links(self.root / key, self.root)
             with attempt_lock(folder, self.attempt):
-                locator = self.store.put(key, archive)
+                locator = self.store.put(key, archive, expect_store_id=self.expect_store_id)
                 now = time.time()
                 manifest = {"schema": SCHEMA, "repository": self.repository,
                             "runId": self.run_id, "attempt": self.attempt, "name": name,
@@ -297,6 +306,7 @@ class Artifacts:
             raise Red("artifact manifest is invalid or unreadable") from ex
 
     def list(self, name: str = "", pattern: str = "", include_expired: bool = False) -> list[dict]:
+        self.store.require_store_id(self.expect_store_id)
         if name:
             folders = [self.root / self.name_prefix(name)]
         else:
@@ -324,7 +334,7 @@ class Artifacts:
     def verified_archive(self, doc: dict, destination: Path) -> list[tarfile.TarInfo]:
         key, _ = STORE.split_locator(doc["locator"], self.store.spec)
         no_links(self.root / key, self.root)
-        self.store.get(doc["locator"], destination)
+        self.store.get(doc["locator"], destination, expect_store_id=self.expect_store_id)
         if destination.stat().st_size != doc["archiveBytes"]:
             raise Red("artifact archive size differs from its manifest")
         with tarfile.open(destination, "r:gz") as tar:
@@ -405,6 +415,7 @@ def parser() -> argparse.ArgumentParser:
     for verb in ("upload", "download", "list", "probe"):
         command = commands.add_parser(verb)
         command.add_argument("--store", required=True)
+        command.add_argument("--expect-store-id", default=None, help=STORE.EXPECT_HELP)
         command.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
         command.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", ""))
         command.add_argument("--attempt", type=int)
@@ -438,7 +449,8 @@ def main(argv: list[str] | None = None) -> int:
                         and args.repository == os.environ.get("GITHUB_REPOSITORY"))
             attempt = (int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
                        if same_run or args.command == "upload" else sys.maxsize)
-        artifacts = Artifacts(args.store, args.repository, args.run_id, attempt)
+        artifacts = Artifacts(args.store, args.repository, args.run_id, attempt,
+                              expect_store_id=args.expect_store_id)
         if args.command == "upload":
             safe_name(args.name)
             if not 0 <= args.retention_days <= 90:
@@ -450,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise Red("no regular files matched the upload paths")
                 if args.if_no_files_found == "warn":
                     print("::warning::no regular files matched; no artifact was published")
+                emit("store-id", artifacts.store.store_id())
                 emit("file-count", 0)
                 return 0
             doc = artifacts.upload(args.name, files, args.compression_level,
@@ -458,11 +471,13 @@ def main(argv: list[str] | None = None) -> int:
             emit("artifact-digest", doc["archiveSha256"])
             emit("artifact-url", "")  # A file locator is not a browser URL.
             emit("artifact-locator", doc["locator"])
+            emit("store-id", artifacts.store.store_id())
             emit("file-count", len(doc["files"]))
         elif args.command == "download":
             if args.name and args.pattern:
                 raise Red("choose name or pattern, not both")
             count = artifacts.download(Path(args.path), args.name, args.pattern, args.merge_multiple)
+            emit("store-id", artifacts.store.store_id())
             emit("download-path", str(Path(args.path).resolve()))
             emit("file-count", count)
         elif args.command == "list":
