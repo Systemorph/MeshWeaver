@@ -203,6 +203,36 @@ that commit was memex.meshweaver.cloud on core `c84c6c05`. **Read the LINE for t
 `namespace`/`pods` fields for neither** — both portals name their deployment
 `memex-portal-deployment`, so the pod suffix discriminates nothing.
 
+🚨 **A merged fix is the commonest reason a rising counter is not new evidence — and the line's
+wording is how you test each sample against it without a cluster read.** Every fix to a log site
+that changes what the line SAYS hands the reader an image fingerprint that is stronger than any
+timestamp: a timestamp says a sample arrived after a merge, which is not after a roll; the wording
+says which code emitted it. Read it FIRST, then the `generation` + `commit` that `Ops/Status/<id>`
+carries per pod (`imageProvenance` says whether every pod resolves), and only then the counter. The
+routing cluster measured on the day both fixes below merged: three tickets carried 93, 523 and 8
+occurrences, every one printing the pre-fix sentence, on portals whose running commits
+(`git merge-base --is-ancestor <fix merge> <running commit>` → NO, with the older-than control
+answering YES) had neither fix — one condition, re-reported from a pre-fix image, per ticket.
+
+| the log site | before the fix — a sample that prints this came from an image WITHOUT it | after — what a post-roll pod prints |
+|---|---|---|
+| `[ROUTE] Routing back-pressure …` (`RoutingGrain`, [Ordered Route Channels](../OrderedRouteChannels)) | `stream destinations queued N, deepest per-destination queue D` | `ordered channels queued N over M stream destination(s), deepest per-channel queue D` — and a non-zero `Deepest` now means frames of ONE stream stacking, a different defect from the head-of-line shape the old line reported |
+| `[ROUTE] Directed delivery to pod hub … failed — surfacing {ErrorType} DeliveryFailure` on Orleans' `… after "DeactivateOnIdle was called." to invalid activation` ([A Departed Silo Is Not a Delivery Defect](../ADepartedSiloIsNotADeliveryDefect)) | `fail:` and the word `Failed` — the pod-hub leg passed the general classifier's defensive default, so on that leg this rejection could only ever be terminal | `info:` and the word `ShuttingDown` — the level and the word are both the instrument; a `fail:`/`Failed` line for this rejection on a post-roll pod is the fix not holding, and the `info:`/`ShuttingDown` line still recurring at volume is the re-activation bounce the fix deliberately left open |
+
+Two traps this cluster produced, both worth a sentence:
+
+- **A closing keyword parses per issue number, not per sentence.** `Closes #N's classification half`
+  closes #N. The PR that fixed the second row said, two paragraphs later, that the issue stays open
+  for the half it did not fix — and the merge closed it anyway, which left the live, unfixed root
+  with no open record until a reader noticed. Write `Fixes the classification half of #N` (no
+  keyword before the number) when a PR closes half a ticket, and reopen on the PR's own text when
+  it has already happened.
+- **The same episode can hold two fingerprints.** The current identity keys on the exception type,
+  so one log site fills one fingerprint when the exception is captured and another when it is not;
+  the second row above was filed twice from one address, one window and one set of senders,
+  minutes apart. Read the address, the window and the senders across the open tickets of a
+  category before treating either count as its own population.
+
 **So the procedure on a reopened auto-filed issue is:**
 
 1. Read the incident node's `samples[]` — **not** the issue body's evidence table, which was written
