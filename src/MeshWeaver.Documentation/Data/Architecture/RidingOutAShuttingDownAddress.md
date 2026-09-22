@@ -224,6 +224,64 @@ answer that was already in the log. It is #1029's silence on the door #1029 did 
 intermittent only because the owner's own teardown notice usually reaches the reader before the
 change-feed event latches the re-ask.
 
+## 🚨 The promise lives in the TEXT, not in the envelope (#4866)
+
+Everything above assumes the rider can *tell* that it was handed the promise. It cannot do that from
+`ErrorType`. Every classifier that decides "re-probe the fresh activation" against "take this answer
+as final" reads the **message text**:
+
+| Classifier | Where | Reads |
+|---|---|---|
+| `MeshNodeStreamCache.IsTransientOwnerFailure` | `MeshWeaver.Hosting` | `"is shutting down"`, `"Rejecting now"`, `"invalid activation"`, … |
+| `AreaErrorClassifier.IsTransientHubFailure` / `IsHubRecycling` | `MeshWeaver.Layout` | the same markers |
+| `OrleansRoutingService.ClassifyRoutedFailure` | `MeshWeaver.Connection.Orleans` | the same markers |
+| `ShutdownNack.IsAnsweredByOwner` | `MeshWeaver.Messaging.Contract` | `ShutdownNack.Banner` — *"Hub X is shutting down"* |
+
+`ShutdownNack.IsAnsweredByOwner` is deliberately **not** an `ErrorType` test, and its own doc comment
+says why: the routing layer mints that same classification off the very same text, so an
+`ErrorType` test answers the question with the routing layer's echo of it. The banner is the only
+evidence that names the speaker.
+
+So an owner-side refusal that is *stamped* `ErrorType.ShuttingDown` but *worded* without the banner
+is a promise nobody can collect. The envelope is transient, every reader is terminal, and there is
+nothing to grep: no compiler error, no exception, no log line — just a consumer that quietly stops
+asking.
+
+**That is what the disposal drain did.** The seam that answers deliveries still parked behind an
+initialization gate when the hub goes down hand-wrote its sentence — *"Hub X **was disposed** while
+GetDataRequest (id=…) was still deferred …"* — instead of composing it through `ShutdownNack`. It
+carried no banner and matched no marker, so `IsAnsweredByOwner` reported *"the routing layer refused
+you"* and every rider took a recycling hub's answer as final. Measured in #4866: one pod, one
+sub-second window, **105** accepted-and-deferred `GetDataRequest`/`SubscribeRequest` deliveries
+discarded when every hub bound to a `Store/Plugin` overlay self-healed at once — each one answered
+with a sentence that told the sender to *"retry to get the authoritative answer"* in wording the
+sender could not recognise as retryable. The recycle itself was correct; the answer to the work it
+displaced was not.
+
+The fix is the seam, not a new drain: `ShutdownNack.RetryForTheAuthoritativeAnswer` is documented for
+exactly this case — *"work this hub ACCEPTED and can no longer finish — a queued turn that came too
+late, machinery that can no longer be created, **a gate that can never open**"* — and it carries the
+banner and the activation tag by construction. Every fact the old sentence had (the gates recorded at
+deferral, who asked for the teardown, the reason they stated) is preserved inside its `what` clause.
+
+**The general rule: an owner-side refusal is COMPOSED by `ShutdownNack`, never written at the call
+site.** A hand-written one looks right in review — it names the address, it explains itself, it even
+ends with the retry sentence — and it is invisible to every reader that has to act on it.
+
+**And the guard over the producers is an enumeration, which is the same trap one level up.**
+`OwnerAnswerRecognitionGuard` calls each producer and runs the real predicate over what it says, but
+the producer *list* is written by hand: #3017 was filed because a fifth terminal was missing from
+such a list, a sixth was missing at the same time, and the class's own guard passed throughout. This
+drain was the seventh, and it stayed unlisted through both. Adding a refusal seam means adding it
+there — and moving the floor in `TheProducerSetCoversEverySeam`, so the shrink is a decision rather
+than an accident.
+
+Pinned live by `DeferredDeliveryNackedOnDisposeTest.ADiscardedDeferredDelivery_IsRecognisedAsTheOwnersAnswer`,
+which discards a real deferred delivery and requires the refusal the sender actually receives to be
+recognised as the owner's, by `Address` and by path, with an activation tag on it — with a different
+address as the negative control, and the gate name and stated reason as positive controls so a
+rewording cannot trade one fact for another.
+
 Since #3498 the re-ask arm mirrors the initial one: `ShuttingDown` is still the promise it rides out;
 any other classification faults the stream's subscribers with the classified error and disposes the
 keep-alive. A reader of a deleted node learns "gone" milliseconds after the delete, and a stream never
