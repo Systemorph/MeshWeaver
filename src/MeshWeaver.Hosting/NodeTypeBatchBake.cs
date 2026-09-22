@@ -1156,11 +1156,21 @@ internal static class NodeTypeBatchBake
                     logger?.LogWarning(
                         "[BatchBake] {NodeTypePath}: no release was cut for this build{Because}. The "
                         + "stamp below keeps the previous release path, so the type will advertise a "
-                        + "build no release names.",
-                        typePath, outcome.Because);
+                        + "build no release names — stamped on the node as "
+                        + "unreleasedBuildPath={Unreleased} so the state is readable, not only logged.",
+                        typePath, outcome.Because, outcome.AttemptedPath ?? "(no id was minted)");
             })
+            // #5057 — the same stamped state the settle path writes: a build with no release says
+            // so ON THE NODE. The bake is unwatched by design, which is exactly why its log line
+            // alone was never enough.
             .SelectMany(outcome => WriteStamp(
-                mesh, typeNode, ok, result, error, outcome.ReleasePath, startedAt, logger))
+                mesh, typeNode, ok, result, error, outcome.ReleasePath, startedAt, logger,
+                unreleasedBuildPath: outcome is { Attempted: true, Succeeded: false }
+                    ? outcome.AttemptedPath
+                    : null,
+                unreleasedBuildReason: outcome is { Attempted: true, Succeeded: false }
+                    ? outcome.Failure
+                    : null))
             .Select(_ =>
             {
                 if (ok)
@@ -1283,11 +1293,14 @@ internal static class NodeTypeBatchBake
         Exception? error,
         string? releasePath,
         DateTimeOffset startedAt,
-        ILogger? logger)
+        ILogger? logger,
+        string? unreleasedBuildPath = null,
+        string? unreleasedBuildReason = null)
     {
         var gate = mesh.ServiceProvider.GetService<MeshPublicationGate>();
         IObservable<Unit> Stamp() =>
-            BuildStamp(mesh, typeNode, ok, result, error, releasePath, startedAt, logger);
+            BuildStamp(mesh, typeNode, ok, result, error, releasePath, startedAt, logger,
+                unreleasedBuildPath, unreleasedBuildReason);
         return gate is null
             ? Observable.Defer(Stamp)
             : gate.Publish($"NodeType compile stamp for {typeNode.Path}", Stamp);
@@ -1305,7 +1318,9 @@ internal static class NodeTypeBatchBake
         Exception? error,
         string? releasePath,
         DateTimeOffset startedAt,
-        ILogger? logger)
+        ILogger? logger,
+        string? unreleasedBuildPath,
+        string? unreleasedBuildReason)
     {
         var storage = mesh.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
@@ -1364,7 +1379,8 @@ internal static class NodeTypeBatchBake
                         // LastCompiledVersion always names a store key that has bytes.
                         ? NodeTypeCompilationHelpers.ApplyCompileSuccess(
                             def, result!, typeNode.Version, activityPath: null, releasePath,
-                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
+                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
+                            unreleasedBuildPath, unreleasedBuildReason)
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null,
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,

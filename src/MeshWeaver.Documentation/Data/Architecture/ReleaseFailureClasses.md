@@ -273,14 +273,98 @@ REFUSED for `NodeAlreadyExists`, which requires the same id, and #3407's reasoni
 on the collision happening *in the same second*. A retry one bound later collides with nothing, so a
 second node is created and nothing adopts either.
 
-**The remedy this points at — deliberately not taken here.** The re-cut should reuse the abandoned
-attempt's release path rather than mint a fresh one: the same id turns the late landing into a
-`NodeAlreadyExists` refusal, which the adoption mechanism already resolves correctly, and the
-duplicate stops being minted. That is a behavioural change to release-id minting with a genuine
-in-flight race to design against, and it needs a control that drives expiry → retry → adopt. It is
-not something to bolt onto a diagnosability fix, and **widening the bound is not the alternative**:
-a tail that reaches 17.8 s would only move the same failure further out while making it rarer and
-therefore harder to catch.
+**The remedy this points at** — taken in the change after the diagnosability one, and described in
+the next section — is that the re-cut reuses the abandoned attempt's release path rather than
+minting a fresh one: the same id turns the late landing into a `NodeAlreadyExists` refusal, which the
+adoption mechanism already resolves correctly, and the duplicate stops being minted. It is a
+behavioural change to release-id minting with a genuine in-flight race to design against, so it was
+kept apart from the diagnosability fix and given its own control. **Widening the bound is not the
+alternative**: a tail that reaches 17.8 s would only move the same failure further out while making
+it rarer and therefore harder to catch.
+
+## The re-cut mints the SAME id, and a build with no release is STAMPED (#5057, second half)
+
+### Why a fresh id could neither adopt nor be idempotent
+
+Two things a re-cut has to be able to do, and a fresh id can do neither:
+
+1. **Adopt the late landing.** The collision adoption (#3407) fires only on `NodeAlreadyExists`,
+   which needs the *same* id. A re-cut minted one second later shares the hash suffix and nothing
+   else, so the first node — which lands, 4% of the time, after the wait gave up — is never
+   recognised as this compile's own release. The pointer stays on the previous build with the
+   release sitting right there.
+2. **Be idempotent with a create still in flight.** At a slow owner the first create is still
+   queued when the re-cut arrives. At a fresh id that is a *second* create behind the first, at the
+   same owner, under the same bound — which is why the re-cut typically expired too: the samples'
+   "Re-cutting…" and "…could not be re-cut" lines sit exactly one bound apart. When both eventually
+   landed, the store held two release nodes for identical bytes.
+
+### The change
+
+- `ReleaseCreateOutcome` carries `AttemptedPath` — the id an attempt was minting — on every
+  attempted outcome, landed or failed. A failure before any id existed (the node could not be
+  composed) carries none, and `NotAttempted` carries none.
+- `TryCreateReleaseNode` takes a `reusePath`. `ReleasePostCondition.Restore` hands it the settle's
+  own failed attempt's path, so the re-cut composes the Release node at **that** id. A late landing
+  is then met as `NodeAlreadyExists` and adopted; a create that never landed is made at the id the
+  stamped state already names. Either way, one node.
+- 🚨 **A path is reused only for its own bytes.** `IsReusableAttempt` requires the id's hash half
+  to equal `ContentHashOf(result)` — the durable content reference, `SHA256(Collection/ContentPath)`,
+  which is what makes two attempts (or two replicas) for the same store version mint the same
+  suffix. A path whose suffix names other bytes is refused with a `Warning` naming it, and a fresh
+  id is minted. The split is positional (the fixed-width second stamp), because the hash itself may
+  contain the dash the id uses.
+- 🚨 **A build that ends with no release is STAMPED as such.** When the post-condition is violated
+  and even the re-cut could not land, `ApplyCompileSuccess` writes `UnreleasedBuildPath` (the id the
+  attempt was minting — the one place to look) and `UnreleasedBuildReason` onto the
+  `NodeTypeDefinition`, beside the previous build's `LatestReleasePath` it has always kept. The batch
+  bake stamps the same pair from its own attempt. Both clear the moment any release lands, and both
+  are mesh-owned — masked by the sync seams and mirrored on the compile-state satellite like every
+  other release pointer. Before this the node **read healthy from every field** — `compilationStatus:
+  Ok`, sources current, an assembly built, a release path present — and the only trace was an
+  `Error` line at the moment of the settle.
+
+What deliberately did **not** change: `RequestedReleaseAt` is still never cleared, so every later
+compile of a type that once had a request consumed re-enters the post-condition. That is the correct
+consequence, not a defect: a rebuild on a new framework produces bytes no existing release names,
+and a released type owes a release per build. The re-cut now costs one node per build instead of
+two, and nothing else about the trigger moved.
+
+### What a roll's two-image window does
+
+Measured on the control instance during a roll, with two replicas on two framework identities
+(`s6f66941` and `sdc4cbaa`) both compiling: `get @MyAi/Panel` at v3420 read `lastCompiledVersion:
+3418`, `latestAssemblyPath: MyAi_Panel/v3418-sdc4cbaa-…`, `requestedReleaseAt ==
+lastReleaseRequestHandledAt` — and `latestReleasePath` naming a release node whose
+`assemblyStoreVersion` was **3343**, artifact `v3343-s6f66941-…`, cut half an hour earlier by the
+other replica. The shape this page is about, alive on an image that already carried the
+diagnosability half. Each replica cuts a release for its own bytes and the shared record's pointer
+is whichever landed last; the log line that would say which attempt failed and why was on a pod
+whose log could not be read from outside the cluster without a write, so it is not quoted here.
+
+### The control
+
+`ReleaseRecutReusesTheAttemptedIdTest`, on a real monolith mesh. The FIRST attempt is driven through
+the production seam `NodeTypeBuildState.Bounded` on a `HistoricalScheduler` over a **real**
+`CreateNode` whose landing is delivered to the waiter only after the clock has expired the bound —
+the wait gives up, the create lands anyway. The production remedy, `ReleasePostCondition.Restore`,
+is then handed that outcome and must answer with the first attempt's path and leave exactly one
+release node under `{type}/Release`. With the re-cut reverted to a fresh id (`reusePath: null`) the
+same test is red on both assertions — a different path comes back and a second node exists. Beside
+it: the hash guard on the real mesh (a foreign path is not reused and the refusal is logged), the
+guard as a pure table (including a hash containing a dash), the outcome carrying its path through
+the real bounded chain, and the stamp's three transitions (set / cleared by a landing / cleared by a
+settle with nothing to say).
+
+### What closes the incident
+
+On the control instance, after a roll carrying this change, for a type the sweep re-bakes:
+`get @<type>` shows a `latestReleasePath` whose release node's `assemblyStoreVersion` equals the
+type's `lastCompiledVersion`, and `unreleasedBuildPath: null`. A `[ReleasePostCondition]` `Error`
+line, if any, ends in a reason and is followed by `release restored at …` naming the **first**
+attempt's id. The `{type}/Release` listing shows no new pair of ids ten seconds apart sharing a
+suffix. A type that still carries `unreleasedBuildPath` is a finding with its reason written on it —
+which is the state this section exists to make visible.
 
 ### The control
 
