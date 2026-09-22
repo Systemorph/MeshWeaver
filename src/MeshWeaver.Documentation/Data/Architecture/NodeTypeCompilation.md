@@ -1767,7 +1767,7 @@ not a conclusion.
 
 🚨 **Where it must NOT go is inside the probe as written.** `ProbeSharedEmitState` runs once per failed
 emit ATTEMPT, and `EmitToDiskWithRetry` makes `DiskEmitAttempts` of them per compile — measured on
-2026-09-22, **58 probe runs across 27 reported compile failures in one occurrence**. Tier-1 promotion
+2026-09-22, **58 probe runs across the 26 NRE compile failures of one occurrence**. Tier-1 promotion
 needs tens of invocations plus a background compile, so a naive "loop until it tiers up" inside the
 leg multiplies a ~1 s probe by that factor **58 times over**, and turns a suite that dies at the
 900 s cap into one that dies there sooner and with less printed. The repeat belongs once per PROCESS
