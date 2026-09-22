@@ -163,6 +163,22 @@ name: Node repo publish-bake (reusable)
 on:
   workflow_call:
     inputs:
+      artifact-store-id:
+        description: >-
+          Physical store identity resolved by the caller's first producer. Pass the same value
+          through the complete artifact graph; an independent consumer resolution is not a proof.
+          Required for file: storage; the caller resolves its identity once before any handoff.
+        required: false
+        type: string
+        default: ''
+      artifact-store:
+        description: >-
+          Named artifact store shared by every producer and consumer. Default gha preserves
+          unmigrated callers; org variables never implicitly select the named backend.
+          file:/mounted/shared/path moves all artifacts to our runners; an unavailable store fails.
+        required: false
+        type: string
+        default: 'gha'
       bake-source:
         description: >-
           The producing repo's source segment in the publication layout
@@ -579,6 +595,13 @@ jobs:
       contents: read
       id-token: write     # azure/login OIDC — no long-lived storage secret in any node repo
     steps:
+      - name: Resolve and bind the artifact store
+        id: store
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.artifact-store || 'gha' }}
+          expected-store-id: ${{ inputs.artifact-store-id }}
+          require-expected-store-id: 'true'
       # 🚨 NO SKIP-TRAPDOOR: the publish credentials are asserted RED here, naming exactly what
       # to provision — never `continue-on-error`, never an if-secret-set skip. A grey skip would
       # silently restore the every-pod-rebakes-everything regression this lane closes.
@@ -1268,13 +1291,16 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
+          package-manager-cache: ${{ steps.store.outputs.store == 'gha' }}
       - name: Pre-bake hook
         if: inputs.pre-bake-script != ''
         run: ${{ inputs.pre-bake-script }}
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
           pattern: ${{ inputs.module-artifacts }}
           path: ${{ runner.temp }}/ext-bundles
           merge-multiple: true

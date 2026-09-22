@@ -51,9 +51,15 @@ a coordination layer over a build that is correct without it, so its unavailabil
 build and may never cost a green (maintainer, 2026-09-02, after the registry answered 503 to three
 Reinsurance bakes — core #3119). Every write command degrades the same way: a `::warning`, exit 0.
 
+The declared ARTIFACT STORE is a different dependency: its preflight runs before the optional-ledger
+catch, and unreadable/corrupt bytes fail RED. In own-store mode no GitHub artifact API fallback is
+allowed. An absent historical object may rebuild; a failed storage measurement may not pretend it
+was absent. A missing durable copy may reuse the named artifact in the same store, with its stale
+durable locator removed from the decision so the downloader uses the bytes actually verified.
+
 USAGE (the lane's steps; every command reads the run identity from GITHUB_* and the endpoint from
 MW_LEDGER_URL / MW_LEDGER_TOKEN)
-  decide    --keys @keys.json --matrix @matrix.json --publish true|false --lane L --out-matrix F --out-build F
+  decide    --keys @keys.json --matrix @matrix.json --publish true|false --lane L --out-matrix F --out-build F [--artifact-store SPEC]
   heartbeat --key K
   record    --key K --status Built --bundle FILE --artifact-name N --retention-days 7 [--bundle-locator L] [--version V] [--platform-identity I]
   record    --key K --status Tested [--trx FILE]
@@ -69,11 +75,14 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -96,6 +105,10 @@ TEST_NAMES_CAP = 50
 
 class LedgerError(RuntimeError):
     """The ledger could not be read or written — unavailable, refused, or malformed. Never 'absent'."""
+
+
+class ArtifactStoreError(RuntimeError):
+    """A declared artifact store failed; never caught as optional ledger coordination."""
 
 
 class ToolError(LedgerError):
@@ -324,65 +337,129 @@ def summary_of(rec: dict) -> dict:
     return {k: rec.get(k) for k in keep if rec.get(k) is not None}
 
 
-def store_fetchable(rec: dict, say) -> tuple[bool, str]:
-    """Can THIS run fetch the record's bundle from the object store on our own infra?
+class ArtifactAccess:
+    """Resolve a declared transport before optional coordination can fail open.
 
-    Only when the run resolved the SAME store the record names (MW_ARTIFACT_STORE, set by the lane
-    from `select`'s one resolution) — a locator from another account or another mount is not
-    something to guess at — and only when the object is actually there, asked of the store, never
-    assumed from the record. A `False` here is not an error: the caller falls through to the GitHub
-    artifact, and past that to a rebuild."""
-    st = rec.get("bundleStore")
-    if not isinstance(st, dict) or not st.get("locator"):
-        return False, "the record names no object-store copy"
-    mine = (os.environ.get("MW_ARTIFACT_STORE") or "").strip()
-    if not mine or mine in ("gha", "none"):
-        return False, "this run resolved no object store, so it cannot read the record's copy"
-    if not str(st["locator"]).startswith(mine + "/"):
-        return False, f"the record's copy is in {str(st['locator']).split('#')[0]}, and this run resolved {mine}"
-    helper = str(Path(__file__).with_name("ci-artifact-store.py"))
-    try:
-        proc = subprocess.run([sys.executable, helper, "probe", "--store", mine, "--locator", st["locator"]],
-                              capture_output=True, text=True, timeout=180)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, f"the store probe could not run: {exc}"
-    if proc.returncode != 0:
-        return False, f"{st['locator'].split('#')[0]} is not in the store ({(proc.stderr or proc.stdout).strip()[:200]})"
-    return True, f"the object store copy {st['locator'].split('#')[0]}"
+    Empty/gha keeps the public caller's existing artifact API path. A file: store selects only
+    our durable or named artifacts: missing historical bytes may require a rebuild, but an
+    unavailable mount, malformed manifest, or corrupt bytes are a storage failure and are RED.
+    """
+
+    def __init__(self, declared: str | None, me: dict, expected_store_id: str | None = None):
+        self.spec = (os.environ.get("MW_ARTIFACT_STORE", "") if declared is None else declared).strip()
+        self.own = self.spec not in ("", "gha")
+        self.layer = None
+        self.store = None
+        self.expected_store_id = expected_store_id
+        if not self.own:
+            return
+        try:
+            path = Path(__file__).with_name("ci-run-artifacts.py")
+            spec = importlib.util.spec_from_file_location("ci_run_artifacts_for_ledger", path)
+            self.layer = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(self.layer)
+            # Constructor asserts an existing writable mount and valid run identity. No mkdir
+            # can turn a missing mount into an empty local store which would trigger rebuilds.
+            self.layer.Artifacts(self.spec, me["repo"], str(me["runId"]), int(me["attempt"]),
+                                 expect_store_id=self.expected_store_id)
+            self.store = self.layer.STORE.make_store(self.spec)
+        except Exception as exc:
+            raise ArtifactStoreError(f"declared artifact store preflight failed: {exc}") from exc
+
+    def durable(self, rec: dict) -> tuple[bool, str]:
+        """A locator's absence is distinct from unreadable or digest-mismatched bytes."""
+        saved = rec.get("bundleStore")
+        if not isinstance(saved, dict) or not saved.get("locator"):
+            return False, "the record names no durable object"
+        locator = str(saved["locator"])
+        if not locator.startswith(self.spec + "/"):
+            return False, "the durable locator belongs to a different store"
+        try:
+            self.store.require_store_id(self.expected_store_id)
+            key, digest = self.layer.STORE.split_locator(locator, self.spec)
+            if not digest:
+                raise ArtifactStoreError("durable locator carries no SHA-256")
+            path = self.store._path(key)
+            self.layer.no_links(path, self.store.root)
+            try:
+                path.stat()
+            except FileNotFoundError:
+                return False, "the durable object is absent"
+            if not path.is_file():
+                raise ArtifactStoreError("durable locator is not a regular file")
+            actual = sha256_file(path)
+            if actual != digest or (rec.get("bundleSha256") and actual != rec["bundleSha256"]):
+                raise ArtifactStoreError("durable bundle bytes do not match the recorded SHA-256")
+            return True, "verified durable bundle in the declared artifact store"
+        except (self.layer.Red, OSError, ValueError) as exc:
+            raise ArtifactStoreError(f"durable artifact could not be verified: {exc}") from exc
+
+    def named(self, rec: dict, art: dict) -> tuple[bool, str]:
+        """Verify the source run's named archive and its bundle against the ledger digest."""
+        try:
+            source = self.layer.Artifacts(self.spec, art["repo"], str(art["runId"]), sys.maxsize,
+                                          expect_store_id=self.expected_store_id)
+            manifests = source.list(art["name"], include_expired=True)
+            if not manifests or manifests[0]["expired"]:
+                return False, "the named artifact is absent or expired in the declared store"
+            manifest = manifests[0]
+            expected = rec.get("bundleSha256")
+            if not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected):
+                return False, "the ledger record carries no valid bundle digest"
+            with tempfile.TemporaryDirectory(prefix="ledger-artifact-") as temp:
+                archive = Path(temp) / "bundle.tar.gz"
+                source.verified_archive(manifest, archive)
+                with tarfile.open(archive, "r:gz") as tar:
+                    members = tar.getmembers()
+                    if len(members) != 1 or not members[0].name.endswith(".module.nupkg"):
+                        raise ArtifactStoreError("named bundle artifact must contain exactly one module package")
+                    digest = hashlib.sha256()
+                    with tar.extractfile(members[0]) as stream:
+                        for chunk in iter(lambda: stream.read(1 << 20), b""):
+                            digest.update(chunk)
+                    if digest.hexdigest() != expected:
+                        raise ArtifactStoreError("named bundle bytes do not match the ledger SHA-256")
+            return True, f"verified named artifact {art['name']} of run {art['runId']} in our store"
+        except (self.layer.Red, OSError, tarfile.TarError, EOFError, ValueError) as exc:
+            raise ArtifactStoreError(f"named artifact could not be verified: {exc}") from exc
 
 
-def artifact_fetchable(rec: dict, me: dict, say) -> tuple[bool, str]:
-    """Can THIS run get the record's bundle bytes? The object store on our own infra first — that is
-    where the durable copy lives once a lane names a store — then the GitHub artifact: same repo
-    (GITHUB_TOKEN is repo-scoped) and still present and unexpired, asked of the API, never assumed
-    from a date. Either answer is a reuse; neither is a rebuild, loudly."""
-    ok, why = store_fetchable(rec, say)
-    if ok:
-        return True, why
-    if rec.get("bundleStore"):
-        say(f"  store: {why} — falling through to the GitHub artifact")
+def artifact_fetchable(rec: dict, me: dict, say, access: ArtifactAccess | None = None) -> tuple[bool, str, dict | None]:
+    """Return availability and ONLY the durable locator actually verified for this selection."""
+    access = access or ArtifactAccess(None, me)
+    if access.own:
+        ok, why = access.durable(rec)
+        if ok:
+            return True, why, rec.get("bundleStore")
+        if rec.get("bundleStore"):
+            say(f"  store: {why} — checking the named artifact in the same declared store")
     art = rec.get("bundleArtifact")
     if not isinstance(art, dict) or not art.get("name") or not art.get("runId"):
-        return False, "the record names no bundle artifact"
+        return False, "the record names no bundle artifact", None
     if art.get("repo") != me["repo"]:
-        return False, f"the bundle lives in {art.get('repo')}'s run {art.get('runId')} — this run's token reads only {me['repo']}"
+        return False, f"the bundle lives in {art.get('repo')}'s run {art.get('runId')} — reuse is scoped to {me['repo']}", None
+    if access.own:
+        ok, why = access.named(rec, art)
+        # The saved bundleStore may be stale. Passing it through here would make pack download
+        # the missing durable copy even though the source just verified was the NAMED artifact.
+        return ok, why, None
     gh = os.environ.get("MW_LEDGER_GH", "gh")
     try:
         proc = subprocess.run([gh, "api", f"repos/{art['repo']}/actions/runs/{art['runId']}/artifacts?name={art['name']}"],
                               capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
-        return False, f"gh api failed: {exc}"
+        return False, f"gh api failed: {exc}", None
     if proc.returncode != 0:
         return False, (f"gh api answered exit {proc.returncode} for run {art['runId']}'s artifacts — "
-                       f"{(proc.stderr or proc.stdout).strip()[:200]} (the caller's job needs `permissions: actions: read` to reuse bundles)")
+                       f"{(proc.stderr or proc.stdout).strip()[:200]} (the caller's job needs `permissions: actions: read` to reuse bundles)"), None
     try:
         found = [a for a in json.loads(proc.stdout).get("artifacts", []) if a.get("name") == art["name"]]
     except json.JSONDecodeError:
-        return False, "gh api answered non-JSON"
+        return False, "gh api answered non-JSON", None
     live = [a for a in found if not a.get("expired")]
     if not live:
-        return False, f"artifact {art['name']} of run {art['runId']} is gone or expired"
-    return True, f"artifact {art['name']} of run {art['runId']}"
+        return False, f"artifact {art['name']} of run {art['runId']} is gone or expired", None
+    return True, f"artifact {art['name']} of run {art['runId']}", None
 
 
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
@@ -401,8 +478,10 @@ def claim_content(entry: dict, key_info: dict, me: dict, attempts: int, previous
     return content
 
 
-def decide_one(ledger: Ledger, entry: dict, key_info: dict, me: dict, publishing: bool, say) -> tuple[str, dict]:
+def decide_one(ledger: Ledger, entry: dict, key_info: dict, me: dict, publishing: bool, say,
+               access: ArtifactAccess | None = None) -> tuple[str, dict]:
     """One pass: ('build'|'reuse'|'wait'|'blocked', detail). 'wait' asks the caller to poll and call again."""
+    access = access or ArtifactAccess(None, me)
     key = key_info["key"]
     need_test = entry.get("test", True) is not False
     rec = ledger.get(key)
@@ -427,7 +506,7 @@ def decide_one(ledger: Ledger, entry: dict, key_info: dict, me: dict, publishing
         return "blocked", {"holder": holder, "phase": rec.get("phase"), "failure": (rec.get("failure") or "")[:1500],
                            "attempts": rec.get("attempts"), "tests": rec.get("tests")}
     if st in ("Built", "Tested", "Published"):
-        ok, why = artifact_fetchable(rec, me, say)
+        ok, why, verified_store = artifact_fetchable(rec, me, say, access)
         if ok:
             more_test = need_test and st not in ("Tested", "Published")
             more_publish = publishing and st != "Published"
@@ -439,7 +518,7 @@ def decide_one(ledger: Ledger, entry: dict, key_info: dict, me: dict, publishing
                     return "wait", {"holder": holder, "status": st, "heartbeatAgeS": 0}
             return "reuse", {"holder": holder, "status": st, "needTest": more_test, "needPublish": more_publish,
                              "artifact": rec.get("bundleArtifact"), "bundleSha256": rec.get("bundleSha256"),
-                             "store": rec.get("bundleStore"),
+                             "store": verified_store,
                              "platformIdentity": rec.get("platformIdentity"), "source": why}
         say(f"  {entry['module']}: {st} record at {holder} is not reusable — {why}")
     # stale claim, non-blocking failure, or a terminal record whose bundle is gone: take the key over
@@ -452,8 +531,9 @@ def decide_one(ledger: Ledger, entry: dict, key_info: dict, me: dict, publishing
 
 
 def decide(ledger: Ledger, matrix: list[dict], keys: list[dict], me: dict, publishing: bool,
-           wait_max_s: float, poll_s: float, say) -> tuple[list[dict], list[str]]:
+           wait_max_s: float, poll_s: float, say, access: ArtifactAccess | None = None) -> tuple[list[dict], list[str]]:
     """Every entry annotated with a `ledger` object; returns (annotated matrix, blocking problems)."""
+    access = access or ArtifactAccess(None, me)
     by_module = {k["module"]: k for k in keys}
     pending = list(matrix)
     decided: dict[str, dict] = {}
@@ -487,7 +567,7 @@ def decide(ledger: Ledger, matrix: list[dict], keys: list[dict], me: dict, publi
                 uncoordinated(e, k, f"the ledger is unavailable ({ledger.down})")
                 continue
             try:
-                verdict, detail = decide_one(ledger, e, k, me, publishing, say)
+                verdict, detail = decide_one(ledger, e, k, me, publishing, say, access)
             except LedgerError as exc:
                 uncoordinated(e, k, f"the ledger is unavailable ({str(exc)[:200]})")
                 continue
@@ -567,9 +647,9 @@ def record(ledger: Ledger, a: argparse.Namespace, me: dict, say) -> int:
         fields["bundleArtifact"] = {"repo": me["repo"], "runId": me["runId"], "name": a.artifact_name,
                                     "expiresAt": iso(now_utc() + dt.timedelta(days=a.retention_days))}
         # 🚨 THE DURABLE COPY, when the lane shelved one on our own infra (ci-artifact-store.py).
-        # The GitHub artifact above stays either way — the run's OWN consumers read it — but when a
-        # store holds the bytes, THAT is what a later run fetches and the artifact can expire in a
-        # day instead of seven. Recorded as a locator (`<store spec>/<key>#sha256=<hex>`), so a
+        # The named artifact above stays either way — on GitHub or in the caller's declared own
+        # store. The optional durable copy is keyed by build identity rather than run and can
+        # outlive that named handoff. Recorded as a locator (`<store spec>/<key>#sha256=<hex>`), so a
         # reader that resolved a DIFFERENT store refuses it rather than fetching the wrong bytes.
         # Absent ⇒ exactly the pre-2026-09-17 record: the artifact is the only durable copy.
         if getattr(a, "bundle_locator", ""):
@@ -857,7 +937,9 @@ def self_test() -> int:
             check("a run that resolved NO store cannot use the store copy — it builds, loudly",
                   v == "build" and d["takeover"], f"{v} {d}")
             shelved(loc)
-            os.environ["MW_ARTIFACT_STORE"] = f"file:{shelf}-elsewhere"
+            elsewhere = root / "other-ci-artifacts"
+            elsewhere.mkdir()
+            os.environ["MW_ARTIFACT_STORE"] = f"file:{elsewhere}"
             v, d = decide_one(L(), entry, kinfo, run(run_id="704"), False, quiet)
             check("a store copy in a DIFFERENT store is never guessed at — it builds",
                   v == "build" and d["takeover"], f"{v} {d}")
@@ -1025,6 +1107,10 @@ def main() -> int:
     p.add_argument("--phase")
     p.add_argument("--bundle")
     p.add_argument("--artifact-name")
+    p.add_argument("--artifact-store", default=os.environ.get("MW_ARTIFACT_STORE", ""),
+                   help="explicit artifact transport: empty/gha or file:<mounted share>; configured failures are fatal")
+    p.add_argument("--expect-store-id", default=None,
+                   help="physical store identity resolved by this run's first producer")
     p.add_argument("--bundle-locator", default="",
                    help="ci-artifact-store.py locator of the durable copy on our own infra, when the lane shelved one")
     p.add_argument("--retention-days", type=int, default=7)
@@ -1047,6 +1133,15 @@ def main() -> int:
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
                 fh.write("\n".join(lines) + "\n")
 
+    # The ledger may be unavailable without failing a build. The declared byte store may NOT:
+    # validate it before constructing the ledger so even missing ledger credentials cannot hide
+    # a missing mount and silently send the lane back to GitHub storage or rebuilding everything.
+    try:
+        access = ArtifactAccess(a.artifact_store, me, a.expect_store_id) if a.command == "decide" else None
+    except ArtifactStoreError as exc:
+        print(f"::error title=CI artifact store::{exc}", file=sys.stderr)
+        return 1
+
     try:
         ledger = Ledger(os.environ.get("MW_LEDGER_URL", ""), os.environ.get("MW_LEDGER_TOKEN", ""), say)
         if a.command == "decide":
@@ -1056,7 +1151,7 @@ def main() -> int:
             keys = load_json_arg(a.keys)
             publishing = str(a.publish).lower() == "true"
             say(f"ledger: deciding {len(matrix)} module(s) as {me['url']} (publish={publishing})")
-            out, problems = decide(ledger, matrix, keys, me, publishing, a.wait_max, a.poll, say)
+            out, problems = decide(ledger, matrix, keys, me, publishing, a.wait_max, a.poll, say, access)
             build = [e for e in out if e["ledger"]["decision"] == "build"]
             Path(a.out_matrix).write_text(json.dumps(out), encoding="utf-8")
             Path(a.out_build).write_text(json.dumps(build), encoding="utf-8")
@@ -1100,6 +1195,9 @@ def main() -> int:
             if not a.status:
                 p.error("record needs --status")
             return record(ledger, a, me, say)
+    except ArtifactStoreError as exc:
+        print(f"::error title=CI artifact store::{exc}", file=sys.stderr)
+        return 1
     except LedgerError as exc:
         # 🚨 Never red on the ledger's account. A decide that cannot even construct or reach the ledger
         # builds every selected module without coordination; a write that fails is a warning.

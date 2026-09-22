@@ -85,6 +85,22 @@ name: node-repo module publish
 on:
   workflow_call:
     inputs:
+      artifact-store-id:
+        description: >-
+          Physical store identity resolved by the caller's first producer. Pass the same value
+          through the complete artifact graph; an independent consumer resolution is not a proof.
+          Required for file: storage; the caller resolves its identity once before any handoff.
+        required: false
+        type: string
+        default: ''
+      artifact-store:
+        description: >-
+          Named artifact store shared by every producer and consumer. Default gha preserves
+          unmigrated callers; org variables never implicitly select the named backend.
+          file:/mounted/shared/path moves all artifacts to our runners; an unavailable store fails.
+        required: false
+        type: string
+        default: 'gha'
       # 🚨 NO `${{ … }}` IN A DESCRIPTION, here or in any other workflow_call metadata. GitHub
       # evaluates expressions in these strings, `needs` is not a context that exists at workflow
       # level, and the file is then INVALID — which for a reusable workflow means every caller
@@ -185,6 +201,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Resolve and bind the artifact store
+        id: store
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.artifact-store || 'gha' }}
+          expected-store-id: ${{ inputs.artifact-store-id }}
+          require-expected-store-id: 'true'
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
@@ -251,15 +274,15 @@ jobs:
             --required "$REQUIRED" --unrelated "$UNRELATED"
 
       # ─────────────── 3. THE STAGED EVIDENCE ───────────────
-      # 🚨 SCOPED TO THIS CALL'S LANE, and `continue-on-error` is on the DOWNLOAD alone for one
-      # reason: a pattern that matches nothing must REACH the checker as zero evidence, which is a
-      # named refusal there, instead of dying here with "no artifacts found" and no module names.
-      # The step immediately after judges the result unconditionally — that is what keeps this from
-      # being a skip-trapdoor (`verify` in the pack lane collects its receipts the same way).
+      # 🚨 SCOPED TO THIS CALL'S LANE. A zero-match pattern reaches the checker as zero evidence
+      # so it can refuse with the missing module names. The shared transport permits that empty
+      # collection, but corrupt bytes or a wrong store identity fail RED at the download itself.
+      # No transfer failure is swallowed (`verify` in pack collects receipts the same way).
       - name: Collect this call's staged publications
-        continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
           pattern: module-publication-${{ inputs.lane }}-*
           path: ${{ runner.temp }}/staged
 

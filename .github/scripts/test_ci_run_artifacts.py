@@ -246,6 +246,49 @@ class ArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ART.Red, "share write refused: disk full"):
                 self.client()
 
+    def test_store_identity_is_checked_before_probe_or_any_artifact_selection(self):
+        other = self.root / "other-share"
+        other.mkdir()
+        expected = ART.STORE.make_store(f"file:{other}").store_id()
+        for identity in (expected, "", "   "):
+            with self.subTest(identity=identity), patch.object(
+                    ART.STORE.FileStore, "reachable") as reachable:
+                with self.assertRaises(ART.Red):
+                    ART.Artifacts(self.store, "Systemorph/Plugins", "12", 1,
+                                  expect_store_id=identity)
+                reachable.assert_not_called()
+        self.assertEqual([], list(self.share.iterdir()))
+
+    def test_matching_identity_preserves_empty_collections_and_alias_paths(self):
+        expected = self.art.store.store_id()
+        alias = self.root / "alias"
+        alias.symlink_to(self.share, target_is_directory=True)
+        client = ART.Artifacts(f"file:{alias}", "Systemorph/Plugins", "12", 1,
+                               expect_store_id=expected)
+        self.assertEqual(0, client.download(self.root / "out", pattern="receipt-*"))
+        self.assertEqual([], client.list())
+
+    def test_cli_rejects_wrong_store_before_empty_upload_download_list_or_probe(self):
+        other = self.root / "other-share"
+        other.mkdir()
+        expected = ART.STORE.make_store(f"file:{other}").store_id()
+        context = ["--store", self.store, "--repository", "Systemorph/Plugins",
+                   "--run-id", "12", "--expect-store-id", expected]
+        selections = (("upload", ["--name", "absent", "--path", str(self.root / "absent"),
+                                  "--if-no-files-found", "ignore"]),
+                      ("download", ["--pattern", "receipt-*", "--path", str(self.root / "out")]),
+                      ("download", ["--path", str(self.root / "out")]),
+                      ("list", []), ("probe", ["--name", "absent"]))
+        for verb, selection in selections:
+            output, error = io.StringIO(), io.StringIO()
+            with self.subTest(verb=verb, selection=selection), contextlib.redirect_stdout(output), \
+                    contextlib.redirect_stderr(error):
+                self.assertEqual(1, ART.main([verb, *context, *selection]))
+            self.assertEqual("", output.getvalue())
+            self.assertIn("NOT on the store this run resolved", error.getvalue())
+        self.assertFalse((self.root / "out").exists())
+        self.assertEqual([], list(self.share.iterdir()))
+
     def test_missing_and_no_file_policies_have_distinct_verdicts(self):
         with self.assertRaises(ART.Red):
             self.art.download(self.root / "out", name="absent")
@@ -318,6 +361,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertIn("artifact-digest=", output.getvalue())
         self.assertIn("artifact-url=\n", output.getvalue())
         self.assertIn("artifact-locator=file:", output.getvalue())
+        self.assertIn(f"store-id={self.art.store.store_id()}\n", output.getvalue())
         self.assertEqual(7, self.art.list("cli")[0]["retentionDays"])
         args = ["download", "--store", self.store, "--repository", "Systemorph/Plugins",
                 "--run-id", "12", "--name", "cli", "--path", str(self.root / "cli"),
