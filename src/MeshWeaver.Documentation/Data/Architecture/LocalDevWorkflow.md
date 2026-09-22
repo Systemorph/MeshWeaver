@@ -11,6 +11,26 @@ Tags:
   - "DevWorkflow"
 ---
 
+## Repository instructions and skills
+
+`AGENTS.md` defines the repository rules. The maintained skill files live under
+`.claude/skills/`; the tracked relative symlink `.agents/skills -> ../.claude/skills` exposes
+the same files to Codex. Edit or add a skill in the canonical directory once. The directory
+link also exposes newly added skills without a second manifest or synchronization step.
+[Codex follows symlinked skill folders](https://learn.chatgpt.com/docs/build-skills).
+
+A one-time import that copies skills into `.agents/skills/` creates an independent snapshot.
+Those copies can become stale while the checked-in skills continue changing. If an existing
+checkout has such an untracked directory, preserve it outside the checkout and review any
+local edits before updating to the tracked link. Do not commit the copied tree or hide it with
+an ignore rule. Git must materialize symlinks (`core.symlinks=true`, with filesystem support);
+a plain text file containing the link target does not enable skill discovery.
+
+`SkillFrontMatterGuard` verifies that Codex's discovery directory resolves to the canonical
+skills and that the source skills parse. `NoConflictMarkersGuard` permits only this exact
+relative alias; other tracked links, including absolute and dangling links, remain errors.
+Machine-local `.codex/config.toml` MCP settings are separate from shared skill content.
+
 ## Quick reference
 
 > 🚨 **The portal hosts live in `MeshWeaver.Plugins` since 2026-08-26** (MeshWeaver#2293 — the GUI
