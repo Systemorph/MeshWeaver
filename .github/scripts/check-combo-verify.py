@@ -11,8 +11,11 @@ production. That is the same blind spot `check-workflow-shell.py` was written fo
 shell, unopened by anything.
 
 A gate you have never seen fail is not a gate. This script EXECUTES the preflight's real `run:`
-text — extracted from the shipped YAML by path, never retyped — under five input scenarios and
-asserts the exit code AND that the message names the specific shortfall:
+text — extracted from the shipped YAML by path, never retyped — under the input scenarios listed
+below, and asserts the exit code AND that the message names the specific shortfall. 🚨 No total is
+stated here or in the prose that describes this script: a count in a comment has no mechanism keeping
+it true, and adding a scenario has now invalidated such a sentence twice. The script's own summary
+line carries the number, and `--self-test` carries how many of them a gutted preflight must fail.
 
 🚨 THE ROSTER IS DERIVED, SO THE PREFLIGHT ASSERTS IN TWO STEPS (#3848), and this drives both.
 `vars.COMBO_VERIFY_INSTANCES` is gone: `derive-combo-instances.py` reads the fleet's deployment
@@ -20,23 +23,42 @@ overlays between them. So `assert` asks whether the inputs that come from outsid
 all, and `roster` — which cannot run before the derivation — asks whether every instance the fleet
 ACTUALLY has carries both credentials. Splitting the assertion split the scenarios with it:
 
-🚨 AND THE SPLIT IS BY WHETHER PROVISIONING IS REVERSIBLE, not merely by what is knowable yet. The
-two per-instance credential MAPS are asserted in `roster`, after the derivation, because both are
-SPENT rather than fetched — an `mwi_` instance key is issued-never-recovered and an `mw_` admin token
-is minted per instance — so an operator sent to mint them before the roster is known to derive spends
-an irreversible credential on a roster that may not exist. `vars.COMBO_VERIFY_SOURCES` stays in
-`assert`: it is plain data, free to provision and free to correct. That is why scenarios 1 and 2
-below live where they do; before the split they were `assert` scenarios, and the workflow's own
-history is the argument — every run in it died in `assert`, so the derivation had never once executed
-in CI and the lane's red named absent secrets while the state that must change first was invisible.
+🚨 AND THE SPLIT IS BY WHETHER AN INPUT IS NEEDED TO *REACH* THE DERIVATION — not by what is knowable
+yet, and NOT by whether provisioning it is reversible. All three `COMBO_*` inputs are asserted in
+`roster`, after the derivation; `assert` carries only `AZURE_*` (the login) and `FLEET_READER_*` (the
+token the derivation reads the overlays with). The workflow's own history is the argument: every run
+in it died in `assert`, so the derivation had NEVER ONCE executed in CI and the lane's red named
+absent inputs while the state that must change first was invisible to every reader.
 
-  assert:  (what is needed to REACH the derivation)
+🚨 AN EARLIER VERSION OF THIS SPLIT GOT THE RULE WRONG, and the wrong rule was written here — that the
+two credential MAPS move because they are SPENT rather than fetched (an `mwi_` key is
+issued-never-recovered, an `mw_` admin token minted per instance, so demanding them before the roster
+exists spends them against a roster that may not derive) while `vars.COMBO_VERIFY_SOURCES` stays
+because it is plain data, free to provision and free to correct. The spend argument is TRUE and is
+still why the maps' guidance must not be emitted early; it is simply not the CRITERION. Measured on
+the first run that reached the step afterwards: the preflight still died in `assert` naming
+`vars.COMBO_VERIFY_SOURCES` and nothing else, and the derivation still did not run. Any unprovisioned
+input in the first step defeats the whole reorder, whatever it costs to provision. Do not move an
+input back on the grounds that it is cheap.
+
+  assert:  (only what is needed to REACH the derivation)
   1. nothing provisioned                    → RED, naming secrets.FLEET_READER_APP_ID — the input
                                               without which the derivation cannot even be attempted.
-  2. the source map absent                  → RED, naming vars.COMBO_VERIFY_SOURCES.
+  2. ONLY what this repository actually      → GREEN, and this is the scenario that would have caught
+     has provisioned                          the earlier mistake. Every other case starts from
+                                              FULLY_PROVISIONED, which holds all three COMBO_* inputs
+                                              CONSTANT at "present"; production varies them to ABSENT,
+                                              all three. So the guard was green over a preflight that
+                                              reddened one step above the derivation in the only
+                                              configuration that matters. Spelled as production's own
+                                              input state, it goes RED if an unprovisioned input is
+                                              ever added to this step again.
   3. everything provisioned                 → GREEN
 
-  roster:  (what is only answerable once the fleet's installations are known)
+  roster:  (what is only answerable, or only worth answering, once the installations are known)
+  3a. the source map absent                 → RED, naming vars.COMBO_VERIFY_SOURCES. Here rather than
+                                              in `assert` for the reachability reason above, not
+                                              because it is expensive to provision — it is not.
   4. the derivation emitted NOTHING         → RED. This is the one that matters most: an empty or
      (and the same for an EMPTY array)        absent roster yields an empty matrix, an empty matrix
                                               SKIPS the verify job, and GitHub paints a skipped job

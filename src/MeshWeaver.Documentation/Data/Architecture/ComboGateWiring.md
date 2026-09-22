@@ -387,7 +387,9 @@ demanding that `assert` **passes**. That matters because every other scenario st
 `FULLY_PROVISIONED`, which holds all three `COMBO_*` **constant at "present"** while production varies
 them to absent — so the guard was green over a preflight that, in production, reddened one step above
 the derivation. Run against the shipped-but-wrong version, the new scenario fails `exit=1 (want 0)`;
-2 of the 10 scenarios fail there against 10 of 10 passing after the fix. **The general test when a
+it and the moved source-map scenario are the two that fail there, and none fails after the fix — a
+measurement of one red-control run rather than a contract, which is why it names the scenarios instead
+of a fraction. **The general test when a
 gate goes green: what does it hold constant that production varies?**
 
 Nothing became conditional and nothing can skip: no `if:` asks whether a secret is set, no step
@@ -396,10 +398,16 @@ job, an absent map still reds by NAME and still carries the whole provisioning g
 ORDER moved — and the whole-map red now arrives with the derived roster printed above it, so "one
 per instance" is a list the reader can act on rather than a phrase.
 
-`check-combo-verify.py` executes both blocks' real shell — extracted from the shipped YAML by step
-id, never retyped — over **nine** scenarios, and its own `--self-test` guts both blocks and requires
-that eight of the nine then fail. So an edit that moves an assertion without moving its scenario is
-red, and a preflight that asserts nothing cannot pass.
+`check-combo-verify.py` executes both blocks' real shell — extracted from the shipped YAML by step id,
+never retyped — over the scenarios its own docstring lists, and its `--self-test` guts both blocks and
+requires that **every scenario which can fail then does**. So an edit that moves an assertion without
+moving its scenario is red, and a preflight that asserts nothing cannot pass.
+
+🚨 **No count appears in that sentence on purpose.** It used to name one, and adding a scenario made it
+false — twice in one change set. A total in prose has no mechanism keeping it true, so the number lives
+where it is derived: the script's own summary line, and `--self-test`'s own tally. The same applies to
+the sibling count on [The Release Wave](/Doc/Architecture/TheReleaseWave), corrected for the same
+reason.
 
 Each `missing+=` and `absent+=` line names what to provision.
 The `verdict` job at `:283-350` separates *no candidate* from *the preflight failed* from
