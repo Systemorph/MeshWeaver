@@ -436,10 +436,17 @@ public class OAuthConnectController(
                 if (superseded.Length == 0)
                     return Observable.Return(System.Reactive.Unit.Default);
 
+                // 🚨 Name the rows. The 401 a superseded holder gets is logged by the validator
+                // under the token's HASH PREFIX — which is the last segment of these paths — so
+                // this line and that one correlate on one string. Without the paths, "superseding
+                // 1 previous token(s)" cannot be tied to the 401 it caused, and the alternation
+                // #5074 reports (two processes of one installation sharing a client_id and
+                // evicting each other's credential) is unattributable inside the log window.
                 logger.LogInformation(
-                    "OAuth: superseding {Count} previous token(s) for user {UserId}, client label {Label} — "
+                    "OAuth: superseding {Count} previous token(s) for user {UserId}, client label {Label}: "
+                    + "{SupersededPaths} replaced by {KeptPath} — "
                     + "a re-authorization replaces the client's credential rather than adding one",
-                    superseded.Length, userId, label);
+                    superseded.Length, userId, label, string.Join(", ", superseded), keepPath);
 
                 // Self-paced (Concat, never Merge): one delete at a time, the same shape the expiry
                 // sweep uses, so a client that re-authorized many times drains gently.

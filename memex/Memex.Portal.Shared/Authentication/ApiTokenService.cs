@@ -478,8 +478,10 @@ internal class ApiTokenService(
     /// <c>true</c> = expected content present with the MATCHING hash (emit the node);
     /// <c>false</c> = content present but a DIFFERENT hash — someone else's token
     /// colliding on the 12-char prefix / tampering — a TERMINAL mismatch that must
-    /// fail fast, never spin the poll; <c>null</c> = content not (yet) extractable —
-    /// transient (mid-create, sync lag), keep polling until the timeout.
+    /// fail fast, never spin the poll; <c>null</c> = the row is there but its content is not
+    /// readable as a token record — also TERMINAL (the store answered; nothing a re-read would
+    /// change), logged under its own <c>-unreadable</c> stage by <see cref="ReadValidationNode"/>
+    /// so it is never mistaken for an absent row.
     /// </summary>
     private bool? IndexHashVerdict(MeshNode node, string hash)
     {
@@ -546,6 +548,18 @@ internal class ApiTokenService(
         // storage-direct cutover) — a leftover from the cross-silo mesh read whose
         // lag no longer exists. Only a THROWN storage error (connection blip)
         // re-polls, bounded by ValidationReadTimeout.
+        //
+        // 🚨 Three negatives, three DIFFERENT log stages — never fold them. `{stage}-not-found`
+        // is the line a 401 investigation reads as "the row was deleted" (#5074 rested its whole
+        // supersession inference on it), so it must be emitted ONLY when the store answered that
+        // no row exists. A row that IS there but whose content cannot be read as the expected
+        // record is a different fact — the token was not deleted, this replica could not TYPE
+        // the row — and used to print as "no row at {Path}", which sent the reader hunting for a
+        // delete that never happened. It logs as `{stage}-unreadable`, naming the row's version
+        // and the content's runtime type, so the next occurrence is attributable inside the log
+        // window. The verdict stays a definitive negative either way: the store WAS read, and a
+        // row that carries no token record authenticates nobody — Unavailable is reserved for a
+        // store that could not be read at all.
         IObservable<ValidationReadOutcome> Attempt() =>
             storage.Read(path, hub.JsonSerializerOptions)
                 .Select(node =>
@@ -557,10 +571,15 @@ internal class ApiTokenService(
                         logger.LogWarning(
                             "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: node at {Path} exists but carries a different token hash",
                             stage + "-hash-mismatch", hashPrefix, elapsed.ElapsedMilliseconds, path);
-                    else
+                    else if (node is null)
                         logger.LogWarning(
                             "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: no row at {Path} (unknown or deleted token)",
                             stage + "-not-found", hashPrefix, elapsed.ElapsedMilliseconds, path);
+                    else
+                        logger.LogWarning(
+                            "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms: row at {Path} exists (version {Version}) but its content is {ContentType}, not a readable token record — the token was NOT deleted; this replica could not type the row",
+                            stage + "-unreadable", hashPrefix, elapsed.ElapsedMilliseconds, path,
+                            node.Version, node.Content?.GetType().Name ?? "null");
                     return new ValidationReadOutcome(null, null);
                 })
                 // A transient storage ERROR (not absence) re-polls — the outer
