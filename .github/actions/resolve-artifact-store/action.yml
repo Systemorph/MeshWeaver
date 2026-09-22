@@ -50,6 +50,8 @@ runs:
                 raise helper.Red('file: reusable consumers require expected-store-id from the first producer')
             if declared not in ('', 'gha') and not declared.startswith('file:'):
                 raise helper.Red('named artifacts require file:/mounted/shared/path or explicit gha')
+            if declared.startswith('file:') and not Path(declared[5:]).is_absolute():
+                raise helper.Red('artifact store must name an existing absolute mounted directory')
             if declared.startswith('file:') and expected:
                 helper.make_store(declared).require_store_id(expected)
             sys.exit(helper.resolve_cmd(argparse.Namespace(
