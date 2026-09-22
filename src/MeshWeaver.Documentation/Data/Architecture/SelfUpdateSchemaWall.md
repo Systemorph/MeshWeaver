@@ -233,6 +233,17 @@ Plugins/control-plane half, and it has a precise shape:
   the target tag, wait for `Database migration completed. Version: N`, then set the image — so the
   operator route has the same ordering the in-pod route has had since the seam landed. Until it does,
   a `Roll` across a schema bump is `Roll` + `Reconcile`, in that order, by hand.
+
+  **The operator half is `hosting-migrate`** (`deploy/aks/operator/bin/`; policy `roll-migrates-first`
+  in the [register](../PolicyNotProse)): it reads the
+  migration Job the release itself rendered (`helm get manifest` — wait-for-postgres, rehearsal,
+  budget, envFrom and pull Secret all kept), moves only the migration containers to the target tag,
+  runs it as its own Job `memex-migration-roll-<tag>`, and exits non-zero unless the Job
+  **succeeded** — so the `Roll` plan's `set image` sits behind a migration that demonstrably ran,
+  outside the portal. Idempotent per tag: a succeeded Job is reported, a failed one is deleted and
+  run again. The `Roll` plan calling it is the Plugins half; until an operator image carrying the
+  command is on `hosting-operator:main`, that plan step would stop with *command not found* — before
+  the image moves, which is the safe side.
 - **(b2) The `Deployments/<name>` record must carry the verdict.** The in-pod path reports on
   `Admin/UpdatePolicy`; an operator `Roll` reports on the instance record, and a plan step that
   patched an image the new pods then refuse must land there as a failure rather than as a completed

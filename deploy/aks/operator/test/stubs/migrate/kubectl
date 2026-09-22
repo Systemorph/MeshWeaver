@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-migrate's tests. Records every invocation (and the body of every
+# `create -f -`) in $HOSTING_MIGRATE_STUB_LOG / $FIXTURE/created.json. The Job's life is played from
+# files in $HOSTING_MIGRATE_FIXTURE:
+#   rendered.json   what `create --dry-run=client -o json -f -` answers (kubectl's own YAML parsing is
+#                   not under test — the manifest's text is ignored)
+#   job-state       absent | succeeded | failed | active | forbidden   (the Job as `get job` sees it)
+#   outcome         what a CREATED Job becomes after `polls` more reads: succeeded | failed | hang
+#   polls           how many reads a created Job stays active before it reaches its outcome
+set -uo pipefail
+log="${HOSTING_MIGRATE_STUB_LOG:?the kubectl stub needs HOSTING_MIGRATE_STUB_LOG}"
+fixture="${HOSTING_MIGRATE_FIXTURE:?the kubectl stub needs HOSTING_MIGRATE_FIXTURE}"
+printf 'kubectl %s\n' "$*" >> "$log"
+if [ "${1:-}" = "-n" ]; then shift 2; fi
+state() { cat "$fixture/job-state" 2>/dev/null || echo absent; }
+job_json() {
+  case "$1" in
+    succeeded) echo '{"kind":"Job","status":{"succeeded":1}}' ;;
+    failed)    echo '{"kind":"Job","status":{"failed":7,"conditions":[{"type":"Failed","status":"True"}]}}' ;;
+    *)         echo '{"kind":"Job","status":{"active":1}}' ;;
+  esac
+}
+case "${1:-}" in
+  create)
+    if [ "${2:-}" = "--dry-run=client" ]; then cat >/dev/null; cat "$fixture/rendered.json"; exit 0; fi
+    cat > "$fixture/created.json"
+    echo active > "$fixture/job-state"
+    echo "job.batch/created" ;;
+  get)
+    s="$(state)"
+    case "$s" in
+      absent)    echo "Error from server (NotFound): jobs.batch \"${3:-}\" not found" >&2; exit 1 ;;
+      forbidden) echo "Error from server (Forbidden): jobs.batch \"${3:-}\" is forbidden: User cannot get resource" >&2; exit 1 ;;
+      active)
+        n="$(cat "$fixture/polls" 2>/dev/null || echo 0)"
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$fixture/polls"; job_json active; exit 0; fi
+        o="$(cat "$fixture/outcome" 2>/dev/null || echo succeeded)"
+        [ "$o" = "hang" ] && { job_json active; exit 0; }
+        echo "$o" > "$fixture/job-state"; job_json "$o" ;;
+      *) job_json "$s" ;;
+    esac ;;
+  delete) echo absent > "$fixture/job-state"; echo "job.batch deleted" ;;
+  logs)   printf 'Rehearsal: 2 pending migrations\nDatabase migration completed. Version: 57\n' ;;
+  *) echo "kubectl stub: unexpected invocation: $*" >&2; exit 1 ;;
+esac
