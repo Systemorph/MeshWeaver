@@ -796,29 +796,23 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// <c>true</c>. Indeterminate probes (<c>null</c>: a provider that can't answer,
     /// a 5s timeout, or an errored probe) never confirm absence — they fail OPEN to
     /// synthesis, so a probe hiccup can never turn a real partition's root into a 404.
+    ///
+    /// <para>The MEASUREMENT now lives in <see cref="PartitionExistenceProbe.Probe"/> — shared with
+    /// the bake sweep, which asks the same providers for a different reason (#5073) — while the FOLD
+    /// stays here, because it is deliberately NOT
+    /// <see cref="PartitionExistenceProbe.ConfirmedAbsent"/>'s.</para>
+    ///
+    /// <para>🚨 <b>The difference is intentional and must not be "tidied up".</b> This fold accepts
+    /// one <c>false</c> with no contradicting <c>true</c>; the strict fold requires EVERY provider to
+    /// say <c>false</c>. The safe direction is opposite in the two cases: here a wrong "absent"
+    /// merely SYNTHESIZES a placeholder root (harmless, and the alternative is a 404 on a real
+    /// partition), whereas for a caller that will skip or refuse work a wrong "absent" means real
+    /// data goes untouched. New callers want the strict one.</para>
     /// </summary>
-    private IObservable<bool> PartitionConfirmedAbsent(string partition)
-    {
-        if (_writablePartitionProviders.Count == 0)
-            return Observable.Return(false);
-
-        var probes = _writablePartitionProviders
-            .Select(p => p.PartitionExists(partition)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(5))
-                .Catch<bool?, Exception>(ex =>
-                {
-                    _logger?.LogDebug(ex,
-                        "PathResolution: partition existence probe for '{Partition}' via {Provider} failed; treating as indeterminate",
-                        partition, p.Name);
-                    return Observable.Return<bool?>(null);
-                }))
-            .ToList();
-
-        return Observable.CombineLatest(probes)
-            .Take(1)
+    /// <param name="partition">The bare partition name being asked about.</param>
+    private IObservable<bool> PartitionConfirmedAbsent(string partition) =>
+        PartitionExistenceProbe.Probe(_writablePartitionProviders, partition, _logger)
             .Select(results => results.Any(r => r == false) && !results.Any(r => r == true));
-    }
 
     /// <summary>
     /// Whether a hit's path IS the path that was asked for — the one case in which a FLOOR

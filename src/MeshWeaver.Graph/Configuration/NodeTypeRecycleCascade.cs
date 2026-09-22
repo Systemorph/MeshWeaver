@@ -68,6 +68,18 @@ public sealed record DependencyNetworkResult(
 /// are posted from the mesh's node-operation issuing hub, never from the definition hub itself: a
 /// dying hub cannot deliver its own last frame.</para>
 ///
+/// <para>🚨 <b>…and the READ comes from a survivor too, which is the half that was missed (#5099).</b>
+/// The seam runs on the recycle's turn, strictly before <c>Dispose()</c> — so "derive it while the
+/// hub is still whole" holds for the synchronous prologue and for NOTHING after it. Each enumeration
+/// leg is a cross-hub query; by the time the second one subscribes the definition hub has finished
+/// disposing and <c>HostedHubsCollection.CloseScopeWhenDisposed</c> has closed its DI lifetime
+/// scope, so every service the leg resolves from that hub throws
+/// <see cref="ObjectDisposedException"/>. Measured in production: <c>Hosting/TriageItem</c> recycled
+/// <b>0</b> addresses with one leg reported INCOMPLETE, and its live instance hubs kept the assembly
+/// they were born with — the exact stale-state problem this cascade exists to remove, wearing the
+/// cascade's own success. <see cref="DependencyNetwork"/> therefore enumerates through the mesh's
+/// read-issuing hub, which the definition hub's teardown cannot reach.</para>
+///
 /// <para>🚨 <b>And a leg that could not be read is never silence.</b> Every enumeration answers an
 /// <see cref="EnumerationLeg"/>, and a failed one is carried to the end as
 /// <see cref="DependencyNetworkResult.Incomplete"/> rather than collapsing into an empty list. The
@@ -210,14 +222,32 @@ public static class NodeTypeRecycleCascade
     /// <see cref="Compose"/>. The cascade must be able to tell "no live instances" from "nobody could
     /// find out", because only the second one leaves stale hubs behind.</para>
     /// </summary>
-    /// <param name="hub">The hub whose services enumerate — the definition hub.</param>
+    /// <param name="hub">Any hub of the mesh — in production the definition hub. Nothing is read
+    /// THROUGH it; it only names the mesh whose read-issuing hub enumerates.</param>
     /// <param name="nodeTypePath">The type being recycled.</param>
     public static IObservable<DependencyNetworkResult> DependencyNetwork(IMessageHub hub, string nodeTypePath)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeRecycleCascade));
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // 🚨 A SURVIVOR enumerates — see the remarks on this class for why, and #5099 for what it
+        // cost. `hub` is the hub being torn down: HandleDispose runs the cascade seam and then
+        // Dispose()es, and HostedHubsCollection.CloseScopeWhenDisposed closes that hub's DI
+        // lifetime scope the moment its DisposalCompleted fires. Only this method's SYNCHRONOUS
+        // prologue runs while the hub is whole — every leg below is a cross-hub query, so the legs
+        // subscribe AFTER the scope is gone, and each service they reach for then
+        // (AccessService via MeshService.StampViewer, the IoPoolRegistry behind MeshQuery's
+        // subscribe pool, JsonSerializerOptions) throws ObjectDisposedException out of
+        // AutofacServiceProvider.GetService. The leg is reported INCOMPLETE, the cascade recycles
+        // nothing, and the instance hubs it exists to reach go on serving the assembly they were
+        // born with — silently, which is the one outcome nobody re-checks.
+        //
+        // The mesh's READ-issuing hub is the seam for a bounded read (MeshExtensions.ReadIssuingHub):
+        // it is hosted by the mesh hub, so the definition hub's teardown cannot touch it; it is off
+        // the router, so the router is never an end of a delivery; and it is not the node-CRUD
+        // execution hub, so these reads are not queued behind every write in flight (#2901).
+        var reader = hub.GetMeshHub().ReadIssuingHub();
+        var logger = reader.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeRecycleCascade));
+        var meshService = reader.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = reader.ServiceProvider.GetService<AccessService>();
 
         IObservable<EnumerationLeg> Instances(string type) =>
             accessService.RunAsSystem(() => meshService
@@ -247,7 +277,7 @@ public static class NodeTypeRecycleCascade
                 .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
                 .ToImmutableDictionary(
                     g => g.Key,
-                    g => g.First().ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger),
+                    g => g.First().ContentAs<NodeTypeDefinition>(reader.JsonSerializerOptions, logger),
                     StringComparer.OrdinalIgnoreCase))
             .Select(types => new DependentsLeg(DependentsOf(types, nodeTypePath), null))
             .Catch<DependentsLeg, Exception>(ex =>

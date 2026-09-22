@@ -189,6 +189,41 @@ publish and the stream-cache invalidation, which is how a deleted node keeps bei
 `Replay(1)` entry. The repo already states the rule in `MeshTeardownExtensions`: *capture
 mesh-scoped services while the scope is still alive — never resolve DI once disposal has begun.*
 
+🚨 **The hoist is COSMETIC when the service's own lifetime is keyed to the thing being torn down, and
+that case is invisible to this root's sweep.** Hoisting changes **when** the container is asked, never
+**which** container answers. For a mesh-lifetime singleton those are the same question, which is why
+the correction above works. For a service registered **scoped per hub** they are not: the hoisted
+instance *is* the short-lived thing — it was constructed with that hub and reaches back through it on
+every later call — so the throw simply moves from the continuation into the service's own method body,
+where no call-site hoist can reach it.
+
+Measured on [#5099](https://github.com/Systemorph/MeshWeaver/issues/5099): the recycle cascade's
+`DependencyNetwork` **already** resolved its services eagerly in its synchronous prologue — this root's
+prescribed correction, applied before this page existed — and still threw. `IMeshService` is
+`AddScoped` (`PersistenceExtensions.cs:720`, `:797`), and `MeshService.StampViewer` →
+`CaptureContext()` does `hub.ServiceProvider.GetService<AccessService>()` on **every** `Query<T>`.
+
+So the test is **not** *"is this resolve inside a continuation"* and **not** *"is it hoisted"* — it is:
+
+> **What is this service's lifetime keyed to, and does this pipeline outlive it?**
+
+Where the answer is "the thing being torn down", the remedy is not to move the resolve earlier but to
+move the **work** to something that outlives the teardown — for a read, the mesh's read-issuing hub
+(`MeshExtensions.ReadIssuingHub`). That is the same shape as the established rule that a recycle's
+caller must outlive its target, applied to reads instead of posts; worked through in
+[Enumerating from a Survivor](../EnumeratingFromASurvivor).
+
+🚨 **This is why the inventory below cannot triage it.** The sweep grades by CALL-SITE SHAPE, which is
+lexical; service lifetime is a property of a registration in another file, so no grep of a continuation
+can see it. Measured on `src/`: **12** types are registered `AddScoped`/`TryAddScoped`
+(`IWorkspace`, `IMeshService`, `IContentService`, `IUiControlService`, `IChatCompletionOrchestrator`,
+`IDataValidator`, `INodeValidator`, `IAutocompleteProvider`, `IAutocompletePrefixRegistry`,
+`IContentCollectionConfigProvider`, `Data.IFileContentProvider`, `SyncStreamActivationLedger`), with
+about **142** resolve sites between them — **118** of those `IMeshService`, the one already proven to
+reach back through its hub. How many fall inside the 204 graded sites is **not yet established**; the
+cross-reference is the open question. Until it is done, a site "fixed" by the hoist alone can pass
+review, pass a hoisting-shaped guard, and still throw in production.
+
 A second, independent correction belongs with it: **a diagnostic must never be able to prevent the
 cleanup it describes.** `ReleaseNodeTypeLease`'s error arm resolved a logger *before* releasing a
 collectible-ALC lease, and that arm is reached only when `meshHub.IsDisposing` is already true — so
@@ -272,6 +307,8 @@ defect. The MeshWeaver-side question it raises is a real one and is separate: wh
 
 ## See also
 
+- [Enumerating from a Survivor](../EnumeratingFromASurvivor) — R3's companion clause: why the hoist is
+  cosmetic for a per-hub SCOPED service, and why that case is invisible to R3's lexical sweep
 - [Teardown Layers](../TeardownLayers) — the two-layer model and the stall verdicts
 - [Hub Disposal Model](../HubDisposalModel) — phases, gates, and what a `DisposeRequest` does
 - [Reading a Disposal Stall Verdict](../DisposalStallVerdicts) — the M1/M2/M3 discriminators
