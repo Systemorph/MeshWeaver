@@ -28,6 +28,22 @@ namespace MeshWeaver.Documentation.Test;
 public class SkillFrontMatterGuard
 {
     private const string SkillsRoot = ".claude/skills";
+    internal const string CodexSkillsPath = ".agents/skills";
+    internal const string CodexSkillsTarget = "../.claude/skills";
+
+    [Fact]
+    public void CodexSkillsResolveToTheMaintainedDirectory()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var alias = new DirectoryInfo(Path.Combine(root, CodexSkillsPath));
+        Assert.True(alias.LinkTarget == CodexSkillsTarget,
+            $"{CodexSkillsPath} must be the relative symlink to {CodexSkillsTarget}, not a copied "
+            + "skill tree or a text file. Enable Git core.symlinks and filesystem symlink support.");
+        Assert.True(alias.Exists, "The shared skills alias must resolve in this checkout.");
+        Assert.Equal(Path.GetFullPath(Path.Combine(root, SkillsRoot)),
+            alias.ResolveLinkTarget(returnFinalTarget: true)?.FullName);
+        Assert.NotEmpty(Directory.EnumerateFiles(alias.FullName, "SKILL.md", SearchOption.AllDirectories));
+    }
 
     /// <summary>Every shipped skill file, as (relative path, text).</summary>
     private static (string Path, string Text)[] SkillFiles()
