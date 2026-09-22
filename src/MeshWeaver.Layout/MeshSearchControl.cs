@@ -87,6 +87,22 @@ public record MeshSearchSortOption(string Label, string Query);
 public record MeshSearchScopeTab(string Label, string Query)
 {
     /// <summary>
+    /// A count rendered BESIDE this tab's <see cref="Label"/> — supplied by the caller, never
+    /// computed here. Null renders no count, which is not the same as <c>0</c>.
+    ///
+    /// <para>🚨 <b>It is a separate field precisely so a live count is safe.</b> The active scope is
+    /// remembered by the tab's LABEL, so a count folded into the label — <c>"Everyone (48)"</c> —
+    /// changes the tab's identity the moment the number moves, and the reader is thrown back to the
+    /// first tab mid-browse. Keeping the number out of the label is what lets it change under a
+    /// reader who is standing on that tab.</para>
+    ///
+    /// <para>The caller supplies it because only the caller knows what is cheap to count: a tab
+    /// whose count costs a second query per render should carry <c>null</c> rather than pay for a
+    /// number nobody asked for. This field adds no query of its own.</para>
+    /// </summary>
+    public int? Count { get; init; }
+
+    /// <summary>
     /// Sort choices that REPLACE the control-level <see cref="MeshSearchControl.SortOptions"/>
     /// while this scope is active (first = this scope's default). Null keeps the control-level set.
     /// </summary>
