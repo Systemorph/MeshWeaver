@@ -370,9 +370,10 @@ a report that names it.
 
 The pool side of R4 has one property the log side does not: *"a leaf that ignores its cancellation
 token"* is a **lexical** property of a call site, so the class can be swept without waiting for an
-occurrence. `Invoke` is the only entry point with no projection of its own (`InvokeObservable` waits
-through `ObserveCompletion(…, ct)`, `InvokeStream` enumerates `.WithCancellation(ct)`,
-`InvokeBlocking` holds no permit), and the sweep of `src/` for an `Invoke` lambda that never
+occurrence. `Invoke` is the entry point with no projection of its own — and `IoPoolExtensions.Run`
+composes straight onto it, so it inherits that — while `InvokeObservable` waits through
+`ObserveCompletion(…, ct)`, `InvokeStream` enumerates `.WithCancellation(ct)` and `InvokeBlocking`
+holds no permit. The sweep of `src/` for a lambda on either unprojected entry point that never
 references its own token parameter returned **exactly one** site: `OrleansRoutingService`'s stream
 teardown, `ioPool.Invoke(_ => subscription.UnsubscribeAsync())` on the `RoutingStream` pool —
 Orleans' `UnsubscribeAsync` takes no token, so nothing the drain cancels could ever settle it. It
