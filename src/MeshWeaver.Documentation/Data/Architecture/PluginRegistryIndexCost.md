@@ -31,10 +31,31 @@ It runs two sequential stages of live mesh reads:
 
 | stage | work | ceiling | what a stall looks like |
 |---|---|---|---|
-| **auth filter** | `InstanceRegistryAuthenticator.Resolve` — a children listing plus two per-node mirrors | **10 s per leg** (`ReadBudget`, `src/MeshWeaver.PluginCatalog/InstanceRegistryAuthenticator.cs:54`) | a real **503 + `Retry-After`** (`InstanceAuthResponses.cs:41`), at ~10,000 ms |
+| **auth filter** | `InstanceRegistryAuthenticator.Resolve` — **three mandatory legs** (a children listing plus two per-node mirrors), then an **optional fourth**: the plan ladder (below) | **10 s per leg** (`ReadBudget`, `src/MeshWeaver.PluginCatalog/InstanceRegistryAuthenticator.cs:54`), and a **separate** 10 s for the ladder | a real **503 + `Retry-After`** (`InstanceAuthResponses.cs:41`), at ~10,000 ms |
 | **index assembly**, only after auth succeeds | `Servable()` `:1192` → `InstalledPackages` `:2149` and `HeldPartitions` `:1325`, both `IMeshService.Query<MeshNode>` awaiting `QueryChangeType.Initial`, plus per-package entitlement `Decide(...)` | **none** | **nothing at all** — no status line, no headers — until the *caller's* budget tears the connection down |
 
 `grep -c '\.Timeout(' PluginBundleEndpoints.cs` returns **`0`**. Not one bound in 2,194 lines.
+
+### The optional fourth auth read, because it is easy to undercount
+
+After the grant leg, `Resolve` chains
+`.SelectMany(result => result.Instance is null ? Observable.Return(result) : Ladder().Select(…))`
+(`InstanceRegistryAuthenticator.cs:406-446`), so **every successful authentication** takes a fourth
+read — unless the host registers no ladder, in which case `Ladder()` is
+`Observable.Return(PlanTierRanks.Empty)` and there is no read at all.
+
+When it is registered, `PlanTierLadder.Read()` is an **`IMeshService.Query<MeshNode>`** over
+`namespace:{Namespace}` awaiting `QueryChangeType.Initial`, with **its own** `.Timeout(ReadTimeout)`
+where `ReadTimeout` is 10 s — a *separate* budget from the authenticator's `ReadBudget` — and it is
+cached per mesh for a `CacheDuration` of one minute, so the cost falls only on a cold or expired
+cache.
+
+Two reasons this matters beyond the count:
+
+- it is a **`Query` listing**, not a point read, so it is a *second* instance of the same
+  CQRS-on-the-hot-path shape this page is about, not merely another leg;
+- the worst case before index assembly even begins is therefore **four live mesh reads at 10 s each**,
+  which sharpens the point rather than softening it.
 
 So the same slow dependency reads as either *"the registry returned 503, retries exhausted"* or
 *"operation timed out after 180001 ms with **0 bytes received**"*, depending purely on which stage it
