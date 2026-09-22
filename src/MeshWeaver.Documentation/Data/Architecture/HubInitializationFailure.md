@@ -140,7 +140,7 @@ return Observable
     .ToList()
     // 🚫 A BuildupAction that HANGS raises no exception, so convert "never completed within
     //    the budget" into a TimeoutException the SAME .Catch handles.
-    .Timeout(Configuration.StartupTimeout ?? DefaultInitializationTimeout)
+    .Timeout(Configuration.NestedInitializationBudget)   // rung 2 of the ladder, never a constant
     .Select(_ => { OpenGate(MessageHubConfiguration.InitializeGateName); return request.Processed(); })
     .Catch((Exception ex) =>
     {
@@ -244,8 +244,8 @@ sees **what** broke.
 
 A BuildupAction that **hangs** (never emits, never completes, never throws) used to leave the
 `Concat` incomplete, so the gate never opened and every message wedged on the 30 s per-message
-deferral timeout. That gap is closed: `.Timeout(Configuration.StartupTimeout ??
-DefaultInitializationTimeout)` converts "did not complete within the budget" into a
+deferral timeout. That gap is closed: `.Timeout(Configuration.NestedInitializationBudget)`
+converts "did not complete within the budget" into a
 `TimeoutException` that the same `.Catch` turns into the FAILED state, and the resulting
 `DeliveryFailure` names the hang explicitly rather than reporting a generic deferral — and it names
 **which** action: *"BuildupAction 3 of 3 (DataExtensions.StartDataSourcesAndOpenGate) did not
@@ -254,15 +254,20 @@ sequential `Concat` was on when the bound fired, and the name is the method behi
 (a method group names itself; a lambda names the compiler's closure method, which still identifies
 the registration site). The sentence used to read *"a BuildupAction did not complete within Ns (a
 hung dependency or stuck compile)"* — two candidates, neither measured, and no way to tell which of
-the hub's actions was pending. That was unanswerable by construction for the commonest hang: the
-`DataContext` time-box is the same length as this one and starts milliseconds later, so this outer
-bound always fires first, disposes the `Concat`, and unsubscribes the inner bound before it can
-print its per-source diagnosis ([What the DataContext Init Time-Box Bounds](../DataContextInitializationTimeout)).
-Naming the pending action is the part this layer can say (issue #2886).
+the hub's actions was pending. Naming the pending action is the part this layer can say (issue #2886).
 
-A hub may tighten the budget via `Configuration.StartupTimeout`. **This bound is a liveness
-guarantee, not a fix** — it makes the failure observable and fast. When it fires, go and fix the
-hung dependency; do not raise the number.
+🚨 **The budget is a RUNG, not a constant** — `Configuration.NestedInitializationBudget`, one
+step inside whatever bounds this hub, and every hub born INSIDE this one's initialization takes a
+step inside that again
+([The Initialization Budget Ladder](../InitializationBudgetLadder)). While every level was
+independently written as the same 120 s, which level reported a hang was decided by scheduling: when
+the enclosing one won it errored the inner hub's streams and that hub's initialization ended as a
+recognised shutdown, recording nothing at all. A hub tightens its whole ladder via
+`Configuration.StartupTimeout`.
+
+**This bound is a liveness guarantee, not a fix** — it makes the failure observable, fast, and
+attributable to the level nearest it. When it fires, go and fix the hung dependency; do not raise
+the number.
 
 What this still does NOT cover: a hub that initialised *successfully* and then hangs inside a
 handler. That is an ordinary wedge — see

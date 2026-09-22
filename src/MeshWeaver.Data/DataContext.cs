@@ -132,16 +132,28 @@ public sealed record DataContext : IDisposable
     internal ReduceManager<EntityStore> ReduceManager { get; init; }
 
     /// <summary>
-    /// Upper bound on DataContext initialization, consumed by
-    /// <see cref="OpenInitializationGate"/>. A data-source init that HANGS (e.g. a
-    /// stuck NodeType/scope Roslyn compile, or a dependency that never initialises)
-    /// trips this and drives the hub to a terminal FAILED state instead of leaving
-    /// <see cref="InitializationGateName"/> closed forever (the 2026-06-26 prod
-    /// wedge). Defaults to <c>120s</c> — the same budget top-level hubs get via
-    /// <c>MessageHub.DefaultInitializationTimeout</c> — and is overridable per
-    /// context via <see cref="WithInitializationTimeout"/> (tests set it short).
+    /// Explicit upper bound on DataContext initialization, when a caller set one via
+    /// <see cref="WithInitializationTimeout"/> (tests set it short). Null means "take the owning
+    /// hub's rung" — see <see cref="EffectiveInitializationTimeout"/>.
     /// </summary>
-    internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromSeconds(120);
+    internal TimeSpan? InitializationTimeout { get; set; }
+
+    /// <summary>
+    /// The bound actually consumed by <see cref="OpenInitializationGate"/>. A data-source init that
+    /// HANGS (a dependency that never initialises, a storage read that never comes back) trips this
+    /// and drives the hub to a terminal FAILED state instead of leaving
+    /// <see cref="InitializationGateName"/> closed forever (the 2026-06-26 prod wedge).
+    ///
+    /// <para>🚨 It is the owning hub's <c>NestedInitializationBudget</c> — rung 2 of the ladder in
+    /// <c>HubInitializationBudget</c> — never a constant of its own. This wait ENCLOSES the
+    /// <c>sync/{clientId}</c> sub-hubs its data sources open, and those are hubs with an
+    /// initialization bound of their own; while both were independently written as <c>120 s</c>,
+    /// which of the two reported a stall was decided by microseconds of scheduling
+    /// (Systemorph/MeshWeaver#1122 — the two that fired were 5 ms apart). The sub-hub now takes a
+    /// strictly smaller rung, so the level nearest the stall is the level that reports it.</para>
+    /// </summary>
+    private TimeSpan EffectiveInitializationTimeout =>
+        InitializationTimeout ?? Hub.Configuration.NestedInitializationBudget;
     /// <summary>The message hub that owns this context's workspace.</summary>
     public IMessageHub Hub { get; }
     /// <summary>The workspace this context belongs to.</summary>
@@ -452,7 +464,7 @@ public sealed record DataContext : IDisposable
         //   1. init settled — allInit bridged Task→IObservable (the sanctioned
         //      direction) and Materialize'd, so a FAULTED or CANCELED init still RUNS
         //      the settle body instead of skipping past it to an error arm;
-        //   2. the time-box — Observable.Timer(InitializationTimeout). The bound itself
+        //   2. the time-box — Observable.Timer(EffectiveInitializationTimeout). The bound itself
         //      is deliberate and STAYS: deleting it re-opens the 2026-06-26 wedge above.
         //      Its expiry fails FAST and LOUDLY (fail-level log + InitializationError +
         //      rejection handler) — never "proceed as if initialized";
@@ -474,7 +486,7 @@ public sealed record DataContext : IDisposable
         // nor on Dispose()'s teardown stack (arm 3) — the same hop the previous
         // ContinueWith(TaskScheduler.Default) gave it.
         var initSettled = allInit.ToObservable().Materialize().Take(1).Select(_ => Unit.Default);
-        var timeBox = Observable.Timer(InitializationTimeout).Select(_ => Unit.Default);
+        var timeBox = Observable.Timer(EffectiveInitializationTimeout).Select(_ => Unit.Default);
         Observable.Amb(initSettled, timeBox, watchdogDisarm)
             .Take(1)
             .ObserveOn(TaskPoolScheduler.Default)
@@ -615,7 +627,7 @@ public sealed record DataContext : IDisposable
             // sources' legs the fan-out is still waiting on. Read it and say it.
             failure = new TimeoutException(
                 $"Hub '{Hub.Address}' DataContext initialization did not complete within "
-                + $"{InitializationTimeout.TotalSeconds:F0}s. {DescribePendingInitialization()}");
+                + $"{EffectiveInitializationTimeout.TotalSeconds:F0}s. {DescribePendingInitialization()}");
             logger.LogError(failure,
                 "DataContext initialization TIMED OUT for {Address}. Hub is now in FAILED state.", Hub.Address);
         }

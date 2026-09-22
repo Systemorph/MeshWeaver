@@ -225,8 +225,8 @@ knows WHICH read starved."* On this path every inner bound is LARGER than the bu
 |---|---|---|
 | the reader's budget | **10 s** | `ReadBudget.cs` → `Default` |
 | deferred delivery, per message | 30 s (default) | `MessageService` → `deferralTimeout`, off `MessageHubConfiguration.WithDeferralTimeout` |
-| the hub's own initialization turn | 120 s | `MessageHub.cs:210` → `DefaultInitializationTimeout` |
-| `DataContext` initialization | 120 s | `DataContext.cs:144` → `InitializationTimeout` |
+| the hub's own initialization turn | 120 s at the top, contracting per nesting level | `MessageHub` → `BuildupTimeout` = `Configuration.NestedInitializationBudget` ([the ladder](../InitializationBudgetLadder)) |
+| `DataContext` initialization | the same rung | `DataContext` → `EffectiveInitializationTimeout` |
 | monolith path resolution on the routing path | 30 s | `RoutingServiceBase.cs:306` |
 | Orleans first-node resolution | 30 s | `MessageHubGrain.cs:88` → `FirstNodeResolutionTimeout` |
 | NodeType slow path (no progress) | 30 s | `NodeTypeEnrichmentHelpers.cs:69` → `SlowPathTimeout` |

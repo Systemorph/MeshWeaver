@@ -14,11 +14,12 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// two candidates and no way to tell which of the hub's actions was the one still pending
 /// (issue #2886, the same defect class #1122 fixed one layer down in <c>DataContext</c>).
 ///
-/// <para><b>Why the outer line has to carry it.</b> On the commonest hang the inner, informative
-/// bound never fires: <c>DataContext</c>'s own time-box is the same length as
-/// <c>MessageHub</c>'s and starts milliseconds later, so the outer <c>Timeout</c> wins, disposes the
-/// <c>Concat</c>, and unsubscribes the inner bound before it can print its per-source diagnosis.
-/// Naming the pending action is the part this layer can say.</para>
+/// <para><b>Why this line has to carry it.</b> A hub's BuildupAction <c>Concat</c> is the ONE thing
+/// this layer can see: the enclosing waits know only that initialization ran out of time, and the
+/// waits nested below it are other hubs' business. Which level of a nested initialization gets to
+/// report at all is a separate property, held by the contracting rungs in
+/// <c>HubInitializationBudget</c> (<c>Doc/Architecture/InitializationBudgetLadder</c>) — this test
+/// pins what the line SAYS once it fires, not which line fires.</para>
 ///
 /// <para><b>Both sides.</b> The action that hangs is the SECOND of two, and the first is a method
 /// group with a name, so the assertion distinguishes "named the right one" from "named one":
