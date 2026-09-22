@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "MCP Authentication"
-Abstract: "How to generate API tokens and configure MCP clients like Claude Code to securely access the MeshWeaver MCP endpoint with bearer token authentication."
+Abstract: "How MCP clients authenticate against the MeshWeaver MCP endpoint: personal API tokens, the OAuth flow OAuth-capable clients run instead, what each flow stores and for how long, why a multi-replica portal needs no affinity, and how to read a rejected token's log line."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#f57f17'/><circle cx='9' cy='12' r='3.5' fill='none' stroke='white' stroke-width='2'/><path d='M12.5 12h7M17 12v3M19.5 12v2' stroke='white' stroke-width='2' stroke-linecap='round'/></svg>"
 Thumbnail: "images/agenticai.svg"
 Authors:
@@ -132,7 +132,67 @@ curl -X POST https://your-portal.com/api/mcp \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'
 ```
 
-A successful JSON-RPC response confirms authentication is working. A `401` means the token is missing, invalid, expired, or revoked.
+A successful JSON-RPC response confirms authentication is working. A `401` means the token is missing, invalid, expired, or revoked — and a `503` with `Retry-After` means the token could **not be checked** right now and must be kept (see *Reading a rejection* below).
+
+---
+
+## OAuth for MCP clients
+
+A client that speaks OAuth — claude.ai connectors, Claude Desktop, Claude Code's `claude mcp add --transport http` — never sees the token page. It discovers the portal as an authorization server and ends up holding the same `mw_` token a manual flow would have produced. The whole flow is served by `OAuthConnectController` in `Memex.Portal.Shared`:
+
+| Step | Endpoint | What happens |
+|---|---|---|
+| Discovery | `GET /.well-known/oauth-protected-resource`, `GET /.well-known/oauth-authorization-server` | The `401` challenge on `/mcp` names the first; it names the second. Only `authorization_code` with PKCE `S256` is advertised — there is no `refresh_token` grant. |
+| Registration | `POST /register` (RFC 7591) | The client sends its name and redirect URIs and receives a `client_id`. **Nothing is persisted.** The id is *derived* — a hash of this portal's origin, the client name and the sorted redirect URIs — so a client that registers again receives the same id and is recognised as the same application. |
+| Authorization | `GET /authorize` | The user must hold a portal session. Without one the request is sent to `/login` with a **local** return target (`/authorize?…`) and comes back here after sign-in; with one, an authorization code is minted and the browser is redirected to the client's `redirect_uri`. No consent screen is shown: a signed-in user is authorized for their own identity. |
+| Exchange | `POST /token` | The client presents the code, its `client_id`, the same `redirect_uri` and the PKCE verifier. The code is consumed (single use, first delete wins), an `mw_` token is minted for the code's user, and the client's *previous* token for the same `client_id` is removed. |
+| Use | `POST /mcp` with `Authorization: Bearer mw_…` | Exactly the manual-token path from here on. |
+
+### What is stored, where, for how long, and who can read it
+
+| Record | Path | Contents | Lifetime | Readable by |
+|---|---|---|---|---|
+| Authorization code | `Admin/OAuthCode/{hashPrefix}` | The SHA-256 hash of the code (never the code), the user's id/name/email, `client_id`, `redirect_uri`, the PKCE challenge, the creation time | 5 minutes, and deleted the moment it is exchanged; expired rows are swept on the next `/authorize` | System-managed rows in the `Admin` partition — a platform admin's grant, nobody else's (see [Access Control → The Admin partition](/Doc/Architecture/AccessControl)). Excluded from search, create menus and autocomplete. |
+| Access token | `{userId}/ApiToken/{hashPrefix}` | The SHA-256 hash of the token (never the token), owner identity, the label `OAuth: {client_id}`, created/expires/last-used stamps, a diagnostic copy of the roles at mint time | 1 year, or until revoked, deleted, or superseded | The owner, in their own partition — the same row the API Tokens settings tab lists |
+| Token index | `ApiToken/{hashPrefix}` | The hash and the path of the token row | Follows its token row: written with it, deleted with it (revocation, expiry sweep, supersede) | Written and deleted under the System identity; the `ApiToken` partition is separately gated and ordinary users hold no grant on it |
+| Client registration | — | nothing | — | — |
+
+Two things are deliberately **not** stored: the raw code and the raw token exist only in the client's hands, and no consent or registration record is kept, so there is nothing for a stable `client_id` to be stable *for* on the server — its value is that the client keys its own token cache on it.
+
+### Nothing is per-process — a multi-replica portal needs no affinity
+
+Every record above is written to and read from the shared store directly, on every replica: `/authorize` on one pod and `/token` on the other exchange the same code, and a token minted by one pod validates on the other on the first request. The MCP transport itself is stateless (no per-pod session table), and the cookie-protection keys are shared across replicas, so a two-replica deployment needs no sticky routing for `/token`, `/register` or `/mcp`. The regression controls for both halves are two-instance tests over one store: `OAuthCodeStoreTest.TwoStoreInstances_GenerateOnOne_ExchangeOnOther` and `TokenMintedOnOneReplicaValidatesOnAnotherTest`.
+
+### One live credential per client — and what that means for a client that shares its `client_id`
+
+A re-authorization **replaces** the client's credential rather than adding one: after minting, `/token` deletes every token with the same label `OAuth: {client_id}` that is strictly older. This is what keeps a reinstall, a new device or a reconnected integration from leaving year-long keys behind — the state the rule was introduced to end was 86 live token rows on one portal.
+
+The key is the `client_id`, and the `client_id` is derived from the client's name and redirect URIs. So which installations share a credential slot is decided by the **client**:
+
+- A client that binds a fresh callback port per registration gets a fresh `client_id` per registration — two such installations never collide, and neither do their re-authorizations (which also means the one-live-credential rule never fires for them).
+- A client that presents the same `client_id` from more than one process — Claude Code keeps one registration per server per machine in its credential store, reuses its callback port when it is free, and every Claude Code process on that machine reads the same entry — shares ONE slot across those processes. When one of them re-authorizes, the others hold a token that has just been removed: their next call answers `401`, and they must re-authorize too. With a live portal session that re-authorization completes without any interaction (`/authorize` redirects straight back with a code), so it shows as a brief hop rather than a failure; with a lapsed session it is a sign-in.
+
+Nothing the exchange receives distinguishes two processes of one installation — `client_id`, `redirect_uri` and `client_name` are identical by construction, and the code and verifier are per attempt — so the portal cannot mint per-process credentials without changing the identity the client keys its cache on. Whether the rule should stay one-per-client, allow a bounded number of live tokens per client, or key on something process-distinct if the protocol ever offers one, is a maintainer decision and is tracked on [#5074](https://github.com/Systemorph/MeshWeaver/issues/5074); the log lines below are what make either choice measurable.
+
+### Reading a rejection
+
+Every rejected bearer token produces a warning on the portal naming the token's **hash prefix** (the first 12 characters of the hash — also the last path segment of its rows) and the failing **stage**. The stage is the whole diagnosis:
+
+| Stage | Meaning | HTTP answer |
+|---|---|---|
+| `index-not-found`, `token-not-found` | The store answered that **no row** exists at the path. The token was never minted here, or its row was deleted (revocation from the settings tab, the expiry sweep, or the one-live-credential supersede). | `401` |
+| `index-unreadable`, `token-unreadable` | The row **exists** but its content is not a readable token record; the line names the row's version and the content's runtime type. The token was **not** deleted — this replica could not type the row. | `401` |
+| `index-hash-mismatch`, `token-hash-mismatch` | A row exists at the prefix but carries a different hash. | `401` |
+| `revoked`, `expired` | The row was read and says so. | `401` |
+| `index-read-timeout`, `token-read-timeout` | The store could **not** be read within the validation window. No verdict was reached. | `503` + `Retry-After` — the body says the token was **not** rejected and must be kept |
+
+A supersede is logged at Information twice, and the two lines say different things: `OAuth: superseding N previous token(s) for user U, client label L — candidates {paths}, keeping {kept path}` is the **intent**, written before any delete has run; `OAuth: superseded R of N previous token(s) … — removed {paths}; kept {kept path}` is the **outcome**, written after every delete has answered (a path a concurrent exchange had already removed, or one whose delete was refused, is not in `removed`). A removed path ends in the same hash prefix the superseded holder's `-not-found` line will name, so one search for the prefix ties the removal to the `401` it caused — read the outcome line for that, never the intent.
+
+To read these on a deployed portal, use the control instance's `Logs` action rather than the cluster (see [Operating from the Portal](/Doc/Architecture/OperatingFromThePortal)): a `Hosting/InstanceAction` node with `requestedAction: "Logs"`, `deployment` naming the instance, `query: "API token validation"` (or `"OAuth: superseding"`, or the hash prefix itself) and a `sinceMinutes` that covers the moment — the entries land under `Ops/Logs`. The window the instrument answers for is bounded, so a reading is taken while the event is recent, not reconstructed afterwards.
+
+### Verifying the flow on a deployed portal — a positive read
+
+A silent log is not evidence of a working flow; the read must be a line that only a *completed* flow produces. After a roll, have an MCP client whose portal session has lapsed re-authorize, then query `OAuth /authorize` and `Issued OAuth` over the minutes around it. The sequence that proves the login hop returns to the flow is, for one `client_id`: `OAuth /authorize: … authenticated=False` → `redirecting unauthenticated caller to /login?returnUrl=%2Fauthorize%3F…` (a **local** target — an absolute `https://…` target here is the shape that [never came back](/Doc/Architecture/RedirectTargetContract)) → `Issued OAuth authorization code for user …, client {ClientId}` → `Issued OAuth access token for user …, client {ClientId}`. A client whose previous token was superseded then shows exactly that sequence with `authenticated=True` and no `/login` hop, which is the silent re-authorization the one-live-credential rule relies on.
 
 ---
 
