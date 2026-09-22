@@ -31,13 +31,41 @@ namespace MeshWeaver.Data;
 /// </summary>
 internal sealed class TypeSourceInitializationLedger
 {
-    private readonly ConcurrentDictionary<string, byte> pending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ITypeSource> pending = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The unsettled legs, as <c>{streamId}/{collectionName}</c>. A snapshot — the fan-out keeps
-    /// running while a diagnostic reads this.
+    /// The unsettled legs, as <c>{streamId}/{collectionName}</c> — followed by
+    /// <c> [what inside the leg is outstanding]</c> when the type source implements
+    /// <see cref="IReportsInitialLoadProgress"/>. A snapshot — the fan-out keeps running while a
+    /// diagnostic reads this.
     /// </summary>
-    internal IReadOnlyCollection<string> Pending => pending.Keys.ToArray();
+    internal IReadOnlyCollection<string> Pending => pending
+        .Select(kv => kv.Value is IReportsInitialLoadProgress progress
+                      && DescribeProgress(progress) is { Length: > 0 } detail
+            ? $"{kv.Key} [{detail}]"
+            : kv.Key)
+        .ToArray();
+
+    /// <summary>
+    /// Asks an optional reporter for its sentence. This runs on the FAILURE path — inside
+    /// <c>SettleInitializationGate</c>, before the failure is recorded and the gate opened — so a
+    /// reporter that throws must not be able to take that path down with it and leave the hub
+    /// wedged instead of FAILED. The fault is not hidden: it is printed in place of the sentence,
+    /// naming the exception type, in the very message the operator reads.
+    /// </summary>
+    /// <param name="progress">The type source's reporter.</param>
+    /// <returns>Its sentence, or a sentence naming the fault it raised.</returns>
+    private static string? DescribeProgress(IReportsInitialLoadProgress progress)
+    {
+        try
+        {
+            return progress.DescribeInitialLoadProgress();
+        }
+        catch (Exception ex)
+        {
+            return $"progress report FAULTED ({ex.GetType().Name}: {ex.Message})";
+        }
+    }
 
     /// <summary>
     /// Marks every type source of <paramref name="stream"/> unsettled and hands back the claim the
@@ -53,9 +81,10 @@ internal sealed class TypeSourceInitializationLedger
         IEnumerable<ITypeSource> typeSources)
     {
         var streamId = stream.StreamId;
-        var keys = typeSources.Select(ts => Key(streamId, ts)).ToArray();
-        foreach (var key in keys)
-            pending[key] = 0;
+        var legs = typeSources.Select(ts => (Key: Key(streamId, ts), Source: ts)).ToArray();
+        foreach (var leg in legs)
+            pending[leg.Key] = leg.Source;
+        var keys = legs.Select(l => l.Key).ToArray();
 
         // Bounds growth on a data source whose partition streams churn: without this, every
         // stream that is torn down before settling leaves its legs behind forever.

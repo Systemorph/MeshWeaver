@@ -44,8 +44,12 @@ namespace MeshWeaver.Graph;
 /// announce-loss class. Deletes have no such ambiguity (a path leaving the collection is always a
 /// genuine delete) and always announce via <see cref="StorageAdapterChangeFeedExtensions.DeleteAndPublish"/>.</para>
 /// </summary>
-public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>
+public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>, IReportsInitialLoadProgress
 {
+    // Which half of Initialize's Concat is outstanding — read only by the DataContext init
+    // time-box's diagnostic (IReportsInitialLoadProgress). A reference, so the record's `with`
+    // copies share it, exactly as the data source's initialization ledger is shared.
+    private readonly InitialLoadProgress _initialLoad = new();
     private readonly IStorageAdapter? _persistenceCore;
     private readonly string _hubPath;  // e.g., "graph/org1"
     private readonly IWorkspace _workspace;
@@ -843,7 +847,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // HubConfiguration delegate that the compile watcher / first-build kickoff /
             // data-model areas read off the workspace's own node.
             return DurableSeed().Select(n => (Node: GraftRoutingEnrichment(n), Durable: true))
-                .Concat(_ownNodeStream.Select(n => (Node: n, Durable: false)))
+                .Concat(_initialLoad.TrackRouting(_ownNodeStream)
+                    .Select(n => (Node: n, Durable: false)))
                 .Where(e => AcceptOwnNodeEmission(e.Node, e.Durable))
                 .Select(e => BuildInstanceCollection(e.Node));
 
@@ -928,8 +933,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         if (_persistenceCore is null)
             return Observable.Empty<MeshNode?>();
 
-        return _persistenceCore.Read(_hubPath, _workspace.Hub.JsonSerializerOptions)
-            .Take(1)
+        return _initialLoad.TrackSeed(_persistenceCore.Read(_hubPath, _workspace.Hub.JsonSerializerOptions))
             .Do(seed =>
             {
                 _logger?.LogDebug(
@@ -1192,5 +1196,110 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         }
 
         return node;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Separates the two waits <see cref="Initialize"/> concatenates, which a pending
+    /// <c>…/MeshNode</c> leg alone cannot: the unbounded durable storage read of this hub's own row,
+    /// and — only once that settled — the routing-supplied own-node stream. "The read has been
+    /// outstanding for 115 s" points at storage (the <c>pg-read</c> gate, a wedged adapter); "the read
+    /// settled after 0.1 s and the routing stream has not emitted" points at the routing and
+    /// stream-cache side. Those are opposite investigations, and before this the timeout could not say
+    /// which one to start (Systemorph/MeshWeaver#1122).
+    /// </remarks>
+    public string? DescribeInitialLoadProgress() =>
+        _initialLoad.Describe(_hubPath, _ownNodeStream is not null);
+
+    /// <summary>
+    /// Presence-only record of how far <see cref="Initialize"/>'s initial load got. Written from the
+    /// load's own callbacks and read only by <see cref="DescribeInitialLoadProgress"/>; nothing waits
+    /// on it and nothing branches on it.
+    /// </summary>
+    internal sealed class InitialLoadProgress
+    {
+        /// <summary>One immutable reading of the durable seed. Published by a single reference
+        /// swap, so a concurrent <see cref="Describe"/> sees either the whole settlement or none of
+        /// it — never a settle time without its outcome.</summary>
+        private sealed record SeedState(long StartedTicks, long SettledTicks, string? Outcome);
+
+        private SeedState? seed;
+        private int routingEmissions;
+
+        /// <summary>
+        /// Wraps the durable read so its subscription and settlement are recorded — the one place
+        /// <see cref="Initialize"/>'s seed wiring lives, so a test can drive it with a controllable
+        /// read. The FIRST settle wins: <c>Take(1)</c> completes right after its value, and that
+        /// completion must not overwrite "read version N".
+        /// </summary>
+        /// <param name="read">The durable read of this hub's own row.</param>
+        /// <returns>The read, taking at most one value, with its progress recorded.</returns>
+        public IObservable<MeshNode?> TrackSeed(IObservable<MeshNode?> read) =>
+            Observable.Defer(() =>
+                {
+                    SeedReadStarted();
+                    return read;
+                })
+                .Take(1)
+                .Do(
+                    node => SeedSettled(node is null ? "found no row" : "read version " + node.Version),
+                    ex => SeedSettled("FAULTED (" + ex.GetType().Name + ")"),
+                    () => SeedSettled("completed with no row"));
+
+        /// <summary>Wraps the routing-supplied own-node stream so each emission is counted.</summary>
+        /// <typeparam name="T">The routing stream's element type.</typeparam>
+        /// <param name="routing">The routing-supplied own-node stream.</param>
+        /// <returns>The same stream, counted.</returns>
+        public IObservable<T> TrackRouting<T>(IObservable<T> routing) =>
+            routing.Do(_ => RoutingEmitted());
+
+        /// <summary>The durable read was subscribed.</summary>
+        public void SeedReadStarted() =>
+            Volatile.Write(ref seed, new SeedState(DateTimeOffset.UtcNow.UtcTicks, 0, null));
+
+        /// <summary>The durable read settled; only the first settle after a start is kept.</summary>
+        /// <param name="outcome">How it settled.</param>
+        public void SeedSettled(string outcome)
+        {
+            var current = Volatile.Read(ref seed);
+            if (current is null || current.SettledTicks != 0)
+                return;
+            Interlocked.CompareExchange(
+                ref seed, current with { SettledTicks = DateTimeOffset.UtcNow.UtcTicks, Outcome = outcome }, current);
+        }
+
+        /// <summary>The routing-supplied own-node stream produced a value (accepted or not).</summary>
+        public void RoutingEmitted() => Interlocked.Increment(ref routingEmissions);
+
+        /// <summary>Renders the progress, or <c>null</c> when the load never reached either wait.</summary>
+        /// <param name="hubPath">This hub's path.</param>
+        /// <param name="concatenatesRoutingStream">Whether the load has a routing leg at all.</param>
+        /// <returns>The description.</returns>
+        public string? Describe(string hubPath, bool concatenatesRoutingStream)
+        {
+            var emissions = Volatile.Read(ref routingEmissions);
+            var routing = emissions == 0
+                ? "the routing-supplied own-node stream has not emitted"
+                : $"the routing-supplied own-node stream emitted {emissions} time(s) and none was accepted";
+
+            var state = Volatile.Read(ref seed);
+            if (state is null)
+                return concatenatesRoutingStream ? $"no durable seed read; {routing}" : null;
+
+            var started = state.StartedTicks;
+            var settled = state.SettledTicks;
+            if (settled == 0)
+            {
+                var outstanding = TimeSpan.FromTicks(DateTimeOffset.UtcNow.UtcTicks - started);
+                return FormattableString.Invariant(
+                        $"durable seed read of '{hubPath}' outstanding for {outstanding.TotalSeconds:0.0}s ")
+                    + "— a storage read that has not come back";
+            }
+
+            var readFor = TimeSpan.FromTicks(settled - started);
+            var head = FormattableString.Invariant(
+                $"durable seed read of '{hubPath}' {state.Outcome} after {readFor.TotalSeconds:0.0}s");
+            return concatenatesRoutingStream ? $"{head}; {routing}" : head;
+        }
     }
 }
