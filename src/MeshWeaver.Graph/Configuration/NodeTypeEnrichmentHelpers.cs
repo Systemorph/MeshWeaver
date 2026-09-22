@@ -2561,6 +2561,20 @@ internal static class NodeTypeEnrichmentHelpers
         // degraded-content warning logs.
         (NodeTypeDefinition? Def, bool Usable) Evaluate(MeshNode? t)
         {
+            // 🚨 A PROVEN NON-DECLARATION is this watcher's NORMAL INPUT on the collision overlay
+            // (#5264/#2231): the instance names a path something else occupies — the Store plugin
+            // root at `Feedback` — so the watched stream is that occupant and every emission of it
+            // is "not a NodeTypeDefinition". Handing it to ContentAs WITH the logger reported that
+            // at Error as `As<NodeTypeDefinition> for Feedback could not recover value:
+            // JsonException`, once per emission for the watcher's life: the incident fingerprint
+            // #5008 removed from the probe and the slow path, re-emitted here, so the incident
+            // could never go quiet however the instance was repaired. The collision was already
+            // reported once, with both sides named, by whoever armed this watcher. Same one-sided
+            // predicate as ProbeCollision; a real declaration (or degraded content that might be
+            // one) still reaches ContentAs with the logger, so a genuine conversion fault on a
+            // NodeType stays loud.
+            if (t is not null && NodeTypeDeclarationProbe.IsProvablyNotADeclaration(t, jsonOptions))
+                return (null, false);
             var def = t?.ContentAs<NodeTypeDefinition>(jsonOptions, logger);
             return (def, def is not null
                 && NodeTypeCompilationHelpers.HasUsableBuild(t!, def, guards));
