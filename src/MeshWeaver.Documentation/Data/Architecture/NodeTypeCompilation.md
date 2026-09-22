@@ -1794,7 +1794,19 @@ experiment is ONE copy held loaded across repeated emits, armed once per PROCESS
 `BELOW-ROSLYN` and read by the later ones — one pair of loads, N emits — and the cost model is part of
 the change, not an afterthought.
 
-**5. The platform set is not the variable.** The four occurrences sit on four different sets, and
+**5. The cleanest control there is: the SAME job, re-run on the SAME head and the SAME set, passes.**
+`35722501930` attempt 1 killed `portal-hosts (Hosting.Monolith.Test)` at `exit 124` with 58 canary
+blocks. Attempt 2 of the same run — head `353b8137b` unchanged, `platform mount: set 3.0.0-ci.9168
+(core 620a4893a)` unchanged, same runner pool — reported **`Test run summary: Passed! total: 813,
+failed: 0`** with **zero** `canary=BELOW-ROSLYN`, in 14 min against the 900 s cap. One comparison
+excludes the pull request's diff *and* the platform set *and* the content of the suite, because none
+of them changed between the two attempts. 🚨 It is also the reason this failure mode is so expensive
+to read: a re-run clears it, which makes it look like a flake to re-run and like the PR's fault to
+anyone who only saw attempt 1. It is neither — it is a process that stopped being able to emit, and
+the next process did not.
+
+**6. The platform set is not the variable — the population says so too.** The four occurrences sit on
+four different sets, and
 `git diff 6b3fda2a4..620a4893a -- src/MeshWeaver.Compiler src/MeshWeaver.Compiler.Pipeline` is **empty**
 across the pair that brackets the newest of them; `Microsoft.CodeAnalysis.CSharp` (5.9.0) and
 `global.json` are unchanged over the same range. A pass-then-fail across a ceiling move is therefore
@@ -1802,7 +1814,7 @@ not evidence about the ceiling — measured on PR #2231, which ran the same suit
 (`total: 813, failed: 0`, run `35700505749`, set `3.0.0-ci.9141`) four hours before it was killed at
 `3.0.0-ci.9168` with no diff of its own in between.
 
-**6. The rate, with its denominator, and why `main` cannot supply the control.** Since
+**7. The rate, with its denominator, and why `main` cannot supply the control.** Since
 2026-09-19T00:00Z the unit ran **201** times across the workflow: 153 `success`, 39 `cancelled`
 (superseded pushes), 1 still running, **8 `failure` — of which 4 are this defect** and the other 4
 carry no `canary=` and no `exit 124` at all. Over the narrower 2026-09-21T00:00Z window it is 102
@@ -1819,14 +1831,14 @@ unrelated branches is the control**, and it attributes the failure to no pull re
 `fix/4740-plugins-runner-timeouts`, `fix/incident-fold-dedupe`, `fix/hosting-bake-probe` and
 `fix/ai-stream-cancel` — share nothing but the defect.
 
-**7. Not observed in core's own CI in the same window — on a denominator too small to mean much.** The
+**8. Not observed in core's own CI in the same window — on a denominator too small to mean much.** The
 24 `MeshWeaver Build and Test` runs since 2026-09-20 carry 13 failed jobs between them, and none of
 those logs contains `PROCESS CANNOT EMIT`, `canary=BELOW-ROSLYN` or `exit 124`. Read it as
 *localising the observation*, not as an exoneration: 13 failures is thin, and core's suites do not
 drive in-process NodeType compilation at anything like the volume of the Plugins Monolith unit, so a
 zero here is close to what a healthy world and a sampling miss would both produce.
 
-**8. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
+**9. What kills the job is arithmetic, not a wedged test.** There is no hanging test to name. From the
 first poisoned emit every compile-gated assertion spends its entire window and then fails — on
 2026-09-22, 11 tests failed and 9 of them burned a full 50 s / 60 s / 90 s / 120 s window — so the
 900 s cap is spent on **138 recorded test starts** (two instruments agree: 138 `TEST_START` events and
@@ -1836,7 +1848,7 @@ to *start* (`NodeTypeRecompileAlcLeakTest.RecompilingANodeType_ReleasesEverySupe
 as *"the process stopped being able to emit at 12:52:40Z"*, and look for the first `PROCESS CANNOT EMIT`,
 never for the last test name.
 
-**9. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
+**10. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
 design produces, and neither half points anywhere: `TeardownStragglerCapturer` *was* loaded — its module
 initializer ran, which the 120 records prove — but its first-chance filter is
 `IsTeardownDisposedStraggler` (Autofac `LifetimeScope` and `MemoryCache` shapes only), so an emit `NRE`
