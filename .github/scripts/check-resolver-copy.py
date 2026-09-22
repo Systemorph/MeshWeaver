@@ -29,14 +29,33 @@ canonical that cannot be read or parsed is RED — a guard that cannot read its 
 WHAT IT DOES NOT TOUCH. The resolver's behaviour — including what an explicit `MW_PLATFORM_REF`
 freeze does — is not read, run or changed here; this compares files.
 
+A SECOND SUBJECT: `scripts/gen-manifests.py` (MeshWeaver#4777). The precedent this header cites —
+six copies, five vintages, each fix landing in one of them — still had no guard when #4775 fixed
+three ways `--resolve` reported success over an unanswered question: four copies were re-copied
+with it, two (Education, Plugins) could not be and still carry all three, and three days later the
+four were already three canonical commits behind again. Same comparison, same function-level
+report, ONE difference: this subject is ADVISORY and carries no flip date, on purpose. 🚨 A red on
+drift is a red on every canonical change for as long as `node-repo-resolve-locks.yml` REQUIRES the
+vendored copy (`[ -f scripts/gen-manifests.py ] || exit 1` — the lane runs the CALLER's copy for
+`--resolve` and the platform's only for the post-check), and the canonical moved four times in the
+three days after #4775: a dated flip here would red the whole fleet on a timer for a file the fleet
+is not allowed to delete. The flip's precondition is therefore a change, not a date: the resolve
+lane resolving with the platform's canonical, so a copy becomes optional and the no-copy notice is
+the end state — exactly as it is for the resolver. Until then this subject's job is to make "did
+the fix reach every copy?" a question every run ANSWERS, in its annotations, instead of one a
+person has to remember to ask.
+
   check-resolver-copy.py --root <repo> --canonical <path to the platform's resolve-platform.py>
+  check-resolver-copy.py --subject gen-manifests --root <repo> --canonical <path to the platform's gen-manifests.py>
   check-resolver-copy.py --self-test
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import difflib
+import io
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -45,6 +64,48 @@ from pathlib import Path
 COPY_PATH = "scripts/resolve-platform.py"
 # The flip: advisory before, red from this instant (UTC). One day after landing (2026-09-13).
 RED_FROM = "2026-09-15T00:00:00Z"
+
+
+class Subject:
+    """One vendored file this guard compares: where the copy lives, what the canonical is called,
+    the remedy the finding names, and whether drift can ever be RED (`red_from` None = advisory
+    with no flip scheduled — the header says why for gen-manifests)."""
+
+    def __init__(self, key: str, copy_path: str, canonical_name: str, remedy: str,
+                 red_from: str | None, what_it_decides: str) -> None:
+        self.key = key
+        self.copy_path = copy_path
+        self.canonical_name = canonical_name
+        self.remedy = remedy
+        self.red_from = red_from
+        self.what_it_decides = what_it_decides
+
+
+SUBJECTS: dict[str, Subject] = {
+    "resolver": Subject(
+        key="resolver",
+        copy_path=COPY_PATH,
+        canonical_name="resolve-platform.py",
+        remedy="Re-copy the canonical (.github/scripts/resolve-platform.py in Systemorph/MeshWeaver at "
+               "this lane's scripts ref), or delete the copy and let the lanes resolve "
+               "(MeshWeaver.Plugins#1565). A deliberate difference belongs in the canonical as an "
+               "option, never in a fork.",
+        red_from=RED_FROM,
+        what_it_decides="which sealed platform set this repository builds and tests against"),
+    "gen-manifests": Subject(
+        key="gen-manifests",
+        copy_path="scripts/gen-manifests.py",
+        canonical_name="gen-manifests.py",
+        remedy="Re-copy the canonical (.github/scripts/gen-manifests.py in Systemorph/MeshWeaver at "
+               "this lane's scripts ref) — it REQUIRES scripts/gen-manifests.config.json, so a repo "
+               "still carrying a module-level SKIP declares that config first, equal to "
+               "validate-repos.py's SKIP (MeshWeaver#4777). No flip is scheduled: the resolve lane "
+               "still runs THIS copy for --resolve and refuses a repo without one, so drift cannot "
+               "be red until the lane resolves with the platform's canonical.",
+        red_from=None,
+        what_it_decides="every manifest.lock's content hash, the moduleVersion derived from it, and "
+                        "whether --resolve reports a merge as resolvable"),
+}
 
 
 def _strip_docstrings(tree: ast.AST) -> ast.AST:
@@ -100,6 +161,13 @@ def parse_when(text: str) -> datetime:
 
 
 def run(root: Path, canonical: Path, red_from: datetime, now: datetime) -> int:
+    """The resolver subject — the original entry point, unchanged in behaviour and wording."""
+    return run_subject(SUBJECTS["resolver"], root, canonical, red_from, now)
+
+
+def run_subject(subject: Subject, root: Path, canonical: Path, red_from: datetime | None,
+                now: datetime) -> int:
+    copy_path, name = subject.copy_path, subject.canonical_name
     # 🚨 THE CANONICAL IS READ FIRST, BEFORE THE NO-COPY SHORTCUT (Copilot review, #4171). A
     # repository that has deleted its copy — the end state — would otherwise pass while the file it
     # is measured against is missing or unparsable, and the lane's own fetch only greps the body for
@@ -109,42 +177,89 @@ def run(root: Path, canonical: Path, red_from: datetime, now: datetime) -> int:
         canonical_src = canonical.read_text(encoding="utf-8")
         code_of(canonical_src)
     except Exception as ex:  # noqa: BLE001 — the reason goes to the log; the verdict is RED
-        print(f"::error::the canonical resolve-platform.py at {canonical} cannot be read or parsed "
+        print(f"::error::the canonical {name} at {canonical} cannot be read or parsed "
               f"({type(ex).__name__}: {ex}) — a guard that cannot read its subject must not pass")
         return 1
-    copy = root / COPY_PATH
+    copy = root / copy_path
     if not copy.is_file():
-        print(f"resolver copy: none at {COPY_PATH} — this repository resolves the platform through the "
-              "lanes' fetched canonical; nothing to compare")
+        if subject.key == "resolver":
+            print(f"resolver copy: none at {copy_path} — this repository resolves the platform through the "
+                  "lanes' fetched canonical; nothing to compare")
+        else:
+            print(f"{subject.key} copy: none at {copy_path} — nothing to compare")
         return 0
     try:
         copy_src = copy.read_text(encoding="utf-8")
         code_of(copy_src)
     except Exception as ex:  # noqa: BLE001
-        print(f"::error::{COPY_PATH} cannot be read or parsed ({type(ex).__name__}: {ex})")
+        print(f"::error::{copy_path} cannot be read or parsed ({type(ex).__name__}: {ex})")
         return 1
     changed, notes = compare(copy_src, canonical_src)
     raw = sum(1 for l in difflib.unified_diff(canonical_src.splitlines(), copy_src.splitlines(),
                                               lineterm="", n=0)
               if l.startswith(("+", "-")) and not l.startswith(("+++", "---")))
     if changed == 0:
-        print(f"resolver copy: {COPY_PATH} is CODE-IDENTICAL to the platform's canonical "
+        print(f"{subject.key} copy: {copy_path} is CODE-IDENTICAL to the platform's canonical "
               f"({raw} raw line(s) differ — docstrings, comments or whitespace only)")
         return 0
-    red = now >= red_from
+    # 🚨 A subject with no flip is advisory BY DECLARATION (red_from None), never by a date that
+    # has not arrived yet: the two print different phases so a reader can tell "not yet" from
+    # "not until the precondition in the header".
+    red = red_from is not None and now >= red_from
     level = "error" if red else "warning"
-    phase = ("RED since" if red else "advisory until") + f" {red_from.strftime('%Y-%m-%dT%H:%M:%SZ')}"
-    print(f"::{level}::{COPY_PATH} has DRIFTED from the platform's canonical resolve-platform.py: "
-          f"{changed} code line(s) differ ({raw} raw), {phase}. Re-copy the canonical "
-          f"(.github/scripts/resolve-platform.py in Systemorph/MeshWeaver at this lane's scripts ref), "
-          "or delete the copy and let the lanes resolve (MeshWeaver.Plugins#1565). A deliberate "
-          "difference belongs in the canonical as an option, never in a fork.")
+    if red_from is None:
+        phase = "advisory — no flip is scheduled (see the guard's header for the precondition)"
+    else:
+        phase = ("RED since" if red else "advisory until") + f" {red_from.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    print(f"::{level}::{copy_path} has DRIFTED from the platform's canonical {name}: "
+          f"{changed} code line(s) differ ({raw} raw), {phase}. This copy decides "
+          f"{subject.what_it_decides}. {subject.remedy}")
     for note in notes:
         print(f"  {note}")
     return 1 if red else 0
 
 
 # ── self-test ───────────────────────────────────────────────────────────────────────────────
+# A miniature of the canonical gen-manifests.py AFTER #4775: the git read reports failure as None
+# and the caller refuses on it.
+GM_CANON = '''"""gen-manifests canonical (miniature)"""
+import sys
+
+def git(root, args):
+    return None
+
+def _unmerged_paths(root):
+    out = git(root, ["diff", "--name-only", "--diff-filter=U"])
+    if out is None:
+        return None
+    return out.splitlines()
+
+def resolve(root):
+    still = _unmerged_paths(root)
+    if still is None:
+        return 2
+    return 0 if not still else 1
+
+def main():
+    return resolve(".")
+'''
+
+# The vintage BEFORE #4775, as two repositories still carry it: no `_unmerged_paths`, and a failed
+# git read coerced to "" so "nothing left to resolve" is reported over a question never answered.
+GM_PRE_4775 = '''"""gen-manifests (older vintage)"""
+import sys
+
+def git(root, args):
+    return None
+
+def resolve(root):
+    still = (git(root, ["diff", "--name-only", "--diff-filter=U"]) or "").strip()
+    return 0 if not still else 1
+
+def main():
+    return resolve(".")
+'''
+
 CANON = '''"""canonical docstring"""
 import sys
 LIMIT = 3
@@ -213,6 +328,50 @@ def self_test() -> int:
               run(repo("none-broken", None), broken, flip, before) == 1)
         check("an unparsable copy is RED", run(repo("z", "def (:\n"), canonical, flip, before) == 1)
         check("RED_FROM parses as an instant", flip.tzinfo is not None)
+
+        # ── the second subject: gen-manifests, advisory by declaration ─────────────────────
+        gm = SUBJECTS["gen-manifests"]
+        gm_canonical = tmp / "gen-manifests.canonical.py"
+        gm_canonical.write_text(GM_CANON, encoding="utf-8")
+
+        def gm_repo(name: str, copy: str | None) -> Path:
+            r = tmp / name
+            (r / "scripts").mkdir(parents=True)
+            if copy is not None:
+                (r / gm.copy_path).write_text(copy, encoding="utf-8")
+            return r
+
+        def captured(subject: Subject, root: Path, canon: Path, now: datetime) -> tuple[int, str]:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = run_subject(subject, root, canon, parse_when(subject.red_from) if subject.red_from else None, now)
+            return rc, buf.getvalue()
+
+        check("gen-manifests: the subject declares NO flip (red_from is None, not a date)", gm.red_from is None)
+        check("gen-manifests: no copy passes with a notice",
+              captured(gm, gm_repo("gm-none", None), gm_canonical, after)[0] == 0)
+        check("gen-manifests: no copy + an ABSENT canonical is still RED (advisory never bypasses the subject check)",
+              captured(gm, gm_repo("gm-none-absent", None), tmp / "gm-not-there.py", after)[0] == 1)
+        check("gen-manifests: an identical copy passes",
+              captured(gm, gm_repo("gm-same", GM_CANON), gm_canonical, after)[0] == 0)
+        # 🚨 PRODUCTION'S ACTUAL STATE, not a normalised fixture (MeshWeaver#4777): a copy of the
+        # vintage BEFORE #4775 — it LACKS `_unmerged_paths` and still coerces a failed git read to
+        # "" — measured on two repositories' main. The guard must NAME both, and it must not red.
+        rc, out = captured(gm, gm_repo("gm-education-vintage", GM_PRE_4775), gm_canonical, after)
+        check("gen-manifests: a pre-#4775 vintage is reported, ADVISORY, long after any resolver flip (rc 0)", rc == 0, out)
+        check("gen-manifests: the finding is a ::warning::, never ::error::", "::warning::" in out and "::error::" not in out, out)
+        check("gen-manifests: the phase says no flip is scheduled, not 'advisory until <date>'",
+              "no flip is scheduled" in out and "advisory until" not in out, out)
+        check("gen-manifests: the report names the function the vintage LACKS", "copy LACKS _unmerged_paths" in out, out)
+        check("gen-manifests: the report names the function whose code differs", "resolve differs" in out, out)
+        check("gen-manifests: the remedy names the config the canonical requires", "gen-manifests.config.json" in out, out)
+        check("gen-manifests: a canonical that does not parse is RED whatever the subject",
+              captured(gm, gm_repo("gm-y", GM_CANON), broken, after)[0] == 1)
+        check("gen-manifests: an unparsable copy is RED",
+              captured(gm, gm_repo("gm-z", "def (:\n"), gm_canonical, after)[0] == 1)
+        # And the resolver subject is untouched by the generalisation: same code drift, same flip.
+        check("resolver: a code difference from the flip is still RED after the generalisation",
+              captured(SUBJECTS["resolver"], repo("late-2", code), canonical, after)[0] == 1)
     if failures:
         print(f"::error::{len(failures)} self-test case(s) FAILED: " + "; ".join(failures))
         return 1
@@ -222,9 +381,13 @@ def self_test() -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--root", default=".", help="the repository whose scripts/resolve-platform.py is checked")
-    p.add_argument("--canonical", help="path to the platform's .github/scripts/resolve-platform.py")
-    p.add_argument("--red-from", default=RED_FROM, help="ISO instant from which drift is an error (default: the file's constant)")
+    p.add_argument("--root", default=".", help="the repository whose vendored copy is checked")
+    p.add_argument("--canonical", help="path to the platform's canonical copy of the subject")
+    p.add_argument("--subject", choices=sorted(SUBJECTS), default="resolver",
+                   help="which vendored file to compare (default: the resolver)")
+    p.add_argument("--red-from", default=None,
+                   help="ISO instant from which drift is an error; resolver only (default: the file's "
+                        "constant). Refused for a subject that declares no flip.")
     p.add_argument("--now", help="ISO instant to evaluate at (tests); default: now")
     p.add_argument("--self-test", action="store_true")
     args = p.parse_args()
@@ -232,8 +395,17 @@ def main() -> int:
         return self_test()
     if not args.canonical:
         p.error("--canonical is required (or --self-test)")
-    return run(Path(args.root), Path(args.canonical), parse_when(args.red_from),
-               parse_when(args.now) if args.now else now_utc())
+    subject = SUBJECTS[args.subject]
+    if subject.red_from is None:
+        if args.red_from:
+            # 🚨 Not a knob. The header says why this subject has no flip; the flip is a change to
+            # the resolve lane, and a workflow argument must not be able to schedule it by accident.
+            p.error(f"--red-from is refused for --subject {subject.key}: it is advisory by declaration")
+        red_from = None
+    else:
+        red_from = parse_when(args.red_from or subject.red_from)
+    return run_subject(subject, Path(args.root), Path(args.canonical), red_from,
+                       parse_when(args.now) if args.now else now_utc())
 
 
 if __name__ == "__main__":
