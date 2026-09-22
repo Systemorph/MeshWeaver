@@ -422,6 +422,18 @@ def main() -> int:
     print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) over "
           f"{len(SENTINELS)} assertion step(s) + {len(NODE_SHAPES)} verdict-merge shape(s), "
           "0 violation(s).")
+    # 🚨 WHAT THIS GREEN DOES NOT COVER, said by the gate rather than left to a reader.
+    # Every `roster` scenario feeds a SUCCESSFUL derivation (`INSTANCES=DERIVED`), because that is
+    # the only state in which the step it exercises is reachable. So this green proves the relocated
+    # credential assertion behaves GIVEN a derived roster; it says nothing about whether the live
+    # fleet produces one. That dimension is held CONSTANT here and VARIES in production — and today
+    # it varies to a refusal (#3848: two live installations both named `memex`), so in production
+    # the block these scenarios cover is not currently reached at all. A gate that cannot vary a
+    # dimension must not let its green be read as coverage of it.
+    print("  NOT COVERED by the above: whether the live fleet derives a roster at all. Every "
+          "`roster` scenario assumes one (INSTANCES=DERIVED). That question belongs to "
+          "derive-combo-instances.py — run its --self-test beside this, and read the LANE's own "
+          "run for the live answer.")
     return 0
 
 
