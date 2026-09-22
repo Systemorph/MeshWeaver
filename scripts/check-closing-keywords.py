@@ -426,6 +426,22 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
             continue
         seen.add(key)
 
+        # Resolve FIRST, even for a reference that is already condemned by its wording. A
+        # possessive aimed at a `sev:H` would otherwise be reworded to a plain close and refused
+        # again on the next run — two pushes for one defect, which is how a gate earns its
+        # reputation as a wall. One code path also means an unresolvable reference is Undecidable
+        # here exactly as it is everywhere else in this file.
+        issue = resolve(repo, ref.number) if ref.local else None
+        also = ""
+        if issue and not issue["is_pull_request"]:
+            blocking_now = [lbl for lbl in issue["labels"] if lbl in BLOCKING_LABELS]
+            if blocking_now:
+                also = (
+                    f" 🚨 And #{ref.number} carries `{blocking_now[0]}`, so a merge may not close "
+                    "it at all: a plain closing keyword here would be refused too (policy "
+                    "`severity-closes-on-verification`)."
+                )
+
         if ref.negation:
             errors.append(
                 f"NEGATED CLOSING KEYWORD — `{ref.text}` (negated by “{ref.negation}”). "
@@ -434,7 +450,7 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
                 f"close #{ref.number} on merge — measured on #5201/#5057, closed two seconds "
                 "after the merge. Write `Refs "
                 f"#{ref.number}` or `see #{ref.number}` instead. An escape cannot release this: "
-                "if you do mean to close it, delete the negation."
+                "if you do mean to close it, delete the negation." + also
             )
             continue
 
@@ -445,7 +461,7 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
                 "said two sentences later that the issue stays open for the half it did not fix, "
                 "and the merge closed it anyway, which left a live root with no open record. Move "
                 "the keyword off the number — `Fixes the <half> of "
-                f"#{ref.number}` closes nothing and still reads."
+                f"#{ref.number}` closes nothing and still reads." + also
             )
             continue
 
@@ -456,7 +472,6 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
             )
             continue
 
-        issue = resolve(repo, ref.number)
         if issue is None:
             notes.append(f"`{ref.text}` — #{ref.number} does not exist here; it closes nothing.")
             continue
@@ -768,6 +783,22 @@ def self_test() -> int:
             failures.append(
                 f"{which}: expected an error naming {marker}, got {errors or 'nothing'}"
             )
+
+    # 🚨 One defect, one push. A reference condemned by its WORDING is still resolved, so a
+    # possessive (or a negation) aimed at a release-blocking issue says so in the same message —
+    # otherwise the author rewords it to a plain close and is refused again on the next run.
+    errors, _, _ = evaluate(BODY_5174, REPO, _fake_resolve)
+    if not any("carries `sev:H`" in e for e in errors):
+        failures.append(
+            "#5174: the possessive message must also name the sev:H label, so rewording to a "
+            f"plain close is not a second round trip. Got: {errors}"
+        )
+    errors, _, _ = evaluate("This does not close #4000.", REPO, _fake_resolve)
+    if any("carries `sev" in e for e in errors):
+        failures.append(
+            "a negation aimed at a sev:M issue must NOT claim a release-blocking label: "
+            f"{errors}"
+        )
 
     # #5190's code-span occurrence must be invisible while its plain-prose one fires — the one
     # place the two rules meet in a real body.

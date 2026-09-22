@@ -95,7 +95,11 @@ The detector reproduces the parser rather than correcting it, because a gate tha
 than the thing it guards produces verdicts an author cannot act on:
 
 - **a keyword binds ONE reference.** `Closes #A, #B` closes #A only, so each reference is reported
-  on its own and a list is never assumed to have been understood;
+  on its own and a list is never assumed to have been understood. One report per *(issue,
+  problem)* — repeating the same keyword five times is one defect, while a negation and a
+  possessive aimed at the same issue are two, with two remedies. 🚨 And a reference condemned by
+  its wording is **still resolved**, so a possessive aimed at a `sev:H` says so in the same
+  message: rewording it to a plain close must not be a second round trip;
 - **a keyword inside a code span or a fence fires nothing** — measured: #3018 merged with
   `` `Fixes #2897` `` and #2897 stayed open. Both are stripped before the scan, which is also what
   lets this page and the gate's own docstring quote the syntax without firing;
