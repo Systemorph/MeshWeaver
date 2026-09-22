@@ -351,6 +351,24 @@ transport variant of the same family reads *"could not REACH the registry for th
 Re-run once it is healthy"*; that one is about the endpoint, not the identity, and
 `/api/plugins/bundles/index.json` answering **401** means reachable (it wants an instance key), not down.
 
+**Measured, and it says which lane can 404 at all.** The resolver walks the platform's `main-cd` runs
+newest-first and skips the ones still sealing, naming the markers it did not find:
+
+```
+skip main-cd #9199 (core dc1ce4139): NOT sealed — promote (`Promote: tag the full set`) absent;
+  verify (`Verify every image shipped`) absent; platform bake (…) absent — still sealing
+plugins publication: main-cd #9196 (core 636e5cb4a) sealed it at … (3.0.0-ci.9196)
+plugins-sealed=success
+```
+
+A lane that reports `plugins-sealed` has **already** checked the very fact the 404 is about and cannot
+hit it; a lane that takes only the resolved identity and then asks the registry for the module set can.
+Both shapes were observed on the same fleet inside ten minutes — one satellite's install leg reported
+`plugins-sealed=success`, while another satellite's `compile-check` 404'd on an identity holding only
+`meshweaver-content`. **Not established:** which of the shared lanes carry the `plugins-sealed` check
+today. Read the failing lane's own log rather than assuming, because that is what decides whether
+waiting or re-running is the remedy.
+
 **2. Is the lag over?** The portal's public `/health` carries a `publication-seal` entry that states,
 for the identity it is serving, every source sealed under it. Read it before re-running — if the
 identity it names does not hold a `plugins` seal, a re-run reproduces the 404:
