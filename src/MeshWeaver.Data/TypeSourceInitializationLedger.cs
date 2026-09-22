@@ -31,13 +31,20 @@ namespace MeshWeaver.Data;
 /// </summary>
 internal sealed class TypeSourceInitializationLedger
 {
-    private readonly ConcurrentDictionary<string, byte> pending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ITypeSource> pending = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The unsettled legs, as <c>{streamId}/{collectionName}</c>. A snapshot — the fan-out keeps
-    /// running while a diagnostic reads this.
+    /// The unsettled legs, as <c>{streamId}/{collectionName}</c> — followed by
+    /// <c> [what inside the leg is outstanding]</c> when the type source implements
+    /// <see cref="IReportsInitialLoadProgress"/>. A snapshot — the fan-out keeps running while a
+    /// diagnostic reads this.
     /// </summary>
-    internal IReadOnlyCollection<string> Pending => pending.Keys.ToArray();
+    internal IReadOnlyCollection<string> Pending => pending
+        .Select(kv => kv.Value is IReportsInitialLoadProgress progress
+                      && progress.DescribeInitialLoadProgress() is { Length: > 0 } detail
+            ? $"{kv.Key} [{detail}]"
+            : kv.Key)
+        .ToArray();
 
     /// <summary>
     /// Marks every type source of <paramref name="stream"/> unsettled and hands back the claim the
@@ -53,9 +60,10 @@ internal sealed class TypeSourceInitializationLedger
         IEnumerable<ITypeSource> typeSources)
     {
         var streamId = stream.StreamId;
-        var keys = typeSources.Select(ts => Key(streamId, ts)).ToArray();
-        foreach (var key in keys)
-            pending[key] = 0;
+        var legs = typeSources.Select(ts => (Key: Key(streamId, ts), Source: ts)).ToArray();
+        foreach (var leg in legs)
+            pending[leg.Key] = leg.Source;
+        var keys = legs.Select(l => l.Key).ToArray();
 
         // Bounds growth on a data source whose partition streams churn: without this, every
         // stream that is torn down before settling leaves its legs behind forever.

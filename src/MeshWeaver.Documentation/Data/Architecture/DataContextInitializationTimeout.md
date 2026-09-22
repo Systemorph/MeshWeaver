@@ -105,6 +105,31 @@ The ledger is diagnostic only: nothing waits on it and nothing branches on it. T
 is unchanged, so the existing incident keeps collecting its history while every sample line now
 carries the cause.
 
+### 🚨 For a per-node hub the leg alone did NOT separate those two — it now says which half
+
+The claim just above — that the leg "separates a storage read never came back from a remote hub
+never answered" — was not true for the case that matters most. A per-node hub has ONE leg, `…/MeshNode`,
+and that leg is `MeshNodeTypeSource.Initialize`: the durable read **concatenated ahead of** the
+routing-supplied own-node stream (above). The first attributed production sample after the ledger
+shipped, `Collaboration` on memex-cloud (2026-09-21 17:06:24Z, Systemorph/MeshWeaver#1122), read
+*"type-source legs still outstanding: 7j8ehN2m0UCo51iBcrGL2A/MeshNode"* — and could be either.
+
+A type source that implements `IReportsInitialLoadProgress` now has its own sentence appended to its
+leg, and `MeshNodeTypeSource` reports which half is outstanding:
+
+| sentence after the leg | where to look |
+|---|---|
+| `[durable seed read of 'P' outstanding for 115.0s — a storage read that has not come back]` | storage: the `pg-read` gate's wait, a wedged adapter |
+| `[durable seed read of 'P' found no row after 0.1s; the routing-supplied own-node stream has not emitted]` | the routing / stream-cache side — the read is done and the node never arrived |
+| `[… ; the routing-supplied own-node stream emitted N time(s) and none was accepted]` | the own-node gate dropped every emission (a null, or a stale version) |
+| `[durable seed read of 'P' FAULTED (…) after …]` | the read faulted and degraded to the routing leg, which then did not deliver |
+
+Still diagnostic only: the progress is written from the load's own callbacks and read by the
+failure path; nothing waits on it. Pinned by `DataContextInitTimeoutNamesTheWaitInsideTheLegTest`
+(the rendering — red with the ledger printing keys only) and `MeshNodeTypeSourceInitialLoadProgressTest`
+(the four sentences). **Not pinned by a test:** that `MeshNodeTypeSource.Initialize` calls the
+recorder at the right moments — read the diff at `DurableSeed` and the routing `.Do`.
+
 ## A failed init errors every stream it holds, and creates none
 
 The failure used to be propagated with `ds.GetStreamForPartition(null).OnError(failure)`. That
