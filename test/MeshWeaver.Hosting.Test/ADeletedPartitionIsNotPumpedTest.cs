@@ -174,10 +174,144 @@ public class ADeletedPartitionIsNotPumpedTest(ITestOutputHelper output) : Monoli
                 + "and read as a clean bake",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-        // The answering provider still decides: it denies both, and nothing contradicts it.
-        absent.OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Admin", GonePartition],
-            "the empty probe is indeterminate, not a veto — it must neither confirm absence on its "
-            + "own nor suppress a provider that did answer");
+        // 🚨 EMITTING is the property under test; the VALUE is the strict fold's, and the two are
+        // deliberately separate claims. One provider could not answer, so not every provider said
+        // false, so nothing is confirmed absent — correct, and the reason this case cannot ALSO
+        // carry a non-empty expectation.
+        absent.Should().BeEmpty(
+            "an indeterminate provider leaves the strict fold unsatisfied, so nothing is confirmed "
+            + "— but the probe must still ANSWER, because a silent completion voids the sweep");
+
+        // The other side, so "empty" here is a fold result and not the probe failing to measure:
+        // with every provider answering false, the same call confirms both partitions.
+        var confirmed = await PartitionExistenceProbe
+            .ConfirmedAbsentAmong(
+                [Provider("pg", (bool?)false), Provider("blob", (bool?)false)],
+                [GonePartition, "Admin"],
+                probeBudget: TestTimeouts.Quick)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the set form must answer", cancellationToken: TestContext.Current.CancellationToken);
+
+        confirmed.OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Admin", GonePartition],
+            "so the empty result above is the indeterminate provider, not a probe that measures nothing");
+    }
+
+    /// <summary>
+    /// 🚨 <b>ONE <c>false</c> BESIDE AN INDETERMINATE IS NOT ABSENCE</b> — the fold, and the review
+    /// finding that corrected it on this PR. A single <c>false</c> means "not in MY store", never
+    /// "absent everywhere": the Postgres provider answers <c>false</c> for a filesystem-backed
+    /// partition while the FileSystem provider that actually holds it cannot answer and returns
+    /// <c>null</c>. Accepting that pair as confirmed absence would skip a partition that genuinely
+    /// exists — the false-absent direction, which is worse than the defect this PR fixes.
+    ///
+    /// <para><c>PartitionWriteGuardValidator</c> had already established the strict fold, in those
+    /// words. This test is the negative control the first version of the probe did not have.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task OneProvidersFalse_BesideAnIndeterminate_IsNotAbsence()
+    {
+        var absent = await PartitionExistenceProbe
+            .ConfirmedAbsent([Provider("pg", (bool?)false), Provider("filesystem", (bool?)null)], GonePartition)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the probe must answer", cancellationToken: TestContext.Current.CancellationToken);
+
+        absent.Should().BeFalse(
+            "the provider that said false knows only its OWN store; the one that could not answer "
+            + "may be the one holding this partition, so skipping its types would skip real work");
+
+        // And the control on the other side, so this is a fold and not a blanket refusal: when
+        // EVERY provider that answered says false, absence IS confirmed.
+        var confirmed = await PartitionExistenceProbe
+            .ConfirmedAbsent([Provider("pg", (bool?)false), Provider("filesystem", (bool?)false)], GonePartition)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the probe must answer", cancellationToken: TestContext.Current.CancellationToken);
+
+        confirmed.Should().BeTrue(
+            "every provider that owns a store says the partition is not in it, and none contradicts "
+            + "them — that is the only shape that confirms absence");
+    }
+
+    /// <summary>
+    /// 🚨 A provider that throws SYNCHRONOUSLY must be indeterminate, not an escaping exception.
+    /// <c>PartitionExists</c> is an interface method on an extension point, so it may throw instead
+    /// of returning a faulted observable — and without the <c>Defer</c> in <c>Probe</c> that throw
+    /// happens while the probe list is being BUILT, escaping the per-provider <c>Catch</c>, the
+    /// probe method itself, and every <c>Catch</c> the caller wrapped around the returned
+    /// observable. On the bake path it would fault the sweep and refuse the pod's readiness: an
+    /// optimisation taking a pod out of rotation. Caught by review on this PR.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AProviderThatThrowsSynchronously_IsIndeterminate_NotAnEscapingException()
+    {
+        // The call itself must not throw — that is the half a .Catch on the result cannot fix.
+        Action composed = () => PartitionExistenceProbe.ConfirmedAbsent(
+            [SynchronouslyThrowingProvider("pg")], GonePartition);
+        composed.Should().NotThrow(
+            "composing the probe must never throw: the caller's Catch is on the OBSERVABLE, so an "
+            + "exception escaping the call reaches nothing and faults the whole bake sweep");
+
+        var absent = await PartitionExistenceProbe
+            .ConfirmedAbsent([SynchronouslyThrowingProvider("pg")], GonePartition)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("a provider that threw has not answered, and the probe must still answer",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        absent.Should().BeFalse("a throw is indeterminate, and indeterminate never confirms absence");
+    }
+
+    // ——— the summary the operator reads must agree with the gate ———
+
+    /// <summary>
+    /// 🚨 <b>EVERY status but <see cref="PreWarmStatus.Faulted"/> must map to a counter that is not
+    /// the fault counter</b> — the second review finding on this PR, and the assertion that keeps it
+    /// fixed. The consumer's classification was an inline <c>switch</c> whose <c>default</c> arm
+    /// meant "a fault", so two of the twelve statuses nobody had named —
+    /// <see cref="PreWarmStatus.Retired"/> and <see cref="PreWarmStatus.Removed"/> — were counted as
+    /// crashes while the GATE correctly filed them as non-gating content verdicts. An operator reads
+    /// the summary and a health payload reads the gate, so the two disagreeing is how "the warmer
+    /// faulted N times" gets investigated instead of the partition that was torn down.
+    ///
+    /// <para>Driven over the whole enum rather than the two members that were wrong, so a member
+    /// added later without a case fails HERE instead of in an operator summary.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void EveryOutcomeButFaulted_CountsAsSomethingOtherThanAFault()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var statuses = Enum.GetValues<PreWarmStatus>();
+        statuses.Length.Should().BeGreaterThan(1, "the enum must actually have been read");
+
+        foreach (var status in statuses)
+        {
+            var counter = DynamicTypePreWarmerHostedService.CounterFor(status);
+            if (status is PreWarmStatus.Faulted)
+            {
+                counter.Should().Be(PreWarmCounters.Faulted,
+                    "a genuine fault is the ONE status that belongs in the fault counter");
+                continue;
+            }
+            counter.Should().NotBe(PreWarmCounters.Faulted,
+                $"{status} is a classified, deliberate outcome — counting it as a fault makes the "
+                + "sweep summary contradict the readiness gate, which is what #5163's review caught");
+        }
+    }
+
+    /// <summary>
+    /// And specifically: a type skipped for a confirmed-absent partition is filed as CONTENT-broken,
+    /// the same bucket the gate files it in. This is the counter half of
+    /// <see cref="ASkippedType_DoesNotHoldReadiness"/> — the gate and the summary asserted against
+    /// the same outcome, because agreeing is the property that matters.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void ASkippedType_IsCountedAsContentBroken_NotAsAFault()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var skipped = DynamicTypePreWarmer.SkipForAbsentPartition(GoneTypePath, Absent(GonePartition))!;
+
+        DynamicTypePreWarmerHostedService.CounterFor(skipped.Status)
+            .Should().Be(PreWarmCounters.ContentBroken,
+                "which partitions exist is a property of the mesh, not of the image — the summary "
+                + "must say content-broken exactly as the gate does");
     }
 
     /// <summary>The partition of a path is its first segment — the whole address arithmetic here.</summary>
@@ -311,6 +445,15 @@ public class ADeletedPartitionIsNotPumpedTest(ITestOutputHelper output) : Monoli
     /// </summary>
     private static IPartitionStorageProvider EmptyProvider(string name) =>
         new ProbeOnlyProvider(name, _ => Observable.Empty<bool?>());
+
+    /// <summary>
+    /// A provider whose <c>PartitionExists</c> throws BEFORE returning an observable — legal for an
+    /// interface method, and the one failure the per-provider <c>Catch</c> cannot see unless the call
+    /// is deferred, because it happens while the probe list is being constructed.
+    /// </summary>
+    private static IPartitionStorageProvider SynchronouslyThrowingProvider(string name) =>
+        new ProbeOnlyProvider(name,
+            _ => throw new InvalidOperationException("the provider threw before returning a sequence"));
 
     /// <summary>
     /// A storage provider that implements ONLY the existence probe — which is all the probe under
