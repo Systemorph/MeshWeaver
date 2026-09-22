@@ -1,5 +1,7 @@
+using System;
 using System.Linq;
 using System.Reactive.Linq;
+using MeshWeaver.AI;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -101,4 +103,95 @@ public class ACachedIssuingHubIsRevalidatedTest(ITestOutputHelper output) : Mono
             + "hub reference has to be revalidated at the read, because the registry's "
             + "retire-and-replace acts on the address and cannot reach a reference in a field");
     }
+
+    /// <summary>
+    /// 🚨 <b>THE SECOND SITE, controlled on its own.</b> <c>MeshOperations.ReadHub</c> has the same
+    /// shape and its OWN cache and predicate, so a regression there would pass the test above and
+    /// every static guard. This drives it through <c>ContentList</c>, a public read that goes
+    /// through <c>ReadHub</c>, under ONE <c>MeshOperations</c> instance whose read hub is disposed
+    /// underneath it.
+    ///
+    /// <para><b>Why the assertion is a bounded ABSENCE and not a value.</b> The read's target is an
+    /// ordinary node with no content handler, so on a healthy read nothing answers until
+    /// <c>ContentList</c>'s own 30 s timeout — waiting for that would make the test 30 s long and
+    /// would measure the timeout rather than the seam. The DISCRIMINATOR is fast and one-sided:
+    /// with the cache unrevalidated, <c>ReadHub.Observe</c> throws
+    /// <see cref="System.ObjectDisposedException"/> SYNCHRONOUSLY inside the <c>SelectMany</c>, so
+    /// the observable faults in milliseconds with <i>"is shutting down"</i>. So the test requires
+    /// that no such answer arrives inside a short window: red in milliseconds when the cache is
+    /// stale, green without waiting for the unrelated timeout.</para>
+    ///
+    /// <para>🚨 Its preconditions are what stop it being an assertion about nothing: the read hub
+    /// must NOT be the mesh hub (off the router the seam is the identity function and there is no
+    /// cached reference to go stale), it must reach <c>Dead</c>, and a successor must be minted at
+    /// the same address.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AReadHubTornDownUnderneathTheFacade_DoesNotDisableEveryLaterRead()
+    {
+        var created = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode("CachedReadHubProbe", TestPartition)
+            {
+                Name = "read probe",
+                NodeType = "Markdown"
+            })
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        // ONE facade, held across both reads — a fresh MeshOperations starts with an empty cache
+        // and would resolve the successor anyway, hiding the defect.
+        var ops = new MeshOperations(Mesh);
+
+        // 🚨 AWAITED, not fire-and-forget. ReadHub is read INSIDE the path-resolution SelectMany,
+        // so a subscription that has not yet resolved the path has not touched the cache — and a
+        // teardown racing it would leave the cache EMPTY, so the second read would resolve the
+        // successor for a reason that has nothing to do with the fix. The first version of this
+        // test did exactly that and could not fail; the control caught it.
+        var first = await ReadContent(ops, created.Path);
+        Output.WriteLine($"DIAG first={first}");
+        first.Should().Contain(CollectionMissing,
+            "the first read must have REACHED the owning node hub and come back — that answer is "
+            + "what proves the read seam was used and its hub cached. Anything else and the "
+            + "measurement below is taken over an empty cache");
+
+        var readHub = Mesh.ReadIssuingHub();
+        readHub.Should().NotBeSameAs(Mesh,
+            "this test is about the ROOT-hub branch, where the read seam hops onto "
+            + "portal/reads-{meshId}; off the router it is the identity function and nothing is "
+            + "cached that could go stale");
+        var address = readHub.Address;
+
+        readHub.Dispose();
+        await readHub.DisposalCompleted.Should().Within(TestTimeouts.Convergence)
+            .Emit("the read hub has to actually be down — a teardown that did nothing would leave "
+                + "a perfectly usable cached reference and make the assertion below vacuous",
+                cancellationToken: TestContext.Current.CancellationToken);
+        readHub.RunLevel.Should().Be(MessageHubRunLevel.Dead,
+            "and terminally down, not merely winding down");
+        Mesh.ReadIssuingHub().Should().NotBeSameAs(readHub,
+            "the registry mints a successor at the same address once the corpse has left it");
+        Mesh.ReadIssuingHub().Address.Should().Be(address);
+
+        Output.WriteLine($"DIAG readHub={address} runLevel={readHub.RunLevel}");
+
+        var second = await ReadContent(ops, created.Path);
+        Output.WriteLine($"DIAG second={second}");
+        second.Should().Contain(CollectionMissing,
+            "the SAME MeshOperations instance must keep reading after its read hub died, and get "
+            + "the same real answer back through the successor. With the cache unrevalidated this "
+            + "answers 'Hub portal/reads-… is shutting down — cannot register new response "
+            + "subject' in about a millisecond instead");
+    }
+
+    /// <summary>The answer a read that REACHED the owning node hub comes back with, for a node that
+    /// declares no such collection. Used as the positive signal on both sides of the teardown.</summary>
+    private const string CollectionMissing = "collection 'content' not found";
+
+    /// <summary>One <c>ContentList</c> through the facade, with a fault folded into the answer so
+    /// both outcomes are one comparable string.</summary>
+    private Task<string> ReadContent(MeshOperations ops, string path) =>
+        ops.ContentList($"{path}/content")
+            .Catch<string, Exception>(ex => Observable.Return($"FAULT {ex.GetType().Name}: {ex.Message}"))
+            .Take(1)
+            .Await(TestContext.Current.CancellationToken);
 }

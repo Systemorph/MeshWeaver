@@ -54,8 +54,14 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class CachedHubReferenceGuard
 {
-    /// <summary>Production only — a test may legitimately pin one activation to measure it.</summary>
-    private static readonly string[] ScannedRoots = ["src"];
+    /// <summary>
+    /// Production only — a test may legitimately pin one activation in order to measure it.
+    ///
+    /// <para>A LOCAL rather than a <c>static readonly string[]</c>: an array is mutable whatever the
+    /// field is, so a shared one is process-wide state another test could write through. The scan
+    /// configuration is one line and has no reason to outlive the call.</para>
+    /// </summary>
+    private static string[] ScannedRoots() => ["src"];
 
     /// <summary>
     /// Field declarations whose type is a hub. Nullable only: a non-nullable field cannot be the
@@ -70,7 +76,7 @@ public class CachedHubReferenceGuard
     public void NoHubReferenceIsCachedWithoutRevalidation()
     {
         var root = SourceScan.FindRepoRoot();
-        var offenders = SourceScan.SourceFiles(root, ScannedRoots)
+        var offenders = SourceScan.SourceFiles(root, ScannedRoots())
             .SelectMany(f => FindIn(File.ReadAllText(f))
                 .Select(field => $"{SourceScan.Relative(root, f)}: {field} ??= …"))
             .OrderBy(x => x, System.StringComparer.Ordinal)
@@ -86,7 +92,7 @@ public class CachedHubReferenceGuard
             + "the ADDRESS and cannot reach a reference in a field (#5136).\n"
             + "Fix: cache the ADDRESS (that is stable), or revalidate at the read — return the "
             + "cached hub while its RunLevel is <= Started and it is not IsDisposing, and resolve "
-            + "again otherwise. See MeshService.ResolveIssuingHub.");
+            + "again otherwise. See MeshService.IssuingHub / UsableIssuingHub.");
     }
 
     /// <summary>
@@ -137,17 +143,17 @@ public class CachedHubReferenceGuard
             """;
         Assert.Empty(FindIn(addressCache));
 
-        // The revalidating form this guard asks for — MeshService.ResolveIssuingHub, verbatim.
+        // The revalidating form this guard asks for — MeshService.IssuingHub, verbatim. 🚨 The seam
+        // call stays INSIDE the property rather than behind a helper method, because
+        // RouterAsNodeOperationOriginRatchetGuard binds a post's receiver to a seam call it can SEE
+        // in the same file; this snippet is the shape that satisfies BOTH guards.
         const string revalidating = """
             private IMessageHub? _issuingHub;
-            private IMessageHub IssuingHub => ResolveIssuingHub();
-            private IMessageHub ResolveIssuingHub()
-            {
-                var cached = _issuingHub;
-                if (cached is not null && !IsWindingDown(cached))
-                    return cached;
-                return _issuingHub = hub.NodeOperationIssuingHub();
-            }
+            private IMessageHub IssuingHub => _issuingHub = UsableIssuingHub ?? hub.NodeOperationIssuingHub();
+            private IMessageHub? UsableIssuingHub =>
+                _issuingHub is { IsDisposing: false, RunLevel: <= MessageHubRunLevel.Started } cached
+                    ? cached
+                    : null;
             """;
         Assert.Empty(FindIn(revalidating));
 

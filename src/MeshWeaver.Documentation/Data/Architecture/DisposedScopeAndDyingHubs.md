@@ -238,7 +238,8 @@ accepted work — so the caller gets the documented transient `ShuttingDown` NAC
 and only past `ShutDown` does it get the successor. Nothing re-posts and nothing polls: it is a
 cache-validity check, O(1), at the one place the reference is read.
 
-Both sites in `src/` now do that (`MeshService.ResolveIssuingHub`, `MeshOperations.ResolveReadHub`),
+Both sites in `src/` now do that — `MeshService.IssuingHub` / `MeshService.UsableIssuingHub`, and
+`MeshOperations.ReadHub` / `MeshOperations.UsableReadHub` —
 and `CachedHubReferenceGuard` holds the tree at zero — keyed on the right-hand side being a seam
 call, with its detector asserted in both directions (it fires on the two pre-fix lines verbatim, and
 stays silent on the address cache, on the revalidating form, and on `ParentHub`). The guard's first
