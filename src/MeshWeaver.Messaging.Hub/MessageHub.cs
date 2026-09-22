@@ -2308,13 +2308,26 @@ public sealed class MessageHub : IMessageHub
         // probe on it for a transform that is only ever INVOKED when a hub is constructed.
         if (create == HostedHubCreation.Never)
             return hostedHubs.GetHubWithOutcome(address, config, create);
-        // 🚨 Stamp the enclosing rung of the initialization ladder (HubInitializationBudget). THIS
-        // hub's rung-2 waits — its BuildupAction Concat and its DataContext time-box — are what
-        // wait on the hub being created here, so that hub's whole initialization must give up
-        // strictly sooner or the level nearest a hang cannot report it (#1122, #1186, #2886).
+        // 🚨 Stamp the enclosing rung of the initialization ladder (HubInitializationBudget) — but
+        // ONLY while this hub's own initialization is still running, because that is exactly when
+        // one of its rung-2 waits can be waiting on the hub created here (a data source's stream
+        // is served by a sync/{clientId} sub-hub built inside StartDataSourcesAndOpenGate). Then
+        // the new hub must give up strictly sooner, or the level nearest a hang is torn down
+        // before it can report it (#1122, #1186, #2886).
+        //
+        // 🚨 HOSTED is not the same as ENCLOSED, and reading it as the same is wrong in the case
+        // that matters most: a per-node hub IS a hosted hub of the mesh root (MessageHubGrain and
+        // MeshExtensions both create it through this method), but routing activates it on demand
+        // long after the mesh hub reached Started — nothing in the mesh hub's initialization is
+        // waiting on it, so contracting it would narrow a production bound for no reason at all.
+        // RunLevel is the discriminator: below Started this hub's gates are still shut and its
+        // init can still be in flight; at or above it, its initialization is over.
+        //
         // Applied AFTER the caller's transform so an explicit WithStartupTimeout still decides its
         // own hub's rung 1, and here rather than in HostedHubsCollection because the host is an
         // Address there, not a hub whose budget can be read.
+        if (RunLevel >= MessageHubRunLevel.Started)
+            return hostedHubs.GetHubWithOutcome(address, config, create);
         return hostedHubs.GetHubWithOutcome(
             address,
             c => config(c) with { EnclosingInitializationBudget = Configuration.NestedInitializationBudget },

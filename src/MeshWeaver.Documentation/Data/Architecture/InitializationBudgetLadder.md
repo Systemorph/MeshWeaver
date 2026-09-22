@@ -1,7 +1,7 @@
 ---
 Name: The Initialization Budget Ladder
 Category: Architecture
-Description: Initialization is a nested wait, and every level of it used to take the same independently-written 120 s constant. Equal is not an ordering, so which level reported a hang was decided by scheduling — and when the enclosing one won, the level that knew which wait starved said nothing. A hosted hub now takes a strictly contracting rung.
+Description: Initialization is a nested wait, and every level of it used to take the same independently-written 120 s constant. Equal is not an ordering, so which level reported a hang was decided by scheduling — and when the enclosing one won, the level that knew which wait starved said nothing. A hub born inside another hub's initialization now takes a strictly contracting rung; a hub nothing is waiting on does not.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M6 20v-5h4v5"/><path d="M10 20v-9h4v9"/><path d="M14 20V7h4v13"/></svg>
 ---
 
@@ -50,15 +50,16 @@ That gap is not a curiosity, because the two outcomes are not symmetric:
 ## The ladder
 
 Exactly ONE bound is configured per hub — `MessageHubConfiguration.InitializationBudget`, which is
-either an explicit `WithStartupTimeout` or `HubInitializationBudget.Root` for a hub nobody hosts.
+either an explicit `WithStartupTimeout` or `HubInitializationBudget.Root` for a hub nothing is
+waiting on.
 Everything nested inside it is DERIVED by `HubInitializationBudget.Nest`, which is strictly
 contracting, so the ordering holds by construction and cannot drift apart again:
 
 | rung | value | what it bounds |
 |---|---|---|
-| 1 | `InitializationBudget` | this hub's WHOLE initialization, as its host bounds it |
+| 1 | `InitializationBudget` | this hub's WHOLE initialization, as whatever waits on it bounds it |
 | 2 | `NestedInitializationBudget` = `Nest(rung 1)` | one wait inside it: the BuildupAction `Concat`, and the `DataContext` time-box |
-| 3 | a hosted hub's rung 1 = `Nest(rung 2)` | that hub's whole initialization — this hub's rung-2 waits are what wait on it |
+| 3 | rung 1 of a hub created DURING this one's initialization = `Nest(rung 2)` | that hub's whole initialization — this hub's rung-2 waits are what wait on it |
 
 `Nest(t) = max(t − 5 s, t × 0.5)`, the same shape `MeshOperationOptions.Nest` uses. The reserve is
 absolute because what it covers is absolute: a hub construction, a post, and the inner hub's first
@@ -72,8 +73,8 @@ not academic, because the fraction floor halves per level: a configured 2 s budg
 the twelfth level of nesting. `Nest` refuses a smaller enclosing bound rather than collapsing the
 ladder, and `NestedInitializationBudgetTest` pins both sides of that boundary.
 
-At the default this reads **120 s / 115 s** for a hub nobody hosts, **110 s / 105 s** for the hub it
-hosts, and so on down.
+At the default this reads **120 s / 115 s** for a hub nothing is waiting on, **110 s / 105 s** for a
+hub created inside that one's initialization, and so on down.
 
 ### The two rung-2 bounds are SIBLINGS, and that is why they may be equal
 
@@ -85,29 +86,50 @@ rule.
 
 ### Where the rung is stamped
 
-`MessageHub.TryGetHostedHub` stamps the host's rung 2 onto the hosted hub's configuration as it is
-created. It is **stamped, never resolved on read**: `MessageHubConfiguration.ParentHub` answers out
-of the parent scope's `IMessageHub` registration, which for a hub built directly on a root provider
+`MessageHub.TryGetHostedHub` stamps the host's rung 2 onto the new hub's configuration as it is
+created.
+
+🚨 **HOSTED is not ENCLOSED, and reading them as the same narrows a production bound for
+nothing.** A per-node hub IS a hosted hub of the mesh root — both `MessageHubGrain` and
+`MeshExtensions` create it that way — but routing activates it on demand long after the mesh hub
+reached `Started`, so nothing in the mesh hub's initialization is waiting on it. The stamp is
+therefore applied only while the host's `RunLevel` is below `Started`, which is exactly the window
+in which one of its rung-2 waits can be waiting on the new hub (a data source's stream is served by
+a `sync/{clientId}` sub-hub built inside `StartDataSourcesAndOpenGate`). A per-node hub consequently
+takes the root budget, and only the sub-hubs born inside its initialization contract.
+
+It is **stamped, never resolved on read**: `MessageHubConfiguration.ParentHub` answers out of the
+parent scope's `IMessageHub` registration, which for a hub built directly on a root provider
 resolves to the hub ITSELF — deriving the ladder from it recursed until the stack died (`Stack
 overflow`, exit 134, the whole test host down with zero tests run). The host is known at the one
 moment that matters, so the value is carried.
 
-## What did NOT change
+## What changes, and what does not
 
-- **The root value.** A hub nobody hosts still gets 120 s — including a per-node hub, which is
-  created directly rather than as a hosted hub, so the production line still reads *"did not
-  complete within 120s"*. Only the hubs nested inside it contract.
+- **The root value, and what a per-node hub gets.** Rung 1 is still 120 s for a per-node hub, because
+  nothing is waiting on it (above). What DOES move is its rung 2: its BuildupAction `Concat` and its
+  `DataContext` time-box read **115 s** rather than 120 s, so the production line changes from *"did
+  not complete within 120s"* to *"… within 115s"*. That is the price of having a rung above them at
+  all, and the rung above them is what a configured `WithStartupTimeout` arms
+  (`MessageService`'s startup timer covers every gate and is armed in the constructor, i.e. strictly
+  earlier — equal values there meant the anonymous *"gates still closed: […]"* answer always beat
+  the one naming the pending action).
 - **Nothing is widened, and nothing is narrowed to make a symptom go away.** The bound is a
   liveness guarantee, not a fix: when it fires, go and fix the hung dependency. What changed is
   only WHICH level gets to report it.
-- **The log templates.** The seconds live inside the exception message, not in the structured
-  template, so an existing `LogIncident` fingerprint keeps collecting its own history.
+- **The log templates**, which is what a `LogIncident` fingerprint is built from at the
+  `DataContext` and `MessageHub` sites: the seconds live inside the exception message, not in the
+  template. That fingerprint demonstrably survived an exception-message rewrite already. 🚨 Where a
+  fingerprint IS built from the exception message — `MessageHubGrain`'s `ActivationFaultReason`
+  excludes the reporter's prose by design and keeps the exception text — a changed number re-keys
+  it, exactly as the query-layer change did.
 
 ## Tests
 
 - `NestedInitializationBudgetTest.EveryStepOfTheLadderIsStrictlySmallerThanTheOneItIsNestedIn` —
-  the derivation contracts at both scales, and a real host/hosted-hub pair carries a strictly
-  decreasing ladder.
+  the derivation contracts at both scales, both sides of the 1 ms domain boundary are pinned, a real
+  host/child pair carries a strictly decreasing ladder, and — the control on the other side of the
+  discriminator — a hub created AFTER the host started takes the root budget unchanged.
 - `NestedInitializationBudgetTest.AHungHostedHubReportsItself_AndTheHubWaitingOnItNeverGivesUp` —
   a host whose BuildupAction waits on a hosted hub whose own BuildupAction hangs. The hosted hub
   records the failure and names its action; the host answers requests normally and records nothing.

@@ -37,6 +37,12 @@ public class NestedInitializationBudgetTest(ITestOutputHelper output) : HubTestB
     /// <summary>The hosted hub the host's own initialization waits on.</summary>
     private static readonly Address ChildAddress = new("nestedinitchild", "1");
 
+    /// <summary>
+    /// A hosted hub created AFTER the host has started — the shape of a per-node hub, which routing
+    /// activates on demand. Nothing is waiting on it, so nothing encloses it.
+    /// </summary>
+    private static readonly Address OnDemandAddress = new("nestedinitondemand", "1");
+
     /// <summary>The host's rung 1. Everything below it is derived, never written.</summary>
     private static TimeSpan HostBudget => TestTimeouts.Quick;
 
@@ -135,6 +141,16 @@ public class NestedInitializationBudgetTest(ITestOutputHelper output) : HubTestB
         child.Configuration.NestedInitializationBudget.Should()
             .BeLessThan(child.Configuration.InitializationBudget,
                 "and the ladder keeps contracting at every further level of nesting");
+
+        // 🚨 The OTHER side of the discriminator, and the one that keeps a production bound where
+        // it was: HOSTED is not ENCLOSED. A hub created once its host has reached Started is not
+        // something the host's initialization can be waiting on — that is exactly a per-node hub,
+        // which IS a hosted hub of the mesh root but is activated on demand long afterwards — so
+        // it takes the full root budget and contracts nothing.
+        var onDemand = host.GetHostedHub(OnDemandAddress, c => c);
+        onDemand.Configuration.InitializationBudget.Should().Be(HubInitializationBudget.Root,
+            "a hub nothing is waiting on takes the root budget, however it was created — "
+            + "contracting it would narrow a bound for no reason at all");
     }
 
     /// <summary>

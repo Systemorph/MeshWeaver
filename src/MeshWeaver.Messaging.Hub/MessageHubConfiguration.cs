@@ -670,8 +670,11 @@ public record MessageHubConfiguration
 
     /// <summary>
     /// The HOST's <see cref="NestedInitializationBudget"/>, stamped by
-    /// <c>MessageHub.TryGetHostedHub</c> when this configuration is built for a hosted hub. Null for
-    /// a hub nobody hosts.
+    /// <c>MessageHub.TryGetHostedHub</c> when this configuration is built for a hub created WHILE
+    /// its host's own initialization is still running — the only case in which the host can be
+    /// waiting on it. Null otherwise, hosted or not: a per-node hub is a hosted hub of the mesh
+    /// root, but routing activates it on demand long after the mesh hub reached <c>Started</c>, so
+    /// nothing encloses it and it takes the full root budget.
     ///
     /// <para>🚨 It is STAMPED at creation, never resolved from <see cref="ParentHub"/> on read. That
     /// property answers out of the parent SCOPE's <c>IMessageHub</c> registration, which for a hub

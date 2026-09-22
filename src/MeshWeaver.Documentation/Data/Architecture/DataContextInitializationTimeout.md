@@ -39,9 +39,12 @@ Two consequences follow directly from that shape:
   its OWN action block after a scheduling hop, so under load the order inverts — the enclosing
   time-box expires first, errors the streams the data source holds, and the sub-hub's init ends as
   a recognised shutdown that records nothing. The level that knew which action hung then says
-  nothing at all. A hosted hub now takes a **strictly contracting** rung
+  nothing at all. A hub born INSIDE another hub's initialization — which is exactly what a `sync/`
+  sub-hub is — now takes a **strictly contracting** rung
   ([The Initialization Budget Ladder](../InitializationBudgetLadder)), so the sub-hub is the level
-  that reports, every time and not most of the time.
+  that reports, every time and not most of the time. (A per-node hub is hosted by the mesh root but
+  born long after it started, so nothing encloses it and its own rung 1 is unchanged; its time-box
+  reads 115 s rather than 120 s, one rung inside it.)
 
 ## For a per-node hub it is one storage read
 
