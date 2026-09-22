@@ -61,7 +61,10 @@ public static class CompileDiagnostics
     /// GUI mark each error at its exact line/column in a Monaco editor and link to the source.
     /// Synchronous, CPU-bound — the caller schedules it off the hub.
     /// </summary>
-    internal static IReadOnlyList<Lsp.DiagnosticInfo> DiagnoseInputs(CompilationInputs inputs)
+    /// <param name="inputs">The compilation inputs to diagnose.</param>
+    /// <param name="ct">Stops the bind when the caller stops waiting — on the CPU lane an abandoned
+    /// diagnose must release its slot, not run to the end holding it.</param>
+    internal static IReadOnlyList<Lsp.DiagnosticInfo> DiagnoseInputs(CompilationInputs inputs, CancellationToken ct = default)
     {
         var trees = new List<SyntaxTree>(inputs.Sources.Length + 2)
         {
@@ -86,9 +89,9 @@ public static class CompileDiagnostics
         // compile already reflects generation). Avoids loading any generator on every failed compile.
         var compilation = GeneratorPipeline.RunSourceGenerators(
             CSharpCompilation.Create(inputs.AssemblyName, trees, inputs.References, inputs.CompilationOptions),
-            Array.Empty<string>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
+            Array.Empty<string>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, ct);
 
-        var diags = compilation.GetDiagnostics();
+        var diags = compilation.GetDiagnostics(ct);
         if (diags.IsDefaultOrEmpty) return Array.Empty<Lsp.DiagnosticInfo>();
 
         var result = new List<Lsp.DiagnosticInfo>(diags.Length);

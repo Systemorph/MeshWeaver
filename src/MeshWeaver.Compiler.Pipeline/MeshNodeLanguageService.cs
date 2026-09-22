@@ -62,7 +62,7 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
     // inline, inside this leaf's Compile-pool gate, with no cancellation participation at all,
     // so a silo/mesh teardown racing the first caller could not reclaim that gate permit within
     // the drain budget. Every caller now races its OWN `ct` against this shared Task via
-    // Task.WaitAsync (see GetScriptCompletionsAsync/GetScriptDiagnosticsAsync) — the FIRST
+    // Task.WaitAsync (see GetScriptCompletionsAsync/ScriptCompilationAsync) — the FIRST
     // caller's own token never cancels the build (it is shared by every request against this
     // mesh instance), it only governs how long THAT caller waits.
     private readonly Lazy<Task<ScriptWorkspace>> _scriptWorkspace;
@@ -86,6 +86,11 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
     // with ConfigureAwait(false) behind a gate. Falls back to the unbounded pool
     // when no registry is wired (e.g. tests constructing the service outside DI).
     private readonly IIoPool _ioPool;
+    private readonly IIoPool _cpuLane;
+
+    /// <summary>Test seam (InternalsVisibleTo): runs on the thread that binds a diagnostics compilation.
+    /// Null in production.</summary>
+    internal Action? OnDiagnoseStarting { get; set; }
 
     public MeshNodeLanguageService(
         MeshNodeCompilationService compilationService,
@@ -103,6 +108,11 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
         usageIndex = new CompletionUsageIndex(hub, logger);
         memoryStore = new CompletionMemoryStore(hub, logger);
         _ioPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+            ?? IoPool.Unbounded;
+        // The CPU lane: every GetDiagnostics (Roslyn's bind — the expensive part of a squiggle
+        // request) runs on a bounded set of DEDICATED threads, never a ThreadPool worker
+        // (Doc/Architecture/CompileOffTheThreadPool). The async workspace legs stay on _ioPool.
+        _cpuLane = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.CompileCpu)
             ?? IoPool.Unbounded;
 
         // 🚨 The two helpers own subscriptions that outlive the request that started them — the
@@ -140,7 +150,8 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
                         // no diagnostics, which is outside #1592's failure (the mandated sweep
                         // enumerates nodeType:NodeType) but is not what this branch means.
                         ? Observable.Return(NodeDiagnosticsOutcome.NotCompilable)
-                        : _ioPool.Run(ct => GetDiagnosticsAsync(cached, ct))
+                        : _ioPool.Run(ct => WorkspaceCompilationAsync(cached, ct))
+                            .SelectMany(compilation => OnCpuLane(compilation, DiagnoseWorkspace))
                             .Select(NodeDiagnosticsOutcome.Compiled)),
 
                 // Genuinely not there, or its delete is in flight — either way nothing was checked.
@@ -280,13 +291,15 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
                     // this says "nothing was compiled" rather than inventing a clean bill.
                     ? Observable.Return(NodeDiagnosticsOutcome.NotCompilable)
                     : _ioPool.Run(ct =>
-                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))
+                            speculativeCompilation.CreateCompilationAsync(inputs, sourcePath, proposedCode, ct))
+                        .SelectMany(compilation => OnCpuLane(compilation, SpeculativeCompilation.Diagnose))
                         .Select(NodeDiagnosticsOutcome.Compiled)),
             // A non-NodeType owner that EXISTS → a standalone script Code node: diagnose in
             // the script environment so lesson cells get live squiggles too (this used to
             // fall through to a compilation that parses a cell as REGULAR C#, reporting the
             // spurious "top-level statements must be in an executable" on every cell).
-            _ => _ioPool.Run(ct => GetScriptDiagnosticsAsync(proposedCode, ct))
+            _ => _ioPool.Run(ct => ScriptCompilationAsync(proposedCode, ct))
+                .SelectMany(compilation => OnCpuLane(compilation, DiagnoseScript))
                 .Select(NodeDiagnosticsOutcome.Compiled),
         };
 
@@ -536,14 +549,32 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
         return true;
     }
 
-    private static async Task<IReadOnlyList<DiagnosticInfo>> GetDiagnosticsAsync(
-        CachedWorkspace cached, CancellationToken ct)
+    /// <summary>
+    /// Hands <paramref name="compilation"/> to the CPU lane for its bind. A null compilation (no
+    /// project / document) answers empty without taking a lane slot.
+    /// </summary>
+    private IObservable<IReadOnlyList<DiagnosticInfo>> OnCpuLane<TCompilation>(
+        TCompilation? compilation,
+        Func<TCompilation, CancellationToken, IReadOnlyList<DiagnosticInfo>> diagnose)
+        where TCompilation : class
+        => compilation is null
+            ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
+            : _cpuLane.InvokeBlocking(ct =>
+            {
+                OnDiagnoseStarting?.Invoke();
+                return diagnose(compilation, ct);
+            });
+
+    /// <summary>The IO half of a node workspace's diagnostics: the project's compilation (not yet bound).</summary>
+    private static async Task<Compilation?> WorkspaceCompilationAsync(CachedWorkspace cached, CancellationToken ct)
     {
         var project = cached.Workspace.CurrentSolution.GetProject(cached.ProjectId);
-        if (project is null) return Array.Empty<DiagnosticInfo>();
+        return project is null ? null : await project.GetCompilationAsync(ct).ConfigureAwait(false);
+    }
 
-        var compilation = await project.GetCompilationAsync(ct).ConfigureAwait(false);
-        if (compilation is null) return Array.Empty<DiagnosticInfo>();
+    /// <summary>The CPU half: bind and report — a CPU-lane leaf (no IO, no pool call).</summary>
+    private static IReadOnlyList<DiagnosticInfo> DiagnoseWorkspace(Compilation compilation, CancellationToken ct)
+    {
         var diags = compilation.GetDiagnostics(ct);
         if (diags.IsDefaultOrEmpty) return Array.Empty<DiagnosticInfo>();
 
@@ -645,19 +676,20 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
     /// Diagnostics for a standalone SCRIPT Code node — the script-environment sibling of
     /// <see cref="SpeculativeCompilation"/>, so lesson cells get live squiggles.
     /// </summary>
-    private async Task<IReadOnlyList<DiagnosticInfo>> GetScriptDiagnosticsAsync(
-        string proposedCode, CancellationToken ct)
+    private async Task<Compilation?> ScriptCompilationAsync(string proposedCode, CancellationToken ct)
     {
         var script = await _scriptWorkspace.Value.WaitAsync(ct).ConfigureAwait(false);
         var document = script.Workspace.CurrentSolution
             .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
             .GetDocument(script.DocumentId);
-        var compilation = document is null
+        return document is null
             ? null
             : await document.Project.GetCompilationAsync(ct).ConfigureAwait(false);
-        if (compilation is null) return Array.Empty<DiagnosticInfo>();
+    }
 
-
+    /// <summary>The CPU half of a script's diagnostics — a CPU-lane leaf.</summary>
+    private static IReadOnlyList<DiagnosticInfo> DiagnoseScript(Compilation compilation, CancellationToken ct)
+    {
         var diags = compilation.GetDiagnostics(ct);
         if (diags.IsDefaultOrEmpty) return Array.Empty<DiagnosticInfo>();
         var result = new List<DiagnosticInfo>();
@@ -968,7 +1000,10 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
                 language: LanguageNames.CSharp,
                 compilationOptions: new CSharpCompilationOptions(
                         OutputKind.DynamicallyLinkedLibrary,
-                        metadataReferenceResolver: Kernel.Hub.MeshScriptEnvironment.MetadataResolver)
+                        metadataReferenceResolver: Kernel.Hub.MeshScriptEnvironment.MetadataResolver,
+                        // Roslyn's default fans every bind out onto the ThreadPool — see
+                        // EmitPipeline.CreateRunCompilationOptions / CompileOffTheThreadPool.
+                        concurrentBuild: false)
                     .WithUsings(Kernel.Hub.MeshScriptEnvironment.Imports),
                 parseOptions: new CSharpParseOptions(kind: SourceCodeKind.Script),
                 metadataReferences: references,

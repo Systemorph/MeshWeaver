@@ -84,7 +84,9 @@ public sealed class IoPoolRegistry : IDisposable
         // and anything that did not win the race is disposed, which wakes its canceller and lets it
         // exit. Same reason the refusal path below disposes `raced`.
         IoPool? candidate = null;
-        var pool = _pools.GetOrAdd(name, n => candidate = new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace));
+        var pool = _pools.GetOrAdd(name, n => candidate = new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace,
+            // The CPU lane holds its threads for pure computation — never borrow them from the pool.
+            dedicatedThreads: n == IoPoolNames.CompileCpu));
         if (candidate is not null && !ReferenceEquals(pool, candidate))
             candidate.Dispose();
 
