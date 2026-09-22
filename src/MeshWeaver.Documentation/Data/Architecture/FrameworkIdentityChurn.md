@@ -335,6 +335,13 @@ The churn above reaches a reader as a **404 on a pull request that has nothing w
 is the one CI red where re-running is the remedy rather than the forbidden "see if it was a flake".
 Telling it apart from a real break takes two readings, and neither is "it went green".
 
+🚨 **The status code is NOT the discriminator — the message text is.** The same 404, on the same URL,
+covers two cases with opposite remedies: a publication that is not sealed for this identity **yet**
+(the lag; re-running is right) and a publication that IS sealed but **predates module sealing**, so it
+carries no `modules/_index` (permanent; re-running never fixes it). `compose-sealed-modules.sh` prints
+both in one breath, and a reader who stops at the line above has been told the wrong remedy for half
+of them.
+
 **1. The signature.** The failing step names the identity it could not find a publication for:
 
 ```
@@ -342,6 +349,21 @@ Telling it apart from a real break takes two readings, and neither is "it went g
 https://<portal>/api/plugins/bundles/prebuilt/<I>/plugins/modules:
 {"error":"no sealed publication for source 'plugins' under framework identity '<I>'"}
 ```
+
+and, immediately after it, the line that says which of the two cases you are in:
+
+```
+##[error]Either 'plugins' has no SEALED publication for this identity, or its publication predates
+module sealing (no modules/_index) — republish 'plugins' under a core that carries MeshWeaver#2707.
+Not composing from the registry instead: that is the decline this exists to end.
+```
+
+**Read reading 2 before re-running anything.** If the identity turns out to be sealed for `plugins`
+and the 404 persists, it is the second case: the remedy is a **republish of `plugins` under a core
+carrying #2707**, not a re-run and not waiting, and it is a person's act. Measured shape, `MeshWeaver.Crm#147`
+attempt 1 (2026-09-22 14:44:37Z): identity `s187230304209d9fab880cdc9f1adfa7b` held exactly ONE
+publication, `meshweaver-content` — the lag, which attempt 2 cleared once the fleet moved to
+`s6d5e8c975a58748025c7283aadea8c5f` and its eight seals.
 
 The satellite lane resolves the newest sealed **platform content** and then asks the registry for
 `plugins` *under that identity*. `plugins` publishes per-identity and trails core, so between core
@@ -394,7 +416,8 @@ upstream 'plugins' sealed 4 module bundle(s) for identity <I'>
 ```
 
 `<I'>` must differ from the 404's `<I>`. A green run that resolved the *same* identity did not test
-what you think it did.
+what you think it did — and if the identity moved and the 404 came back anyway, stop re-running: that
+is the `predates module sealing` case, and it needs the republish named in reading 1.
 
 🚨 **Classify before re-running, because two unrelated reds wear this costume.** A whole run whose
 conclusion is `cancelled` has **no verdict at all** — its gate fan-out reports `the gate fan-out
