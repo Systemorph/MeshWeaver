@@ -1028,14 +1028,16 @@ public class MeshQuery : IMeshQueryCore
     ///
     /// <para><b>Sort order — the canonical contract.</b></para>
     /// <list type="number">
-    ///   <item><see cref="ParsedQuery.OrderBy"/> when the query author
-    ///     specified <c>sort:Foo-desc</c> (or any other property). The
-    ///     <see cref="QueryEvaluator.OrderResults"/> primitive is used so the
+    ///   <item><see cref="ParsedQuery.EffectiveOrderBy"/> when it resolves: the author's
+    ///     <c>sort:Foo-desc</c> (or any other property), or — for a query with no <c>sort:</c>
+    ///     and no free-text term — <see cref="ParsedQuery.DefaultFilterOrdering"/>, newest
+    ///     first, so a capped filter-only result keeps the rows a reader is asking about
+    ///     (#4950). The <see cref="QueryEvaluator.OrderResults"/> primitive is used so the
     ///     ordering rules match per-provider behavior (LastModified handles
     ///     DateTime, Name is case-insensitive, …). This is the FIRST sort
     ///     dimension — explicit user intent always wins.</item>
     ///   <item><b>Score descending</b> within ties (or as the sole sort key
-    ///     when no <c>sort:</c> was specified). Each provider attaches a
+    ///     when a free-text term makes relevance the ordering). Each provider attaches a
     ///     numeric score per item via <see cref="QueryResultChange{T}.Scores"/>;
     ///     <see cref="MergeProviderObservables{T}"/> pairs items with their
     ///     scores and hands them here. Higher score = stronger match.
@@ -1063,40 +1065,53 @@ public class MeshQuery : IMeshQueryCore
         ParsedQuery parsed,
         MeshQueryRequest request)
     {
-        IEnumerable<(T Item, double Score)> merged = hits;
-        if (parsed.OrderBy is { } orderBy)
+        IEnumerable<(T Item, double Score)> merged;
+        // 🚨 EffectiveOrderBy, never OrderBy: an authored sort: wins, a free-text query resolves to
+        // null (relevance — the score branch below), and a filter-only query resolves to
+        // newest-first on the contract (ParsedQuery.DefaultFilterOrdering, #4950). The same
+        // property is what each provider clipped over before this merge saw a row, so the window
+        // taken here is a window over the SAME order — not a re-sort of an arbitrarily clipped one.
+        //
+        // 🚨 Taken ONLY when EVERY item is a MeshNode. The guard used to be "T is MeshNode, or any
+        // item is one", which was reachable only when an author wrote sort: — now that a
+        // filter-only query resolves an ordering by default it runs for every such query, and on
+        // a mixed batch under T = object the OfType<MeshNode>() below would silently DROP the
+        // non-node items while a narrower T would fail the cast back. All-nodes means OfType
+        // drops nothing and (T)(object)node is the identity; anything else keeps the score + path
+        // total order in the else branch, which preserves every item (Copilot review, #5192).
+        if (parsed.EffectiveOrderBy is { } orderBy
+            && hits.Count > 0 && hits.All(h => h.Item is MeshNode))
         {
             // OrderBy is the FIRST sort dimension when present — user intent
             // beats provider scoring. Strip to items, sort, re-pair with
-            // scores (preserved by item identity). For non-MeshNode items
-            // the OrderBy is a no-op (QueryEvaluator only handles MeshNode);
-            // skip the sort to avoid mangling the score order.
-            if (typeof(T) == typeof(MeshNode) || hits.Any(h => h.Item is MeshNode))
+            // scores (preserved by item identity).
+            var evaluator = new QueryEvaluator();
+            var scoreByItem = new Dictionary<MeshNode, double>();
+            foreach (var (item, score) in hits)
             {
-                var evaluator = new QueryEvaluator();
-                var scoreByItem = new Dictionary<MeshNode, double>();
-                foreach (var (item, score) in hits)
-                {
-                    if (item is MeshNode node && node.Path is not null)
-                        scoreByItem[node] = score;
-                }
-                // Path-ordered BEFORE the OrderBy: OrderResults sorts stably, so the explicit
-                // sort dimension wins and ties fall back to path rather than to the arbitrary
-                // order the providers happened to merge in. See PathTiebreak below.
-                var ordered = evaluator
-                    .OrderResults(
-                        hits.Select(h => h.Item).OfType<MeshNode>()
-                            .OrderBy(n => n.Path ?? "", StringComparer.Ordinal),
-                        orderBy)
-                    .ToList();
-                merged = ordered.Select(node => ((T)(object)node,
-                    scoreByItem.TryGetValue(node, out var s) ? s : 0.0));
+                if (item is MeshNode node && node.Path is not null)
+                    scoreByItem[node] = score;
             }
+            // Path-ordered BEFORE the OrderBy: OrderResults sorts stably, so the explicit
+            // sort dimension wins and ties fall back to path rather than to the arbitrary
+            // order the providers happened to merge in. See PathTiebreak below.
+            var ordered = evaluator
+                .OrderResults(
+                    hits.Select(h => h.Item).OfType<MeshNode>()
+                        .OrderBy(n => n.Path ?? "", StringComparer.Ordinal),
+                    orderBy)
+                .ToList();
+            merged = ordered.Select(node => ((T)(object)node,
+                scoreByItem.TryGetValue(node, out var s) ? s : 0.0));
         }
         else
         {
-            // No explicit OrderBy → score IS the sort dimension. Sort
-            // descending so the highest-relevance match lands first.
+            // No applicable OrderBy → score IS the sort dimension. Sort descending so the
+            // highest-relevance match lands first. Also the branch for a batch that is not all
+            // MeshNodes, where QueryEvaluator.OrderResults has nothing to read a sort key from
+            // on every item: the score order is kept and the tiebreak (empty for non-nodes, so
+            // stable) keeps it a total order over EVERY item, rather than the provider-arrival
+            // order the OrderBy branch used to leave behind.
             merged = hits.OrderByDescending(h => h.Score)
                 .ThenBy(PathTiebreak, StringComparer.Ordinal);
         }

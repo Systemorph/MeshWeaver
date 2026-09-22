@@ -8,9 +8,11 @@ namespace MeshWeaver.Mesh;
 /// <see cref="Items"/> — so the <c>IMeshQueryProvider</c> fan-in can
 /// merge hits from multiple backends into one ordered set. Higher score =
 /// stronger match. The aggregator sorts the merged result by
-/// <see cref="ParsedQuery.OrderBy"/> first (when present) and then by score
-/// descending, so callers always get the most relevant hit at index 0
-/// without re-ranking on their side.</para>
+/// <see cref="ParsedQuery.EffectiveOrderBy"/> first (an authored <c>sort:</c>, or newest-first
+/// for a filter-only query) and by score descending when a free-text term makes relevance the
+/// ordering, so index 0 is the first item in the APPLIED ordering — the most relevant hit for a
+/// free-text query, the newest for a filter-only one, the author's first for an explicit
+/// <c>sort:</c> — without callers re-ranking on their side.</para>
 ///
 /// <para><b>What each provider's score means.</b> The contract is that the
 /// scale is comparable ACROSS providers for a single query, not absolute:</para>
@@ -55,11 +57,11 @@ public record QueryResultChange<T>
     /// <see cref="Items"/>. When non-null its length MUST equal
     /// <c>Items.Count</c>. Higher = stronger match. The aggregator
     /// (<c>MeshQuery.ClipMergedInitial</c>) consults this AFTER any
-    /// <see cref="ParsedQuery.OrderBy"/> clauses; with no OrderBy specified
-    /// the score is the sole sort key (desc), so a provider can drive
+    /// <see cref="ParsedQuery.EffectiveOrderBy"/> clause; for a free-text query no such clause
+    /// resolves and the score is the sole sort key (desc), so a provider can drive
     /// "best match first" ordering without the query author having to add
     /// <c>sort:</c>. <see langword="null"/> means the provider did not
-    /// score this batch — aggregator preserves insertion order.
+    /// score this batch — every item competes as 0 and the path tiebreak decides.
     /// </summary>
     public IReadOnlyList<double>? Scores { get; init; }
 
