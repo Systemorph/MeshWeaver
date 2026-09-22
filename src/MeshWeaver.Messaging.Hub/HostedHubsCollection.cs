@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -339,10 +340,24 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// <param name="corpse">The hub found there, at <see cref="MessageHubRunLevel.ShutDown"/> or beyond.</param>
     private void RetireCorpse(Address address, IMessageHub corpse)
     {
-        if (!messageHubs.TryRemove(new KeyValuePair<Address, IMessageHub>(address, corpse)))
+        // 🚨 INTO `retiring` FIRST, out of `messageHubs` SECOND — never the other way round. The
+        // owner's disposal takes its two snapshots in the opposite order (registry, then retiring:
+        // see DisposeHubsReactive), and that pairing is what keeps the corpse in at least one of
+        // them at every instant without a lock: a registry snapshot taken before this removal
+        // still holds it; one taken after it was taken after the add too, so the retiring
+        // snapshot that follows holds it. Remove-then-add would open a gap — removed here, not yet
+        // added, both snapshots taken in between — in which the owner would omit the corpse from
+        // its join, close its container, and strand the corpse's registrant walk on a disposed
+        // scope: the very failure the join exists to prevent. The completion subscription is
+        // armed by whichever caller's add was first; a second concurrent lookup finds the entry
+        // present and arms nothing.
+        if (!retiring.TryAdd(corpse, Unit.Default))
+        {
+            messageHubs.TryRemove(new KeyValuePair<Address, IMessageHub>(address, corpse));
             return;
+        }
 
-        retiring[corpse] = Unit.Default;
+        messageHubs.TryRemove(new KeyValuePair<Address, IMessageHub>(address, corpse));
         logger.LogWarning(
             "[HOSTED-RETIRE] {Address} in Host {Host}: the registered hub is at RunLevel={RunLevel} and "
             + "has not left the registry — its teardown has not reached its own removal. Retiring it so "
@@ -699,12 +714,20 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     private void DisposeHubsReactive()
     {
         var totalStopwatch = Stopwatch.StartNew();
-        var hubs = messageHubs.Values.ToArray();
-        // Retired predecessors (RetireCorpse) are already disposing on their own; they are not
-        // disposed again here — Dispose() would be a no-op on them anyway — but they ARE joined,
-        // because their scopes are children of the owner's and the owner must not close it under
-        // a teardown still resolving from it.
+        // 🚨 TWO SNAPSHOTS, IN THIS ORDER — the registry first, `retiring` second — and the order
+        // is load-bearing. RetireCorpse moves a hub the other way round (into `retiring`, THEN out
+        // of the registry), so a retirement racing this teardown lands in at least one snapshot
+        // whatever the interleaving: taken before the removal, the registry snapshot holds it;
+        // taken after, the add that preceded that removal is visible to the retiring snapshot
+        // that follows. Snapshotting `retiring` first would open the one gap that loses it.
+        // Retired predecessors are already disposing on their own; they are not disposed again
+        // here — Dispose() would be a no-op on them anyway — but they ARE joined, because their
+        // scopes are children of the owner's and the owner must not close it under a teardown
+        // still resolving from it. A hub caught in both snapshots is joined once, as retired.
+        var registered = messageHubs.Values.ToArray();
         var retired = retiring.Keys.ToArray();
+        var retiredSet = retired.ToImmutableHashSet<IMessageHub>(ReferenceEqualityComparer.Instance);
+        var hubs = registered.Where(h => !retiredSet.Contains(h)).ToArray();
         logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]; joining {retired} retired hub(s) still tearing down",
             hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())), retired.Length);
 
@@ -762,7 +785,9 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             .Take(1)
             .SelectMany(_ =>
             {
-                var late = messageHubs.Values.Except(hubs).ToArray();
+                // Against the REGISTRY snapshot, not the live-legs subset: a hub retired between
+                // the two snapshots is joined as retired and is not a late construction.
+                var late = messageHubs.Values.Except(registered).Where(h => !retiredSet.Contains(h)).ToArray();
                 if (late.Length == 0)
                     return Observable.Return(Unit.Default);
                 logger.LogInformation(

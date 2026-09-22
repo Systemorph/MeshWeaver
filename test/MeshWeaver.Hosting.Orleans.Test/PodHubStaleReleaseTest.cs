@@ -58,7 +58,10 @@ public class PodHubStaleReleaseTest(TwoSiloCacheUpdateFixture fixture, ITestOutp
         var ct = TestContext.Current.CancellationToken;
 
         // 1. The predecessor claims the address.
-        var predecessor = routes.RegisterStream(address, (delivery, _) => Observable.Return(delivery));
+        // `using`: the fixture is shared across this class, so a registration a failed assertion
+        // would otherwise leave behind — its local route and its pod-hub claim — must not outlive
+        // the test. The explicit early Dispose() below stays; the disposable is idempotent.
+        using var predecessor = routes.RegisterStream(address, (delivery, _) => Observable.Return(delivery));
         var predecessorClaim = routes.PodHubClaimSettled(address);
         Assert.NotNull(predecessorClaim);
         await predecessorClaim.Timeout(Bound).Await(ct);
@@ -114,7 +117,7 @@ public class PodHubStaleReleaseTest(TwoSiloCacheUpdateFixture fixture, ITestOutp
             .ServiceProvider.GetRequiredService<IRoutingService>();
         var ct = TestContext.Current.CancellationToken;
 
-        var registration = routes.RegisterStream(address, (delivery, _) => Observable.Return(delivery));
+        using var registration = routes.RegisterStream(address, (delivery, _) => Observable.Return(delivery));
         var claim = routes.PodHubClaimSettled(address);
         Assert.NotNull(claim);
         await claim.Timeout(Bound).Await(ct);
