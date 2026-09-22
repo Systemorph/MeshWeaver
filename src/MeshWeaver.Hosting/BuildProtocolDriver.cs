@@ -835,12 +835,51 @@ public static class BuildProtocolDriver
                     // Loud, and it NAMES what it could not reach. The bare TimeoutException this
                     // replaces said "no response ... → target Admin/Build" and was read as a
                     // compile problem for as long as anyone looked at it.
+                    //
+                    // 🚨 IT STATES WHAT IT KNOWS AND NOT THE READINESS VERDICT (#3404). This
+                    // sentence used to end "This is a refusal, not a pass: readiness stays refused
+                    // and the rollout holds the previous image." That was true when the
+                    // subscription was the ONLY door, and it became false the moment
+                    // WhenTheSubscriptionDoorIsShut started catching this exception: the verdict is
+                    // decided AFTER this line runs, by a door that may GRANT readiness on a durable
+                    // GO the transport could not reach. This line cannot know which, because it is
+                    // logged first.
+                    //
+                    // The cost of claiming it anyway was measured, and it is not cosmetic. The
+                    // red-log watcher captures only `fail:`/`crit:` — Error and Critical — and the
+                    // grant branch reports itself at WARNING, so it is never collected at all.
+                    // Every benign transport blip therefore published one red line asserting that
+                    // pods refused readiness and a rollout was held, with NOTHING in the pipeline
+                    // able to contradict it: on memex-cloud, 2026-09-19T06:32:23Z, one such line
+                    // reopened the issue about held rollouts on an image three framework builds
+                    // NEWER than the door that fixed them.
+                    //
+                    // On the identity that folds it (Doc/Architecture/LogWatchTriage, "One fault,
+                    // one ticket"): it is a hash over WHERE (the top application frame, or
+                    // (category, eventId) when the burst names none), WHAT (the exception type's
+                    // simple name) and WHICH (the masked EXCEPTION message — the logged message
+                    // only when there is no exception). This call passes the exception, so WHICH is
+                    // this literal and the wording IS load-bearing for folding. What the wording
+                    // does NOT do is separate the granting path from the refusing one: both carry
+                    // the same exception type from the same frame, so they share an identity either
+                    // way. The refusing path is distinguished by the door logging its OWN Error,
+                    // not by this one's identity. The change here is that the ticket a benign blip
+                    // opens now describes a transport fault instead of a held rollout.
+                    //
+                    // Nothing here reduces visibility. This stays an Error, it still names the node
+                    // and the attempt count, it still says the sweep never ran, and the three
+                    // branches downstream still state the verdict they actually decide — two of
+                    // them at Error, with the refusal in as many words.
                     var unreachable = new BuildCoordinationUnreachableException(
                         $"BuildProtocol: could not reach the build coordination node "
-                        + $"'{BuildNodeType.RootPath}' in {total} attempt(s) — the pre-warm sweep "
-                        + "never started, so this process has verified NOTHING about its NodeTypes "
-                        + "on this image. This is a refusal, not a pass: readiness stays refused "
-                        + "and the rollout holds the previous image. A restart re-attempts.",
+                        + $"'{BuildNodeType.RootPath}' in {total} attempt(s) — the subscription-borne "
+                        + "pre-warm sweep never started, so this process has verified NOTHING about "
+                        + "its NodeTypes on this image THROUGH THAT DOOR. The readiness verdict is "
+                        + "NOT decided here: the durable witness is asked next, and it may already "
+                        + "carry the GO for this framework. Whichever door answers says so on its "
+                        + "own line — read that one for the verdict. This line reports the transport "
+                        + "fault only, and the fault is real: the path from this process to the "
+                        + $"'{BuildNodeType.RootPath}' hub is broken.",
                         ex);
                     logger?.LogError(unreachable, "{Message}", unreachable.Message);
                     return Observable.Throw<T>(unreachable);
