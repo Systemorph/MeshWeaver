@@ -210,6 +210,53 @@ Not established by the incident's read-only session, and still open: which activ
 `RecompileForLiveFramework` reaches after `MaxRecompileAttempts` — the census names the state; it
 does not explain that bind.
 
+### The bind path yields on the same reading
+
+The census names a cross-stamp; until MeshWeaver#4632's other half landed, the bind path then
+**healed** it. A fresh activation on a replica whose framework the record no longer names took the
+framework-stale branch of `NodeTypeEnrichmentHelpers` — flip the type `Pending`, recompile for the
+live framework, restamp — which is right after a platform roll (the previous image's build, stamped
+before this process started) and wrong mid-roll (a NEWER image's build, stamped after). Measured on
+the memex control instance's roll from `3.0.0-ci.9106` to `9162`: within minutes of the new replica
+booting its `/health` read *"34 NodeType record(s) were RE-KEYED to a framework this replica does not
+run AFTER it booted"* — the two draining replicas were healing the new generation's stamps backwards,
+the new replica was healing them forward, every activation on both flipped the same types `Pending`
+in turn, and the roll's second replica sat in *"NodeType bake in progress"* for a quarter of an hour.
+
+The rule is one pure function, and both consumers read through it:
+`NodeTypeBuildIdentity.OwnedByANewerGeneration(record, liveFramework, bootedAt)` —
+foreign to this process **and** stamped after this process started. The census folds its
+`ForeignSinceBoot` count through the same time half (`StampedAfter`); the bind path, on that
+verdict, **yields**: it leaves the record exactly as the newer generation wrote it, logs which
+generation owns the type and when it stamped, and shows the framework-stale overlay with its
+version-gated self-heal — which on a draining replica means until the pod is gone, and that is the
+point. The boundary is the PROCESS start, read once at service registration into a mesh-scoped
+`ProcessBootClock` (never a static touched from a hub turn), so the census and the bind path
+cannot split on different instants; a mesh that registered no clock never yields. The bind path's
+three-way decision (`DecideFrameworkStale`: Yield / Overlay / Recompile) is pure and held by
+`FrameworkStaleDecisionTest`.
+
+🚨 **The stamp alone cannot say WHICH end of the pair this process is, so the yield also needs
+`hub.IsLeaving()`.** A framework identity is a hash with no order: "foreign and stamped after I
+booted" reads identically on the draining replica (the new generation's stamp) and on the
+SURVIVOR (every record a draining replica re-keyed backwards after the survivor booted — the 34
+the census counted on memex's new replica were exactly those). Yielding on the stamp alone left the
+survivor overlaying those types as framework-stale for its whole life, since a persisted `Ok` is
+recompiled by no watcher; `OrleansCompileActivityAccessTest.FrameworkStaleAssembly_SelfHealsOnInstanceActivation`
+caught it by stamping a foreign framework mid-run on a process that is not stopping and demanding
+the heal. What separates the two ends is which one is going away: `IsLeaving` — the hub shutting
+down, or the host's `ApplicationStopping`, live from SIGTERM for the whole termination grace — the
+same predicate #3129 gave every sweep that touches state other generations share. A leaving process
+yields; the survivor heals. What this does NOT stop: an old-image replica that has not yet been
+signalled (a one-at-a-time roll keeps some un-signalled until their successor is Ready) still heals
+backwards until its SIGTERM, so the ping-pong is bounded to that window rather than removed.
+
+A foreign stamp from BEFORE boot is still healed
+(the ordinary post-roll state), and a stamp with no time is never treated as since-boot — the same
+absent-reading rule the census has always applied. `OwnedByANewerGenerationTest` holds the reader
+against the incident's own mixed population and asserts, record by record, that what the census
+counts since-boot is exactly what the bind path refuses to touch while it is leaving.
+
 ## What would close this class
 
 Stated as options. None has been scoped by the maintainer, and the last one is a legitimate answer.

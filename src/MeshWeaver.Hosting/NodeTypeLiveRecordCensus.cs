@@ -125,7 +125,7 @@ public sealed record NodeTypeLiveRecordCensus(
             // A stamp with no time is foreign of UNKNOWN age: counted as foreign, never as
             // since-boot — an absent reading may not decide the never-benign count in either
             // direction.
-            var sinceBoot = definition.LastCompileSucceededAt is { } stamped && stamped > bootedAt;
+            var sinceBoot = NodeTypeBuildIdentity.StampedAfter(definition, bootedAt);
             foreign.Add((PartitionOf(path), Short(definition.CompiledFrameworkVersion), sinceBoot));
         }
 

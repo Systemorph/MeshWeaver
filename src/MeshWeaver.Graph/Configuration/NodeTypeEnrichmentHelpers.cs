@@ -1078,6 +1078,52 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     private const int MaxRecompileAttempts = 1;
 
+    /// <summary>What the bind path does with a record whose build is for another framework.</summary>
+    internal enum FrameworkStaleAction
+    {
+        /// <summary>Flip the type Pending and rebuild for the live framework — the ordinary post-roll heal.</summary>
+        Recompile,
+
+        /// <summary>The recompile budget is spent: show the framework-stale overlay and its version-gated self-heal.</summary>
+        Overlay,
+
+        /// <summary>This process is LEAVING and another generation stamped the record after it started: leave it, overlay, never recompile.</summary>
+        Yield,
+    }
+
+    /// <summary>
+    /// 🚨 The framework-stale decision, pure, so the contract the bind path acts on is held without
+    /// a hub (the <c>StaleAssemblySelfHealWatcherTest</c> shape). <paramref name="bootedAt"/> is the
+    /// registered <see cref="ProcessBootClock"/>'s instant, or null on a mesh that registered none —
+    /// and null can never yield: an absent boundary is the benign side, the heal as it always was.
+    /// Yield outranks the budget: a record a newer generation owns is not this process's to heal
+    /// however many attempts remain, because each attempt would re-key it backwards.
+    ///
+    /// <para>🚨 <b>Yield needs <paramref name="leaving"/> as well as the since-boot foreign stamp.</b>
+    /// A framework identity is a hash with no order, so "foreign and stamped after I booted" says
+    /// only that ANOTHER generation wrote the record while this process was up — never which of the
+    /// two is newer. Both ends of a mid-roll pair read it: the draining replica sees the new
+    /// generation's stamp, and the SURVIVOR sees every stamp a draining replica re-keyed backwards
+    /// after the survivor booted (the 34 records the census counted on memex's new replica were
+    /// exactly those). Yielding on the stamp alone therefore left the survivor — the process that
+    /// stays — overlaying those types as framework-stale for its whole life, with nothing left to
+    /// heal them (status stays <c>Ok</c>, so no watcher recompiles). What tells the two ends apart is
+    /// which one is going away: <see cref="HubLeavingExtensions.IsLeaving"/>, true from SIGTERM for
+    /// the whole termination grace, the same predicate #3129 gave every sweep that touches state
+    /// other generations share. A leaving process yields; the survivor heals.</para>
+    /// </summary>
+    internal static FrameworkStaleAction DecideFrameworkStale(
+        NodeTypeDefinition judged, string liveFrameworkVersion, DateTimeOffset? bootedAt, bool leaving, int recompileAttempts)
+    {
+        if (leaving
+            && bootedAt is { } boot
+            && NodeTypeBuildIdentity.OwnedByANewerGeneration(judged, liveFrameworkVersion, boot))
+            return FrameworkStaleAction.Yield;
+        return recompileAttempts >= MaxRecompileAttempts
+            ? FrameworkStaleAction.Overlay
+            : FrameworkStaleAction.Recompile;
+    }
+
     /// <summary>
     /// Decides what an activating instance BINDS, given the NodeType node the wait settled on.
     ///
@@ -1631,38 +1677,88 @@ internal static class NodeTypeEnrichmentHelpers
                                 chosen, node, nodeType, meshConfiguration, compilationService, meshHub,
                                 logger, recompileAttempts);
                         }
-                        return RecompileForLiveFramework();
+                        // The authoritative record is judged where it was read; the mirror only
+                        // where storage could not answer.
+                        var judged = !ReferenceEquals(chosen, typeNode)
+                            && chosen.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions) is { } authoritativeDef
+                                ? authoritativeDef
+                                : def;
+                        return ActOnFrameworkStale(judged);
                     });
             }
-            return RecompileForLiveFramework();
+            return ActOnFrameworkStale(def);
 
-            IObservable<MeshNode> RecompileForLiveFramework()
-            {
-                if (recompileAttempts >= MaxRecompileAttempts)
+            // 🚨 ONE decision, three actions, and the decision is pure (DecideFrameworkStale) so its
+            // contract is held without a hub: YIELD when this process is LEAVING and another
+            // generation stamped the record after it started (#4632's other half), OVERLAY once the recompile budget is
+            // spent, RECOMPILE otherwise — the heal every ordinary platform roll relies on.
+            IObservable<MeshNode> ActOnFrameworkStale(NodeTypeDefinition judged) =>
+                DecideFrameworkStale(
+                    judged, NodeTypeCompilationHelpers.FrameworkVersion,
+                    meshHub.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc,
+                    leaving: meshHub.IsLeaving(), recompileAttempts) switch
                 {
-                    logger?.LogWarning(
-                        "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
-                        nodeType, def.CompiledFrameworkVersion ?? "(null)",
-                        NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
-                    // Version-gated self-heal: when the operator's recompile lands
-                    // (a Version-advancing write with a framework-matching build),
-                    // every instance stuck on this prompt recycles itself.
-                    var (staleIntro, staleCta, staleGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
-                    return Observable.Return(
-                        WithOverlaySelfHeal(
-                            WithCompilationErrorOverlay(node, nodeType,
-                                "Built against a previous framework version",
-                                guidance: staleGuidance,
-                                intro: staleIntro,
-                                callToAction: staleCta,
-                                activityPath: def.LastCompilationActivityPath),
-                            meshHub, nodeType, typeNode.Version, logger));
-                }
-                return TriggerRecompileAndRetry(
-                    node, nodeType, meshConfiguration, compilationService, meshHub,
-                    logger, recompileAttempts,
-                    reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
-                    requireUsableBuild: true);
+                    FrameworkStaleAction.Yield => YieldToNewerGeneration(judged),
+                    FrameworkStaleAction.Overlay => OverlayFrameworkStale(),
+                    _ => TriggerRecompileAndRetry(
+                        node, nodeType, meshConfiguration, compilationService, meshHub,
+                        logger, recompileAttempts,
+                        reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
+                        requireUsableBuild: true),
+                };
+
+            // 🚨 A replica on ANOTHER image stamped this record AFTER this process started, and this
+            // process is LEAVING (SIGTERM, IsLeaving): the generation that stays owns the type now.
+            // Recompiling here would re-key the record back to THIS framework, the newer replica
+            // would heal it forward again, and every activation on both would flip Pending in
+            // between — the ping-pong that re-keyed 34 records on memex's control instance within
+            // minutes of its new replica booting (2026-09-22), each old-generation activation
+            // "healing" a build it could never adopt. The record is left exactly as the newer
+            // generation wrote it; this instance shows the framework-stale overlay and its
+            // version-gated self-heal, which for a draining replica means: until the pod is gone.
+            // The census (bake-report's LIVE RECORD CENSUS) reports the same set through the same
+            // reader, so what it names since-boot is precisely what this branch refuses to touch.
+            IObservable<MeshNode> YieldToNewerGeneration(NodeTypeDefinition owned)
+            {
+                logger?.LogWarning(
+                    "EnrichWithNodeType: {NodeType} was compiled for framework {Compiled} at {StampedAt:O}, AFTER this "
+                    + "process started ({BootedAt:O}) — a replica on another image owns the type mid-roll; NOT "
+                    + "recompiling for the live framework {Live} (that would re-key the record backwards). "
+                    + "Overlaying '{InstancePath}' as framework-stale instead",
+                    nodeType, owned.CompiledFrameworkVersion ?? "(null)", owned.LastCompileSucceededAt,
+                    meshHub.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc,
+                    NodeTypeCompilationHelpers.FrameworkVersion, node.Path);
+                var (yieldIntro, yieldCta, yieldGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
+                return Observable.Return(
+                    WithOverlaySelfHeal(
+                        WithCompilationErrorOverlay(node, nodeType,
+                            "Built against a previous framework version",
+                            guidance: yieldGuidance,
+                            intro: yieldIntro,
+                            callToAction: yieldCta,
+                            activityPath: owned.LastCompilationActivityPath),
+                        meshHub, nodeType, typeNode.Version, logger));
+            }
+
+            IObservable<MeshNode> OverlayFrameworkStale()
+            {
+                logger?.LogWarning(
+                    "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
+                    nodeType, def.CompiledFrameworkVersion ?? "(null)",
+                    NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
+                // Version-gated self-heal: when the operator's recompile lands
+                // (a Version-advancing write with a framework-matching build),
+                // every instance stuck on this prompt recycles itself.
+                var (staleIntro, staleCta, staleGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
+                return Observable.Return(
+                    WithOverlaySelfHeal(
+                        WithCompilationErrorOverlay(node, nodeType,
+                            "Built against a previous framework version",
+                            guidance: staleGuidance,
+                            intro: staleIntro,
+                            callToAction: staleCta,
+                            activityPath: def.LastCompilationActivityPath),
+                        meshHub, nodeType, typeNode.Version, logger));
             }
         }
 

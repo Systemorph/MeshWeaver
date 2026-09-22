@@ -78,6 +78,39 @@ a module this install runs fails against it is refused from the button too, nami
 tab renders where a handed-over release WENT (`HandedOverTag/At/To`, in the viewer's zone) instead
 of "update available" for ever.
 
+## The control instance patches itself
+
+🚨 **`Local` is a write into the control instance's OWN mesh — so for the control instance the
+hand-over depends on exactly the thing a roll most often has to recover.** The fleet rule is right
+for every other install: a satellite POSTs one signed event and the control plane does the rest. The
+control instance's route is `Local`: the event is stored into its own `Hosting/PlatformBuilds` inbox,
+the watcher opens a `Roll` node, the operator Job reads the deployment record — every hop a mesh
+read or write on the instance that is trying to update. When its mesh is degraded, that chain is the
+first thing to fail, and the image that carries the fix is the one it cannot reach.
+
+This is MeshWeaver#1020's lesson, undone for one instance by #4098. #1020 had the availability
+bookkeeping write chained ahead of the patch: the `Admin/UpdatePolicy` hub was unreachable, every
+tick died in that write, and memex sat 37 h on a stale image while the registry check kept
+succeeding — *"the update it would not apply is exactly what recovers a degraded pod, so the write
+must never gate it."* The fix moved the k8s PATCH ahead of every mesh write. #4098 then replaced the
+PATCH with the hand-over, and on 2026-09-22 the control instance sat four hours behind six sealed
+builds carrying core#5151 — the fix for the router saturation it was suffering — logging
+`[SelfUpdate] the hand-over of 3.0.0-ci.9168 to the control lane FAILED; the next check announces it
+again`, `could not record available tag … on Admin/UpdatePolicy; applying the update anyway` (it
+could not: applying IS the hand-over), and `self-update-available for 'memex-cloud' could not be
+routed` — because the satellites' events land in the same wedged inbox, the whole fleet's
+self-update was down with it. The roll that ended it was one hand-over that happened to land on the
+one silo that could still write.
+
+So the control instance keeps the pre-#4098 apply: the deployment record declares
+`selfPatch: true`, the in-mesh `HelmValues` renders it as the chart's `selfUpdate.canPatch`, the
+chart renders the Role and `SelfUpdate__CanPatch=true` from that one value, and
+`ApplyModeFor(true, true, Local)` answers `SelfPatch` — the k8s API, no mesh write on the path,
+`Failed_availability_write_never_blocks_the_roll_forward` and the hand-over resilience cases holding
+it there. Every other record leaves `selfPatch` unset and hands over as before. The chart's guidance
+("set it `true` ONLY on a standalone install with no control instance to hand to") already describes
+the control instance: it has none but itself.
+
 ## The channel — the one every portal already has
 
 The instance → control-instance channel is the pair the Feedback hand-over introduced
