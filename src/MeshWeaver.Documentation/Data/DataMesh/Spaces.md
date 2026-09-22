@@ -137,10 +137,12 @@ on the **Space node's content** — you never create a second node for it.
 | `website`, `email`, `location` | Small linked stats in the header row. |
 | `icon` | A **renderable** value used where no logo is set — an image URL, an inline `<svg>`, or an emoji. Never a Fluent icon name: a bare name like `Building` cannot render as an image and shows as text or a broken image. Defaults to `/static/NodeTypeIcons/space.svg`. |
 
-The body is resolved as **`node.PreRenderedHtml` → `content.body` → default welcome
-text**. So to replace the generic starter text, just set `content.body`. Leaving it
-empty falls back to the welcome placeholder — which is the "generic template text"
-you see on a fresh Space.
+The body is resolved from **the authored `content.body` first** (or `content.content` on a
+markdown-backed Space), then source-absent cached HTML, then the default welcome text. Set
+`content.body` to replace the generic starter text. An empty string explicitly clears the page;
+an absent or null body uses the welcome placeholder on a fresh Space. Current source always wins
+over older prerendered HTML, so an edit or clear appears in both the first HTTP response and the
+interactive page. See [Public Web Presence](../Architecture/PublicWebPresence.md).
 
 ### Writing a good overview body
 

@@ -238,15 +238,24 @@ public static class SeoResolver
     /// </summary>
     public static IObservable<SeoPageData?> Resolve(IMessageHub hub, string path) =>
         ResolveGated(hub, path)
-            .Select(gated => gated is { Readable: true } readable
-                ? new SeoPageData(
-                    readable.Node, ExtractDescription(readable.Node), ShareImage(readable.Node))
-                {
-                    Remainder = string.IsNullOrEmpty(readable.Resolution.Remainder)
-                        ? null
-                        : readable.Resolution.Remainder,
-                }
-                : null)
+            .SelectMany(gated => gated is not { Readable: true } readable
+                ? Observable.Return<SeoPageData?>(null)
+                // Path resolution is discovery and may carry an older query snapshot. Read the
+                // admitted node from its owner, then recheck anonymous access: a policy may have
+                // changed during that read, and a signed-in caller's read grant is not publicness.
+                : hub.GetMeshNode(readable.Resolution.Prefix)
+                    .SelectMany(node => node is null
+                        ? Observable.Return<SeoPageData?>(null)
+                        : AnonymousGate.AllowAnonymous(hub, readable.Resolution.Prefix)
+                            .Take(1)
+                            .Select(allowed => allowed
+                                ? new SeoPageData(node, ExtractDescription(node), ShareImage(node))
+                                {
+                                    Remainder = string.IsNullOrEmpty(readable.Resolution.Remainder)
+                                        ? null
+                                        : readable.Resolution.Remainder,
+                                }
+                                : null)))
             .Timeout(ResolveBudget)
             .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
 

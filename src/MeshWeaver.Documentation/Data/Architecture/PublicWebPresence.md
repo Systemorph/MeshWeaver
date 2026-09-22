@@ -105,18 +105,30 @@ fix for the empty sitemap and the reason the body can be served.
 `SeoPageData.Body` is the page text a crawler reads: the node's current markdown (`content` for a
 markdown node, `body` for a Space or plugin cover, or a bare string) rendered by
 `MarkdownBody.Render`, which calls `MarkdownViewLogic.Render`, the same renderer the interactive
-markdown view uses. The signed-in prerender read (`IMeshService.GetPreRenderedHtml`) uses this same
-source-first helper. Both pass the
+markdown view uses. The signed-in prerender read (`IMeshService.GetPreRenderedHtml`) reads the node
+from its owner and uses this same source-first helper, so an eventually consistent query snapshot
+cannot keep showing the source from before an edit. Both pass the
 node path, so relative links and embeds resolve against the same page. An edit therefore reaches
 both views from the same source, even when the node still carries HTML generated before the edit
 or before a renderer update. An explicitly empty source renders empty; it never revives the old
 page. The node's mirrored HTML, then the content's `prerenderedHtml`, are fallbacks only for nodes
 that carry no markdown source. Neither cache records which source or renderer produced it, so
-neither can establish freshness. It is computed only for a node the gate admitted, and it
+neither can establish freshness. SEO resolution refreshes the admitted node from its owner, then
+rechecks anonymous access before returning its current title and body. A signed-in caller's own
+read grant cannot turn a newly private page into public HTML. It is computed only for a node the gate admitted, and it
 is rendered **visibly** in the static server pass of the page, not inside `<noscript>`: Googlebot
 renders with JavaScript on and may ignore noscript content, and the visible article is what the
 interactive circuit replaces on hydration. The interactive page reads the same per-request stash
 the head resolved into, so the mesh is asked once per request.
+
+The interactive Space view follows the same source-first priority and preserves an explicitly
+empty body. Navigation derives HTML for its current snapshot without persisting that result: a
+delayed cache write must not overwrite the HTML after another author has edited the source.
+The landing page and its descendants request the existing `showHeader=false` presentation, so
+the authored hero and headings survive hydration without an additional Space title. The SEO head
+and interactive public page titles use the same `PublicPageTitle` formatter; the landing title
+also follows the node stream when its name changes. These interactive changes live in
+`MeshWeaver.Plugins`, alongside the Space view and the portal pages.
 
 ### The sitemap descends
 
