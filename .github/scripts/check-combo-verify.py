@@ -131,9 +131,26 @@ SCENARIOS = [
         "secrets.FLEET_READER_APP_ID",
     ),
     (
+        # 🚨 THE SCENARIO THAT WOULD HAVE CAUGHT THE FIRST ATTEMPT AT THIS REORDER, and the reason it
+        # is spelled as PRODUCTION'S OWN INPUT STATE rather than as one absent name. Every other
+        # scenario starts from FULLY_PROVISIONED, which holds all three COMBO_* inputs CONSTANT at
+        # "present" — and production varies them to ABSENT, all three. So the guard was green over a
+        # preflight that, in production, still died in `assert` one step above the derivation, naming
+        # `vars.COMBO_VERIFY_SOURCES`. This asserts the property the reorder exists for: given
+        # exactly what this repository actually has provisioned, `assert` PASSES and the derivation
+        # is REACHED. If a future input is added to that step unprovisioned, this goes red.
         "assert",
+        "ONLY what this repository actually has provisioned ⇒ the derivation is reached",
+        {**{k: "" for k in FULLY_PROVISIONED}, "AZURE_CLIENT_ID": "cid", "AZURE_TENANT_ID": "tid",
+         "AZURE_SUBSCRIPTION_ID": "sid", "FLEET_READER_APP_ID": "app",
+         "FLEET_READER_APP_PRIVATE_KEY": "pem"},
+        0,
+        "Every external input is present",
+    ),
+    (
+        "roster",
         "the source map absent",
-        {**FULLY_PROVISIONED, "COMBO_VERIFY_SOURCES": ""},
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_SOURCES": ""},
         1,
         "vars.COMBO_VERIFY_SOURCES",
     ),

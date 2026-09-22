@@ -368,9 +368,27 @@ The order now follows **whether provisioning is reversible**, which is the prope
 
 | step | asserts | why there |
 |---|---|---|
-| `assert` (`combo-verify.yml:118-152`) | `AZURE_*`, `FLEET_READER_*`, `COMBO_VERIFY_SOURCES` | everything needed to *reach* the derivation, plus the one input that is plain data — free to provision and free to correct |
-| `derive` (`:172-183`) | — | the roster, which refuses loudly rather than emitting an empty one |
-| `roster` (`:185-239`) | `COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS` | both are **spent, not fetched** — an `mwi_` key is issued-never-recovered and an `mw_` admin token is minted per instance — so the instruction to mint one must not be emitted before the gate knows the roster it is for can be derived at all |
+| `assert` (`combo-verify.yml:123-155`) | `AZURE_*`, `FLEET_READER_*` — **and nothing else** | exactly what is needed to *reach* the derivation: the login, and the token the derivation reads the overlays with |
+| `derive` (`:174-186`) | — | the roster, which refuses loudly rather than emitting an empty one |
+| `roster` (`:188-255`) | `COMBO_VERIFY_SOURCES`, `COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS` | all three are only answerable, or only worth answering, once the fleet's installations are known. The two maps are **spent, not fetched** — an `mwi_` key is issued-never-recovered, an `mw_` admin token is minted per instance — so the instruction to mint one must not be emitted before the gate knows the roster it is for can be derived |
+
+🚨 **The rule is "needed to REACH the derivation", not "irreversible to provision", and getting that
+wrong once is why it is spelled out.** A first attempt moved only the two credential maps and kept
+`COMBO_VERIFY_SOURCES` in `assert`, reasoning that it is plain data — free to provision, free to
+correct — so asserting it early costs nothing. Measured on the first run that reached the step
+afterwards (`35687854914`): the preflight still died in `assert`, naming `vars.COMBO_VERIFY_SOURCES`
+**and nothing else**, and the derivation still did not execute. **Any unprovisioned input in the first
+step defeats the entire reorder, whatever it costs to provision.**
+
+The guard now asserts that property directly, and the scenario is spelled as **production's own input
+state** rather than as one absent name: *"ONLY what this repository actually has provisioned ⇒ the
+derivation is reached"* sets `AZURE_*` and `FLEET_READER_*` and leaves all three `COMBO_*` empty,
+demanding that `assert` **passes**. That matters because every other scenario starts from
+`FULLY_PROVISIONED`, which holds all three `COMBO_*` **constant at "present"** while production varies
+them to absent — so the guard was green over a preflight that, in production, reddened one step above
+the derivation. Run against the shipped-but-wrong version, the new scenario fails `exit=1 (want 0)`;
+2 of the 10 scenarios fail there against 10 of 10 passing after the fix. **The general test when a
+gate goes green: what does it hold constant that production varies?**
 
 Nothing became conditional and nothing can skip: no `if:` asks whether a secret is set, no step
 carries `continue-on-error:`, both maps are still asserted unconditionally in the same `preflight`
