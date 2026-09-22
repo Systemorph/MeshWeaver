@@ -157,16 +157,29 @@ public class OAuthSupersedeLineNamesTheRowsTest(ITestOutputHelper output) : Mono
         var second = await AuthorizeAndExchange(controller, clientId);
         second.Should().NotBe(first, "each authorization mints its own credential");
 
-        var supersede = Log.Lines(LogLevel.Information).Where(l => l.Contains("superseding")).ToArray();
-        supersede.Should().ContainSingle(
-            "the second authorization retires exactly the first credential, once");
-        supersede.Single().Should()
+        // Two lines, two facts. The first is INTENT (the candidate set before any delete ran);
+        // the second is the OUTCOME (what each delete actually removed). A reader tying a 401 to
+        // a removal reads the second, so that is the one the paths are asserted on.
+        var intent = Log.Lines(LogLevel.Information).Where(l => l.Contains("superseding ")).ToArray();
+        intent.Should().ContainSingle(
+            "the second authorization sets out to retire exactly the first credential, once");
+        intent.Single().Should()
             .Contain("superseding 1 previous token(s)")
             .And.Contain(label)
-            .And.Contain(TokenPath(first),
+            .And.Contain($"candidates {TokenPath(first)}")
+            .And.Contain($"keeping {TokenPath(second)}");
+
+        var outcome = Log.Lines(LogLevel.Information).Where(l => l.Contains("superseded ")).ToArray();
+        outcome.Should().ContainSingle(
+            "one removal report per supersede, emitted after every delete has answered");
+        outcome.Single().Should()
+            .Contain("superseded 1 of 1 previous token(s)",
+                "the count is what the deletes RETURNED, not what was attempted")
+            .And.Contain(label)
+            .And.Contain($"removed {TokenPath(first)}",
                 "the removed row's path carries the hash prefix the holder's 401 will be logged under — "
                 + "without it the supersede and the 401 it caused cannot be tied together")
-            .And.Contain($"replaced by {TokenPath(second)}",
+            .And.Contain($"kept {TokenPath(second)}",
                 "the replacement is the other half of the same event");
     }
 }
