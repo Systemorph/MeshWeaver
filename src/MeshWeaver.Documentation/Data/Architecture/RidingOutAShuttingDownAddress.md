@@ -101,34 +101,6 @@ The `ShuttingDown` NACK carries the activation identity for exactly this discrim
 [Naming the Recycling Shape](#naming-the-recycling-shape) below — so both riders can tell the two
 apart from the message they already receive.
 
-### 🚨 A refusal not COMPOSED by `ShutdownNack` defeats both axes at once, and reads correct while it does
-
-Every owner-side refusal is composed by `ShutdownNack` — `RejectingNow` for a delivery turned away
-at the door, `RetryForTheAuthoritativeAnswer` for work the hub ACCEPTED and can no longer finish
-(*"a queued turn that came too late, machinery that can no longer be created, **a gate that can
-never open**"*). That is not a style preference; it is what makes a refusal machine-readable, and a
-site that hand-writes the sentence instead loses both halves silently:
-
-| what the seam puts in | what reads it | what its absence does |
-|---|---|---|
-| the **banner**, `Hub {address} is shutting down` | `ShutdownNack.IsAnsweredByOwner`, and the three text classifiers that decide retry-vs-give-up (`MeshNodeStreamCache.IsTransientOwnerFailure`, `OrleansRoutingService.ClassifyRoutedFailure`, `AreaErrorClassifier.IsTransientHubFailure`) | a TRANSIENT refusal is read as terminal — the rider stops asking, and the address that was coming back is treated as gone |
-| the **activation tag** | `ChargeReArmBudget` (this page's two axes), `GetMeshNodeOutcome`'s paced re-probe | an untagged refusal is charged against the ACTIVATION budget, so N refusals from ONE activation exhaust a budget sized for N DIFFERENT ones — and the give-up line then names a storm that never happened |
-
-The disposal drain's discard NACK was exactly that site. It read perfectly well to a human, and had
-even copied the reactivation promise across by hand, so nothing in it looked wrong — while carrying
-neither the banner nor the tag, on the one path whose whole purpose is to tell a sender *"ask
-again"*. It is composed by the seam now, with the gates and the teardown attribution riding in the
-`what` clause, and pinned by
-`DeferredDeliveryNackedOnDisposeTest.ADiscardedDeferredDelivery_IsRecognisableAsTheOwnersTransientRefusal`,
-which asserts both halves **through the producers** (`ShutdownNack.Banner`,
-`ShutdownNack.FormatActivationTag`) rather than against a copy of the sentence — and asserts the
-owner predicate is false for a different address, so a trivially-true match cannot pass it.
-
-🚨 **The lesson generalises past this one site.** A hand-written refusal cannot be caught by reading
-it: it is wrong only in what it OMITS, and every reader who checks it is a human reading prose while
-every reader who acts on it is a classifier matching a substring. When you add a refusal, compose it
-— and when you review one, look for the seam call, not for the words.
-
 ### What the sync stream does now
 
 ```text

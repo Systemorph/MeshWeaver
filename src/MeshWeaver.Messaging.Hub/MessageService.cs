@@ -3345,35 +3345,11 @@ public class MessageService : IMessageService
                     + "this hub went down with work still parked behind its gates.",
                     Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
                     gatesAtDeferral, hub.RunLevel, disposal);
-            // 🚨 COMPOSED BY ShutdownNack, never hand-written — this site was the one owner-side
-            // refusal that was not, and it cost the sender both machine-readable halves of the
-            // answer while READING correct to a human (it even copied the reactivation promise by
-            // hand). ShutdownNack.RetryForTheAuthoritativeAnswer is exactly this case in its own
-            // words: "work this hub ACCEPTED and can no longer finish — … a gate that can never
-            // open". What the hand-written sentence left out:
-            //
-            //   • the BANNER ("Hub {address} is shutting down"), which is the ONLY evidence that
-            //     identifies the SPEAKER. Without it ShutdownNack.IsAnsweredByOwner answers false,
-            //     and the three text classifiers that decide retry-vs-give-up —
-            //     MeshNodeStreamCache.IsTransientOwnerFailure, ClassifyRoutedFailure and
-            //     AreaErrorClassifier.IsTransientHubFailure — all key on that same substring, so a
-            //     TRANSIENT refusal was read as a terminal one and the caller stopped asking.
-            //   • the ACTIVATION TAG, which is what lets a rider count DISTINCT owner activations
-            //     instead of raw probes. JsonSynchronizationStream's recycle re-arm charges an
-            //     untagged refusal against MaxRecycleReArms (distinct activations) rather than
-            //     MaxSameActivationReAsks (paced re-asks at one corpse) — so three discards by ONE
-            //     activation exhaust a budget sized for three DIFFERENT ones, and the give-up line
-            //     then names a storm that never happened.
-            //
-            // Both were already available here (ActivationTag(), hub.RunLevel) and are what the
-            // sibling late-turn NACK a few hundred lines up has carried since #2025/#2376. The
-            // gates and the teardown attribution ride in the `what` clause, unchanged.
-            NackThroughParent(delivery, ShutdownNack.RetryForTheAuthoritativeAnswer(
-                Address,
-                $"RunLevel={hub.RunLevel}, {ActivationTag()}",
-                $"{delivery.Message.GetType().Name} (id={delivery.Id}) was still deferred behind "
-                + $"initialization gates [{gatesAtDeferral}] and was never processed. "
-                + $"The teardown was {disposal}"));
+            NackThroughParent(delivery,
+                $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
+                + $"(id={delivery.Id}) was still deferred; initialization gates closed at deferral: "
+                + $"[{gatesAtDeferral}] — the message was never processed. The teardown was {disposal}. "
+                + "The address may reactivate (recycle / restart); retry to get the authoritative answer.");
         });
 
         // No buffers to Complete — ScheduleNotify drops post-shutdown messages and the
