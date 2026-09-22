@@ -1,20 +1,26 @@
 ---
 Name: The Routing Entry Point
 Category: Architecture
-Description: "Why every routed message pays an Orleans grain PLACEMENT it mostly does not need, the two measured ways that placement fails and drops live traffic, and the case for a local routing service where a silo is co-hosted — with the three things such a change must carry deliberately."
+Description: "Why, on an Orleans mesh, every message that misses the local-stream fast path pays a grain PLACEMENT it mostly does not need, the two measured ways that placement fails and drops live traffic, and the case for a local routing service where a silo is co-hosted — with the three things such a change must carry deliberately."
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h6"/><path d="M14 12h6"/><circle cx="12" cy="12" r="2"/><path d="M12 4v6M12 14v6"/></svg>
 ---
 
 # The Routing Entry Point
 
-> **The question this page answers:** every mesh message is routed through `IRoutingGrain`, a
-> cluster grain. Placement of that grain is a dependency on the cluster being healthy — and it is
+> **The question this page answers:** on an Orleans mesh, every message that is not for a locally
+> registered stream is routed through `IRoutingGrain`, a cluster grain. Placement of that grain is a dependency on the cluster being healthy — and it is
 > the step that drops live traffic during a roll. Where the caller and the router are in the SAME
 > PROCESS, that dependency buys nothing.
 
 ## What the entry point is today
 
-`OrleansRoutingService.DeliverMessage` ends in one call:
+**Scope.** This is the ORLEANS path only, and only its fallback. `OrleansRoutingService.DeliverMessage`
+first checks the streams registered in this process (portals, in-process clients) and hands a hit to
+that callback directly — no grain is involved. A Monolith mesh (`UseMonolithMesh`, which registers
+`MonolithRoutingService`) never touches `IRoutingGrain` at all. So an incident from a Monolith, or a
+delivery that hit a local stream, is never evidence about the placement described here.
+
+On a miss, `OrleansRoutingService.DeliverMessage` ends in one call:
 
 ```csharp
 var grain = GrainWhileRunning<IRoutingGrain>("default");
