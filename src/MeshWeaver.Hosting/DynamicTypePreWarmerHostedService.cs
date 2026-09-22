@@ -115,6 +115,14 @@ public sealed class DynamicTypePreWarmerHostedService(
     private IDisposable? _startedRegistration;
 
     /// <summary>
+    /// 🚨 The standing catalog watch behind <c>bake-report</c>'s live half (#4632) — held for the
+    /// process's life, independent of the sweep and of the bundle seeding (it needs neither: a
+    /// stamp the seeding lands is a change event it will see), and disposed with the service. A
+    /// discarded subscription would root the hub.
+    /// </summary>
+    private IDisposable? _liveCensus;
+
+    /// <summary>
     /// One recovery watch per RECORDED REGRESSION (#1214) — each observes its type until it
     /// reaches a usable build on this image and then retracts the regression. They outlive the
     /// sweep by design (the content that tore the compile converges after it), so they are owned
@@ -216,6 +224,38 @@ public sealed class DynamicTypePreWarmerHostedService(
         // the gate's own level-triggered read cannot supply, and it is what releases the stamps a
         // passing sweep held and discards the ones a failing sweep produced.
         var admission = mesh.ServiceProvider.GetService<Mesh.Services.MeshPublicationGate>();
+        // 🚨 #4645 — THE OUTCOME CENSUS, off the SAME provider as the admission gate and for
+        // the same reason: it must be the instance the bake report was published into, or /health
+        // would carry a plan from one object and an outcome from another. This is the only reader
+        // of the sweep's verdicts that is neither the readiness gate nor a log line, and it is the
+        // only one an operator can reach with `curl` and no credential.
+        var census = mesh.ServiceProvider.GetService<NodeTypeBakeReportRegistry>();
+        // 🚨 #4632 — THE LIVE HALF, armed here and never again. Everything the two passes below
+        // publish is a boot-time reading; this watch keeps reading the catalog for the process's
+        // life so a record another replica re-keys to ITS framework after this one booted is on
+        // /health within one emission instead of in nobody's list. Unconditional — like the
+        // adoption and the report — because it is exactly the deployments that pre-compile nothing
+        // (adopt-only, lazy first access) that a mid-roll cross-stamp leaves with no instrument.
+        // It does not wait for the seeding: a stamp the seeding lands is a change event it sees.
+        if (census is not null)
+            _liveCensus = DynamicTypePreWarmer.ObserveLiveRecordCensus(mesh, startedAt, logger)
+                .Subscribe(
+                    census.RecordLiveRecords,
+                    ex =>
+                    {
+                        // The fault is RECORDED, not only logged: log access on this fleet is
+                        // break-glass, and a frozen last reading on /health would read as current.
+                        // 🚨 The TYPE only, never ex.Message — this reaches a PUBLIC, unauthenticated
+                        // body, and a storage fault's message can carry connection, schema or
+                        // provider detail. The full exception is in the log line below.
+                        census.RecordLiveRecordsFault(
+                            $"{ex.GetType().Name} terminated the catalog subscription");
+                        logger.LogError(ex,
+                            "DynamicTypePreWarmer: the live NodeType-record census FAULTED — /health's "
+                            + "bake-report now degrades and says so; a record re-keyed to another "
+                            + "framework after this replica booted is no longer being watched for "
+                            + "(#4632)");
+                    });
         if (sweepEnabled)
             gate?.MarkRunning("enumerating dynamic NodeTypes");
         if (gate is { GatesReadiness: true })
@@ -387,13 +427,27 @@ public sealed class DynamicTypePreWarmerHostedService(
                             + "Adoption itself already ran; every type still compiles on first "
                             + "access, so the pod stays correct — it just cannot tell you how much "
                             + "of its content arrived pre-built.");
+                        // The census first, then the barrier — see the note at the sweep's
+                        // terminals: MarkSettled releases readers that can ask /health.
+                        census?.RecordSettlement("faulted");
                         bake?.MarkSettled(PreWarmSettlement.Faulted);
                     },
                     // NotApplicable, deliberately: adoption ran but no BAKE did, and completion was
                     // only ever a claim about a sweep. Consumers sequenced behind the barrier (the
                     // default-install pass adopts plugin bundles behind it) still get their signal
                     // once the seeding has landed, and learn that nothing was compiled.
-                    () => bake?.MarkSettled(PreWarmSettlement.NotApplicable));
+                    () =>
+                    {
+                        // 🚨 #4645 — the census says the SAME thing in its own words, and says
+                        // it BEFORE the barrier is released (readers behind the bake can ask
+                        // /health). This path publishes an adopt-only bake report, so without
+                        // this the reading would carry a plan and an empty settlement, which is
+                        // the sentence reserved for "no sweep reported here". "Nothing was
+                        // compiled, on purpose" and "I do not know whether anything was" must not
+                        // collapse into one reading — the ambiguity this census exists to refuse.
+                        census?.RecordSettlement("not applicable");
+                        bake?.MarkSettled(PreWarmSettlement.NotApplicable);
+                    });
             return;
         }
 
@@ -417,6 +471,12 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // activating its hub at all, and one broken upstream would otherwise activate
                     // its whole fan-out and hold it for the pod's lifetime. Those are retracted
                     // through their blocker instead (NodeTypeBakeGateState.RetractRegression).
+                    // 🚨 #4645 — the census records the SAME object the gate judges, so the
+                    // two can never disagree, and it costs no I/O: the verdict is already here.
+                    // The gate decides whether this pod may serve; the census says, on a public
+                    // body, WHICH types it cannot serve — including on a pod the gate lets
+                    // through, which is exactly the case nobody could see before.
+                    census?.RecordOutcome(outcome);
                     var gated = gate?.MarkOutcome(outcome) == true;
                     // 🚨 #3478 — act on the verdict the moment it turns, mid-sweep. The first
                     // regression makes this process Refused, so every stamp it has HELD so far is
@@ -449,25 +509,14 @@ public sealed class DynamicTypePreWarmerHostedService(
                             if (slowest.Count > SlowestReported)
                                 slowest.RemoveAt(slowest.Count - 1);
                         }
-                    switch (outcome.Status)
+                    switch (CounterFor(outcome.Status))
                     {
-                        case PreWarmStatus.Compiled: Interlocked.Increment(ref compiled); break;
-                        case PreWarmStatus.AlreadyBaked: Interlocked.Increment(ref alreadyBaked); break;
-                        case PreWarmStatus.CompileError: Interlocked.Increment(ref errored); break;
-                        case PreWarmStatus.TimedOut: Interlocked.Increment(ref timedOut); break;
-                        // A type skipped because its upstream failed — or because its upstream was
-                        // never evaluated — is not a FAULT; it is a deliberate, reported outcome.
-                        // Counting it as one made the summary read like the warmer had crashed N
-                        // times when one dependency was broken. (Which of the two it was is not
-                        // lost: the gate files UpstreamUnevaluated under "not evaluated" and names
-                        // it in the health payload, while UpstreamFailed gates.)
-                        case PreWarmStatus.UpstreamFailed:
-                        case PreWarmStatus.UpstreamUnevaluated: Interlocked.Increment(ref skipped); break;
-                        // Broken by deleted CONTENT, not by this image — the gate files these
-                        // under ContentBroken (never gating); the count keeps them visible here.
-                        case PreWarmStatus.NoSources:
-                        case PreWarmStatus.DeclaredSourcesMissing:
-                        case PreWarmStatus.UpstreamContentBroken: Interlocked.Increment(ref contentBroken); break;
+                        case PreWarmCounters.Compiled: Interlocked.Increment(ref compiled); break;
+                        case PreWarmCounters.AlreadyBaked: Interlocked.Increment(ref alreadyBaked); break;
+                        case PreWarmCounters.Errored: Interlocked.Increment(ref errored); break;
+                        case PreWarmCounters.TimedOut: Interlocked.Increment(ref timedOut); break;
+                        case PreWarmCounters.Skipped: Interlocked.Increment(ref skipped); break;
+                        case PreWarmCounters.ContentBroken: Interlocked.Increment(ref contentBroken); break;
                         default: Interlocked.Increment(ref faulted); break;
                     }
                 },
@@ -525,6 +574,12 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // A fault is a terminal too: the sweep is over, the compile queue is no longer
                     // saturated, and whoever sequenced on the bake may proceed (#1114) — now able
                     // to see THAT it was a fault they proceeded past.
+                    // 🚨 THE CENSUS IS SET BEFORE THE BARRIER IS RELEASED. MarkSettled publishes the
+                    // terminal value to everything sequenced behind the bake, and one of those things
+                    // can read /health. Released first, a subscriber could see the barrier settled while
+                    // SweepSettlement was still empty and print the false "NO sweep has reported"
+                    // reading — the signal a join waits on must be published LAST.
+                    census?.RecordSettlement("faulted");
                     bake?.MarkSettled(PreWarmSettlement.Faulted);
                 },
                 () =>
@@ -594,6 +649,12 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // flows sequenced on the bake (#1114). On a Regressed+armed pod readiness
                     // stays refused regardless; the default install proceeding is deliberate —
                     // installs repair content, and the broken type is already terminal.
+                    // 🚨 THE CENSUS IS SET BEFORE THE BARRIER IS RELEASED. MarkSettled publishes the
+                    // terminal value to everything sequenced behind the bake, and one of those things
+                    // can read /health. Released first, a subscriber could see the barrier settled while
+                    // SweepSettlement was still empty and print the false "NO sweep has reported"
+                    // reading — the signal a join waits on must be published LAST.
+                    census?.RecordSettlement("completed");
                     bake?.MarkSettled(PreWarmSettlement.Completed);
                 });
     }
@@ -678,8 +739,83 @@ public sealed class DynamicTypePreWarmerHostedService(
         _startedRegistration = null;
         _warmSubscription?.Dispose();
         _warmSubscription = null;
+        _liveCensus?.Dispose();
+        _liveCensus = null;
         _recoveryWatches.Dispose();
     }
+
+    /// <summary>
+    /// Which summary counter one <see cref="PreWarmStatus"/> belongs to. Pure, and extracted for
+    /// ONE reason: an inline <c>switch</c> whose <c>default</c> arm means "a fault" silently
+    /// mis-files any member nobody remembered to name, and two of the twelve were mis-filed that
+    /// way — <see cref="PreWarmStatus.Retired"/> and <see cref="PreWarmStatus.Removed"/>, both
+    /// content verdicts the gate already treats as non-gating, both counted here as crashes
+    /// (caught by review on <see href="https://github.com/Systemorph/MeshWeaver/pull/5163">#5163</see>).
+    ///
+    /// <para>🚨 The gate and this summary must AGREE: an operator reads the summary and a health
+    /// payload reads the gate, so two numbers for one fact is how "the warmer faulted N times" gets
+    /// investigated instead of the partition that was actually torn down.</para>
+    ///
+    /// <para>Being a pure function, the exhaustiveness is now ASSERTED — every status but
+    /// <see cref="PreWarmStatus.Faulted"/> must map to something other than
+    /// <see cref="PreWarmCounters.Faulted"/>, so a future member added without a case here fails a
+    /// test instead of quietly inflating the fault count.</para>
+    /// </summary>
+    /// <param name="status">The outcome's status.</param>
+    internal static string CounterFor(PreWarmStatus status) => status switch
+    {
+        PreWarmStatus.Compiled => PreWarmCounters.Compiled,
+        PreWarmStatus.AlreadyBaked => PreWarmCounters.AlreadyBaked,
+        PreWarmStatus.CompileError => PreWarmCounters.Errored,
+        PreWarmStatus.TimedOut => PreWarmCounters.TimedOut,
+        // A type skipped because its upstream failed — or because its upstream was never evaluated
+        // — is not a FAULT; it is a deliberate, reported outcome. Counting it as one made the
+        // summary read like the warmer had crashed N times when one dependency was broken. (Which
+        // of the two it was is not lost: the gate files UpstreamUnevaluated under "not evaluated"
+        // and names it in the health payload, while UpstreamFailed gates.)
+        PreWarmStatus.UpstreamFailed => PreWarmCounters.Skipped,
+        PreWarmStatus.UpstreamUnevaluated => PreWarmCounters.Skipped,
+        // Broken by CONTENT, not by this image — the gate files all of these as non-gating; the
+        // count keeps them visible here. Retired: the repository withdrew the type's sources.
+        // Removed: the definition node, or the partition it lived in, is gone.
+        PreWarmStatus.NoSources => PreWarmCounters.ContentBroken,
+        PreWarmStatus.DeclaredSourcesMissing => PreWarmCounters.ContentBroken,
+        PreWarmStatus.Retired => PreWarmCounters.ContentBroken,
+        PreWarmStatus.Removed => PreWarmCounters.ContentBroken,
+        PreWarmStatus.UpstreamContentBroken => PreWarmCounters.ContentBroken,
+        // Faulted — and any member added without a case above, which the exhaustiveness test
+        // refuses rather than leaving to be discovered in an operator summary.
+        _ => PreWarmCounters.Faulted,
+    };
+}
+
+/// <summary>
+/// The sweep summary's counter names — <c>const string</c> rather than an enum, per policy
+/// <c>open-vocabulary-string-constants</c>: named exactly as the enum members would have been, so
+/// every call site reads identically.
+/// </summary>
+internal static class PreWarmCounters
+{
+    /// <summary>Reached a usable compiled build on this sweep.</summary>
+    public const string Compiled = nameof(Compiled);
+
+    /// <summary>Not attempted — the assembly store already held this build.</summary>
+    public const string AlreadyBaked = nameof(AlreadyBaked);
+
+    /// <summary>An image verdict: the compile settled at Error.</summary>
+    public const string Errored = nameof(Errored);
+
+    /// <summary>No verdict — the per-type budget elapsed before the compile settled.</summary>
+    public const string TimedOut = nameof(TimedOut);
+
+    /// <summary>Not attempted because an upstream type failed or was never evaluated.</summary>
+    public const string Skipped = nameof(Skipped);
+
+    /// <summary>A CONTENT verdict no image caused and no rollout can fix.</summary>
+    public const string ContentBroken = nameof(ContentBroken);
+
+    /// <summary>The sweep genuinely faulted on this type.</summary>
+    public const string Faulted = nameof(Faulted);
 }
 
 /// <summary>Opt-in registration for the dynamic-NodeType startup pre-warm (portal hosts).</summary>

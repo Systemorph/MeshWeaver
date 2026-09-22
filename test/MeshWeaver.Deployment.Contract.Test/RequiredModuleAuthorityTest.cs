@@ -89,6 +89,169 @@ public class RequiredModuleAuthorityTest
         Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(null));
     }
 
+    /// <summary>
+    /// 🚨 THE Memex#378 PIN — and the second occurrence of the same defect on the same instance.
+    ///
+    /// <para>A slot names an index in an array whose other half is the IMAGE's own list: another
+    /// repository, another release schedule, not given to the record at render time. Memex#131 put
+    /// MCP at 5 over an image whose 5 had become <c>Social</c>; Memex#378 is the same slot advice
+    /// one append later — <c>{"7": "MeshWeaver.Mcp.dll"}</c> over an image whose list grew from
+    /// seven entries to nine, so 7 is <c>Markdown.Collaboration</c> and the collaboration pack is
+    /// required by nobody on the public instance. Neither was visible anywhere: the module is not
+    /// MISSING (nothing asks for it) and the key IS rendered (coverage passes).</para>
+    ///
+    /// <para>So the rule is not "pick a better index" — no index a record can pick is safe while it
+    /// does not own the list. It is: a positional slot counts only under the authority claim, where
+    /// the image's list does not apply at any index and a slot can therefore shadow nothing.</para>
+    /// </summary>
+    [Fact]
+    public void APositionalSlotWithoutTheClaim_IsREPORTED_BecauseItsIndexMeansWhateverTheImageShipped()
+    {
+        // The shape measured on Deployments/memex-cloud, v85 (2026-09-16) and unchanged at v92
+        // (2026-09-17): five contiguous entries, one slot at 7, no claim.
+        var live = new DeploymentContent
+        {
+            RequiredModules =
+            [
+                "MeshWeaver.Blazor.Radzen.dll", "MeshWeaver.Blazor.Analysis.dll",
+                "MeshWeaver.Blazor.EntityViews.dll", "MeshWeaver.Blazor.GoogleMaps.dll",
+                "MeshWeaver.Speech.dll",
+            ],
+        }.WithRequiredModuleSlot(7, "MeshWeaver.Mcp");
+
+        var problem = Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(live));
+        Assert.Contains("MeshWeaver.Mcp.dll", problem, StringComparison.Ordinal);
+        Assert.Contains("SLOT 7", problem, StringComparison.Ordinal);
+        Assert.Contains("requiredModulesAuthoritative", problem, StringComparison.Ordinal);
+
+        // 🚨 The claim is the WHOLE difference: the same slot, on a record that owns every index,
+        // can shadow nothing — so it is not reported, and the fix is not "move the slot".
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(live.WithRequiredModulesAuthoritative()));
+
+        // And the surface is silent where there is nothing positional to distrust.
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(
+            new DeploymentContent { RequiredModules = ["MeshWeaver.Mcp.dll"] }));
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(null));
+    }
+
+    /// <summary>
+    /// The two slot surfaces answer DIFFERENT questions and must not be folded together: the chart
+    /// ceiling is route-specific (Aspire delivers a slot the chart would drop), while a slot whose
+    /// index the image owns is wrong on EVERY route. A record can hit one, both or neither.
+    /// </summary>
+    [Fact]
+    public void ThePositionalRuleAndTheChartCeiling_AreIndependent()
+    {
+        var overCeiling = DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot + 1;
+
+        // Over the ceiling AND authoritative: a chart problem, not a positional one.
+        var chartOnly = new DeploymentContent()
+            .WithRequiredModuleSlot(overCeiling, "MeshWeaver.Mcp")
+            .WithRequiredModulesAuthoritative();
+        Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(chartOnly));
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(chartOnly));
+
+        // Inside the ceiling and NOT authoritative: a positional problem, not a chart one.
+        var positionalOnly = new DeploymentContent().WithRequiredModuleSlot(7, "MeshWeaver.Mcp");
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(positionalOnly));
+        Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(positionalOnly));
+
+        // Both at once, reported by both — neither surface stands in for the other.
+        var both = new DeploymentContent().WithRequiredModuleSlot(overCeiling, "MeshWeaver.Mcp");
+        Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(both));
+        Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(both));
+
+        // And NEITHER — the fourth combination, which is the one a coupling of the two guards
+        // would break silently: inside the ceiling and authoritative is a record with nothing
+        // wrong, and both surfaces have to say so.
+        var neither = new DeploymentContent()
+            .WithRequiredModuleSlot(7, "MeshWeaver.Mcp")
+            .WithRequiredModulesAuthoritative();
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(neither));
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(neither));
+    }
+
+    /// <summary>
+    /// 🚨 A problem is reported for the slots that are RENDERED, never for the raw map. A blank
+    /// entry and an entry the contiguous list already occupies both emit nothing — so reporting
+    /// them would name a module that is not there, in the very sentence that explains why nothing
+    /// else reports this ("the key IS rendered, so coverage passes"). A collision is a real defect
+    /// and it has its own reporter: <c>HelmValues.Problems</c>'s slot-collides-with-the-list check.
+    /// </summary>
+    [Fact]
+    public void ASlotThatRendersNothing_IsNotReportedAsAShadow()
+    {
+        var blank = new DeploymentContent().WithRequiredModuleSlot(7, "   ");
+        Assert.DoesNotContain(7, DeploymentPortalConfig.ModuleSlots(blank).Keys);
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(blank));
+
+        // Slot 1 is inside the record's OWN two-entry list, so the render keeps the list's entry
+        // and the slot emits nothing — no image index is shadowed by it.
+        var colliding = new DeploymentContent
+        {
+            RequiredModules = ["MeshWeaver.Blazor.Radzen.dll", "MeshWeaver.Blazor.Analysis.dll"],
+        }.WithRequiredModuleSlot(1, "MeshWeaver.Mcp");
+        Assert.Equal("MeshWeaver.Blazor.Analysis.dll", DeploymentPortalConfig.ModuleSlots(colliding)[1]);
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(colliding));
+
+        // …while the same record with the slot PAST its list is the reported shape.
+        var past = new DeploymentContent
+        {
+            RequiredModules = ["MeshWeaver.Blazor.Radzen.dll", "MeshWeaver.Blazor.Analysis.dll"],
+        }.WithRequiredModuleSlot(7, "MeshWeaver.Mcp");
+        Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(past));
+    }
+
+    /// <summary>
+    /// 🚨 A slot BELOW ZERO is the ceiling's question at the other end, and it took a measurement to
+    /// place it. It is NOT an unbound array entry: the reader enumerates
+    /// <c>GetSection("Modules:Required").GetChildren()</c> rather than binding a CLR array, so an
+    /// injected <c>Modules:Required:-1</c> comes back and the module IS required under Aspire
+    /// (pinned across the assembly boundary by
+    /// <c>ConfiguredModuleActivationTest.ANegativeSlotIsDeliveredByTheASPIREReader</c>). The chart's
+    /// literal-key block starts at 0, so in Kubernetes the key reaches no container — works
+    /// locally, disappears in the cluster, exactly like a slot above the ceiling, and reported by
+    /// the same chart-scoped surface.
+    ///
+    /// <para>It is the one malformed index a hand-written record can carry —
+    /// <c>WithRequiredModuleSlot</c> takes any <c>int</c> — so leaving it to "the ceiling reads the
+    /// upper bound only" left it seen by nothing.</para>
+    /// </summary>
+    [Fact]
+    public void ASlotBelowZero_IsReportedByTheCHART_Surface_WhateverTheRecordClaims()
+    {
+        var negative = new DeploymentContent().WithRequiredModuleSlot(-1, "MeshWeaver.Mcp");
+
+        // It really is rendered on both routes — this is not a hypothetical shape.
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(negative, PortalConfigOptions.Helm)["Modules__Required__-1"]);
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(negative, PortalConfigOptions.Aspire(null))["Modules__Required__-1"]);
+
+        var problem = Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(negative));
+        Assert.Contains("MeshWeaver.Mcp.dll", problem, StringComparison.Ordinal);
+        Assert.Contains("slot -1", problem, StringComparison.Ordinal);
+
+        // The claim says which entries are the complete set; it does not decide which keys the
+        // chart renders, so it cannot excuse this one.
+        Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(negative.WithRequiredModulesAuthoritative()));
+
+        // And it is NOT a positional shadow: no index of the image's list is at -1, so the surface
+        // that answers "does this index mean what you think" has nothing to say.
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(negative));
+    }
+
+    /// <summary>
+    /// One normalization, every surface: a record that states a module WITHOUT the <c>.dll</c>
+    /// suffix must be named the same way in the entries it renders and in the problem that reports
+    /// it — otherwise a reader greps the problem's spelling and finds nothing.
+    /// </summary>
+    [Fact]
+    public void AProblemNamesTheModuleTheWayTheRenderDoes()
+    {
+        var record = new DeploymentContent().WithRequiredModuleSlot(7, "  MeshWeaver.Mcp  ");
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.ModuleSlots(record)[7]);
+        Assert.Contains("'MeshWeaver.Mcp.dll'", Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(record)), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void TheCeilingIsTheCHARTS_SoTheRouteNeutralSpecProblemsDoesNotCarryIt()
     {

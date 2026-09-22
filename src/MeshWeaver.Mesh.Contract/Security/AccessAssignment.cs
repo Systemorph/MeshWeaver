@@ -1,5 +1,7 @@
-﻿using MeshWeaver.Domain;
+﻿using System.ComponentModel;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Security;
 
@@ -101,6 +103,41 @@ public record PartitionAccessPolicy
     /// it cannot loop — see <c>HubPermissionExtensions.GetRedirectOnDenied</c>. Leading '/' is optional.
     /// </summary>
     public string? RedirectOnDenied { get; init; }
+
+    /// <summary>
+    /// 🚨 OPT-IN, DEFAULT OFF: let a page whose content stays GATED describe ITSELF in a link
+    /// preview — its own name, its own description and its own share image — to whoever holds the
+    /// URL. <c>null</c> (the default) or <c>false</c> = a gated page discloses nothing of its own,
+    /// which is the behaviour every partition has today and keeps unless someone sets this.
+    ///
+    /// <para><b>It is NOT a read grant and confers no access.</b> The
+    /// <see cref="MeshWeaver.Mesh.Security.AnonymousGate"/> still refuses the page, its BODY is
+    /// still never rendered for a logged-out visitor, and the node stays out of the published
+    /// surface and <c>/sitemap.xml</c> — those read the gate, not this. What it opens is exactly
+    /// three authored strings and one picture: <c>Name</c>, the authored summary
+    /// (<c>Description</c>/<c>abstract</c>/<c>tagline</c>/…, never the body), <c>Icon</c>, and the
+    /// card drawn from them. To make a page READABLE, use <see cref="PublicRead"/>.</para>
+    ///
+    /// <para><b>Inherited nearest-scope-first, like <see cref="RedirectOnDenied"/> and unlike the
+    /// permission caps.</b> The closest scope that states a value wins — self, then each ancestor up
+    /// to root — so a partition root opts its whole subtree in, and any deeper scope opts back OUT
+    /// with an explicit <c>false</c>. A policy filed at a single node's own scope therefore governs
+    /// that one node. <see cref="BreaksInheritance"/> does NOT apply: it discards inherited ROLE
+    /// assignments, and this is not a role.</para>
+    ///
+    /// <para>🚨 <b>Know what you are opting in before you set it.</b> Every descendant's TITLE and
+    /// SUMMARY become readable by anyone who can guess or is given a URL — that is the point of the
+    /// flag, and it is a deliberate disclosure, not a side effect. Set it on a partition whose
+    /// page names are marketing (a catalog, an offer, a course) and never on one whose names are
+    /// the secret (a deal room, a person's files).</para>
+    /// </summary>
+    // 🚨 The one LABELLED field on this record, and deliberately so rather than a sweep: a label is
+    // owed by what a change ADDS. Its siblings render as wordified property names, which is
+    // pre-existing and left where it is.
+    [Description("Let gated pages here describe themselves in link previews (name, summary, icon)")]
+    [Translation("de", "Gesperrte Seiten hier dürfen sich in Link-Vorschauen selbst beschreiben "
+                       + "(Name, Kurzbeschreibung, Symbol)")]
+    public bool? PublicPreview { get; init; }
 
     /// <summary>
     /// Computes the permission cap mask from individual switches.

@@ -37,17 +37,28 @@ public sealed class BakeReportHealthCheck(IServiceProvider services) : IHealthCh
         // 🚨 A null REGISTRY is not a null reading — it is a host that never registered the
         // instrument, and Describe(null) already says "measured NOTHING" in those words. Reporting
         // Healthy here would be the missing-instrument-reads-as-clean bug, one layer up.
-        var reading = services.GetService<NodeTypeBakeReportRegistry>()?.Latest;
-        var description = NodeTypeBakeReportRegistry.Describe(reading);
+        var registry = services.GetService<NodeTypeBakeReportRegistry>();
+        var reading = registry?.Latest;
+        // 🚨 #4632 — the LIVE half: the catalog as it stands now, not as it stood at boot. A record
+        // re-keyed to another framework after this replica booted degrades the entry; an absent
+        // live reading prints as its own sentence and degrades nothing (a replica still coming up
+        // has not emitted yet, and every boot degrading would teach readers to ignore the entry).
+        var live = registry?.LiveRecords;
+        // A FAULTED watch degrades too: it was armed and stopped, and its last reading is frozen.
+        var liveFault = registry?.LiveRecordsFault;
+        var description = NodeTypeBakeReportRegistry.DescribeIncludingLive(reading, live, liveFault);
+        var data = DataOf(reading, live, liveFault);
 
-        if (!NodeTypeBakeReportRegistry.IsClean(reading))
-            return Task.FromResult(HealthCheckResult.Degraded(description, data: DataOf(reading)));
+        if (!NodeTypeBakeReportRegistry.IsCleanIncludingLive(reading, live, liveFault))
+            return Task.FromResult(HealthCheckResult.Degraded(description, data: data));
 
-        return Task.FromResult(HealthCheckResult.Healthy(description, data: DataOf(reading)));
+        return Task.FromResult(HealthCheckResult.Healthy(description, data: data));
     }
 
-    private static IReadOnlyDictionary<string, object> DataOf(BakeReportReading? reading) =>
-        reading is null
+    private static IReadOnlyDictionary<string, object> DataOf(
+        BakeReportReading? reading, NodeTypeLiveRecordCensus? live, string? liveFault)
+    {
+        var data = reading is null
             ? new Dictionary<string, object>(StringComparer.Ordinal)
             {
                 ["report"] = "none",
@@ -66,4 +77,20 @@ public sealed class BakeReportHealthCheck(IServiceProvider services) : IHealthCh
                 ["ownership"] = reading.Ownership,
                 ["at"] = reading.At,
             };
+        // #4632 — the live catalog census, in the same partition-only discipline.
+        data["liveRecords"] = liveFault is not null ? "faulted" : live is null ? "none" : "taken";
+        if (liveFault is not null)
+            data["liveFault"] = liveFault;
+        if (live is not null)
+        {
+            data["liveTotal"] = live.Total;
+            data["liveUntyped"] = live.Untyped;
+            data["liveForeign"] = live.Foreign;
+            data["liveForeignSinceBoot"] = live.ForeignSinceBoot;
+            data["liveForeignDetail"] = live.ForeignDetail;
+            data["liveBootedAt"] = live.BootedAt;
+            data["liveAt"] = live.At;
+        }
+        return data;
+    }
 }

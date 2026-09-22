@@ -245,13 +245,25 @@ internal sealed class MeshService(
                 {
                     var r = d.Message;
                     if (r.Success)
-                        return Observable.Return(true);
+                        // 🚨 THE `bool` IS THE HONEST HALF, and until #4668 it was a dead channel —
+                        // this method emitted `true` or threw, so no caller has ever seen `false`
+                        // and none can misread the new value as a failure. `true` = this call
+                        // removed the node; `false` = it was ALREADY gone, so nothing was removed
+                        // and the postcondition held before we arrived. Both are successes: a
+                        // caller that only wants the node gone ignores the value (that is the
+                        // idempotent read), a caller that wants to know what happened branches on
+                        // it. Throwing for the second case is what put `Node not found` in front of
+                        // a user who had done nothing wrong.
+                        return Observable.Return(!r.AlreadyAbsent);
                     return Observable.Throw<bool>(r.RejectionReason switch
                     {
                         NodeDeletionRejectionReason.ValidationFailed =>
                             new UnauthorizedAccessException(r.Error ?? "Access denied"),
                         NodeDeletionRejectionReason.Unauthorized =>
                             new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        // Still a failure, and deliberately so: reaching this now means the absence
+                        // was discovered MID-CASCADE, on a subtree that may be partially removed —
+                        // not the "there was nothing to do" case above.
                         NodeDeletionRejectionReason.NodeNotFound =>
                             new InvalidOperationException($"Node not found: {path}"),
                         _ => new InvalidOperationException(r.Error ?? "Node deletion failed")

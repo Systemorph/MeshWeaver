@@ -13,9 +13,22 @@ public enum WarningClass
     /// <summary>
     /// A REAL warning — unused code (<c>CS0219</c>), an unresolvable <c>cref</c>
     /// (<c>CS1574</c>/<c>CS1584</c>), a <c>&lt;param&gt;</c> tag naming a parameter that does not
-    /// exist (<c>CS1573</c>), an unreachable statement, a shadowed member. Every one of these is a
+    /// exist (<c>CS1572</c>), an unreachable statement, a shadowed member. Every one of these is a
     /// latent bug or a doc comment that is actively WRONG, and <c>src/</c> would not compile with
     /// it under <c>-warnaserror</c>.
+    ///
+    /// <para>🚨 NOT <c>CS1573</c>, which is <c>CS1572</c>'s opposite and is easy to swap for it:
+    /// a parameter with NO <c>&lt;param&gt;</c> tag is doc COMPLETENESS, it is in
+    /// <see cref="CompileWarning.NotReported"/>, and <c>EmitPipeline.Collect</c> filters it out
+    /// before the inventory is built — so a <c>CS1573</c> Roslyn emits can never enter the warning
+    /// INVENTORY, and therefore can never be a NEW warning against either ratchet.</para>
+    ///
+    /// <para>That guarantee lives upstream, in the filter, and NOT in
+    /// <see cref="WarningClasses.Of(string)"/>, which is deliberately not an enumerated list: it
+    /// files every id that is not <see cref="CompileWarning.MissingDocComment"/> as
+    /// <see cref="WarningClass.Real"/>. So a <c>CS1573</c> written into a baseline file BY HAND does
+    /// land in this class — as a STALE entry, because the type it names compiled clean of a code the
+    /// inventory never sees, and stale entries fail the run too.</para>
     /// </summary>
     Real,
 
@@ -170,10 +183,27 @@ public sealed record WarningBaseline(
     public bool Allows(string scope, string code) =>
         Entries.Any(e => e.Matches(scope, code));
 
-    /// <summary>The entries belonging to one ratchet.</summary>
+    /// <summary>The entries belonging to one ratchet — <see cref="Inert"/> ones excluded.</summary>
     /// <param name="warningClass">Which ratchet.</param>
     public IEnumerable<WarningBaselineEntry> For(WarningClass warningClass) =>
-        Entries.Where(e => e.Class == warningClass);
+        Entries.Where(e => e.Class == warningClass && !CompileWarning.IsNotReported(e.Code));
+
+    /// <summary>
+    /// Baseline entries naming a code the compile no longer REPORTS
+    /// (<see cref="CompileWarning.NotReported"/>) — reported once, tolerated, and never failed in
+    /// either direction.
+    ///
+    /// <para>🚨 This exists so that retiring a code cannot red the fleet. The moment
+    /// <c>CS1701</c> stopped being reported, every one of MeshWeaver.Plugins' 95 <c>CS1701</c>
+    /// entries would have become STALE — a hard bake failure on a file no pull request in flight
+    /// had any reason to touch — and the repo would have been unable to go green until a trim
+    /// landed, on a platform image it does not control the timing of. An entry here is simply
+    /// INERT: not stale (nothing measured it), not known debt (nothing can produce it), just a line
+    /// with nothing left to say. The report names them so they get deleted, rather than sitting
+    /// unread for ever.</para>
+    /// </summary>
+    public IEnumerable<WarningBaselineEntry> Inert =>
+        Entries.Where(e => CompileWarning.IsNotReported(e.Code));
 
     private static string StripComment(string line) =>
         line.IndexOf('#') is var i && i >= 0 ? line[..i] : line;

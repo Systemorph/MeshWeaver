@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -628,6 +629,82 @@ public static class DynamicTypePreWarmer
     }
 
     /// <summary>
+    /// The stable id of the standing catalog subscription <see cref="ObserveLiveRecordCensus"/>
+    /// opens — one per process, keyed with its query set, never composed per call (#1311).
+    /// </summary>
+    internal const string LiveRecordCensusQueryId = "nodetype-live-record-census";
+
+    /// <summary>
+    /// 🚨 <b>WATCHES, NEVER BUILDS — the live half of <c>bake-report</c></b> (#4632).
+    ///
+    /// <para>A standing subscription to the mesh-wide NodeType catalog, folded on every emission
+    /// into a <see cref="NodeTypeLiveRecordCensus"/>: which records, AS THEY STAND NOW, name a build
+    /// keyed to a framework this process does not run, and how many of those were stamped after
+    /// <paramref name="bootedAt"/>. The two boot-time passes above (<see cref="ProbeDynamicTypes"/>,
+    /// <see cref="WarmDynamicTypes"/>) take ONE enumeration and publish; a record another replica
+    /// re-stamps a minute later is invisible to both, which is how a mid-roll cross-stamp reached a
+    /// customer-facing page with every instrument green. This one keeps reading.</para>
+    ///
+    /// <para>Same population as the bake — dynamic types only, the ones with source to compile — and
+    /// the same System scope, for the same reason: enumerating NodeType definitions across every
+    /// partition is infrastructure, not a user-attributable read. The synced query is the canonical
+    /// surface for a live collection (<c>hub.GetQuery</c>): one shared upstream, whole-set
+    /// emissions, change events applied for the process's life. The fold is pure and touches no
+    /// store and no hub, so an emission costs a pass over a few hundred typed records.</para>
+    ///
+    /// <para>Cold, like every observable here: the caller subscribes and owns the subscription
+    /// (the hosted service disposes it with the service). Faults propagate — a catalog that cannot
+    /// be read must not be reportable as "nothing foreign".</para>
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    /// <param name="bootedAt">The boundary <see cref="NodeTypeLiveRecordCensus.ForeignSinceBoot"/> splits on.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <returns>One census per catalog emission.</returns>
+    public static IObservable<NodeTypeLiveRecordCensus> ObserveLiveRecordCensus(
+        IMessageHub mesh, DateTimeOffset bootedAt, ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var accessService = mesh.ServiceProvider.GetService<AccessService>();
+        var liveFramework = NodeTypeCompilationHelpers.FrameworkVersion;
+        var options = mesh.JsonSerializerOptions;
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
+        // WarmDynamicTypes (#1444/#1790) for why the scope must be sealed inside the one Subscribe.
+        return accessService.RunAsSystem(() => mesh
+                // Every NodeType definition — a catalog, mesh-wide by nature (#3202 — fan-out is
+                // opt-in, and this is one of its three legitimate shapes: a process-wide watch).
+                .GetQuery(LiveRecordCensusQueryId, MeshWideQuery.OfType(MeshNode.NodeTypePath)))
+            // 🚨 No logger into the fold: this runs on EVERY catalog emission for the process's
+            // life, so a permanently untyped record would re-log the same conversion failure on
+            // every unrelated NodeType write — a log wave during a bake. The boot-time DynamicTypesOf
+            // already names each untyped path once; here it is COUNTED (Untyped) and printed.
+            .Select(nodes => NodeTypeLiveRecordCensus.Of(
+                LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>
+    /// The census's input from one catalog emission: every ACTIVE node whose definition has
+    /// compilable source (the bake's own population rule, <see cref="HasCompilableSource"/>), or
+    /// whose content could not be typed at all (carried as <c>null</c> so the census can count what
+    /// it decided nothing about). Static types — no source, assembly shipped with the process — are
+    /// not in it, exactly as they are not in <see cref="DynamicTypesOf"/>.
+    /// </summary>
+    internal static ImmutableList<(string Path, NodeTypeDefinition? Definition)> LiveRecordsOf(
+        IEnumerable<MeshNode> nodes, JsonSerializerOptions options, ILogger? logger)
+        => nodes
+            .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
+            .Select(n => (
+                Path: n.Path!,
+                Definition: n.ContentAs<NodeTypeDefinition>(options, logger),
+                HasContent: n.Content is not null))
+            // A typed definition is in the population iff it has source to compile; an untyped
+            // node is in it iff it HAD content the hub could not type (no content is nothing at
+            // all, not a failure to type) — the same two rules DynamicTypesOf applies.
+            .Where(pair => pair.Definition is { } d ? HasCompilableSource(d) : pair.HasContent)
+            .GroupBy(pair => pair.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (g.First().Path, g.First().Definition))
+            .ToImmutableList();
+
+    /// <summary>
     /// 🚨 <b>Publishes the report so <c>/health</c> can carry it</b> (#3703).
     ///
     /// <para>The report's numbers — and above all
@@ -1037,7 +1114,8 @@ public static class DynamicTypePreWarmer
         // it activates nothing, so there is no burst to spread out — and a gated pod
         // serves nobody, so there is nothing to be gentle to.)
         IObservable<PreWarmOutcome> Sweep(
-            ImmutableDictionary<string, IReadOnlyList<MeshNode>>? batchSources)
+            ImmutableDictionary<string, IReadOnlyList<MeshNode>>? batchSources,
+            ImmutableHashSet<string> absentPartitions)
             => order
                 .Select((p, i) => Observable.Defer(() =>
                 {
@@ -1048,6 +1126,41 @@ public static class DynamicTypePreWarmer
                     if (baked.Contains(p))
                         return Observable.Return(new PreWarmOutcome(
                             p, PreWarmStatus.AlreadyBaked, "assembly store already holds this build"));
+
+                    // 🚨 ITS PARTITION IS GONE, so there is nothing to warm and nothing to wait
+                    // for (#5073). Asked BEFORE the work, never after it: warming such a type can
+                    // only end one of two ways, and both were measured in production —
+                    //
+                    //   activation-driven: the SubscribeRequest routes to a partition hub whose
+                    //     store was dropped, is never answered, and the entry costs a FULL per-type
+                    //     budget (5 minutes at the default). BakePhase stays Running for the whole
+                    //     sweep, so a readiness-gated pod stays out of rotation for that × the
+                    //     number of dead entries — 31 of them held one pod 2/3 for 48+ minutes with
+                    //     maxUnavailable: 0, i.e. two builds serving one host;
+                    //   batch-driven: the compile's state write to a node in that partition fails
+                    //     (OwnerUnreachable), which is a FAULTED image verdict, and the one absence
+                    //     test that would rescue it (TypeNodeExists) asks the same stale index the
+                    //     entry came from and answers "still there" — so the verdict stands and the
+                    //     gate refuses readiness FOREVER.
+                    //
+                    // Reported as Removed and filed under contentBroken exactly as a repository-
+                    // retired type is: which partitions exist is a property of the mesh, not of the
+                    // framework being rolled out, so no image caused it and no rollout can fix it.
+                    // NOT silently skipped — an operator who cannot see it cannot clean it up.
+                    if (SkipForAbsentPartition(p, absentPartitions) is { } gone)
+                    {
+                        contentBroken.Add(p);
+                        logger?.LogWarning(
+                            "DynamicTypePreWarmer: {TypePath} → {Status} — its partition "
+                            + "'{Partition}' is CONFIRMED ABSENT by the storage providers, so the "
+                            + "definition this index row names no longer has a store to live in. "
+                            + "Not warmed: activating it could only time out, and a stale index row "
+                            + "cannot be disproved by asking the index. The row itself is left "
+                            + "alone — a boot sweep reports data it cannot account for, it does not "
+                            + "delete it",
+                            p, gone.Status, PartitionExistenceProbe.PartitionOf(p));
+                        return Observable.Return(gone);
+                    }
 
                     // A real verdict upstream wins over a merely-unevaluated one: if ANY dependency
                     // actually failed to compile, this type is genuinely blocked and must gate,
@@ -1147,8 +1260,6 @@ public static class DynamicTypePreWarmer
 
         if (order.Count == 0)
             return Observable.Empty<PreWarmOutcome>();
-        if (!useBatch)
-            return Sweep(null);
 
         // Batch discovery first — ONE pass resolving every pending type's source queries.
         // Only a DISCOVERY failure falls back to the activation-driven sweep (before any
@@ -1162,32 +1273,100 @@ public static class DynamicTypePreWarmer
         // that read as "169 of 237 types are content-broken" and, on an ungated pod, would have
         // baked a fleet of empty assemblies with nothing refusing readiness. Whole-batch fallback is
         // the only safe answer: the activation-driven sweep resolves each type's sources itself.
-        return NodeTypeBatchBake
-            // 🚨 The registry is the PUBLICATION of #3704's discriminator — the per-pass chunk
-            // count and the largest inter-chunk gap — so /health can carry what only a Loki query
-            // could read before. Resolved, never required: a host without one publishes nothing and
-            // the check says so in those words rather than reading as clean.
-            .ResolveSources(
-                batchMeshService!, accessService, definitions, pending, logger,
-                mesh.ServiceProvider.GetService<SourceDiscoveryRegistry>())
-            .Select(index =>
-                (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)index)
-            .Catch<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?, Exception>(ex =>
+        IObservable<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?> BatchSources() =>
+            NodeTypeBatchBake
+                // 🚨 The registry is the PUBLICATION of #3704's discriminator — the per-pass chunk
+                // count and the largest inter-chunk gap — so /health can carry what only a Loki query
+                // could read before. Resolved, never required: a host without one publishes nothing and
+                // the check says so in those words rather than reading as clean.
+                .ResolveSources(
+                    batchMeshService!, accessService, definitions, pending, logger,
+                    mesh.ServiceProvider.GetService<SourceDiscoveryRegistry>())
+                .Select(index =>
+                    (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)index)
+                .Catch<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "DynamicTypePreWarmer: batched source discovery did not establish the source "
+                        + "sets — abandoning the batch and falling back to the activation-driven sweep "
+                        + "for ALL {Pending} pending type(s). No type is reported from this pass, so "
+                        + "nothing here can be mistaken for a content or compile verdict.",
+                        pending.Count);
+                    return Observable.Return(
+                        (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)null);
+                });
+
+        // 🚨 ONE provider vote, in front of everything, over the distinct partitions of the PENDING
+        // types (#5073) — see the skip inside Sweep for what it prevents and what it cost. It runs
+        // first because the fact it establishes is only useful before the work: afterwards the
+        // budget has already been spent, or the verdict has already been formed and cannot be
+        // disproved. The probes run together, so the whole answer is bounded by ONE probe budget
+        // rather than by the number of partitions, and it fails OPEN — an indeterminate answer, or
+        // any provider saying the partition IS there, leaves this sweep byte-for-byte as it was.
+        return AbsentPartitionsAmongPending(mesh, pending, logger)
+            .SelectMany(absent => useBatch
+                ? BatchSources().SelectMany(index => Sweep(index, absent))
+                : Sweep(null, absent));
+    }
+
+    /// <summary>
+    /// The partitions among <paramref name="pending"/> that the writable storage providers CONFIRM
+    /// are gone — the one absence witness that is not the node index the pending set came from.
+    /// Emits one set and completes; a host with no partition providers, or one that cannot answer,
+    /// yields the empty set (<see cref="PartitionExistenceProbe"/> fails open).
+    /// </summary>
+    /// <param name="mesh">The mesh hub whose container holds the partition providers.</param>
+    /// <param name="pending">The type paths about to be warmed.</param>
+    /// <param name="logger">Optional.</param>
+    internal static IObservable<ImmutableHashSet<string>> AbsentPartitionsAmongPending(
+        IMessageHub mesh, IReadOnlyCollection<string> pending, ILogger? logger)
+    {
+        if (pending.Count == 0)
+            return Observable.Return(
+                ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
+
+        // Read-only seeds (EmbeddedResource, StaticNode) own no per-partition store and so can
+        // never witness one missing — the same exclusion PathResolutionService makes.
+        var writable = mesh.ServiceProvider.GetServices<IPartitionStorageProvider>()
+            .Where(p => !p.IsReadOnly)
+            .ToList();
+
+        return PartitionExistenceProbe
+            .ConfirmedAbsentAmong(
+                writable, pending.Select(PartitionExistenceProbe.PartitionOf), logger)
+            .Do(absent =>
             {
-                logger?.LogWarning(ex,
-                    "DynamicTypePreWarmer: batched source discovery did not establish the source "
-                    + "sets — abandoning the batch and falling back to the activation-driven sweep "
-                    + "for ALL {Pending} pending type(s). No type is reported from this pass, so "
-                    + "nothing here can be mistaken for a content or compile verdict.",
-                    pending.Count);
-                return Observable.Return(
-                    (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)null);
+                if (!absent.IsEmpty)
+                    logger?.LogWarning(
+                        "DynamicTypePreWarmer: {Count} partition(s) named by pending NodeType rows "
+                        + "are CONFIRMED ABSENT by the storage providers — their types are reported "
+                        + "and NOT warmed, because warming a type whose store is gone can only spend "
+                        + "its whole budget or produce a verdict no image can fix: {Partitions}",
+                        absent.Count, string.Join(", ", absent.OrderBy(x => x, StringComparer.Ordinal)));
             })
-            .SelectMany(Sweep);
+            .Catch<ImmutableHashSet<string>, Exception>(ex =>
+            {
+                // A probe that could not be taken must never stop the bake: this is an optimisation
+                // over a sweep that already works, and the fail-open direction is the safe one.
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: the partition-existence probe could not be taken — every "
+                    + "pending type is warmed exactly as before");
+                return Observable.Return(
+                    ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
+            })
+            // 🚨 THE OUTERMOST BACKSTOP, and the one that matters most: the whole sweep is composed
+            // behind this with SelectMany, so a source that completed WITHOUT EMITTING would produce
+            // a sweep that emits no outcomes and completes normally — which the hosted service reads
+            // as a clean bake and the gate then certifies. That is the one failure mode
+            // WarmDynamicTypes faults an enumeration error to avoid, and a silent completion here
+            // would reintroduce it through the back door. The probe cannot do that today (see
+            // PartitionExistenceProbe's own DefaultIfEmpty); this is what keeps that a fact rather
+            // than a hope.
+            .DefaultIfEmpty(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
     }
 
     /// <summary>A NodeType has something for Roslyn to compile (so it is a dynamic type worth warming).</summary>
-    private static bool HasCompilableSource(NodeTypeDefinition d) =>
+    internal static bool HasCompilableSource(NodeTypeDefinition d) =>
         !string.IsNullOrWhiteSpace(d.Configuration)
         || !string.IsNullOrWhiteSpace(d.HubConfiguration)
         || (d.Sources is { Count: > 0 });
@@ -1465,6 +1644,49 @@ public static class DynamicTypePreWarmer
         outcome.Status is PreWarmStatus.CompileError or PreWarmStatus.Faulted;
 
     /// <summary>
+    /// The outcome for a type whose PARTITION the storage providers confirm is gone, or <c>null</c>
+    /// when it should be warmed as usual. Pure over its two inputs, so the decision is pinned
+    /// without a mesh — <see cref="ReclassifyAbsent"/>'s neighbour, and for the same reason.
+    ///
+    /// <para>🚨 <b>This is asked BEFORE the work, and that ordering is the fix</b> (issue #5073).
+    /// A NodeType row whose partition's store was dropped can only be warmed to one of two
+    /// useless ends, and the platform measured both: the activation-driven path routes a
+    /// <c>SubscribeRequest</c> to a partition hub with no store behind it, is never answered, and
+    /// spends a FULL per-type budget — <see cref="BakePhase.Running"/> holds readiness for the whole
+    /// sweep, so a readiness-gated pod stays out of rotation for that budget times the number of
+    /// dead rows; the batch-driven path faults its state write (<c>OwnerUnreachable</c>) into a
+    /// gating image verdict that <see cref="ReclassifyAbsent"/> cannot rescue, because
+    /// <see cref="TypeNodeExists"/> asks the SAME index the row came from and is answered "still
+    /// there". Asked afterwards, the fact is worthless: the budget is already spent, or the verdict
+    /// is already formed and self-confirming.</para>
+    ///
+    /// <para><see cref="PreWarmStatus.Removed"/>, and deliberately not a new status: which
+    /// partitions exist is a property of the mesh and not of the framework being rolled out, which
+    /// is exactly what <see cref="PreWarmStatus.Removed"/> already means — so this inherits its
+    /// non-gating treatment in <see cref="NodeTypeBakeGateState"/>, its
+    /// <see cref="PreWarmStatus.UpstreamContentBroken"/> cascade to dependents, and its place in
+    /// the report, rather than needing each of those taught a new member.</para>
+    ///
+    /// <para>The row is REPORTED, never deleted: a boot sweep that pruned mesh data on the strength
+    /// of a probe would be a far worse failure than the one this closes.</para>
+    /// </summary>
+    /// <param name="typePath">The NodeType path about to be warmed.</param>
+    /// <param name="absentPartitions">Partitions CONFIRMED absent — from <see cref="PartitionExistenceProbe"/>, which never guesses.</param>
+    internal static PreWarmOutcome? SkipForAbsentPartition(
+        string typePath, ImmutableHashSet<string> absentPartitions)
+    {
+        ArgumentNullException.ThrowIfNull(absentPartitions);
+        var partition = PartitionExistenceProbe.PartitionOf(typePath);
+        if (string.IsNullOrEmpty(partition) || !absentPartitions.Contains(partition))
+            return null;
+        return new PreWarmOutcome(
+            typePath, PreWarmStatus.Removed,
+            $"the partition '{partition}' is confirmed absent by the writable storage providers — "
+            + "this NodeType row outlived the store it named, so nothing about this image caused it "
+            + "and no rollout can fix it");
+    }
+
+    /// <summary>
     /// <see cref="ReclassifyAbsent"/> with the existence question actually asked — only for an
     /// image verdict, so the overwhelming majority of outcomes cost nothing.
     /// </summary>
@@ -1657,8 +1879,15 @@ public static class DynamicTypePreWarmer
             .Subscribe(
                 witness =>
                 {
+                    // 🚨 #4645 — THE CENSUS LEARNS THE LATER VERDICT TOO. Recording only what
+                    // the sweep emitted made "the last verdict wins" false the moment a recovery
+                    // watch fired: /health would keep naming a type as having no usable assembly
+                    // long after this process had watched it build. A stale census is worse than
+                    // none — it sends an operator after a type that is fine.
+                    var census = mesh.ServiceProvider.GetService<NodeTypeBakeReportRegistry>();
                     if (string.Equals(witness, RemovedWitness, StringComparison.Ordinal))
                     {
+                        census?.RecordOutcome(new PreWarmOutcome(typePath, PreWarmStatus.Removed));
                         if (gate.RetireRegression(
                                 typePath,
                                 "the NodeType definition no longer exists — pruned by its repository "
@@ -1675,6 +1904,10 @@ public static class DynamicTypePreWarmer
                         }
                         return;
                     }
+                    // Recorded on the WITNESS, not on the gate's answer: the gate returns true
+                    // only where a regression was actually held, while the census's question is
+                    // simply "can this replica serve the type now" — and the witness says it can.
+                    census?.RecordOutcome(new PreWarmOutcome(typePath, PreWarmStatus.Compiled));
                     if (gate.RetractRegression(
                             typePath,
                             $"rebuilt to a usable build on this image after the bake ({witness})"))

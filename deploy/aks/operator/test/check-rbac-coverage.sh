@@ -42,7 +42,12 @@ resource_of() {
     pv|persistentvolume|persistentvolumes)   echo " persistentvolumes" ;;
     pod|pods|po)                             echo " pods" ;;
     event|events|ev)                         echo " events" ;;
+    node|nodes|no)                           echo " nodes" ;;
     storageclass|storageclasses|sc)          echo "storage.k8s.io storageclasses" ;;
+    # `crd` is kubectl's documented shortname; hosting-db-release asks whether the CloudNativePG
+    # CRD is installed. Resolving it means this checker now CHECKS that read against the ClusterRole
+    # instead of reporting `unknown` — an unresolved name is not a pass, it is an unasked question.
+    crd|crds|customresourcedefinition|customresourcedefinitions) echo "apiextensions.k8s.io customresourcedefinitions" ;;
     deployment|deployments|deploy)           echo "apps deployments" ;;
     statefulset|statefulsets|sts)            echo "apps statefulsets" ;;
     replicaset|replicasets|rs)               echo "apps replicasets" ;;
@@ -50,6 +55,7 @@ resource_of() {
     job|jobs)                                echo "batch jobs" ;;
     cronjob|cronjobs|cj)                     echo "batch cronjobs" ;;
     secretproviderclass|secretproviderclasses|spc) echo "secrets-store.csi.x-k8s.io secretproviderclasses" ;;
+    certificate|certificates|cert) echo "cert-manager.io certificates" ;;
     *) echo "" ;;
   esac
 }

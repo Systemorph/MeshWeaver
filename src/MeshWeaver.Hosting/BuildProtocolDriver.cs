@@ -187,15 +187,20 @@ public static class BuildProtocolDriver
     /// negative ("the durable witness carries no GO"). That is the same defect the door was built to
     /// close, one level down: a read that never completed rendered as an answer.</para>
     ///
-    /// <para>🚨 <b>And the second door is NOT in a different failure domain from the first.</b> In
-    /// the fleet's portal wiring <c>AddPartitionStorageHubs</c> replaces
-    /// <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c>, which serves
-    /// <c>ReadBuildGo</c> as <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> over the SAME hub
-    /// transport a <c>SubscribeRequest</c> travels on. The candidates for #3404's silence are a
-    /// routing loss, a wedged per-node hub, a lost reply, the deferred-queue ordering defect
-    /// (#3408) and a root that stops emitting — and the first, fourth and fifth take both doors
-    /// down together. So on the very fault this door exists for, the expected reading is
-    /// <c>Undetermined</c>, not <c>NoGo</c>.</para>
+    /// <para>🚨 <b>Whether the second door is in a different failure domain from the first is OPEN,
+    /// and the reading this comment used to assert is measurably wrong today.</b> It said that the
+    /// fleet's portal wiring replaces <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c>
+    /// via <c>AddPartitionStorageHubs</c>, so <c>ReadBuildGo</c> would travel the SAME hub transport
+    /// a <c>SubscribeRequest</c> does. Measured 2026-09-19: <c>AddPartitionStorageHubs</c> has no
+    /// caller anywhere — not in this repository's <c>src/</c> or <c>test/</c>, not in any <c>.cs</c>
+    /// source of <c>MeshWeaver.Plugins</c> — and <c>PartitionStorageRouter</c> says so about itself
+    /// ("Stage 1 stub … currently dead code on the main message path"). So the durable read is
+    /// <c>PersistenceService</c> over its backend, i.e. a store round-trip rather than a hub
+    /// request. The candidates for #3404's silence — a routing loss, a wedged per-node hub, a lost
+    /// reply, the deferred-queue ordering defect (#3408), a root that stops emitting — therefore
+    /// have to be re-argued against THAT path before any of them is said to take both doors down;
+    /// what is unchanged is that <c>Undetermined</c> must not be rendered as <c>NoGo</c>, which is
+    /// this door's actual rule and does not depend on the domain question.</para>
     ///
     /// <para><b>What the process does with <c>Undetermined</c>: it MEASURES rather than guesses.</b>
     /// Fail-open ("grant, lazy compile covers correctness") and fail-closed ("refuse, finding
@@ -545,22 +550,22 @@ public static class BuildProtocolDriver
             .Select(r => r!)
             .ToImmutableList();
 
-        return mesh.UpdateBuildAsHolder(
+        // 🚨 The chunk's close-out is a TERMINAL transition, so it states its outcome exactly as the
+        // root's does and lets the chunk's own hub apply it (#4708). It used to clear the claim
+        // fields itself through UpdateBuildAsHolder, whose "am I still the holder?" guard runs on a
+        // copy this hub does not own: a stale copy made the whole write a silent no-op, leaving the
+        // chunk locked to a builder that had finished with it and its release paths unrecorded.
+        return mesh.ReportBuildOutcome(
                 holder,
-                s => s with
-                {
-                    Status = failed.Count > 0 ? BuildStatus.Failed : BuildStatus.Ready,
-                    Error = failed.Count > 0
-                        ? string.Join("; ", failed.Select(f => $"{f.TypePath}: {f.Detail}"))
-                        : null,
-                    WrittenPaths = written,
-                    ClaimedBy = null, ClaimedAt = null, HeartbeatAt = null,
-                },
+                failed.Count > 0
+                    ? BuildOutcome.Failed(
+                        DateTime.UtcNow,
+                        string.Join("; ", failed.Select(f => $"{f.TypePath}: {f.Detail}")),
+                        written)
+                    // A chunk publishes no GO — the per-fingerprint Ready map is root-only — so it
+                    // reports a completion that carries only its release paths.
+                    : BuildOutcome.Completed(DateTime.UtcNow, go: null, writtenPaths: written),
                 chunk.Path)
-            // This close-out clears the claim fields itself instead of going through
-            // CompleteBuild/FailBuild, so it has to drop the chunk's LOCK explicitly — clearing
-            // ClaimedBy on the node alone would free the chunk in this cluster only.
-            .SelectMany(node => mesh.ReleaseBuildClaim(holder, chunk.Path).Select(_ => node))
             .SelectMany(_ => FinishActivity(
                 mesh, chunk.ActivityPath,
                 failed.Count > 0 ? ActivityStatus.Failed : ActivityStatus.Succeeded))
@@ -830,12 +835,51 @@ public static class BuildProtocolDriver
                     // Loud, and it NAMES what it could not reach. The bare TimeoutException this
                     // replaces said "no response ... → target Admin/Build" and was read as a
                     // compile problem for as long as anyone looked at it.
+                    //
+                    // 🚨 IT STATES WHAT IT KNOWS AND NOT THE READINESS VERDICT (#3404). This
+                    // sentence used to end "This is a refusal, not a pass: readiness stays refused
+                    // and the rollout holds the previous image." That was true when the
+                    // subscription was the ONLY door, and it became false the moment
+                    // WhenTheSubscriptionDoorIsShut started catching this exception: the verdict is
+                    // decided AFTER this line runs, by a door that may GRANT readiness on a durable
+                    // GO the transport could not reach. This line cannot know which, because it is
+                    // logged first.
+                    //
+                    // The cost of claiming it anyway was measured, and it is not cosmetic. The
+                    // red-log watcher captures only `fail:`/`crit:` — Error and Critical — and the
+                    // grant branch reports itself at WARNING, so it is never collected at all.
+                    // Every benign transport blip therefore published one red line asserting that
+                    // pods refused readiness and a rollout was held, with NOTHING in the pipeline
+                    // able to contradict it: on memex-cloud, 2026-09-19T06:32:23Z, one such line
+                    // reopened the issue about held rollouts on an image three framework builds
+                    // NEWER than the door that fixed them.
+                    //
+                    // On the identity that folds it (Doc/Architecture/LogWatchTriage, "One fault,
+                    // one ticket"): it is a hash over WHERE (the top application frame, or
+                    // (category, eventId) when the burst names none), WHAT (the exception type's
+                    // simple name) and WHICH (the masked EXCEPTION message — the logged message
+                    // only when there is no exception). This call passes the exception, so WHICH is
+                    // this literal and the wording IS load-bearing for folding. What the wording
+                    // does NOT do is separate the granting path from the refusing one: both carry
+                    // the same exception type from the same frame, so they share an identity either
+                    // way. The refusing path is distinguished by the door logging its OWN Error,
+                    // not by this one's identity. The change here is that the ticket a benign blip
+                    // opens now describes a transport fault instead of a held rollout.
+                    //
+                    // Nothing here reduces visibility. This stays an Error, it still names the node
+                    // and the attempt count, it still says the sweep never ran, and the three
+                    // branches downstream still state the verdict they actually decide — two of
+                    // them at Error, with the refusal in as many words.
                     var unreachable = new BuildCoordinationUnreachableException(
                         $"BuildProtocol: could not reach the build coordination node "
-                        + $"'{BuildNodeType.RootPath}' in {total} attempt(s) — the pre-warm sweep "
-                        + "never started, so this process has verified NOTHING about its NodeTypes "
-                        + "on this image. This is a refusal, not a pass: readiness stays refused "
-                        + "and the rollout holds the previous image. A restart re-attempts.",
+                        + $"'{BuildNodeType.RootPath}' in {total} attempt(s) — the subscription-borne "
+                        + "pre-warm sweep never started, so this process has verified NOTHING about "
+                        + "its NodeTypes on this image THROUGH THAT DOOR. The readiness verdict is "
+                        + "NOT decided here: the durable witness is asked next, and it may already "
+                        + "carry the GO for this framework. Whichever door answers says so on its "
+                        + "own line — read that one for the verdict. This line reports the transport "
+                        + "fault only, and the fault is real: the path from this process to the "
+                        + $"'{BuildNodeType.RootPath}' hub is broken.",
                         ex);
                     logger?.LogError(unreachable, "{Message}", unreachable.Message);
                     return Observable.Throw<T>(unreachable);

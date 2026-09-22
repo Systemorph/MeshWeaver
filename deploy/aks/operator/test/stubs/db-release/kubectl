@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for test/run-tests.sh — answers hosting-db-release's platform-layer preflight
+# so the DENIED-vs-ABSENT discrimination can be asserted without a cluster. Not a mock of kubectl:
+# what is tested is WHICH OF THE THREE ANSWERS the script gives — present, absent, or refused — and
+# that a Forbidden is never reported as an absence (MeshWeaver#4722).
+#
+#   $HOSTING_DB_STUB_FORBID  space-separated resources answering Forbidden   (crd storageclass nodes)
+#   $HOSTING_DB_STUB_ABSENT  space-separated resources answering NotFound, or — for nodes — the real
+#                            "selector matched nothing" shape: exit 0 with NO output
+#   $HOSTING_DB_STUB_ZONES   newline-separated zones the jsonpath read reports (default: two)
+#
+# Past the preflight it also answers the POST-INSTALL verification, so the credentials-Secret read
+# can be driven through its own three answers (MeshWeaver#4722): `secret` in FORBID answers
+# Forbidden, `secret` in ABSENT answers NotFound, and `password` in ABSENT is the third state the
+# old code could not say — the Secret EXISTS and carries no password key, which kubectl reports as
+# exit 0 with no output.
+#
+# The Forbidden text is copied from a real refusal, because the script discriminates on it:
+#   Error from server (Forbidden): nodes is forbidden: User "system:serviceaccount:memex-ops:
+#   hosting-operator" cannot list resource "nodes" in API group "" at the cluster scope
+set -uo pipefail
+forbid=" ${HOSTING_DB_STUB_FORBID:-} "
+absent=" ${HOSTING_DB_STUB_ABSENT:-} "
+
+deny() {
+  echo "Error from server (Forbidden): $1 is forbidden: User \"system:serviceaccount:memex-ops:hosting-operator\" cannot list resource \"$1\" in API group \"\" at the cluster scope" >&2
+  exit 1
+}
+
+case "$*" in
+  *"get crd "*)
+    case "$forbid" in *" crd "*) deny customresourcedefinitions ;; esac
+    case "$absent" in *" crd "*)
+      echo 'Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "clusters.postgresql.cnpg.io" not found' >&2
+      exit 1 ;;
+    esac
+    echo 'customresourcedefinition.apiextensions.k8s.io/clusters.postgresql.cnpg.io' ;;
+  *"get storageclass "*)
+    case "$forbid" in *" storageclass "*) deny storageclasses ;; esac
+    case "$absent" in *" storageclass "*)
+      echo 'Error from server (NotFound): storageclasses.storage.k8s.io "memex-db-premiumv2" not found' >&2
+      exit 1 ;;
+    esac
+    echo 'storageclass.storage.k8s.io/memex-db-premiumv2' ;;
+  *"get nodes"*jsonpath*)
+    case "$forbid" in *" nodes "*) deny nodes ;; esac
+    zones="${HOSTING_DB_STUB_ZONES:-}"
+    if [ -z "$zones" ]; then zones="westeurope-1
+westeurope-2"; fi
+    printf '%s\n' "$zones" ;;
+  *"get nodes"*)
+    case "$forbid" in *" nodes "*) deny nodes ;; esac
+    # exit 0 with NO output — what a real `get nodes -l workload=db` does when nothing matches.
+    case "$absent" in *" nodes "*) exit 0 ;; esac
+    printf 'node/aks-db-1\nnode/aks-db-2\n' ;;
+  *"wait cluster.postgresql.cnpg.io/"*)
+    echo 'cluster.postgresql.cnpg.io/pearl-db condition met' ;;
+  *"get secret "*)
+    case "$forbid" in *" secret "*) deny secrets ;; esac
+    case "$absent" in *" secret "*)
+      echo 'Error from server (NotFound): secrets "pearl-db-app" not found' >&2
+      exit 1 ;;
+    esac
+    # The Secret exists but has no `password` key: kubectl exits 0 and prints nothing.
+    case "$absent" in *" password "*) exit 0 ;; esac
+    printf 'c3VwZXItc2VjcmV0' ;;
+  *) echo "kubectl stub (db-release): unexpected invocation: $*" >&2; exit 1 ;;
+esac

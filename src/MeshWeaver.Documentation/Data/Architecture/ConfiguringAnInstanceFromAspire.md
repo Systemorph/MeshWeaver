@@ -144,6 +144,17 @@ Helm values are the paths in the values file `HelmValues.Render` produces (`conf
 is the portal ConfigMap). A dash means the field is the record's or the operator's alone — it
 configures no container.
 
+🚨 **The Method column names a `DeploymentRecordExtensions` transform, NOT an Aspire builder method,
+and the two surfaces are not the same size.** `MemexHostingExtensions` forwards the transforms an
+AppHost reaches by name — a majority of the table, not all of it: `WithRegistry`, `WithSecretMount`,
+`WithInlineEnv`, `WithDrain`, `WithHttpPort`, `WithStorageAccount` and a dozen more have a row here
+and no named method there. **That is not a gap in what an AppHost can set.**
+Every named facade method *is* `Configure(record => transform(record))` with one transform, and
+`Configure` — like the `AddMemex(name, configure)` overload — is public, so any row of this table is
+set as `.Configure(r => r.WithInlineEnv("LOG_LEVEL", "Information"))` whether or not a short spelling exists.
+A missing forwarder costs a caller the spelling, never the field, and `RendererParityTest` deliberately
+resolves this column against `DeploymentRecordExtensions` alone — it asserts nothing about the facade.
+
 | Method | Record field | Helm value | Config key |
 |---|---|---|---|
 | `WithHost(host, dnsZone)` | `Host`, `DnsZone` | `ingress` (host) — the DNS record is the operator's | — |
@@ -157,9 +168,11 @@ configures no container.
 | `WithGrafana(baseUrl)` | `GrafanaBaseUrl` | — | — |
 | `WithDatabase(database, server, username, host, port, connectionSecret)` | `Database`, `DatabaseServer`, `DatabaseUsername`, `DatabaseHost`, `DatabasePort`, `DatabaseConnectionSecret` | `config.memex_migration.MEMEX_*`, `config.memex_portal.MEMEX_*` | `MEMEX_DATABASENAME`, `MEMEX_HOST`, `MEMEX_PORT`, `MEMEX_USERNAME`, `MEMEX_JDBCCONNECTIONSTRING` (Helm only) |
 | `WithInClusterPostgres(enabled)` | `InClusterPostgres` | `postgres.enabled` | — |
+| `WithInClusterDatabase(release, instances, size, storageClass)` | `InClusterDatabase` | `database.release`, `database.name` — the database itself is a second release, see [InClusterDatabases](/Doc/Architecture/InClusterDatabases) | `MEMEX_HOST`, `MEMEX_USERNAME` — the release primary and its owner |
 | `WithImage(repository, tag, pullSecret, migrationRepository)` | `ImageRepository`, `PinnedImageTag`, `ImagePullSecret`, `MigrationImageRepository` | `portal.image`, `portal.imagePullSecret`, `migration.image`, `selfUpdate.registry` | — |
 | `WithPinnedImageTag(tag)` | `PinnedImageTag` | `portal.image` (the tag; the pin IS the roll) | — |
-| `WithUpdatePolicy(policy)` | `UpdatePolicy` | — (the self-updater reads the record) | — |
+| `WithUpdatePolicy(policy)` | `UpdatePolicy` | `config.memex_portal.SelfUpdate__DefaultPolicy` (seeds a NEW install's `Admin/UpdatePolicy`; the self-updater reads the record thereafter) | `SelfUpdate__DefaultPolicy` |
+| `WithUpdatePattern(pattern)` | `UpdatePattern` | `config.memex_portal.SelfUpdate__DefaultPattern` (seeds a NEW install's pattern under Continuous, e.g. `3.0.0-ci*`) | `SelfUpdate__DefaultPattern` |
 | `WithModuleUpdatePolicy(policy)` | `ModuleUpdatePolicy` | — (rendered into the portal's config) | `PluginCatalog__DefaultUpdatePolicy` |
 | `WithMinRollInterval(interval)` | `MinRollInterval` | `config.memex_portal.SelfUpdate__MinRollInterval` | `SelfUpdate__MinRollInterval` |
 | `WithAutoRecycleOnStaleBuild(enabled)` | `AutoRecycleOnStaleBuild` | `config.memex_portal.Modules__AutoRecycleOnStaleBuild` | `Modules__AutoRecycleOnStaleBuild` |
@@ -181,7 +194,7 @@ configures no container.
 | `WithAutoscaling(enabled, minReplicas, maxReplicas, cpuTarget, memoryTarget)` | `Autoscaling.Enabled`, `Autoscaling.MinReplicas`, `Autoscaling.MaxReplicas`, `Autoscaling.CpuTarget`, `Autoscaling.MemoryTarget` | `keda` | — |
 | `WithVolume(name, mountPath, size, claimName, storageClass, accessMode, create)` | `Volumes[].Name`, `Volumes[].MountPath`, `Volumes[].Size`, `Volumes[].ClaimName`, `Volumes[].StorageClass`, `Volumes[].AccessMode`, `Volumes[].Create` | `persistence`, `extraVolumes`, `extraVolumeMounts` (Aspire: a named Docker volume at the mount path) | — |
 | `ClearVolumes()` | `Volumes` | `persistence` | — |
-| `WithIngress(className, tlsSecret, annotations, sessionAffinity, affinityCookie)` | `Ingress.ClassName`, `Ingress.TlsSecret`, `Ingress.Annotations`, `Ingress.SessionAffinity.Enabled`, `Ingress.SessionAffinity.CookieName` | `ingress` | — |
+| `WithIngress(className, tlsSecret, annotations, sessionAffinity, affinityCookie, clusterIssuer)` | `Ingress.ClassName`, `Ingress.TlsSecret`, `Ingress.Annotations`, `Ingress.ClusterIssuer`, `Ingress.SessionAffinity.Enabled`, `Ingress.SessionAffinity.CookieName` | `ingress` | the issuer DEFAULTS to Let's Encrypt production, so a host with a TLS secret asks for its certificate without the call; the opt-out value is the literal none |
 | `WithPortalNext(enabled, image, replicas, portalOrigin)` | `PortalNext.Enabled`, `PortalNext.Image`, `PortalNext.Replicas`, `PortalNext.PortalOrigin` | `portalNext` | — |
 | `WithStartupProbe(periodSeconds, timeoutSeconds, failureThreshold)` | `StartupProbe.PeriodSeconds`, `StartupProbe.TimeoutSeconds`, `StartupProbe.FailureThreshold` | `probes.startup` | — |
 | `WithDrain(drainSeconds, shutdownMarginSeconds)` | `Drain.DrainSeconds`, `Drain.ShutdownMarginSeconds` | the pod's termination grace period | — |
@@ -197,6 +210,7 @@ configures no container.
 | `WithSignIn(provider, microsoftClientId, microsoftTenantId, googleClientId, linkedInClientId, appleClientId, enableDevLogin)` | `SignIn.Provider`, `SignIn.MicrosoftClientId`, `SignIn.MicrosoftTenantId`, `SignIn.GoogleClientId`, `SignIn.LinkedInClientId`, `SignIn.AppleClientId`, `SignIn.EnableDevLogin` | `config.memex_portal.Authentication__*` | `Authentication__Provider`, `Authentication__EnableDevLogin`, `Authentication__Microsoft__ClientId`, `Authentication__Microsoft__TenantId`, `Authentication__Google__ClientId`, `Authentication__LinkedIn__ClientId`, `Authentication__Apple__ClientId` |
 | `WithEmail(enabled, mailboxAddress, clientId, tenantId, useManagedIdentity, inboundEnabled, webhookBaseUrl, inboundForwardAddress)` | `Email.Enabled`, `Email.MailboxAddress`, `Email.ClientId`, `Email.TenantId`, `Email.UseManagedIdentity`, `Email.InboundEnabled`, `Email.WebhookBaseUrl`, `Email.InboundForwardAddress` | `config.memex_portal.Email__*` | `Email__Enabled`, `Email__MailboxAddress`, `Email__ClientId`, `Email__TenantId`, `Email__UseManagedIdentity`, `Email__InboundEnabled`, `Email__WebhookBaseUrl`, `Email__Inbound__ForwardAddress` |
 | `WithGitHubApp(clientId, installationId, installationOwner)` | `GitHubApp.ClientId`, `GitHubApp.InstallationId`, `GitHubApp.InstallationOwner` | `config.memex_portal.GitHub__App__*` | `GitHub__App__ClientId`, `GitHub__App__InstallationId`, `GitHub__App__InstallationOwner` |
+| `WithOpsGitHubApp(clientId, installationId, installationOwner, privateKeySecret, privateKeyConfigKey)` | `OpsGitHubApp.ClientId`, `OpsGitHubApp.InstallationId`, `OpsGitHubApp.InstallationOwner`, `OpsGitHubApp.PrivateKeySecret`, `OpsGitHubApp.PrivateKeyConfigKey` | — (never rendered into this deployment's own portal) | — (the CONTROL instance reads it ABOUT this deployment) |
 | `WithSocialLinkedIn(clientId)` | `SocialLinkedInClientId` | `config.memex_portal.Social__LinkedIn__ClientId` | `Social__LinkedIn__ClientId` |
 | `WithAi(configure)` | `Ai.OpenRouter`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light`, `Ai.Tiers.Utility` | `config.memex_portal.<Provider>__*`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
 | `WithOperator(enabled, ns, serviceAccount, image, environment)` | `Operator.Enabled`, `Operator.Namespace`, `Operator.ServiceAccount`, `Operator.Image`, `Operator.Environment` | `hostingOperator` | `Hosting__Operator__Enabled` |
@@ -274,6 +288,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `DatabasePort` | Database port | Datenbank-Port |
 | `DeploymentContent` | `DatabaseUsername` | Database user | Datenbank-Benutzer |
 | `DeploymentContent` | `InClusterPostgres` | Run an in-cluster Postgres (self-host only) | In-Cluster-Postgres betreiben (nur Selbst-Hosting) |
+| `DeploymentContent` | `InClusterDatabase` | The instance's own database release (in-cluster, CloudNativePG) | Eigenes Datenbank-Release der Instanz (im Cluster, CloudNativePG) |
 | `DeploymentContent` | `MigrationImageRepository` | Migration image repository — blank derives it from the portal's | Repository des Migrations-Images — leer leitet es vom Portal ab |
 | `DeploymentContent` | `HttpPort` | HTTP port | HTTP-Port |
 | `DeploymentContent` | `Resources` | Resources (RAM / CPU) | Ressourcen (RAM / CPU) |
@@ -291,6 +306,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `SignIn` | Sign-in | Anmeldung |
 | `DeploymentContent` | `Email` | Email | E-Mail |
 | `DeploymentContent` | `GitHubApp` | GitHub App | GitHub-App |
+| `DeploymentContent` | `OpsGitHubApp` | The App the control instance dispatches this deployment's pipelines as | Die App, als die die Kontrollinstanz die Pipelines dieses Deployments startet |
 | `DeploymentContent` | `Operator` | Hosting operator | Hosting-Operator |
 | `DeploymentContent` | `Registry` | Container registry this instance hosts (the public instance only) | Container-Registry, die diese Instanz betreibt (nur die öffentliche Instanz) |
 | `DeploymentContent` | `Telemetry` | Telemetry | Telemetrie |
@@ -401,6 +417,8 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `GitHubAppIdentity` | `ClientId` | GitHub App client id | GitHub-App-Client-ID |
 | `GitHubAppIdentity` | `InstallationId` | Installation id | Installations-ID |
 | `GitHubAppIdentity` | `InstallationOwner` | Installation owner | Inhaber der Installation |
+| `GitHubAppIdentity` | `PrivateKeySecret` | Key Vault object holding the PEM (ops identity only) | Key-Vault-Objekt mit dem PEM (nur Ops-Identität) |
+| `GitHubAppIdentity` | `PrivateKeyConfigKey` | Configuration key the control instance reads the PEM from (ops identity only) | Konfigurationsschlüssel, aus dem die Kontrollinstanz das PEM liest (nur Ops-Identität) |
 | `HostingOperatorSpec` | `Enabled` | Run the hosting operator here (the control instance only) | Hosting-Operator hier ausführen (nur die Kontrollinstanz) |
 | `HostingOperatorSpec` | `Namespace` | Operator namespace | Operator-Namespace |
 | `HostingOperatorSpec` | `ServiceAccount` | Operator service account | Operator-Dienstkonto |
@@ -408,6 +426,10 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `HostingOperatorSpec` | `Environment` | Job environment (KEY=VALUE) | Job-Umgebung (KEY=VALUE) |
 | `HostingOperatorSpec` | `Executor` | Executor: Job (in-cluster operator Job) or Actions (aks-ops.yml through the GitHub App) | Ausführung: Job (Operator-Job im Cluster) oder Actions (aks-ops.yml über die GitHub-App) |
 | `HostingOperatorSpec` | `Maintainer` | Maintainer: the one user id that may approve its own request | Maintainer: die eine Benutzer-ID, die den eigenen Antrag genehmigen darf |
+| `InClusterDatabaseSpec` | `Release` | Database release name — blank derives {namespace}-db | Name des Datenbank-Releases — leer leitet {namespace}-db ab |
+| `InClusterDatabaseSpec` | `Instances` | Instances (primary + standbys, one per zone) | Instanzen (Primär + Standby, eine pro Zone) |
+| `InClusterDatabaseSpec` | `Size` | Volume size per instance | Volume-Größe pro Instanz |
+| `InClusterDatabaseSpec` | `StorageClass` | Storage class — blank uses the platform's zonal Premium SSD v2 class | Storage-Klasse — leer nutzt die zonale Premium-SSD-v2-Klasse der Plattform |
 | `TelemetrySpec` | `OtlpEndpoint` | OTLP endpoint | OTLP-Endpunkt |
 | `TelemetrySpec` | `OtlpProtocol` | OTLP protocol | OTLP-Protokoll |
 | `DrainSpec` | `DrainSeconds` | Drain ceiling in seconds (termination grace) | Drain-Obergrenze in Sekunden (Beendigungsfrist) |

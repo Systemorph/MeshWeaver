@@ -267,8 +267,22 @@ public static class AreaErrorClassifier
     /// later" would hide it.</para>
     /// </summary>
     /// <param name="ex">The exception to classify; may be null.</param>
+    /// <remarks>
+    /// 🚨 <b>A stalled query PROVIDER counts too</b>, and it is not a widening of the rule above —
+    /// it is the same class arriving through a different door.
+    /// <see cref="MeshWeaver.Mesh.QueryProviderStalledException"/> is the query fan-in saying a
+    /// provider never delivered its Initial, so the read produced no snapshot: retryable, nobody's
+    /// defect to fix from the view, and it will not be replaced by a pushed frame. Without this arm
+    /// it falls through to the generic panel, which leaks a framework sentence naming provider
+    /// class names at an end user — in English, past the localized degrade copy — and logs the
+    /// whole thing as a rendering defect. It is deliberately NOT part of
+    /// <see cref="StorageFaults.IsTransientConnectFault"/>: that rule also drives
+    /// <c>RetryTransientConnect</c>, and a stalled provider must be FIXED, never resubscribed
+    /// behind the caller's back.
+    /// </remarks>
     public static bool IsStorageUnavailable(Exception? ex)
-        => StorageFaults.IsTransientConnectFault(ex);
+        => StorageFaults.IsTransientConnectFault(ex)
+           || ex is MeshWeaver.Mesh.QueryProviderStalledException;
 
     /// <summary>
     /// True when the failure is a routing <b>NotFound</b> — the target node/hub no longer exists

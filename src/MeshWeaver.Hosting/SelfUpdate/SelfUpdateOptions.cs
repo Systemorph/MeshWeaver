@@ -333,6 +333,33 @@ public record SelfUpdateOptions
     /// </summary>
     public string? DefaultPattern { get; init; }
 
+    /// <summary>
+    /// The shipped, fail-closed value of <see cref="AvailabilityAnswerBudget"/> — also what a
+    /// non-positive configured value falls back to, because a budget of zero or less would mean no
+    /// bound at all and a tick that never completes is the exact failure the bound converts into an
+    /// honest hold.
+    /// </summary>
+    public static readonly TimeSpan DefaultAvailabilityAnswerBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// 🚨 How long the release-availability gate and the roll selector may take to ANSWER before the
+    /// verdict becomes <c>Indeterminate</c> — which is a HOLD, never clearance.
+    ///
+    /// <para><b>This is a knob for a slow SHARE, and never a remedy for a slow READ</b> (#4742). The
+    /// budget was blown on memex.meshweaver.cloud because the gate's denominator re-enumerated every
+    /// framework-identity directory the published root has ever held, on every tick, against a store
+    /// that gains roughly sixty a day — so the public instance held every candidate and sat six days
+    /// behind <c>main</c> while CD kept sealing. That read is now incremental
+    /// (<c>SealedBundleFloorCache</c>); widening this value would have bought a longer freeze with
+    /// the same ending. It exists so an operator whose storage is genuinely slower than the fleet's
+    /// can say so in configuration (<c>SelfUpdate__AvailabilityAnswerBudget</c>, e.g.
+    /// <c>00:02:00</c>) rather than wait for a release — the hold stays a hold either way.</para>
+    ///
+    /// <para>Keep it shorter than the check cadence, so a stalled tick can never overlap the next
+    /// one.</para>
+    /// </summary>
+    public TimeSpan AvailabilityAnswerBudget { get; init; } = DefaultAvailabilityAnswerBudget;
+
     /// <summary>The full image reference for a portal version tag.</summary>
     public string PortalImage(string tag) => $"{Registry}/{PortalRepository}:{tag}";
 

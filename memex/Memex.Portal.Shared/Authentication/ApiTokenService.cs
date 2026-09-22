@@ -806,6 +806,25 @@ internal class ApiTokenService(
     /// global index entry (fire-and-forget). The user-scoped delete goes
     /// through <see cref="IMeshService.DeleteNode"/>; this is the
     /// authoritative removal and the only outcome the caller observes.
+    ///
+    /// <para>🚨 The emitted <c>bool</c> is <b>what this call removed</b>, not whether it
+    /// completed. <c>true</c> means a token node was there and is now gone; <c>false</c> means
+    /// nothing was removed because the path was ALREADY ABSENT
+    /// (<see cref="IMeshService.DeleteNode"/> answers <c>false</c> for that since
+    /// MeshWeaver#4668). Both are successes, and that is exactly why the value must not be
+    /// invented: a caller that can no longer tell "removed it" from "there was nothing there"
+    /// cannot detect a read that resolved the wrong path, which is what
+    /// <c>DeleteToken_ImmediatelyAfterCreate_RemovesTheNewToken</c> exists to catch.</para>
+    ///
+    /// <para>🚨 A REFUSAL is the third outcome and it FAULTS — it is not folded into <c>false</c>
+    /// (MeshWeaver#4707). A permission denial, a validator verdict or an unestablished check is a
+    /// statement about a token that is STILL THERE and still authenticates; reporting it as
+    /// "removed nothing" made the settings tab tell the operator the token "was already gone"
+    /// while it kept working. Only the two success cases are values; the failure stays a failure,
+    /// so every caller has to decide what to do with it rather than inherit a quiet <c>false</c>.
+    /// The three consumers each carry their own arm: the settings tab renders
+    /// <c>apiTokens.deleteFailed</c>, the expiry sweep logs at Debug and continues its
+    /// <c>Concat</c>, and the OAuth supersede path warns that the previous token stays live.</para>
     /// </summary>
     public IObservable<bool> DeleteToken(string tokenNodePath)
     {
@@ -813,13 +832,19 @@ internal class ApiTokenService(
 
         logger.LogInformation("Deleting API token at {Path}", tokenNodePath);
 
+        // 🚨 PASS THE VALUE THROUGH — never `.Select(_ => true)`. Before MeshWeaver#4668 an
+        // already-absent path FAULTED, so the Catch below produced the `false` and the projection
+        // was harmless. Now the same case EMITS `false`, and overwriting it with `true` would
+        // report a removal that never happened — and, worse, make every assertion that this call
+        // returned `true` vacuous, including the stale-read regression test that is the only thing
+        // watching for DeleteToken resolving a path the token is not at.
+        // 🚨 AND DO NOT CATCH — `.Do`, so the warning is kept and the fault still propagates
+        // (MeshWeaver#4707). The Catch that used to sit here returned `false` for EVERY fault,
+        // which merged "refused" into "was already absent": two outcomes that differ in the one
+        // way an operator cares about, since after a refusal the token is still there and still
+        // authenticates. It also made the settings tab's Failed arm unreachable by construction.
         var primary = nodeFactory.DeleteNode(tokenNodePath)
-            .Select(_ => true)
-            .Catch<bool, Exception>(ex =>
-            {
-                logger.LogWarning(ex, "DeleteToken failed for {Path}", tokenNodePath);
-                return Observable.Return(false);
-            });
+            .Do(_ => { }, ex => logger.LogWarning(ex, "DeleteToken failed for {Path}", tokenNodePath));
 
         // Chain the index-entry delete into the returned observable rather than
         // firing a separate Subscribe. The previous shape leaked a pending

@@ -88,6 +88,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Initialization Gates](InitializationGates)
 - [What the DataContext Init Time-Box Bounds](DataContextInitializationTimeout) — the 120 s box is nested three deep (data source → stream → type-source leg), a per-node hub's initialization is in practice ONE unbounded storage read, and the timeout now names the leg instead of guessing "a stuck NodeType compile", which cannot reach it
 - [Retiring an Activation](RetiringAnActivation) — a transient init fault retires instead of latching; the gate is failed BEFORE the dispose, because two drains cannot be ordered by a comment
+- [Stale State Until a Recycle](StaleStateUntilRecycle) — an activation serves what it bound and never re-reads it, so merged, sealed, rolled and restarted do not make a fix live at an address that is already up; what a `DisposeRequest` changes and what it provably does not
 - [Aggregating Providers](AggregatingProviders)
 - [Hub Disposal Model](HubDisposalModel)
 - [Transient Node Probes](TransientNodeProbes) — a probe hub's own address is not a node
@@ -97,6 +98,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Request a Hub Sends to Itself](SelfAddressedRequests) — node CRUD is issued on the hub that executes it, so routing and the reply leg cannot lose it; what that leaves, and why an empty queue at the timeout proves nothing when the handler answers from a detached observable
 - [Router Traffic Detection](RouterTrafficDetection) — the detector has two sites; the receiver names the two addresses, the origin names the call site, and a ratchet per tree keeps the seams adopted
 - [No Static State](NoStaticState)
+- [Open Vocabularies Are String Constants](OpenVocabulariesAsStringConstants) — a persisted or module-extended vocabulary is `const string`, never an `enum`; it stays open for anyone to extend with their own constants, and resolution is a durable chain of rule nodes rather than a switch
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
 - [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
 - [Removing Hand-Woven Concurrency Gates](RemovingHandWovenGates)
@@ -106,10 +108,13 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Reading & writing nodes
 
 - **Start here:** [CQRS — Queries vs. Content Access](CqrsAndContentAccess)
+- [Three Registries a Read Can Miss](ThreeRegistriesAReadCanMiss) — "the type is not registered" is three unrelated tables (the hub's type registry, the workspace's mapped collections, the reduce manager), so a guard that checks one while the read uses another passes having checked nothing; plus what a refusal and a recovery failure must NAME to be followed up
 - [An Answer Nobody Gave Is Not Cached](AnswerNobodyGaveIsNotCached) — a synced chain replays its FIRST frame for the life of the process, and a provider that completes without an Initial is counted as an empty one, so a cold moment used to become a permanent false "absent"; the frame now names who never answered and an unanswered frame is delivered but not kept
+- [The Query Fan-In's Stall Terminal](QueryFanInStallTerminal) — a provider that neither emits, completes nor errors used to starve the all-providers Initial gate for ever, with no error and nothing to grep; the merge now faults naming it, at a DERIVED rung strictly inside the permission fold's own budget, and every consumer that decides access already fails closed on it
 - [MeshNode Stream Cache](MeshNodeStreamCache)
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
+- [Expressing a Write](ExpressingAWrite) — the four shapes a mutation can take (C# lambda, JSON Patch + text splice, full entity, other), which context may use which, and the lowering that keeps the fold owner-side
 - [Data Access Patterns](DataAccessPatterns)
 - [Node Identity and Path Keying](NodeIdentityAndPathKeying) — `(namespace, id)` is the key and `path` is derived, so splitting a path positionally leaves the path identical while re-keying the node into a second row
 - [Workspace References](WorkspaceReferences)
@@ -129,12 +134,15 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Evicted-Stream Retention](EvictedStreamRetention) — a change-feed eviction parks a remote stream and `ReclaimIfUnheld` refuses to dispose one that carries no lease entry, so every unleased call site retains one stream, and two `sync/` hubs, per change event
 - [The Read Path Minted a Hub Per Read](ReadPathStreamMinting) — a live in-process census decomposed a replica's `sync/` hubs into their holders and pinned the growth on the read path: a constant configuration took `GetDataRequest` out of the stream cache, so every read left a permanent hub behind (six reads, six hubs, measured on the running portal)
 - [A Reference That Cannot Be a Key](AReferenceThatCannotBeAKey) — the same defect through the other door: a record whose member is a collection is compared BY REFERENCE, so the reference can never hit the stream cache at all; every one of a replica's 311 `sync/` hubs attributed to its minting stream, and the duplicates split into "cache bypassed" and "key unhittable" by comparing the reference objects on the heap. Carries the census script, because the last two were lost
+- [A Release Refused at the Source](AReleaseRefusedAtTheSource) — the other direction: why the population never DRAINS. An `UnsubscribeRequest` is the only thing that ends an owner-side `sync/` hub, and on the hub-teardown route the subscribing hub is in `DisposeHostedHubs` by construction when it is posted, so the teardown guard refused it at the source and the owner was never told; the `IReleasesRemoteState` marker and forwarding through captured parents to a surviving ancestor, preserving the fully qualified sender
 - [The Recursive-Delete Drain](RecursiveDeleteDrain) — the plan is a snapshot the removals may exceed, the completion check must include the ROOT, and the stage bound measures progress, not duration
+- [Deleting What Is Already Gone](IdempotentDelete) — an absent node already satisfies the delete's postcondition, so the delete succeeds and reports that it removed nothing; why checking existence first cannot close the race, and which absences are still failures
 - [Business Rules & Calculations](BusinessRules)
 - [Data Versioning Strategies](DataVersioning)
 - [Mesh Graph Architecture](MeshGraph)
 - [MeshNode Versioning](MeshNodeVersioning)
 - [Query Provider Parity](QueryProviderParity)
+- [A Failed Read Is Not An Absent Node](AFailedReadIsNotAnAbsentNode) — a store fault caught inside a query provider arrived downstream as a COMPLETE answer, so a read that failed reported a node that does not exist and a per-node hub was refused over a working node; the one provider-side verdict that closes it, why it folds into `SilentProviders` instead of adding a second decider, and the two sides a test of it must have
 - [Search Coverage and Refusal](SearchCoverageAndRefusal) — the `search` tool answered an unanchored query with a clean 0 for nodes it returned when anchored; it now refuses a query that names no partition and declares no fan-out, and every envelope carries `coverage.partitions` — the denominator a zero is read against
 - [Query Result Scoring](QueryResultScoring)
 - [Reading a Write Verdict](ReadingAWriteVerdict)
@@ -143,6 +151,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Repairing a Stale MainNode — When the Broken Field Guards Itself](StaleMainNodeRepair)
 - [Synced Mesh Node Queries](SyncedMeshNodeQueries)
 - [Update Validators See Typed Content](UpdateValidatorsSeeTypedContent)
+- [Content Is Validated Against Its Declared Shape On Write](ContentSchemaOnWrite) — content that cannot bind to its NodeType's declared content type was stored verbatim and then read as absent everywhere; the two shapes the write boundary refuses, the narrow rule that keeps legitimate writers landing, and the wire-boundary residue it does not close
 - [The /api/mesh REST Contract](MeshRestApiContract) — a 200 carries the verb's JSON document and nothing else; a sentinel answer is a non-2xx JSON envelope naming the sentence and its kind
 
 ### Storage & partitions
@@ -190,21 +199,28 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
 - [Invitation-Only Onboarding](InvitationOnlyOnboarding)
+- [The Redirect-Target Contract](RedirectTargetContract) — every `returnUrl` sink validates local-only, so every source must mint local; a wrong source is refused rather than followed, which costs the whole flow and logs nothing
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
+- [PublicRead and Denies](PublicReadAndDenies) — a Public/Anonymous deny under a `PublicRead` policy is honoured by the SQL read path and ignored by the C# evaluator; what that split exposes, and what each remedy costs
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
+- [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
+- [Protected Segments on a Public Partition](ProtectedSegmentsOnAPublicPartition) — a partition that is public except for one inbox cannot be expressed with `PublicRead`: the C# evaluator and the SQL projection resolve a deeper deny under it differently, so the segment reads by exact path and is absent from every listing. The grant shape both folds agree on, why a read cap is a blackout rather than a gate, and why the boot heal may never retire a deny it could not have written
+- [Secure Development Framework](SecureDevelopmentFramework) — how production and development are separated when the platform is delivered into a client's own environment: a ringfenced client estate, a narrow interface, a consultant environment that never touches production data, and who approves what
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
 
 ### Threads, activities & AI
 
 - **Start here:** [Thread Operations](ThreadOperations)
+- [Thread Supervision](ThreadSupervision) — a round ends stamped, whatever failed; the one death the hub cannot cover is its own, and the supervisor, dispatch pool and `Admin/Threads` queue page that cover it
 - [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
 - [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
 - [Activity Operations](ActivityOperations)
+- [The Communication Hub](CommunicationHub) — one participant registry, one message-type family (approvals, notifications, information requests) and the master-plus-copies fan-out that keeps every inbox query anchored to one schema
 - [Notifications](Notifications)
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
 - [Agentic AI](AgenticAI)
@@ -226,6 +242,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [User Interface](UserInterface)
 - [Blazor Data Binding](BlazorDataBinding)
+- [Editor Field Keys](EditorFieldKeys) — the node-content editor binds by JSON key, so a rename behind `[JsonPropertyName]` or a value the serializer drops discards what an admin set, silently and permanently
 - [Per-Tab Session State](PerTabSessionState) — a node is shared by every tab of one account, so "which page is this viewer on" and "navigate ME there" can never live on one
 - [Blazor Async](BlazorAsync)
 - [Available Controls](UserInterface/AvailableControls)
@@ -243,6 +260,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Catalog Action Identity](CatalogActionIdentity) — a retained click keeps its package when the catalog refreshes
 - [Link Previews](LinkPreviews)
 - [Public Web Presence](PublicWebPresence) — one public host, a body in the first response, a sitemap that descends to every page a stranger may open
+- [A Zero-Root Sitemap Is an Assertion](AZeroRootSitemapIsAnAssertion) — the sitemap projected the tri-state anonymous gate onto a bool because omitting ONE undecidable page states nothing; omitting every root produces a 200 that says the deployment publishes nothing, so an empty surface nothing decided is now 503 and a partial one is still published
 - [Local-First Client & Bootstrap](LocalFirstClient)
 - [PDF Export — one browser, two fidelities](PixelFaithfulExport)
 - [UI Extensibility](UiExtensibility)
@@ -250,10 +268,12 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Node types
 
 - **Start here:** [Adding a New Node Type](AddingANewNodeType)
+- [NodeType Supersession](NodeTypeSupersession) — a retired NodeType names its successor and how its content maps; an instance re-types itself when its hub next activates, which removes the migration script, converges LAZILY and therefore still needs a sweep, and requires the migrating activation to recycle itself
 - [Creatable Types](CreatableTypes) — what may be created under a node: the one provider the Create form asks, what a parent NodeType restricts, what it extends, and why a parent that declares nothing must never narrow the menu
 - [Retiring a NodeType](RetiringANodeType) — the prune keeps the definition and deletes its sources
 - [Dangling NodeTypes](DanglingNodeTypes) — a node whose type resolves to nothing, and the two write paths that allowed it
 - [Node Type Compilation](NodeTypeCompilation)
+- [Mount-Relative Source Queries](MountRelativeSourceQueries) — a cross-type `shared=@…` source reference is authored mount-relative, so the resolver asks for the mount-anchored spelling too; resolved verbatim under an import prefix it matched nothing while the type's own rebased query did, so the merged set stayed non-empty, no emptiness check could fire, and Roslyn reported a genuine-looking `CS0246` about present content. Also: the four `CS0246` shapes a reader has to tell apart from the source-discovery block
 - [Who Owns a NodeType Member](NodeTypeMemberOwnership) — the repo owns the definition, the mesh owns the compile state, and the mask that encodes it was pinned in ONE direction: four runtime-state members were missing from it, one spelled outside the naming convention meant to catch them. The three guards, and why a member the mesh writes may still have to stay unmasked
 - [Compile Cache Input Freshness](CompileCacheInputFreshness) — verify the captured input before reusing a DLL that finished after a source edit
 - [Execute-Time Interlock](ExecuteTimeInterlock) — a build proven stale is never armed
@@ -261,6 +281,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
 - [Toolchain Re-evaluation Lane](ToolchainReevaluationLane) — why a toolchain change stopped rebaking the world
 - [The Dependency Record Floor](DependencyRecordFloor) — a record's module entry says "I need at least X", not "I need exactly this build"; the MVID pin that could not converge because Roslyn hashes absolute source paths, the two-replica recompile ping-pong it produced, and the four things the floor deliberately does not relax
+- [Reading a Module's Stamp](ReadingAModuleStamp) — reading ONE assembly-level attribute through reflection resolves the type of ALL of them, so a module with a private dependency killed the version read with a nine-frame reflection stack naming nothing; the metadata read that fixes it, and the measurement (23 of 24 declared modules carry a module attribute — `MeshWeaver.Maps` carries none) that says module-ness is a deployment fact, not a property of the bytes
 - [An Unloadable Build Is Never A Silent Default](AnUnloadableBuildIsNeverASilentDefault) — a recorded build that does not LOAD in this process used to bind the mesh default configuration for the grain's whole life; the always-activated Hosting/PlatformBuilds hub that ran twenty hours without its inbox, fleet watch and build queue while its record read Ok, and the two hypotheses (a missing module, "a restart activates it") the measurements refuted
 - [Producer Determinism of the Dependency Record](ProducerDeterminismOfTheDependencyRecord) — the same content must stamp the same record however the producer reached its bytes; the disk-cache hit that shipped a weaker guard, and why the digest is persisted beside the bytes rather than recomputed
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes
@@ -270,6 +291,8 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Install-Time Prebuilt Adoption](InstallTimePrebuiltAdoption) — the only lane that serves a package installed AFTER boot, and the four answers its zero must keep apart because a silent non-adoption reads exactly like a successful one
 - [Adoption and the Sweep Count Different Things](AdoptionAndTheSweepCountDifferentThings) — the cold boot that adopted 78 prebuilt assemblies and then reported 5, with nothing wrong on the share: what each instrument counts, why the sweep could not see its own process's writes, and the node-version ordering that keeps the fix from becoming a stale serve
 - [A Census That Counts Must Name](ACensusThatCountsMustName) — the one past-RLS census counted a permanently-broken NodeType and dropped its path one call before publication, so its output read as clean; where the identity was lost, what a PUBLIC census may name (the partition, never the node title), and how to tell a fix that is merged from a fix that is running
+- [Dynamic Content Type Registration](DynamicContentTypeRegistration) — a dynamic NodeType's content CLR type registers only as a side effect of one of its INSTANCES activating in this process, so a type this replica adopted rather than compiled is untypeable here with a perfectly usable assembly, a clean bake and a clean census; the instance-count discriminator, the disjoint instrument sets that falsify “the bundle was declined”, and why closing it from the degrade seam drives an adopted type into a compile and re-stamps a record the whole deployment shares
+- [Denied Is Not Absent](DeniedIsNotAbsent) — a Forbidden that a read discards comes back as the thing being MISSING, so the operator announces a node pool, an Ingress or a ConfigMap is absent when it was merely not permitted to look; the three answers a read owes its reader, why fixing the sites a report names does not sweep the defect, and the gate that makes the next one red
 - [Import Write Ordering](ImportWriteOrdering) — type before instance, and what a foreign type does
 - [Language Services](LanguageServices)
 - [Extensible Defaults](ExtensibleDefaults)
@@ -289,11 +312,13 @@ Each theme starts with its introductory page, followed by related architecture t
 - **Start here:** [Plugins](Plugins) — node repos from git, no NuGet
 - [Plugin Manual](PluginAuthoring) — author · publish · install · own registry
 - [Plugin Registry](PluginRegistry) — memex re-serves plugins over REST
+- [The Plugin Registry Index's Per-Request Cost](PluginRegistryIndexCost) — the authenticated bundle index evaluates entitlement per package and queries the mesh per request (12–19 s to first byte for 8.7 KB), and that one cost reads as two unrelated incidents because it meets a 10 s auth budget and an unbounded assembly stage; why widening a client budget moved the symptom instead of fixing it
 - [Webhook Inbox](WebhookInbox) — external services deliver into {target}/_Inbox
 - [Plugin Packaging](PluginPackaging) — bundles, the framework identity, and the `Release` node that links a release to its assemblies per architecture
 - [Install Readability](InstallReadability) — the two doors an install can open, and the cover-grant deadlock detector
 - [A Module's Static Web Assets](ModuleStaticAssets) — a module's CSS/JS ride the bundle in their own folder and must land MODULE-RELATIVE beside the entry assembly; anything that copies only the closure loads perfectly and 404s every asset behind one Debug line
 - [Static Repo Import](StaticRepoImport)
+- [Adopt Then Sync, Per NodeType](AdoptThenSyncPerNodeType) — the seal is a REPOSITORY fact and adoption is a per-NodeType one, so landing a Space on the sealed commit is not enough: an adopted type's sources wait for the bundle built from them, the rest of the Space imports, and a partially-held Space keeps the commit it genuinely holds
 - [The Sync-Ref Contract](SyncRefContract) — an import of a repository whose bundles this instance runs lands on the commit they were baked from, whoever asked — a person's Update included since 2026-09-17; every other repository reads a commit CI proved, or a branch tip a person asked for; resolving the ref twice put sources no build had compiled onto two production portals for five hours
 - [Node Type Compilation](NodeTypeCompilation)
 - [The Platform Image's Closure](PlatformImageClosure) — the image IS the reference set every satellite's modules compile against; the two invariants, and why every consumer used to discover them by failing to compile
@@ -305,6 +330,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [One Partition, One Bookkeeping](OnePartitionOneBookkeeping) — a partition written by BOTH a GitSync source and the registry installer keeps two independent records of one mesh; the seal reconcile rewrites the content and the next registry delta is computed against a record that stopped describing it, so `Store` on memex became a mix of 1.10.3 and 1.11.1 and `Store/Catalog` parked on `CS1061`. The invariant, why resetting the record or diffing the mesh both produce a ping-pong, and the two gates
 - [CI Content Bake](CiContentBake)
 - [The In-Mesh Warning Standard](InMeshWarningStandard) — in-mesh C# is the only C# no `-warnaserror` build ever sees, and the bake was discarding its warnings too; the two shrink-only ratchets (real warnings, and CS1591 on its own), why the RUNTIME compile must stay lenient — a parked NodeType refuses readiness and stalls a rollout — the three codes the platform itself was emitting into content it does not own (850 raw occurrences → 375), and the observe-only default that lets a repo adopt without going red
+- [A Gate Must Compile the Same Program](AGateMustCompileTheSameProgram) — the pre-push NodeType gate compiled each source file on its own while the mesh concatenates them into one unit, so a nullable-context directive in the first file (in force in the last) reached nothing and the gate was blind to diagnostics the bake then filed under the NodeType's name with no file and no line; what the unit boundary decides, the culture-sensitive `StartsWith` that a naive reproduction gets wrong, and the parity test that caught it
 - [Bundle Delivery Stages](BundleDeliveryStages) — the four independent stages between a merge and a portal serving prebuilt bytes (write · compose · select · deliver), which of #3461 / #3732 / #3768 / #3583 owns each, the instrument that answers for each — and why a reading taken at one stage is not evidence about another
 - [Framework Identity Churn](FrameworkIdentityChurn) — the identity moves on every core COMMIT, not on every content change (43 merges, 5 touching the full-MVID set, ≥18 identities in 24h); the commit sha compiled into `AssemblyInformationalVersion` is why, the falsification test that refuted the local fix (0 of 22 control, 22 of 22 and 21 of 21), and the four costed options with every runner-hour labelled as arithmetic
 - [Prebuilt Bundle Retention](PrebuiltBundleRetention) — the sweep that prunes what CI bakes: where it is registered (and why "zero callers" was measured twice and wrong both times), the deletion default that is `true` in code and `false` in the chart, the report that names its denominator, and the pinned satellite gate the protected set cannot see
@@ -351,6 +377,11 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Content Sync Visibility](ContentSyncVisibility) — a Space whose assets the transport refuses says so, on the Space itself, naming the file, its size and the limit
 - [Out-of-Band Content Transfer](OutOfBandContentTransfer) — a content file too large for one delivery travels through the content store behind a content-addressed handle, never on the message
 - [An Unreachable Store Is Not a Refusal](StoreUnreachableIsNotARefusal) — one classification, three consumers; reporting an availability failure as a verdict is how a retried create becomes a duplicate
+- [A Name That Does Not Resolve Is Not Transient](ANameThatDoesNotResolveIsNotTransient) — the default pipeline retried a hostname that does not exist three times and logged each attempt at Error, so a URL in somebody's data manufactured a platform incident; the one socket error that is permanent, why the breaker must not count it either, and the control that keeps a nameserver hiccup retryable
+- [A Departed Silo Is Not a Delivery Defect](ADepartedSiloIsNotADeliveryDefect) — two incidents (191 and 3,959 occurrences) read as two defects for four weeks and are ONE root; which predicate sees which of the four rejection shapes, why the cure is the classifier and never a retry, and why an incident fingerprinted on a dependency's logger counts attempts rather than verdicts
+- [A Timed-Out Delivery Is Still Held by the Callee](ATimedOutDeliveryIsStillHeldByTheCallee) — a response timeout is a caller-side give-up timer, so the six-retry ladder sized for an instant rejection re-sent seven copies of every slow delivery and held a dispatch slot for 3 m 40 s; the three-predicate ladder that separates "is this transient" from "may we send it again", and the one caller that keeps the wider answer because it is idempotent
+- [The Subsystem in the Title Is Not the Cause](TheSubsystemInTheTitleIsNotTheCause) — six tickets named two Orleans subsystems and grouping them on that was wrong three times; the three questions to ask per ticket, the pod-hub address suffix that is a process id rather than an operation id (which moved one investigation to the other side of the call), the two `memory-streams` tickets whose live traffic has different owners, and the precondition for folding a symptom into its root
+- [Reading a Routing Saturation Report](ReadingARoutingSaturationReport) — the `[ROUTE]` back-pressure line is a gauge over three different facts, and for most of the tickets it produces the causal arrow runs the other way; which number answers which question, the two opposite pool states that printed the same number because the report showed the one gauge blind to the cause it named, and the oldest-leg age that separates load from a leaked slot in a single sample
 - [A Bulk Create Compensates Per Node](BulkCreateCompensation) — every row is durable before any post-creation handler runs, so one critical failure left the failed node AND every node after it, whose handlers never ran and which nothing can tell apart from a success; what the rollback removes, why it walks backwards, and the measured reason the stop is a fault and not a `Take(1)`
 - [Undetermined Is Not No](UndeterminedIsNotNo) — a read that did not answer is a THIRD state; the second door that shared the first door's failure domain, and the rule for what a gate does with "I could not determine"
 - [Reading a Silo Eviction](ReadingASiloEviction) — a heartbeat newer than the suspect votes is not proof the silo was healthy; the control arm that tells a correct eviction from a false positive
@@ -361,7 +392,11 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
 - [Guards and Unknown States](GuardsAndUnknownStates)
 - [Mesh Admission](MeshAdmission)
+- [Disposed Scopes and Dying Hubs — one symptom, five roots](DisposedScopeAndDyingHubs) — every `ObjectDisposedException` on an Autofac `LifetimeScope` looks identical in a log and comes from one of five unrelated roots; the discriminators, which are fixed, and the swept inventory of deferred resolve sites
+- [Enumerating from a Survivor](EnumeratingFromASurvivor) — a recycle derived its work THROUGH the hub it was tearing down, so only the synchronous prologue ran while that hub was whole and every asynchronous leg after it resolved from a closed scope; the cascade recycled 0 addresses while reading as its own success. Hoisting the resolve — the correction for this family — does NOT fix it when the service is scoped PER HUB, which is the companion clause to R3
+- [A Stale Index Row Confirms Itself](AStaleIndexRowConfirmsItself) — a torn-down partition leaves index rows behind, and the listing that would disprove one is answered by the same index, so absence is unaskable rather than merely unproven; the storage providers are the only independent witness, the answer is worth nothing unless it is asked BEFORE the work, and fail-open is the only safe direction
 - [Mesh Lifecycle — Build Up & Tear Down](MeshLifecycle)
+- [Ordered Route Channels — the FIFO Key Is (Destination, Stream)](OrderedRouteChannels) — a stream-routed address is a multiplexer, so keying the router's ordering FIFO on the destination serialised a whole process's data-sync traffic into one lane with one in-flight cross-silo grain call; 62 of 64 dispatch slots queued behind one cache hub for 1.5 h while the peer pod's local lane read as load, and the identity that separates the streams was already stamped on the envelope
 - [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
 - [The Portal Heap Is Hubs](PortalHeapIsHubs)
 - [SignalR Mesh Participant — joining the mesh over a WebSocket](SignalRMeshParticipant)
@@ -381,11 +416,14 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Detached Response Continuations](DetachedResponseContinuations) — why a `hub.Observe(...)` continuation runs on the RESPONDING hub's action block, what that cost on the mesh's one node-CRUD hub, and the six invariants that make the hop an opt-in rather than the default
 - [Reading a Disposal Stall Verdict](DisposalStallVerdicts) — what each field of the disposal snapshot actually measures, the three that were read as evidence while measuring nothing, and the verdict hole that sent 47 reports to children that were not the problem
 - [A Failure Report Answers Its Own Instruction](AFailureReportAnswersItsOwnInstruction) — a report that says "find why this hub disposed" while holding the answer, and an outstanding-work field that rendered "not measured" identically to "none"
+- [A Fault Does Not State the Verdict](AFaultDoesNotStateTheVerdict) — a fault logged at Error claimed the outcome a later branch decides, so once a recovery path was added every benign blip filed a red line asserting held rollouts; why the watcher's Error-and-Critical capture rule makes that claim the permanent record, and why the issue could never stay closed
+- [One Log Site, Many Terminals](OneLogSiteManyTerminals) — an incident fingerprint keys on the message, so it SPLITS one log site across tickets and FOLDS unrelated roots into one; how to group a cluster of timeout tickets on the innermost TERMINAL before fixing any of them, why a count whose log statement precedes the recovery branch establishes neither breakage nor a fix, and the three reasons a frozen `lastSeen` is not the fix working
 - [Ambient Test-Host Hangs](AmbientTestHostHangs) — what decides whether a killed test host can be diagnosed at all, and the readings of it already falsified
 - [In-Mesh Tests and the Seal](InMeshTestsAndTheSeal) — a Tests area no required context executes is a latent trunk red the seal detonates fleet-wide; how to measure a gate before requiring it
 - [Cancel and Join Are Two Questions](CancelAndJoinSequencing) — a deadline that asks work to stop and a deadline that waits for it to have stopped must not share one clock
 - [Collection-Scoped Test Fixtures](CollectionScopedTestFixtures)
 - [Debugging Native Crashes (core dumps)](DebuggingNativeCrashes)
+- [Peer Death Is Dated by Its Exception Class](PeerDeathIsDatedByItsExceptionClass) — a frozen silo and a dead silo raise different Orleans exceptions, so the changeover between them timestamps the crash; how one pod's SIGSEGV became three issues, and how to get a dead pod's own account out of Loki
 - [Reading the Memory Watchdog](ReadingTheMemoryWatchdog) — a step with no mesh class active is a plain test class, a ramp across mesh classes is retention; the guard states what it measured, never a cause
 - [Debugging Postgres in Prod / Test](DebuggingPostgres)
 - [Decentralised Tests](DecentralisedTests)
@@ -393,6 +431,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [In-Mesh Build and Test](InMeshBuildAndTest)
 - [Orleans Test Routing Pattern](OrleansTestRoutingPattern)
 - [Reading CI Signals](ReadingCiSignals)
+- [The Canonical Node-Test Harness](CanonicalNodeTestHarness) — `run-node-tests.py` has one home and the satellites launch it; how three vendored copies broke silently and differently the day the compile model changed, and why the one-line revert is measurably not the fix
 - [Which Attempt an Artefact Belongs To](ArtifactAttemptAttribution) — a run holds every attempt's artefacts and the API names no attempt; how the required check consolidated attempt 1 over attempt 2's green and could not be re-run to green
 - [Workflow Permission Pairing](WorkflowPermissionPairing) — a job-level `permissions:` in a shared lane is a requirement on every caller; an unpaired one is `startup_failure` with zero jobs
 
@@ -402,21 +441,28 @@ Each theme starts with its introductory page, followed by related architecture t
 - [AKS](DeploymentAKS)
 - [Database Migration Procedure](DatabaseMigrationProcedure) — the schema moves before the image, every roll; the 2026-09-03 wedge behind a 200, the recovery, and why a migration deadlocks under load
 - [Container Apps](DeploymentContainerApps)
+- [Hybrid delivery — GitHub for code, Azure DevOps for the deploy](HybridGitHubAzureDevOps) — for organisations whose change management lets ONLY an Azure DevOps pipeline touch the cluster: the GitHub App that merges to main is the App that triggers the deploy, one Azure Pipelines run per SEALED image set (never per push), the record selects the executor, and the pipeline ends with one signed report — same record, same action, a different executor
+- [In-cluster databases](InClusterDatabases) — each instance's PostgreSQL as its own Helm release: a CloudNativePG Cluster on a dedicated `db` node pool, primary and standby in two zones; why neither the chart's bundled Postgres nor the shared Flexible Server serves a client instance
 - [Local Dev Workflow](LocalDevWorkflow)
 - [Onboarding a New Environment](OnboardingNewEnvironment)
 - [Unclaimed Control-Plane Requests](UnclaimedControlPlaneRequests) — an InstanceAction at version 1 with an empty log means "queued", "nobody is listening" and "the operator died holding it" in the same bytes; the 2026-09-10 measurement, the `Ops/Status` staleness that DOES discriminate, and the acceptance signal that does not exist
 - [Release & Self-Update Strategy](ReleaseStrategy)
+- [Release Channels](ReleaseChannels) — a channel is a named, moving pointer to an immutable release; `latest` is derived and only `stable` is promoted, and a channel names what to SELECT while the selection always resolves to an immutable id that is what gets pinned, recorded and run
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
 - [The Self-Update Registry Credential](SelfUpdateRegistryCredential) — which plugin-registry key may be presented to a container registry: a DECLARED pairing, never host equality or name resemblance; an absent declaration refuses
 - [Self-Update on the Control Lane](SelfUpdateControlLane) — detection stays on the instance, the apply is one signed event to the control instance, the chart's one declaration binds the self-patch Role to the poller's intent; no portal holds a credential that changes the cluster
 - [The Continuous Delivery Contract](ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick
+- [Why the Fleet Stopped Rolling Itself](SelfUpdateFreeze) — the September 2026 measurement: a frozen `heldReason` is history, not a hold; a policy record that lost its own policy; "waiting for an approval" is not a freeze; and the seal that a cross-repo pair skipped
 - [Reading a Bake Publication Receipt](BakePublicationReceipt) — the four target outcomes and what each licenses; the one that had no word rendered "already everywhere" as "reached nothing", and two readers acted on it
 - [CD Reconciles the Plugins Seal](CdReconcilesThePluginsSeal) — a set seals on its trio alone, so it can seal with no `plugins` publication for its framework identity; why the reconciler REPAIRS that rather than the seal forbidding it, and the three probe answers of which only one licenses a re-attempt
 - [The Self-Update Schema Wall](SelfUpdateSchemaWall) — every schema-bumping release is un-takeable by self-update, the stall is invisible, and a promoted tag is not a deployable tag
 - [Bake Identity Mismatch](BakeIdentityMismatch) — why a green CD can publish a bake no portal adopts, and the one rule that keeps two images of one commit on one address
 - [Release Availability Gates](ReleaseGates) — one predicate; never roll or build into a release a package cannot survive
+- [Adding a Data Sync Needs a Global Admin](DataSyncApproval) — a sync is a standing grant, not a one-off action: it keeps moving data indefinitely under an identity nobody re-examines, so the review at creation is the only one there will be. The trigger list, what is explicitly NOT covered, why a credential request instead of a proposal is the anti-pattern, and the one finding that blocks rather than being filed
+- [Policy Not Prose](PolicyNotProse) — never hard-code a decision's date or author into source, a comment, an XML doc comment or doc prose; a policy is a record with a value and an in-force date and everything else cites its id. The register, what counts as evidence rather than a policy marker (and so stays), the review finding, and why it is forward-only with no backward migration
+- [Issue Taxonomy and the Release Readiness Gate](IssueTaxonomy) — four axes on every issue, and the one that is a gate: `sev:B` and `sev:H` must both be zero to cut a release; why only bugs carry a severity, why a zero is only trustworthy when its query's coverage is, and why the ledger stays in GitHub rather than being mirrored
 - [Combo Gate Wiring](ComboGateWiring) — the roll consults the combo verdict; Red refuses, and "could not find out" is neither
 - [Roll Selection](RollSelection) — completeness as a SELECTION criterion: pick the latest release that ships all of an environment's plugins, refuse an empty denominator, and never roll backwards
 - [Release Process](ReleaseProcess)
@@ -424,31 +470,38 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Repository Dependency Direction](RepositoryDependencyDirection) — the platform never depends on a plugin repo; the inventory of every edge that still does
 - [The Cross-Repo Pair Gate](CrossRepoPairGate) — a removal here reds a plugin repo's trunk hours later; the deleting half lands LAST
 - [Platform Script Resolution](PlatformScriptResolution) — a repo runs the platform's gate scripts, never a copy; the local runner must resolve the ref the LANE resolves, which is per-script, so a loader copied from another repo refuses on every call (one repo demands one lane sha, another pins four and the pin gate calls that consistent)
+- [A Stale Run Listing Is Not a Broken Main](StaleRunListingRefusals) — GitHub serves the platform resolver a weeks-old page of workflow runs, per call and with no error (three measured); why only one of the two listings can be checked, why neither retries, and the refusal wording that sent two readers at a `main` that was fine
 - [Keeping the Platform Source Pin Current](PlatformRefBumpLane) — a satellite pins WHICH core commit its `src/` compiles against, the image set had a mover and the source ref had none, and a bump PR opened with `GITHUB_TOKEN` is a PR no CI ever runs
 - [Transitional Allow Entries](TransitionalAllowEntries) — an allow entry is written for ONE merge and expires with it by mechanism; the instruction that was ignored once cost every C#-touching PR in the fleet ~40 minutes of red
 - [Pinned Image Retention](PinnedImageRetention) — registry retention deletes what CI pins, and republishing frequency is what destroys a pin rather than what protects it; the guard that names a dead pin, and the retention design that stops the deletion
 - [Artifact Retention Interlock](ArtifactRetentionInterlock) — the one mechanism behind the four retention issues: cleanup may delete only what a COMPLETE and FRESH consumer inventory shows to be unreferenced. Three axes (the third asks each installation what it is RUNNING, because a committed pin is a proxy that drifts), the denominator every run must state, the TAG lock a manifest lock does not provide, and the instrument control that replaced an assertion about the fleet
-- [CI Artifact Storage](CiArtifactStorage) — where CI's big build outputs live: the measured $260/month GitHub Actions storage bill, the ONE artifact family that is read across runs (and why most of its bytes are duplicates of themselves), the 66.8 GB the fleet uploaded for a reader that was never built, the object-store seam and the degrade rule that keeps the public repo working, and the two Azure grants the migration still needs
+- [CI Artifact Storage](CiArtifactStorage) — where CI's big build outputs live: the measured $260/month GitHub Actions storage bill and the org budget that decides whether a private repo can upload at all, the ONE artifact family that is read across runs (and why most of its bytes are duplicates of themselves), the 66.8 GB uploaded for a reader that was never built — and the stale checkout that made "nothing reads this" wrong, why an EXPIRED artifact is still billed and still deletable, the object-store seam and the degrade rule that keeps the public repo working, and the grants and the one variable the migration still needs
+- [PR Artifacts on Our Infrastructure](OwnPrArtifacts) — moving PR compute to our runners did not move its artifact BYTES: the named-artifact transport (`store:` on the shared upload/download actions, a declared store that cannot be used being an error and never a quiet fall back to GitHub), the partial-rerun selection rule, and the four rollout gates that separate "the transport exists" from "a private PR uses it" — including why queue admission is not a native build worker
 - [Fleet Registry Retention](FleetRegistryRetention) — the same question asked of `cr.meshweaver.cloud`, the fleet's OWN registry and the default for new instances: what deletes today (nothing — enumerated, with the one row that is a maintainer read), and why a registry with NO LOCK needs a stricter rule than the ACR rather than the same one, because there the derivation IS the whole safety margin
 - [The Image Tag Contract](ImageTagContract) — which image tags the promotion actually publishes, why the portal has no `latest`, and the two-writer history of the one that had no producer at all: retired lane, then retention, and every check green throughout
 - [Pin Set Consistency](PinSetConsistency) — every pinned digest EXISTING is not every pinned digest naming the same BUILD; the invariants that red a half-moved set, three written deliberately weaker than the obvious version, and the falsification that found the vacuity trap inside the gate itself
 - [Duplicate Keys in Workflow YAML](WorkflowDuplicateKeys) — a duplicate mapping key is accepted silently and the LAST one wins, so a pin can move in the diff and not in the job; the near-miss, why every existing gate was blind, and the guard that names the file, the key and both lines at the first job
 - [Image Pair Skew](ImagePairSkew) — a promoted image pairs a core commit with a Plugins head resolved hours later; each half green, the pair never run (the 2026-09-03 sign-in outage)
+- [The CD Ledger Records a Failure, Not a Cadence](CdLedgerRecordsFailures) — 109 of 109 `incomplete image set` alarms recorded a delivery that had not failed: the pair tag that cannot be satisfied because Plugins merges faster than a publish takes, the minutes before a publisher even exists, the registry fingerprint that separates an attempt from an absence — and the rebuild-cadence decision this deliberately leaves open
 - [The Merge Queue](MergeQueue) — one entry built at a time so nothing churns, and a steward that re-queues an ejected PR on evidence and never re-runs
+- [Review Findings Answered](ReviewFindingsAnswered) — a pull request reads red until the automatic review has landed and each thread it opened has a person's reply; the reviewer's two logins, the quota refusal posted as a review, and the maintainer-only waiver
 - [Carving Projects Out Of Core](CarvingProjectsOutOfCore) — what a SOURCE move costs and what it does not
 - [Red-Log Watching & Ticketing](LogWatchTriage) — every `fail:`/`crit:` becomes exactly one triaged issue
 - [Log Entries Are a Query Result, Not a Feed](LogEntriesAreAQueryResult) — `Hosting/LogEntry` is the output of one `Logs` action, so an absence in it is evidence of nothing; the denominator printed on every row, the level that lives on a different node, and how to ask for a line that carries an answer
+- [Telling a Stalled Pipeline From a Dead One](TellingAStalledPipelineFromADeadOne) — the incident store carries three clocks and `lastModified` is triage bookkeeping, not ingestion; which query reaches detection and which reaches delivery (and the three that error), the normal-lag-then-silence signature that means dead rather than behind, and why a missing pipeline self-finding is evidence of death rather than health
 - [Verifying Chart Values](VerifyingChartValues) — a key can be set, reach the render, and still not be read; why the obvious gate was vacuous for the one component it existed to guard, and the binary check that closes it (the drain that erased every namespace's log history)
 - [Measuring a Live Portal Read-Only](MeasuringALivePortalReadOnly) — `/health` first (public, past RLS, a different replica each call), the incident store, the four break-glass instruments, and why an absence needs a coverage fact before it counts as evidence
 - [Chart Ownership and the Runner Pool](ChartOwnershipAndRunnerPool) — why the chart's gate is here, what a relocation must carry, and why path-filtering it is unsafe
 - [Sharding the Node-Repo Gate](NodeRepoGateSharding) — a cap cut reports as `cancelled`, so the fan-out that removes it, and the fold that keeps ONE required context and ONE gate log
 - [Applying Is Not Rolling Out](ApplyingIsNotRollingOut) — helm applies, the caller observes; the fixed fifteen-minute `--atomic --wait` that reverted a correct upgrade mid-startup-gate, and why a bigger timeout only moves the cliff
 - [Probe Semantics](ProbeSemantics) — readiness, liveness and startup ask three different questions with three different remedies; why they get three paths and three tags
+- [A Probe Must Answer Inside Its Own Timeout](AProbeMustAnswerInsideItsOwnTimeout) — `/health` reached 8-10 s against the 5 s the startup probe waits, so a healthy replica could never leave startup and was killed at its 3 h budget; why a startup timeout is the unrecoverable one, why a HEALTHY slow check is the one nothing could name, and the timing line the endpoint now publishes
 - [What a Synthetic Probe May Assert](SyntheticProbeTargets) — a probe naming one deployment's installed content is broken by construction; the platform floor, the negative control that tells "absent" from "down", and reading the target's own declaration
 - [Why a GC-Bound Pod Stays in Rotation](WhyAGcBoundPodStaysInRotation) — the GC's hard limit sits below the container limit, so a portal short of memory is defended rather than restarted
 - [Self-hosted CI runners on AKS](SelfHostedRunners) — ARC beside the portals on one pool; three brakes, a negative priority class, and the reserve arithmetic that decides the cap
 - [Candidate Release Protocol](CandidateReleaseProtocol)
 - [Chart Drift — what a deploy actually does](ChartDriftSemantics)
+- [Rendering a chart you are not allowed to fully configure](ChartDriftRenderWithoutSecrets) — 39 runs, 39 failures, zero verdicts: the check may hold two of the deploy's three value sources and the chart correctly refuses that subset; the placeholder that unblocks the render, the two-render proof that no compared object depends on it, and the bake gate that was off on both production namespaces the moment a verdict finally appeared
 - [Configuring an instance from Aspire](ConfiguringAnInstanceFromAspire)
 - [The Dependabot Secret Store](DependabotSecretStore)
 - [GitHub App Credentials](GitHubAppCredentials) — `meshweaver-cloud` writes to its own repo; every cross-repo READ mints from the read-only `fleet-reader`
@@ -458,6 +511,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Environment Composition](EnvironmentComposition)
 - [Feature Flags](FeatureFlags)
 - [First-Run Setup](FirstRunSetup)
+- [First-run setup on a PROVISIONED instance](FirstRunSetupOnAProvisionedInstance) — a fleet-provisioned instance boots configured and unadministerable; the wizard keys on "no storage" and the onboarding gate on "no admin grant", so neither fires
 - [Image Cleanup](ImageCleanup)
 - [Instance Identity and Setup](InstanceIdentityAndSetup)
 - [Instance Lifecycle — State of Record](InstanceLifecycleStateOfRecord)
@@ -471,8 +525,11 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Payment Provider Contract](PaymentProviderContract)
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
 - [Project Templates](ProjectTemplates)
+- [Reading a Recurrence Reopen](ReadingARecurrenceReopen) — a bot reopen asserts two things and both fail independently; the 2026-09-17 wave measured, and the honest triple behind core's count
+- [Reopening on Image Provenance](ReopeningOnImageProvenance) — the third reopen predicate: an occurrence counts only if it came from an image whose commit contains the fix, and why a staleness window would close live defects
 - [Registry-key rotation — two phases, at the registry that holds the instance](RegistryKeyRotation)
 - [The Release Event Bus](ReleaseEventBus)
+- [Release Failure Classes](ReleaseFailureClasses) — one log line carried four unrelated defects, so its issue could never be closed; what an incident's identity is really computed from (including the second line that never reaches it) and the rule that puts the failure CLASS in the template
 - [The Release Gate's Denominator](ReleaseGateDenominator)
 - [Release to Production — the whole path](ReleaseToProductionPipeline)
 - [Renaming a Required Status Check](RenamingARequiredCheck)
@@ -487,6 +544,8 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Glossary](/Doc/Glossary)
 - [Developing from within MeshWeaver](DevelopingFromMeshWeaver)
 - [Shared Rule Blocks](SharedRuleBlocks)
+- [Incidental Findings](IncidentalFindings) — the defect you did not come for: the three tests that decide, what a filed issue owes, and why turning aside costs twice
+- [Governed Autonomy](GovernedAutonomy) — do, file, govern or ask: the four responses to an instruction, and why the test is reversibility rather than importance
 
 ### Licensing
 

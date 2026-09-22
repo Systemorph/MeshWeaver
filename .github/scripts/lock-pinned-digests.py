@@ -237,6 +237,29 @@ TEMPLATED_RE = re.compile(r"\{\{")
 # today would pin the wrong bytes forever. These are reported as "floating", never locked.
 FLOATING_TAGS = {"latest", "main", "master", "edge", "stable", "nightly"}
 
+# 🚨 A LINE POINTER IS FLOATING TOO, and membership alone never saw it. CD publishes `3-latest`,
+# `3.0-latest` and `3.0.0-latest` on every promote (main-cd.yml Phase D / Hosting/Deployment's
+# `ImageLine`, whose `PointerSuffix` is literally "-latest" over a one-to-three-part numeric line).
+# None of those is IN the set, so `tag.lower() in FLOATING_TAGS` classified every one of them as an
+# ordinary PIN and locked it to whichever digest it happened to name at that moment — protecting a
+# manifest the pointer has already left, and reading in the report as a protected pin. Measured on
+# this file before the fix: `latest` floating, `3.0.0-latest` LOCKED.
+#
+# The shape is deliberately narrow — a numeric line of one to three parts, then one of the floating
+# words — so it cannot swallow an immutable tag. `3.0.0-ci.8702` does not match (its last segment is
+# `ci.8702`), nor does a sha, nor `staging-<sha>-<run>`.
+LINE_POINTER_RE = re.compile(
+    r"^\d+(?:\.\d+){0,2}-(?:" + "|".join(sorted(FLOATING_TAGS)) + r")$")
+
+
+def is_floating_tag(tag: str) -> bool:
+    """Whether `tag` names a MOVING manifest — a bare floating word, or a version-line pointer.
+
+    A floating tag has no fixed manifest to protect, so it is never locked and never counted as a
+    pin. Compared case-insensitively, the way the bare words always were."""
+    lowered = tag.strip().lower()
+    return lowered in FLOATING_TAGS or bool(LINE_POINTER_RE.match(lowered))
+
 # Where a deployment overlay lives. Narrow ON PURPOSE — see the module docstring: widening this to
 # every YAML/JSON under `deploy/` drags in test fixtures whose tags never existed.
 OVERLAY_DIR_SEGMENTS = ("deploy", "deployments")
@@ -248,6 +271,80 @@ def is_overlay_path(path: str) -> bool:
     if not any(segment in OVERLAY_DIR_SEGMENTS for segment in parts[:-1]):
         return False
     return bool(OVERLAY_FILE_RE.match(parts[-1]))
+
+
+# ── AXIS 2b: the image a Hosting/Deployment RECORD pins ────────────────────────────────────────
+#
+# 🚨 THE RECORD IS THE PIN THAT IS ACTUALLY APPLIED, AND IT WAS INVISIBLE HERE TWICE OVER
+# (Memex#219, measured 2026-09-17). `helm-release.yml` applies the COMMITTED pin when its `image`
+# input is empty, so a purged record tag is a broken deploy — and `Systemorph/Memex`'s records are
+# `mesh/Deployments/<name>.json`, which:
+#
+#   1. is not an overlay PATH — no `deploy`/`deployments` segment, and not a `values*.y*ml` name, so
+#      `is_overlay_path` answered False and the file was never read at all. Everything in it went
+#      unprotected, including the `repo:tag`-shaped `operator.image`, `gates[].image` and
+#      `portalNext.image` the ordinary extractor would have caught on sight; and
+#   2. spells the portal's own pin as TWO keys — `imageRepository` + `pinnedImageTag` — which no
+#      `repo:tag` rule can see even once the file IS read.
+#
+# Measured over the five committed records: FOUR carry a portal pin the overlay extractor does not
+# see — `memex` 3.0.0-ci.8692, `pearl` 3.0.0-ci.8080, `build` 3.0.0-ci.8411, and `memex-cloud` with
+# an EMPTY tag (floating, and reported as such rather than as a pin). That is the exact shape this
+# module's own docstring warns about: *"an overlay that pins its images somewhere else then extracts
+# as pinning NOTHING"* — a confidently wrong zero.
+#
+# Narrow for the same reason `is_overlay_path` is: a record is a `*.json` directly under a
+# `Deployments` directory. Widening this to every JSON under it would drag in `index.json` and any
+# fixture that happens to live there — both of which extract as pinning nothing anyway, but the
+# denominator this job prints would stop meaning "records".
+RECORD_DIR_SEGMENT = "Deployments"
+RECORD_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
+# `index.json` is a listing of the records, not a record. It pins nothing and never will.
+RECORD_FILE_EXCLUDE = frozenset({"index.json"})
+
+
+def is_deployment_record_path(path: str) -> bool:
+    """True for a committed Hosting/Deployment record — `…/Deployments/<name>.json`."""
+    parts = path.split("/")
+    if len(parts) < 2 or parts[-2] != RECORD_DIR_SEGMENT:
+        return False
+    return parts[-1] not in RECORD_FILE_EXCLUDE and bool(RECORD_FILE_RE.match(parts[-1]))
+
+
+def extract_record_pins(text: str, registry: str) -> tuple[list[tuple[str, str]],
+                                                           list[tuple[str, str]]]:
+    """(pins, floating) for the split `imageRepository` + `pinnedImageTag` pair of ONE record.
+
+    🚨 Returns the SPLIT pin only. Every `repo:tag`-shaped field in the same record
+    (`operator.image`, `gates[].image`, `portalNext.image`) is left to `extract_overlay_pins`, which
+    already reads them correctly out of the record's text — so the two extractors compose instead of
+    each half-knowing the other's shapes.
+
+    A record whose `pinnedImageTag` is EMPTY is FLOATING, not pinning: `memex-cloud` is exactly that
+    today, and reporting it as a pin would ask the registry to lock a tag that does not exist.
+    """
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        # Not a record this axis can read. It is not an error: the caller still runs the ordinary
+        # extractors over the same text, and a malformed record shows up as pinning nothing HERE
+        # rather than as a crash that stops the whole sweep.
+        return [], []
+    content = doc.get("content", doc)
+    if not isinstance(content, dict):
+        return [], []
+    repository = content.get("imageRepository")
+    tag = content.get("pinnedImageTag")
+    if not isinstance(repository, str) or not repository.strip():
+        return [], []
+    host, _, path = repository.partition("/")
+    if not path or host.lower() != f"{registry}.azurecr.io".lower():
+        # A record pinning a DIFFERENT registry is foreign, and `extract_foreign_pins` says so over
+        # the same text. Silently locking nothing is right; silently calling it "no pin" is not.
+        return [], []
+    if not isinstance(tag, str) or not tag.strip():
+        return [], [(path, "")]
+    return [(path, tag.strip())], []
 
 
 def extract_foreign_pins(text: str, registry: str) -> list[tuple[str, str, str]]:
@@ -311,7 +408,7 @@ def extract_overlay_pins(text: str, registry: str = "") -> tuple[list[tuple[str,
 
     def add(repo: str, tag: str) -> None:
         pair = (repo, tag)
-        if tag.lower() in FLOATING_TAGS:
+        if is_floating_tag(tag):
             if pair not in floating:
                 floating.append(pair)
         elif pair not in pins:
@@ -443,7 +540,9 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
                            "a measured zero.")
         return scan
     paths = [entry["path"] for entry in tree.get("tree", [])
-             if entry.get("type") == "blob" and is_overlay_path(entry.get("path", ""))]
+             if entry.get("type") == "blob"
+             and (is_overlay_path(entry.get("path", ""))
+                  or is_deployment_record_path(entry.get("path", "")))]
     for path in sorted(paths):
         rc, body, err = consistency.gh_api(f"repos/{gh_repo}/contents/{path}")
         if rc != 0:
@@ -457,6 +556,11 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             return scan
         scan.files += 1
         pins, floating = extract_overlay_pins(text, registry)
+        # The record's SPLIT pin, on top of whatever the `repo:tag` rules found in the same text.
+        if is_deployment_record_path(path):
+            record_pins, record_floating = extract_record_pins(text, registry)
+            pins = pins + record_pins
+            floating = floating + record_floating
         scan.pins.extend((repo, tag, path) for repo, tag in pins)
         scan.floating.extend((repo, tag, path) for repo, tag in floating)
         scan.instances.extend((ident, host, path)
@@ -472,13 +576,25 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
     if not base.is_dir():
         scan.unreadable = f"{root} is not a directory, so its overlays were never looked for."
         return scan
-    for path in sorted(base.rglob("values*.y*ml")):
+    # 🚨 BOTH globs, or the local arm answers a different question from the remote one — and the
+    # local arm is what a person runs by hand to check the remote arm's verdict.
+    # 🚨 The record glob is ANCHORED to the directory the predicate requires, not `**/*.json`: the
+    # remote arm filters GitHub's tree listing, which costs nothing, but a bare `rglob("*.json")`
+    # here walks `node_modules`, `bin/`, `obj/` and every fixture in a real working tree to discard
+    # almost all of it. `is_deployment_record_path` still decides — this only stops the walk from
+    # visiting files it is certain to reject.
+    candidates = sorted(set(base.rglob("values*.y*ml")) | set(base.glob("**/Deployments/*.json")))
+    for path in candidates:
         rel = path.relative_to(base).as_posix()
-        if not is_overlay_path(rel):
+        if not (is_overlay_path(rel) or is_deployment_record_path(rel)):
             continue
         scan.files += 1
         text = path.read_text(encoding="utf-8", errors="replace")
         pins, floating = extract_overlay_pins(text, registry)
+        if is_deployment_record_path(rel):
+            record_pins, record_floating = extract_record_pins(text, registry)
+            pins = pins + record_pins
+            floating = floating + record_floating
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
         scan.floating.extend((repo, tag, rel) for repo, tag in floating)
         scan.instances.extend((ident, host, rel) for ident, host in extract_overlay_instances(text))
@@ -749,6 +865,13 @@ class Instance:
     foreign_references: list[tuple[str, str]] = field(default_factory=list)
     # Those of them declared `fleet-unlockable` — the ones that make it out of scope.
     unlockable_registries: list[str] = field(default_factory=list)
+    # 🚨 AND THOSE THE TABLE DOES NOT CLASSIFY AT ALL, carried rather than inferred from an EMPTY
+    # `unlockable_registries`. An undeclared host leaves that list empty exactly as a `third-party`
+    # one does, so the two were indistinguishable downstream and `resolve_running_sets` said "every
+    # one of them declared `third-party`" about a host the record had never heard of — a sentence
+    # that is FALSE, printed by the run that refused because it was undeclared, in the lane whose
+    # log is the only place anyone reads either fact.
+    undeclared_registries: list[str] = field(default_factory=list)
     # What every message about this installation says. Assigned once the whole fleet is known.
     label: str = ""
 
@@ -981,6 +1104,92 @@ def read_registry_dispositions(root: str) -> tuple[dict[str, tuple[str, str]], l
             continue
         table[host] = (disposition, reason)
     return table, problems
+
+
+def check_registry_roster(referenced: set[str], declared: dict[str, tuple[str, str]],
+                          publishes: set[str], pushed_to: set[str],
+                          complete: bool = True,
+                          unreadable: tuple[str, ...] = ()) -> list[str]:
+    """The OTHER direction on the `registries` table: a declaration nothing in the fleet answers to.
+
+    🚨 THIS IS THE ARM THAT WOULD HAVE NAMED THE SIX-DAY RED, and the incident is the argument for
+    it. `registries` was the only one of this file's three tables checked in ONE direction. The
+    strict half — an undeclared host is a blocker — is `classify_foreign_registries`, and it worked:
+    it refused, correctly, on 2026-09-17. What nothing checked was the half that had gone wrong
+    FIRST. PartnerRe's estate was deleted on 2026-09-16 and rebuilt on 2026-09-17 in PartnerRe's own
+    subscription and tenant, minting a new ACR (`memexaksacr43rzd6faaix36`); the overlay moved to it
+    the same morning and the declaration stayed on `memexaksacrqoqqdqnhlaksg`, a registry that no
+    longer exists in any subscription. The record went on validating green — a `disposition`, a
+    `reason`, an `out-of-estate` retention block, all well-formed prose about nothing — while the
+    lane reported the NEW host as unknown. PartnerRe.Memex's own commit for the twin defect in its
+    records says it in four words: *"and nothing could tell us"*.
+
+    It is the same doctrine `check_repository_roster` and `check_publication_accounting` already
+    carry, one level up: a stale exemption accounts for nothing and hides the next one. And the
+    hiding is not hypothetical here — a table accumulating one dead entry per estate churn is a
+    table where the next reader cannot tell which line describes the registry in front of them.
+
+    🚨 THE POPULATION IS A UNION OF THREE, so this can never contradict the gate next door. A host
+    is answered for by:
+
+      * an OVERLAY REFERENCE — the fleet pins an image there (the `foreign_references` set, the
+        same object the PROTECTED SET report prints, so the report and this verdict cannot drift);
+      * a `publishes` BLOCK — `check_publication_accounting` owns those and already reds on a block
+        nothing pushes to any more, so deleting the host here would deadlock the two gates against
+        each other: one demanding the line go, the other demanding it exist;
+      * the fleet PUSHING there, derived from the publishing lanes rather than read from this
+        record — `cr.meshweaver.cloud` is exactly that case and carries no `publishes` block,
+        because its `fleet-unlockable` disposition already says our images live there.
+
+    🚨 `complete` IS THE DENOMINATOR AND ONLY `--discover` SUPPLIES ONE, exactly as for the
+    repository table: "this host is unknown" is sound over any scan, "nothing answers to this
+    declaration" is sound only over the whole fleet, and `--repos`/`--root` deliberately scan part
+    of it. A partial run SAYS it did not assert this rather than asserting it wrongly.
+
+    🚨 AN UNREADABLE OVERLAY TREE STANDS THE STALE DIRECTION DOWN ENTIRELY (#5156 review), and
+    `complete` alone is NOT that condition: a full `--discover` stays complete while one repository's
+    tree could not be read. If the only overlay referencing a declared registry lives in that
+    repository, its references read as zero and this arm would emit a FALSE cause beside the real
+    unreadable-repository blocker — "two contradictory blockers about one thing send the reader to
+    delete the line that is right", which is #4396's lesson one table over.
+
+    🚨 And the sibling's remedy does NOT transfer, which is why this takes its own argument.
+    `check_repository_roster` can count an unreadable tree as REACHED because a repository's identity
+    IS its name. A registry's reference lives INSIDE the unread file, so there is no host to credit
+    and nothing to compare — the only sound answer is not to assert at all, and to SAY so, because
+    "not checked" and "checked and clean" are the confusion this whole file is made of. The STRICT
+    direction is untouched: an undeclared host in front of the run still reds, because an unreadable
+    tree may buy a missing assertion and never a widening."""
+    problems: list[str] = []
+    for host in sorted(declared):
+        if host == LANE_REGISTRY:
+            # Not a staleness question: pins to the lane's own registry are extracted as IN-SCOPE
+            # repositories and never appear among the foreign references, so "nothing references
+            # it" would be a true sentence about the wrong thing. The defect is the declaration.
+            problems.append(
+                f"{ROSTER_PATH}: `registries.{host}` declares the registry THIS LANE LOCKS. Both "
+                "dispositions are statements about a host this lane cannot lock — `fleet-unlockable` "
+                "that our images live somewhere out of reach, `third-party` that the images are not "
+                "ours — and both are false about the subject of the script. Delete the entry.")
+            continue
+        if host in referenced or host in publishes or host in pushed_to:
+            continue
+        if not complete or unreadable:
+            continue
+        # 🚨 THE DIAGNOSTIC NAMES ONLY THIS HOST (#5156 review). It used to carry the PartnerRe
+        # incident inline — including *"while the lane refused over the ACR that replaced it"*,
+        # which on any OTHER stale host is not a stale example but a false assertion that a
+        # replacement exists, sending an operator to a registry that has nothing to do with it.
+        # The incident belongs in the docstring above, where it is a historical statement; a
+        # printed blocker says what is true of the host in front of it and nothing else.
+        problems.append(
+            f"{ROSTER_PATH}: `registries.{host}` is declared and NOTHING in the fleet answers to "
+            "it — no deployment overlay pins an image there, it carries no `publishes` block, and "
+            "no publishing lane pushes to it. A declaration whose registry is gone accounts for "
+            "nothing and reads exactly like one that is in force, so this is a blocker rather "
+            f"than a note. Either delete the line, or point it at the host `{host}` was replaced "
+            "by if an estate moved.")
+    return problems
 
 
 def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], list[str]]:
@@ -1306,6 +1515,38 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, 
 
     for instance in instances.values():
         if instance.state != "live":
+            # 🚨 A NON-LIVE DECLARATION IS RE-MEASURED, NEVER TRUSTED (#3848). The file's own
+            # header says forgetting an entry is "always the stricter mistake, never the looser
+            # one" — true of an ABSENT line, and it says nothing about a line that has gone WRONG.
+            # A stale exemption is the looser mistake, and it is silent by construction: the
+            # installation is skipped, so nothing ever contradicts it. Measured 2026-09-21 — the
+            # `pearl` entry read "never installed — pearl.meshweaver.cloud has no DNS record
+            # (measured 2026-09-12)" and ended "Delete this entry the day it is provisioned";
+            # pearl was provisioned 2026-09-16 and had been answering for five days, outside this
+            # lane's protected set AND outside the combo-verification roster derived from the same
+            # file, with nothing anywhere saying so.
+            #
+            # So the exemption is held to the ONE question that can falsify it — does a portal
+            # answer there? — using the probe seam this function already takes. It costs one HTTPS
+            # call per exempted installation THAT NAMES A HOST, which in the committed fleet is
+            # ZERO: after `pearl`'s line goes the only exemption left is `partnerre`, whose overlay
+            # still reads `host: "TODO"` and yields no host at all, so it is skipped here and left
+            # to the roster's own stale-entry check. The reading is the COMMIT, not
+            # the absence of an error: `derive-combo-instances.py` passes a probe that answers
+            # nothing (`_no_probe`), so the combo lane stays free of a call to every portal in the
+            # fleet and this arm is inert there by construction — one lane does the network.
+            if instance.host:
+                answered, _version, _error = probe(instance.host)
+                if answered:
+                    blockers.append(
+                        f"{ROSTER_PATH} declares `{instance.label}` {instance.state}, but "
+                        f"https://{instance.host}{VERSION_ROUTE} ANSWERS — it is running core "
+                        f"{answered[:7]}. A non-live line states that nothing is expected to "
+                        "answer there, and while it stands this installation is missing from "
+                        "every denominator derived from this file: its running images are "
+                        "protected by nothing here, and a roster derived from it covers it "
+                        "nowhere. That is an omission in the one direction a hand-maintained "
+                        "file may not fail in. Delete the line — the installation is live.")
             continue
         if not instance.host:
             instance.error = ("its overlay declares the installation but no ingress host, so it "
@@ -1330,6 +1571,10 @@ def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, s
             continue
         undeclared = [host for host in instance.foreign_registries if host not in dispositions]
         if undeclared:
+            # Recorded on the instance so every message downstream can tell "the record classifies
+            # this host as somebody else's" from "the record has never heard of it". They are the
+            # same empty `unlockable_registries` and they are not the same fact.
+            instance.undeclared_registries = undeclared
             plan.blockers.append(
                 f"AXIS 3 — installation `{instance.label}` pins images in "
                 f"{', '.join(undeclared)}, which `.github/acr-retention/{ROSTER_PATH}` does not "
@@ -1408,11 +1653,35 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
             # pinned nothing, which reads as a broken matcher and sent the reader to the wrong
             # place. The images are real; they are simply not in the registry this lane locks.
             if instance.foreign_registries:
-                # Every foreign host is declared by now (classify_foreign_registries blocks
-                # otherwise), so this is out of scope exactly when a fleet-unlockable one is why
-                # there is nothing here to protect.
+                # A fleet-unlockable host is why there is nothing here to protect ⇒ out of scope.
                 if instance.unlockable_registries:
                     instance.out_of_scope = True
+                    continue
+                # 🚨 UNDECLARED IS NOT `third-party`, AND SAYING SO WAS A FALSE SENTENCE FOR SIX
+                # DAYS. `classify_foreign_registries` has already BLOCKED this run over the
+                # undeclared host — so the run's verdict was right — but it `continue`s before
+                # assigning `unlockable_registries`, and this branch then read that empty list as
+                # "every foreign host is declared, and none of them fleet-unlockable". The comment
+                # here used to assert exactly that. Measured on the 2026-09-17→21 schedules: the
+                # lane printed *"pins images ONLY in memexaksacr43rzd6faaix36.azurecr.io, every one
+                # of them declared `third-party`"* about a host `instances.json` did not mention at
+                # all — an instrument stating a classification that does not exist, one line below
+                # the blocker saying the record does not account for it. A reader who believes the
+                # second line looks for the entry to change; a reader who believes THIS one
+                # concludes somebody already decided the images are not ours. Same red, opposite
+                # conclusions. So the sentence is derived from what the record actually says, and
+                # the undeclared case gets its own — still a blocker, because a running set no
+                # declaration classifies is a running set nothing accounts for.
+                if instance.undeclared_registries:
+                    plan.blockers.append(
+                        f"AXIS 3 — installation `{instance.label}` runs core "
+                        f"{instance.commit[:7]} and its overlay ({instance.source}) pins images "
+                        f"ONLY in {', '.join(instance.foreign_registries)}, of which "
+                        f"{', '.join(instance.undeclared_registries)} is/are not declared in "
+                        f"`.github/acr-retention/{ROSTER_PATH}` at all — so this run cannot say "
+                        "whether ANY registry accounts for what it is running. That is the "
+                        "blocker above, restated where the consequence lands: declare the host, "
+                        "and this line will say which of the two cases it is.")
                     continue
                 plan.blockers.append(
                     f"AXIS 3 — installation `{instance.label}` runs core {instance.commit[:7]} and "
@@ -1879,7 +2148,7 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
                 # PRESERVES a moving tag, and `main`/`master`/`edge`/`stable`/`nightly` move exactly
                 # as `latest` does — checking one spelling reports the other five as ordinary pins.
                 # One set, shared with the ACR path, so the two cannot drift apart.
-                moving = tag.strip().lower() in FLOATING_TAGS
+                moving = is_floating_tag(tag)
                 emit(f"        {repo}:{tag}"
                      + ("   🚨 a MOVING tag — outside this model (#3438)" if moving else ""))
                 emit(f"          pinned by {where}")
@@ -2189,6 +2458,43 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
                                                  complete=fleet_is_complete))
     dispositions, disposition_problems = read_registry_dispositions(local_root or ".")
     plan.blockers.extend(disposition_problems)
+    # 🚨 AND BOTH DIRECTIONS ON THAT TABLE TOO. `classify_foreign_registries` below asks whether
+    # every host in front of the run is declared; this asks whether every declaration still answers
+    # to something. The second half is the one that had never been checked, and it is where the
+    # six-day red started: the declaration stayed on an ACR that no longer exists while the overlay
+    # moved to its replacement, and a well-formed line about a dead registry validated green. Same
+    # `complete` gate as the repository table — a partial scan cannot know that nothing answers.
+    if not fleet_is_complete:
+        print("registry roster: PARTIAL scan — every registry in front of this run is still held "
+              "to the `registries` table, but the STALE direction (a declaration nothing answers "
+              "to) is NOT asserted. Only --discover enumerates the whole fleet.")
+    # 🚨 AND AN UNREADABLE TREE IS A SECOND, INDEPENDENT REASON THE STALE DIRECTION CANNOT BE
+    # ASSERTED (#5156 review). `fleet_is_complete` stays true on a `--discover` whose scan hit an
+    # unreadable repository, and the host that repository's overlay pins is unknowable from here —
+    # so a declaration answered for ONLY there would read as stale, a false cause printed beside the
+    # real unreadable-repository blocker. It is NOT asserted, and that is PRINTED: "not checked" and
+    # "checked and clean" must never be the same output.
+    unreadable_trees = tuple(scan.gh_repo for scan in axis2 if scan.unreadable)
+    if unreadable_trees and fleet_is_complete:
+        print("registry roster: the STALE direction is NOT asserted — "
+              + ", ".join(unreadable_trees) + " could not be read, so a declaration answered for "
+              "only by an overlay in there would read as answered for by nothing. The strict "
+              "direction (an undeclared host) still ran, and the unreadable tree is already a "
+              "blocker of its own.")
+    plan.blockers.extend(check_registry_roster(
+        referenced={host for host, _repo, _tag, _where in plan.foreign_references},
+        declared=dispositions,
+        publishes=set(read_registry_publications(local_root or ".")),
+        # 🚨 THE DERIVATION'S OWN PROBLEMS ARE NOT SWALLOWED HERE, THEY ARE UNNEEDED. A derivation
+        # that failed yields a SMALLER `pushed_to`, so a host answered for only by being a push
+        # target reads as stale and REDS — the strict direction, not a silent pass. The problems
+        # themselves are reported by `--check-registry-retention`, which runs on every pull request
+        # and is named by `Consolidate test results`; reporting them twice would put a second way to
+        # red this lane on a fact it does not decide (the same reasoning as the retention step
+        # deliberately not repeating `--check-registry-retention` here).
+        pushed_to=set(publish_targets(local_root or ".")[0]),
+        complete=fleet_is_complete,
+        unreadable=unreadable_trees))
     plan.instances, instance_blockers = build_instances(axis2, roster)
     plan.blockers.extend(instance_blockers)
     if not plan.instances and not any(scan.unreadable for scan in axis2):
@@ -2652,9 +2958,12 @@ def check_retention_record(root: str) -> int:
 
 # 🚨 `out-of-estate` IS THE FOURTH RULE, AND IT IS THE ONE THAT HAD TO BE EARNED (#3438,
 # 2026-09-15). `Systemorph/PartnerRe.Memex` joined the fleet on 2026-09-14 with a LIVE control
-# instance (partnerre.meshweaver.cloud, answering /api/version) whose overlay pins our portal and
+# instance (partnerre.meshweaver.cloud, answering /api/version) whose overlay pinned our portal and
 # migration images in `memexaksacrqoqqdqnhlaksg.azurecr.io` — an ACR in the `PartnerRe Memex`
-# subscription, which this lane's OIDC credential does not reach at all. Every existing rule was a
+# subscription, which this lane's OIDC credential does not reach at all. (That estate was torn down
+# on 2026-09-16 and rebuilt in PartnerRe's OWN subscription and tenant the next day; the live host
+# is `memexaksacr43rzd6faaix36.azurecr.io` and the reasoning below is unchanged by the move — what
+# the move cost is `check_registry_roster`, above.) Every existing rule was a
 # FALSE sentence about it: `not-ours` (the images ARE ours, mirrored), `nothing-deletes` (its
 # enumeration is held to a committed CHART this repository renders, and there is none), and
 # `derived-protected-set` (it asserts a cleanup exists that deletes only a derived complement, and
@@ -4034,6 +4343,9 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
            dispositions: dict[str, tuple[str, str]] | None = None,
            publications_root: str | None = None,
            repositories: dict[str, str] | None = None,
+           # The derived push targets, taken as a PARAMETER for the same reason the scanners and
+           # the roster are: the harness drives no repository tree. ARM 36 supplies it explicitly.
+           pushed_to: set[str] | None = None,
            ) -> tuple[Plan, list[str], FakeRegistry]:
     """The SAME sequence `run()` performs, minus the report — so the self-test falsifies the real
     decision path rather than a paraphrase of it. Its per-lock chatter is swallowed; the assertions
@@ -4054,6 +4366,19 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
             axis2,
             repositories if repositories is not None
             else {scan.gh_repo: "fixture" for scan in axis2 if scan.files and not scan.unreadable}))
+        # 🚨 THE STALE DIRECTION ON THE REGISTRY TABLE, DRIVEN IN EVERY ARM. Same reasoning as the
+        # repository roster above: an arm that is inert unless a test opts in is inert everywhere
+        # else, which is how a declaration about a deleted registry validated green for six days.
+        plan.blockers.extend(check_registry_roster(
+            referenced={host for host, _repo, _tag, _where in plan.foreign_references},
+            declared=dispositions or {},
+            publishes=set(read_registry_publications(publications_root))
+            if publications_root else set(),
+            pushed_to=pushed_to or set(),
+            # 🚨 DERIVED HERE THE WAY `run()` DERIVES IT, not taken as a parameter (#5156 review).
+            # A harness that took the denominator as an argument would let every arm opt out of the
+            # one condition the finding was about, which is the shape of a guard whose subject moved.
+            unreadable=tuple(scan.gh_repo for scan in axis2 if scan.unreadable)))
         plan.instances, instance_blockers = build_instances(
             axis2, roster or {}, probe or _answers())
         plan.blockers.extend(instance_blockers)
@@ -4357,6 +4682,80 @@ def self_test() -> int:
           "ARM 13: a raw manifest was accepted as an overlay")
     check(not is_overlay_path("src/values.yaml"),
           "ARM 13: a values file outside any deploy path was accepted")
+
+    # ── ARM 13b: the Hosting/Deployment RECORD axis (Memex#219) ────────────────────────────────
+    # The record is the pin `helm-release.yml` APPLIES when its `image` input is empty, and it was
+    # invisible twice over: not an overlay path, and a pin split across two keys.
+    check(is_deployment_record_path("mesh/Deployments/pearl.json"),
+          "ARM 13b: Memex's real record path was rejected")
+    check(not is_deployment_record_path("mesh/Deployments/index.json"),
+          "ARM 13b: the record INDEX was accepted as a record — it lists records, it pins nothing")
+    check(not is_deployment_record_path("mesh/Deployments/sub/thing.json"),
+          "ARM 13b: a json NOT directly under Deployments/ was accepted")
+    check(not is_deployment_record_path("deployments/aks/memex/values.memex.public.yaml"),
+          "ARM 13b: an overlay was accepted as a record; the two axes must stay separable")
+
+    # The REAL pearl shape, verbatim in the fields that matter (measured 2026-09-17): its record
+    # pins an ACR tag its overlay does not, because the overlay pins the FLEET REGISTRY instead.
+    # That is the one live instance of this gap — `pearl` has never been installed, so AXIS 3's
+    # running-set protection cannot cover it either, and #219's own table names it.
+    pearl_record = json.dumps({
+        "$type": "Hosting/Deployment",
+        "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+        "pinnedImageTag": "3.0.0-ci.8080",
+        "operator": {"image": "meshweaver.azurecr.io/hosting-operator:1979979"},
+    })
+    pins, floating = extract_record_pins(pearl_record, "meshweaver")
+    check(pins == [("memex-portal-ai", "3.0.0-ci.8080")] and not floating,
+          f"ARM 13b: the record's SPLIT pin was not extracted: {pins!r} {floating!r}")
+    # The `repo:tag`-shaped fields in the same record stay the ordinary extractor's job, so the two
+    # compose rather than each half-knowing the other's shapes.
+    inline, _ = extract_overlay_pins(pearl_record, "meshweaver")
+    check(("hosting-operator", "1979979") in inline,
+          f"ARM 13b: the record's inline operator image was not extracted by the overlay rules: {inline!r}")
+
+    # An EMPTY pinnedImageTag is FLOATING, not a pin — `memex-cloud` is exactly this today, and
+    # reporting it as a pin would ask the registry to lock a tag that does not exist.
+    pins, floating = extract_record_pins(
+        json.dumps({"imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+                    "pinnedImageTag": ""}), "meshweaver")
+    check(not pins and floating == [("memex-portal-ai", "")],
+          f"ARM 13b: an empty pinnedImageTag was not reported as floating: {pins!r} {floating!r}")
+
+    # A record pinning ANOTHER registry is not this lane's to lock, and must not read as "no pin":
+    # `extract_foreign_pins` says so over the same text.
+    pins, floating = extract_record_pins(
+        json.dumps({"imageRepository": "cr.meshweaver.cloud/memex-portal-ai",
+                    "pinnedImageTag": "3.0.0-ci.8080"}), "meshweaver")
+    check(not pins and not floating,
+          f"ARM 13b: a foreign-registry record produced an ACR pin: {pins!r}")
+
+    # A malformed record must not stop the sweep — it pins nothing HERE and the ordinary extractors
+    # still run over the same text.
+    check(extract_record_pins("{ not json", "meshweaver") == ([], []),
+          "ARM 13b: a malformed record raised instead of extracting nothing")
+
+    # 🚨 AND THE WIRING, not only the predicates. Asserting `is_deployment_record_path` and
+    # `extract_record_pins` in isolation leaves the SCAN free to never call either — measured: an
+    # early version of this arm passed while the record path was unwired from the listing, which is
+    # a guard that cannot fail for the defect it was written for. This drives `scan_overlays_local`
+    # over a real directory so the listing, the predicate and both extractors are on one path.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "mesh" / "Deployments").mkdir(parents=True)
+        (root / "mesh" / "Deployments" / "pearl.json").write_text(pearl_record, encoding="utf-8")
+        # The index sits beside it and must be read as pinning nothing rather than skipped silently.
+        (root / "mesh" / "Deployments" / "index.json").write_text(
+            json.dumps({"deployments": ["pearl"]}), encoding="utf-8")
+        scan = scan_overlays_local(str(root), "Systemorph/Fixture", "meshweaver")
+        found = {(repo, tag) for repo, tag, _ in scan.pins}
+    check(scan.unreadable is None, f"ARM 13b: the local scan refused the fixture tree: {scan.unreadable}")
+    check(scan.files == 1,
+          f"ARM 13b: expected ONE record file to be read (index.json is not a record), got {scan.files}")
+    check(("memex-portal-ai", "3.0.0-ci.8080") in found,
+          f"ARM 13b: the scan did not surface the record's split pin — the axis is not WIRED: {sorted(found)}")
+    check(("hosting-operator", "1979979") in found,
+          f"ARM 13b: the scan did not surface the record's inline operator image: {sorted(found)}")
 
 
     # ══ AXIS 3 and the TAG half — MeshWeaver#3438 / #3858 / #3859 / #3860 ═══════════════════════
@@ -4731,7 +5130,10 @@ ingress:
 
     # 🚨 EVERY floating tag, not the string `latest` (#4324 review). `main`, `master`, `edge`,
     # `stable` and `nightly` move exactly as `latest` does and are PRESERVED by the extractor.
-    for _moving in sorted(FLOATING_TAGS):
+    # …and every LINE POINTER, which membership alone missed: `3.0.0-latest` is what CD actually
+    # publishes and what a record seeded by `ImageLine.PointerFor` names, and it was being locked.
+    for _moving in sorted(FLOATING_TAGS) + ["3-latest", "3.0-latest", "3.0.0-latest",
+                                            "3.0.0-stable"]:
         _scan = _scan2("Systemorph/Memex",
                        FIXTURE_OVERLAY_FOREIGN.replace("3.0.0-ci.8411", _moving),
                        "deployments/aks/build/values.build.public.yaml")
@@ -5918,11 +6320,186 @@ ingress:
           "ARM 35: no committed roster entry names its `repo`, so the qualified path this "
           "repository's own record depends on is exercised by nothing")
 
+    # ── ARM 37: the REGISTRY table, both ways — and the sentence an undeclared host used to get ──
+    # 🚨 THE LIVE CASE, AND IT IS THE HALF THAT HAD NEVER BEEN CHECKED. The strict direction
+    # (`classify_foreign_registries`) refused correctly on 2026-09-17 and the lane was red for six
+    # days. What produced that red was the OTHER direction going unguarded three days earlier:
+    # PartnerRe's estate was deleted on 2026-09-16 and rebuilt in PartnerRe's own subscription and
+    # tenant on 2026-09-17 with a new ACR, the overlay moved to it the same morning, and the
+    # declaration stayed on `memexaksacrqoqqdqnhlaksg.azurecr.io` — a registry that no longer exists
+    # in any subscription (measured read-only 2026-09-21: the old subscription holds ZERO
+    # registries). A well-formed `disposition`, `reason` and `out-of-estate` retention block about
+    # nothing validated green the whole time.
+    _live = {"memexaksacr43rzd6faaix36.azurecr.io": ("fleet-unlockable", "PartnerRe's own ACR")}
+    _dead = dict(_live, **{"memexaksacrqoqqdqnhlaksg.azurecr.io": ("fleet-unlockable", "gone")})
+    _referenced = {"memexaksacr43rzd6faaix36.azurecr.io"}
+    # The CONTROL first, or the arm is a gate that reds on everything and gets ignored.
+    check(not check_registry_roster(_referenced, _live, set(), set()),
+          "ARM 37: a registry the fleet actually pins in was called a stale declaration")
+    _stale_reg = check_registry_roster(_referenced, _dead, set(), set())
+    check(any("qoqqdqnhlaksg" in p and "NOTHING in the fleet answers to it" in p
+              for p in _stale_reg),
+          f"ARM 37: a declaration for a registry no overlay pins, nothing publishes to and no lane "
+          f"pushes to PASSED. That is exactly the line that stood for six days while the lane "
+          f"refused over the ACR that replaced it: {_stale_reg}")
+    # 🚨 THE THREE WAYS A HOST IS ANSWERED FOR, each driven on its own — because using overlay
+    # references ALONE would deadlock this arm against `check_publication_accounting`: that gate
+    # reds when a `publishes` block has no publication, and this one would red when the block's host
+    # has no overlay pin. Two gates, opposite demands, one line.
+    check(not check_registry_roster(set(), {"ghcr.io": ("third-party", "mixed")},
+                                   publishes={"ghcr.io"}, pushed_to=set()),
+          "ARM 37: a host whose `publishes` block is what accounts for it was called stale — the "
+          "publication gate owns that half and already reds on a block nothing pushes to")
+    check(not check_registry_roster(set(), {"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
+                                   publishes=set(), pushed_to={"cr.meshweaver.cloud"}),
+          "ARM 37: a host this fleet PUSHES to was called stale. `cr.meshweaver.cloud` carries no "
+          "`publishes` block (its disposition already says our images live there), so overlay "
+          "references alone would demand deleting the line the publication gate demands exists")
+    # …and the DENOMINATOR, exactly as for the repository table: only a full discovery may say that
+    # nothing answers to a declaration.
+    check(not check_registry_roster(_referenced, _dead, set(), set(), complete=False),
+          "ARM 37: a PARTIAL scan (`--repos` / `--root`) asserted that a declared registry it never "
+          "looked at is gone — that would red every partial run on a record that is right")
+    # 🚨 AND THE LANE'S OWN REGISTRY IS NOT A STALENESS QUESTION. Pins to it are extracted as
+    # IN-SCOPE repositories and never reach the foreign set, so "nothing references it" would be a
+    # true sentence about the wrong thing; both dispositions are false about the subject of the
+    # script, so the entry is the defect.
+    _own = check_registry_roster(set(), {LANE_REGISTRY: ("third-party", "wrong on purpose")},
+                                 set(), {LANE_REGISTRY})
+    check(any("THIS LANE LOCKS" in p for p in _own),
+          f"ARM 37: the registry this lane locks was declared as a foreign host and accepted — or "
+          f"reported as merely unreferenced, which sends the reader to add an overlay pin: {_own}")
+    # 🚨 ON THE DECISION PATH, not merely a return value: the full harness must carry the blocker.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(),
+                        dispositions=dict(FLEET_UNLOCKABLE,
+                                          **{"gone.example.io": ("third-party", "deleted")}))
+    check(any("gone.example.io" in b and "NOTHING in the fleet answers to it" in b
+              for b in plan.blockers),
+          f"ARM 37: the registry roster is not on the decision path — a stale declaration reached "
+          f"the plan with no blocker: {plan.blockers}")
+    # …and this repository's own table declares no entry for the registry it locks.
+    _own_table, _ = read_registry_dispositions(".")
+    check(LANE_REGISTRY not in _own_table,
+          f"ARM 37: this repository's own `registries` table declares `{LANE_REGISTRY}`, the "
+          "registry this lane locks, as a foreign host")
+
+    # 🚨 UNDECLARED IS NOT `third-party`, AND THE LANE SAID IT WAS FOR SIX DAYS. `classify_foreign_
+    # registries` blocks and `continue`s before assigning `unlockable_registries`, so
+    # `resolve_running_sets` read that empty list as "declared, and none fleet-unlockable" and
+    # printed *"every one of them declared `third-party`"* about a host the record never mentioned —
+    # one line below the blocker saying the record does not account for it. A reader believing the
+    # first looks for the entry to change; a reader believing the second concludes somebody already
+    # decided the images are not ours. The run's VERDICT was right either way, which is why nothing
+    # caught it. ARM 32 holds the other side: a host genuinely declared `third-party` must still get
+    # the third-party sentence.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers())          # no dispositions ⇒ undeclared
+    check(not any("every one of them declared `third-party`" in b for b in plan.blockers),
+          f"ARM 37: an UNDECLARED registry was reported as 'declared `third-party`'. The report is "
+          f"then stating a classification that does not exist, in the one artifact a reader checks "
+          f"the record against: {plan.blockers}")
+    check(any("not declared in" in b and "at all" in b
+              and "cannot say whether ANY registry accounts for what it is running" in b
+              for b in plan.blockers),
+          f"ARM 37: the undeclared case lost its own sentence about the consequence, so the branch "
+          f"either says nothing or says something false: {plan.blockers}")
+    check(not any(i.out_of_scope for i in plan.instances),
+          "ARM 37: an installation whose registry is UNDECLARED was marked OUT OF SCOPE — an "
+          "unknown host would then read as a declared exemption, which is the whole failure mode")
+
+    # 🚨 ARM 37b: AN UNREADABLE OVERLAY TREE STANDS THE STALE DIRECTION DOWN (#5156 review). The
+    # first cut passed `fleet_is_complete` straight through, and that flag stays TRUE on a
+    # `--discover` whose scan hit a repository it could not read. A declaration answered for only by
+    # an overlay in THAT repository then reads as answered for by nothing, and the arm prints a false
+    # cause beside the real unreadable-repository blocker — #4396's lesson, one table over: two
+    # contradictory blockers about one thing send the reader to delete the line that is right.
+    _dark = OverlayScan(gh_repo="Systemorph/Dark", files=0)
+    _dark.unreadable = "the git tree could not be read"
+    check(not check_registry_roster(set(), _dead, set(), set(),
+                                    unreadable=("Systemorph/Dark",)),
+          "ARM 37b: a declared registry was called STALE on a scan that could not read one of the "
+          "fleet's overlay trees. The reference may be in there; `complete` does not cover this, "
+          "because a full --discover stays complete when a tree is unreadable")
+    # …and the sibling's remedy is NOT available here, which is why it takes its own argument: a
+    # repository's identity is its NAME, so an unreadable one can be counted as reached; a registry's
+    # reference lives INSIDE the unread file, so there is no host to credit.
+    check(check_registry_roster(set(), _dead, set(), set()),
+          "ARM 37b: with every tree readable the stale direction must still assert — standing it "
+          "down unconditionally would be the skip-trapdoor, not the fix")
+    # 🚨 THE STRICT DIRECTION IS UNTOUCHED BY AN UNREADABLE TREE. An unreadable tree may buy a
+    # MISSING assertion; it may never buy a WIDENING, so an undeclared host in front of the run
+    # still reds — driven through the full path, with the dark repository in the scan.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan, _dark],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers())
+    check(any("does not account for" in b for b in plan.blockers),
+          f"ARM 37b: an UNDECLARED registry stopped reding because some other repository's tree "
+          f"could not be read: {plan.blockers}")
+    # 🚨 AND THE STALE HALF ON THE SAME PATH, WITH SOMETHING THAT COULD ACTUALLY GO STALE. Driving
+    # this with no dispositions would assert the absence of a blocker over an EMPTY table — a
+    # control that cannot fail, which is the shape this file exists to refuse. So a ghost IS
+    # declared, and the assertion is that the unread tree stands the arm down anyway.
+    _ghost = dict(FLEET_UNLOCKABLE, **{"gone.example.io": ("third-party", "deleted")})
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan, _dark],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions=_ghost)
+    check(not any("NOTHING in the fleet answers to it" in b for b in plan.blockers),
+          f"ARM 37b: the harness does not derive the unreadable-tree denominator the way run() "
+          f"does, so the stale arm fired over an unread tree on the real decision path: "
+          f"{plan.blockers}")
+    # …and the SAME fixture with every tree readable must produce it, or the arm above is measuring
+    # nothing but a fixture that never had a stale host in it.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions=_ghost)
+    check(any("gone.example.io" in b and "NOTHING in the fleet answers to it" in b
+              for b in plan.blockers),
+          f"ARM 37b: the control is vacuous — the same declaration does not red even with every "
+          f"tree readable, so the arm above proves nothing about the unreadable one: "
+          f"{plan.blockers}")
+
+    # 🚨 ARM 37c: THE DIAGNOSTIC NAMES THE HOST IT IS ABOUT, AND NO OTHER (#5156 review). The first
+    # cut embedded PartnerRe's old hostname and the incident's own narrative in the generic blocker,
+    # so a DIFFERENT stale declaration would be reported with a sentence asserting that a specific
+    # other registry had replaced it — a false statement pointing an operator at the wrong registry,
+    # which is the exact defect class this whole diff removes.
+    _other = check_registry_roster(set(), {"someoneelse.example.io": ("third-party", "gone")},
+                                   set(), set())
+    check(len(_other) == 1 and "someoneelse.example.io" in _other[0],
+          f"ARM 37c: the stale blocker did not name the host it is about: {_other}")
+    check("qoqqdqnhlaksg" not in _other[0] and "43rzd6faaix36" not in _other[0],
+          f"ARM 37c: the generic stale blocker still names a registry from the incident it was "
+          f"written for. On any other host that is a false claim about a replacement: {_other}")
+
     # ── ARM 25: a roster entry naming nobody is a stale exemption, and reds ─────────────────────
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
                         roster={"ghost": ("retired", "decommissioned in 2019", "")})
     check(any("ghost" in b and "exempts nothing" in b for b in plan.blockers),
           f"ARM 25: a roster entry for an installation no overlay declares did not red: {plan.blockers}")
+
+    # ── ARM 25b: a non-live declaration whose portal ANSWERS is stale, and reds (#3848) ─────────
+    # ARM 25 covers an exemption naming NOBODY. This covers the other half, which is the one that
+    # actually happened: an exemption naming a real installation that has since been stood up. The
+    # `pearl` line said "never installed — pearl.meshweaver.cloud has no DNS record (measured
+    # 2026-09-12)" and "Delete this entry the day it is provisioned"; pearl went live 2026-09-16
+    # and answered for five days while this file still exempted it, so its running images were
+    # protected by nothing here and the combo roster derived from this same file covered it
+    # nowhere. Nothing contradicted the line, because a non-live installation was never asked.
+    plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        roster={"memex-cloud": ("not-installed", "never stood up", "")})
+    check(any("memex-cloud" in b and "ANSWERS" in b for b in plan.blockers),
+          f"ARM 25b: an exemption for a portal that ANSWERS did not red — the stale half of a "
+          f"hand-maintained file fails in the looser direction and silently: {plan.blockers}")
+
+    # …and the NEGATIVE control, which is what makes the arm above a test rather than a tautology:
+    # an exemption that is still TRUE stays silent. The same roster, the same fixture, and the one
+    # thing changed is that nothing answers at that host.
+    plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        roster={"memex-cloud": ("not-installed", "never stood up", "")},
+                        probe=_answers(None, "no such host"))
+    check(not any("ANSWERS" in b for b in plan.blockers),
+          f"ARM 25b: a still-true exemption was reported as stale, which would make the arm above "
+          f"fire on every declaration and train its reader to delete correct lines: {plan.blockers}")
 
     # ── ARM 26: an installation running an image the registry no longer carries reds ────────────
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
@@ -6020,6 +6597,9 @@ env:
     run_calls = _calls(run) - {"report", "emit", "print", "Registry", "len", "bool", "sorted",
                                "set", "any", "all", "read_instance_roster",
                                "read_registry_dispositions", "read_repository_roster",
+                               # …and the derived push-target set, for the same reason: it is a
+                               # repository-tree read the harness takes as a parameter.
+                               "publish_targets",
                                "scan_overlays_local", "scan_overlays_remote"}
     missing = run_calls - _calls(_drive)
     check(not missing,
@@ -6032,6 +6612,10 @@ env:
     # until this check existed. Name the steps the protection decision must make.
     required = {"extractor_control", "read_instance_roster", "read_registry_dispositions",
                 "read_repository_roster", "check_repository_roster",
+                # Both directions on the registry table, named here for the same reason every other
+                # step is: the harness has its own copy of the sequence, so an arm can pass about a
+                # step `run()` has stopped taking.
+                "check_registry_roster", "publish_targets",
                 "build_instances", "classify_foreign_registries",
                 "resolve_running_sets", "resolve_and_classify", "classify_tags",
                 "read_inventory", "build_plan", "apply_locks", "apply_tag_locks"}

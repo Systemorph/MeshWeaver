@@ -24,6 +24,45 @@ made — one line, then stop. A change set spanning repos (MeshWeaver.Education,
 MeshWeaver.Plugins) is finished when every part is merged in dependency order: platform first, then
 what depends on it.
 
+### 🚨 …and MERGED is not LIVE — the running grain still serves its old state
+
+**"The grain keeps serving old state until we send a dispose request"** (maintainer, 2026-09-17).
+Merging is where *your* work ends; it is not where the change starts being served. A per-node hub —
+on Orleans, a grain activation — is built ONCE out of what it read while activating, and **nothing
+re-reads it while it lives**. Every change a portal absorbs *while it keeps running* — a merge that
+syncs in, a package installed or updated, a NodeType recompiled in place — changes what the NEXT
+activation would load and reaches a live one through nothing at all: it keeps answering from what it
+holds, with no error, no log line and nothing to grep. So a merged fix that "does not work" is as
+likely to be an un-recycled activation as a bad fix. (A pod restart or a roll DOES end the
+activations on the pods it replaces — the gap is the running portal, and what a fresh activation
+then chooses.)
+
+**This is the last step of the change set, and it is yours.** For a PR that changes something a
+per-node hub serves — a NodeType's `Source/*.cs`, node content shipped in an image or a bake, a
+layout area compiled in the mesh:
+
+1. **Exercise the feature against the RUNNING address** after the roll. Not the image tag, not the
+   install record, not the green tick — the thing a user does.
+2. **Still the old answer? Recycle that address** and exercise it again. The two surfaces do
+   different amounts of work: `hub.RecycleNode(path, reason: "…")` is **dispose-only**, while the
+   operator `recycle` verb (the MCP tool, the node's **Recycle** menu entry, `mw recycle <path>`)
+   *also* stamps a FORCED release request — but **only when the target is a NodeType node**, and a
+   forced release is what skips prebuilt adoption and compiles the live source (#2818). Recycling an
+   ordinary page recompiles nothing.
+3. **Still the old answer after that? The activation was never the problem.** A third recycle finds
+   nothing. Go look at delivery — the `[ModuleLoad] … (written=…)` line says which bytes the pod
+   actually loaded.
+4. **Name the addresses a deploy has to recycle in the PR body.** A recycle nobody knew to run is
+   indistinguishable from a fix that did not work, and the next session inherits the confusion.
+
+🚨 **A recycle makes the activation RE-READ; it does not decide what the re-read FINDS.** A
+dispose-only recycle compiles nothing at all — it re-resolves the same store key
+`(nodeTypePath, version)` and re-binds the same local copy, which is why a same-path build mismatch
+is reported and deliberately NOT offered as a recycle (#2471). It clears no data, and it touches one
+address, not the process and not the other replicas. Full reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md)
+· [/deployment](../deployment/SKILL.md).
+
 ### PR capability is CREDENTIAL × REPO — measure it, never remember it
 
 The guidance here once read *"`gh` CLI has read + push only — cannot merge, resolve threads, or
@@ -78,7 +117,7 @@ green CI image. So `main`'s CI is not a formality — it is the source of the im
 > merge only on `conclusion == SUCCESS`** (step 3). Do NOT use `gh run watch` — it polls REST and
 > drains the shared token budget into 403s that masquerade as CI-red.
 
-**"Consolidate test results" is the required check** (ruleset `main pr protection`) — GitHub now blocks
+**"Consolidate test results" is A required check** (ruleset `main pr protection`; `Automatic review answered` is the other, since 2026-09-17) — GitHub now blocks
 the merge until it reports green, so the gate above is mechanical as well as a rule. Require nothing
 else from that workflow: `Build solution (once)` and the shards are legitimately **skipped** when the
 run reuses an already-green tree, and a skipped *required* check blocks the merge forever.
@@ -118,50 +157,41 @@ differs and the full suite runs; there is no way to skip an untested tree.
 git status --porcelain | grep '^??'        # untracked files a committed file might reference
 dotnet build src/<TheProjectYouTouched> -c Release -warnaserror --no-restore   # match the CI flags
 
-# 0.5 RELEASE NOTE — every USER-FACING PR ships a "What's New" entry as a doc node (one node per
-#     entry → no cross-PR merge conflicts). It's shipped in the docs partition and surfaced by the
-#     What's New settings tab (Doc/WhatsNew, grouped by ship day, newest first). SKIP only for
-#     pure-internal changes (refactor/test/CI/deps with NO user-visible effect) — say so in the PR
-#     body when you skip.
+# 0.5 RELEASE NOTE — NOT per pull request (policy `whatsnew-cadence`, Doc/Architecture/PolicyNotProse).
+#     A merge mints NO What's New file. It updates the DOC PAGE its change belongs to (AGENTS.md
+#     `conserve-work-products`), and What's New is written once per RELEASE, when the release is
+#     cut — naming what completed and linking to those pages. See Release Process §6. The old
+#     per-merge rule took the folder to 1,292 entries (662 in August 2026, 590 in September,
+#     ~20/day), which is the commit log with nicer titles: every entry individually defensible,
+#     the aggregate unusable.
 #
-#     🚨 A BUG FIX A USER CAN NOTICE IS USER-FACING. Fixes are the entries that go missing: over
-#     2026-07-29…08-09, 86 of 127 `fix/` PRs shipped none, against 22 of 69 `feat/` PRs. That is
-#     what makes the feed read as a feature-only changelog when most of the work is repair. A fix
-#     costs one line — Category: Fix bundles it into the day's "N fixes" summary rather than giving
-#     it a paragraph — so the bar is "would a user notice?", never "is it big enough?".
+#     So there is nothing to mint in this step. Confirm instead that the durable form exists:
+#       • behaviour a user can notice  → the doc page explaining it is in THIS change set
+#       • no page covers it yet        → write one (AuthoringDocumentation.md), or say in the PR
+#                                        body why none is needed
 #
-#     Category is the LABEL the tab groups by, not a constant:
-#       feat/ perf/ chore/ docs/ → Category: Feature   (rendered in full, with its Description)
-#       fix/                     → Category: Fix       (bundled into the day's one-line fix summary)
-#     Order is -YYYYMMDD (a NEGATIVE date), which sorts the doc tree and the Doc/WhatsNew folder
-#     page newest-first — without it they fall back to alphabetical by title.
+#     🚨 WHEN YOU ARE CUTTING A RELEASE — and only then — the entry's mechanics are:
 #
-#     🚨 IN A SATELLITE REPO (Plugins, Education, Reinsurance, SocialMedia, Memex) the path below
-#     does not exist — it is core-only. Write the entry into YOUR repo instead, at
-#     `WhatsNew/${DATE}-<slug>.md`, and add ONE line to the front matter:
+#       path    core:       src/MeshWeaver.Documentation/Data/WhatsNew/<yyyy-MM-dd>-<slug>.md
+#               satellite:  WhatsNew/<yyyy-MM-dd>-<slug>.md, plus ONE front-matter line,
+#                           `nodeType: WhatsNew` — the feed lists by node TYPE as well as by the
+#                           core path (#2539), so an entry declaring it reaches the one
+#                           Doc/WhatsNew feed from any repo with no cross-repo PR.
 #
-#         nodeType: WhatsNew
+#       name    🚨 MUST START WITH THE ISO SHIP DATE. `WhatsNewEntryIntegrityTest` enforces
+#               `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES `Order` from that date, so a
+#               version-prefixed name is rejected from the feed. The version belongs in `Name` /
+#               `Description`, never in the filename.
 #
-#     That is the whole difference. The feed lists entries by node TYPE as well as by the core
-#     path (#2539), so an entry declaring it reaches the one Doc/WhatsNew feed from any repo, with
-#     no cross-repo PR. Everything else — Name / Category / Description / Icon / Order, and the
-#     rule that a user-noticeable FIX gets an entry — is identical.
+#       Order   `-YYYYMMDD` (a NEGATIVE ship date), which sorts the doc tree and the folder page
+#               newest-first; without it they fall back to alphabetical by title. The test
+#               requires it to match the filename's date exactly.
 #
-#     Before #2539 there was no route at all, so satellite fixes were simply skipped, and the feed
-#     drifted toward being a platform-only changelog while reading as a complete one.
-DATE=$(date -u +%Y-%m-%d)                   # no clock in scripts elsewhere, but this is a shell step
-NOTE_FILE=src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md   # core; satellites: WhatsNew/${DATE}-<slug>.md
-# Frontmatter is printf'd (Order needs the date substituted); the PROSE goes in a QUOTED heredoc so
-# a note containing `$`, `${…}` or backticks is written literally instead of being expanded by bash.
-printf -- '---\nName: %s\nCategory: %s\nDescription: %s\nIcon: Sparkle\nOrder: -%s\n---\n\n' \
-  '<short human title of the change>' '<Feature|Fix>' \
-  '<one-line summary shown in the What'"'"'s New list>' "${DATE//-/}" > "$NOTE_FILE"
-cat >> "$NOTE_FILE" <<'NOTE'
-# <title>
-
-<2–5 plain-language sentences on what changed and why it matters to a user — not the how.>
-NOTE
-git add "$NOTE_FILE"
+#       content A release entry names FIXES as well as features. Fixes are the items that go
+#               missing — over 2026-07-29…08-09, 86 of 127 `fix/` PRs shipped no note against 22
+#               of 69 `feat/` PRs — which is what made the feed read as a feature-only changelog
+#               when most of the work is repair. `Category: Fix` bundles an item into the one-line
+#               fix summary, so the bar is "would a user notice?", never "is it big enough?".
 
 # 1. CREATE the PR (branch must be pushed first; push only when the user asked — AGENTS.md).
 git push -u origin "$(git branch --show-current)"
@@ -216,8 +246,14 @@ c=$(suite conclusion); echo "PR $PR CI: $c"; [ "$c" = "SUCCESS" ]   # exit 0 iff
 #    - CI red  → pull the failing job log (REST, but ONE call — not a poll — so it's fine), fix, push, GOTO 3.
 #        gh run view <run-id> --log-failed | grep -iE 'error|##\[error\]'
 #    - Copilot review (arrives automatically — see step 2) → read its comments, address the
-#      actionable ones, resolve threads, push, GOTO 3. Same for any human review.
-#        gh pr view <PR> --json reviews,comments
+#      actionable ones, push, and REPLY to EVERY thread it opened (fixed, or why not), GOTO 3.
+#      Same for any human review. The `Automatic review answered` check (review-answered.yml,
+#      #4299) is RED until the review has landed and each of its threads has a reply from a person
+#      — resolving a thread is not a reply. Never apply the `review-waived` label yourself: it is
+#      a maintainer's decision, and your session runs under an account the check cannot tell apart
+#      from the maintainer's. Doc: Doc/Architecture/ReviewFindingsAnswered.
+#        gh api "repos/Systemorph/MeshWeaver/pulls/<PR>/comments?per_page=100"          # REST, not GraphQL
+#        gh api -X POST "repos/Systemorph/MeshWeaver/pulls/<PR>/comments/<id>/replies" -f body='…'
 
 # 5. MERGE — only now, only if step 3 was green.
 gh pr merge <PR> --merge
@@ -241,7 +277,7 @@ never finished. Poll the `MeshWeaver Build and Test` suite specifically (step 3 
 
 Two further gotchas:
 
-- **`Consolidate test results` is the required check** — and the ONLY one to require. `Build solution
+- **`Consolidate test results` is the required check for TESTS** — but NOT the only required context: `Automatic review answered` joined it on 2026-09-17, and an unanswered review thread leaves a green PR `blocked` and silently OUTSIDE the merge queue. Answer it by replying ON each thread (`gh api "repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies" -f body=…`); a PR-level comment does not count. `Build solution
   (once)` and the shards are legitimately *skipped* when a run reuses an already-green tree, and a
   skipped required check blocks the merge forever.
 - **Also check the clock before declaring a job stuck.** GitHub timestamps are UTC; a local-time
@@ -358,16 +394,22 @@ changes about this procedure:
 - **The step-3 poll still applies to the PR's own run**, and after the queue lands it, to `main`'s.
   The queue is not a reason to stop watching; it is the reason the merge is no longer yours to press.
 
-## What's New entry (step 0.5) — one doc node per user-facing PR
+## What's New entry — the MECHANICS, for when you are cutting a release
 
-The platform's **What's New** feed is not a hand-maintained changelog: it's the set of per-entry
-markdown nodes under `src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition,
-so every self-updating deployment shows the same feed). The **What's New** settings tab lists them
+> 🚨 **This section is NOT a per-PR step. A merge mints no What's New file** — see step 0.5 above,
+> and policy `whatsnew-cadence`. What follows is the file format, which you need only when you are
+> writing the entry for a **release**. Everything below is about *how* to write one, never *whether*
+> to. (This heading used to read "one doc node per user-facing PR"; that rule is retired.)
+
+The platform's **What's New** feed is the set of per-entry markdown nodes under
+`src/MeshWeaver.Documentation/Data/WhatsNew/` (shipped in the `Doc` partition, so every
+self-updating deployment shows the same feed). The **What's New** settings tab lists them
 newest-first; each entry is a normal doc node you can open.
 
-- **One file per PR** (`<YYYY-MM-DD>-<slug>.md`) — the date prefix drives newest-first ordering, and
-  a distinct filename per PR means two concurrent PRs never conflict on the feed (the reason we do
-  NOT prepend to a single rolling file).
+- **One file per RELEASE** (`<YYYY-MM-DD>-<slug>.md`), written when the release is cut, named by the
+  SHIP DATE — `WhatsNewEntryIntegrityTest` enforces `^(?<date>\d{4}-\d{2}-\d{2})-.+$` and DERIVES
+  `Order` from it, so a version-prefixed name is rejected from the feed. The version belongs in
+  `Name`/`Description`, never in the filename.
 - **Front-matter**: `Name` (title shown in the list), `Category` — **`Feature` or `Fix`, nothing else**
   (`feat/ perf/ chore/ docs/` → `Feature`, rendered in full; `fix/` → `Fix`, bundled into the day's
   one-line summary) — `Description` (one-liner), `Icon` (a Fluent icon name, e.g. `Sparkle`), and
@@ -375,8 +417,10 @@ newest-first; each entry is a normal doc node you can open.
   newest-first instead of alphabetically by title. Body is plain-language user-facing prose.
   `WhatsNewEntryIntegrityTest` enforces all five — a wrong `Category` or a missing `Order` turns
   **main** red, not just your PR, because the entry only reaches CI once it has merged.
-- **When to skip**: pure-internal PRs (refactors, tests, CI, dependency bumps) with no user-visible
-  change don't need an entry — note the skip in the PR body so a reviewer knows it was deliberate.
+- **What it names**: what the release COMPLETED — the user-visible outcome of the features and
+  fixes in that stream, each linking to the doc page that explains it. Internal work (refactors,
+  tests, CI, dependency bumps) is not announced; there is no per-PR skip to note, because no PR
+  writes an entry (policy `whatsnew-cadence`).
 
 ## The half-committed-WIP trap (how main went red on a clean CI)
 

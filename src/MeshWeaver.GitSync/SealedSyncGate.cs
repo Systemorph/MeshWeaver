@@ -136,17 +136,28 @@ public static class SealedSyncGate
         ArgumentNullException.ThrowIfNull(sealedForThisIdentity);
 
         if (RefusedForUnreadableIndex(readOutcome, identity) is { HoldReason: { } unreadable })
-            return new ImportPlan(null, null, unreadable, unreadable,
+            return new ImportPlan(null, null, WithLine(unreadable, newerLine), unreadable,
             [
                 new LogMessage(
                         $"Nothing was imported: the publication index for this instance's framework identity "
                         + $"{identity} could not be read, so the commit its bundles were baked from is unknown.",
                         LogLevel.Warning)
                     .WithKey("activity.gitsync.seal.heldUnreadable", ("identity", identity)),
+                // 🚨 EVERY hold names its direction, this one included (review on #4576). An
+                // unreadable identity directory beside READABLE release markers is exactly the case
+                // where the roll clause is the actionable half — and dropping it here would have made
+                // one of the four holds silent about what releases it.
+                DirectionLine(repo, identity, newerLine),
             ]);
 
+        // 🚨 A REQUESTED REF IS ONLY A COMMIT WHEN IT LOOKS LIKE ONE (review on #4576). `SameCommit`
+        // compares seven-character prefixes, so a branch whose NAME is hex — `abcdef1`, a real and
+        // legal branch name — would be read as the sealed commit: the branch would be fetched with no
+        // redirect, and it could attribute a marker-less seal to this repository. A branch is not a
+        // coordinate; only a commit-shaped ref may take either leg.
+        var requestedCommit = IsFullCommitSha(requested) ? requested : null;
         var mine = sealedForThisIdentity
-            .Where(s => BelongsTo(s, repo, requested, lastSyncSha))
+            .Where(s => BelongsTo(s, repo, requestedCommit ?? "", lastSyncSha))
             .ToList();
         if (mine.Count == 0)
             return new ImportPlan(requested, null, null,
@@ -162,7 +173,7 @@ public static class SealedSyncGate
         }
 
         var commit = adopted.Commit!;
-        if (SameCommit(requested, commit))
+        if (requestedCommit is not null && SameCommit(requestedCommit, commit))
             return new ImportPlan(requested, commit, null,
                 $"'{requested}' is the commit {repo} is sealed at for identity {identity} — imported as asked", []);
 
@@ -351,9 +362,10 @@ public static class SealedSyncGate
     /// <para>This is deliberately NOT a parameter of <c>Decide</c>. The question is not per
     /// repository — if the index could not be read, no per-repository answer is trustworthy — so
     /// the caller asks ONCE per delivery, before any verdict, and holds every source when it
-    /// answers. #3461 phase 5 (dropping the flat compatibility copy) is the documented trigger:
-    /// this reader would find no sentinel at all and silently switch the whole rule off at the
-    /// moment it matters most.</para>
+    /// answers. #3461 phase 5 (disposing of the flat compatibility copy) is the documented
+    /// trigger, and it is live since that landed: a pointer read while it is being replaced falls
+    /// back to a source directory that no longer holds a publication, so the source reads as
+    /// unsealed AND unattributable — which this gate would otherwise answer with Go.</para>
     /// </summary>
     /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor"/> reported.</param>
     /// <param name="identity">This instance's framework identity — log copy only.</param>
@@ -365,6 +377,32 @@ public static class SealedSyncGate
                 + "not be READ (see the SealedPublicationIndex warning above it) — that is an "
                 + "absence of measurement, not an empty index, so every source is held rather "
                 + "than advanced. 'Cannot tell' is never 'clear to proceed' (#3461)")
+            : null;
+
+    /// <summary>
+    /// The same precondition for a FIRST import (<see cref="DecideFirstImport"/>), whose two
+    /// unattended callers — <c>ModuleDiscoveryService.FirstImport</c> and
+    /// <c>InstanceAutoRegistrationService</c>'s boot default install — read the index themselves.
+    ///
+    /// <para>🚨 It is a separate method rather than an overload of <c>DecideFirstImport</c> on
+    /// purpose: an added overload makes every parameterless <c>&lt;see cref&gt;</c> to that name
+    /// ambiguous (<c>CS0419</c> under <c>-warnaserror</c>), here and in every repository that pins
+    /// this assembly.</para>
+    ///
+    /// <para>A first import reads WORSE from an unreadable index than a green build does, because
+    /// only the repository MARKER can attribute a seal there — no built commit, no
+    /// <c>LastSyncCommitSha</c> — so an unattributable source is indistinguishable from "this
+    /// instance runs no publication of that repository" and the Space would be populated from the
+    /// branch TIP. A held first import leaves a Space with its sync entry and no content, which
+    /// the next scan, the next seal arrival or the next boot completes.</para>
+    /// </summary>
+    /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor"/> reported.</param>
+    /// <param name="identity">This instance's framework identity — log copy only.</param>
+    /// <returns>A holding <see cref="FirstImportPlan"/>, or null when the reading is usable.</returns>
+    public static FirstImportPlan? RefusedFirstImportForUnreadableIndex(
+        SealedReadOutcome outcome, string identity)
+        => RefusedForUnreadableIndex(outcome, identity) is { HoldReason: { } reason }
+            ? Hold(reason)
             : null;
 
     /// <summary>
@@ -524,6 +562,23 @@ public static class SealedSyncGate
         var parts = ownerSlashName.Trim().Split('/', StringSplitOptions.RemoveEmptyEntries);
         return parts.Length == 2 ? new RepoIdentity(parts[0], parts[1]) : new RepoIdentity("", "");
     }
+
+    /// <summary>
+    /// 🚨 Whether a ref a PERSON asked for can be compared to a sealed commit at all: a FULL
+    /// 40-character hex sha, and nothing shorter (review on #4576).
+    ///
+    /// <para><see cref="SameCommit"/> matches on a seven-character prefix, which is right for two
+    /// machine-produced shas and wrong for a ref somebody typed: a branch name may legally be hex,
+    /// so <c>abcdef1</c> — a branch — would have read as the sealed commit, been fetched AS a branch
+    /// with no redirect, and could even have attributed a marker-less seal to this repository. A
+    /// branch is a pointer, not a coordinate, and no shape test can tell the two apart below full
+    /// length. Requiring the full sha costs nothing: a shortened one simply redirects onto the
+    /// sealed commit it names, which is the same tree, and the activity says so.</para>
+    /// </summary>
+    /// <param name="commitish">The ref a caller was asked for.</param>
+    /// <returns>True when it can only be a commit.</returns>
+    internal static bool IsFullCommitSha(string? commitish)
+        => commitish is { Length: 40 } sha && sha.All(char.IsAsciiHexDigit);
 
     internal static bool SameCommit(string? a, string? b) =>
         !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)

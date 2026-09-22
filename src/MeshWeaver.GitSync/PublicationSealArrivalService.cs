@@ -50,13 +50,20 @@ namespace MeshWeaver.GitSync;
 /// and dispatching the same import twice. That is the house serialization channel, not a gate — no
 /// <c>SemaphoreSlim</c>, no lock, nothing that can park a turn.</para>
 ///
-/// <para>🚨 <b>What it deliberately does NOT do.</b> It hands the reconciler an EMPTY declined-type
-/// set, so only <c>SealedSyncReconcile.Action.ImportAtSealedCommit</c> can fire. The
-/// <c>ReconcileAtSealedCommit</c> arm exists for types the adoption sweep declined on their source
-/// fingerprint, and that measurement belongs to the sweep — claiming it here would report "nothing
-/// was declined" for a population this service never looked at. It also never releases a source for
-/// ANOTHER identity's publication: whether it should is the open design question #4063 names, and
-/// it is the same question <c>Modules:VersionStrictness</c> answers for bundle adoption.</para>
+/// <para>🚨 <b>It hands the reconciler <c>null</c>, not an empty declined-type set</b>
+/// (MeshWeaver#4620). The paragraph here used to say the opposite, and the reasoning was half
+/// right: this service does not take the adoption sweep's measurement, so claiming "nothing was
+/// declined" would report a clean partition for a population it never looked at. What it missed is
+/// that an EMPTY set says exactly that — the reconciler reads an at-the-seal source with nothing
+/// declined as its STEADY STATE and moves nothing. So <c>ReconcileAtSealedCommit</c> could never
+/// fire on this, the only post-boot trigger, and a partition left holding one file from each of two
+/// trees stayed that way while its sync recorded success (measured in two of nineteen partitions on
+/// memex.systemorph.com, 2026-09-17). Null means "I did not measure", and the reconciler then takes
+/// the measurement itself, where the bundle inventory already is. Both arms can now fire.</para>
+///
+/// <para>🚨 <b>What it still deliberately does NOT do.</b> It never releases a source for ANOTHER
+/// identity's publication: whether it should is the open design question #4063 names, and it is the
+/// same question <c>Modules:VersionStrictness</c> answers for bundle adoption.</para>
 ///
 /// <para>Idempotent by construction, so a burst of announcements costs at most a re-read: the
 /// reconciler imports only where the source is BEHIND the sealed commit, and a source already at it
@@ -180,7 +187,16 @@ internal sealed class PublicationSealArrivalService(
                 .Do(sealedForThisIdentity => census?.RecordPublication(new SealedPublicationReading(
                     identity, publishedRoot, [.. sealedForThisIdentity], DateTimeOffset.UtcNow)))
                 .SelectMany(sealedForThisIdentity =>
-                    reconciler.Reconcile(identity, sealedForThisIdentity, [])))
+                    // 🚨 `null`, not `[]` (MeshWeaver#4620). An empty set is a MEASUREMENT — "I
+                    // compared the partition against the commit's tree and nothing had drifted" —
+                    // and the reconciler reads it as the steady state and moves nothing. This
+                    // trigger measures nothing of the kind: the declined set is a by-product of the
+                    // boot sweep's bundle-adoption walk, which does not run here. Passing `[]`
+                    // therefore asserted a clean partition on no evidence, and it was the ONLY
+                    // post-boot path into the drift detector — so after boot the detector could
+                    // never fire. Null says "I did not look", and the reconciler takes the
+                    // measurement itself, where the bundle inventory already is.
+                    reconciler.Reconcile(identity, sealedForThisIdentity, declinedTypePaths: null)))
             .Do(
                 dispatched =>
                 {

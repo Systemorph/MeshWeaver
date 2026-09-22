@@ -55,7 +55,7 @@ with a smaller repro; do not retry. The only exceptions: (a) the test harness it
 (MSBuild MSB4166, infrastructure error — a re-run is the same input), (b) the previous run was
 killed by the user before completion.
 
-🚨 **`.ToTask()` is FORBIDDEN in tests too** (maintainer, 2026-08-30 — the earlier test exemption is retracted: a Task completed inside an Rx pipeline resumes inline on the signalling thread, still inside the trampoline, so the bridge changes what the test measures). Await the observable directly with a `.Timeout(...)` — see
+🚨 **`.ToTask()` is FORBIDDEN in tests too** (maintainer, 2026-08-30 — the earlier test exemption is retracted: a Task completed inside an Rx pipeline resumes inline on the signalling thread, still inside the trampoline, so the bridge changes what the test measures). 🚨 **Awaiting the observable DIRECTLY is not the alternative** — Rx's awaiter is an `AsyncSubject<T>` that completes its continuation from inside `OnCompleted` and resumes inline just the same (`InlineResumptionMechanismTest`); this line used to say it was, and `DirectObservableAwaitSites.allow` is the 228-site inventory that advice produced. Assert on the stream through `MeshWeaver.Reactive.Assertions`, or wait through `.Await(ct)` / `.ObserveCompletion(reportLateFault, ct)` — see
 [/async](../async/SKILL.md).
 
 **No static collections, in `test/` as much as `src/`** — a `Clear()` added "for test isolation" is
@@ -128,7 +128,7 @@ first. Never rerun a hung test "to see".
 
 - **`MonolithMeshTestBase`** (recommended) — full integration with persistence, messaging, DI; use
   `AwaitResponseAsync(request, ...)` for request/response in tests.
-- **`HubTestBase`** — message routing / layout tests; await the observable directly, e.g. `await hub.Observe<TResponse>(request).FirstAsync().Timeout(30.Seconds())` — never `.ToTask()`.
+- **`HubTestBase`** — message routing / layout tests; assert on the stream, e.g. `await hub.Observe<TResponse>(request).Should().Within(TestTimeouts.Convergence).Emit("the response arrives")`, or wait through the one bridge: `await hub.Observe<TResponse>(request).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)`. Never `.ToTask()`, and never a bare `await hub.Observe<TResponse>(request).FirstAsync()` — Rx's own awaiter resumes inline on the signalling thread exactly as `.ToTask()` does.
 - **`MeshWeaver.Hosting.Orleans.TestBase`** — the core Orleans cluster machinery (test cluster,
   disposal drain, shutdown-race suppression). `OrleansMeshTestBase` is the ONE base a suite
   derives from; which cluster it gets is `Bootstrap => MeshBootstrap.Orleans(…)` plus

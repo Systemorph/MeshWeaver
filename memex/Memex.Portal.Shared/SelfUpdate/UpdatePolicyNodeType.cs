@@ -89,9 +89,18 @@ public record UpdatePolicyContent
     /// forward-looking guard that keeps that guarantee if an "edge" channel (publish-on-every-build,
     /// tags carrying the <c>edge</c> pre-release label) is ever added — green-only ignores those.
     /// Set <c>false</c> to also accept unverified edge builds (bleeding-edge / pre-merge testing).
+    ///
+    /// <para>🚨 <see cref="JsonIgnoreCondition.Never"/> is REQUIRED, not decoration — the same
+    /// reason <c>NotificationSettings</c> and <c>GitHubSyncConfig</c> carry it on every
+    /// default-true bool. The hub serializer uses <see cref="JsonIgnoreCondition.WhenWritingDefault"/>,
+    /// which omits the CLR default, and the CLR default for a bool is <c>false</c> — so an admin
+    /// unticking this box wrote a value the serializer dropped, and the next read re-applied this
+    /// initializer's <c>true</c>. The checkbox could be unticked and never stayed unticked: another
+    /// setting on this node that silently discards what an operator chose (#3542).</para>
     /// </summary>
     [Description("Only update to CI-verified (green) builds")]
     [Translation("de", "Nur auf CI-geprüfte (grüne) Builds aktualisieren")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool RequireCiGreen { get; init; } = true;
 
     /// <summary>The newest image tag the poller has found on the registry (for the admin UI /

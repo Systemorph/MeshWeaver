@@ -64,6 +64,12 @@ public sealed class InMeshPartitionOwnerPostCreationHandler(
         if (string.Equals(createdBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
             return Observable.Empty<Unit>();
 
+        // 🚨 OwnsPartition, NOT OwnsPartitionOnce — this resolution is deliberately INDEPENDENT of
+        // the one the validators shared. The three validators run back to back on one context and
+        // now share a single view of the type (PartitionOwnershipMemo); this check is the other
+        // side of the storage write, which is the one window in a create wide enough for the
+        // declaration to have actually moved. Reading the pre-write answer here would grant a
+        // creator Admin on the strength of a fact nobody re-established after the row landed.
         return PartitionOwningTypes.OwnsPartition(hub, createdNode.NodeType)
             .SelectMany(owns => owns == true
                 ? Establish(createdNode, createdBy)

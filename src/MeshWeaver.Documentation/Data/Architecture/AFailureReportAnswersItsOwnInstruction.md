@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "A Failure Report Answers Its Own Instruction"
-Abstract: "Two live incidents in which a failure report told the reader to go and find a fact the reporting code already held: the deferred-delivery discard that said 'find why this hub disposed' without naming the teardown, and the commit-stage delete timeout that printed an outstanding-work field as '-' while the drain was stuck on the rest of the subtree. The rule, the two shapes it covers, and why a field that renders 'not measured' identically to 'none' is worse than no field."
+Abstract: "Live incidents in which a failure report told the reader to go and find a fact the reporting code already held: the deferred-delivery discard that said 'find why this hub disposed' without naming the teardown, the commit-stage delete timeout that printed an outstanding-work field as '-' while the drain was stuck on the rest of the subtree, a report that re-derived a past fact from a structure that had since emptied, and a pooled-I/O attribution subscribed to a completion signal the failing case never publishes. The rule, the four shapes it covers, why a field that renders 'not measured' identically to 'none' is worse than no field, and why a report behind a hard-coded bound is a report nobody has ever read."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#b23c17'/><path d='M12 7v6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/><circle cx='12' cy='17' r='1.3' fill='white'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -19,9 +19,10 @@ Tags:
 > must first check whether it is already holding it — and if a report carries a field for
 > outstanding work, every producer of that report fills it, because an unfilled one does not
 > abstain, it asserts the opposite. A fact about a PAST event is read from what was RECORDED then,
-> never re-derived now from a structure that has moved since.**
+> never re-derived now from a structure that has moved since — and a report about a FAILURE is never
+> subscribed to a signal that only SUCCESS publishes.**
 
-All three shapes were measured on live portals in September 2026, within a week, in subsystems that
+All four shapes were measured on live portals in September 2026, within two weeks, in subsystems that
 share no code. They are the same defect.
 
 Related: [Reading a Disposal Stall Verdict](../DisposalStallVerdicts) — what a snapshot field actually
@@ -245,6 +246,114 @@ yet tell the caller.**
 
 ---
 
+## Shape 4 — the attribution rides the SUCCESS signal, so the failure case names nothing
+
+The first three shapes are about a fact the report could have read and did not. This one is
+structural, and it is the hardest of the four to see in review, because the attribution code is
+**there**, it is correct, it is tested, and it is wired to a signal the failing case never publishes.
+
+At silo shutdown the pooled-I/O registry is asked to cancel every leaf and report what did not
+unwind. Its per-pool attribution — added for
+[#2480](https://github.com/Systemorph/MeshWeaver/issues/2480) precisely because *"the teardown report
+does not name the offending pool or leaf"* — is subscribed to each pool's own completion:
+
+```csharp
+foreach (var kvp in pools)
+    kvp.Value.Disposed.Subscribe(residual => { if (residual != 0) LogWarning(…, kvp.Key, residual); });
+```
+
+That is sound for a pool which unwinds LATE — it reports even after the caller's own bounded wait
+has given up. But a pool holding a leaf that ignores its token **never completes `Disposed` at
+all**; the pool's own remarks say so in as many words:
+
+> *If a leaf never unwinds, `Disposed` simply never fires and the caller's bounded wait surfaces that
+> as the timeout it is.*
+
+So the one path the fault ever takes is the one path with no attribution. The registry also clears
+its pool dictionary on the way in — correctly, so a pool handed out after disposal can never be
+issued work nobody will join — which removed the caller's last way to enumerate what it was waiting
+for. The result, measured across three weeks and 18 production occurrences on 16 pods:
+
+```text
+IoPoolSiloTeardown: pooled I/O did not finish within 00:00:30 — the silo is releasing over live
+work. A leaf ignored its cancellation token; fix the leaf, do not widen the budget.
+```
+
+Every occurrence identical. No pool, no site, no stack — an instruction (*fix the leaf*) addressed
+to a reader who is given no leaf, guarding a failure mode whose next step is a native
+use-after-unload crash.
+
+### The tell: which signal is the report attached to?
+
+This is the report-shaped form of the ordering rule that
+[#4466](https://github.com/Systemorph/MeshWeaver/issues/4466) states for joins — *the signal a joiner
+waits on is the LAST thing the fact it asserts publishes*. Turned around for a report it reads:
+
+> **A report about a failure must not be subscribed to a signal that only success publishes.** If
+> the only way the line gets written is the path where nothing went wrong, the line does not exist.
+
+The fix reads the pools the join was waiting on **directly**, at the moment the budget expires,
+which needs no signal from them at all — `UnreportedResiduals()` subtracts the pools that did report
+from the set the disposal captured, and each remaining one names its in-flight count and its leaf
+call sites. The residual then travels as the return value of a plain read rather than as an event:
+
+```text
+… do not widen the budget. Did NOT report: Query=1 [MeshQuery+<>c__DisplayClass22_0.<MergeProviderObservables>b__1].
+```
+
+### The sweep: three of the four teardown budgets already did it right
+
+This is worth stating because it makes the defect a deviation rather than a design gap. Four places
+hold a bounded wait at teardown and report its expiry, and the other three all read their state
+**directly at the moment the bound expires**:
+
+| where | what its expiry report reads |
+|---|---|
+| `MeshTeardownHostedService` | `mesh.GetDisposalDiagnostics()` — the recursive snapshot, taken there |
+| `MeshTeardownExtensions.TeardownAsync` | the same snapshot, onto the `TimeoutException` it throws |
+| `RoutingQuiescenceSiloParticipant` | `quiescence.InFlightSample()` — the stuck legs, with target and delivery id |
+| `IoPoolSiloTeardown` | **nothing** — it waited for the pools to tell it, and they never did |
+
+`RoutingQuiescence` is the closest sibling and the direct precedent: same 30 s budget, same silo-stop
+phase, and [#2833](https://github.com/Systemorph/MeshWeaver/issues/2833) filed *the same
+diagnosability ask on the same day* as #2480 — *"logging the target/sender/delivery id would turn the
+next occurrence into a direct pointer — the same ask #2480 made for the pool name."* It was answered
+by reading the registry at expiry, and production shows the difference plainly: bare lines until
+2026-09-02, and from then on
+
+```text
+… do not widen the budget. Stuck leg(s): dispatch → Ops/Status/partnerre (delivery nxnf1DdwRU6mG0t4iI9bwA) | …
+```
+
+Same ask, same week, two subsystems; the one that read its own state at expiry became actionable and
+the one that subscribed to a completion stayed blind for another seventeen days. **The pattern to copy
+is the sibling's, and the question to ask at review is simply: at the moment the bound expires, what
+does this line READ?**
+
+### The empty case is a different finding, and must not read as "clean"
+
+If the budget expired and yet **every** pool reported, no leaf is holding anything — so the
+aggregate join itself failed to complete, which is a defect in the registry's own combinator and not
+in any leaf. That has to be spelled out, or it renders as the absence of a finding and sends the
+reader to look for a leaf that is not there. Same trap as Shape 2, one level up.
+
+### Why nobody caught it for three weeks — and why the budget is now settable
+
+The issue was closed as fixed on the strength of reading the attribution code, and reopened by the
+next occurrence. The reading was right about the code and wrong about which path reaches it, and no
+test could have settled the argument either way: the join budget was a hard-coded `static readonly`
+30 s, so the expiry report was **unreachable from any test** — at 30 s it cannot even be observed
+under `test/xunit.runner.json`'s 30 s `methodTimeout`. It is now `IoPoolOptions.SiloJoinBudget`,
+default unchanged, settable only so a test can let it expire; the regression pin parks a leaf that
+genuinely ignores its token and asserts the pool name and the leaf site are both in the line.
+
+That is checklist item 7 collecting its second victim in the same subsystem, and it is the reason to
+treat it as a rule rather than a nicety: **a path no test can reach is a path whose wording nobody
+checks.** Widening the budget would have been the forbidden move — the budget is not the defect, and
+the report is what makes the defect findable at all.
+
+---
+
 ## What this rule is not
 
 It is **not** a licence to downgrade or silence a report. Both changes here leave every level,
@@ -276,3 +385,8 @@ stops reporting is a silenced fault, not a classification.
 7. Can a test reach this line at all? A report behind a hard-coded bound is a report whose wording
    nobody ever checks — three readers shared one drain here, and the two nobody could reach are the
    two that stayed wrong.
+8. **Which signal is the report subscribed to?** If the attribution is published by a completion, an
+   `OnNext`, a `Disposed` or any other event that only the SUCCESS path raises, then the failure case
+   writes nothing — and that is the only case the report exists for. Read the state directly at the
+   moment the bound expires instead. And say what the EMPTY reading means, because "the budget
+   expired and nothing is outstanding" is a different, sharper finding than "no finding".

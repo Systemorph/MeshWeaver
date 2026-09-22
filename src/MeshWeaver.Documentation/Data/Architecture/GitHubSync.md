@@ -303,6 +303,70 @@ Under the hood this is the platform's standard **[Activity Control Plane](/Doc/A
 > only ever enter the Space through the **import pipeline** (import deltas — add / update
 > / prune), never by ad-hoc node edits.
 
+### 🚨 A sync operation is refused on anything that is not a synced Space
+
+**Commit**, **Update** and **Check** run *as the System identity* — the click authorizes, the
+System executes — because a GitSynced Space is system-owned and no real user holds Create in it.
+That elevation rests on a premise: **the target IS a GitSynced Space.** The trigger now checks it
+before anything runs: it reads the sync config for the requested source
+(`{space}/_GitSync`, or `{space}/_GitSync/{sourceId}`) — after authorization, as System, through the
+same `ReadConfig` every operation inside the activity decides on — and unless that config **names a
+repository** it **faults, names the path, and creates no activity**:
+
+> Cannot run the GitHub check on 'WhatsNew': it has no GitHub repository configured
+> ('WhatsNew/_GitSync' is absent or names no repository), so it is not a GitHub-synced Space and
+> nothing was started.
+
+A config *node* is not a configured Space: opening the GitHub Sync settings tab mints `_GitSync`
+with an empty repository (`EnsureConfigNode`) before one is chosen, and the sync-source provider
+treats that as untracked, so the predicate is the repository URL, not the node's existence. A read
+that does not answer within 15 s faults too (localized), never falls through to either branch.
+
+**Why this is a rule and not a nicety ([#4933](https://github.com/Systemorph/MeshWeaver/issues/4933)).**
+The trigger is handed *the first path segment of whatever it was called on* — the MCP
+`git_hub_sync` tool and the GitHub action page both pass `path.Split('/')[0]` — and until this it
+never asked what that segment was. `check` and `update` need only **Read**, and the System identity
+is exempt from the "no partition, no write" guard, so **any readable first segment became a
+System-owned `{segment}/_Activity/{id}` create.**
+
+Measured on memex.meshweaver.cloud: `42P01: relation "whatsnew.activities" does not exist` for
+`WhatsNew/_Activity/cc667f2e` (2026-09-18 15:35:29.421Z), reported as *"the WhatsNew namespace was
+never provisioned"*. It was not a provisioning gap. The same pod logged
+`MCP github_sync check failed for WhatsNew` **one millisecond later** (…29.422Z): an MCP caller
+had asked to `check` the "Space" `WhatsNew`, which is no Space — it is the root-level declaration
+node of the built-in `WhatsNew` NodeType, and What's New *entries* live under `Doc/WhatsNew/…` or
+wherever a satellite files them (the feed lists by node TYPE). Three such calls in eight days are
+the whole incident.
+
+| Reading | Verdict |
+|---|---|
+| Provision a `whatsnew` schema (`OwnsPartition = true`, or a `PartitionDefinition`) | ❌ Makes a spurious write succeed, and mints a schema for a type declaration — by symmetry for ~30 sibling built-in types too. |
+| Create the schema lazily at the write | ❌ Exactly what was removed on purpose: the storage router fails loudly (`42P01`) rather than conjuring a ghost schema for an arbitrary path segment (the 45-ghost-schema incident). **The `42P01` was the platform behaving as designed.** |
+| Route the activity somewhere provisioned | ❌ Bakes in a home for a write that should not exist. |
+| **Do not attempt the write** | ✅ The elevation's premise is checked where the elevation happens. |
+
+On a **real** Space with no sync config the same hole was quieter and worse: a reader could plant a
+System-owned activity node in somebody else's partition. The refusal covers that too, and an
+unknown `sourceId` on a synced Space is refused the same way.
+
+🚨 **How the writer was found, because the log line does not name it.**
+`Unexpected error during node creation at {path}` carries no caller. Two things did: the **id
+shape** — an 8-hex activity id is minted at exactly two code sites (`ActivityRunner.RunActivity`
+here, `ContentIndexingActivity.Run` in MeshWeaver.Plugins), while script runs, test runs and chunk
+builds use 32-hex and compiles use `compile-<ts>…` — and a **`Logs` action on the control
+instance** for `WhatsNew` over the window, which put the tool's own warning beside the store's
+error. Of the two 8-hex writers only GitSync elevates to System; the other runs as the caller and
+is stopped by the write guard before it reaches the store.
+
+🚨 **`ActivityRunner.RunActivity` does not provision anything, and neither does the create path.**
+Its comment used to promise that a not-yet-provisioned partition "is fine —
+`EnsurePartitionBootstrap` provisions + roots it". That stopped being true with #3451 (a *repair*
+must never be able to create a partition — the heal writes at most a root row). A caller that
+elevates to System is exempt from the write guard, so **it** owns establishing that its target is a
+real partition before calling. Pinned by `ASyncTriggerNeedsASyncedSpaceTest`, which fails on the
+in-memory store against the pre-fix code — *"expected a refusal, got activity
+`WhatsNew/_Activity/4c37cc28`"* — so the defect is caught without Postgres.
+
 ### Open a pull request — AI drafts, you edit, then submit
 
 This is a four-step flow, all in the **Pull request** section:
@@ -482,6 +546,44 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    measured on memex-cloud as the first failure 2 h 01 min after the container started).
    `GitHubAppTokenRefreshTest` in `Memex.Portal.Shared.Test` holds the invariant with an
    injected clock: the second and third refresh mint, a fresh token replays.
+
+   **🚨 A token that was never minted is a different event from one GitHub rejected — and
+   they used to read the same.** Every fault out of `GetInstallationToken()` is now a
+   `GitHubAppTokenMintException` carrying the stage it stopped at: `NotConfigured`,
+   `Signing` (the key cannot sign — nothing reached GitHub), `InstallationDiscovery` (the App
+   is not installed where it is expected), `TokenExchange` (GitHub refused the exchange — the
+   nearest thing to "revoked"), `Response` (no token in the body) or `Transport` (no verdict
+   at all), plus GitHub's status code where one exists. The translation is total — anything
+   unexpected from the HTTP leaf is wrapped with the original as `InnerException`, and only a
+   cancellation passes through as itself, because a cancelled mint is not a failed one. The
+   type derives from `InvalidOperationException`, which is what all of these paths threw
+   before, so every existing catch behaves identically, and it never carries the key, the JWT
+   or the token.
+
+   Why the distinction has to be carried by a TYPE rather than a message: a consumer may
+   legitimately degrade to an anonymous fetch when no token can be minted — the Store's
+   package feed does, because a public source must keep working — and the *next* thing that
+   happens is GitHub refusing the private repositories, which Octokit reports as
+   `AuthorizationException: Bad credentials`. That sentence is about a credential that was
+   presented and judged. Read against a credential that was never issued it sends the reader
+   to the installation's repository permissions, which are fine, and away from the private key
+   or the installation, which are not (#4736 — four days of identical five-minute reports).
+   `GitHubAppTokenMintFailureTest` pins both sides: a failed mint is a
+   `GitHubAppTokenMintException` naming its stage, and a mint that SUCCEEDS and is then
+   refused downstream is not one.
+
+   Two things that follow, and neither is obvious from a log:
+
+   - **An empty token means anonymous, not "a bad token".** `OctokitGitHubRepoClient.Client`
+     builds a credential-free client for an empty string (Octokit's `new Credentials("")`
+     throws), so an anonymous read of a *private* repository answers **404**. A **401** on a
+     private source therefore means a token was presented — the mint succeeded and the
+     credential is the problem. The empty-token downgrade cannot produce a 401.
+   - **The Store's own degradation is not in this repository.** `StoreManifestSource.Token()`
+     is in-mesh C# in `Systemorph/MeshWeaver.Plugins` (`Store/Catalog/Source/`), so it
+     compiles at runtime in the portal and never in core's CI. It catches the mint failure,
+     names it at Error on the feed's own logger, and then lets the empty token flow on
+     purpose.
 
 All GitHub HTTP and serialization run through the controlled I/O pool — see
 [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling).

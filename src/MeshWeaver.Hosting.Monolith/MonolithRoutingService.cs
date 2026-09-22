@@ -29,8 +29,17 @@ internal class MonolithRoutingService(
         streams[address] = callback;
         // Unregister is a synchronous dictionary removal — no actual async, so no
         // IO-pool bridge needed. Hand back a plain IDisposable.
+        //
+        // 🚨 A registration removes WHAT IT REGISTERED, never "whatever is registered at this
+        // address now". Registration is last-writer-wins, so removing by KEY lets a departing
+        // registration erase a LATER one at the same address — and the local route is what makes
+        // in-process delivery work, so that takes the address dark with no exception and nothing
+        // to grep. Found while tracing #5136 (a hosted hub handed out after its disposal had
+        // begun); no production occurrence of the erase itself is on record, because nothing
+        // currently re-registers an address while its predecessor's teardown is still running.
+        // It is asserted here so that stays a property of this method rather than of its callers.
         return System.Reactive.Disposables.Disposable.Create(
-            () => streams.TryRemove(address, out _));
+            () => streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback)));
     }
 
 
@@ -63,6 +72,24 @@ internal class MonolithRoutingService(
             // The AsyncDelivery callback is a cold IObservable now — return it
             // directly; the base RouteMessageAsync subscribes once at the boundary.
             return stream.Invoke(delivery, CancellationToken.None);
+        }
+
+        // 🚨 A DisposeRequest for an address with NO live hub instantiates nothing. A recycle exists
+        // to make an ACTIVATION re-read its node; an address that has none is already in the state a
+        // recycle produces, so building a hub only to tear it down would cost a full activation
+        // (node resolution, NodeType binding, assembly load) for no change — and a NodeType's
+        // cascade (RecycleCascade) fans out to EVERY instance of the type precisely because it can
+        // rely on this: only the sub-bits that were instantiated are recycled. On this host the
+        // stream table is authoritative for liveness (every node hub registers on creation), so
+        // "no stream" IS "not instantiated"; the Orleans host answers the same question inside the
+        // grain (MessageHubGrain.DeliverMessage), where a silo's table is not the cluster's.
+        if (DisposeRequestEnvelope.TryRead(delivery, out var dispose))
+        {
+            logger.LogInformation(
+                "[ROUTE-IMPL] DisposeRequest → {Address} finds no live hub — nothing to dispose, and "
+                + "nothing is instantiated for it (cascadedFrom={CascadedFrom}; reason: {Reason})",
+                address, dispose!.CascadedFrom ?? "(direct)", dispose.Reason ?? DisposeRequest.ReasonNotStated);
+            return Observable.Return(delivery.Ignored());
         }
 
         // 100% reactive: CreateHub returns IObservable<IMessageHub?>. Compose

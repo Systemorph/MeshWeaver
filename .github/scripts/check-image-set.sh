@@ -4,6 +4,22 @@
 #
 #   .github/scripts/check-image-set.sh <short-sha> [<plugins-short-sha>] [--pointers <version>]
 #   exit 0 = complete   exit 1 = something is missing / malformed / could not be verified
+#   exit 2 = every image of the set is present and good, and the pair tag is CONFIRMED ABSENT
+#            (az exit 3 = ResourceNotFoundError). An unreadable pair read is exit 1, never 2.
+#
+# 🚨 EXIT 2 IS DELIVERABILITY vs PROVENANCE, AND THEY WERE CONFLATED FOR 109 ALARMS
+# (MeshWeaver#4687). The three sha-tagged indexes are what an install PULLS; the pair tag is a
+# fact about how the newest one was BUILT. Reporting a missing pair tag through the same exit
+# code as a missing image told `gate` that main's HEAD had no deployable image — and `gate` then
+# filed `CD: main <sha> has an incomplete image set`, whose body says *every self-updating install
+# stays on the previous image*. Measured over every such issue ever filed: 28 of 109 were this
+# shape, the set complete and every install able to roll. They are not the same condition and they
+# no longer share an answer.
+#
+# Both are still non-zero, so EVERY caller that simply runs this script — `verify-images`,
+# `release.yml` — keeps today's behaviour exactly: a pair tag the run itself just wrote and cannot
+# read back is still RED there. Only a caller that INSPECTS the code can tell the two apart, and
+# only `gate` does.
 #
 # 🚨 THE SECOND ARGUMENT IS WHAT MAKES THE IDENTITY HONEST (MeshWeaver#2622). The portal HOSTS
 # live in MeshWeaver.Plugins, so a merge THERE that edits a file shipping in the image — an
@@ -118,8 +134,15 @@ REGISTRY="${ACR_NAME:-meshweaver}"
 # its preview warning while retaining registry failures. If it is ever withdrawn, the equivalent is
 # `docker buildx imagetools inspect --raw <acr>/<repo>:<tag>` after `az acr login`.
 fail=0
+hosts_stale=0
 summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$1" >> "$GITHUB_STEP_SUMMARY"; return 0; }
 report()  { echo "::error::$1"; summary "- ❌ $1"; fail=1; }
+# 🚨 A SEPARATE SINK, NOT A SEPARATE SEVERITY. `stale` is what the PAIR tag misses into, and it
+# must never touch `fail`: the whole point of exit 2 is that the deployable set is intact. It is
+# still printed and still summarised — the condition is real and the reconciler acts on it — but
+# as a NOTICE, because `::error::` on a job that then succeeds is how a run's annotation list
+# becomes something nobody reads.
+stale()   { echo "::notice::$1"; summary "- 🏠 $1"; hosts_stale=1; }
 ok()      { echo "$1";          summary "- ✅ $1"; }
 
 summary "### Images for main \`$SHA\`"
@@ -177,7 +200,19 @@ if [ -n "$PLUGINS_SHA" ]; then
     ok "memex-portal-ai:$pair — built from plugins $PLUGINS_SHA"
   else
     status=$?
-    report "memex-portal-ai:$pair could not be verified in ACR (az exit $status) — see the registry diagnostic above. The pair tag must identify the image built from plugins $PLUGINS_SHA (#2622)."
+    # 🚨 ONLY A CONFIRMED ABSENCE IS STALE (Copilot on MeshWeaver#4687). Exit 2 PROMISES that every
+    # deliverability image was verified and only the pairing is behind, and `gate` acts on that
+    # promise: it marks the set complete, writes nothing to the ledger, and refreshes. A 503, a
+    # refused pull or an expired credential establishes NOTHING about the tag — reading it as
+    # "merely behind" is exactly the answer-that-reads-like-a-pass this whole change exists to
+    # remove, one layer down. Azure CLI exits 3 for ResourceNotFoundError and 1/2 for everything
+    # else, so the discriminator is the code, never the absence of an answer: anything but 3 stays
+    # on the exit-1 path, RED, naming the failed read.
+    if [ "$status" -eq 3 ]; then
+      stale "memex-portal-ai:$pair is not in ACR (az exit $status — the manifest is absent, not unreadable). The pair tag must identify the image built from plugins $PLUGINS_SHA (#2622). The deployable set is UNAFFECTED: every image above resolved, so nothing is holding an install back."
+    else
+      report "memex-portal-ai:$pair could not be READ in ACR (az exit $status) — see the registry diagnostic above. That is not the same as the pair tag being behind: an unreadable registry establishes nothing, so this is a failed verification and not a stale host pairing (#2622)."
+    fi
   fi
 fi
 
@@ -223,5 +258,12 @@ fi
 if [ "$fail" -ne 0 ]; then
   echo "::error::The complete image set for main $SHA could not be verified — see the errors above for missing or malformed images, or failed registry reads. A failed read does not establish that an image is absent; this gate remains red until the complete set is verified."
   exit 1
+fi
+# 🚨 ORDER IS THE WHOLE CONTRACT: a missing IMAGE outranks a stale PAIR. A run that lost a leg AND
+# whose plugins HEAD has moved must exit 1, never 2 — exit 2 says "the set is intact", and saying
+# that over a torn set is the failure this file exists to prevent.
+if [ "$hosts_stale" -ne 0 ]; then
+  echo "Every image of the set exists in ACR for $SHA${POINTER_VERSION:+, and every promoted pointer resolves ($POINTER_VERSION)} — but the published portal image was built from an older MeshWeaver.Plugins commit than $PLUGINS_SHA. The set is DELIVERABLE and the host pairing is BEHIND."
+  exit 2
 fi
 echo "All images exist in ACR for $SHA${PLUGINS_SHA:+ (built from plugins $PLUGINS_SHA)}${POINTER_VERSION:+, and every promoted pointer resolves ($POINTER_VERSION)}."

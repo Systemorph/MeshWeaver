@@ -75,6 +75,43 @@ each other's fields (Mirror A's `{Content: {Field1: X}}` and Mirror B's `{Conten
 both land — never "last write wins on whole node"). Treat your `update` lambda accordingly: touch
 only the fields you intend to change.
 
+### How the change is EXPRESSED — four shapes, and the context picks
+
+`stream.Update` settles *where* the write goes. *How you say what changed* is a second decision with
+four answers, and picking the wrong one is how a write silently reverts a field or loses a count.
+Full design: [ExpressingAWrite.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ExpressingAWrite.md).
+
+| Shape | Use it when | Trap |
+|---|---|---|
+| **1. C# lambda** `live => live with { … }` | in-process, default | can't cross a wire as a delegate |
+| **2. JSON Patch** (+ anchored text splice) | over MCP / CLI / a webhook | can't express a fold |
+| **3. Full entity** | you are the SOLE authority — one-way sync source, or the buffer IS the content | every field you omit is still WRITTEN |
+| **4. Other** | — | not a category; it means shape 1 or 2 has a gap. File it |
+
+**The two rules that actually bite:**
+
+🚨 **A fold must be computed against the LIVE node, inside the lambda — never from a prior read.**
+`count + 1` where `count` came from a read is a lost update the moment a second writer exists. The
+in-process shape is the one that gets this right:
+
+```csharp
+// ✅ the fold happens inside the owner-serialised lambda (RegistrationKeyService.cs:131)
+stream.Update(current => current with { Content = key with { UsageCount = key.UsageCount + 1 } })
+```
+
+🚨 **A text edit inside a long body is a SPLICE, and the splice is ANCHORED, never positional.**
+Re-emitting a whole markdown/code document to change one line costs tokens and truncates; an offset
+or (row, column) is stale the moment anyone inserts a character above it and lands in the **wrong
+place without erroring** — the one silent-corruption shape here. Use the anchored form
+(`MeshOperations.EditContent`: exact `oldText` → `newText`, re-verified against live text). A
+positional splice is legal only carrying a base fingerprint the owner checks.
+
+**Known gap — do not design around it, it is tracked.** `CreateOrUpdateNodeRequest` cannot express a
+fold (full-instance mode takes `Content` wholesale; its `Patch` mode is declared but **refused by the
+handler**, zero callers). So a caller needing *both* create-if-missing *and* a fold has no route, and
+the tempting fallback — decide create-vs-update from a query, then `stream.Update` — is the
+eventually-consistent-positive bug in section 2. That is core#4928, blocking core#1174.
+
 ### The 3 rules this unifies
 
 1. **Writes**: `stream.Update(current => current with { Content = ... })`. The owning hub's action
@@ -174,6 +211,39 @@ per DEPLOYMENT rather than per user, and only someone shipping a `DbVersion` bum
 Full reference: [LogonActions.md](../../../src/MeshWeaver.Documentation/Data/Architecture/LogonActions.md)
 · the `/logon-action` skill (a Skill node shipped by the AI engine in MeshWeaver.Plugins).
 
+### 🚨 CONTENT is live; the hub's BINDING is not — the grain serves old state until a `DisposeRequest`
+
+**"The grain keeps serving old state until we send a dispose request"** (maintainer, 2026-09-17), and
+the line between the two halves is exactly the line this skill draws.
+
+**Live, by construction:** everything `stream.Update` writes. The patch routes to the owning
+activation, which applies it on its own turn and publishes it to every mirror, and `MeshDataSource`
+holds a long-standing own-node subscription — activation only *seeds* the workspace. So no read, no
+view and no test ever needs a recycle to see a write. **If you are reaching for a recycle to make a
+write visible, the bug is the write** (an unsubscribed cold observable, a query used where a stream
+was needed), not the activation.
+
+**Pinned for the activation's lifetime, and re-read by nothing:** the `HubConfiguration` the hub was
+born with — its NodeType binding, the compiled assembly and collectible load context that closure
+captured, the streams it composed — plus anything read from outside the mesh. Routing short-circuits
+on an already-hosted address and never resolves the path again, so a node that *changes its type*,
+or a NodeType that *publishes a new build*, reaches a live instance through nothing at all. The
+framework's own words: *"the hub keeps serving the configuration it was born with for the rest of its
+lifetime"* (`NodeTypeRebindWatcher`, #1104).
+
+**The one surface that makes an activation re-read** is `hub.RecycleNode(path, reason: "…")` — cold
+(posts on Subscribe), the wait is the framework's own READ rather than a poll, and it defers while a
+package install holds that root. It is **dispose-only**: it requests no compile. The caller's hub
+must OUTLIVE the target (and must not be the root hub, whose dispose and read leave different
+off-router hubs, so the read can overtake the teardown). As an operator it is the `recycle` verb
+(MCP tool / **Recycle** menu entry / `mw recycle`), which additionally checks `Update` and — **only
+when the target is a NodeType node** — stamps a FORCED release request before the dispose, the one
+trigger that skips prebuilt adoption and compiles the live source (#2818). Always carry a `Reason`.
+
+🚨 **A dispose makes the activation RE-READ; it does not decide what the re-read FINDS**, so it is
+never itself a fix and a second recycle proves nothing the first did not. Full reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
+
 ### The data-access table
 
 Never use `IMeshStorage` or `IMeshCatalog` directly — internal infrastructure only.
@@ -252,7 +322,9 @@ hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EX
 The index **trails** the store, so "the index has seen it" implies "the store has it" — the point
 read opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a
 query for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely
-and use `CreateOrUpdateNodeRequest`.
+and use `CreateOrUpdateNodeRequest` — **unless the write is a FOLD** (a counter bump, or anything
+computed off the node's current value), which that verb cannot express today (core#4928). There is
+no correct shape for create-if-missing + fold yet, so say so rather than falling back to the query.
 
 🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
 worked counter-example is a token chip that reads `content` out of a

@@ -285,6 +285,7 @@ spec:
             - {{ toYaml . | nindent 14 | trim }}
             {{- end }}
           env:
+            {{- include "memex.dbReleaseEnv" (dict "root" $ "half" "memex_portal") | nindent 12 }}
             # 🩺 Crash diagnostics. We hit a native SIGSEGV (exit 139) in the Npgsql → SslStream TLS
             # read path: the process dies with NO managed exception, so the logs show nothing useful.
             # Write a dump to /data/dumps (the dedicated memex-dumps emptyDir below — createdump does
@@ -394,7 +395,21 @@ spec:
             # the SAME change kills the pod mid-bake, every time, for ever. The paired setting and
             # the full derivation live in values.yaml (probes.startup); PreWarmGateReadinessGuard
             # enforces the coupling, so this comment can no longer drift away from what ships.
-            httpGet: { path: /health, port: 8080 }
+            #
+            # 🚨 timeoutSeconds is what this probe gives /health to ANSWER, and /health is an
+            # aggregate census whose cost grows with the mesh. On 2026-09-17 one check reached
+            # 6.5–10.1 s against the 5 s below and the control instance could not boot at all: a
+            # startup-probe timeout is the unrecoverable one, because Kubernetes suspends readiness
+            # and liveness until this probe records ONE success. Raising the number is not the fix
+            # and the number is not the defect — every check on this path must READ A REGISTRY
+            # rather than do the work (Doc/Architecture/AProbeMustAnswerInsideItsOwnTimeout).
+            #
+            # The PATH is a value (probes.startup.path, default /health) so a deployment that must
+            # move it does so where it is reviewed and where chart drift can see it, rather than as
+            # a live patch the next `helm upgrade` silently undoes. Moving it has two costs, both
+            # named in values.yaml: the bake gate loses its only reader, and a booting pod stops
+            # being held out of the Service.
+            httpGet: { path: {{ .Values.probes.startup.path | default "/health" }}, port: 8080 }
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}

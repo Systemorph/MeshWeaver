@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using MeshWeaver.PluginCatalog;
 using Xunit;
 
@@ -57,6 +58,8 @@ public class ModulePlatformFloorScriptParityTest
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
+            UseShellExecute = false,
         };
         psi.ArgumentList.Add(ScriptPath);
         psi.ArgumentList.Add("--package");
@@ -69,17 +72,66 @@ public class ModulePlatformFloorScriptParityTest
 
         using var process = Process.Start(psi);
         Assert.NotNull(process);
-        // 🚨 DRAIN BOTH PIPES BEFORE WAITING (Copilot review). A redirected stream nobody reads
-        // fills its OS buffer and blocks the child in `write`, so the wait would time out on a
-        // process that had already finished its work — a hang that reads as a broken gate. stdout
-        // first because it is the one this call can make large (`--quiet` suppresses the verdict
-        // line, but an argparse or traceback message can arrive on either).
-        var stdout = process!.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(milliseconds: 30_000);
-        Assert.True(process.HasExited,
-            "python3 did not answer within 30s — the gate's own logic is a pure comparison, so a "
-            + "hang here is the environment, not the rule. Do not raise the bound.");
+        // 🚨 DRAIN BOTH PIPES CONCURRENTLY, THROUGH THE EVENT-BASED READER (#4734) — never
+        // `StandardOutput.ReadToEnd()` then `StandardError.ReadToEnd()`. There is a deadlock on
+        // EITHER side of the bounded wait, and only a concurrent drain misses both:
+        //   • Reading BEFORE the wait — what this did — cannot honour the bound it advertises.
+        //     `ReadToEnd()` returns at EOF, and the child produces EOF by EXITING. So on the one
+        //     failure the 30 s exists to catch, a wedged check-module-platform-floor.py, the read
+        //     blocks for ever and `WaitForExit` is never reached: the cap was reachable only when
+        //     it was not needed, and the assertion beneath it could never report the hang it
+        //     names. A cap that cannot fire is not a cap.
+        //   • Reading AFTER the wait deadlocks the other way: a redirected stream nobody reads
+        //     fills its OS buffer and blocks the child in `write`, so the wait times out on a
+        //     process that had already finished its work.
+        // So reordering is not the fix — draining both pipes while the wait runs is. The same
+        // analysis and the same remedy sit in MsBuildPropertyProbe and StartupFailureProcessTest;
+        // MemexLocalDiscoversNodeRepoSiblingsGuard takes the other sanctioned route, redirecting
+        // to FILES so there is no pipe at all. Event-based reading needs no TaskCompletionSource
+        // and no async bridge, so it stays inside the house rules for `test/`.
+        var outBuffer = new StringBuilder();
+        var errBuffer = new StringBuilder();
+        process!.OutputDataReceived += (_, e) => { if (e.Data is not null) outBuffer.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) errBuffer.AppendLine(e.Data); };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        // Close stdin immediately. The script reads none, so a regression that started waiting on
+        // it (an `input()`, an argparse prompt) would otherwise park until the bound; with the
+        // pipe closed it gets EOF at once and fails as a named exit code instead of as a timeout.
+        process.StandardInput.Close();
+
+        if (!process.WaitForExit(30_000))
+        {
+            // Kill the TREE: python3 is the launcher, and a guard that leaks a spinning child on
+            // every timeout degrades the machine it is measuring on. The race where the process
+            // exits between the wait returning false and this call is the NON-event — catching it
+            // keeps the named failure below, rather than replacing it with an opaque
+            // InvalidOperationException. Nothing is suppressed: Assert.Fail runs either way.
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+            // 🚨 JOIN THE READERS BEFORE READING THE BUFFERS (Copilot review). `Kill` only requests
+            // termination; it does not stop the OutputDataReceived/ErrorDataReceived callbacks, so
+            // without this the interpolation below would call StringBuilder.ToString() while a
+            // threadpool thread is still appending — not thread-safe, and the way it fails is an
+            // opaque ArgumentOutOfRangeException standing WHERE THE NAMED FAILURE SHOULD BE. That
+            // is the very defect this change exists to remove. The wait cannot hang: the whole
+            // tree is dead, so both pipes are at EOF and the readers complete. Joining also beats
+            // locking the snapshot here — it yields everything the child wrote before it died,
+            // which on a wedged script is the most useful part of the message.
+            process.WaitForExit();
+            Assert.Fail(
+                "python3 did not answer within 30s — the gate's own logic is a pure comparison, so a "
+                + "hang here is the environment, not the rule. Do not raise the bound.\n"
+                + $"stdout so far: {outBuffer} stderr so far: {errBuffer}");
+        }
+        // 🚨 The TIMED overload waits for the PROCESS only; the parameterless one is what joins the
+        // async readers started above. Reading the buffers straight after `WaitForExit(ms)` can
+        // therefore catch a TRUNCATED stream, which would make this test fail on a half-read
+        // message instead of on its subject. The process has already exited here, so this returns
+        // as soon as the readers drain.
+        process.WaitForExit();
+
+        var stdout = outBuffer.ToString();
+        var stderr = errBuffer.ToString();
         // A python that could not START (argparse error, syntax error) exits 2 with text on stderr.
         // That must never read as "the floor is not satisfied": it is a broken fixture, named.
         Assert.True(process.ExitCode is 0 or 1,

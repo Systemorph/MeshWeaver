@@ -136,9 +136,27 @@ public static class BuildCoordinationExtensions
 
     /// <summary>
     /// Applies <paramref name="change"/> to the node's state ONLY while <paramref name="holder"/>
-    /// still holds the claim; otherwise the write is a no-op. This is the single primitive behind
-    /// every holder-side transition (heartbeat, chunk plan, completion, failure), and the property
-    /// that makes stale-claim stealing safe: a superseded builder's late writes land on nothing.
+    /// still holds the claim, as THIS hub's copy of the node reports it; otherwise the write is a
+    /// no-op. The intent is that a superseded builder's late writes land on nothing.
+    ///
+    /// <para>🚨 <b>The guard is evaluated on a copy this hub does not own, so it can refuse a write
+    /// the owner would have accepted — silently (#4708).</b> A candidate does not own the Build
+    /// node: the lambda runs against this hub's mirror, or against the locally computed state its
+    /// own predecessor on the stream cache's per-path queue handed forward, and when that copy
+    /// disagrees the lambda returns the node UNCHANGED. The write path then posts nothing and
+    /// completes the caller as a SUCCESS (<c>IsRecordNoOp</c>; everything it logs is at
+    /// <c>Debug</c>). That is the general failure of
+    /// <c>Doc/Architecture/ConditionalWritesAcrossHubs</c> in its strongest form — not one member
+    /// absent from the patch, but no patch at all.</para>
+    ///
+    /// <para>So this is NOT the surface for a transition whose loss matters. The TERMINAL
+    /// transitions — a build completing or failing, on the root or on a chunk — go through
+    /// <see cref="ReportBuildOutcome"/>, which states a fact under the holder's own key and lets
+    /// the node's OWN hub decide whether the reporter still holds the claim
+    /// (<see cref="BuildNodeType.FoldReportedOutcomes"/>, serialised against fresh state). What
+    /// remains here is the PROGRESS surface — the heartbeat's visible stamp and the chunk plan —
+    /// where a refused write costs a stale projection that the next write or the next pass
+    /// restates, never a build that ends on nothing.</para>
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="holder">The claim holder performing the write.</param>
@@ -230,9 +248,50 @@ public static class BuildCoordinationExtensions
     }
 
     /// <summary>
-    /// Completes the build: records the GO for <paramref name="go"/>'s fingerprint on the
-    /// per-fingerprint history (never removing an older GO) and releases the claim, which lets the
-    /// arbiter grant the next pending candidate.
+    /// 🚨 THE terminal holder-side write: <paramref name="holder"/> STATES how its build ended,
+    /// under its own key in <see cref="BuildState.ReportedOutcomes"/>, and the node's OWN hub draws
+    /// the conclusion (<see cref="BuildNodeType.FoldReportedOutcomes"/>). The claim LOCK is then
+    /// dropped, which is what actually frees the build for the next candidate in ANY cluster —
+    /// clearing the node's projection alone would only free it here.
+    ///
+    /// <para><b>Why this is not <see cref="UpdateBuildAsHolder"/> (#4708).</b> That primitive asks
+    /// "am I still the holder?" on a copy this hub does not own, and answers a stale copy by
+    /// returning the node UNCHANGED — which posts nothing and reports SUCCESS. For a terminal
+    /// transition that is a build ending on nothing: no GO for the fingerprint,
+    /// <see cref="ObserveBuildGo"/> never emitting, and every silo's readiness probe held down,
+    /// with nothing logged above <c>Debug</c>. The fact written here is UNCONDITIONAL, so it is
+    /// present in the patch whatever this hub's copy showed; it is keyed by the reporter, so it is
+    /// merge-safe against every other holder; and the owner CONSUMES it, so nothing accumulates.
+    /// The superseded-builder property is not dropped but MOVED: the fold refuses a report from a
+    /// holder the owner's own state no longer names, which is the only place that distinction can
+    /// be drawn. See <see cref="BuildOutcome"/> and
+    /// <c>Doc/Architecture/ConditionalWritesAcrossHubs</c>.</para>
+    /// </summary>
+    /// <param name="hub">The calling hub.</param>
+    /// <param name="holder">The claim holder reporting the outcome.</param>
+    /// <param name="outcome">How the build ended — see <see cref="BuildOutcome.Completed"/> /
+    /// <see cref="BuildOutcome.Failed"/>.</param>
+    /// <param name="path">The Build node (root or chunk) whose build ended.</param>
+    /// <returns>Cold observable emitting the node after the write.</returns>
+    public static IObservable<MeshNode> ReportBuildOutcome(
+        this IMessageHub hub, string holder, BuildOutcome outcome,
+        string path = BuildNodeType.RootPath)
+        // 🚨 The TYPED overload, for the same reason RequestBuildClaim uses it (#3623): a
+        // `?? new BuildState()` fallback would publish an empty state over the live claim,
+        // every other candidate's registration and every stand-down mark whenever the content
+        // is present but unreadable. Here `null` means ABSENT and only absent.
+        => hub.GetWorkspace().GetMeshNodeStream(path)
+            .Update<BuildState>((curr, content) =>
+                BuildNodeType.RecordOutcome(curr, content, holder, outcome))
+            // …then drop the LOCK. It is conditional on still owning it, so a superseded builder's
+            // report cannot release its successor's claim, and it is what actually frees the build
+            // for the next candidate in ANY cluster.
+            .SelectMany(node => hub.ReleaseBuildClaim(holder, path).Select(_ => node));
+
+    /// <summary>
+    /// Completes the build: reports a GO for <paramref name="go"/>'s fingerprint, which the owner
+    /// folds onto the per-fingerprint history (never removing an older GO) before releasing the
+    /// claim so the arbiter can grant the next pending candidate.
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="holder">The claim holder completing the build.</param>
@@ -241,25 +300,10 @@ public static class BuildCoordinationExtensions
     /// <returns>Cold observable emitting the node after the write.</returns>
     public static IObservable<MeshNode> CompleteBuild(
         this IMessageHub hub, string holder, BuildGo go, string path = BuildNodeType.RootPath)
-        => hub.UpdateBuildAsHolder(
-                holder,
-                s => s with
-                {
-                    Status = BuildStatus.Ready,
-                    Ready = (s.Ready ?? ImmutableDictionary<string, BuildGo>.Empty)
-                        .SetItem(go.FrameworkVersion, go),
-                    ClaimedBy = null,
-                    ClaimedByIdentity = null,
-                    ClaimedAt = null,
-                    HeartbeatAt = null,
-                },
-                path)
-            // …and drop the LOCK, which is what actually frees the build for the next candidate in
-            // ANY cluster. Clearing ClaimedBy on the node alone would only free it here.
-            .SelectMany(node => hub.ReleaseBuildClaim(holder, path).Select(_ => node));
+        => hub.ReportBuildOutcome(holder, BuildOutcome.Completed(DateTime.UtcNow, go), path);
 
     /// <summary>
-    /// Fails the build: records the error and releases the claim. The fingerprint gets NO GO —
+    /// Fails the build: reports the error and releases the claim. The fingerprint gets NO GO —
     /// readiness for that image stays refused, which is the fail-closed behaviour the probe
     /// contract requires.
     /// </summary>
@@ -270,21 +314,7 @@ public static class BuildCoordinationExtensions
     /// <returns>Cold observable emitting the node after the write.</returns>
     public static IObservable<MeshNode> FailBuild(
         this IMessageHub hub, string holder, string error, string path = BuildNodeType.RootPath)
-        => hub.UpdateBuildAsHolder(
-                holder,
-                s => s with
-                {
-                    Status = BuildStatus.Failed,
-                    Error = error,
-                    ClaimedBy = null,
-                    ClaimedByIdentity = null,
-                    ClaimedAt = null,
-                    HeartbeatAt = null,
-                },
-                path)
-            // A failed build releases the claim exactly like a completed one — the fingerprint gets
-            // no GO, but the build must not stay locked to a holder that has stopped.
-            .SelectMany(node => hub.ReleaseBuildClaim(holder, path).Select(_ => node));
+        => hub.ReportBuildOutcome(holder, BuildOutcome.Failed(DateTime.UtcNow, error), path);
 
     /// <summary>
     /// THE readiness primitive: emits the GO record once the build root's history covers
@@ -357,13 +387,19 @@ public static class BuildCoordinationExtensions
     /// <see cref="BuildGoWitness.Undetermined"/> is refusing on a read that never happened, and
     /// SAYING it refused because there is no GO is a claim the process is not entitled to make.</para>
     ///
-    /// <para>🚨 <b>The witness is not necessarily in a different failure domain from the
-    /// subscription.</b> In the fleet's portal wiring <see cref="IStorageAdapter"/> is
-    /// <c>RoutingProxyAdapter</c>, which serves this read as
-    /// <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> over the same hub transport a
-    /// <c>SubscribeRequest</c> travels on. So the fault that shuts the subscription door can shut
-    /// this one too, and it arrives here as the SAME <see cref="TimeoutException"/> — which is
-    /// exactly why it must not be laundered into "no GO recorded".</para>
+    /// <para>🚨 <b>Whether the witness is in a different failure domain from the subscription is
+    /// OPEN, and the wiring this used to assert is measurably absent.</b> It said that in the
+    /// fleet's portal wiring <see cref="IStorageAdapter"/> IS <c>RoutingProxyAdapter</c>, so this
+    /// read would travel the same hub transport a <c>SubscribeRequest</c> does and arrive as the
+    /// same <see cref="TimeoutException"/>. Measured 2026-09-19: <c>AddPartitionStorageHubs</c>,
+    /// the only thing that installs that proxy, has no caller anywhere — not in this repository's
+    /// <c>src/</c> or <c>test/</c>, not in any <c>.cs</c> source of <c>MeshWeaver.Plugins</c> — and
+    /// <c>PartitionStorageRouter</c> says so about itself ("Stage 1 stub … currently dead code on
+    /// the main message path"). So this read is <c>PersistenceService</c> over its backend, a store
+    /// round-trip, and the shared-domain claim needs re-measuring against THAT path before it is
+    /// relied on (<c>Doc/Architecture/UndeterminedIsNotNo</c>). What does NOT depend on the answer,
+    /// and is this method's whole reason to exist: a read that never happened must not be laundered
+    /// into "no GO recorded", whichever transport it used.</para>
     ///
     /// <para>Emits exactly once and completes. Never throws: a failed read becomes
     /// <see cref="BuildGoWitness.Undetermined"/> carrying its exception, and is still logged here at

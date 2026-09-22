@@ -31,15 +31,16 @@ namespace MeshWeaver.Hosting.Test;
 /// negative: <i>"the durable witness carries no GO for framework X"</i>. The pod refused a build it
 /// had not asked about, and told the operator the build had not been approved.</para>
 ///
-/// <para>🚨 <b>Why that is the live case and not a corner.</b> The second door is NOT in a different
-/// failure domain from the first. In the fleet's portal wiring <c>AddPartitionStorageHubs</c>
-/// replaces <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c>, which serves the durable
-/// read as <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> — the SAME hub transport a
-/// <c>SubscribeRequest</c> travels on, with the same 60 s request budget. Three of the five
-/// candidates for #3404's silence (a routing loss, the deferred-queue ordering defect #3408, and a
-/// root that stops emitting) take both doors down together, and the durable read then fails with
-/// the SAME <see cref="TimeoutException"/> the subscription did. That is what these cases stage.
-/// </para>
+/// <para><b>Why a failed read is the case worth staging.</b> These cases stage the durable read
+/// failing with a <see cref="TimeoutException"/> while the subscription is also unanswered, and the
+/// assertion is about the VERDICT: <c>Undetermined</c>, never <c>NoGo</c>. 🚨 This comment used to
+/// justify that by saying the two doors share a failure domain, because the fleet's portal wiring
+/// replaces <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c> via
+/// <c>AddPartitionStorageHubs</c>. Measured 2026-09-19, that wiring has no caller anywhere — this
+/// repository or <c>MeshWeaver.Plugins</c> — so the durable read is <c>PersistenceService</c> over
+/// its backend and the shared-domain argument needs re-measuring
+/// (<c>Doc/Architecture/UndeterminedIsNotNo</c>). What these cases pin does not depend on it: a read
+/// that did not answer must not be rendered as an answer, whichever transport it used.</para>
 ///
 /// <para><b>The third state, and what the rollout does with it.</b> <c>BuildGoWitness</c> now has
 /// three values and the door has three branches. On <c>Undetermined</c> the process does not guess
@@ -199,17 +200,28 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     private IAssemblyStore Store => Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
 
     /// <summary>
-    /// The verbatim production refusal: a <see cref="BuildCoordinationUnreachableException"/> whose
-    /// inner is the hub's own request-budget <see cref="TimeoutException"/> naming
-    /// <c>Admin/Build</c> — what <c>RetryUnreachableCoordination</c> throws after its attempts are
-    /// exhausted, copied from the incident's log lines.
+    /// The verbatim production transport fault: a
+    /// <see cref="BuildCoordinationUnreachableException"/> whose inner is the hub's own
+    /// request-budget <see cref="TimeoutException"/> naming <c>Admin/Build</c> — what
+    /// <c>RetryUnreachableCoordination</c> throws after its attempts are exhausted, kept in step
+    /// with it word for word so a reader of this test sees what the incident saw.
+    ///
+    /// <para>🚨 It is the FAULT, not a refusal, and the wording says so (#3404). The verdict is
+    /// decided by the door that catches this, on its own line; the invariant that this message
+    /// states no verdict is pinned on the PRODUCTION message — not on this fixture — by
+    /// <c>PreWarmerReadsTheDurableGoTest.TheTransportFaultStatesNoVerdict_WhenTheDurableGoGrants</c>.
+    /// </para>
     /// </summary>
     private static BuildCoordinationUnreachableException TheSubscriptionDoorIsShut() =>
         new(
             "BuildProtocol: could not reach the build coordination node 'Admin/Build' in 3 "
-            + "attempt(s) — the pre-warm sweep never started, so this process has verified NOTHING "
-            + "about its NodeTypes on this image. This is a refusal, not a pass: readiness stays "
-            + "refused and the rollout holds the previous image. A restart re-attempts.",
+            + "attempt(s) — the subscription-borne pre-warm sweep never started, so this process "
+            + "has verified NOTHING about its NodeTypes on this image THROUGH THAT DOOR. The "
+            + "readiness verdict is NOT decided here: the durable witness is asked next, and it may "
+            + "already carry the GO for this framework. Whichever door answers says so on its own "
+            + "line — read that one for the verdict. This line reports the transport fault only, "
+            + "and the fault is real: the path from this process to the 'Admin/Build' hub is "
+            + "broken.",
             new TimeoutException(
                 "No response received in hub cache/UE4Wtq7CgkiAqGLfYRiJPQ within 00:01:00 for "
                 + "request SubscribeRequest (id=ASCknHcTgkSMVRR-dy6F3Q) → target Admin/Build."));

@@ -398,6 +398,16 @@ public sealed class GitProtocolRepoClient(
         => octokit.GetIssue(repositoryUrl, number, accessToken);
 
     /// <inheritdoc />
+    /// <remarks>🚨 Delegated deliberately. Inheriting the interface DEFAULT would route this through
+    /// <see cref="GetIssue"/> — two legs — and lose the one property this member exists for: an
+    /// issue that was TRANSFERRED answers 200 for itself and 404 for its comments, so the two-leg
+    /// path cannot answer a state question about it (MeshWeaver#4629). The default is for stubs;
+    /// every production client must reach the one-request path.</remarks>
+    public IObservable<GitHubIssue?> FindIssueState(
+        string repositoryUrl, int number, string accessToken)
+        => octokit.FindIssueState(repositoryUrl, number, accessToken);
+
+    /// <inheritdoc />
     public IObservable<GitHubIssue> CreateIssue(GitHubCreateIssueRequest request)
         => octokit.CreateIssue(request);
 

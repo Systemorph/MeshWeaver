@@ -45,6 +45,8 @@
 #                                                             spins forever on a name that never resolves
 #  18. the operator EXECUTOR renders whatever `enabled` says  or Actions never reaches the pod that
 #                                                             switched the operator Job off
+#  19. an ingress naming a tlsSecret names an ISSUER for it   or the host is served another
+#                                                             instance's certificate (chart refusal)
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -129,6 +131,18 @@ COMBOS=(
   # here is the chart's in-cluster default, and pearl's pods waited forever for memex-postgres-service.
   # Invariants 16 and 17 assert the probe is the record-rendered MEMEX_HOST and never that Service.
   "a Key Vault connection string, record-driven (the pearl shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
+  # 🚨 A public host and its certificate (pearl, 2026-09-15). The ingress must ASK cert-manager for
+  # the Secret it names in spec.tls; an ingress that names one nobody issues is served the
+  # controller's fallback — another instance's certificate — and every browser refuses it. The
+  # opt-out shape is here too, because "no issuer" must be a statement, never an omission.
+  "a public host issued by cert-manager (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-issuer.yaml"
+  "a host whose TLS Secret is pre-provisioned (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-preprovisioned.yaml"
+  # 🚨 The instance's OWN database release (Doc/Architecture/InClusterDatabases): a CloudNativePG
+  # Cluster beside the portal release, named by database.release. The only combination whose
+  # connection strings are COMPOSED in the containers' env from a Secret the chart does not render.
+  # Invariant 19 asserts the credentials are defined before the strings that expand them, and that
+  # the gate probes the host those strings name.
+  "the instance's own database release (the pearl shape after 2026-09-15, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.incluster-db-release.yaml"
   # 🚨 The control instance on the ACTIONS executor (Plugins#1738): the operator Job OFF and the
   # executor switched to aks-ops.yml through the GitHub App. The only combination that sets
   # `hostingOperator.executor`, so without it the one render that must carry
@@ -139,6 +153,13 @@ COMBOS=(
   # A whitespace-only maintainer: the one render where "only when set" can be observed failing, if
   # the template stops trimming. The evidence check asserts it renders NO maintainer key.
   "a whitespace-only operator maintainer (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-maintainer-blank.yaml"
+  # 🚨 The NodeType bake gate ARMED (MeshWeaver#4588). Invariant 10b asserts an armed gate has a
+  # reader — the startupProbe on /health — and no combination above arms it, so without this fixture
+  # that invariant runs on nothing and reports clean. It became reachable when probes.startup.path
+  # stopped being a literal in the template; the evidence check below asserts this render really
+  # does arm the gate, so "the invariant passed" and "the invariant had no subject" stay different
+  # sentences.
+  "the NodeType bake gate armed (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.bake-gate-armed.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -209,6 +230,19 @@ if [ "$executor_evidence" -eq 3 ]; then
   ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set"
 fi
 
+# The bake-gate evidence (MeshWeaver#4588). Invariant 10b — an armed PreWarm__GateReadiness must
+# have a reader, i.e. a startupProbe on /health — is CONDITIONAL, so it is satisfied just as well by
+# a set of renders where nothing ever arms the gate. Read the fixture by NAME and assert it actually
+# armed it, and that the startup probe it rendered is the one that reads the gate.
+gate_render="$(render_of "the NodeType bake gate armed (fixture)")"
+if [ -f "$gate_render" ] \
+   && grep -q '^  PreWarm__GateReadiness: "true"$' "$gate_render" \
+   && grep -q 'path: /health' "$gate_render"; then
+  ok "the bake-gate fixture arms PreWarm__GateReadiness and renders the startupProbe that reads it"
+else
+  report "the bake-gate fixture did not render PreWarm__GateReadiness=\"true\" with a /health startupProbe — invariant 10b then had no subject, and 'no contradictions' would mean 'nothing was armed'"
+fi
+
 # ---------------------------------------------------------------------------
 # REFUSALS — shapes the chart must NOT render, and must name why.
 #
@@ -230,6 +264,8 @@ REFUSALS=(
   "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
   "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
   "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
+  "a TLS secret with no issuer reaching the ingress (the pearl certificate refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-no-issuer.yaml|NO issuer reaches the ingress"
+  "a database release AND the bundled Postgres (two answers to which database)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.db-release-with-bundled-postgres.yaml|exclusive with postgres.enabled"
   # Plugins#1738: an executor the portal would silently read as Job must fail the render.
   "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
 )
@@ -266,6 +302,39 @@ for entry in "${REFUSALS[@]}"; do
 done
 if [ "$refused" -lt "${#REFUSALS[@]}" ]; then
   report "only $refused of ${#REFUSALS[@]} refusal controls held — treating as FAILURE"
+fi
+
+# ---------------------------------------------------------------------------
+# THE DATABASE RELEASE CHART (deploy/helm-db, Doc/Architecture/InClusterDatabases) — a second chart,
+# installed per instance beside the portal release. It must render its CloudNativePG Cluster where
+# the platform layer puts it (the `db` pool, one instance per zone), and refuse a release with no
+# database name rather than bootstrap one called ''.
+# ---------------------------------------------------------------------------
+DB_CHART="$REPO/deploy/helm-db"
+if [ -d "$DB_CHART" ]; then
+  db_out="$WORK/db-release.yaml"
+  if helm template pearl-db "$DB_CHART" --namespace pearl --set database=pearl > "$db_out" 2> "$db_out.err"; then
+    db_ok=1
+    for want in 'kind: Cluster' 'instances: 2' 'podAntiAffinityType: "required"' 'topologyKey: topology.kubernetes.io/zone' \
+                'workload: db' 'effect: NoSchedule' 'CREATE EXTENSION IF NOT EXISTS vector' 'storageClass: "memex-db-premiumv2"'; do
+      if ! grep -qF -- "$want" "$db_out"; then
+        report "the database release chart does not render '$want' — the Cluster would not land one instance per zone on the db pool"
+        db_ok=0
+      fi
+    done
+    [ "$db_ok" -eq 1 ] && ok "the database release chart — a two-zone Cluster on the db pool with the vector extension"
+  else
+    report "the database release chart does not render at all:"
+    sed 's/^/    /' "$db_out.err"
+  fi
+  if helm template pearl-db "$DB_CHART" --namespace pearl > "$db_out" 2> "$db_out.err"; then
+    report "the database release chart RENDERED with no database name — it must refuse instead"
+  elif grep -q "must be a plain lower-case PostgreSQL identifier" "$db_out.err"; then
+    ok "the database release chart — refuses a release with no database name"
+  else
+    report "the database release chart refused, but not for the stated reason:"
+    sed 's/^/    /' "$db_out.err"
+  fi
 fi
 
 if [ "$fail" -eq 0 ]; then

@@ -1701,9 +1701,16 @@ public class MessageService : IMessageService
         }
     }
 
+    // A synchronous handler can post its next turn before completing, so draining until empty
+    // can own a scheduler worker forever. PreferFairness only makes QUEUED drains reachable; it
+    // cannot preempt that running task (#3593/#4847). Yield after a batch to let peer hubs run,
+    // preserving the draining latch and the original scheduler across the handoff. This bounds
+    // worker ownership, not the message backlog or any handler's execution time.
+    private const int MaxSynchronousTurnsPerDrain = 64;
+
     private void DrainLoop()
     {
-        while (true)
+        for (var synchronousTurns = 0; synchronousTurns < MaxSynchronousTurnsPerDrain; synchronousTurns++)
         {
             QueuedTurn queued;
             lock (turnGate)
@@ -1724,8 +1731,8 @@ public class MessageService : IMessageService
 
             // Trampoline. A synchronous turn (Observable.Return chains — the norm)
             // completes inline during Subscribe, so we loop to the next turn on THIS
-            // pool task without re-scheduling: one task drains a whole run of sync turns,
-            // exactly as the old ActionBlock did. The previous one-StartNew-per-turn shape
+            // pool task without re-scheduling: one task drains a bounded batch of sync turns.
+            // The previous one-StartNew-per-turn shape
             // added a pool-queue wait per turn; under a saturated full-suite run that
             // accumulated into the ResubscribeOnOwnerDispose 20s timeout. Only a
             // genuinely-async turn returns before completing — then we stop and its
@@ -1768,6 +1775,18 @@ public class MessageService : IMessageService
             if (!loopNext)
                 return;   // async turn in flight — Terminal() re-schedules the drain
         }
+
+        lock (turnGate)
+        {
+            if (mainQueue.Count == 0)
+            {
+                draining = false;
+                return;
+            }
+        }
+        // Keep the latch: posts racing this handoff enqueue behind the same single drain.
+        // ScheduleDrainOne retains the configured scheduler and reports scheduling failures.
+        ScheduleDrainOne();
     }
 
     private void LogPumpError(Exception ex)
@@ -2415,7 +2434,93 @@ public class MessageService : IMessageService
     // before this observable is awaited, so the turn never leaves the thread. A
     // genuinely-async handler yields only at its own await.
     private IObservable<IMessageDelivery> ExecuteOnTarget(IMessageDelivery delivery, CancellationToken pipelineToken)
-        => Observable.Defer(() => RunHandler(delivery));
+        // 🚨 THE EXECUTING-TURN TRACKER IS STAMPED AND CLEARED AS ONE RESOURCE (#3593). It used to
+        // be set at the top of RunHandler and cleared in a `.Finally` attached ~260 lines later, so
+        // any throw between the two left the field SET with nothing to clear it: Observable.Defer
+        // turns that throw into a downstream OnError with the Finally never attached. A stale
+        // tracker makes GetQueueSnapshot report `Executing(T, <ms since the stamp>)` for a handler
+        // no thread is in, and the disposal watchdog then keys a verdict on it.
+        //
+        // That is not hypothetical — it is the #3593 population of 2026-09-19, whose snapshot is
+        // self-contradictory under this file's own invariants: `Executing(ShutdownRequest, 253055ms)`
+        // together with `drainsInFlight=0` and `draining=False`. A handler holding the block
+        // synchronously requires drainsInFlight >= 1 (a turn runs only inside DrainOne); a turn
+        // parked asynchronously leaves DrainLoop without clearing the latch, so it requires
+        // draining=True. Neither holds, so no thread was in that handler and the 253 s was time
+        // since a stamp nobody cleared.
+        //
+        // Observable.Using makes the pairing structural: Rx disposes the resource when the sequence
+        // terminates AND when the observable factory throws, so there is no exit path that can stamp
+        // without arming the clear. `turnsCompleted` deliberately STAYS in RunHandler's Finally —
+        // it counts HANDLER completions and is meant to be blind to a turn that never reached one.
+        => Observable.Using(
+            () => StampExecutingTurn(delivery),
+            _ => Observable.Defer(() => RunHandler(delivery)));
+
+    /// <summary>
+    /// Marks this delivery as the turn currently on the action block, and hands back the token that
+    /// un-marks it. Paired by <see cref="Observable.Using{TSource,TResource}(Func{TResource},Func{TResource,IObservable{TSource}})"/>
+    /// so the clear cannot be skipped — see the remarks at the call site (#3593).
+    /// </summary>
+    private IDisposable StampExecutingTurn(IMessageDelivery delivery)
+    {
+        var generation = Interlocked.Increment(ref currentlyExecutingStampSeq);
+        // Ownership is published BEFORE the values, so a clear that sees a generation it does not
+        // own cannot be looking at a half-written stamp it might erase.
+        Interlocked.Exchange(ref currentlyExecutingStampOwner, generation);
+        currentlyExecutingMessageType = delivery.Message.GetType().Name;
+        Interlocked.Exchange(ref currentlyExecutingStartedTicks, Stopwatch.GetTimestamp());
+        return new ExecutingTurnStamp(this, generation);
+    }
+
+    // Per-turn stamp identity: `Seq` mints them, `Owner` says whose stamp is on the fields right
+    // now. A clear must OWN the stamp to erase it — see ExecutingTurnStamp.Dispose.
+    private long currentlyExecutingStampSeq;
+    private long currentlyExecutingStampOwner;
+
+    /// <summary>
+    /// Clears the executing-turn tracker on dispose, but ONLY while the fields still belong to this
+    /// turn. A named type rather than a closure so the clear allocates nothing beyond this one object
+    /// per turn and shows up by name in a heap dump.
+    ///
+    /// <para>🚨 <b>The generation check is load-bearing, and an idempotency flag cannot replace it</b>
+    /// (Copilot review, #4931). Rx disposes a <c>Using</c> resource only AFTER <c>OnCompleted</c>
+    /// returns, and for an ASYNCHRONOUS turn <c>DrainLoop</c>'s <c>Terminal()</c> calls
+    /// <c>ScheduleDrainOne()</c> from inside that callback. So the next turn can stamp these fields
+    /// before this resource is disposed, and an unconditional clear would erase the LIVE turn's
+    /// type and timestamp — reporting <c>CurrentMessage == null</c> while a turn is genuinely on the
+    /// block. That is the mirror of the stale-stamp defect this pairing exists to remove: it sends
+    /// <c>OnDisposalStall</c> down the pump branch to report "no turn is executing" about a hub that
+    /// has one, the same class of false reading as the old <c>exec=0</c> literal.</para>
+    ///
+    /// <para>The window is NOT new — the predecessor <c>.Finally</c> also ran on subscription
+    /// disposal, so the same interleaving existed before the stamp and clear were paired. Pairing
+    /// them is simply where the guard now belongs.</para>
+    ///
+    /// <para>🚨 <b>What this does and does not guarantee.</b> It removes the systematic case: a clear
+    /// from an older turn can no longer erase a newer turn's stamp, because it does not own it. It
+    /// does NOT make stamp-and-clear one atomic operation — a stamp landing between the winning CAS
+    /// and the two field writes below would still be erased. That residue is deliberately left: the
+    /// fields are a DIAGNOSTIC, the next turn re-stamps within microseconds, and closing it properly
+    /// means a lock on the per-message path, which is a far worse trade than a diagnostic that can be
+    /// momentarily blank. Stated rather than glossed, because "the ordering makes this safe" is the
+    /// reasoning that was wrong here in the first place.</para>
+    /// </summary>
+    private sealed class ExecutingTurnStamp(MessageService owner, long generation) : IDisposable
+    {
+        public void Dispose()
+        {
+            // CLAIM the clear: only the turn that currently OWNS the stamp may erase it, and winning
+            // relinquishes ownership in the same atomic step. A later turn has already written its
+            // own generation, so this fails and leaves the live reading intact — and it makes the
+            // dispose idempotent for free, since a second call no longer owns anything either.
+            if (Interlocked.CompareExchange(ref owner.currentlyExecutingStampOwner, 0, generation)
+                != generation)
+                return;
+            owner.currentlyExecutingMessageType = null;
+            Interlocked.Exchange(ref owner.currentlyExecutingStartedTicks, 0);
+        }
+    }
 
     // Runs the message's handler chain reactively (IObservable end-to-end, no await,
     // no Task in the signature) INLINE on the single turn thread. A synchronous
@@ -2439,10 +2544,9 @@ public class MessageService : IMessageService
         // The stage that matters most for #981: did a handler actually RUN for this delivery, and
         // with what outcome. Resolved once and reused by the Do/Catch arms below.
         var fate = requestFates?.Find(delivery.Id);
-        // Mark this handler as the currently-executing one so a disposal timeout
-        // diagnostic can name it. Cleared in Finally below.
-        currentlyExecutingMessageType = messageTypeName;
-        Interlocked.Exchange(ref currentlyExecutingStartedTicks, Stopwatch.GetTimestamp());
+        // The currently-executing tracker is stamped by ExecuteOnTarget's Observable.Using, not
+        // here: set and clear have to be one resource or a throw in this method orphans the stamp
+        // (#3593 — see the remarks on ExecuteOnTarget).
 
         IObservable<IMessageDelivery> exec;
         if (!isDisposing || delivery.Message is ShutdownRequest)
@@ -2702,9 +2806,11 @@ public class MessageService : IMessageService
             })
             .Finally(() =>
             {
-                // Clear the currently-executing tracker — the turn is now idle.
-                currentlyExecutingMessageType = null;
-                Interlocked.Exchange(ref currentlyExecutingStartedTicks, 0);
+                // The executing tracker is cleared by ExecuteOnTarget's Observable.Using resource,
+                // which also covers the paths that never reach this Finally (#3593). turnsCompleted
+                // stays HERE by design: it counts HANDLER completions, so it must remain blind to a
+                // turn that never reached a handler — that asymmetry is what lets the disposal
+                // watchdog tell "the pump is busy" from "the pump never handed work over".
                 Interlocked.Increment(ref turnsCompleted);
                 if (delivery.Message is not ExecutionRequest && logger.IsEnabled(LogLevel.Debug))
                     logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms",
@@ -2961,6 +3067,57 @@ public class MessageService : IMessageService
                         + "through the parent of shutting-down hub {Address}",
                         message!.GetType().Name, delivery.Id, correlatedRequestId, Address);
                     replyFate?.Add($"REPLY_FORWARD_THREW {ex.GetType().Name}", Address);
+                }
+            }
+
+            // 🚨 …AND SO DOES A RELEASE — for the OPPOSITE reason, which is why the clause above
+            // could not cover it (Systemorph/MeshWeaver#3432).
+            //
+            // The reply forward is justified by "somebody is waiting". An IReleasesRemoteState
+            // message is fire-and-forget: nobody is waiting, and that is exactly what makes
+            // dropping it the expensive case. A lost event is recovered by the next snapshot, the
+            // re-subscribe, the change feed or a heartbeat lapse; a lost RELEASE is recovered by
+            // NOTHING — the receiver keeps what it was holding, there is no requester to NACK, no
+            // retry to trigger, and no later probe that ever discovers the loss. So the historical
+            // refusal of fire-and-forget traffic, correct for events, silently leaks here.
+            //
+            // Measured: UnsubscribeRequest is the only thing that ends an owner-side per-subscriber
+            // stream and its sync/{id} sub-hub, and it is posted from the SUBSCRIBING hub by the
+            // release disposable registered on the client-side sync/{id} hub — so on the
+            // HUB-teardown route (a Blazor circuit ending, a DisposeRequest, a recycle) it runs
+            // while this hub is in DisposeHostedHubs BY CONSTRUCTION: that phase is what disposes
+            // the child whose ShutDown runs it. It was refused right here, the owner was never
+            // told, and the portal accumulated one RunLevel=Started hub per subscription — each
+            // holding its own Autofac lifetime scope and TypeRegistry — until the process ended.
+            // (SubscriberTeardownReleasesTheOwnerSyncHubTest pins both directions.)
+            //
+            // A nested subtree can be disposing while the receiver is in another, LIVE subtree.
+            // Its immediate parent is then also in DisposeHostedHubs: limiting the carrier to one
+            // hop drops the release again (#3432). Each parent's own post guard forwards through
+            // its construction-captured ParentHub until a routing ancestor is reached. A true
+            // root has ParentHub=null, so a whole-tree teardown terminates with the ordinary
+            // refusal, without resolving Configuration.ParentHub from a dying scope. Keep the
+            // original sender and the SAME host qualification as HierarchicalRouting's upward
+            // hop: a bare sender identifies different state from the live subscription's sender.
+            if (message is IReleasesRemoteState && ParentHub is { } releaseParent)
+            {
+                try
+                {
+                    var releaseOptions = releaseParent.Address.Type != AddressExtensions.MeshType
+                        ? opt with { Sender = opt.Sender.WithHost(releaseParent.Address) }
+                        : opt;
+                    var forwarded = releaseParent.Post(message, _ => releaseOptions);
+                    postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
+                    if (forwarded is not null)
+                        return forwarded;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex,
+                        "Could not forward the release {MessageType} (ID: {MessageId}) through the "
+                        + "parent of shutting-down hub {Address} — the receiver keeps what it holds",
+                        message!.GetType().Name, delivery.Id, Address);
+                    postFate?.Add($"RELEASE_FORWARD_THREW {ex.GetType().Name}", Address);
                 }
             }
 

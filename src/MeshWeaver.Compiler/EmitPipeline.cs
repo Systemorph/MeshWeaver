@@ -54,9 +54,30 @@ public static class EmitPipeline
     /// list has always produced (<see cref="CompileWarning.Describe"/> is injective, so
     /// distinct-then-sort over tuples and over their renderings agree).</para>
     /// </summary>
+    /// <remarks>
+    /// 🚨 <see cref="CompileWarning.NotReported"/> is applied HERE, at the single point every
+    /// consumer reads warnings through, and it is the in-mesh compile's <c>NoWarn</c> — the parity
+    /// that makes "in-mesh C# is held to the standard <c>src/</c> is held to" true rather than
+    /// aspirational. A raw <see cref="CSharpCompilation"/> applies no <c>NoWarn</c> at all, so
+    /// before this filter the in-mesh compile reported two families core's own <c>src/</c> build does
+    /// not — and for two DIFFERENT reasons, which is the part that was previously stated wrong here.
+    /// Reference-set skew (<c>CS1701</c>/<c>CS1702</c>, 95 baseline entries in MeshWeaver.Plugins
+    /// alone, unpayable by any author) is NOT covered by the .NET SDK's default <c>NoWarn</c> in this
+    /// repo — core's <c>Directory.Build.props</c> SETS <c>$(NoWarn)</c> before that default's
+    /// <c>'$(NoWarn)' == ''</c> condition evaluates — it is simply never PRODUCED by a project build,
+    /// whose reference set MSBuild resolves coherently (measured on core; see
+    /// <see cref="CompileWarning.NotReported"/> for the measurement and its scope). Doc completeness
+    /// (<c>CS1591</c>/<c>CS1573</c>/<c>CS1712</c>) IS a quotable suppression, in core's own
+    /// <c>Directory.Build.props</c>. Filtering at collection rather than
+    /// through <c>WithSpecificDiagnosticOptions</c> is deliberate: the options are REFLECTED into
+    /// <see cref="GeneratedInputIdentity.OptionsFingerprint"/>, so suppressing there would change
+    /// the content key of every NodeType in the fleet and force one global recompile — a rollout
+    /// cost for a reporting decision.
+    /// </remarks>
     internal static IReadOnlyList<CompileWarning> Collect(IEnumerable<Diagnostic> diagnostics)
         => diagnostics
             .Where(d => d.Severity == DiagnosticSeverity.Warning && !d.IsSuppressed)
+            .Where(d => !CompileWarning.IsNotReported(d.Id))
             .Select(d => new CompileWarning(d.Id, d.GetMessage(), Where(d)))
             .Distinct()
             .OrderBy(w => w.Describe(), StringComparer.Ordinal)

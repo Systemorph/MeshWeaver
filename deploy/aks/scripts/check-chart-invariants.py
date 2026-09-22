@@ -330,11 +330,97 @@ elif _probe_paths["readinessProbe"] == _probe_paths["livenessProbe"]:
 elif _probe_paths["readinessProbe"] == _probe_paths["startupProbe"]:
     finding(
         f"readinessProbe probes the startupProbe's path {_probe_paths['startupProbe']}",
-        "that path runs EVERY registered health check — the database and the mesh included. Under "
-        "load a heavy readiness check times out, the pod is yanked from the Service endpoints, and "
-        "the survivors inherit its traffic: the 2026-07-21 death spiral. The startup probe already "
-        "holds readiness on the heavy path until the mesh is up; after that readiness must be cheap.",
+        "the two probes then answer ONE question, and whichever path they share is wrong for one of "
+        "them. Shared on /health (the default), readiness inherits every registered check — the "
+        "database and the mesh included — so under load a heavy readiness check times out, the pod "
+        "is yanked from the Service endpoints, and the survivors inherit its traffic: the "
+        "2026-07-21 death spiral. Shared on /ready — which probes.startup.path now makes "
+        "expressible, and which a live `kubectl patch` reached for during the 2026-09-17 incident — "
+        "the startup probe stops asking whether the portal is UP at all: the pod is 'started' the "
+        "instant the process accepts a socket, joins the Service while the mesh is still booting, "
+        "and the NodeType bake gate (PreWarm__GateReadiness) loses its only reader. Startup asks "
+        "'is everything I need up yet', readiness asks 'can I take a request': separate paths.",
     )
+
+# ---------------------------------------------------------------------------
+# 10b. An ARMED NodeType bake gate must have a reader.
+#
+# 🚨 PreWarm__GateReadiness holds /health RED until this pod's NodeTypes are built against ITS
+# image, and the startupProbe is the ONLY probe that reads /health — so a gate that is armed while
+# the startup probe reads some other path is registered, permanently unread, and protects nothing.
+# It does not fail: it reports healthy on every rollout, which is exactly the outcome the gate
+# exists to prevent. Memex.Portal.Distributed already says this at Critical for the sibling case
+# (GateReadiness=true with DynamicTypes=false), and deploy/aks/values.aks.yaml has stated the rule
+# in PROSE for months — "the startupProbe must actually EXIST and point at /health".
+#
+# A rule stated in a comment is not a gate (#3330's lesson, one probe over). It became reachable by
+# an overlay the moment probes.startup.path stopped being a literal in the template, and the live
+# `kubectl patch` of 2026-09-17 — startupProbe → /ready, applied as break-glass while the control
+# instance was down — is precisely the render this refuses to let anyone commit by accident.
+#
+# 🚨 And the render cannot always ANSWER whether the gate is armed. The portal's `envFrom` list puts
+# `memex-portal-secrets`, every Key Vault-synced Secret and `.Values.extraEnvFrom` AFTER the
+# ConfigMap, and Kubernetes keeps the LAST source on a key clash — so a source whose contents this
+# render does not contain can set PreWarm__GateReadiness to anything. Reading the ConfigMap and
+# concluding "not armed" would then be a guard answering confidently from evidence it does not have.
+# So the unprovable case is a FINDING, scoped to the one combination where it matters: a startup
+# probe that is NOT on /health. With the probe on /health (the default) nothing can be silently
+# disarmed and the question does not arise.
+checks += 1
+_gate_env = {e.get("name"): e.get("value") for e in (portal.get("env") or [])}
+# Precedence, lowest first: the ConfigMap, then the chart's own Secret (both rendered here, so both
+# READABLE), then whatever the opaque sources below carry, then the container's inline `env`.
+_gate_secret = ((secret or {}).get("stringData") or {}).get("PreWarm__GateReadiness")
+_gate_stated = _gate_env.get(
+    "PreWarm__GateReadiness",
+    _gate_secret if _gate_secret is not None else cfg_data.get("PreWarm__GateReadiness"))
+_gate_armed = str(_gate_stated or "false").strip().lower() == "true"
+
+# The env sources whose CONTENTS are not in this render — a Key Vault-synced Secret or an
+# extraEnvFrom entry. The chart's own two are excluded because they are rendered above and read.
+_opaque_env_sources = [
+    (src.get("secretRef") or src.get("configMapRef") or {}).get("name")
+    for src in (portal.get("envFrom") or [])
+    if (src.get("configMapRef") or {}).get("name") != "memex-portal-config"
+    and (src.get("secretRef") or {}).get("name") != "memex-portal-secrets"
+]
+
+if not _gate_armed and _probe_paths["startupProbe"] and _probe_paths["startupProbe"] != "/health" \
+        and _opaque_env_sources:
+    finding(
+        f"the startupProbe reads {_probe_paths['startupProbe']} and this render cannot prove the "
+        f"NodeType bake gate is off (env source(s) {sorted(n for n in _opaque_env_sources if n)} "
+        f"are layered after the ConfigMap and their contents are not in this render)",
+        "PreWarm__GateReadiness reads 'false' in memex-portal-config, but Kubernetes keeps the LAST "
+        "envFrom source on a key clash, so a Key Vault-synced Secret or an extraEnvFrom entry can "
+        "arm the gate without appearing here. Armed plus a startup probe off /health is a gate that "
+        "is registered, never read, and permanently green — silently. This is a fail-closed on an "
+        "UNPROVABLE state, not a claim that the gate IS armed: keep the startup probe on /health "
+        "(the chart default, and the path that reads the gate), and the question does not arise.",
+    )
+
+if _gate_armed:
+    if not _probe_paths["startupProbe"]:
+        finding(
+            "PreWarm__GateReadiness is true but the portal container has no startupProbe httpGet path",
+            "the bake gate withholds /health, and the startup probe is its only reader. With no "
+            "startup probe the gate is registered, never read, and every rollout completes as if it "
+            "had passed. Render a startupProbe on /health, or turn the gate off so the "
+            "configuration stops claiming a protection that is not there.",
+        )
+    elif _probe_paths["startupProbe"] != "/health":
+        finding(
+            f"PreWarm__GateReadiness is true but the startupProbe reads "
+            f"{_probe_paths['startupProbe']}, not /health",
+            "the bake gate's check (nodetype_bake) is deliberately tagged neither `live` nor "
+            "`ready` — a long bake, a missing module and an unreachable registry are all wrong "
+            "answers to a restart AND to an eviction — so it lands on /health alone and the startup "
+            "probe is its only reader. Pointing the startup probe elsewhere disarms the gate "
+            "silently: it goes on being configured and goes on reporting healthy. If the startup "
+            "probe has to move because /health cannot answer inside its timeout, fix what is "
+            "spending the budget (its `timing:` line names it) — moving the probe trades a rollout "
+            "gate for a faster boot, and that is a decision, not a side effect.",
+        )
 
 # ---------------------------------------------------------------------------
 # 11. The platform-image pull secret is on BOTH pods that pull a platform image, or on neither.
@@ -816,6 +902,62 @@ if str(cfg_data.get("Hosting__Operator__Enabled", "false")) != "true":
             "`enabled` false they must render nowhere, or the Actions lane ships beside a "
             "half-armed Job path.",
         )
+
+# ---------------------------------------------------------------------------
+# 19. The instance's OWN database release (values database.release, Doc/Architecture/InClusterDatabases):
+#     the connection strings are COMPOSED in the containers' env from `$(MEMEX_DB_USER)` and
+#     `$(MEMEX_DB_PASSWORD)`, which come from the CloudNativePG Secret by secretKeyRef.
+#     Kubernetes expands $(VAR) only from variables defined EARLIER in the same container — a
+#     reference to one defined later stays the literal text `$(MEMEX_DB_PASSWORD)`, and the pod
+#     authenticates with that as its password. So: every container whose env composes a string
+#     must define both variables from a secretKeyRef BEFORE it, and the gate of the pod must probe
+#     the host the composed string names.
+# ---------------------------------------------------------------------------
+def _composed_env_problems(obj, label):
+    if not obj:
+        return []
+    problems = []
+    spec = ((obj.get("spec") or {}).get("template") or {}).get("spec") or {}
+    probed = _probe_hosts(_waiter_command(obj) or "")
+    for c in (spec.get("initContainers") or []) + (spec.get("containers") or []):
+        env = c.get("env") or []
+        defined = {}
+        for i, e in enumerate(env):
+            ref = ((e.get("valueFrom") or {}).get("secretKeyRef") or {})
+            if ref:
+                defined[e.get("name")] = (i, ref.get("name"), ref.get("key"))
+            value = e.get("value") or ""
+            if (e.get("name") or "").startswith("ConnectionStrings__") and "$(" in value:
+                for var in ("MEMEX_DB_USER", "MEMEX_DB_PASSWORD"):
+                    if f"$({var})" not in value:
+                        continue
+                    if var not in defined or defined[var][0] > i:
+                        problems.append(
+                            f"{label}/{c.get('name')}: {e.get('name')} expands $({var}) but {var} is not "
+                            "defined from a secretKeyRef EARLIER in the same container — Kubernetes leaves "
+                            "the literal text, and the pod authenticates with it")
+                hosts, _port = _cs_hosts(value)
+                if probed and hosts and not (set(hosts) & probed):
+                    problems.append(
+                        f"{label}/{c.get('name')}: {e.get('name')} names {sorted(hosts)} but the pod's "
+                        f"wait-for-postgres probes {sorted(probed)} — the gate and the connection disagree")
+    return problems
+
+_composing = False
+for _label, _obj in (
+    ("portal", dep),
+    ("migration", next((d for d in by_kind("Job")
+                        if ((d.get("metadata") or {}).get("name") or "").startswith("memex-migration-")), None)),
+):
+    spec = (((_obj or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    if any("$(" in (e.get("value") or "") for c in (spec.get("containers") or []) for e in (c.get("env") or [])
+           if (e.get("name") or "").startswith("ConnectionStrings__")):
+        _composing = True
+    for _p in _composed_env_problems(_obj, _label):
+        finding(_p, "templates/_database.tpl → memex.dbReleaseEnv renders the two secretKeyRef entries first; "
+                    "keep that order, and derive the gate from memex.meshConnectionString.")
+if _composing:
+    checks += 1
 
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:

@@ -141,8 +141,8 @@ internal static class NodeTypeCompilationHelpers
         // .mesh-cache assembly that has since been cleaned up. Trusting it
         // strands the NodeType — the kickoff skips, no recompile runs, and
         // every instance hub falls back to the default config (no
-        // MeshNodeReference reducer → "No reducer defined for
-        // MeshNodeReference" on every subscribe). The ONLY safe skip condition
+        // MeshNodeReference reducer, so every subscribe is refused with "has no
+        // reducer from MeshNodeReference to MeshNode"). The ONLY safe skip condition
         // is "Ok AND the compiled assembly still exists on disk"
         // (<see cref="HasUsableBuild"/>); everything else — null / Unknown /
         // Compiling (interrupted) / Error / Ok-but-assembly-gone — recompiles.
@@ -4438,17 +4438,23 @@ internal static class NodeTypeCompilationHelpers
                     var releasePathObservable = ok
                         ? NodeTypeBuildState.TryCreateReleaseNode(
                             hub, hubPath, outcome.Result!, outcome.PendingNode, resolvedActivityPath, logger)
-                        : Observable.Return<string?>(null);
+                        // 🚨 NOT-ATTEMPTED, not failed (#5057). A compile that produced no assembly
+                        // was never asked to release anything, and the post-condition below must not
+                        // be told a create failed when none was made.
+                        : Observable.Return(NodeTypeBuildState.ReleaseCreateOutcome.NotAttempted);
 
                     releasePathObservable
                         .Take(1)
                         // 🚨 Same totality guard as the compile pipeline above: the terminal
                         // Status write below runs in THIS OnNext — a release-create observable
                         // that completed empty would silently skip it and wedge the NodeType at
-                        // Compiling. TryCreateReleaseNode is bounded (null on timeout/fault) by
-                        // contract; DefaultIfEmpty makes the write unconditional even if that
-                        // contract is ever violated.
-                        .DefaultIfEmpty()
+                        // Compiling. TryCreateReleaseNode is bounded (a reasoned failure on
+                        // timeout/fault) by contract; DefaultIfEmpty makes the write unconditional
+                        // even if that contract is ever violated — and says so rather than producing
+                        // a null indistinguishable from a refusal (#5057).
+                        .DefaultIfEmpty(NodeTypeBuildState.ReleaseCreateOutcome.Failed(
+                            "the release create completed without emitting — the pipeline's "
+                            + "exactly-once contract was violated"))
                         // 🚨 THE POST-CONDITION (#781), checked where the compile SETTLES — the one
                         // moment at which "does a release name the build this node is about to
                         // advertise?" is answerable from facts all in hand. A consumed request whose
@@ -4458,12 +4464,12 @@ internal static class NodeTypeCompilationHelpers
                         // remedy re-cuts from the bytes this compile just produced (no recompile,
                         // under System) and is loud either way. Also totality-safe: exactly one
                         // emission, never a fault.
-                        .SelectMany(newReleasePath => ok
+                        .SelectMany(firstAttempt => ok
                             ? ReleasePostCondition.Restore(
                                 hub, hubPath, outcome.Result!, outcome.PendingNode,
-                                resolvedActivityPath, newReleasePath, logger)
-                            : Observable.Return<(string? ReleasePath, string? Diagnosis)>(
-                                (newReleasePath, null)))
+                                resolvedActivityPath, firstAttempt, logger)
+                            : Observable.Return<(string? ReleasePath, LogMessage? Diagnosis)>(
+                                (firstAttempt.ReleasePath, null)))
                         // 🚨 #4469 — THE JOIN POINT. A failure on an unresolved NAME asks the
                         // partition's import bookkeeping whether it lost the file that would have
                         // defined it, so the operator who lands on the compile error is told about
@@ -4592,9 +4598,12 @@ internal static class NodeTypeCompilationHelpers
                             .WithKey("activity.compile.releaseCreated", ("path", newReleasePath)));
                     // The post-condition's verdict belongs on the OFFICIAL diagnosis surface, not
                     // only in a log sink — a stale release is invisible everywhere else (#781).
+                    // 🚨 KEYED, so a German viewer reads it in German (#3236 / review on #5057). The
+                    // entry arrives carrying its own catalog key, args and level — it used to be
+                    // wrapped in a bare `new LogMessage(string, …)` here, which renders its English
+                    // interpolation to every viewer forever.
                     if (settle.Diagnosis is { } diagnosis)
-                        activityMessages.Add(new LogMessage(diagnosis,
-                            newReleasePath is null ? LogLevel.Error : LogLevel.Warning));
+                        activityMessages.Add(diagnosis);
                     NodeTypeCompilationActivity.Complete(hub, resolvedActivityPath,
                         ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
                         activityMessages.ToImmutable(), logger!);

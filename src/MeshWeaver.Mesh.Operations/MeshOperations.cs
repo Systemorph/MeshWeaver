@@ -671,7 +671,22 @@ public class MeshOperations
             using var callerScope = caller is not null
                 ? accessService?.SwitchAccessContext(caller)
                 : null;
-            var stream = hub.GetWorkspace()
+            // 🚨 SUBSCRIBED OFF THE ROUTER (#4614/#4615/#4617). `hub` is whatever hub built this
+            // facade, and for the AI/agent surface that is the DI-injected IMessageHub — the
+            // ROUTER (see ReadHub). A workspace is SCOPED PER HUB, so `hub.GetWorkspace()` would
+            // open this layout-area stream on the router's workspace: the SubscribeRequest leaves
+            // stamped `sender: mesh/{id}` (#4614), the owner then addresses its SubscribeAck
+            // (#4615), every DataChangedEvent and the StreamEndedEvent (#4617) straight back at
+            // `mesh/{id}` — because those are all posted to `request.Subscriber`, which IS the
+            // subscribe's sender — and the router hosts the `sync/{streamId}` sub-hub and routes
+            // every frame through its own action block for the life of the render.
+            //
+            // The remedy the ORIGIN report suggests — ReadIssuingHub() — is NOT available here and
+            // would break data sync: `portal/reads-{meshId}` registers no handlers, so it has no
+            // RouteStreamMessage route and no sync sub-hub, and the owner's fan-out would arrive
+            // nowhere. The subscriber hub must be a data-wired actor; that is StreamSubscribingHub,
+            // the identity function for every MCP-session / portal / per-node caller of this facade.
+            var stream = hub.StreamSubscribingHub().GetWorkspace()
                 .GetRemoteStream<JsonElement, LayoutAreaReference>(
                     (Address)resolution.Prefix, reference);
             if (stream is null)
@@ -1124,6 +1139,64 @@ public class MeshOperations
                 return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// Projects the caller's touched key PATHS onto the serializer-NORMALIZED form of what is about
+    /// to be written, producing the expectation <see cref="FieldsLandedIn"/> can actually satisfy.
+    ///
+    /// <para>🚨 <b>Why the caller's raw JSON is the wrong expectation.</b> #2469 replaced a
+    /// version-only confirmation (which produced false POSITIVES — any concurrent writer's bump
+    /// satisfied it) with a comparison of the caller's submitted leaves against the live node. That
+    /// fixed the false positive and introduced a false NEGATIVE, because the caller's raw values and
+    /// the STORED values are not the same JSON: the owner persists what the serializer writes.
+    /// Anything the serializer normalizes away makes the comparison unsatisfiable forever, so a
+    /// write that landed is reported as <i>"did not land within the confirmation window"</i> — and
+    /// the message tells the caller to retry, which for a non-idempotent write is actively
+    /// harmful.</para>
+    ///
+    /// <para>Measured 2026-09-21 on a live approval: a patch carrying <c>"status": "Pending"</c> —
+    /// the enum's ZERO member, which the serializer omits — was reported as not landed on three
+    /// attempts. The third had also changed <c>purpose</c>, and that change was in the store at
+    /// version 4 while the caller was told the write had failed.</para>
+    ///
+    /// <para>The rule this restores: <b>the expectation is what we can actually STORE, not what the
+    /// caller typed.</b> Every key the caller named is still expected — one whose value the
+    /// serializer WRITES is compared in its stored form, and one the serializer OMITS is expected
+    /// to be absent (projected as an explicit null, which <see cref="FieldsLandedIn"/> satisfies
+    /// with a live key that is missing or null). So the comparison resolves to one unambiguous
+    /// state in both directions: a landed write confirms, and a REFUSED write that leaves the old
+    /// non-default value in place still fails. #2469's guarantee is untouched — only keys the
+    /// caller named are ever projected, so a concurrent writer's change elsewhere on the node can
+    /// still neither satisfy nor fail the check.</para>
+    /// </summary>
+    /// <param name="normalized">The node about to be written, serialized with the hub's options.</param>
+    /// <param name="delta">The caller's own submitted fields — the key paths, not the values.</param>
+    /// <returns>The caller's key paths carrying their stored values.</returns>
+    internal static JsonObject ProjectTouched(JsonObject normalized, JsonObject delta)
+    {
+        var projected = new JsonObject();
+        foreach (var (key, deltaVal) in delta)
+        {
+            if (!normalized.TryGetPropertyValue(key, out var storedVal))
+            {
+                // 🚨 ABSENT IS AN EXPECTATION, NOT A REASON TO STOP ASKING. The serializer will
+                // not write this key, so the landed node must not carry it either — project it as
+                // an explicit null, which FieldsLandedIn already reads as "absent OR null" (RFC
+                // 7396 remove). DROPPING it instead is a false POSITIVE, which is the failure
+                // #2469 exists to prevent and strictly worse than the false negative this method
+                // fixes: a patch touching only a serializer-omitted field would project
+                // {"content":{}}, and an empty expectation is satisfied by the FIRST emission
+                // whatever the live node holds — so a REFUSED write reports "Patched:".
+                projected[key] = null;
+                continue;
+            }
+            if (deltaVal is JsonObject deltaObj && storedVal is JsonObject storedObj)
+                projected[key] = ProjectTouched(storedObj, deltaObj);
+            else
+                projected[key] = storedVal?.DeepClone();
+        }
+        return projected;
     }
 
     /// <summary>
@@ -1694,6 +1767,15 @@ public class MeshOperations
     /// Full-replacement update of one or more existing nodes from a JSON array. Each node is validated and
     /// written independently (results combine in input order); a read-your-writes barrier ensures a
     /// following read sees the reconciled state.
+    ///
+    /// <para>🚨 This is the FULL-ENTITY shape (pattern 3 of <c>Doc/Architecture/ExpressingAWrite</c>), and
+    /// it is only correct when the caller is the sole authority for the node's content — a one-way sync
+    /// source, or a buffer that IS the new content. Every field the supplied node does not mention is
+    /// still WRITTEN, so a concurrent writer's field is reverted rather than preserved. To change some
+    /// fields and leave the rest alone use <see cref="Patch"/>; to edit text inside a long body use
+    /// <see cref="EditContent"/>. Neither this verb nor <see cref="Patch"/> can express a FOLD
+    /// ("bump this counter") — both require the caller to know the current value, which is a stale read
+    /// the moment a second writer exists (#4928).</para>
     /// </summary>
     /// <param name="nodes">A JSON array of complete MeshNode objects to write.</param>
     /// <returns>A cold observable emitting a newline-joined per-node result/error summary.</returns>
@@ -1816,6 +1898,13 @@ public class MeshOperations
     /// Partial update of a single node: only the keys present in <paramref name="fields"/> change, with
     /// <c>content</c> deep-merged per RFC 7396 (omitted keys preserved, a null member deletes that key).
     /// Merged content is schema-validated before the write.
+    ///
+    /// <para>This is the PATCH shape (pattern 2 of <c>Doc/Architecture/ExpressingAWrite</c>) and it is the
+    /// right default for "change these fields, leave the rest alone". Two limits worth knowing: it replaces
+    /// a text field WHOLESALE (for an edit inside a long markdown body or code source use
+    /// <see cref="EditContent"/>, which splices), and it cannot express a FOLD — <c>count + 1</c> has to be
+    /// computed by the caller from a read that a second writer can invalidate before the patch lands
+    /// (#4928).</para>
     /// </summary>
     /// <param name="path">The exact path of the node to patch.</param>
     /// <param name="fields">A JSON object holding only the fields to change.</param>
@@ -1894,7 +1983,10 @@ public class MeshOperations
                 // live mirror — the caller's raw content sub-delta, not the merged snapshot (which
                 // also carries whatever unrelated fields — e.g. a poller's checkedAt — happened to
                 // be live at merge time, and would never match a busy node's live state again).
-                var expectedFields = jsonObj.DeepClone().AsObject();
+                // The caller's own key PATHS. Values are projected from the normalized
+                // merged node below (ProjectTouched) — never taken from here, because the
+                // raw submitted value is not what gets stored.
+                var callerDelta = jsonObj.DeepClone().AsObject();
 
                 if (jsonObj["content"] is JsonObject contentPatch)
                 {
@@ -1946,6 +2038,15 @@ public class MeshOperations
                 var validationObs = (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
                     ? ValidateContentWithSchema(merged)
                     : Observable.Return<string?>(null);
+
+                // 🚨 Build the expectation from what will actually be STORED — the merged node
+                // as the serializer writes it — projected onto the caller's own key paths. See
+                // ProjectTouched: comparing the caller's RAW values makes any serializer-normalized
+                // field (a default-valued enum, a rewritten date, a renamed enum member) an
+                // expectation that can never be met, so a landed write reports as not landed.
+                var mergedJson = JsonSerializer.SerializeToNode(merged, hub.JsonSerializerOptions)
+                    as JsonObject ?? new JsonObject();
+                var expectedFields = ProjectTouched(mergedJson, callerDelta);
 
                 var versionBefore = existing.Version;
                 return validationObs.SelectMany(validationError =>
@@ -2011,6 +2112,14 @@ public class MeshOperations
     /// re-enqueues the lambda, which re-verifies the anchor against fresh state. The
     /// success string is additionally gated on the edit provably landing in the live
     /// mirror, so an exhausted late-NACK retry surfaces as an error, never "Edited:".</para>
+    ///
+    /// <para>🚨 ANCHORED, not POSITIONAL, and that is the design (pattern 2 of
+    /// <c>Doc/Architecture/ExpressingAWrite</c>). An offset or a (row, column) is meaningless the moment
+    /// another writer inserts a character above it, and a splice aimed at a stale position lands in the
+    /// WRONG PLACE without erroring — the one silent-corruption shape in the write design. An anchor is
+    /// re-verified against live text, so the same race surfaces as
+    /// <see cref="AnchorNotFoundException"/> instead. A positional splice is legal only when it carries a
+    /// base fingerprint the owner checks, which is what the content-only splice path already does.</para>
     /// </summary>
     public IObservable<string> EditContent(string path, string oldText, string newText, bool replaceAll = false)
     {
@@ -2697,7 +2806,14 @@ public class MeshOperations
                 var capturedPath = resolvedPath;
                 perPath = perPath.Add(
                     mesh.DeleteNode(capturedPath)
-                        .Select(_ => $"Deleted: {capturedPath}")
+                        // 🚨 READ THE VALUE — `false` means the node was ALREADY gone and this call
+                        // removed nothing (#4668). Deleting what is already absent is a success (the
+                        // verb's postcondition holds either way), but reporting it as "Deleted:" would
+                        // tell an agent that a path it mistyped had been cleaned up. The honest line
+                        // is what lets the caller tell a completed delete from a no-op.
+                        .Select(removed => removed
+                            ? $"Deleted: {capturedPath}"
+                            : $"Nothing to delete at {capturedPath}: it was already absent.")
                         .Catch((Exception ex) =>
                         {
                             logger.LogWarning(ex, "Error deleting {Path}", capturedPath);
@@ -3627,7 +3743,23 @@ public class MeshOperations
     /// Returns a JSON <c>{status, path}</c> envelope. The caller should wait ~100ms
     /// before re-accessing so the grain teardown completes.
     /// </summary>
-    public IObservable<string> Recycle(string path)
+    public IObservable<string> Recycle(string path) => Recycle(path, reason: null);
+
+    /// <summary>
+    /// Recycles the hub at <paramref name="path"/>, carrying the operator's own
+    /// <paramref name="reason"/> into the target's <c>DisposeRequest</c>.
+    ///
+    /// <para>🚨 An OVERLOAD, not a defaulted parameter, for the reason this file states elsewhere:
+    /// a defaulted parameter REPLACES the signature a previously-built module calls. The one-argument
+    /// form stays and forwards.</para>
+    ///
+    /// <para><paramref name="reason"/> is the half a reader of a <c>[QUIESCE-START]</c> cannot
+    /// reconstruct. #3712 stopped this verb posting an anonymous teardown, so the line already names
+    /// WHO tore the hub down and by which surface; what no framework string can supply is WHAT the
+    /// operator was trying to fix. Null keeps exactly the #3712 sentence — the fallback is never
+    /// replaced by a blank (#3510).</para>
+    /// </summary>
+    public IObservable<string> Recycle(string path, string? reason)
     {
         logger.LogInformation("Recycle called with path={Path}", path);
 
@@ -3711,7 +3843,7 @@ public class MeshOperations
                 // ONE implementation in HubRecycleExtensions, never a second copy of the rule.
                 if (outcome.IsGranted)
                     return hub.WhenNoInstallHoldsRoot(resolvedPath)
-                        .SelectMany(_ => RecycleCore(resolvedPath));
+                        .SelectMany(_ => RecycleCore(resolvedPath, reason));
 
                 if (outcome.IsUndetermined)
                 {
@@ -3731,7 +3863,7 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Re-decides a DENIED <see cref="Recycle"/> pre-flight through the target node's own
+    /// Re-decides a DENIED <see cref="Recycle(string)"/> pre-flight through the target node's own
     /// <c>INodeTypeAccessRule</c> — the same second opinion <c>AccessControlPipeline</c> takes since
     /// #3061, built from the same <c>NodeTypeAccessRuleGate</c> helpers so the two seams cannot
     /// drift into asking different questions.
@@ -3786,7 +3918,7 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// The one sentence <see cref="Recycle"/> says when access was EVALUATED and the answer is "no"
+    /// The one sentence <see cref="Recycle(string)"/> says when access was EVALUATED and the answer is "no"
     /// — whoever reached it, the caller's own pre-flight or the owning hub's delivery gate.
     ///
     /// <para>ONE constant, deliberately: those are two different evaluators at two different
@@ -3829,7 +3961,7 @@ public class MeshOperations
         + "admin) to do it.";
 
     /// <summary>
-    /// What <see cref="Recycle"/> says when the permission check reached NO verdict. Says the
+    /// What <see cref="Recycle(string)"/> says when the permission check reached NO verdict. Says the
     /// opposite thing to <see cref="RecycleDeniedMessage"/> on purpose: retry, do not go asking
     /// for rights you may already hold (#974).
     /// </summary>
@@ -3878,7 +4010,63 @@ public class MeshOperations
         return false;
     }
 
-    private IObservable<string> RecycleCore(string resolvedPath)
+    /// <summary>
+    /// The <c>DisposeRequest.Reason</c> an operator recycle carries — the framework's own sentence
+    /// (#3712), plus the operator's <paramref name="operatorReason"/> when they gave one.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 Pure and named so both directions are testable without driving the permission fold, the
+    /// lease gate and the change feed: that a supplied reason SURVIVES, and that an absent one still
+    /// produces the #3712 sentence rather than a blank. A blank is the exact failure #3510 measured
+    /// at six occurrences and four bake seals, so "the fallback is not silently replaced" is the
+    /// half that most needs a test.
+    /// </remarks>
+    internal static string RecycleReason(string resolvedPath, string? operatorReason)
+    {
+        var framework =
+            $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
+            + "to be recycled (the Recycle tool / Compile button), which "
+            + "stamps a release request and then tears the hub down so the "
+            + "next access reactivates it";
+        return string.IsNullOrWhiteSpace(operatorReason)
+            ? framework
+            : $"{framework}. The operator's reason: {SanitizeReason(operatorReason)}";
+    }
+
+    /// <summary>Longest operator reason carried onto the line. Generous for a sentence, short
+    /// enough that one caller cannot push the framework's own text out of a reader's view.</summary>
+    private const int MaxOperatorReasonLength = 300;
+
+    /// <summary>
+    /// Flattens an operator-supplied reason to something that can only ever contribute to the ONE
+    /// log line it belongs on.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 A LOG-FORGERY PRIMITIVE, not a formatting nicety. This string is rendered into the
+    /// target's <c>[QUIESCE-START]</c> line, and the log-incident filer fingerprints on the RENDERED
+    /// line — so a reason of <c>"routine\nfail: MeshWeaver.Something[0] …"</c> appends a second
+    /// entry that reads exactly like a real one from another component, and can mint an incident.
+    /// Anything able to reach a recycle surface could write arbitrary lines into the log.
+    /// <c>Trim()</c> alone does not touch embedded breaks, which is what made it insufficient.
+    ///
+    /// <para>Every line break AND every other control character collapses to a single space:
+    /// a lone <c>\r</c>, a vertical tab and <c>\u0085</c> all start a new line in one renderer or
+    /// another, so enumerating the ones that do would be a list to get wrong. Length is bounded for
+    /// the same reason the masking exists — one caller must not be able to push the framework's own
+    /// sentence out of view.</para>
+    /// </remarks>
+    internal static string SanitizeReason(string reason)
+    {
+        var flattened = new string(reason.Select(c => char.IsControl(c) ? ' ' : c).ToArray());
+        // Collapse the runs the substitution just created, so a pasted block does not arrive as a
+        // corridor of spaces.
+        flattened = string.Join(' ', flattened.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return flattened.Length <= MaxOperatorReasonLength
+            ? flattened
+            : flattened[..MaxOperatorReasonLength] + "… (truncated)";
+    }
+
+    private IObservable<string> RecycleCore(string resolvedPath, string? reason)
     {
         try
         {
@@ -4016,10 +4204,7 @@ public class MeshOperations
                     .Post(
                         new DisposeRequest
                         {
-                            Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
-                                     + "to be recycled (the Recycle tool / Compile button), which "
-                                     + "stamps a release request and then tears the hub down so the "
-                                     + "next access reactivates it",
+                            Reason = RecycleReason(resolvedPath, reason),
                         },
                         o => o.WithTarget(new Address(resolvedPath)));
                 return JsonSerializer.Serialize(
@@ -4027,7 +4212,7 @@ public class MeshOperations
                     {
                         status = "Recycled",
                         path = resolvedPath,
-                        message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. Wait ~100ms before the next access."
+                        message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. A NodeType's recycle cascades to its dependency network (the NodeTypes sharing its sources and every instance of each): only the activations that EXIST are torn down, nothing is instantiated to be recycled. Wait ~100ms before the next access."
                     },
                     hub.JsonSerializerOptions);
             });

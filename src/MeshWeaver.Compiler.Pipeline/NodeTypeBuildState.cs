@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Compiler;
@@ -44,9 +45,17 @@ public static class NodeTypeBuildState
     /// 2-core flake). Same rule as RunCompile's activity-create guard: the stamp
     /// follows the create; it is never a path that does not exist.</para>
     ///
-    /// <para>Failures are swallowed (emit <c>null</c>): the release MeshNode is
-    /// observability + history. Compile correctness must not depend on the create
-    /// succeeding. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    /// <para>Compile correctness must not depend on the create succeeding — the release MeshNode is
+    /// observability + history — so a failure does not fault the compile. See
+    /// <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    ///
+    /// <para>🚨 <b>But a failure is never SILENT, and that is issue #5057.</b> This used to emit a
+    /// bare <c>null</c> for every one of its four failure channels, so the reason was thrown away at
+    /// the only place that knew it. <see cref="ReleaseCreateOutcome"/> carries the reason out
+    /// instead, because the caller that reports the consequence — <c>ReleasePostCondition</c>, which
+    /// logs an ERROR and writes the compile <c>_Activity</c> — is not the frame that can see the
+    /// cause. An <c>Exception</c>'s stack still goes to the log here, where it exists; the one-line
+    /// reason is what travels.</para>
     /// </summary>
     /// <summary>
     /// The re-cut's own release path when a create failed only because that path is already taken,
@@ -54,10 +63,66 @@ public static class NodeTypeBuildState
     /// only its ingredient — pinning <see cref="NodeCreationFailure.IsNodeAlreadyExists"/> alone
     /// would leave the catch free to keep returning <c>null</c> and stay green.
     /// </summary>
+    /// <param name="ex">The exception the create failed with.</param>
+    /// <param name="releasePath">The path this attempt was minting.</param>
     internal static string? AdoptOnOwnCollision(Exception ex, string releasePath)
         => ex.IsNodeAlreadyExists() ? releasePath : null;
 
-    internal static IObservable<string?> TryCreateReleaseNode(
+    /// <summary>
+    /// How long the observed create may take before the attempt is abandoned.
+    ///
+    /// <para>🚨 Named, so the refusal can SAY what it waited for — and so no test writes the number
+    /// again. It is a bound on a cross-hub round trip inside a compile settle; raising it is not the
+    /// remedy for it expiring (a create that cannot land in ten seconds is not a slow create), which
+    /// is exactly why the expiry now has to be reportable.</para>
+    /// </summary>
+    internal static readonly TimeSpan CreateBound = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// What ONE Release-create attempt amounts to: the path when the create LANDED, else the reason
+    /// it did not — and <see cref="NotAttempted"/> when none was made.
+    ///
+    /// <para>🚨 <b>Three states, never two.</b> "Landed", "tried and failed BECAUSE x" and "never
+    /// tried" are three different facts about a build, and a <c>string?</c> can hold only two of
+    /// them — which is how #5057 came to report <i>"the release could not be re-cut"</i> with
+    /// nothing after it, eight times over three minutes across seven node types, while the channel
+    /// that produced it (a <see cref="CreateBound"/> that expired) wrote no log line at all.</para>
+    /// </summary>
+    /// <param name="ReleasePath">The release that now exists, or <c>null</c>.</param>
+    /// <param name="Failure">
+    /// Why no release exists, in one operator-readable line — <c>null</c> both when the create
+    /// landed and when no create was attempted, which <see cref="Attempted"/> separates.
+    /// </param>
+    /// <param name="Attempted">False only for <see cref="NotAttempted"/>.</param>
+    internal sealed record ReleaseCreateOutcome(string? ReleasePath, string? Failure, bool Attempted = true)
+    {
+        /// <summary>No create was made — this compile was not asked to release anything.</summary>
+        internal static readonly ReleaseCreateOutcome NotAttempted = new(null, null, Attempted: false);
+
+        /// <summary>The create landed at <paramref name="releasePath"/>.</summary>
+        /// <param name="releasePath">The release that now exists.</param>
+        internal static ReleaseCreateOutcome Landed(string releasePath) => new(releasePath, null);
+
+        /// <summary>The create was attempted and did not land, for <paramref name="reason"/>.</summary>
+        /// <param name="reason">Why, in one line an operator can act on.</param>
+        internal static ReleaseCreateOutcome Failed(string reason) => new(null, reason);
+
+        /// <summary>True when a release exists for these bytes.</summary>
+        internal bool Succeeded => ReleasePath is not null;
+
+        /// <summary>
+        /// The reason as a clause to append to a sentence — <c>": …"</c> when there is one, and a
+        /// sentence that SAYS the reason is missing when there is not. Never the empty string: a
+        /// report that trails off is the defect, not the terse form of it.
+        /// </summary>
+        internal string Because => Failure is { Length: > 0 } reason
+            ? $": {reason}"
+            : Attempted
+                ? " — and the attempt reported no reason, which is itself a defect in this pipeline"
+                : " — no create was attempted";
+    }
+
+    internal static IObservable<ReleaseCreateOutcome> TryCreateReleaseNode(
         IMessageHub hub,
         string nodeTypePath,
         NodeCompilationResult result,
@@ -68,7 +133,9 @@ public static class NodeTypeBuildState
         try
         {
             var meshService = hub.ServiceProvider.GetService<IMeshService>();
-            if (meshService is null) return Observable.Return<string?>(null);
+            if (meshService is null)
+                return Observable.Return(ReleaseCreateOutcome.Failed(
+                    "no IMeshService is registered on this hub, so no Release node could be created"));
 
             // Markdown release notes the author wrote on the NodeType's
             // ReleaseNotes field BEFORE clicking Create Release — sourced
@@ -188,63 +255,137 @@ public static class NodeTypeBuildState
             var requestedBy = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
             var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-            // OBSERVED create: emit the path only once the create response lands.
-            // Bounded — a hung owner must never block the compile's terminal write;
-            // on timeout/fault emit null so the parent never advertises a phantom
-            // Release path (mirrors RunCompile's activity-create guard).
-            return Observable.Using(
-                    () => !string.IsNullOrEmpty(requestedBy) && accessService is not null
-                        ? accessService.SwitchAccessContext(new AccessContext
-                        {
-                            ObjectId = requestedBy,
-                            Name = requestedBy
-                        })
-                        : System.Reactive.Disposables.Disposable.Empty,
-                    _ => meshService.CreateNode(node).Take(1))
-                .Select(_ => (string?)releasePath)
-                .Timeout(TimeSpan.FromSeconds(10), Observable.Return<string?>(null))
-                .Catch<string?, Exception>(ex =>
-                {
-                    // 🚨 A COLLISION AT OUR OWN ID IS SUCCESS (#3407). ReleasePostCondition re-cuts
-                    // when latestReleasePath still names an earlier build; when the retry lands in
-                    // the SAME SECOND as the first attempt, both mint the same id and the second
-                    // create throws. Swallowing that into null left the pointer un-advanced: the
-                    // bytes were published, the Release node existed, and the type went on
-                    // advertising a build no release named — every instance kept executing the
-                    // previous assembly behind a $Banner whose own text says a recycle will not
-                    // clear it. Measured on memex.localhost 2026-09-06 (Edu/CourseInvite build 767);
-                    // only a pod restart cleared it, and nothing in the pipeline did.
-                    //
-                    // Adopting is naming the same bytes, not guessing. The id is
-                    // {yyyyMMddHHmmss}-{8 chars of SHA256(Collection/ContentPath)} — the hash comes
-                    // from the DURABLE content reference, so an equal id means equal second AND
-                    // equal content. A collision can therefore only be this same code's own earlier
-                    // attempt for this same compile. (Healthy re-cuts show in the release list as
-                    // PAIRS a second or two apart sharing the suffix; the failing one was the single
-                    // unpaired id.)
-                    if (AdoptOnOwnCollision(ex, releasePath) is { } adopted)
-                    {
-                        logger?.LogInformation(
-                            "CompileWatcher: Release node at {ReleasePath} already exists — adopting "
-                            + "it. The re-cut collided with its own first attempt in the same second; "
-                            + "the id encodes the content hash, so this names the same bytes.",
-                            adopted);
-                        return Observable.Return<string?>(adopted);
-                    }
-
-                    logger?.LogWarning(ex,
-                        "CompileWatcher: failed to create Release node at {ReleasePath}",
-                        releasePath);
-                    return Observable.Return<string?>(null);
-                });
+            // OBSERVED create: report the path only once the create response lands.
+            // Bounded — a hung owner must never block the compile's terminal write; on
+            // timeout/fault the outcome carries no path (and, since #5057, the REASON), so
+            // the parent never advertises a phantom Release path (mirrors RunCompile's
+            // activity-create guard).
+            return Bounded(
+                Observable.Using(
+                        () => !string.IsNullOrEmpty(requestedBy) && accessService is not null
+                            ? accessService.SwitchAccessContext(new AccessContext
+                            {
+                                ObjectId = requestedBy,
+                                Name = requestedBy
+                            })
+                            : System.Reactive.Disposables.Disposable.Empty,
+                        _ => meshService.CreateNode(node).Take(1))
+                    .Select(_ => System.Reactive.Unit.Default),
+                releasePath, scheduler: null, logger);
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex,
                 "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath}", nodeTypePath);
-            return Observable.Return<string?>(null);
+            return Observable.Return(ReleaseCreateOutcome.Failed(
+                $"the Release node could not be composed at all: {ex.GetType().Name}: {ex.Message}"));
         }
     }
+
+    /// <summary>
+    /// The BOUNDED WAIT around one create, and the classification of however it ends — extracted so a
+    /// test drives the production chain rather than only its ingredients.
+    ///
+    /// <para>🚨 <b>Why this is a seam and not an inline expression (review on #5057).</b> The
+    /// load-bearing change is that the bound FAULTS instead of substituting, and asserting that
+    /// through a hand-built <see cref="TimeoutException"/> handed to <see cref="Describe"/> proves
+    /// nothing about the chain: reverting
+    /// <c>Timeout(CreateBound)</c> to <c>Timeout(CreateBound, Observable.Return(&lt;no reason&gt;))</c>
+    /// would leave every such test green. Pure over its source and its
+    /// <paramref name="scheduler"/> — the same shape the fleet-watch dead-man's switch uses — so a
+    /// <c>HistoricalScheduler</c> drives the expiry with no mesh, no clock and no sleep, and the
+    /// substituting revert is caught by the outcome carrying no reason.</para>
+    /// </summary>
+    /// <param name="create">The create, as a single signal that it LANDED.</param>
+    /// <param name="releasePath">The path being minted — named in every outcome.</param>
+    /// <param name="scheduler">The clock the bound is measured on; null uses the default.</param>
+    /// <param name="logger">Where an exception's stack is published.</param>
+    internal static IObservable<ReleaseCreateOutcome> Bounded(
+        IObservable<System.Reactive.Unit> create,
+        string releasePath,
+        IScheduler? scheduler,
+        ILogger? logger) =>
+        create
+            .Take(1)
+            .Select(_ => ReleaseCreateOutcome.Landed(releasePath))
+            // 🚨 A BOUND THAT FAULTS, never one that SUBSTITUTES (#5057). This was
+            // `Timeout(bound, Observable.Return<string?>(null))` — the expiry replaced the sequence
+            // with the same `null` a refusal produced, wrote NO log line of any kind, and was
+            // therefore the one failure channel with no trace whatsoever. It is also the channel the
+            // incident names: on `Hosting/InstanceRequest` the "Re-cutting…" line was logged at
+            // 22:16:14Z and "…AND the release could not be re-cut" at 22:16:24Z — exactly this
+            // bound, expiring, reported by nothing but the gap between two lines that happened to be
+            // adjacent. Faulting routes it into the catch below, where it becomes a reason like
+            // every other failure.
+            //
+            // 🚨 And it bounds the WAIT, not the CREATE: the request is already on the bus, so the
+            // owning hub writes the node whether or not anyone is still listening. Measured over
+            // `Hosting/InstanceRequest/Release/*` on the control instance (200 nodes, a floor), from
+            // each id's own second stamp to the node's creation: median 0.7 s, 8 of 200 BEYOND this
+            // bound, out to 17.8 s. Which is why `Describe` sends the reader to the path instead of
+            // saying the release was not created.
+            .Timeout(CreateBound, scheduler ?? DefaultScheduler.Instance)
+            .Catch<ReleaseCreateOutcome, Exception>(ex =>
+            {
+                // 🚨 A COLLISION AT OUR OWN ID IS SUCCESS (#3407). ReleasePostCondition re-cuts
+                // when latestReleasePath still names an earlier build; when the retry lands in
+                // the SAME SECOND as the first attempt, both mint the same id and the second
+                // create throws. Swallowing that into null left the pointer un-advanced: the
+                // bytes were published, the Release node existed, and the type went on
+                // advertising a build no release named — every instance kept executing the
+                // previous assembly behind a $Banner whose own text says a recycle will not
+                // clear it. Measured on memex.localhost 2026-09-06 (Edu/CourseInvite build 767);
+                // only a pod restart cleared it, and nothing in the pipeline did.
+                //
+                // Adopting is naming the same bytes, not guessing. The id is
+                // {yyyyMMddHHmmss}-{8 chars of SHA256(Collection/ContentPath)} — the hash comes
+                // from the DURABLE content reference, so an equal id means equal second AND
+                // equal content. A collision can therefore only be this same code's own earlier
+                // attempt for this same compile. (Healthy re-cuts show in the release list as
+                // PAIRS a second or two apart sharing the suffix; the failing one was the single
+                // unpaired id.)
+                if (AdoptOnOwnCollision(ex, releasePath) is { } adopted)
+                {
+                    logger?.LogInformation(
+                        "CompileWatcher: Release node at {ReleasePath} already exists — adopting "
+                        + "it. The re-cut collided with its own first attempt in the same second; "
+                        + "the id encodes the content hash, so this names the same bytes.",
+                        adopted);
+                    return Observable.Return(ReleaseCreateOutcome.Landed(adopted));
+                }
+
+                // The STACK stays here, where it exists; the one-line REASON travels out, to the
+                // ERROR line and the compile _Activity that report the consequence (#5057).
+                logger?.LogWarning(ex,
+                    "CompileWatcher: failed to create Release node at {ReleasePath}",
+                    releasePath);
+                return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath)));
+            });
+
+    /// <summary>
+    /// One create failure as one operator-readable line. A <see cref="TimeoutException"/> is named
+    /// for what it IS — the bound expired and the owning hub never answered — because "TimeoutException:
+    /// The operation has timed out" tells a reader nothing about which operation or what it waited for.
+    /// Pure.
+    ///
+    /// <para>🚨 <b>And the expiry says the node MAY EXIST, naming where.</b> The bound stops this
+    /// process WAITING; it does not stop the create, whose message is already on the bus, so the
+    /// owning hub writes the node whether or not anyone is still listening. Measured on the control
+    /// instance over <c>Hosting/InstanceRequest/Release/*</c> (200 nodes, a floor — the listing
+    /// truncated): the interval from the id's own minute-second stamp to the node's creation is a
+    /// median <b>0.7 s</b> with <b>8 of 200 (4%) beyond this bound</b>, out to <b>17.8 s</b>. So
+    /// "did not land within the bound" and "was not created" are DIFFERENT facts, and a reader told
+    /// the first who acts on the second goes looking for bytes that are already published. The path
+    /// is in the sentence for exactly that reason: it is the one place to look.</para>
+    /// </summary>
+    /// <param name="ex">The exception the create failed with.</param>
+    /// <param name="releasePath">The path the attempt was minting.</param>
+    internal static string Describe(Exception ex, string releasePath) =>
+        ex is TimeoutException
+            ? $"the create did not land within {CreateBound} — the bound stops this process WAITING, "
+              + "not the create, so the node may well exist and nothing here advanced the pointer to "
+              + $"it: LOOK AT '{releasePath}' before concluding the release is missing"
+            : $"the create at '{releasePath}' failed: {ex.GetType().Name}: {ex.Message}";
 
     /// <summary>
     /// Holds a NodeType MeshNode stream until <see cref="NodeTypeDefinition.CompilationStatus"/>

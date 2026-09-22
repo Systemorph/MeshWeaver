@@ -115,10 +115,28 @@ public class PreWarmGateReadinessGuard
             + "making the NEW pod refuse readiness, which protects nothing if the serving pod was "
             + "already deleted. Prerequisite 3 of the chart's own list.");
 
-        Assert.True(Regex.IsMatch(deployment, @"startupProbe:(?s).{0,400}?path:\s*/health"),
-            "PreWarm__GateReadiness is armed but the startupProbe does not target /health — the "
-            + "only endpoint that reads the gate. A namespace probing /alive or /healthz ignores it "
-            + "entirely, so the gate is silently useless.");
+        // 🚨 Read the path the chart SHIPS, not a literal in the template. Since MeshWeaver#4588
+        // the startup path is `probes.startup.path` — a value, so that an environment which must
+        // move it does so in the repository rather than as a live `kubectl patch` — and a guard
+        // matching the old literal would have failed on the template's own comment or, worse,
+        // matched a `/health` that no longer had anything to do with this probe.
+        Assert.True(Regex.IsMatch(deployment,
+                @"startupProbe:(?s).*?httpGet:[^\n]*?path:[^\n]*?\.Values\.probes\.startup\.path"),
+            "PreWarm__GateReadiness is armed, and this guard can no longer see how the startupProbe "
+            + "gets its path. It reads probes.startup.path out of the values; if the template now "
+            + "states the path some other way, update this assertion DELIBERATELY — a guard that "
+            + "stops matching its subject passes having checked nothing.");
+
+        var startupPath = StartupPath(values);
+        Assert.True(startupPath == "/health",
+            $"PreWarm__GateReadiness is armed but probes.startup.path is '{startupPath}', not "
+            + "/health — the only endpoint that reads the gate. nodetype_bake is deliberately "
+            + "tagged neither `live` nor `ready`, so it lands on /health alone and the startup probe "
+            + "is its only reader: a namespace probing /ready, /alive or /healthz ignores the gate "
+            + "entirely while it goes on being configured and goes on reporting healthy. If the "
+            + "startup probe has to move because /health cannot answer inside its timeout, fix what "
+            + "is spending the budget (/health's own `timing:` line names it) rather than trading "
+            + "the rollout gate away as a side effect.");
     }
 
     private static bool MentionsStartupBudget(string line) =>
@@ -148,6 +166,26 @@ public class PreWarmGateReadinessGuard
             $"{Values} probes.startup no longer declares both periodSeconds and failureThreshold.");
         return (int.Parse(period.Groups[1].Value, CultureInfo.InvariantCulture),
                 int.Parse(threshold.Groups[1].Value, CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// The path <c>probes.startup.path</c> ships. Read out of the probes block, like the budget
+    /// beside it, and asserted rather than defaulted: a missing key would make the template's own
+    /// <c>default</c> the path, which is the one state where the chart says it twice.
+    /// </summary>
+    private static string StartupPath(string values)
+    {
+        var block = Regex.Match(values, @"^probes:\s*$(?<body>(?:\n(?:[ \t].*)?)+)",
+            RegexOptions.Multiline);
+        Assert.True(block.Success,
+            $"{Values} no longer has a top-level 'probes:' block — this guard reads the startup "
+            + "path from it, and a guard that cannot find its subject passes having checked nothing.");
+        var path = Regex.Match(block.Groups["body"].Value, @"^\s+path:\s*(?<p>\S+)\s*$",
+            RegexOptions.Multiline);
+        Assert.True(path.Success,
+            $"{Values} probes.startup declares no path. The template reads it and falls back to its "
+            + "own default, so the path would be stated in two places at once.");
+        return path.Groups["p"].Value.Trim('"', '\'');
     }
 
     private static bool BoolKey(string values, string key) =>

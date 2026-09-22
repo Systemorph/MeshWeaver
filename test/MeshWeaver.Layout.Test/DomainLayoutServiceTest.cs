@@ -27,6 +27,11 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .WithRoutes(r =>
                 r.RouteAddress(ClientType, (_, d) => d.Package())
             )
+            // 🚨 The SECOND type is the whole point of TestCatalogOfATypeThatIsNotAWorkspaceCollection
+            // (#5065): registered in the hub's TypeRegistry, mapped to NO data source. That is the
+            // ordinary production state of every content type a NodeType declares, and it is the one
+            // case the Catalog area's guard used to walk straight past.
+            .WithTypes(typeof(UnmappedRecord))
             .AddData(data =>
                 data.AddSource(
                     ds =>
@@ -165,4 +170,50 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         dataStream.Should().BeOfType<IEnumerable<object>>().Which.Should().HaveCount(2);
 
     }
+
+    /// <summary>
+    /// The negative control for <see cref="TestCatalog"/>, and the reproduction of
+    /// Systemorph/MeshWeaver#5065: a type the hub's <c>ITypeRegistry</c> knows but that NO data source
+    /// maps renders the area's actionable caution, rather than letting
+    /// <c>WorkspaceStreams.CreateWorkspaceStream</c> throw <c>"Collections X are not mapped to any
+    /// source"</c> out of the render.
+    ///
+    /// <para>The two tests sit on opposite sides of exactly one condition — <c>DataRecord</c> is
+    /// mapped, <c>UnmappedRecord</c> is not — and both types are in the same TypeRegistry, which is
+    /// why the old guard could not tell them apart.</para>
+    ///
+    /// <para>Asserting on the CONTROL TYPE is deliberate: before the fix the failing render still put
+    /// a control in the area (the host's top-level <c>Catch</c> renders an error panel), so "the area
+    /// produced something" proves nothing. What distinguishes the two outcomes is a
+    /// <see cref="MarkdownControl"/> carrying the area's own guidance versus the render-error control
+    /// carrying a framework exception message.</para>
+    /// </summary>
+    [HubFact]
+    public async Task TestCatalogOfATypeThatIsNotAWorkspaceCollection()
+    {
+        var reference = DomainLayoutAreas.GetCatalogReference(nameof(UnmappedRecord));
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        var content = await stream.GetControlStream(reference.Area!)
+            .Should().Within(10.Seconds()).Match(x => x != null);
+
+        var text = content.Should().BeOfType<MarkdownControl>().Subject.Markdown?.ToString()
+                   ?? string.Empty;
+        text.Should().Contain(nameof(UnmappedRecord),
+            "the author needs to know WHICH type they named");
+        text.Should().NotContain("not mapped to any source",
+            "the framework's own workspace diagnostic must never reach a viewer");
+    }
+
+    /// <summary>
+    /// A type registered for serialization only — no data source, therefore no workspace collection.
+    /// Deliberately minimal: what matters is that it is resolvable by name in the TypeRegistry and
+    /// absent from <c>DataContext.TypeSources</c>.
+    /// </summary>
+    public record UnmappedRecord(string Id, string Label);
 }

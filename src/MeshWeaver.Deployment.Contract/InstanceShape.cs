@@ -297,6 +297,34 @@ public sealed record IngressSpec
     public string? TlsSecret { get; init; }
 
     /// <summary>
+    /// The cert-manager <c>ClusterIssuer</c> that issues <see cref="TlsSecret"/>, rendered into the
+    /// ingress as <c>cert-manager.io/cluster-issuer</c>. <b>Defaults to
+    /// <see cref="DefaultClusterIssuer"/></b>, so an instance declared with a host and a TLS secret
+    /// asks for its certificate without anyone writing an annotation — and a record written before
+    /// this field existed gets one too, because an absent JSON member leaves this initializer
+    /// standing.
+    ///
+    /// <para>🚨 This is a DEFAULT, not an override: a hand-written
+    /// <c>cert-manager.io/cluster-issuer</c> in <see cref="Annotations"/> wins, so a record that
+    /// names its own issuer keeps it. <c>none</c> is the explicit opt-out for a Secret created by
+    /// other means (a self-signed local install, a certificate uploaded by hand) — the ingress then
+    /// asks cert-manager for nothing, deliberately.</para>
+    ///
+    /// <para>Why it is typed rather than "just an annotation": a Provision renders the values from
+    /// THIS record, never from a repository overlay. pearl.meshweaver.cloud had the issuer in its
+    /// overlay and not on its record, so the rendered ingress asked for no certificate and the
+    /// controller served another host's for nine hours (2026-09-15).</para>
+    /// </summary>
+    [Description("cert-manager ClusterIssuer for the TLS secret — 'none' opts out")]
+    public string? ClusterIssuer { get; init; } = DefaultClusterIssuer;
+
+    /// <summary>The fleet's ClusterIssuer: Let's Encrypt's production endpoint, what every public host is issued from.</summary>
+    public const string DefaultClusterIssuer = "letsencrypt-prod";
+
+    /// <summary>The value of <see cref="ClusterIssuer"/> that means "ask cert-manager for nothing".</summary>
+    public const string NoClusterIssuer = "none";
+
+    /// <summary>
     /// Controller annotations. The OIDC login callback answers with several large Set-Cookie
     /// headers; a large claims set exceeds nginx's default 4k proxy_buffer_size and the LOGIN
     /// answers 502, deterministically per user (2026-08-23) — hence
@@ -664,6 +692,30 @@ public sealed record GitHubAppIdentity
     /// <summary>The installation's owner (organisation).</summary>
     [Description("Installation owner")]
     public string? InstallationOwner { get; init; }
+
+    /// <summary>
+    /// The Key Vault object holding this App's PEM — read only when this identity is a record's
+    /// <see cref="DeploymentContent.OpsGitHubApp"/>, i.e. the App a CONTROL instance dispatches
+    /// this deployment's pipelines as. It names WHICH object the control instance must mount; it
+    /// is never a secret itself. Blank on a record that states <c>keyVaultSecretPrefix</c> means
+    /// the fleet's own name, <c>{keyVaultSecretPrefix}GitHub-App-PrivateKey</c>.
+    /// <para>On <see cref="DeploymentContent.GitHubApp"/> — this portal's own identity — it is
+    /// inert: that PEM arrives as <c>GitHub__App__PrivateKey</c> through the portal's secret
+    /// mount, not through a record field.</para>
+    /// </summary>
+    [Description("Key Vault object holding the PEM (ops identity only)")]
+    public string? PrivateKeySecret { get; init; }
+
+    /// <summary>
+    /// The configuration key the CONTROL instance reads this App's PEM from — the key its own
+    /// record maps <see cref="PrivateKeySecret"/> onto (<c>GitHub__Apps__{id}__PrivateKey</c> in a
+    /// <c>keyVaultSecrets</c> entry, read in-process as <c>GitHub:Apps:{id}:PrivateKey</c>). Blank
+    /// means that derived default for the deployment's id. A control instance that has not mounted
+    /// it refuses the dispatch NAMING both this key and the vault object — a dispatch as the wrong
+    /// App would be worse than no dispatch.
+    /// </summary>
+    [Description("Configuration key the control instance reads the PEM from (ops identity only)")]
+    public string? PrivateKeyConfigKey { get; init; }
 }
 
 /// <summary>
@@ -735,6 +787,34 @@ public sealed record HostingOperatorSpec
             : value;
         return canonical is null or "Job" or "Actions";
     }
+}
+
+/// <summary>
+/// The instance's OWN database, as a separate Helm release in its namespace (Doc/Architecture/
+/// InClusterDatabases): a CloudNativePG Cluster on the cluster's <c>db</c> node pool — primary and
+/// standby in two zones — whose owner credentials are generated in-cluster into the Secret
+/// <c>{Release}-app</c>. Present → the portal connects to <c>{Release}-rw</c> and the Provision
+/// installs the database release instead of creating a database on a shared server; absent → the
+/// record's <see cref="DeploymentContent.DatabaseServer"/> / <see cref="DeploymentContent.DatabaseHost"/>
+/// as before. Names and sizes only; nothing here is secret.
+/// </summary>
+public sealed record InClusterDatabaseSpec
+{
+    /// <summary>The database release (and CloudNativePG Cluster) name. Blank → <c>{namespace}-db</c>.</summary>
+    [Description("Database release name — blank derives {namespace}-db")]
+    public string? Release { get; init; }
+
+    /// <summary>PostgreSQL instances: primary + standbys, each in its own zone. Null → 2.</summary>
+    [Description("Instances (primary + standbys, one per zone)")]
+    public int? Instances { get; init; }
+
+    /// <summary>The volume size per instance. Blank → <c>32Gi</c>.</summary>
+    [Description("Volume size per instance")]
+    public string? Size { get; init; }
+
+    /// <summary>The zonal StorageClass. Blank → <c>memex-db-premiumv2</c> (the platform's).</summary>
+    [Description("Storage class — blank uses the platform's zonal Premium SSD v2 class")]
+    public string? StorageClass { get; init; }
 }
 
 /// <summary>OpenTelemetry export.</summary>

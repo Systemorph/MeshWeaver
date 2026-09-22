@@ -1,5 +1,10 @@
 using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -505,6 +510,11 @@ public sealed record ModuleFallback(
 /// <para>A pull-on-demand READER: it starts nothing, subscribes to nothing and writes nothing, so
 /// an instance that never asks pays nothing. The read is a single small file, which is why it is
 /// plain and synchronous — the same reason <see cref="ModuleActivationSidecar"/> is.</para>
+///
+/// <para>🚨 <b>The one exception is the PROBE surface</b> (<see cref="ReadProbeInputs"/>), which
+/// performs no filesystem call at all — it hands back the last reading this instance TOOK and asks
+/// the <see cref="IIoPool"/> for a new one. See that member for why a probe may never do the
+/// work.</para>
 /// </summary>
 public sealed class PendingModuleActivations(string moduleRoot)
 {
@@ -569,6 +579,154 @@ public sealed class PendingModuleActivations(string moduleRoot)
     public IReadOnlyCollection<string> PlatformIdentities { get; init; } = [];
 
     /// <summary>
+    /// The bounded IO pool every volume reading is TAKEN on, so no probe thread ever walks the
+    /// module volume (MeshWeaver#4655). Production passes the mesh-scoped <c>FileSystem</c> pool;
+    /// a test that wants the reading on its own terms passes its own, and
+    /// <see cref="MeshWeaver.Mesh.Threading.IoPool.Unbounded"/> is the fallback for a host that
+    /// registered no pools — it still moves the walk off the calling thread, which is the whole
+    /// property.
+    /// </summary>
+    public IIoPool IoPool { get; init; } = Mesh.Threading.IoPool.Unbounded;
+
+    /// <summary>Diagnostics for a refresh that faulted. Optional: a reader without one is silent,
+    /// exactly as it was before, and the fault still reaches <see cref="Refresh"/>'s
+    /// subscriber.</summary>
+    public ILogger? Logger { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>The disk-derived inputs a REQUIRED-modules probe hands
+    /// <c>RequiredModuleStatus.Classify</c> — read ONCE per CHANGE of the on-disk activation state,
+    /// never once per probe</b> (MeshWeaver#4608, the sibling of #3664).
+    ///
+    /// <para>#3664 found <see cref="Read()"/> walking the module volume on every startup and
+    /// readiness probe and memoised it behind <see cref="DiskFingerprint"/>. The REQUIRED-modules
+    /// probe asks the volume the same three questions — the activation sidecar, one existence
+    /// probe per landed DLL, and one per declared entry — and it was left doing all of them per
+    /// call, against the same share, for the same reason. Measured on memex.systemorph.com
+    /// 2026-09-17, on all three replicas: <b>6.5–10.1 s per probe</b>, against a
+    /// <c>startupProbe</c> that waits 5 s. No replica rolled onto the candidate image could ever
+    /// record a startup success; each was killed at its three-hour budget and started over.</para>
+    ///
+    /// <para>This hands out the SAME snapshot <see cref="Read()"/> uses rather than a second one:
+    /// a probe that memoised its own copy would be free to disagree with this one about the same
+    /// volume, which is the shape every defect in this file has in common. The cheap half — which
+    /// assemblies THIS process has loaded — stays the caller's to read fresh per call.</para>
+    ///
+    /// <para>🚨 <b>And it TAKES no reading — it reads the one this instance already took</b>
+    /// (MeshWeaver#4655). Memoising the walk fixed "every probe pays it" and left the two occasions
+    /// that decide a rollout still paying it in full: the FIRST probe of a fresh pod — which is the
+    /// startup probe, the one whose timeout a container cannot recover from — and the first probe
+    /// after anything lands, i.e. exactly when the module lane is doing the thing this check
+    /// reports. Both are the same shape: a probe endpoint whose latency is a rollout gate cannot
+    /// contain work whose cost is the size of a network volume. So the walk moved to
+    /// <see cref="Refresh"/> on <see cref="IoPool"/>, this member performs no filesystem call at
+    /// all, and what it returns is a READING with a date rather than an answer computed now.
+    /// (<c>Doc/Architecture/AProbeMustAnswerInsideItsOwnTimeout</c>.)</para>
+    ///
+    /// <para>🚨 <b>Precisely: this MEMBER touches no file, and the two predicates it hands over are
+    /// lazy.</b> <see cref="ModuleProbeInputs.ResolvesFromDeployment"/> and
+    /// <see cref="ModuleProbeInputs.LandedDllExists"/> are memos forced by whoever calls them —
+    /// which is the classifier, on the caller's thread — so a probe still pays one existence probe
+    /// per DECLARED ENTRY the first time a snapshot is classified. That cost is a constant of the
+    /// deployment's <c>Modules:Required</c> list (a handful of entries), not a function of the
+    /// volume, and it is the difference this whole file is about: what moved off the probe is the
+    /// part that GROWS.</para>
+    ///
+    /// <para>🚨 <b>Having taken no reading is NOT a clean reading, and it must never render as
+    /// one.</b> Before the first refresh lands this returns <see cref="ModuleProbeInputs.NotRead"/>,
+    /// whose image-side resolver is the <see cref="ModuleProbeInputs.VolumeNotRead"/> sentinel:
+    /// <c>RequiredModuleStatus.Classify</c> recognises it and answers
+    /// <see cref="RequiredModuleState.Unmeasured"/> for every entry its in-process evidence does
+    /// not already settle — which <c>RequiredModuleStatus.Absent</c> counts, so a caller that never
+    /// heard of the state still REFUSES rather than passes. The alternative — "no activation record
+    /// read, therefore nothing is installed" — is a gate that cannot run wearing the colours of one
+    /// that ran.</para>
+    /// </summary>
+    /// <returns>The last reading taken, or <see cref="ModuleProbeInputs.NotRead"/> when none has
+    /// been. Never walks the volume; a refresh is requested on <see cref="IoPool"/> either way.</returns>
+    public ModuleProbeInputs ReadProbeInputs()
+    {
+        // Requested FIRST: a probe that finds nothing held is exactly the caller whose next
+        // attempt must find something, and the request costs it nothing — the fingerprint check
+        // that decides whether a walk is needed at all happens on the pool, inside ReadDisk.
+        RequestRefresh();
+        var disk = Volatile.Read(ref snapshot);
+        if (disk is null)
+            return ModuleProbeInputs.NotRead(ModuleRootPath);
+
+        return new ModuleProbeInputs(
+            disk.Activation,
+            disk.OpenFailure is { } failure
+                ? disk.Corruptions.Add(
+                    $"the activation sidecar under '{ModuleRootPath}' could not be opened "
+                    + $"({failure.GetType().Name}: {failure.Message})")
+                : disk.Corruptions,
+            disk.ModuleFileResolves,
+            disk.LandedDllExists);
+    }
+
+    /// <summary>
+    /// Takes a reading of the module volume on <see cref="IoPool"/> and holds it for
+    /// <see cref="ReadProbeInputs"/>. It is a no-op costing three directory stats when the
+    /// fingerprint has not moved, so a caller may ask as often as it likes.
+    ///
+    /// <para>This is the WORK half of the split this type exists to hold: the work runs here, on a
+    /// bounded pool, where nothing has a five-second budget; the probe reads what it produced.</para>
+    ///
+    /// <para>🚨 <b>EAGER, and every caller shares ONE walk.</b> The reading is a promise-cached
+    /// one-shot (<see cref="PromiseSlot{TValue}"/> over <c>IIoPool.RunBlocking</c>, held as an
+    /// instance field): a caller arriving while a walk is running JOINS it rather than starting a
+    /// second. That is not an optimisation — the host-start reading and the first probes of a
+    /// booting pod overlap by construction on exactly the slow volume this type exists to keep off
+    /// the probe path, and two concurrent walks there would both pile onto the share AND let the
+    /// older snapshot land last. Nothing waits: joining hands back an observable, never a block.
+    /// The slot is retired when the walk ENDS, so the next caller takes a fresh reading; a walk
+    /// that faulted or that the pool refused outright is evicted by the cache itself, so one
+    /// transient failure cannot latch.</para>
+    /// </summary>
+    /// <returns>An observable that emits once when the reading has been taken — the in-flight one
+    /// when a walk is already running.</returns>
+    public IObservable<Unit> Refresh() =>
+        reading.GetOrCreate(() => IoPool.RunBlocking(token =>
+        {
+            try
+            {
+                ReadDisk(token);
+                return Unit.Default;
+            }
+            finally
+            {
+                // 🚨 Retired from INSIDE the work, not from the observable's terminal: that
+                // terminal is per-SUBSCRIBER, so a probe that went away early would retire a walk
+                // that is still running and let the next caller start a second one. The work ends
+                // exactly once per walk, which is what "one at a time" has to be measured against.
+                reading.Invalidate();
+            }
+        }));
+
+    private readonly PromiseSlot<Unit> reading = new();
+
+    /// <summary>
+    /// Asks for a reading and observes nothing but its failure — what a PROBE wants: it is not
+    /// waiting for the answer, it is making sure the next probe has one.
+    ///
+    /// <para>A cancellation is the pool's teardown path rather than a fault (the pool links its own
+    /// token into every leaf), so it is recorded at <see cref="LogLevel.Debug"/> — a pod shutdown
+    /// must not emit a warning per reader — while anything else stays a warning. Neither is
+    /// swallowed into a pass: with no reading, <see cref="ReadProbeInputs"/> answers
+    /// <see cref="ModuleProbeInputs.NotRead"/> and the classification REFUSES.</para>
+    /// </summary>
+    private void RequestRefresh() =>
+        Refresh().Subscribe(
+            _ => { },
+            exception => Logger?.Log(
+                exception is OperationCanceledException ? LogLevel.Debug : LogLevel.Warning,
+                exception,
+                "[ModuleActivation] taking a reading of the module volume under {ModuleRoot} did "
+                + "not complete — the probe keeps answering from the reading it has, and the next "
+                + "probe asks again.", ModuleRootPath));
+
+    /// <summary>
     /// The current report. Recomputed per call — the state changes underneath a running process
     /// (that is the whole point), so a cached answer would be wrong exactly when it matters.
     /// </summary>
@@ -612,7 +770,9 @@ public sealed class PendingModuleActivations(string moduleRoot)
         Exception? OpenFailure,
         ModuleSetIndex Sets,
         ImmutableList<string> SetNotes,
-        Func<ModuleActivationEntry, bool> LandedDllExists);
+        Func<ModuleActivationEntry, bool> LandedDllExists,
+        ImmutableList<string> Corruptions,
+        Func<string, bool> ModuleFileResolves);
 
     /// <summary>
     /// The last-write times of the three directories every activation writer renames into. PURE
@@ -630,15 +790,37 @@ public sealed class PendingModuleActivations(string moduleRoot)
             Directory.Exists(directory) ? Directory.GetLastWriteTimeUtc(directory) : DateTime.MinValue;
     }
 
-    private DiskSnapshot ReadDisk()
+    /// <summary>
+    /// Takes the reading. <paramref name="token"/> is the pool's own — <c>IIoPool</c> links its
+    /// teardown cancellation into every leaf — and it is observed BETWEEN the units of volume work,
+    /// which is the same granularity the modules GC states for its own pass ("between directories").
+    ///
+    /// <para>🚨 <b>What that does and does not promise.</b> A teardown arriving between the
+    /// fingerprint, the activation sidecar and the set index stops the walk there, so a drain no
+    /// longer waits out the whole of a slow share. It does NOT interrupt a single enumeration
+    /// already inside <c>ModuleActivationSidecar.Read</c> or <c>ModuleSetStore.Read</c>: those
+    /// enumerate and parse their own directories behind public signatures whose callers all sit
+    /// outside this type, so a per-FILE token is a change to them rather than to this one. Stated
+    /// rather than implied — the comment this replaced claimed a stop this code cannot make.</para>
+    ///
+    /// <para>A reading already gathered is PUBLISHED even when the token fires afterwards: the
+    /// volume work is done, the rest is arithmetic, and throwing it away would make the next probe
+    /// answer "not measured" for no gain.</para>
+    /// </summary>
+    /// <param name="token">The pool's cancellation, or <c>default</c> for the pull-on-demand
+    /// readers that have no pool leaf to cancel.</param>
+    private DiskSnapshot ReadDisk(CancellationToken token = default)
     {
         var fingerprint = DiskFingerprint.Of(ModuleRootPath);
         var current = snapshot;
         if (current is not null && current.Fingerprint == fingerprint)
             return current;
 
+        // ① Before the first enumeration — a cancelled walk must not START one.
+        token.ThrowIfCancellationRequested();
         Interlocked.Increment(ref diskReads);
         string? corrupt = null;
+        var corruptions = ImmutableList.CreateBuilder<string>();
         ModuleActivationList? activation = null;
         Exception? openFailure = null;
         try
@@ -647,12 +829,24 @@ public sealed class PendingModuleActivations(string moduleRoot)
             // swallows an unparseable file into the EMPTY list, so a surface that ignores the
             // callback reports a corrupt sidecar as "nothing pending" — cheerfully, forever. That
             // is the shape this whole cluster of defects has in common.
-            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason => corrupt = reason);
+            //
+            // EVERY reason is kept, and `corrupt` still holds the LAST one so this type's own
+            // report is byte-identical to what it said before: the required-modules probe names
+            // each unreadable file separately (its `unreadable` list), and folding them to one
+            // would lose a file name an operator needs.
+            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason =>
+            {
+                corrupt = reason;
+                corruptions.Add(reason);
+            });
         }
         catch (Exception exception)
         {
             openFailure = exception;
         }
+        // ② Between the two enumerations — the second is a whole directory of set records, and a
+        // drain that has already waited out the first must not be made to wait out this one too.
+        token.ThrowIfCancellationRequested();
         var setNotes = ImmutableList.CreateBuilder<string>();
         var sets = openFailure is null && corrupt is null
             ? ModuleSetStore.Read(ModuleRootPath, setNotes.Add)
@@ -660,13 +854,41 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
         // fingerprint stands (a landing renames into activation.d, which moves it).
-        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        //
+        // 🚨 Lazy, not a bare bool: ConcurrentDictionary.GetOrAdd guarantees that ONE VALUE is
+        // stored, never that the factory runs once — so under concurrent probes a bare bool let the
+        // same path be stat-ed several times inside one snapshot, and "asked once per change" was
+        // true only by luck. Lazy's default mode is ExecutionAndPublication, so at-most-once is now
+        // a property of the type rather than of the timing.
+        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(StringComparer.Ordinal);
         bool LandedDllExists(ModuleActivationEntry entry) =>
             landed.GetOrAdd(
                 ModuleActivationBoot.LandedDllPath(ModuleRootPath, entry),
-                path => File.Exists(path));
+                path => new Lazy<bool>(() => File.Exists(path))).Value;
+        // 🚨 The SECOND per-entry volume question, memoised on the same fingerprint. The
+        // required-modules probe asks `File.Exists(MeshBuilder.ResolveModulePath(entry))` for every
+        // declared entry on EVERY probe — and the resolution itself probes the image's modules/
+        // tree before falling back to the app closure, so one entry costs several metadata round
+        // trips. Same Lazy as above, for the same reason.
+        //
+        // 🚨 The ONE-ARGUMENT overload, deliberately, and this is not an oversight to tidy up:
+        // the root-aware overload probes the LANDED tree first, and that is the OTHER predicate's
+        // question. RequiredModuleStatus.Classify asks this one first and answers Present — "present
+        // on this deployment; it loads at the next restart" — then falls through to the store
+        // branches, where LandedDllExists and the activation record produce the far more useful
+        // "landed on the volume, not yet loaded", "its landed assembly is ABSENT — the landing did
+        // not complete" and the plan-tier refusal. Passing ModuleRootPath here would make the first
+        // question swallow all three: every landed module would classify as Present and no operator
+        // would ever be told that a landing did not finish. The split is the contract, and this
+        // reproduces exactly the resolution the probe (and the boot loader before it) already used.
+        var resolved = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(
+            StringComparer.OrdinalIgnoreCase);
+        bool ModuleFileResolves(string entry) =>
+            resolved.GetOrAdd(
+                entry, e => new Lazy<bool>(() => File.Exists(Mesh.MeshBuilder.ResolveModulePath(e)))).Value;
         var fresh = new DiskSnapshot(
-            fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists);
+            fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists,
+            corruptions.ToImmutable(), ModuleFileResolves);
         snapshot = fresh;
         return fresh;
     }

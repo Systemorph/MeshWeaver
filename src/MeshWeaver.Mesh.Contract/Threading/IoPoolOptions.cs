@@ -87,6 +87,15 @@ public static class IoPoolNames
     public const string Process = "Process";
 
     /// <summary>
+    /// The cases of a NodeType's <c>Tests</c> area (<c>MeshWeaver.Testing.InMesh.MeshTestRunner</c>).
+    /// A case runs as ONE leaf on this pool so that the runner's bound cancels it through the pool's
+    /// linked token rather than abandoning it. The pool does NOT order the cases (the runner does);
+    /// its cap (<see cref="IoPoolOptions.Tests"/>) bounds how many cases that ignored their
+    /// cancellation may still be running.
+    /// </summary>
+    public const string Tests = "Tests";
+
+    /// <summary>
     /// Prefix for per-Postgres-storage-<b>provider</b> pools (<c>pg:{providerName}</c>). Capped at
     /// ONE in-flight WRITE. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     ///
@@ -190,6 +199,21 @@ public sealed record IoPoolOptions
     public TimeSpan DrainGrace { get; init; } = IoPool.DefaultDrainGrace;
 
     /// <summary>
+    /// How long a host's terminal drain waits for <see cref="IoPoolRegistry.Disposed"/> before it
+    /// gives up and REPORTS what did not unwind — the budget <c>IoPoolSiloTeardown</c> holds silo
+    /// shutdown for.
+    ///
+    /// <para>🚨 Leave this at the default in production — 30 s is the teardown contract, and a leaf
+    /// that outlives it is a defect in the LEAF (issue #2480: fix the leaf, never widen the budget).
+    /// It is settable for exactly one reason: the report on EXPIRY is the only place the offending
+    /// pool and its leaf sites are named, and at 30 s no test can reach that path at all under
+    /// <c>test/xunit.runner.json</c>'s <c>methodTimeout: 30000</c>. A path no test can reach is a
+    /// path whose wording nobody checks — which is how that report went three weeks naming
+    /// nothing.</para>
+    /// </summary>
+    public TimeSpan SiloJoinBudget { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Concurrent file-system ops. These are async leaves (the thread is released
     /// during the await), so a generous cap avoids bottlenecking the many concurrent
     /// data-path reads/writes a busy mesh issues, while still preventing pathological
@@ -254,6 +278,15 @@ public sealed record IoPoolOptions
     public int Process { get; init; } = 4;
 
     /// <summary>
+    /// Slots of the <see cref="IoPoolNames.Tests"/> pool. NOT the serializer — the in-mesh runner
+    /// already runs cases one after another — so this is the number of cases that may IGNORE their
+    /// cancellation and keep running before the pool is full. A cap of one made a single such case
+    /// block every later case of every suite on the mesh (MeshWeaver#4719 review); the runner names
+    /// a pool its own leaked cases have filled rather than timing out behind it.
+    /// </summary>
+    public int Tests { get; init; } = 32;
+
+    /// <summary>
     /// Concurrent READS per Postgres storage adapter (the <c>pg-read:{adapter}</c> pool). Kept
     /// comfortably below the shared base connection pool's <c>MaxPoolSize</c> so a synced-query
     /// read fan-out storm cannot drain the pool and starve writes (prod 2026-06-04: "connection
@@ -298,6 +331,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Ai => Ai,
             IoPoolNames.Query => Query,
             IoPoolNames.Layout => Layout,
+            IoPoolNames.Tests => Tests,
             IoPoolNames.AgentStore => AgentStore,
             IoPoolNames.Routing => Routing,
             IoPoolNames.Compile => Compile,

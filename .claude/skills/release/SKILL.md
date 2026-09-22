@@ -84,6 +84,56 @@ for the portal's own identity brings the repository's sync sources onto its comm
 
 ## Preconditions for a release (gates the lane enforces — check them before tagging)
 
+### 🚨 Before any of the below: the READINESS gate, which the lane does NOT enforce
+
+**A release may be cut only when NO `sev:B` and NO `sev:H` bug is open, in any of the seven gated
+repositories**; `sev:M` and `sev:L` never gate a cut. That is policy
+[`release-blocker-gate`](../../../src/MeshWeaver.Documentation/Data/Architecture/PolicyNotProse.md),
+which carries when it took effect and who set it — this page carries only the rule.
+
+Enforced by `Governance/Standards/release.cut` in MeshWeaver.Plugins — 7 repositories × 2 labels = 14
+`NoOpenIssues` gates — so a release proposal cannot reach `Ready` while one is open. `Memex` and
+`MeshWeaver.Feedback` are deliberately outside it. Rubric and the two rules that keep it honest:
+[Issue Taxonomy](../../../src/MeshWeaver.Documentation/Data/Architecture/IssueTaxonomy.md).
+
+Check it first — it is the cheapest gate here and it stops everything:
+
+```bash
+REPOS="MeshWeaver MeshWeaver.Plugins MeshWeaver.Crm MeshWeaver.SocialMedia
+       MeshWeaver.Reinsurance MeshWeaver.Manufacturing MeshWeaver.Education"
+
+# Fail CLOSED first. A label that does not exist answers 0 open issues, which reads as GREEN.
+for R in $REPOS; do
+  for S in B H; do
+    gh api "repos/Systemorph/$R/labels/sev:$S" --jq '.name' >/dev/null 2>&1 \
+      || { echo "ABORT: $R carries no sev:$S label — a count against it would read 0 and mean nothing"; exit 1; }
+  done
+done
+
+for R in $REPOS; do
+  for S in B H; do
+    printf '%-26s sev:%s = %s\n' "$R" "$S" \
+      "$(gh api "repos/Systemorph/$R/issues?state=open&labels=sev:$S&per_page=100" \
+           --jq '[.[]|select(.pull_request==null)]|length')"
+  done
+done
+```
+
+🚨 **Read a zero against its coverage — THREE ways this count lies, all measured.** (1) A
+`search/*` query answers 0 when it is truncated, rate-limited (search has its OWN ~30/min limit) or
+unanchored, indistinguishable from "none open" — which is why the loop uses the REST issues endpoint
+instead. (2) PRs share that endpoint, hence `pull_request == null`. (3) 🚨 **An unknown label folds the
+gate to GREEN**: `labels=sev:DOESNOTEXIST` answers `0`, byte-identical to a real label with nothing
+open, so a renamed or missing label ships a known blocker silently. The assertion above is what makes
+the count mean something — and it uses the SINGLE-label endpoint deliberately, because **listing
+labels is the trap one level down**: core holds 13 pages of them and its `sev:*` four sit on page 2,
+so a one-page existence check reports them absent from the repository that carries the most open
+`sev:H`. `repos/{o}/{r}/labels/sev:H` needs no pagination and 404s when the label is gone.
+
+🚨 **A green gate reached by DOWNGRADING an `sev:H` to `sev:M` is not a green gate.** That is the
+cheapest defeat of this bar and `release.cut`'s acceptance criterion names it; spot-check the most
+recently re-labelled two.
+
 1. **The commit is on `main` and its CD run SEALED**: `Promote`, `Verify every image shipped` and
    `Plugins: bake + seal` all `success` — read the seal JOB, never the run's conclusion:
    ```bash
@@ -286,6 +336,19 @@ against the run's "Resolve the target commit" job output — never against the r
   a 403 (missing AcrPull workload-identity grant — armed path no-ops with a logged 403, never crashes).
 - `Admin/UpdatePolicy.heldReason` is empty: a hold names an unsealed bundle, and that is a delivery
   incident, not a release.
+
+🚨 **And the running IMAGE is still not the served ANSWER.** *"The grain keeps serving old state
+until we send a dispose request"* (maintainer, 2026-09-17): a per-node hub binds its configuration
+once at activation and is pinned by address. A roll ends the activations on the pods it replaces, so
+the gap is not the roll itself — it is everything a portal absorbs **while it keeps running** (a
+package published or installed, a NodeType recompiled in place) and what a fresh activation then
+chooses. Whether an instance converges on a newly published build is `Modules:AutoRecycleOnStaleBuild`,
+and the code default (**off** — only a banner, so viewers must click) is NOT what the AKS chart sets
+(**true**, fleet-wide): read the effective value rather than either. Exercise the feature at the
+running address; recycle the addresses that still answer the old way and name them. A recycle makes
+the activation re-read, it does not decide what the re-read finds — so a second one that answers the
+same is a delivery question, not an activation one. Full reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
 
 ## Pipeline files (edit here to change the pipeline)
 

@@ -603,6 +603,19 @@ public static class GitHubSyncSettingsTab
             GitHubSyncService.HasFinalVerdictAt(cfg, cfg.LastAttemptedCommitSha)
                 ? Esc(LocalizationCatalog.Get("ui.gitSync.settled", locale))
                 : null,
+            // 🚨 #3845 hole 4 — the NodeTypes whose sources are HELD for their bundle. Rendered
+            // beside the commit, because the two belong together: the Space is at that commit
+            // EXCEPT for these types, and a reader shown only the commit would conclude the
+            // partition is whole. Named, not counted alone: "which type is behind" is the question
+            // an operator actually has.
+            cfg.BundleHeldNodeTypes is { IsEmpty: false } bundleHeld
+                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.bundleHeld", locale,
+                    new Dictionary<string, object>
+                    {
+                        ["count"] = bundleHeld.Count,
+                        ["paths"] = string.Join(", ", bundleHeld.Select(h => h.Path)),
+                    }))
+                : null,
         };
         return $"<p style=\"{Style}\">{string.Join(" — ", parts.Where(x => x is not null))}</p>";
     }

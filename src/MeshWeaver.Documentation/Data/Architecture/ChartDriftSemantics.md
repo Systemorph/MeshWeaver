@@ -9,9 +9,18 @@ Icon: BranchCompare
 
 `Chart Drift` compares what the chart *describes* against what the cluster *runs*
 (`deploy/aks/scripts/check-chart-drift.sh`, scheduled daily by `.github/workflows/chart-drift.yml`).
-It has been red every day since it first completed on 2026-08-26, and its report was ranked by a
-model of `helm upgrade` that **measurement does not support**. This page records the measurement, so
-the ranking is not re-derived from intuition every time somebody re-reads the backlog.
+Its report was ranked by a model of `helm upgrade` that **measurement does not support**. This page
+records the measurement, so the ranking is not re-derived from intuition every time somebody
+re-reads the backlog.
+
+> 🚨 **This page used to open by saying the gate "has been red every day since it first completed on
+> 2026-08-26". It had never completed.** Measured on
+> [#4640](https://github.com/Systemorph/MeshWeaver/issues/4640): 39 scheduled runs from 2026-08-15
+> to 2026-09-17, 39 failures, **zero** verdicts — the reds were a credential and then a render that
+> could not be made, never a comparison. The findings below are real; they come from LOCAL runs of
+> the same script, which is what made a claim about the scheduled gate so easy to write. The first
+> verdict the scheduled gate could actually produce dates from 2026-09-18, and what stopped it is
+> [Rendering a chart you are not allowed to fully configure](../ChartDriftRenderWithoutSecrets).
 
 ## The claim that was wrong
 
@@ -58,6 +67,54 @@ deploy rendered and the CURRENT chart does not is in the release's own manifest,
 and the merge deletes it. That is not a cluster-only setting surviving; it is a chart retirement
 landing. The gate computes that case and reports it as a `PENDING DELETION` — the discriminator and
 the mechanism are under *"`CLUSTER-ONLY` splits in two"* below.
+
+## The mirror case: a field the chart RENDERS is reset
+
+Every row of the table above is something the chart does **not** render — a key, an entry or a probe
+field that exists only live. The mirror case is an out-of-band edit to a field the chart **does**
+render, and it comes out the opposite way for exactly the same reason: that field is in both the old
+and the new manifest, so the three-way patch sets it back.
+
+The two halves were measured on the two production namespaces within 48 hours of each other, and they
+belong together because each half had been believed of the other case:
+
+| out-of-band edit | in the chart's manifest? | after `helm upgrade` |
+|---|---|---|
+| `startupProbe.httpGet.path` patched `/health` → `/ready` on `memex` | **yes** — `probes.startup.path` | **reset** |
+| inline `env:` `PreWarm__GateReadiness=false` added on `memex-cloud` | **no** — the chart renders that key into the ConfigMap, never inline | **survives** |
+
+The evidence is two consecutive verdicts of the gate itself, on `memex`, either side of a `Reconcile`
+that upgraded the release for an unrelated reason:
+
+- run `35426956173` (2026-09-19): `DIFFERS startupProbe` — chart
+  `{"path": "/health", "periodSeconds": 10, "timeoutSeconds": 30, "failureThreshold": 1080}`
+  vs live `{"path": "/ready", "periodSeconds": 10, "timeoutSeconds": 5, "failureThreshold": 1080}`.
+  23 divergences across 212 compared fields.
+- run `35570080512` (2026-09-21): **no `startupProbe` finding at all.** The four `DIFFERS` are two
+  ConfigMap keys and the two inert `initialDelaySeconds` probes; 19 divergences across 216 fields.
+
+and, for the other half, the same run's own closing line on `memex-cloud`, which states the rule
+without being asked: `0 pending deletions: no live-and-unrendered key is in the release manifest, so
+nothing here is removed by the next helm upgrade.` Its
+`SHADOWS inline env PreWarm__GateReadiness … 🚨 THE TWO DISAGREE` is unchanged from the day it was
+first reported.
+
+🚨 **So "a live patch and an inline entry both survive until a `helm upgrade`" is wrong in both
+directions, and each direction has a cost.**
+
+- Believing a rendered probe field survives hides a **behaviour change a deploy has already made**.
+  The `memex` startup probe is the NodeType bake gate's only reader (`readinessProbe` is deliberately
+  on `/ready`; see [Probe semantics](../ProbeSemantics)), so restoring `/health` re-armed the gate on
+  the control instance without anyone deciding to — and the next roll then held its new replica out
+  of the Service for the length of a full bake, which reads as a stalled rollout to whoever does not
+  know the probe moved.
+- Believing an inline entry is cleared by a deploy sends an operator to file a `Reconcile` that
+  **cannot** change what the pod reads. On `memex-cloud` the entry has to be deleted deliberately,
+  and its value disagrees with the ConfigMap, so the deletion is a behaviour change rather than
+  hygiene.
+
+The discriminator is one question — **does the chart render this field?** — and it is answered from
+the template, never from the class name the report prints.
 
 ## The hazard that is real, and was invisible
 

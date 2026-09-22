@@ -48,10 +48,21 @@ fi
 ingress="${HOSTING_INGRESS:-memex-portal}"
 ANNOTATION="nginx.ingress.kubernetes.io/permanent-redirect"
 
-if ! kubectl -n "$namespace" get ingress "$ingress" >/dev/null 2>&1; then
+hosting::probe any kubectl -n "$namespace" get ingress "$ingress"
+_ing_rc=$?
+[ "$_ing_rc" -ne 2 ] || hosting::die_refused "Ingresses in ${namespace}"
+if [ "$_ing_rc" -ne 0 ]; then
   # Find it rather than fail: ingress names have drifted across namespaces before (core #1917).
-  found="$(kubectl -n "$namespace" get ingress -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-  [ -n "$found" ] || hosting::die "no Ingress in ${namespace} — nothing to redirect"
+  #
+  # 🚨 THREE ANSWERS, not two (MeshWeaver#4722). Both reads used to discard stderr, so a Forbidden
+  # on `ingresses` came out as "no Ingress in <ns> — nothing to redirect": a suspend step telling
+  # the reader the instance has no Ingress while one was serving traffic the whole time.
+  hosting::probe output kubectl -n "$namespace" get ingress -o jsonpath='{.items[0].metadata.name}'
+  case $? in
+    2) hosting::die_refused "Ingresses in ${namespace}" ;;
+    1) hosting::die "no Ingress in ${namespace} — nothing to redirect" ;;
+  esac
+  found="$HOSTING_PROBE_OUT"
   hosting::log "ingress '${ingress}' not found; using '${found}'"
   ingress="$found"
 fi

@@ -11,6 +11,52 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// </summary>
 public class FluentBuilderTest
 {
+    /// <summary>
+    /// A new instance ASKS FOR ITS CERTIFICATE without anyone saying so. The issuer is a record
+    /// default, not something an overlay writes as an annotation: pearl.meshweaver.cloud had the
+    /// annotation in its checked-in overlay and not on its record, a Provision renders from the
+    /// record, and the host was served another instance's certificate for nine hours
+    /// (2026-09-15). The default is what makes that shape unreachable for the next instance.
+    /// </summary>
+    [Fact]
+    public void AnInstanceWithATlsSecretAsksForItsCertificateByDefault()
+    {
+        // Declared with nothing but a host and a TLS secret.
+        var declared = new DeploymentContent()
+            .WithHost("portal.example.com")
+            .WithIngress(className: "nginx", tlsSecret: "portal-tls");
+        Assert.Equal(IngressSpec.DefaultClusterIssuer, declared.Ingress!.ClusterIssuer);
+
+        // The bare shape carries it too — a record that never calls WithIngress, and a record
+        // written before the field existed, both deserialize onto this initializer.
+        Assert.Equal(IngressSpec.DefaultClusterIssuer, new IngressSpec().ClusterIssuer);
+        var old = DeploymentRecordJson.Read("""
+            {"host":"portal.example.com","ingress":{"className":"nginx","tlsSecret":"portal-tls",
+             "annotations":{"nginx.ingress.kubernetes.io/proxy-buffer-size":"16k"}}}
+            """);
+        Assert.Equal(IngressSpec.DefaultClusterIssuer, old!.Ingress!.ClusterIssuer);
+    }
+
+    /// <summary>
+    /// The default never overrides a decision. An explicit issuer stands, and <c>none</c> — the
+    /// opt-out for a Secret created by other means — survives the round trip rather than being
+    /// helpfully replaced by the fleet's issuer.
+    /// </summary>
+    [Fact]
+    public void AnExplicitIssuerStandsAndNoneIsKept()
+    {
+        var staging = new DeploymentContent().WithIngress(tlsSecret: "portal-tls", clusterIssuer: "letsencrypt-staging");
+        Assert.Equal("letsencrypt-staging", staging.Ingress!.ClusterIssuer);
+
+        var optedOut = new DeploymentContent().WithIngress(tlsSecret: "portal-tls", clusterIssuer: IngressSpec.NoClusterIssuer);
+        Assert.Equal(IngressSpec.NoClusterIssuer, optedOut.Ingress!.ClusterIssuer);
+        var reread = DeploymentRecordJson.Read(DeploymentRecordJson.Write(optedOut));
+        Assert.Equal(IngressSpec.NoClusterIssuer, reread!.Ingress!.ClusterIssuer);
+
+        // And a later call that says nothing about the issuer leaves the decision alone.
+        Assert.Equal("letsencrypt-staging", staging.WithIngress(className: "nginx").Ingress!.ClusterIssuer);
+    }
+
     [Fact]
     public void EveryTransformLeavesItsInputUntouched()
     {
@@ -140,5 +186,37 @@ public class FluentBuilderTest
         Assert.Equal("PostgreSql", config["Graph__Storage__Type"]);
         Assert.Equal("Filesystem", config["Deployment__Backend"]);
         Assert.Equal("8080", config["ASPNETCORE_HTTP_PORTS"]);
+    }
+
+    /// <summary>
+    /// What a NEW instance starts with: the record's platform policy and pattern render as the
+    /// self-updater's seed keys, and a record that says nothing renders neither — the chart's own
+    /// default (Stable, no pattern) must not be narrowed or widened by silence.
+    /// </summary>
+    [Fact]
+    public void UpdatePolicyAndPattern_SeedANewInstance_ThroughTheConfig()
+    {
+        var record = new DeploymentContent().WithUpdatePolicy("Continuous").WithUpdatePattern(" 3.0.0-ci* ");
+        Assert.Equal("3.0.0-ci*", record.UpdatePattern);
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(record, options);
+            Assert.Equal("Continuous", config["SelfUpdate__DefaultPolicy"]);
+            Assert.Equal("3.0.0-ci*", config["SelfUpdate__DefaultPattern"]);
+
+            var silent = DeploymentPortalConfig.PortalConfig(new DeploymentContent(), options);
+            Assert.False(silent.ContainsKey("SelfUpdate__DefaultPolicy"), "an absent policy renders nothing — the image's own default stands");
+            Assert.False(silent.ContainsKey("SelfUpdate__DefaultPattern"), "an absent pattern renders nothing");
+        }
+        Assert.Null(new DeploymentContent().WithUpdatePattern("  ").UpdatePattern);
+
+        // The key binds to an enum on the pod: the renderer emits the canonical casing and refuses
+        // a misspelling by name, instead of letting it abort the new replica's host.
+        var lower = DeploymentPortalConfig.PortalConfig(new DeploymentContent().WithUpdatePolicy(" stable "), PortalConfigOptions.Helm);
+        Assert.Equal("Stable", lower["SelfUpdate__DefaultPolicy"]);
+        var misspelled = new DeploymentContent().WithUpdatePolicy("Continuos");
+        var refusal = Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.PortalConfig(misspelled, PortalConfigOptions.Helm));
+        Assert.Contains("Continuos", refusal.Message);
+        Assert.Contains("SelfUpdate__DefaultPolicy", refusal.Message);
     }
 }

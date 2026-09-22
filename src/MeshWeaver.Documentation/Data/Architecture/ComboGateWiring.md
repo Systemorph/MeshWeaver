@@ -293,22 +293,26 @@ are the whole of what is missing.
 
 | Name | Kind | Value | Where it comes from |
 |---|---|---|---|
-| `COMBO_VERIFY_SOURCES` | variable | space-separated `name=url`, e.g. `plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the module source repositories the verifier materialises. 🚨 **Not derivable from the overlays, and that is a property of the data rather than of the effort spent**: it maps a registry *source NAME* carried by an install record to the repository that source's modules come from, and only the registry holds that mapping (`ComboAssembly.SourceRepositories`, consumed at `InstanceComboAssembler.cs:310`). It is plain data, not a credential. |
+| `COMBO_VERIFY_SOURCES` | variable | space-separated `name=url`, e.g. `Plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the module source repositories the verifier materialises — it maps a registry *source NAME* carried by an install record to the repository that source's modules come from (`ComboAssembly.SourceRepositories`, consumed at `InstanceComboAssembler.cs:310`). Plain data, not a credential. 🚨 **This row used to claim the mapping was "not derivable from the overlays, and that is a property of the data rather than of the effort spent". It is derivable — see below.** |
 | `COMBO_VERIFY_KEYS` | secret | `{"<instance>":"mwi_…"}`, one per **derived** instance | 🚨 **ISSUED, never recovered.** An `mwi_` instance-registry key is stored hash-only (`InstanceKeys` persists `Hash(raw)`), so an existing key cannot be read back — a NEW key is issued per instance, additively, and separately revocable. |
 | `COMBO_VERIFY_TOKENS` | secret | `{"<instance>":"mw_…"}`, one per **derived** instance | an API token of a **global admin** on that instance. #3891 made this removable — see below — but the lander still uses it, so it is required until that switch lands. |
 
 🚨 **"One per instance" is now answered by the lane, not by the reader.** The preflight prints the
 derived roster before it asks for credentials, and names the instance any map is missing
-(`combo-verify.yml:194-198`). The hand-written value this page used to carry named `memex` and
+(`combo-verify.yml:215-238`). The hand-written value this page used to carry named `memex` and
 `memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
 is the failure mode a derivation removes rather than a tidiness argument.
 
-🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Measured
-2026-09-15 over all three deployments repositories, the fleet declares **four live** installations:
-`build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud) and `memex`
-(memex.systemorph.com) in `Systemorph/Memex`, **and a second `memex`** (partnerre.meshweaver.cloud)
-in `Systemorph/PartnerRe.Memex` — with `pearl` and `partnerre` excluded by their `not-installed`
-declarations in `.github/acr-retention/instances.json`.
+🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Re-measured
+2026-09-21 over all three deployments repositories, the fleet declares **five live** installations:
+`build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud), `memex`
+(memex.systemorph.com) and `pearl` (pearl.meshweaver.cloud) in `Systemorph/Memex`, **and a second
+`memex`** (partnerre.meshweaver.cloud) in `Systemorph/PartnerRe.Memex`. `partnerre` is the ONLY
+remaining exclusion in `.github/acr-retention/instances.json`.
+
+(It read *four* until 2026-09-21, because `pearl` carried a `not-installed` line that had been true
+when it was written and was not any more — see the stale-exemption section above. That is the
+measurement changing, not the rule.)
 
 Upstream that duplicate is **legal and correct**: since [#3438](https://github.com/Systemorph/MeshWeaver/issues/3438)
 (2026-09-15) an installation's identity is `gh_repo:id`, because a `Hosting__Deployment` is unique
@@ -319,12 +323,93 @@ second's verdict would land on the FIRST's `Admin/UpdatePolicy`. So the derivati
 both declaring overlays, rather than emitting two rows called `memex`. Silently qualifying the name
 to `repo:id` would be worse — it would ask for credentials under a key nobody has provisioned.
 
-Resolving it is a decision, not a workaround: rename one installation, or key the maps by the
-qualified `repo:id` and record that here. Until then the lane is red on the roster rather than on
-the credentials, and it says which two overlays collide.
+Resolving it is a decision, not a workaround, and **two ways out exist today**: rename one
+installation (its `Hosting__Deployment` is its inventory identity, so this moves whichever estate owns
+the one that changes), or key the maps by the qualified `repo:id` and record that here — which removes
+the collision and then demands a credential for every installation named, including any in an estate
+this fleet holds none for.
 
-The names are asserted at `combo-verify.yml:99-129` (the inputs) and `:169-205` (the per-instance
-half, which cannot run before the derivation); each `missing+=` line already names what to provision.
+🚨 **The right answer in principle is a third one, and it is NOT IMPLEMENTED — do not reach for a flag
+that looks like it.** Scoping the **denominator** is what fits here: an installation that can never
+receive this candidate — because its overlay pins a registry declared `out-of-estate`, so the image
+this lane verifies is not the image it runs — does not belong in the set this lane is measured over.
+Nothing expresses that today, and **neither existing flag can stand in for it**:
+
+| flag | what it actually means | why it cannot be used here |
+|---|---|---|
+| `instances.json` instance `state` | **liveness** — `live` / `not-installed` / `retired` (`ROSTER_STATES`) | it is the only exclusion lever that file has, and the installation in question IS live. Declaring it `not-installed` records a **falsehood** in order to obtain an exclusion. |
+| the retention table's derived `out_of_scope` | the **lock** lane's registry scoping | `derive-combo-instances.py` never reads it. `build` is live and `out_of_scope` and is still in the combo roster — the direct counter-example. |
+
+So `partnerre`'s exclusion is **not** the precedent it looks like: that is a `not-installed` liveness
+declaration with a reason that happens to mention the estate, not a scope mechanism. Building the real
+thing means an explicit combo-scope declaration this derivation **consumes**, with its own self-test
+arm. 🚨 And even then it is the **looser** direction, the only one of the three that can be silently
+wrong: it SHRINKS the denominator, so an installation excluded by mistake is one this lane reports
+nothing about while reading green — the very failure the derived roster replaced a hand-maintained
+list to prevent.
+
+`derive-combo-instances.py`'s self-test asserts each of those claims in the refusal — that the third
+answer is named, that it is NOT IMPLEMENTED, that the liveness states cannot express it, and that it is
+the looser direction — rather than the shape of the paragraph, so the earlier wrong advice cannot come
+back silently. Reverting the message fails exactly that one arm of the fifteen.
+
+### 🚨 The preflight asserts in the order that makes its red actionable
+
+"Until then the lane is red on the roster rather than on the credentials" is what this page has
+always said, and the workflow used to do the **opposite**: all three `COMBO_*` inputs were asserted
+in the first step, before the checkout and before the token mint, so every run died one step above
+the derivation. Measured over the whole history of workflow `352181036`: **the derivation had never
+once executed in CI** — more than a thousand runs, every one of them red on three absent secrets,
+while the state that has to change first (what the derivation says about the fleet's installations)
+was invisible to every reader of every run. Nobody could have known from a run that provisioning the
+credentials would not have made the lane green.
+
+The order now follows **whether provisioning is reversible**, which is the property that matters:
+
+| step | asserts | why there |
+|---|---|---|
+| `assert` (`combo-verify.yml:123-155`) | `AZURE_*`, `FLEET_READER_*` — **and nothing else** | exactly what is needed to *reach* the derivation: the login, and the token the derivation reads the overlays with |
+| `derive` (`:174-186`) | — | the roster, which refuses loudly rather than emitting an empty one |
+| `roster` (`:188-255`) | `COMBO_VERIFY_SOURCES`, `COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS` | all three are only answerable, or only worth answering, once the fleet's installations are known. The two maps are **spent, not fetched** — an `mwi_` key is issued-never-recovered, an `mw_` admin token is minted per instance — so the instruction to mint one must not be emitted before the gate knows the roster it is for can be derived |
+
+🚨 **The rule is "needed to REACH the derivation", not "irreversible to provision", and getting that
+wrong once is why it is spelled out.** A first attempt moved only the two credential maps and kept
+`COMBO_VERIFY_SOURCES` in `assert`, reasoning that it is plain data — free to provision, free to
+correct — so asserting it early costs nothing. Measured on the first run that reached the step
+afterwards (`35687854914`): the preflight still died in `assert`, naming `vars.COMBO_VERIFY_SOURCES`
+**and nothing else**, and the derivation still did not execute. **Any unprovisioned input in the first
+step defeats the entire reorder, whatever it costs to provision.**
+
+The guard now asserts that property directly, and the scenario is spelled as **production's own input
+state** rather than as one absent name: *"ONLY what this repository actually has provisioned ⇒ the
+derivation is reached"* sets `AZURE_*` and `FLEET_READER_*` and leaves all three `COMBO_*` empty,
+demanding that `assert` **passes**. That matters because every other scenario starts from
+`FULLY_PROVISIONED`, which holds all three `COMBO_*` **constant at "present"** while production varies
+them to absent — so the guard was green over a preflight that, in production, reddened one step above
+the derivation. Run against the shipped-but-wrong version, the new scenario fails `exit=1 (want 0)`;
+it and the moved source-map scenario are the two that fail there, and none fails after the fix — a
+measurement of one red-control run rather than a contract, which is why it names the scenarios instead
+of a fraction. **The general test when a
+gate goes green: what does it hold constant that production varies?**
+
+Nothing became conditional and nothing can skip: no `if:` asks whether a secret is set, no step
+carries `continue-on-error:`, both maps are still asserted unconditionally in the same `preflight`
+job, an absent map still reds by NAME and still carries the whole provisioning guidance. Only the
+ORDER moved — and the whole-map red now arrives with the derived roster printed above it, so "one
+per instance" is a list the reader can act on rather than a phrase.
+
+`check-combo-verify.py` executes both blocks' real shell — extracted from the shipped YAML by step id,
+never retyped — over the scenarios its own docstring lists, and its `--self-test` guts both blocks and
+requires that **every scenario which can fail then does**. So an edit that moves an assertion without
+moving its scenario is red, and a preflight that asserts nothing cannot pass.
+
+🚨 **No count appears in that sentence on purpose.** It used to name one, and adding a scenario made it
+false — twice in one change set. A total in prose has no mechanism keeping it true, so the number lives
+where it is derived: the script's own summary line, and `--self-test`'s own tally. The same applies to
+the sibling count on [The Release Wave](/Doc/Architecture/TheReleaseWave), corrected for the same
+reason.
+
+Each `missing+=` and `absent+=` line names what to provision.
 The `verdict` job at `:283-350` separates *no candidate* from *the preflight failed* from
 *verification did not succeed*, so a red here reads as "verification never ran, provision X" rather
 than as "verification failed". **That half of the lane is not the defect.**
@@ -366,7 +451,7 @@ repository already uses**, and the derivation is now in the lane.
 extractor**, imported rather than copied, so the set this lane verifies and the set the nightly lock
 protects cannot disagree about what an installation is. It needs only the read-only **fleet-reader**
 GitHub App, whose two secrets this preflight already asserted; the preflight now also checks out the
-tree and mints that App's token (`combo-verify.yml:131-144`), which is the one structural change the
+tree and mints that App's token (`combo-verify.yml:148-160`), which is the one structural change the
 move required — the job previously had neither.
 
 `.github/acr-retention/instances.json` is the only thing that removes an installation from the
@@ -374,6 +459,34 @@ roster, and only by declaring it `retired` or `not-installed` **with a reason**.
 are the denominator and that file only explains an absence**: an installation it does not mention is
 LIVE, so forgetting an entry makes the lane stricter (one more instance demanding a credential),
 never looser — the only direction a hand-maintained file may fail in.
+
+#### 🚨 …but a line that has gone WRONG fails in the looser direction, and it is silent by construction
+
+"Forgetting an entry is the stricter mistake" is a statement about an **absent** line. It says
+nothing about a line that was true when it was written and is not any more — and that one removes a
+live installation from every denominator derived from this file, with nothing anywhere contradicting
+it, because a non-live installation was never asked anything.
+
+Measured: the `pearl` entry read *"never installed — pearl.meshweaver.cloud has no DNS record
+(measured 2026-09-12)"* and ended *"Delete this entry the day it is provisioned."* pearl was
+provisioned 2026-09-16 and answered `/api/version` from then on. Five days later the line still
+stood, so pearl was outside this lane's roster **and** outside the nightly lock's AXIS 3 protected
+set, and no run of either was red about it. The entry even named its own expiry condition; nothing
+evaluated it.
+
+**A non-live declaration is now re-measured against the one question that can falsify it — does a
+portal answer at that host?** `build_instances` probes an exempted installation through the same
+probe seam it already takes, and an ANSWER is a blocker naming the line to delete. The reading is
+the returned **commit**, never the absence of an error, so `derive-combo-instances.py` — which
+passes a probe that answers nothing — stays free of an HTTPS call to every portal in the fleet and
+the arm is inert there by construction: one lane does the network. An exempted installation whose
+overlay names no host (`partnerre`, whose template still reads `host: "TODO"`) cannot be falsified
+this way and is left to the roster's own stale-entry check, so the cost in the fleet today is zero
+calls.
+
+`lock-pinned-digests.py --self-test` ARM 25b drives both halves, and both were proven able to fail:
+disabling the check reports *"an exemption for a portal that ANSWERS did not red"*; making it fire
+regardless of the answer reports the negative control **and** ARM 24 independently.
 
 🚨 **Every way the derivation could come back empty is a RED, not a shorter answer.** An empty roster
 would produce an empty matrix, an empty matrix SKIPS the verify job, and GitHub paints a skipped job
@@ -387,9 +500,77 @@ installations". Three independent layers refuse a zero — the script, the prefl
 and the `verdict` job's `COUNT < 1` arm — and `check-combo-verify.py` plus
 `derive-combo-instances.py --self-test` drive all of them on every pull request.
 
-### 🚨 The three remaining inputs are the WHOLE prerequisite — `verify:combo` is not one
+### 🚨 MEASURED: `COMBO_VERIFY_SOURCES` IS derivable from the overlays — the row above was wrong
 
-**Provisioning the three remaining `COMBO_*` inputs makes this lane green today.** The lander does not use the
+The claim that only the registry holds the source→repository mapping is false, and it was stated
+with the confidence of a property (*"a property of the data rather than of the effort spent"*),
+which is the shape that stops anyone re-checking it. The mapping is in the fleet's own overlays, in
+the same files the roster is derived from — `deployments/aks/memex-cloud/values.memexcloud.public.yaml`,
+`pluginCatalog.sources`:
+
+```yaml
+  sources:
+    - name: "Plugins"      repoPath: "https://github.com/Systemorph/MeshWeaver.Plugins"
+    - name: "Education"    repoPath: "https://github.com/Systemorph/MeshWeaver.Education"
+    - name: "Reinsurance"  repoPath: "https://github.com/Systemorph/MeshWeaver.Reinsurance"
+    - name: "Crm"          repoPath: "https://github.com/Systemorph/MeshWeaver.Crm"
+```
+
+`name` is exactly the `PackageCoordinate.SourceName` an install record stamps (measured: `Plugins/Chat`
+on memex.meshweaver.cloud carries `"source": "Plugins"`) and `repoPath` is exactly the URL
+`--source <name>=<url>` wants. `Systemorph/Memex`'s `check-record-renders-overlay.py` already holds
+that block to the record's `pluginRepos` by index, name, repository URL and ref **in both
+directions**, so it is kept honest by a gate rather than by nobody.
+
+**So `COMBO_VERIFY_SOURCES` is the same shape of pin `vars.COMBO_VERIFY_INSTANCES` was**, and
+deriving it would leave only the two issued-never-recovered credentials for an operator — the
+irreducible half. It is less dangerous than the roster pin was: a stale source map fails LOUD (the
+assembler refuses by name, *"no repository is known for source 'X'"*, the verdict is
+`NotVerifiable`, and the lane reds) rather than silently verifying a short set. That is why it is
+worth doing and why it is not urgent — and it unblocks nothing on its own, because the refusal below
+comes first.
+
+### 🚨 MEASURED: the three inputs are necessary and NOT sufficient — the roster refuses first
+
+This section used to open *"provisioning the three remaining `COMBO_*` inputs makes this lane green
+today"* — **while the section above described the derivation refusing.** The page contradicted
+itself, and the wrong half is the one an operator would act on.
+
+It is wrong because the preflight asserts the credentials **BEFORE** it derives the roster, so the
+derivation has never once run in CI: every run of this lane has died one step earlier, and nobody
+could have seen the duplicate-`memex` refusal without running it by hand. Re-measured 2026-09-21
+against the repository set CI's own credential reaches, and confirmed independently by the nightly
+lock naming the same installation `Systemorph/PartnerRe.Memex:memex` in its 01:19Z run — so the
+collision is real under CI's credential, not an artefact of a narrow scan.
+
+**So the remainder is provisioning PLUS one decision**, and the decision is cheapest now, while the
+maps do not exist:
+
+- **Renaming** one installation changes what it reports as (`Hosting__Deployment` is its inventory
+  identity), and the one that would have to move is in PartnerRe's estate.
+- **Qualifying** the maps by `repo:id` removes the collision but then DEMANDS a credential for a
+  portal in another party's subscription — one this fleet will never hold — so the lane stays red,
+  differently worded.
+- **Scoping the denominator** is the answer the question actually wants: combo verification asks
+  *may THIS candidate image roll to THAT instance*, which is meaningless for an installation that
+  never receives our images. PartnerRe's `memex` runs its own build (core `293bfff` on
+  2026-09-21) from its own ACR. Expressing that needs the `registries` table to account for
+  PartnerRe's current ACR, **which it now does**: the declaration was moved to
+  `memexaksacr43rzd6faaix36.azurecr.io` (the estate was rebuilt in PartnerRe's own subscription and
+  tenant on 2026-09-17 and the old entry named a registry that no longer exists), and the table
+  gained the arm that names such a line instead of leaving it to be found through the refusal it
+  causes — [ArtifactRetentionInterlock → the declaration is checked BOTH ways](/Doc/Architecture/ArtifactRetentionInterlock).
+  That staleness is what had held `lock-pinned-digests` red from 2026-09-17 (the 09-15 and 09-16
+  reds were a different cause: the ramp-up portal stopped answering `/api/version` as it was torn
+  down). So this decision no longer waits on the registry table. Declaring another party's registry
+  is still not a statement this repository can verify on its own.
+
+Whichever is chosen, **it is not optional and it is not the operator's** — provisioning the three
+inputs against today's tree buys a different red, not a verdict.
+
+### The three inputs are still the whole of the CREDENTIAL prerequisite — `verify:combo` is not one
+
+The lander does not use the
 `verify:combo` route at all: `combo-verify-instance.sh` reads `roll-target` and `combo` with the
 `mwi_` instance key and then lands the verdict by `POST /api/mesh/get` + `POST /api/mesh/patch`
 with `ADMIN_TOKEN` (steps 1–4 of that script). `/api/plugins/combo-verification` and its
@@ -401,9 +582,13 @@ prerequisite that does not exist and blocks the remediation that would actually 
 
 So the remainder, in the order it can be done:
 
-1. **Provision the three inputs** (the table above). This alone produces verdicts on every derived
-   instance and ends the UNVERIFIED state. Nothing else is required, and nothing in this repository
-   can substitute for it: a credential is issued at the service that holds it, not derived.
+0. **Resolve the duplicate `memex`** (the section above). Not the operator's, and not skippable:
+   until it is resolved the derivation refuses and no instance is verified whatever is provisioned.
+1. **Provision the three inputs** (the table above). Nothing in this repository can substitute for
+   it: a credential is issued at the service that holds it, not derived. Two of the three cannot be
+   copied from anywhere — an `mwi_` key is hash-only and an `mw_` token is issued once — so they are
+   NEW credentials, additive and separately revocable, verified against the live instance before
+   they are written.
 2. ~~**Enumerate instances from the deployment overlays**~~ — **done** (#3848). The roster is
    derived; `vars.COMBO_VERIFY_INSTANCES` is gone from the preflight and from this page.
 3. **Grant `verify:combo` to the build identity on each instance**, then **switch the lander off

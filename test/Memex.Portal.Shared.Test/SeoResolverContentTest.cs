@@ -59,6 +59,28 @@ public class SeoResolverContentTest
         Assert.Null(SeoResolver.ExtractImage(Node(new MarkdownContent { Content = "x" })));
     }
 
+    /// <summary>
+    /// A catalog root carries sales copy, not a description: the Store's root has a
+    /// <c>headline</c> and a <c>tagline</c> and nothing else, so its <c>og:description</c> and its
+    /// share card were empty (2026-09-18). The tagline is the sentence, the headline the slogan;
+    /// the sentence reads better under a title, so it is preferred. An authored description still
+    /// beats both.
+    /// </summary>
+    [Fact]
+    public void ExtractDescription_FallsBackToTagline_ThenHeadline()
+    {
+        Assert.Equal("Courses, plugins and tools.",
+            SeoResolver.ExtractDescription(Node(Json(new { headline = "Everything that plugs in", tagline = "Courses, plugins and tools." }))));
+        Assert.Equal("Everything that plugs in",
+            SeoResolver.ExtractDescription(Node(Json(new { headline = "Everything that plugs in" }))));
+        Assert.Equal("The one-line summary.",
+            SeoResolver.ExtractDescription(Node(Json(new { summary = "The one-line summary.", headline = "Slogan" }))));
+        Assert.Equal("Authored.",
+            SeoResolver.ExtractDescription(Node(Json(new { description = "Authored.", tagline = "Copy." }))));
+        Assert.Equal("Node desc",
+            SeoResolver.ExtractDescription(Node(Json(new { tagline = "Copy." }), description: "Node desc")));
+    }
+
     [Fact]
     public void ExtractDescription_TypedMarkdownContent_FallsBackToAbstract()
     {

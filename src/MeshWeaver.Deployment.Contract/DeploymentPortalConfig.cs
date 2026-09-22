@@ -96,18 +96,52 @@ public static class DeploymentPortalConfig
 
     // ───────────────────────────────── database + ports ────────────────────────────────────────
 
-    /// <summary>Database host: the explicit FQDN, else the Azure server's FQDN, else the in-cluster service.</summary>
+    /// <summary>The StorageClass a database release uses when the record names none — installed once per cluster by the platform.</summary>
+    public const string DefaultDatabaseStorageClass = "memex-db-premiumv2";
+
+    /// <summary>The owner role a database release bootstraps when the record names no user.</summary>
+    public const string DatabaseReleaseOwner = "memex";
+
+    /// <summary>
+    /// The instance's own database release name (<see cref="DeploymentContent.InClusterDatabase"/>),
+    /// or null when the record has none: the stated name, else <c>{namespace}-db</c>, else null
+    /// (a release with no name and no namespace is a <see cref="SpecProblems"/> entry, never a guess).
+    /// </summary>
+    public static string? DatabaseRelease(DeploymentContent d) =>
+        d.InClusterDatabase is not { } db ? null
+        : !string.IsNullOrWhiteSpace(db.Release) ? db.Release!.Trim()
+        : !string.IsNullOrWhiteSpace(d.Namespace) ? d.Namespace!.Trim() + "-db"
+        : null;
+
+    /// <summary>The database release's instances (primary + standbys), 2 unless stated.</summary>
+    public static int DatabaseReleaseInstances(DeploymentContent d) => d.InClusterDatabase?.Instances ?? 2;
+
+    /// <summary>The database release's volume size per instance, <c>32Gi</c> unless stated.</summary>
+    public static string DatabaseReleaseSize(DeploymentContent d) =>
+        string.IsNullOrWhiteSpace(d.InClusterDatabase?.Size) ? "32Gi" : d.InClusterDatabase!.Size!.Trim();
+
+    /// <summary>The database release's StorageClass, the platform's unless stated.</summary>
+    public static string DatabaseReleaseStorageClass(DeploymentContent d) =>
+        string.IsNullOrWhiteSpace(d.InClusterDatabase?.StorageClass) ? DefaultDatabaseStorageClass : d.InClusterDatabase!.StorageClass!.Trim();
+
+    /// <summary>
+    /// Database host: the instance's own database release's primary Service (<c>{release}-rw</c>),
+    /// else the explicit FQDN, else the Azure server's FQDN, else the chart's bundled in-cluster service.
+    /// </summary>
     public static string DatabaseHost(DeploymentContent d) =>
-        !string.IsNullOrWhiteSpace(d.DatabaseHost) ? d.DatabaseHost!.Trim()
+        DatabaseRelease(d) is { } release ? release + "-rw"
+        : !string.IsNullOrWhiteSpace(d.DatabaseHost) ? d.DatabaseHost!.Trim()
         : !string.IsNullOrWhiteSpace(d.DatabaseServer) ? d.DatabaseServer!.Trim() + AzurePostgresDomain
         : InClusterPostgresService;
 
     /// <summary>Database port, 5432 unless stated.</summary>
     public static int DatabasePort(DeploymentContent d) => d.DatabasePort ?? 5432;
 
-    /// <summary>Database user, <c>postgres</c> unless stated.</summary>
+    /// <summary>Database user: the stated one, else the database release's owner (<c>memex</c>), else <c>postgres</c>.</summary>
     public static string DatabaseUsername(DeploymentContent d) =>
-        string.IsNullOrWhiteSpace(d.DatabaseUsername) ? "postgres" : d.DatabaseUsername!.Trim();
+        !string.IsNullOrWhiteSpace(d.DatabaseUsername) ? d.DatabaseUsername!.Trim()
+        : d.InClusterDatabase is not null ? DatabaseReleaseOwner
+        : "postgres";
 
     /// <summary>Database name, trimmed ("" when unset).</summary>
     public static string DatabaseName(DeploymentContent d) => (d.Database ?? "").Trim();
@@ -191,8 +225,7 @@ public static class DeploymentPortalConfig
     {
         var names = (requiredModules ?? Enumerable.Empty<string>())
             .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name.Trim())
-            .Select(name => name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll")
+            .Select(WithDllSuffix)
             .ToArray();
         var entries = ImmutableList.CreateBuilder<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -218,8 +251,7 @@ public static class DeploymentPortalConfig
         {
             if (builder.ContainsKey(slot) || string.IsNullOrWhiteSpace(assembly))
                 continue;
-            var name = assembly.Trim();
-            builder[slot] = name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll";
+            builder[slot] = WithDllSuffix(assembly);
         }
         return builder.ToImmutable();
     }
@@ -349,8 +381,8 @@ public static class DeploymentPortalConfig
 
     /// <summary>
     /// The required-module slots this record declares that the HELM CHART does not render — a slot
-    /// above <see cref="MaxChartRenderedRequiredModuleSlot"/>, which its literal-key block does not
-    /// carry. Empty when every slot is inside the block.
+    /// above <see cref="MaxChartRenderedRequiredModuleSlot"/> or below 0, neither of which its
+    /// literal-key block carries. Empty when every slot is inside the block.
     ///
     /// <para>🚨 <b>Scoped to the chart on purpose, and NOT folded into
     /// <see cref="SpecProblems(IEnumerable{PluginRepoMount}, IEnumerable{string})"/>.</b> The Aspire
@@ -371,6 +403,7 @@ public static class DeploymentPortalConfig
             return ImmutableList<string>.Empty;
         var problems = ImmutableList.CreateBuilder<string>();
         foreach (var (slot, assembly) in ModuleSlots(record))
+        {
             if (slot > MaxChartRenderedRequiredModuleSlot)
                 problems.Add(
                     $"required module '{assembly}' is declared at slot {slot}, above the highest "
@@ -380,7 +413,116 @@ public static class DeploymentPortalConfig
                     + "in the cluster). Raise the chart's Modules__Required__N block (one hasKey "
                     + "entry per index) and MaxChartRenderedRequiredModuleSlot together, or move "
                     + "the entry into the contiguous requiredModules list.");
+            // 🚨 The SAME asymmetry at the other end, and the same remedy shape. A negative slot is
+            // not an unbound entry: the reader enumerates the section's CHILDREN rather than
+            // binding a CLR array, so an injected `Modules:Required:-1` is returned and the module
+            // IS required under Aspire. The chart's literal-key block starts at 0, so in Kubernetes
+            // the key reaches no container and the module is required by nobody — works locally,
+            // disappears in the cluster, exactly like a slot above the ceiling. Raising the ceiling
+            // cannot fix this one, so the remedy names the only two that can.
+            else if (slot < 0)
+                problems.Add(
+                    $"required module '{assembly}' is declared at slot {slot}, below the lowest slot "
+                    + "the Helm chart renders (0) — in Kubernetes it would reach no container, so "
+                    + "the module would not be required at all (the Aspire route delivers it, "
+                    + "because the reader enumerates the section's children rather than binding an "
+                    + "array — so this works locally and disappears in the cluster). Move the entry "
+                    + "into the contiguous requiredModules list — or give it a slot that is FREE "
+                    + "(past that list, whose entries win at the indices they occupy, so a slot "
+                    + "inside it is dropped just as silently) and no higher than "
+                    + $"{MaxChartRenderedRequiredModuleSlot}.");
+        }
         return problems.ToImmutable();
+    }
+
+    /// <summary>
+    /// Why this record's POSITIONAL boot-module slots cannot be trusted, or an empty list when it
+    /// declares none — the ROUTE-NEUTRAL half, wrong under Aspire exactly as in the cluster.
+    ///
+    /// <para>🚨 <b>A slot names an index in an array whose OTHER HALF this record cannot read.</b>
+    /// <c>Modules:Required</c> merges by index, so slot N means "replace whatever the image's own
+    /// list holds at N" — and the image's list lives in another repository, versions on its own
+    /// schedule and is not given to the record at render time. The advice that produced every one
+    /// of these slots ("put it at the first free index") is therefore a measurement of a list the
+    /// record does not own, taken once and silently invalidated by the next append.</para>
+    ///
+    /// <para>🚨 <b>It has already happened twice, on the same instance.</b> Memex#131:
+    /// <c>Modules__Required__5</c> named MCP over an image whose index 5 had become
+    /// <c>MeshWeaver.Social.dll</c>. Memex#378, measured 2026-09-16 and unchanged at record v92 on
+    /// 2026-09-17: <c>requiredModuleSlots {"7": "MeshWeaver.Mcp.dll"}</c> over an image whose list
+    /// has grown from seven entries to nine, so index 7 is now
+    /// <c>MeshWeaver.Markdown.Collaboration.dll</c> — the collaboration pack is REQUIRED BY NOBODY
+    /// on the public instance, and a pod that never landed it reports Healthy and rolls out green.
+    /// Neither shadow was visible: the module is not MISSING (nothing asks for it), so the
+    /// readiness contract has nothing to say, and the override is rendered, so the key-coverage
+    /// gate passes.</para>
+    ///
+    /// <para><b>The rule, and why it is this one.</b> A positional slot is sound only where the
+    /// record owns the WHOLE index space — which is exactly what
+    /// <see cref="DeploymentContent.RequiredModulesAuthoritative"/> claims (#4476/#4483). Under the
+    /// claim the image's list does not apply at any index, so no entry of it can be shadowed and a
+    /// slot is merely a position in the record's own set. Without the claim the slot's meaning is
+    /// whatever the image happened to ship that day, and no amount of care in the record can fix
+    /// that — so this reports it rather than waiting for the next append to make it wrong
+    /// again.</para>
+    ///
+    /// <para>🚨 <b>This is a rule with no production caller yet</b>, exactly like
+    /// <see cref="ChartModuleSlotProblems"/> beside it: the one renderer that asks a record "why
+    /// can you not be deployed" is <c>HelmValues.Problems</c> in MeshWeaver.Plugins, and it asks
+    /// neither. Until it does, both are pinned here and reach no deploy — stated so the next reader
+    /// does not mistake a defined surface for an enforced one.</para>
+    ///
+    /// <para>A slot BELOW ZERO is NOT this surface's business, and measuring said so: the reader
+    /// enumerates <c>GetSection("Modules:Required").GetChildren()</c> rather than binding a CLR
+    /// array, so an injected <c>Modules:Required:-1</c> IS returned and the module IS required on
+    /// the Aspire route. It is the chart that drops it — the literal-key block starts at 0 — which
+    /// makes it the ceiling's question at the other end, and <see cref="ChartModuleSlotProblems"/>
+    /// reports it there.</para>
+    ///
+    /// <para>Pure.</para>
+    /// </summary>
+    public static ImmutableList<string> PositionalModuleSlotProblems(DeploymentContent? record)
+    {
+        if (record is null || record.RequiredModuleSlots.IsEmpty)
+            return ImmutableList<string>.Empty;
+
+        if (record.RequiredModulesAuthoritative)
+            return ImmutableList<string>.Empty;
+
+        var problems = ImmutableList.CreateBuilder<string>();
+
+        // 🚨 The RENDERED slots, never the raw map. <see cref="ModuleSlots"/> drops a blank entry
+        // and drops an explicit slot the contiguous list already occupies, so the raw map contains
+        // entries that emit no key at all — and a problem saying "the key IS rendered" about one of
+        // those would be false where it matters most, in the sentence explaining why nothing else
+        // reports this. Above the contiguous count is exactly the explicit half that survived: the
+        // list's own entries occupy 0..count-1 and nothing else.
+        var contiguous = ModuleEntries(record.RequiredModules).Count;
+        foreach (var (slot, assembly) in ModuleSlots(record).Where(entry => entry.Key >= contiguous))
+            problems.Add(
+                $"required module '{WithDllSuffix(assembly)}' is declared at SLOT {slot}, and this record "
+                + "does not claim the complete set — so the slot replaces whatever the IMAGE's own "
+                + $"{ModulesSection}:Required list holds at index {slot}, which this record cannot "
+                + "read and which versions on its own schedule (it has already grown from seven "
+                + "entries to nine underneath a slot chosen as 'the first free index', twice: "
+                + "Memex#131 and Memex#378). The replaced module is then required by nobody, which "
+                + "nothing reports — it is not missing, so readiness is silent, and the key IS "
+                + "rendered, so coverage passes. State the complete set in requiredModules and set "
+                + "requiredModulesAuthoritative, after which no index of the image's list applies "
+                + "and a slot can shadow nothing.");
+        return problems.ToImmutable();
+    }
+
+    /// <summary>
+    /// A stated module name as the render writes it — trimmed, with the <c>.dll</c> suffix added
+    /// when it is not already there. ONE rule, asked by every place that turns a record's word into
+    /// a <c>Modules:Required</c> value, so a record cannot be normalized one way into the entries
+    /// and another into a problem that names it. Pure.
+    /// </summary>
+    private static string WithDllSuffix(string? stated)
+    {
+        var name = (stated ?? "").Trim();
+        return name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll";
     }
 
     /// <summary>
@@ -445,6 +587,17 @@ public static class DeploymentPortalConfig
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
+        // 🚨 What a NEW instance STARTS with (maintainer 2026-09-19: "need to put this to the config
+        // where we start"). The record's platform policy and pattern render as the self-updater's
+        // SEED keys: the first creation of Admin/UpdatePolicy copies them, an existing node is never
+        // touched. Absent renders nothing, and nothing is the chart's own default (Stable, no
+        // pattern) — a record that says nothing must not narrow or widen what the image ships.
+        // The value binds to an ENUM on the pod (SelfUpdateOptions.DefaultPolicy): a misspelling that
+        // reached the ConfigMap would abort the host in the configuration binder, on the new
+        // ReplicaSet, while the old pods keep serving — the #2210 shape. So the renderer refuses
+        // anything but the three names, and emits them in their canonical casing.
+        Set("SelfUpdate__DefaultPolicy", UpdatePolicyName(d.UpdatePolicy));
+        Set("SelfUpdate__DefaultPattern", string.IsNullOrWhiteSpace(d.UpdatePattern) ? null : d.UpdatePattern!.Trim());
         // The per-PACKAGE default update policy (Auto | Notify | None) the instance seeds onto every
         // install record — separate from the platform's own image policy (Admin/UpdatePolicy) since
         // 2026-09-14. Absent renders nothing: the chart's default keeps the legacy AutoUpdateByDefault
@@ -556,6 +709,27 @@ public static class DeploymentPortalConfig
         if (p.Order is int order) c[$"{section}__Order"] = order.ToString();
         if (flagKey is not null && p.Enabled is bool enabled) c[flagKey] = enabled ? "true" : "false";
     }
+
+    /// <summary>The platform self-update policies the portal binds (<c>UpdatePolicyKind</c>), in the casing the binder reads.</summary>
+    public static readonly IReadOnlyList<string> UpdatePolicyNames = ["Continuous", "Stable", "None"];
+
+    /// <summary>
+    /// The canonical spelling of a record's <see cref="DeploymentContent.UpdatePolicy"/>, or
+    /// <c>null</c> for blank. Any other value throws: it would render into a key the pod binds to an
+    /// enum and abort the new replica's host in the configuration binder.
+    /// </summary>
+    public static string? UpdatePolicyName(string? policy)
+    {
+        if (string.IsNullOrWhiteSpace(policy))
+            return null;
+        var wanted = policy.Trim();
+        return UpdatePolicyNames.FirstOrDefault(n => string.Equals(n, wanted, StringComparison.OrdinalIgnoreCase))
+               ?? throw new InvalidOperationException(
+                   $"updatePolicy '{wanted}' is not a platform update policy — one of {string.Join(", ", UpdatePolicyNames)}. "
+                   + "It renders as SelfUpdate__DefaultPolicy, which the portal binds to an enum: a misspelling would "
+                   + "abort the new replica's host in the configuration binder while the old pods keep serving.");
+    }
+
 }
 
 /// <summary>

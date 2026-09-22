@@ -73,6 +73,7 @@ Icon: <svg …/>                           # inline SVG, content:file.svg, or an
 ## Images and diagrams
 
 - **Inline SVG** directly in the markdown is the house style for diagrams — it themes with `currentColor`, needs no asset pipeline, and renders identically in docs and thumbnails. Never put blank lines or HTML comments *inside* an `<svg>` block (markdown would split it).
+  An accent colour that is not `currentColor` must hold **4.5:1** against the page in BOTH themes when it colours text (small labels included), so it is declared once per theme, never as one mid-tone value: put the palette in the SVG's own `<style>` as custom properties on the diagram's root class, override them under `[data-theme="dark"] .cls` and, for a viewer on the system theme, under `@media (prefers-color-scheme: dark) { html:not([data-theme="light"]) .markdown-body:not([data-theme="light"]) .cls { … } }` — the same selector pair `MarkdownView.razor.css` uses — and measure each value before committing it. [Secure Development Framework](/Doc/Architecture/SecureDevelopmentFramework) is the worked example.
 - **Static images** go through a content collection: `![alt](images/foo.svg)` resolves via `ImgPathMarkdownExtension` to the page's static content.
 - **Mermaid** fenced blocks render for sequence/flow diagrams where hand-drawn SVG is overkill.
 

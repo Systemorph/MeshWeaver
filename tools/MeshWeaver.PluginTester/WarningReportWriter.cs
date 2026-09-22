@@ -53,8 +53,33 @@ public static class WarningReportWriter
         ArgumentNullException.ThrowIfNull(ratchets);
 
         WriteInventory(output, inventory);
+        WriteInert(output, baseline);
         foreach (var ratchet in ratchets)
             WriteRatchet(output, inventory, baseline, ratchet);
+    }
+
+    /// <summary>
+    /// Baseline entries naming a code the compile no longer reports — one line, naming the codes
+    /// and the count, so an inert line gets DELETED instead of sitting unread for ever. Never a
+    /// failure: see <see cref="WarningBaseline.Inert"/> for why retiring a code must not be able to
+    /// red a repo that has not trimmed its file yet.
+    /// </summary>
+    private static void WriteInert(TextWriter output, WarningBaseline baseline)
+    {
+        var inert = baseline.Inert.ToList();
+        if (inert.Count == 0)
+            return;
+        var codes = inert
+            .Select(e => e.Code)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(c => c, StringComparer.Ordinal);
+        output.WriteLine(
+            $"{Prefix} {inert.Count} INERT baseline entr(ies) naming "
+            + string.Join(", ", codes)
+            + " — the in-mesh compile no longer reports these (CompileWarning.NotReported: "
+            + "reference-set skew, which a project build does not produce, and doc completeness, "
+            + "which core's src/ NoWarn suppresses). They tolerate "
+            + "nothing and fail nothing. Delete the lines.");
     }
 
     /// <summary>Evaluates both ratchets, in report order: latent bugs first, doc debt second.</summary>

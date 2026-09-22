@@ -9,9 +9,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 > ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
-**A pull-based self-update carries the IMAGE and nothing else. So an instance rolls itself forward
-release after release until it meets the first one that bumps the database schema — and then it
-stops there, still serving, with nothing on the outside to say it stopped.**
+**A roll that carries the IMAGE and nothing else meets the first release that bumps the database
+schema and stops there — still serving, at the OLD build, with nothing on the outside to say it
+stopped.** The self-updater no longer makes that roll: it runs the migration first, or refuses. An
+operator `Roll` still does, and so does any install whose migration leg cannot run — and the failure
+is the same one every time, which is why the property outlived the mechanism that caused it.
 
 This page is about the *property*, not the incident: which releases an instance can take by itself,
 which it cannot, and how to pick a target when an operator has to carry one across. The
@@ -25,13 +27,16 @@ repeated here.
 | | |
 |---|---|
 | The updater patches | `memex-portal-deployment` (container `memex-portal`) — **one** workload, and it says so in its own success line |
-| The migration is | a run-once `Job` the chart renders per Helm revision. Only `helm upgrade` mints one; nothing in the continuous path ever runs it |
+| The migration is | a run-once `Job`. The chart renders one per Helm revision; the self-updater mints its own, `memex-migration-su-<tag>`, from the same ConfigMap and Secret — see [Database Migration Procedure](../DatabaseMigrationProcedure) |
 | The portal checks | `DbVersionGate` reads `admin.mesh_nodes.db_version` **once** at startup and, if it is below the `ExpectedDbVersion` compiled into the build, logs `Critical` and stops the application |
-| So a schema-bumping release is | image-forward, schema-behind — the new pod fails closed and exits, and the rollout never completes |
+| So a roll that moves the image without the schema is | image-forward, schema-behind — the new pod fails closed and exits, and the rollout never completes |
 
 CD *does* build and push a correctly tagged `memex-migration` image on every run, tag for tag with
-`memex-portal-ai`. That is not the gap. The gap is that no continuous path ever runs it: there is no
-migration leg for self-update to get wrong, because there is no migration leg at all.
+`memex-portal-ai`. That was never the gap. **The gap was that no continuous path ran it** — there was
+no migration leg for self-update to get wrong, because there was no migration leg at all. The
+self-updater grew one (`IDeploymentUpdater.RunMigrationAsync`, the `memex-migration-su-<tag>` Job),
+and the paragraphs below are about what remains: the two states in which that leg cannot run, and the
+one actor that still patches images with no leg at all.
 
 ## Why it is invisible
 
@@ -70,8 +75,10 @@ Two consequences follow, and both are easy to miss:
 
 - **Clearing one instance at one tag clears TODAY, and nothing else.** An out-of-band `helm upgrade`
   runs the Job, the schema advances, the already-attempted portal starts — and the instance resumes
-  self-updating until the *next* schema bump, where it stops again. The remedy is per-occurrence by
-  construction; it does not change the property.
+  self-updating until the *next* schema bump. That cure is per-occurrence by construction and does not
+  change the property; what does change it is the instance owning a migration leg of its own, which is
+  the section below. Where the leg cannot run, the per-occurrence cure is still the cure — the
+  difference is that the instance now says so before rolling rather than after.
 - **An instance that has not hit the wall is not configured differently — it has not arrived yet.**
   `memex-cloud` served `ci.7621` and was healthy on the same day, for the single reason that no build
   it had selected needed schema 55. Its next selection past `ci.7647` meets the wall identically.
@@ -154,18 +161,89 @@ run and is **not** clearance. Why a green Promote can sit above an unsealed publ
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract) → "A promoted tag is
 not a deployable tag".
 
-## The durable remedy is an OPEN decision
+## The durable remedy: option (a), and it is now the self-updater's own leg
 
-**Nothing here has been decided, and this page deliberately does not pick.** The options on the
-table, with what each one costs:
+Of the three options this page used to list as open, **(a) was taken** — the instance runs the
+migration itself, from inside the pod, as a `Job` it mints (`memex-migration-su-<tag>`) rather than a
+credential or a workflow trigger it holds. The blast radius the option was feared for stayed small:
+one extra RBAC rule (`batch/jobs create,get,list,delete` on `memex-portal-sa`) instead of a cluster
+credential. The routine is [Database Migration Procedure](../DatabaseMigrationProcedure); this page
+keeps only the part that is still a WALL.
 
-| Option | Shape | What it trades |
+**What is still a wall is not the mechanism but the two states in which it cannot run — and, since
+[#4764](https://github.com/Systemorph/MeshWeaver/issues/4764), the poller no longer patches blind in
+either.** Only `MigrationRunOutcome.Completed` proves the schema moved, so:
+
+| State | What the poller does | Where it says so |
 |---|---|---|
-| **(a) Self-update triggers the helm run at a schema boundary** | The instance detects that its target needs a schema it does not have and drives the migration itself | Closes the gap end-to-end. Gives the in-pod updater a much larger blast radius — it would have to hold a credential or a workflow trigger that can mint a Job, which is exactly the surface the current one-workload design keeps small |
-| **(b) Schema-bumping releases are FLAGGED, and the instance holds** | The release advertises the schema it needs; an instance that cannot satisfy it declines to roll and asks for the helm run instead of rolling into a wedge | Turns a silent stall into an explicit, reported hold — the fleet-visible state the current failure lacks. Does not remove the operator step; needs the expected version to become a published property of a release rather than a constant compiled into an image |
-| **(c) Status quo — schema bumps are always operator-run** | Keep the property, make it legible and alarmed | Cheapest and safest. Leaves the control instance without a self-service path, and leaves "did anyone notice?" as a monitoring problem rather than a mechanism one |
+| `Forbidden` — 403 on the Job POST; the install has not been `helm upgrade`d since the RBAC rule landed | **REFUSES the roll** (`SelfUpdateOutcome.MigrationUnavailable`) | `lastCheckVerdict` on `Admin/UpdatePolicy`, naming the missing permission and the `helm upgrade` that grants it **and** runs the migration; `LogCritical` |
+| `NotSupported` — the installed `MeshWeaver.SelfUpdate.Aks` generation predates the seam, so no migration is possible at all | **rolls**, and records that it rolled blind (`applied update … UNMIGRATED — …`) | the same field, naming the module to update; `LogWarning` |
 
-Two constraints any answer has to respect, both already standing directives:
+🚨 **Both of the portal's own routes are held to that rule, and for a while only one of them was.**
+There are two places in the portal that patch the image: the poller, and the Updates tab's manual
+**Apply** button. The button honoured the release-availability gate, the combo gate and the
+control-lane route — and had no migration step at all, so an admin click made exactly the image-only
+roll the poller had stopped making, and left no verdict anywhere to inspect afterwards. That is what a
+per-route `switch` statement costs. The decision is now ONE predicate
+(`SelfUpdateVerdict.MayPatchAfter`) that both routes read, with a test that drives every outcome
+through the poller and asserts its behaviour equals the predicate — so an outcome added to the enum
+cannot be classified one way in one route and another in the other.
+
+The asymmetry is deliberate and is the whole judgement. A 403 is a state an operator clears with the
+very command that also moves the schema, so refusing asks for nothing that was not already owed. "This
+install can never migrate" is not like that: refusing there would freeze the install for ever, and
+silently, which is the worse failure shape
+([#2553](https://github.com/Systemorph/MeshWeaver/issues/2553)) — so the roll goes, and what changes is
+that it stops being indistinguishable from a migrated one.
+
+> 🚨 **Why this is a blanket rule and not a version comparison.** The natural formulation — *refuse
+> when the target's expected `db_version` exceeds the database's* — is not available to a portal, and
+> that is structural: `DbVersionGate.ExpectedDbVersion` is a constant compiled INTO each build, so the
+> pod running the OLD image cannot read the NEW image's number. **Running the migration IS that
+> comparison, executed rather than computed**, which is why "could not run it" and "do not know" are
+> the same fact here. Making the expected version a published property of a release — option (b)
+> below — is what would let a refusal name two numbers instead of one missing capability.
+
+### Measured, 2026-09-19 (memex-cloud)
+
+Image `3.0.0-ci.8411` (commit `c84c6c05`, predating `DbVersion.Latest = 56`). A `Roll` to
+`3.0.0-ci.8955` — the same single `set image` write the self-updater makes:
+
+```text
+pod memex-portal-deployment-65468bfccf-68g7f   0/1  CrashLoopBackOff   restarts=2 by 05:06Z
+crit: Memex.Portal.Distributed.DbVersionGate[0]
+crit: Memex.Portal.Shared.MemexConfiguration[0]  Startup was cancelled … Exiting with code 1 after 3319 ms
+Deployment: generation 1402, desired 4, ready 4 (all on the OLD set), updated 1, unavailable 1
+```
+
+No migration Job in the namespace. Nothing converged, nothing rolled back, and the record still said
+the roll was made. Note what the numbers say: the instance was *serving*, on four healthy old pods, at
+full capacity — which is why no outside-in probe and no availability metric could see it.
+
+## What is still open — and it is not in this repo
+
+**The actor that produced the 2026-09-19 reading was not the self-updater; it was an operator `Roll`
+`Hosting/InstanceAction`**, which patches the image and nothing else. So the remaining gap is the
+Plugins/control-plane half, and it has a precise shape:
+
+- **(b1) The record-driven `Reconcile` already runs the migration — make the `Roll` plan include it.**
+  A `Reconcile` re-applies the chart at the image the Deployment carries, and a `helm upgrade`
+  renders `memex-migration-<revision>`, which is why "`Roll`, then `Reconcile`" is the operator
+  workaround the measurement used. The fix is for the `Roll` plan to *contain* that step — migrate at
+  the target tag, wait for `Database migration completed. Version: N`, then set the image — so the
+  operator route has the same ordering the in-pod route has had since the seam landed. Until it does,
+  a `Roll` across a schema bump is `Roll` + `Reconcile`, in that order, by hand.
+- **(b2) The `Deployments/<name>` record must carry the verdict.** The in-pod path reports on
+  `Admin/UpdatePolicy`; an operator `Roll` reports on the instance record, and a plan step that
+  patched an image the new pods then refuse must land there as a failure rather than as a completed
+  action. This is the same ask as #4764's second one, one level up.
+- **(b3) Publish the expected schema version with the release.** The original option (b): make
+  `ExpectedDbVersion` readable from outside an image — a release-marker field — and both halves can
+  refuse (or clear) by comparing two numbers, which is strictly better than refusing on a missing
+  capability. It also lets the fleet answer the question at the end of "Why it is structural" without
+  rolling anything.
+
+Two constraints any answer has to respect, both standing directives:
 
 - **Rolls go through CD.** The first remedy proposed on #3207 — running `helm-release.yml` against a
   hand-picked `image` — was **withdrawn** by its own author for exactly this reason: a hand-pinned
@@ -175,12 +253,10 @@ Two constraints any answer has to respect, both already standing directives:
   keeps a half-migrated database from being written to. No option may weaken it; the argument is
   only about who runs the migration and when.
 
-The decision is the maintainer's. Until it is made, the operative facts are: schema-bumping releases
-are un-takeable by self-update, an instance behind the wall is serving and safe, and a target chosen
-to carry one across must clear all three conditions above.
-
 ## See also
 
+- [Database Migration Procedure](/Doc/Architecture/DatabaseMigrationProcedure) — the routine: who mints
+  the Job, the one-time grant, the outcome table the poller decides on, and the recovery
 - [Deployment — AKS](/Doc/Architecture/DeploymentAKS) — "Migration under self-update": the runbook
   detail, the `exitCode 139` that is really SIGABRT, and the guard that keeps the updater to one
   workload

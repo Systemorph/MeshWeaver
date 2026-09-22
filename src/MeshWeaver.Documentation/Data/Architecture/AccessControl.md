@@ -505,11 +505,53 @@ Each refusal, concretely:
 conservative seed that is not a spurious denial**. The fold genuinely needs its inputs, so a starving
 leg's only sound terminal is an **error** — which the fold already propagates as
 `PermissionCheckOutcome.Undetermined` → `ErrorType.Unavailable` (retryable, and attributed to the read
-rather than to the caller's impatience). Making a *silent* starvation produce that error is a
-query-layer change, not a fold change: `MeshQuery` already **detects** it (`InitialStallProbe`, 20 s,
-whose own warning says *"Fix the stalled provider; never bump the consumer's timeout"*) and
-deliberately only logs. Turning that probe into a terminal would change every query in the mesh and is
-a platform decision in its own right — it is tracked, not slipped in under a symptom fix.
+rather than to the caller's impatience). **And the blast radius is the argument, not caution:** the
+other shape the fan-in has for an unanswered provider — count it empty and NAME it on the frame — is
+exactly the permissive seed the three bullets above rule out, so delivering one to this fold would be
+a hole, not a diagnosis. What a CONSUMER can also do is refuse to convert a named-silent frame into a
+verdict of its own; path resolution does that, and
+[HubInitializationFailure](../HubInitializationFailure) → "Resolving the node is a READ" carries the
+worked case (issue #1186) with the measurements.
+
+### 🚨 The stall is now that error — the fan-in is rung 4 of the ladder
+
+Making a *silent* starvation produce that error is a **query-layer** change, not a fold change, and it
+has been made: policy [`query-fanin-stall-terminal`](../PolicyNotProse). `MeshQuery`'s
+`InitialStallProbe` had **detected** this for a long time and only logged — on `memex`, over the 400
+minutes to 2026-09-21T04:12Z, it emitted 200+ warnings whose own text reads *"the query is silently
+stalled on its all-providers Initial gate and its consumer hangs with no error"*, alongside 95
+`No MeshNode emitted for` faults (~14/hour), and nothing acted on any of them. It now **terminates**
+the merged query with `QueryProviderStalledException`, naming the providers that did not answer.
+
+**Nothing in this fold changed, and that is the point.** Every consumer that turns a mesh read into a
+decision already classifies a fault correctly, because the three bullets above are what forced them
+to: `CheckPermissionOutcome` answers `Undetermined` ⇒ `IsGranted == false` (#974, #2742),
+`RlsNodeValidator` answers `NodeRejectionReason.Unavailable`, `AnonymousGate` projects to `false`, and
+`MeshNodeStreamCache.EvictFaultedQuery` drops the chain so one terminal is not replayed for the life
+of the process (#1316). The terminal is the input those classifiers were built for and never received.
+
+**The budget is DERIVED, and it had to be.** The probe's diagnostic delay was a hard-coded 20 s —
+*exactly* `PermissionEstablishmentBudget` at the production default. Promoting that constant to a
+terminal as-is would have recreated #1198's defect precisely: equal is not an ordering, the outer clock
+starts first, so the fan-in could never win and every stalled read would still have been reported as
+"the check could not be established" with no provider named. `MeshOperationOptions.QueryInitialBudget`
+is therefore **rung 4** — `Nest(PermissionEstablishmentBudget)`, 30 s / 25 s / 20 s / **15 s** at the
+default — so the level that can name WHICH provider starved is the level that fires. `RlsNodeValidator`
+has a fourth `why` arm for it, and reports the provider rather than its own budget.
+
+| where the read stalls | what the caller is told |
+|---|---|
+| a leg of a `[RequiresPermission]` message gate's fold | `Undetermined` → `ErrorType.Unavailable`, naming the provider |
+| a leg of a node operation's `RlsNodeValidator` fold | `NodeRejectionReason.Unavailable`: *"the effective-permission read of 'X' could not be read: query provider(s) [Y] did not emit an Initial within 15s"* |
+| a leg of the anonymous gate | `AllowAnonymous == false`, warned once, naming the path |
+| a layout area's own data read | `AreaErrorClassifier.IsStorageUnavailable` ⇒ the **localized** "temporarily unavailable, worth re-opening" frame, not a raw framework sentence |
+
+Pinned by `StalledPolicyReadFailsClosedTest` — one user, one role, two partitions, and a provider that
+stalls one partition's `_Policy` read: the control partition still **allows**, and the stalled one
+answers `Undetermined` with the provider named, *for a caller who holds Admin there*. The fan-in's own
+contract is pinned by `QueryFanInStallIsTerminalTest`, including the case that keeps the two apart — a
+provider that **completes** without an Initial is still counted empty and named on the frame, never
+faulted. Full account: [Query Fan-In Stall Terminal](../QueryFanInStallTerminal).
 
 **The gate stays unbounded, deliberately.** `AccessControlPipeline` carries no `Timeout` (see its "No
 Timeout here" comment) and this change does not add one. Bounding the shared gate would change the
@@ -1250,7 +1292,9 @@ The predicate above used to carry a third term — `public_read_node_type OR …
 - **Connecting it would have been a breach.** ~24 node types declared public read, including `Thread`/`ThreadMessage` (private conversations), `Markdown`/`Code`/`Document` (most content), and `Course`/`Module`/`Exercise`/`ExerciseAttempt` (paid course content and learners' own submissions).
 - **The shape was unsafe regardless of the type list.** Being an unconditional `OR` in front of the node fold, it short-circuited the longest-prefix resolution — i.e. it overrode DENY rows, which is precisely where store/course paywall gating lives. And `PermissionEvaluator` has no node-type-keyed term, so the SQL and evaluator paths would have diverged.
 
-**Declare public read with a mechanism both read paths honour instead:** a `PartitionAccessPolicy` `_Policy` node with `PublicRead = true` (issue #603 — projected as allow-`Read` rows for `Public`/`Anonymous` that *participate in* the prefix fold, so a deeper deny still wins), or a [`NodeTypeGate`](#type-declared-subtree-gates-nodetypegate) (issue #701) for a type that opens a short, explicitly listed set of surfaces on its own subtree.
+**Declare public read with a mechanism both read paths honour instead:** a `PartitionAccessPolicy` `_Policy` node with `PublicRead = true` (issue #603 — projected as allow-`Read` rows for `Public`/`Anonymous` that *participate in* the prefix fold, so a deeper read **cap** still wins), or a [`NodeTypeGate`](#type-declared-subtree-gates-nodetypegate) (issue #701) for a type that opens a short, explicitly listed set of surfaces on its own subtree.
+
+🚨 **A deeper ROLE DENY is a different question, and the two read paths answer it differently.** The parenthetical above says *cap* on purpose: read as "a deeper deny of any kind still wins" it is wrong for the C# evaluator, and that reading is exactly how a submission inbox came to be published under a public partition. The SQL projection resolves one row set by longest prefix, so a `Public`/`Anonymous` deny at a deeper prefix wins there ("the store-gating shape and it is intentional"); `PermissionEvaluator` instead ORs the public grant in separately from the role fold, so the same deny is inert. Measured 2026-09-20 and pinned by `PublicReadIsNotSuppressedByADenyTest`. Full account, and what each remedy costs: [PublicRead and Denies](../PublicReadAndDenies) (MeshWeaver#4716).
 
 ### Public policy grants and deeper read caps
 
@@ -1271,6 +1315,17 @@ same prefix, and a more specific prefix wins when reading a descendant.
 read cap ineffective against a public ancestor. Role denies continue to remove roles, while
 `PublicRead` remains a separate grant. This rule does not change the additive `NodeTypeGate`
 contract or the separate `Api` capability cap.
+
+🚨 **"Role denies continue to remove roles, while `PublicRead` remains a separate grant" is the whole
+reason a partition cannot be published with `PublicRead` and then have one segment taken back.** The
+table above is about a read CAP; a deeper Public/Anonymous role DENY under a `PublicRead` policy
+withholds nothing on this path and is honoured by the SQL fold, so the same node answers two ways —
+and a read cap that would suppress it darkens the segment's own reviewers along with the public.
+A partition that needs an exception is published through root Viewer GRANTS instead, which both folds
+resolve identically. Full account, the installer's shape decision, and why the legacy gate heal may
+never retire a deny it could not have written:
+[Protected Segments on a Public Partition](../ProtectedSegmentsOnAPublicPartition)
+([#4716](https://github.com/Systemorph/MeshWeaver/issues/4716)).
 
 **Regression evidence (2026-09-11).** On core baseline
 `3e731d947244b51b19f4c78b1114fc4273a9a840`, `PublicReadPolicyScopeTest` executed 14 cases against a
@@ -1416,7 +1471,9 @@ What it grants is what any signed-in user already had — creating a partition, 
 
 **Read the declaration the CQRS way.** The definition is one known path the create GATES on, so its content comes from `GetMeshNodeStream` (authoritative), after a `namespace:` listing of its parent has established that it exists — never from a query's index, and never with the caller's type interpolated into a `path:` term (a wildcard there could select another type's definition). The type must be a literal path.
 
-**Still open (#4449):** a NESTED instance of an in-mesh owning type is not refused (the static-type refusal never covered in-mesh types — unchanged here); a bulk `CreateNodesRequest` does not compensate a failed owner grant (the same gap Space has); the declaration is resolved once per check rather than once per create — every disagreement fails closed. `RlsNodeValidator` is registered by `AddRowLevelSecurity()` alongside `PartitionWriteGuardValidator`, `OwnsPartitionProvisioningValidator` and `PartitionRootDeletionGuard` — validators **AND**-compose, so a rejection by any one of them wins even when RLS would grant.
+**And read it ONCE per create.** The three validators above run back to back on one validation context and share a single resolution (`PartitionOwningTypes.OwnsPartitionOnce`); the post-creation handler, on the far side of the storage write, deliberately keeps its own. Why that split is [Partition Ownership Resolution](/Doc/Architecture/PartitionOwnershipResolution).
+
+**And never below the root (#4449).** `OwnsPartitionProvisioningValidator` refuses a NESTED instance of an owning type — registered in `src/` or declared in mesh content — with `InvalidPath`. For an in-mesh type it reads the definition's durable row rather than the stream, so the refusal never activates the type's hub and never varies with which hubs are warm; a store that cannot answer refuses as unavailable. The design, and why a hub-fed projection could not carry it, is [Partition Ownership Resolution](/Doc/Architecture/PartitionOwnershipResolution). (A bulk `CreateNodesRequest` compensates a failed owner grant — [Bulk Create Compensation](/Doc/Architecture/BulkCreateCompensation).) `RlsNodeValidator` is registered by `AddRowLevelSecurity()` alongside `PartitionWriteGuardValidator`, `OwnsPartitionProvisioningValidator` and `PartitionRootDeletionGuard` — validators **AND**-compose, so a rejection by any one of them wins even when RLS would grant.
 
 Node *reads* are validated through `MeshCatalog.ValidateReadAsync`, which runs the same validators; query *listing* is filtered separately, in SQL, by `user_effective_permissions` (see "PostgreSQL integration").
 

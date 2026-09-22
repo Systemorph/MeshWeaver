@@ -325,9 +325,10 @@ on:
           into its OWN directory named by the publisher's run-unique token, sealed there, and a
           one-line `_current` pointer — written after the seal — says which one applies. Two
           publishers never write the same bytes, so a mix becomes unrepresentable rather than
-          merely detectable. The flat copy is still written for readers that predate pointer
-          resolution, and THAT copy still races: this layout closes the window for
-          pointer-following readers only.
+          merely detectable. Since MeshWeaver#3461 phase 5 the flat copy at the prefix is DISPOSED
+          OF once the pointer has moved and been read back — its `_complete` first, then the files
+          the publisher positively identifies — so nothing is written at the prefix in place any
+          more and the window is closed for every reader, not only pointer-following ones.
 
           `flat` (the historical layout): that directory IS the publication, replaced IN PLACE —
           unseal, upload over the live files, re-seal. Two publishers interleaved on one prefix can
@@ -361,9 +362,9 @@ on:
           which is the reason the default moved rather than five one-line PRs being opened.
 
           🚨 A flat caller on a migrated prefix NEVER takes the prefix back. Retiring or
-          re-pointing would move consumers backwards: the pointer is moved BEFORE the flat
-          compatibility copy is refreshed, so a run seeing an older flat copy could skip and
-          expose bytes older than the generation it displaced.
+          re-pointing would move consumers backwards: a run seeing an older flat copy — or, since
+          phase 5, none at all — could skip and expose bytes older than the generation it
+          displaced, or nothing.
 
           Retention is implemented (MeshWeaver#3959) and registered in the portal hosts, so
           generations under a retained identity are collected once nothing names them and they are

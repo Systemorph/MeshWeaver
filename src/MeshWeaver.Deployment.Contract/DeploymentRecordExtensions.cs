@@ -83,6 +83,14 @@ public static class DeploymentRecordExtensions
     public static DeploymentContent WithInClusterPostgres(this DeploymentContent d, bool enabled = true) =>
         d with { InClusterPostgres = enabled };
 
+    /// <summary>
+    /// The instance's OWN database release — a CloudNativePG Cluster in its namespace on the db node
+    /// pool (Doc/Architecture/InClusterDatabases). Blank release → <c>{namespace}-db</c>.
+    /// </summary>
+    public static DeploymentContent WithInClusterDatabase(
+        this DeploymentContent d, string? release = null, int? instances = null, string? size = null, string? storageClass = null) =>
+        d with { InClusterDatabase = new InClusterDatabaseSpec { Release = release, Instances = instances, Size = size, StorageClass = storageClass } };
+
     // ── images ──────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -108,6 +116,16 @@ public static class DeploymentRecordExtensions
 
     /// <summary>Self-update policy name (<c>None</c>, <c>Continuous</c>, <c>Stable</c>).</summary>
     public static DeploymentContent WithUpdatePolicy(this DeploymentContent d, string policy) => d with { UpdatePolicy = policy };
+
+    /// <summary>
+    /// The version pattern the Continuous self-update follows (<c>3.0.0-ci*</c> on the fleet's
+    /// line). Together with <see cref="WithUpdatePolicy"/> this is what a NEW instance starts with:
+    /// both render into the portal's config (<c>SelfUpdate__DefaultPolicy</c> /
+    /// <c>SelfUpdate__DefaultPattern</c>) and seed its <c>Admin/UpdatePolicy</c> on first creation.
+    /// Null or blank clears it. See <see cref="DeploymentContent.UpdatePattern"/>.
+    /// </summary>
+    public static DeploymentContent WithUpdatePattern(this DeploymentContent d, string? pattern) =>
+        d with { UpdatePattern = string.IsNullOrWhiteSpace(pattern) ? null : pattern.Trim() };
 
     /// <summary>
     /// The default update policy every package installed on this instance is SEEDED with —
@@ -271,14 +289,24 @@ public static class DeploymentRecordExtensions
     /// <summary>Removes every volume.</summary>
     public static DeploymentContent ClearVolumes(this DeploymentContent d) => d with { Volumes = ImmutableList<VolumeClaim>.Empty };
 
-    /// <summary>Ingress class, TLS secret, annotations (merged) and cookie-based session affinity.</summary>
+    /// <summary>
+    /// Ingress class, TLS secret, the cert-manager ClusterIssuer, annotations (merged) and
+    /// cookie-based session affinity.
+    ///
+    /// <para><paramref name="clusterIssuer"/> is a DEFAULT that is already there: a new
+    /// <see cref="IngressSpec"/> starts at <see cref="IngressSpec.DefaultClusterIssuer"/>, so an
+    /// instance declared with a host and a TLS secret asks cert-manager for its certificate with no
+    /// further call. Pass it to name a different issuer, or
+    /// <see cref="IngressSpec.NoClusterIssuer"/> when the Secret is created by other means.</para>
+    /// </summary>
     public static DeploymentContent WithIngress(
         this DeploymentContent d,
         string? className = null,
         string? tlsSecret = null,
         IEnumerable<KeyValuePair<string, string>>? annotations = null,
         bool? sessionAffinity = null,
-        string? affinityCookie = null)
+        string? affinityCookie = null,
+        string? clusterIssuer = null)
     {
         var i = d.Ingress ?? new IngressSpec();
         var merged = i.Annotations;
@@ -296,6 +324,7 @@ public static class DeploymentRecordExtensions
             {
                 ClassName = className ?? i.ClassName,
                 TlsSecret = tlsSecret ?? i.TlsSecret,
+                ClusterIssuer = clusterIssuer ?? i.ClusterIssuer,
                 Annotations = merged,
                 SessionAffinity = affinity,
             },
@@ -451,6 +480,33 @@ public static class DeploymentRecordExtensions
     /// <summary>The GitHub App identity the instance acts as.</summary>
     public static DeploymentContent WithGitHubApp(this DeploymentContent d, string clientId, string installationId, string? installationOwner = null) =>
         d with { GitHubApp = new GitHubAppIdentity { ClientId = clientId, InstallationId = installationId, InstallationOwner = installationOwner ?? d.GitHubApp?.InstallationOwner } };
+
+    /// <summary>
+    /// The App a CONTROL instance dispatches THIS deployment's pipelines as — a client estate's own
+    /// App, installed on that client's config repository only. The PEM never passes through here:
+    /// <paramref name="privateKeySecret"/> names the Key Vault object, and
+    /// <paramref name="privateKeyConfigKey"/> the key the control instance reads it from. Both may
+    /// be left to their derived defaults (<c>{keyVaultSecretPrefix}GitHub-App-PrivateKey</c> and
+    /// <c>GitHub__Apps__{id}__PrivateKey</c>).
+    /// </summary>
+    public static DeploymentContent WithOpsGitHubApp(
+        this DeploymentContent d,
+        string clientId,
+        string? installationId = null,
+        string? installationOwner = null,
+        string? privateKeySecret = null,
+        string? privateKeyConfigKey = null) =>
+        d with
+        {
+            OpsGitHubApp = new GitHubAppIdentity
+            {
+                ClientId = clientId,
+                InstallationId = installationId ?? d.OpsGitHubApp?.InstallationId,
+                InstallationOwner = installationOwner ?? d.OpsGitHubApp?.InstallationOwner,
+                PrivateKeySecret = privateKeySecret ?? d.OpsGitHubApp?.PrivateKeySecret,
+                PrivateKeyConfigKey = privateKeyConfigKey ?? d.OpsGitHubApp?.PrivateKeyConfigKey,
+            },
+        };
 
     /// <summary>The LinkedIn client id the Social plugin posts with.</summary>
     public static DeploymentContent WithSocialLinkedIn(this DeploymentContent d, string? clientId) => d with { SocialLinkedInClientId = clientId };

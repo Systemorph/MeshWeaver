@@ -103,38 +103,47 @@ internal class DynamicMeshNodeAttributeGenerator
     }
 
     /// <summary>
-    /// Generates the complete C# source code for a dynamic node assembly.
+    /// The SOURCE-BEARING half of the generated skeleton: the import block the compile puts in
+    /// scope, and the authored code with its <c>using</c> lines removed. Everything a diagnostic
+    /// about AUTHORED text can be about is in here, and <see cref="GenerateAttributeSource"/>
+    /// emits exactly this between its header and the assembly attribute.
+    ///
+    /// <para>🚨 <b>It is a separate member so the PRE-PUSH GATE can be pinned to it</b>
+    /// (Systemorph/MeshWeaver#4711). <c>.github/scripts/compile-check.py</c> used to hand each of a
+    /// NodeType's sources to MSBuild as its OWN <c>&lt;Compile&gt;</c> item, while this path
+    /// concatenates them into ONE compilation unit. Under
+    /// <c>NullableContextOptions.Annotations</c> — what <c>EmitPipeline.CreateCompilationOptions</c>
+    /// sets, and what the gate mirrors — that difference is not cosmetic: nullable analysis runs
+    /// only in text that opted in with <c>#nullable enable</c>, and in one concatenated unit a
+    /// directive in the FIRST file is still in force in the LAST. The gate was therefore
+    /// structurally blind to a class of diagnostics the bake then reported — aggregated under the
+    /// NODETYPE's name, with no file and no line, against content that could not reproduce them.
+    /// Measured on MeshWeaver.Plugins/BusinessRules/Scope, 2026-09-18, same tree both ways: the
+    /// gate said <c>98 clean</c> while the bake said <c>CS8601 12× / CS8602 12×</c>, all 24 in
+    /// committed generated proxies that inherit a <c>#nullable enable</c> from a file sorting ahead
+    /// of them.</para>
+    ///
+    /// <para>The script now reproduces this shaping line for line, and
+    /// <c>ConcatenatedUnitParityTest</c> compares the two outputs against each other instead of
+    /// trusting two careful implementations to stay equal — the same reasoning as
+    /// <c>ModulePlatformFloorScriptParityTest</c>: two call sites computing the same fold
+    /// differently either never converge or never fire, and both are silent.</para>
     /// </summary>
-    /// <param name="node">The MeshNode being compiled.</param>
-    /// <param name="codeFile">The CodeConfiguration containing user code.</param>
-    /// <param name="hubConfiguration">The HubConfiguration lambda expression (from NodeTypeDefinition).</param>
-    /// <param name="contentCollections">Content collections to register for this node type.</param>
-    /// <returns>Complete C# source code ready for compilation.</returns>
-    public string GenerateAttributeSource(
-        MeshNode node,
-        CodeConfiguration? codeFile,
-        string? hubConfiguration,
-        IReadOnlyList<ContentCollectionConfig>? contentCollections = null)
+    /// <param name="code">The COMBINED source text — <see cref="NodeCompileShaping.CombineSources"/>
+    /// output, i.e. every source file of the compile joined in node-path order.</param>
+    /// <returns>The import lines, to be emitted verbatim in this order, and the authored code with
+    /// its <c>using</c> directives removed.</returns>
+    internal static (ImmutableArray<string> Imports, string CodeWithoutUsings)
+        ShapeAuthoredSource(string? code)
     {
-        var safeClassName = SanitizeName(node.Path);
-        var code = codeFile?.Code;
-        var hasCode = !string.IsNullOrWhiteSpace(code);
-
         // Extract using statements from user code (they must go at the top)
         var (userUsings, userCodeWithoutUsings) = ExtractUsingStatements(code);
 
-        var sb = new StringBuilder();
-
-        // Header comment
-        sb.AppendLine($"// Auto-generated from MeshNode: {node.Path}");
-        sb.AppendLine($"// Generated at: {DateTimeOffset.UtcNow:O}");
-        sb.AppendLine("// Source file for debugging support - do not edit manually");
-        sb.AppendLine();
-
         // Using statements (standard ones) — read from the single declaration so the emit path and
         // the language service's `global using` rendering cannot drift apart (#1802).
+        var imports = ImmutableArray.CreateBuilder<string>();
         foreach (var ns in StandardUsings)
-            sb.AppendLine($"using {ns};");
+            imports.Add($"using {ns};");
 
         // User-defined using statements (extracted from code files), DEDUPED — against each other
         // and against StandardUsings.
@@ -152,8 +161,7 @@ internal class DynamicMeshNodeAttributeGenerator
         // The language-service path (GlobalUsings) has ALWAYS deduped — it builds a HashSet — so
         // this also closes the drift #1802 exists to prevent: the two renderings of the same import
         // scope now agree about what that scope contains.
-        var alreadyEmitted = new HashSet<string>(
-            StandardUsings.Select(ns => $"using {ns};"), StringComparer.Ordinal);
+        var alreadyEmitted = new HashSet<string>(imports, StringComparer.Ordinal);
         foreach (var userUsing in userUsings)
         {
             // Whole lines arrive, possibly indented and possibly `using static X;` or an alias.
@@ -161,8 +169,41 @@ internal class DynamicMeshNodeAttributeGenerator
             // emitted trimmed so two spellings of one import cannot both survive.
             var directive = userUsing.Trim();
             if (directive.Length > 0 && alreadyEmitted.Add(directive))
-                sb.AppendLine(directive);
+                imports.Add(directive);
         }
+
+        return (imports.ToImmutable(), userCodeWithoutUsings);
+    }
+
+    /// <summary>
+    /// Generates the complete C# source code for a dynamic node assembly.
+    /// </summary>
+    /// <param name="node">The MeshNode being compiled.</param>
+    /// <param name="codeFile">The CodeConfiguration containing user code.</param>
+    /// <param name="hubConfiguration">The HubConfiguration lambda expression (from NodeTypeDefinition).</param>
+    /// <param name="contentCollections">Content collections to register for this node type.</param>
+    /// <returns>Complete C# source code ready for compilation.</returns>
+    public string GenerateAttributeSource(
+        MeshNode node,
+        CodeConfiguration? codeFile,
+        string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections = null)
+    {
+        var safeClassName = SanitizeName(node.Path);
+        var code = codeFile?.Code;
+
+        var (imports, userCodeWithoutUsings) = ShapeAuthoredSource(code);
+
+        var sb = new StringBuilder();
+
+        // Header comment
+        sb.AppendLine($"// Auto-generated from MeshNode: {node.Path}");
+        sb.AppendLine($"// Generated at: {DateTimeOffset.UtcNow:O}");
+        sb.AppendLine("// Source file for debugging support - do not edit manually");
+        sb.AppendLine();
+
+        foreach (var directive in imports)
+            sb.AppendLine(directive);
         sb.AppendLine();
 
         // Assembly attribute - MUST come before any namespace declarations

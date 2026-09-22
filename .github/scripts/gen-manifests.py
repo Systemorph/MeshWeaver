@@ -148,7 +148,8 @@ MODULE_TAG_RE = re.compile(r"^.+/v\d+\.\d+\.\d+$")
 # Every flag this script understands. An unrecognised one is an ERROR, never a silent fall-through
 # to the writer: `--check-verisons` used to sail past both `if` arms, REWRITE the manifests and
 # exit 0 — a "check" that mutated the tree and reported success.
-KNOWN_ARGS = {"--check", "--check-versions", "--no-fetch", "--resolve", "--self-test"}
+KNOWN_ARGS = {"--check", "--check-versions", "--list-packages", "--no-fetch", "--resolve",
+              "--self-test"}
 
 SCHEMA = "mw-manifest/1"
 # The caller's allow-file. Named by MW_MANIFEST_CONFIG when the lane places it elsewhere; otherwise
@@ -207,7 +208,12 @@ def skip_set(root: Path) -> set[str]:
     """Directories that are NOT node packages — declared per repo, and kept equal to
     validate-repos.py's SKIP by the caller's check-skip-sets.py. A directory in one and not the
     other either gets validated as nodes it does not contain, or has a manifest.lock demanded for a
-    package it is not."""
+    package it is not.
+
+    🚨 The DECLARATION is not the whole rule — see `plugin_dirs`, which also drops every
+    dot-directory. A caller's guard that compares this set against its own enumerator's SKIP is
+    comparing declarations and will answer green over two enumerations that disagree; ask
+    `--list-packages` for the effective answer instead."""
     return config(root)["skip"]
 
 
@@ -226,6 +232,31 @@ def plugin_dirs(root: Path) -> list[Path]:
     return sorted((d for d in root.iterdir()
                    if d.is_dir() and d.name not in skip and not d.name.startswith(".")),
                   key=lambda d: d.name)
+
+
+def list_packages(root: Path) -> int:
+    """Prints the EFFECTIVE package enumeration — one name per line, sorted, nothing else.
+
+    🚨 This exists because a repo that enumerates its top-level packages TWICE cannot keep the two
+    in step by comparing declarations (#4774). `plugin_dirs` applies the declared `skip` AND an
+    implicit dot-directory rule; a caller's `check-skip-sets.py` that asserts
+    `validate-repos.SKIP == skip_set(root)` compares only the first half, so equal declared sets
+    over different effective enumerations answer green — the guard's own docstring calls that
+    "worse than the drift it exists to catch". Measured on five satellites' main: their second
+    enumerator has no dot rule, so an undeclared top-level `.foo` is skipped here and walked there.
+
+    The answer is machine-readable on purpose: a caller diffs its own enumerator's output against
+    this and needs no copy of either rule. stdout carries ONLY the names, so a reader of the
+    diff sees packages and never a banner; every diagnostic a failure needs is on stderr.
+    """
+    names = [d.name for d in plugin_dirs(root)]
+    for name in names:
+        print(name)
+    # The DENOMINATOR, on stderr so it cannot reach a diff: a caller comparing against an empty
+    # answer must be able to tell "this repo declares no packages" from "the enumeration found
+    # none", and an empty stdout alone cannot say which.
+    print(f"gen-manifests --list-packages: {len(names)} package(s) under {root}", file=sys.stderr)
+    return 0
 
 
 def declared_module(plugin: Path) -> str | None:
@@ -255,15 +286,57 @@ def _closure_inputs(root: Path) -> tuple[dict[str, set[str]], set[str]]:
     return _CLOSURE_INPUTS[key]
 
 
-def _hash_project(proj: Path, root: Path, files: dict[str, str]) -> None:
-    """Hash one `src/` project directory into `files`, keyed by its repo-relative POSIX path."""
+def _project_paths(proj: Path) -> list[Path]:
+    """The files of one `src/` project directory that get hashed — ENUMERATION only.
+
+    Split out from the hashing so `--resolve`'s safety check can ask what the regeneration is
+    about to read WITHOUT a second copy of these rules to drift from. It drifted: the check
+    enumerated git's view (`ls-files --others --exclude-standard`) while the hashing enumerates
+    the FILESYSTEM, so every ignored-but-present file was hashed into a lock and invisible to the
+    check — Copilot's review of MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
+    """
+    found: list[Path] = []
     for path in sorted(proj.rglob("*")):
         if not path.is_file() or path.name in EXCLUDE_FILES:
             continue
         rel = path.relative_to(proj)
         if rel.parts and rel.parts[0] in {"bin", "obj"}:
             continue
+        found.append(path)
+    return found
+
+
+def _hash_project(proj: Path, root: Path, files: dict[str, str]) -> None:
+    """Hash one `src/` project directory into `files`, keyed by its repo-relative POSIX path."""
+    for path in _project_paths(proj):
         files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _module_source_dirs(plugin: Path, root: Path) -> list[Path]:
+    """The `src/` directories a MIXED package's version covers — its own project plus every
+    in-tree sibling that RIDES its bundle — or `[]` when this repo did not opt in.
+
+    The selection half of `module_source_files`, split for the same reason as `_project_paths`:
+    one enumerator, read by the hashing AND by `--resolve`'s safety check.
+    """
+    # DECLARED, never inferred. A repo that has not opted in keeps hashing exactly the files it
+    # hashed before — flipping this moves every mixed package's content hash and therefore the
+    # version its dependents pin, which is a release event, not a script upgrade.
+    if not config(root)["hashModuleSources"]:
+        return []
+    module = declared_module(plugin)
+    if not module:
+        return []
+    proj = root / "src" / module
+    if not proj.is_dir():
+        return []
+    dirs = [proj]
+    graph, owned = _closure_inputs(root)
+    for sibling in _project_closure(root).riding_siblings(root, f"src/{module}", graph, owned):
+        directory = root / sibling
+        if directory.is_dir():
+            dirs.append(directory)
+    return dirs
 
 
 def module_source_files(plugin: Path, root: Path) -> dict[str, str]:
@@ -308,25 +381,16 @@ def module_source_files(plugin: Path, root: Path) -> dict[str, str]:
     The `.csproj` IS included, for the entry and every riding sibling: it pins the package
     versions that ride with them.
     """
-    # DECLARED, never inferred. A repo that has not opted in keeps hashing exactly the files it
-    # hashed before — flipping this moves every mixed package's content hash and therefore the
-    # version its dependents pin, which is a release event, not a script upgrade.
-    if not config(root)["hashModuleSources"]:
-        return {}
-    module = declared_module(plugin)
-    if not module:
-        return {}
-    proj = root / "src" / module
-    if not proj.is_dir():
-        return {}
     files: dict[str, str] = {}
-    _hash_project(proj, root, files)
-    graph, owned = _closure_inputs(root)
-    for sibling in _project_closure(root).riding_siblings(root, f"src/{module}", graph, owned):
-        directory = root / sibling
-        if directory.is_dir():
-            _hash_project(directory, root, files)
+    for directory in _module_source_dirs(plugin, root):
+        _hash_project(directory, root, files)
     return files
+
+
+def _package_paths(plugin: Path) -> list[Path]:
+    """The package's OWN files that get hashed — ENUMERATION only (see `_project_paths`)."""
+    return [p for p in sorted(plugin.rglob("*"))
+            if p.is_file() and p.name not in EXCLUDE_FILES]
 
 
 def hash_files(plugin: Path, root: Path) -> dict[str, str]:
@@ -337,12 +401,30 @@ def hash_files(plugin: Path, root: Path) -> dict[str, str]:
     stops exactly there.
     """
     files: dict[str, str] = {}
-    for path in sorted(plugin.rglob("*")):
-        if not path.is_file() or path.name in EXCLUDE_FILES:
-            continue
+    for path in _package_paths(plugin):
         files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     files.update(module_source_files(plugin, root))
     return files
+
+
+def hashed_paths(root: Path) -> set[str]:
+    """Every repo-relative POSIX path `generate()` would hash, from the SAME enumerators
+    `hash_files` reads — never a re-statement of their rules.
+
+    🚨 This exists so `--resolve`'s "is anything here not part of the merge?" check and the
+    regeneration it guards can never answer about different file sets. They did: the check asked
+    git (`ls-files --others --exclude-standard`, which HIDES ignored files) while the hashing
+    walks the filesystem, so an ignored-but-present `Module/output.trx` was hashed into the lock
+    the resolver staged and named by nothing.
+    """
+    found: set[str] = set()
+    for plugin in plugin_dirs(root):
+        for path in _package_paths(plugin):
+            found.add(path.relative_to(root).as_posix())
+        for directory in _module_source_dirs(plugin, root):
+            for path in _project_paths(directory):
+                found.add(path.relative_to(root).as_posix())
+    return found
 
 
 def module_version(files: dict[str, str]) -> str:
@@ -825,21 +907,80 @@ def generate(root: Path, fetch: bool = True) -> int:
     written = 0
     commit = git_head(root)
     modules = plugin_dirs(root)
+    # 🚨 TWO PHASES, and the split is the whole fix for #4781. Deriving is cheap to redo and a
+    # write is not: a module whose derived number is BELOW its committed one is evidence that this
+    # checkout cannot see every release, and that has to stop the run BEFORE anything is rewritten.
+    # Writing as we go would leave the earlier modules downgraded and only then refuse.
+    plans: list[tuple[Path, dict[str, str], str, str, dict | None]] = []
     for plugin in modules:
-        lock = plugin / "manifest.lock"
         files = hash_files(plugin, root)
         version = module_version(files)
-        existing = read_existing(lock)
+        existing = read_existing(plugin / "manifest.lock")
         # The SemVer is recomputed here, not just shape-checked, because a REVERT needs it: the
         # restored tree hashes to an already-published one, so `files`/`moduleVersion` match and the
         # old skip left `version` pointing at a number that describes a DIFFERENT (later) tree. A
         # published version describes exactly one tree forever, so a revert must move FORWARD.
-        #
+        plans.append((plugin, files, version, release_version(root, plugin, version, trunk), existing))
+
+    # 🚨 NEVER REWRITE A VERSION DOWNWARD — refuse, naming the missing evidence (#4781).
+    #
+    # The old guard only compared direction for a manifest that was OTHERWISE up to date, so a
+    # tagless checkout left an unchanged module alone. It did not cover the case that actually
+    # corrupts: a CONTENT change. Then `files`/`moduleVersion` move, the manifest must be rewritten,
+    # and `version` went out with whatever the incomplete tag set derived. Measured on a fixture
+    # with NO git remote: a committed v1.2.1 was rewritten to v1.2.0, silently, at exit 0 — the
+    # exact defect `--check-versions`' own hint warns about, done by the generator itself.
+    #
+    # A derived number BELOW the committed one can only mean the derivation did not see every
+    # release: with a remote, `derivation_inputs` has already proven the tag set current, so it is a
+    # hand-edited or orphaned number; with NO remote, nothing proved anything and a release
+    # published elsewhere is invisible by construction. Both want a human, and neither wants a
+    # silent rewrite — a published version describes exactly one tree forever, so re-issuing a
+    # lower number hands an already-published number to a different tree.
+    remote_for_hint = _remote_name(root)
+    downgrades = [
+        f"{plugin.name}: manifest.lock records version {existing.get('version')!r}, and this "
+        f"checkout derives {expected!r} — LOWER. Refusing to rewrite it down."
+        for plugin, _files, _version, expected, existing in plans
+        if existing is not None
+        and VERSION_RE.fullmatch(str(existing.get("version", "")))
+        and _is_behind(expected, str(existing.get("version")))
+    ]
+    if downgrades:
+        print("✗ refusing to rewrite a committed version DOWNWARD — a published version describes "
+              "exactly one tree forever:")
+        for d in downgrades:
+            print(f"  - {d}")
+        # 🚨 THE TWO CASES HAVE OPPOSITE REMEDIES, and saying both would send the reader to the
+        # wrong one (Copilot's review of #4917). `check_versions` already draws this distinction on
+        # the same comparison; the refusal here must not contradict it.
+        if remote_for_hint:
+            # `derivation_inputs` has ALREADY proven the tag set and the trunk baseline current
+            # against this remote — that is its whole job, and it refuses before reaching here if it
+            # could not. So nothing is missing: the committed number is one neither the published
+            # tags nor the trunk's committed manifest justify. Fetching again cannot change it.
+            print(f"  The tag set and the trunk baseline were verified against "
+                  f"'{remote_for_hint}' before this comparison, so NOTHING is missing — the "
+                  f"committed number is one neither the published tags nor the trunk's committed "
+                  f"manifest justify. A hand-edited or orphaned version, not absent evidence.")
+            print("  Fix: correct the `version` in that manifest.lock deliberately (the derived "
+                  "number above is the one CI computes), then re-run. Re-fetching tags cannot "
+                  "change this result.")
+        else:
+            print("  This checkout has NO git remote, so nothing could be verified and a release "
+                  "published elsewhere is invisible to it by construction — the committed number "
+                  "being higher is exactly the evidence that such a release exists.")
+            print("  Fix: run the generator where the published tags are. Do NOT correct the "
+                  "committed version from here; from inside this checkout a real release and a "
+                  "hand-edited number are indistinguishable.")
+        return 1
+
+    for plugin, files, version, expected_semver, existing in plans:
+        lock = plugin / "manifest.lock"
         # 🚨 Only ever rewrite the version FORWARD. On a tagless/shallow checkout release_version
         # computes `major.minor.0` for everything, and blindly writing that would rewrite correct
         # versions DOWN — the very thing `--check-versions`' hint warns about. Comparing direction
         # (rather than equality) makes the tagless case a no-op instead of a corruption.
-        expected_semver = release_version(root, plugin, version, trunk)
         semver_stale = VERSION_RE.fullmatch(str(existing.get("version", ""))) is not None \
             and _is_behind(existing.get("version"), expected_semver) if existing else False
         if existing is not None and existing.get("files") == files \
@@ -881,7 +1022,23 @@ def generate(root: Path, fetch: bool = True) -> int:
     return 0
 
 
-def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None) -> int:
+def _unmerged_paths(root: Path) -> list[str] | None:
+    """The paths git reports as unmerged — or `None` when git could not answer.
+
+    🚨 `None` and `[]` are OPPOSITE answers and no caller may collapse them. `[]` is "this merge
+    has no unmerged paths left"; `None` is "nobody knows". `--resolve`'s closing verification read
+    this through `(git(...) or "").strip()`, so a git that could not run became an empty result
+    and the run printed `✓ … the merge can be committed` — a verification step incapable of
+    failing, over the single question `--resolve` exists to answer (Copilot's review of
+    MeshWeaver.Reinsurance#225).
+    """
+    out = git(root, ["diff", "--name-only", "--diff-filter=U"])
+    if out is None:
+        return None
+    return sorted({p.strip() for p in out.splitlines() if p.strip()})
+
+
+def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None, unmerged_paths=None) -> int:
     """Finish a merge whose only unmerged paths are `manifest.lock` files.
 
     🚨 A lock has no meaningful three-way merge: both sides are DERIVED from their own tree, so a
@@ -894,17 +1051,25 @@ def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None) -> int:
     `--check` over content nobody has ever built. So this exits non-zero and names those paths
     instead: a real conflict is still yours to resolve, and only after that does the lock follow.
 
-    `regenerate` is injectable so the self-test can exercise this function itself rather than a
-    re-implementation of its decisions.
+    `regenerate` and `unmerged_paths` are injectable so the self-test can exercise this function
+    itself rather than a re-implementation of its decisions — including the case where git answers
+    the opening question and then cannot answer the closing one.
     """
     regenerate = regenerate or (lambda: generate(root, fetch))
-    unmerged = git(root, ["diff", "--name-only", "--diff-filter=U"])
-    if unmerged is None:
+    unmerged_paths = unmerged_paths or _unmerged_paths
+    paths = unmerged_paths(root)
+    if paths is None:
         print("✗ --resolve: cannot list unmerged paths (is this a git checkout?)")
         return 2
-    paths = sorted({p.strip() for p in unmerged.splitlines() if p.strip()})
-    locks = [p for p in paths if p.endswith("/manifest.lock")]
-    others = [p for p in paths if not p.endswith("/manifest.lock")]
+    # 🚨 GENERATED means "a path `generate()` writes", which is exactly `<package>/manifest.lock`
+    # for the packages the config declares — NOT every path ending in `/manifest.lock`. The suffix
+    # test called `scripts/manifest.lock` and `Claims/SomeNode/manifest.lock` generated; the
+    # regeneration then left them untouched (they are not packages), `git add` staged their
+    # CONFLICT MARKERS, and the run reported the merge ready to commit. Copilot's review of
+    # MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
+    generated = {f"{d.name}/manifest.lock" for d in plugin_dirs(root)}
+    locks = [p for p in paths if p in generated]
+    others = [p for p in paths if p not in generated]
 
     if others:
         print(f"✗ --resolve refuses: {len(others)} non-generated path(s) are still unmerged, and a "
@@ -921,7 +1086,15 @@ def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None) -> int:
     # hash describing a tree that was never committed, arriving inside a merge commit where nobody
     # is looking for it. During a merge every merged file is staged, so an unstaged change here is
     # not part of the merge and this refuses rather than silently absorbing it.
-    if (loose := _loose_worktree_paths(root, locks)):
+    loose = _loose_worktree_paths(root, locks)
+    if loose is None:
+        # Same rule as `_unmerged_paths`: a safety check that cannot read its input REFUSES. It
+        # used to read `(git(...) or "")`, so a git that could not run produced an empty list and
+        # the refusal passed having established nothing.
+        print("✗ --resolve: cannot list the working tree's loose paths, so it cannot be "
+              "established that the regeneration would hash only this merge — refusing.")
+        return 2
+    if loose:
         print(f"✗ --resolve refuses: {len(loose)} unstaged/untracked path(s) would be hashed into "
               f"the regenerated lock, and they are not part of this merge:")
         for path in loose[:20]:
@@ -956,7 +1129,12 @@ def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None) -> int:
     # Safe because of the refusal above: `_loose_worktree_paths` has already established that the
     # tree carried no unstaged or untracked edits apart from the conflicted locks, so anything
     # `generate()` has just modified is a product of THIS merge and belongs in it.
-    changed = sorted(set(locks) | set(_dirty_locks(root)))
+    dirty = _dirty_locks(root, generated)
+    if dirty is None:
+        print("✗ --resolve: regeneration succeeded but the locks it moved cannot be listed — "
+              "stage them yourself, and do not commit until `git status` is clean of them.")
+        return 2
+    changed = sorted(set(locks) | set(dirty))
     if git(root, ["add", "--"] + changed) is None:
         print("✗ --resolve: regeneration succeeded but `git add` failed — stage the locks yourself")
         return 1
@@ -965,42 +1143,74 @@ def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None) -> int:
               f"and would otherwise have been left out of the merge commit:")
         for path in extra:
             print(f"  - {path}")
-    still = (git(root, ["diff", "--name-only", "--diff-filter=U"]) or "").strip()
+    still = unmerged_paths(root)
+    if still is None:
+        # 🚨 The one line this whole function exists to be able to print truthfully. `None` here is
+        # "git could not tell me", and printing ✓ over it is the false pass Copilot's review of
+        # MeshWeaver.Reinsurance#225 named: the locks may be staged and the merge may still be
+        # half-resolved, and nothing in this process knows which.
+        print("✗ --resolve: the locks are staged, but git could not confirm that no unmerged "
+              "paths remain — check `git status` yourself before committing this merge.")
+        return 2
     if still:
         print("✗ --resolve: paths are still unmerged after staging:")
-        for path in still.splitlines():
+        for path in still:
             print(f"  - {path}")
         return 1
     print(f"✓ resolved {len(locks)} generated lock conflict(s) — the merge can be committed")
     return 0
 
 
-def _dirty_locks(root: Path) -> list[str]:
-    """Every `*/manifest.lock` git currently reports as changed — staged or not.
+def _dirty_locks(root: Path, generated: set[str]) -> list[str] | None:
+    """Every GENERATED lock git currently reports as changed — staged or not — or `None` when git
+    could not answer.
 
     `git status --porcelain` rather than `diff --name-only`, because after `generate()` a lock may
     be modified in the index, in the working tree, or both, and all three must be staged.
+
+    🚨 `generated` is passed in rather than re-derived from the suffix: the caller stages this list,
+    and staging a `manifest.lock` the generator does not own is how a conflicted non-package lock
+    got committed with its markers. `None` propagates for the same reason as everywhere else in
+    this file — the caller must not read "git could not run" as "nothing moved", which is the
+    #1023 miss again with no message.
     """
-    out = git(root, ["status", "--porcelain", "--", "*/manifest.lock"]) or ""
+    out = git(root, ["status", "--porcelain", "--", "*/manifest.lock"])
+    if out is None:
+        return None
     found: list[str] = []
     for line in out.splitlines():
         # "XY <path>" — the status codes are the first two columns; a rename would carry " -> ",
         # which a generated lock never does (the generator only rewrites in place).
         path = line[3:].strip().strip('"')
-        if path.endswith("/manifest.lock"):
+        if path in generated:
             found.append(path)
     return found
 
 
-def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str]:
-    """Unstaged modifications and untracked files that `generate()` would hash — excluding the
-    conflicted locks themselves, which are exactly what this run is about to rewrite. Pure-ish:
-    two git reads, no writes."""
+def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str] | None:
+    """Working-tree paths that are NOT part of this merge but that `generate()` would hash —
+    excluding the conflicted locks themselves, which are exactly what this run is about to
+    rewrite. `None` when any of its git reads failed. Pure-ish: three git reads, no writes.
+
+    🚨 THE IGNORED FILES ARE THE POINT. `--exclude-standard` hides gitignored untracked files from
+    git, but `hash_files()` walks the FILESYSTEM and hashes them anyway (only `manifest.lock` and
+    `.DS_Store` are exempt) — so an ignored `Module/output.trx` went into the regenerated lock the
+    resolver staged, and CI then red on a lock hashing a file that is in nobody's commit. They are
+    filtered through `hashed_paths(root)` rather than listed wholesale, because a repo's ignored
+    set is mostly `bin/`, `obj/` and `node_modules/` that `generate()` never reads: refusing on
+    those would make `--resolve` unusable, and refusing on none of them was the defect.
+    Copilot's review of MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
+    """
     conflicted = set(locks)
-    unstaged = (git(root, ["diff", "--name-only"]) or "").splitlines()
-    untracked = (git(root, ["ls-files", "--others", "--exclude-standard"]) or "").splitlines()
-    return sorted({p.strip() for p in unstaged + untracked
-                   if p.strip() and p.strip() not in conflicted})
+    unstaged = git(root, ["diff", "--name-only"])
+    untracked = git(root, ["ls-files", "--others", "--exclude-standard"])
+    ignored = git(root, ["ls-files", "--others", "--ignored", "--exclude-standard"])
+    if unstaged is None or untracked is None or ignored is None:
+        return None
+    hashed = hashed_paths(root)
+    loose = {p.strip() for p in unstaged.splitlines() + untracked.splitlines() if p.strip()}
+    loose |= {p.strip() for p in ignored.splitlines() if p.strip() and p.strip() in hashed}
+    return sorted(loose - conflicted)
 
 
 def self_test() -> int:
@@ -1150,11 +1360,151 @@ def self_test() -> int:
             failures.append(f"an untracked file under a module must be refused, got {rc}")
         if called2b:
             failures.append("the untracked-file case still ran the regenerator")
-        # …and staging it makes it part of the merge, so the resolve proceeds.
+        # …and staging it makes it part of the merge, so the resolve proceeds. 🚨 That is the
+        # DESIGNED boundary, not an oversight: `git merge` refuses to start against a dirty index
+        # at all (measured 2026-09-19: both a staged edit and a staged new file give "Your local
+        # changes to the following files would be overwritten by merge"), so during a conflict
+        # "staged" means "the merge put it there" unless somebody deliberately `git add`ed
+        # something else mid-conflict — which is what this line does.
         g(repo2b, "add", "Mod/stray.cs")
         rc = resolve_conflicts(repo2b, fetch=False, regenerate=lambda: 0)
         if rc != 0:
             failures.append(f"a STAGED file is part of the merge and must not block, got {rc}")
+
+        # 2c. 🚨 A `manifest.lock` THE GENERATOR DOES NOT OWN is a real conflict, not a generated
+        #     one. The classifier tested the SUFFIX, so `scripts/manifest.lock` and a NESTED
+        #     `Mod/Nested/manifest.lock` both read as generated: `generate()` leaves them alone
+        #     (neither is a package), `git add` then stages their CONFLICT MARKERS, and the run
+        #     prints "the merge can be committed". Copilot's review of Reinsurance#225 /
+        #     SocialMedia#208. Two shapes, because they fail through different doors — one is under
+        #     a SKIPPED directory, the other under a real package.
+        for name, lock_path in (("skipped-dir-lock", "scripts/manifest.lock"),
+                                ("nested-lock", "Mod/Nested/manifest.lock")):
+            repo2c = tmp / name
+            (repo2c / "Mod").mkdir(parents=True)
+            g(repo2c.parent, "init", "-q", "-b", "main", str(repo2c))
+            g(repo2c, "config", "user.email", "t@example.com")
+            g(repo2c, "config", "user.name", "t")
+            declare(repo2c)
+            (repo2c / lock_path).parent.mkdir(parents=True, exist_ok=True)
+            (repo2c / "Mod" / "manifest.lock").write_text('{"moduleVersion": "base"}\n')
+            (repo2c / lock_path).write_text("base\n")
+            g(repo2c, "add", "-A")
+            g(repo2c, "commit", "-qm", "base")
+            g(repo2c, "checkout", "-qb", "feature")
+            (repo2c / lock_path).write_text("feature\n")
+            g(repo2c, "commit", "-qam", "feature")
+            g(repo2c, "checkout", "-q", "main")
+            (repo2c / lock_path).write_text("trunk\n")
+            g(repo2c, "commit", "-qam", "trunk")
+            g(repo2c, "checkout", "-q", "feature")
+            g(repo2c, "merge", "main")
+            if g(repo2c, "diff", "--name-only", "--diff-filter=U").split() != [lock_path]:
+                failures.append(f"fixture({name}): expected {lock_path} unmerged, got "
+                                f"{g(repo2c, 'diff', '--name-only', '--diff-filter=U').split()}")
+            called2c = []
+            rc = resolve_conflicts(repo2c, fetch=False,
+                                   regenerate=lambda: (called2c.append(True), 0)[1])
+            if rc != 1:
+                failures.append(f"an unmerged {lock_path} is NOT a generated lock — the generator "
+                                f"writes only <package>/manifest.lock — and must be refused with "
+                                f"exit 1, got {rc}")
+            if called2c:
+                failures.append(f"the {lock_path} case still ran the regenerator")
+            if "<<<<<<<" not in (repo2c / lock_path).read_text():
+                failures.append(f"fixture({name}) does not reproduce the hazard: {lock_path} "
+                                f"carries no conflict markers, so staging it would have been safe")
+            # The property that matters: it is STILL unmerged. (`diff --cached` is no test here —
+            # git reports every unmerged entry as staged-against-HEAD whatever --resolve did.)
+            if g(repo2c, "diff", "--name-only", "--diff-filter=U").split() != [lock_path]:
+                failures.append(f"{lock_path} stopped being unmerged — --resolve staged a conflict "
+                                f"the generator does not own, markers and all")
+
+        # 2d. 🚨 An IGNORED untracked file under a package is hashed by `hash_files()` (it walks the
+        #     FILESYSTEM; only EXCLUDE_FILES are exempt) and was invisible to this refusal, which
+        #     asked git with `--exclude-standard`. The lock then hashes a file that is in nobody's
+        #     commit and CI reds on it. Copilot's review of Reinsurance#225 / SocialMedia#208.
+        # `.gitignore` is COMMITTED IN THE BASE, so it is not itself a loose path — a fixture whose
+        # own ignore file tripped the refusal would pass for the wrong reason.
+        repo2d = tmp / "ignored"
+        (repo2d / "Mod").mkdir(parents=True)
+        g(repo2d.parent, "init", "-q", "-b", "main", str(repo2d))
+        g(repo2d, "config", "user.email", "t@example.com")
+        g(repo2d, "config", "user.name", "t")
+        declare(repo2d)
+        (repo2d / ".gitignore").write_text("*.trx\n")
+        (repo2d / "Mod" / "manifest.lock").write_text('{"moduleVersion": "base"}\n')
+        (repo2d / "Mod" / "src.cs").write_text("base\n")
+        g(repo2d, "add", "-A")
+        g(repo2d, "commit", "-qm", "base")
+        g(repo2d, "checkout", "-qb", "feature")
+        (repo2d / "Mod" / "manifest.lock").write_text('{"moduleVersion": "feature"}\n')
+        g(repo2d, "commit", "-qam", "feature")
+        g(repo2d, "checkout", "-q", "main")
+        (repo2d / "Mod" / "manifest.lock").write_text('{"moduleVersion": "trunk"}\n')
+        g(repo2d, "commit", "-qam", "trunk")
+        g(repo2d, "checkout", "-q", "feature")
+        g(repo2d, "merge", "main")
+        if g(repo2d, "diff", "--name-only", "--diff-filter=U").split() != ["Mod/manifest.lock"]:
+            failures.append("fixture(ignored): expected only the lock unmerged, got "
+                            f"{g(repo2d, 'diff', '--name-only', '--diff-filter=U').split()}")
+        (repo2d / "Mod" / "output.trx").write_text("a build artifact, not part of this merge\n")
+        if g(repo2d, "status", "--porcelain").count("Mod/output.trx"):
+            failures.append("fixture(ignored) does not reproduce the hazard — git still reports "
+                            "Mod/output.trx, so the old check would have caught it anyway")
+        if "Mod/output.trx" not in hashed_paths(repo2d):
+            failures.append("fixture(ignored) does not reproduce the hazard — hash_files() does "
+                            "not hash Mod/output.trx, so nothing would go into the lock")
+        called2d = []
+        rc = resolve_conflicts(repo2d, fetch=False,
+                               regenerate=lambda: (called2d.append(True), 0)[1])
+        if rc != 1:
+            failures.append(f"an IGNORED untracked file that hash_files() hashes must be refused, "
+                            f"got {rc}")
+        if called2d:
+            failures.append("the ignored-file case still ran the regenerator")
+        # The control that keeps this from degenerating into "refuse every ignored file": a repo's
+        # ignored set is mostly bin/obj/node_modules that `generate()` never reads, and refusing on
+        # those would make --resolve unusable. `scripts/` is skipped, so nothing under it is hashed.
+        (repo2d / "Mod" / "output.trx").unlink()
+        (repo2d / "scripts" / "scratch.trx").write_text("ignored, and hashed by nobody\n")
+        if "scripts/scratch.trx" in hashed_paths(repo2d):
+            failures.append("the negative control is not one — scripts/scratch.trx IS hashed")
+        rc = resolve_conflicts(repo2d, fetch=False, regenerate=lambda: 0)
+        if rc != 0:
+            failures.append(f"an ignored file OUTSIDE every hashed package must not block "
+                            f"--resolve, got {rc}")
+
+        # 2e. 🚨 THE CLOSING VERIFICATION MUST BE ABLE TO FAIL. `git()` answers None when it cannot
+        #     run, and the final "are any paths still unmerged?" read went through `or ""` — so a
+        #     git that could not answer became "no unmerged paths" and the run printed
+        #     "✓ … the merge can be committed" over a merge nobody had checked. Copilot's review of
+        #     Reinsurance#225. The seam is `unmerged_paths`, injected the way `regenerate` is.
+        repo2e = fixture(tmp, also_conflict_source=False, name="verify-fails")
+        answers: list[object] = [_unmerged_paths(repo2e), None]
+        rc = resolve_conflicts(repo2e, fetch=False, regenerate=lambda: 0,
+                               unmerged_paths=lambda _root: answers.pop(0))
+        if rc == 0:
+            failures.append("--resolve reported the merge committable while git could not say "
+                            "whether any path was still unmerged — a verification step that "
+                            "cannot fail is not a verification step")
+        # Positive control: the same seam, answering truthfully that a path IS still unmerged.
+        repo2e2 = fixture(tmp, also_conflict_source=False, name="verify-says-unmerged")
+        answers2: list[object] = [_unmerged_paths(repo2e2), ["Mod/src.cs"]]
+        rc = resolve_conflicts(repo2e2, fetch=False, regenerate=lambda: 0,
+                               unmerged_paths=lambda _root: answers2.pop(0))
+        if rc != 1:
+            failures.append(f"a path still unmerged after staging must exit 1, got {rc}")
+        # …and the seam itself is honest: on a directory that is not a checkout, every one of these
+        # readers says None rather than "nothing found". Three separate swallows lived here.
+        notrepo = tmp / "not-a-checkout"
+        notrepo.mkdir()
+        if _unmerged_paths(notrepo) is not None:
+            failures.append("_unmerged_paths must answer None outside a checkout, not []")
+        if _loose_worktree_paths(notrepo, []) is not None:
+            failures.append("_loose_worktree_paths must answer None outside a checkout, not []")
+        if _dirty_locks(notrepo, set()) is not None:
+            failures.append("_dirty_locks must answer None outside a checkout, not []")
 
         # 4. 🚨 #1426: a checkout that IS an older committed state of the trunk — every intermediate
         #    commit of a merge-queue group's main push — derives against ITSELF. Two trunk commits,
@@ -1330,6 +1680,175 @@ def self_test() -> int:
         if rc != 0:
             failures.append(f"a clean tree should be a no-op, got exit {rc}")
 
+        # 6. 🚨 #4781: a CONTENT change in a checkout that cannot account for the committed version
+        #    must REFUSE, never rewrite the number down. The fixture is the one the old guard did
+        #    not cover — NO git remote at all, so nothing can be verified and a release published
+        #    elsewhere is invisible by construction — and a committed version ABOVE anything
+        #    derivable here. Measured on the code before this case: `v1.2.1` became `v1.2.0`, at
+        #    exit 0, with no line saying so.
+        repo6 = tmp / "no-remote-ahead"
+        (repo6 / "Mod").mkdir(parents=True)
+        g(tmp, "init", "-q", "-b", "main", str(repo6))
+        g(repo6, "config", "user.email", "t@example.com")
+        g(repo6, "config", "user.name", "t")
+        declare(repo6)
+        (repo6 / "Mod" / "index.json").write_text('{"content": {"version": "1.2"}}\n')
+
+        def commit6(src: str, version: str, tag: str | None = None) -> None:
+            (repo6 / "Mod" / "src.cs").write_text(src)
+            files = hash_files(repo6 / "Mod", repo6)
+            (repo6 / "Mod" / "manifest.lock").write_text(serialize({
+                "schema": SCHEMA, "module": "Mod", "moduleVersion": module_version(files),
+                "version": version, "sourceCommit": None, "files": files}))
+            g(repo6, "add", "-A")
+            g(repo6, "commit", "-qm", version)
+            if tag:
+                g(repo6, "tag", tag)
+
+        def committed_version() -> str | None:
+            return (read_existing(repo6 / "Mod" / "manifest.lock") or {}).get("version")
+
+        # 1.2.0 is released and tagged, so the highest derivable patch here is 1.2.1…
+        commit6("one\n", "1.2.0", "Mod/v1.2.0")
+        if g(repo6, "remote").strip():
+            failures.append("the no-remote fixture has a remote — it would not exercise #4781")
+        # …and the committed number is 1.2.5, ABOVE anything this checkout can account for. With no
+        # remote nothing proved the tag set complete, so 1.2.1–1.2.5 may well be published elsewhere.
+        commit6("one\n", "1.2.5")
+        def run_generate(root: Path) -> tuple[int, str]:
+            """`generate` plus everything it printed — the refusal's WORDS are the deliverable here,
+            and the two cases below must not be able to speak each other's remedy."""
+            import contextlib
+            import io as _io
+            buffer = _io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = generate(root, fetch=False)
+            printed = buffer.getvalue()
+            print(printed, end="")
+            return code, printed
+
+        # The defect arm: a content change makes the lock stale, so it MUST be rewritten — and the
+        # version is the field that must not move backwards while it is.
+        (repo6 / "Mod" / "src.cs").write_text("two\n")
+        rc6, said6 = run_generate(repo6)
+        if "NO git remote" not in said6:
+            failures.append("the no-remote refusal must say the checkout has NO git remote and send "
+                            "the reader to where the tags are — it must NOT tell them to correct the "
+                            f"committed version from here; said: {said6!r}")
+        if "Re-fetching tags cannot change this result" in said6:
+            failures.append("the no-remote refusal spoke the REMOTE arm's remedy — there is no "
+                            "remote to have verified anything against")
+        if rc6 == 0:
+            failures.append("a content change whose derived version is BELOW the committed one must "
+                            "REFUSE (exit 1), not report success (#4781)")
+        if committed_version() != "1.2.5":
+            failures.append(f"#4781: the committed version was rewritten DOWN to "
+                            f"{committed_version()!r} — a published version describes exactly one "
+                            f"tree forever, so the generator must never re-issue a lower number")
+        # The control — without it this case would pass on a generator that refuses everything. Same
+        # fixture, same shape of content change, with the committed number no longer above what is
+        # derivable: the rewrite must go through and the version must move FORWARD to 1.2.1.
+        g(repo6, "checkout", "-q", "--", "Mod/src.cs")
+        commit6("one\n", "1.2.0")
+        (repo6 / "Mod" / "src.cs").write_text("three\n")
+        rc6b, _ = run_generate(repo6)
+        if rc6b != 0:
+            failures.append(f"a content change with nothing committed above the derivable set must "
+                            f"be written, got exit {rc6b} — the refusal above would then be "
+                            f"unconditional and prove nothing")
+        elif committed_version() != "1.2.1":
+            failures.append(f"the control arm must move the version FORWARD to 1.2.1, got "
+                            f"{committed_version()!r}")
+
+        # 7. 🚨 …AND THE SAME REFUSAL WITH A REMOTE SAYS THE OPPOSITE THING (Copilot's review of
+        #    #4917). `derivation_inputs` has already PROVEN the tag set and the trunk baseline
+        #    current against the remote — it refuses before reaching the comparison if it could not —
+        #    so nothing is missing and "fetch the tags" is a remedy that cannot change the result.
+        #    The committed number is one no witness justifies: hand-edited or orphaned. Two arms of
+        #    one comparison with opposite remedies, which is why the message is split and asserted.
+        origin7 = tmp / "origin7.git"
+        g(tmp, "init", "-q", "--bare", "-b", "main", str(origin7))
+        repo7 = tmp / "remote-ahead"
+        (repo7 / "Mod").mkdir(parents=True)
+        g(tmp, "init", "-q", "-b", "main", str(repo7))
+        g(repo7, "config", "user.email", "t@example.com")
+        g(repo7, "config", "user.name", "t")
+        g(repo7, "remote", "add", "origin", str(origin7))
+        declare(repo7)
+        (repo7 / "Mod" / "index.json").write_text('{"content": {"version": "1.0"}}\n')
+
+        def commit7(src: str, version: str, tag: str | None = None) -> None:
+            (repo7 / "Mod" / "src.cs").write_text(src)
+            files = hash_files(repo7 / "Mod", repo7)
+            (repo7 / "Mod" / "manifest.lock").write_text(serialize({
+                "schema": SCHEMA, "module": "Mod", "moduleVersion": module_version(files),
+                "version": version, "sourceCommit": None, "files": files}))
+            g(repo7, "add", "-A")
+            g(repo7, "commit", "-qm", version)
+            if tag:
+                g(repo7, "tag", tag)
+
+        commit7("one\n", "1.0.0", "Mod/v1.0.0")
+        commit7("two\n", "1.0.1", "Mod/v1.0.1")
+        g(repo7, "push", "-q", "origin", "main", "--tags")
+        # Everything published and verifiable; the committed number is nonetheless 1.0.9.
+        commit7("two\n", "1.0.9")
+        (repo7 / "Mod" / "src.cs").write_text("three\n")
+        rc7, said7 = run_generate(repo7)
+        if rc7 == 0:
+            failures.append("a committed version above every VERIFIED witness must refuse, not be "
+                            "rewritten down (#4917 review)")
+        if "NOTHING is missing" not in said7 or "hand-edited or orphaned" not in said7:
+            failures.append("the remote refusal must say the witnesses were VERIFIED and nothing is "
+                            f"missing — a hand-edited or orphaned number; said: {said7!r}")
+        if "run the generator where the published tags are" in said7:
+            failures.append("the remote refusal spoke the NO-REMOTE arm's remedy — the tags are "
+                            "right here and were verified, so sending the reader elsewhere is wrong")
+        if (read_existing(repo7 / "Mod" / "manifest.lock") or {}).get("version") != "1.0.9":
+            failures.append("the remote arm rewrote the committed version — refusing means refusing")
+
+        # 8. 🚨 #4774: the ENUMERATION is the rule, not the declared skip set — and it is exported.
+        #
+        # `plugin_dirs` drops dot-directories on top of the declared `skip`, so a repo's SECOND
+        # enumerator (`validate-repos.py`) can declare the identical SKIP and still walk a
+        # directory this one skips. `check-skip-sets.py` compares the two DECLARATIONS and is
+        # therefore blind to it by construction. `--list-packages` is what a caller compares
+        # against instead, so the assertions below are on the EFFECTIVE answer.
+        #
+        # 🚨 Both directions, and a POSITIVE denominator: an assertion that `.example-check` is
+        # absent is satisfied by an enumeration that found nothing at all, so the real packages
+        # are asserted PRESENT in the same breath — and `Skipped` proves the declared half is
+        # still being applied, so the case cannot pass on the dot rule alone.
+        import contextlib
+        import io as _io
+
+        repo8 = tmp / "enumeration"
+        for d in ("Alpha", "Beta", "Skipped", ".example-check", ".platform-scripts"):
+            (repo8 / d).mkdir(parents=True)
+        (repo8 / "Alpha" / "index.json").write_text("{}\n")
+        (repo8 / "Beta" / "index.json").write_text("{}\n")
+        (repo8 / ".example-check" / "index.json").write_text("{}\n")
+        declare(repo8, skip=("scripts", "Skipped", ".git"))
+
+        enumerated = [d.name for d in plugin_dirs(repo8)]
+        if enumerated != ["Alpha", "Beta"]:
+            failures.append(
+                "plugin_dirs must enumerate exactly the real packages — an UNDECLARED "
+                "dot-directory is never one, and a DECLARED skip is still skipped; "
+                f"got {enumerated}")
+
+        exported = _io.StringIO()
+        with contextlib.redirect_stdout(exported):
+            rc8 = list_packages(repo8)
+        listed = exported.getvalue().split()
+        if rc8 != 0:
+            failures.append(f"--list-packages must exit 0 on a readable tree, got {rc8}")
+        if listed != enumerated:
+            failures.append(
+                "--list-packages must print the SAME enumeration plugin_dirs returns, one name "
+                f"per line and nothing else — a caller diffs this; enumerated {enumerated}, "
+                f"printed {listed}")
+
     if failures:
         print("✗ gen-manifests self-test:")
         for f in failures:
@@ -1337,9 +1856,15 @@ def self_test() -> int:
         return 1
     print("✓ gen-manifests self-test: --resolve regenerates a lock-only conflict, ALSO stages a "
           "non-conflicted lock the regeneration moved, REFUSES a half-merged tree and an unstaged "
-          "edit, no-ops on a clean one, an older trunk commit derives against ITSELF (#1426), and "
-          "the per-repo config is REQUIRED — a missing one, a typo'd key and an unusable "
-          "project-closure.py each fail rather than defaulting")
+          "edit, no-ops on a clean one, an older trunk commit derives against ITSELF (#1426), a "
+          "content change whose derived version is BELOW the committed one REFUSES rather than "
+          "downgrading it while the same change with nothing committed above the derivable set "
+          "still moves FORWARD (#4781) — with the remedy split, since a VERIFIED remote means the "
+          "committed number is hand-edited and NO remote means a release is invisible, and each "
+          "arm is asserted not to speak the other's, and the per-repo config is REQUIRED — a missing one, a "
+          "typo'd key and an unusable project-closure.py each fail rather than defaulting, and "
+          "--list-packages exports the EFFECTIVE enumeration (an undeclared dot-directory is not a "
+          "package, a declared skip still is not, and the two real ones are)")
     return 0
 
 
@@ -1386,6 +1911,8 @@ def main() -> int:
         return 0
     if "--self-test" in args:
         return self_test()
+    if "--list-packages" in args:
+        return list_packages(root)
     if "--resolve" in args:
         return resolve_conflicts(root, fetch)
     if "--check" in args:

@@ -307,9 +307,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             serviceProvider = null;
             provider = null;
             var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+            // Four verdicts, four tags (#4654): a drain that measured nothing — no tracker, or nothing
+            // pending — must not write the tag a measured, collected unload writes.
             Fixture.TestTraceLog.AppendPhase(testClassName,
                 outcome.Fault is not null ? "DISPOSE_SHARED_UNLOAD_FAULTED"
                 : outcome.Retained ? "DISPOSE_SHARED_ALC_RETAINED"
+                : !outcome.Measured ? "DISPOSE_SHARED_UNLOADS_NOT_MEASURED"
                 : "DISPOSE_SHARED_UNLOADS_COLLECTED", 0, outcome.ToString());
         }
     }
@@ -1752,9 +1755,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // built), so this is a release that costs nothing, not a measured fix.
             ServiceProvider = null!;
             var unloadOutcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(collectibleUnloads);
+            // Four verdicts, four tags (#4654): a drain that measured nothing — the tracker was never
+            // resolved because an earlier phase threw, or nothing was pending — must not write the tag
+            // a measured, collected unload writes. Before this split both read
+            // "DISPOSE_UNLOADS_COLLECTED … after 0 round(s)", and a crash analysis counted them as
+            // clean unloads.
             TestPhaseTrace(testName,
                 unloadOutcome.Fault is not null ? "DISPOSE_UNLOAD_FAULTED"
                 : unloadOutcome.Retained ? "DISPOSE_ALC_RETAINED"
+                : !unloadOutcome.Measured ? "DISPOSE_UNLOADS_NOT_MEASURED"
                 : "DISPOSE_UNLOADS_COLLECTED",
                 sw.ElapsedMilliseconds, unloadOutcome.ToString());
             if (unloadOutcome.Fault is not null && disposeException is null)

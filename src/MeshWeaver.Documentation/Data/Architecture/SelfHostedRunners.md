@@ -233,6 +233,66 @@ selected-visibility variable, a fallback other than `'ubuntu-latest'`, and an in
 does not reach `MW_RUNNER`/`MW_RUNNER_DOCKER`. Its self-test takes `--root` and mutates every real
 runner expression back to `ubuntu-latest`, demanding a fire for each.
 
+### 🚨 FORK pull requests, and which setting actually holds the line
+
+Core is **public**, so it is the one repository in the fleet that can receive a pull request carrying a
+stranger's code. That makes "can untrusted code reach a runner holding org-scoped credentials?" a real
+question here and a latent one everywhere else — and the answer is **not** the variable visibility
+described above, which is what this section said when it was first written.
+
+Measured over the fleet:
+
+| | |
+|---|---|
+| core | **public**, `allow_forking: true`, **5 forks** |
+| every satellite + Memex | private, `allow_forking: false`, 0 forks |
+| org | `members_can_fork_private_repositories: false` |
+
+**The control is the RUNNER GROUP.** The org has exactly one, and it refuses public repositories
+outright:
+
+```
+orgs/Systemorph/actions/runner-groups
+  1  Default   visibility=all   allows_public_repositories=false   default=true
+```
+
+So a **public** repository cannot use these runners *at all*, whatever any variable resolves to and
+whatever a workflow's `runs-on` asks for. That is the property the invariant rests on, and it is the
+right shape: it is enforced by the forge on the runner side, not by an expression on the repository
+side.
+
+**What the variable visibility does instead** is decide what core's own `runs-on` expressions resolve
+to — see the fallback semantics above. Flipping `MW_RUNNER`/`MW_RUNNER_DOCKER` to `all` would make
+core's jobs *name* a self-hosted label, and the runner group would then refuse to serve them: a stuck
+or failing queue, which is a **liveness** problem rather than a disclosure one. Worth knowing before
+flipping it for cost reasons, but it is not the fork boundary.
+
+🚨 **`MW_RUNNER_GATE` / `MW_RUNNER_HEAVY` are caller guidance only in this repository** — measured, 4
+occurrences, all of them comments or input descriptions, and **zero** `runs-on:` uses. Adding core to
+their `selected` lists would therefore move no core job anywhere. They matter for the rule above —
+`check-reusable-workflow-runners.py` refuses a selected-visibility variable inside a core lane — and
+not as part of the fork boundary.
+
+**Two things a reader should not conclude from this.**
+
+1. 🚨 **A pre-checkout refusal inside a `pull_request` job would not be enforceable.** On a
+   `pull_request` event the workflow definition comes from the pull request's own merge ref, so a fork
+   can delete such a step, run commands before it, or change `runs-on` itself. A first step protects an
+   *unchanged* workflow, which is not the threat. Anything of that shape has to live in a
+   **base-owned** workflow the fork cannot alter. Given the runner group already refuses public
+   repositories, there is nothing for an in-job refusal to add.
+2. **The residual is real but narrow, and it is about ASSERTING the setting rather than adding a
+   guard.** `allows_public_repositories` and the group's `visibility` are organisation-level, and
+   nothing inside a run can read them: `GITHUB_TOKEN` carries no such permission and neither org App
+   holds one. So the invariant is held by a setting no gate in CI can see — the same shape as every
+   other split between a guard and the thing it protects. Whether that is worth a scheduled assertion
+   from a credential that *can* read it is a runner-policy judgement, tracked on
+   [#4786](https://github.com/Systemorph/MeshWeaver/issues/4786).
+
+**So if you are widening runner access for cost or convenience, the setting to think about is the
+runner group's `allows_public_repositories`, not the variables — and nothing in CI will tell you it
+moved.**
+
 **What a job needs when it moves.** The runner image (Systemorph/Memex
 `deployments/aks/ci-runners/runner-image/Dockerfile`) is not GitHub's hosted image. It carries git,
 `gh`, `az`, jq, python3 (no pip — `actions/setup-python` brings one), curl, unzip, sqlite3, .NET 10

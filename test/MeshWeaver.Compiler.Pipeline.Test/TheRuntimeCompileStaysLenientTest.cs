@@ -41,10 +41,92 @@ public class TheRuntimeCompileStaysLenientTest
             + string.Join("; ", result.Diagnostics
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Select(d => d.ToString())));
-        // …and it IS produced as a warning, so the gate has something to ratchet on. A green emit
-        // with no diagnostic at all would mean the standard has nothing to measure.
-        Assert.Contains(EmitPipelineAccess.Collect(result.Diagnostics),
+        // …and it is not REPORTED either: doc completeness is centrally suppressed for in-mesh C#
+        // exactly as core suppresses it for src/ (CompileWarning.NotReported — CS1591;CS1573;CS1712
+        // there, CS1591;CS1573;CS1712 in Directory.Build.props here).
+        Assert.DoesNotContain(EmitPipelineAccess.Collect(result.Diagnostics),
             w => w.Id == CompileWarning.MissingDocComment);
+    }
+
+    /// <summary>
+    /// 🚨 The suppression is a PARITY list, not a blanket. The two families the fleet's own
+    /// <c>NoWarn</c>s carry are dropped; every other warning still reaches the gate, or the
+    /// standard would be a tick over nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("CS1591", "public class P { public int V; }")]
+    [InlineData("CS1573", "/// <summary>S.</summary>\n/// <param name=\"a\">A.</param>\n"
+                          + "public class P { /// <summary>M.</summary>\n"
+                          + "/// <param name=\"a\">A.</param>\npublic void M(int a, int b) { } }")]
+    // 🚨 CS1712 was keyed into the policy by #4591 and exercised by nothing until this line. Its
+    // shape is exactly CS1573's one level up and is easy to get wrong: the compiler says "…but
+    // other type parameters do", so ONE documented <typeparam> beside an undocumented one is
+    // required. A type with no <typeparam> at all produces CS1591 instead — measured, as an empty
+    // diagnostic set on the first attempt at this case.
+    [InlineData("CS1712", "/// <summary>S.</summary>\n/// <typeparam name=\"T\">T.</typeparam>\n"
+                          + "public class P<T, U> { }")]
+    public void ACentrallySuppressedCode_IsNotReported(string code, string source)
+    {
+        var result = Emit(source);
+
+        Assert.True(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Id == code);          // the compiler produced it
+        Assert.DoesNotContain(EmitPipelineAccess.Collect(result.Diagnostics), w => w.Id == code);
+    }
+
+    /// <summary>
+    /// 🚨 THE SET ITSELF, member by member — the one assertion a compiler probe cannot make.
+    ///
+    /// <para>The cases above prove the FILTER for every id that a one-reference
+    /// <see cref="CSharpCompilation"/> can actually produce. <c>CS1701</c>/<c>CS1702</c> are
+    /// reference-set SKEW: they need two assemblies disagreeing about a third's version, which is
+    /// precisely what a hand-assembled reference set presents and a probe here cannot. So they were
+    /// keyed into <see cref="CompileWarning.NotReported"/> and reachable by no test — a typo
+    /// (<c>CS17O2</c>), a dropped entry or a sixth id added by mistake would all have been silent,
+    /// and CS1701 was the 95-entry root cause the whole change existed to retire.</para>
+    ///
+    /// <para>This pins the membership literally, in both directions, and goes through
+    /// <see cref="CompileWarning.IsNotReported"/> rather than the collection so the accessor the
+    /// pipeline actually calls (<c>EmitPipeline.Collect</c>) is the one under test. Changing the
+    /// policy means changing this list in the same commit — which is the point.</para>
+    /// </summary>
+    [Fact]
+    public void TheNotReportedSet_IsExactlyTheParityList()
+    {
+        Assert.Equal(
+            ["CS1573", "CS1591", "CS1701", "CS1702", "CS1712"],
+            CompileWarning.NotReported.OrderBy(id => id, System.StringComparer.Ordinal));
+
+        foreach (var id in new[] { "CS1573", "CS1591", "CS1701", "CS1702", "CS1712" })
+            Assert.True(CompileWarning.IsNotReported(id), $"{id} must stay centrally suppressed");
+
+        // The control: EVERY code the ratchets measure must NOT be on the list, or the standard
+        // would be a tick over nothing. This is the full roster the policy's own doc comment and
+        // Doc/Architecture/InMeshWarningStandard name as "doc comments that EXIST and are WRONG",
+        // plus CS0219 — and it is complete on purpose: a code missing from HERE is a code that
+        // could be added to NotReported without anything failing.
+        // 🚨 CS1572/CS1734 and CS1574 are one character from the suppressed CS1573 and CS1712 and
+        // mean the OPPOSITE — a tag that is wrong, not one that is missing.
+        foreach (var id in new[]
+                 {
+                     "CS0219",                                  // an assigned-but-unused local
+                     "CS1570", "CS1571",                         // malformed XML; a duplicated <param>
+                     "CS1572", "CS1734",                         // a tag naming a parameter that is not there
+                     "CS1574", "CS1584", "CS0419",               // a cref resolving to nothing, or to two things
+                     "CS1587",                                   // a doc comment on something that cannot carry one
+                 })
+            Assert.False(CompileWarning.IsNotReported(id), $"{id} must keep reaching the gate");
+    }
+
+    /// <summary>The control for the case above: a code NOT on the parity list still reaches the
+    /// gate, so "nothing was reported" can never mean "nothing is reported".</summary>
+    [Theory]
+    [InlineData("CS0219", "public class P { public int Go() { int unused = 42; return 1; } }")]
+    [InlineData("CS1574", "/// <summary>See <see cref=\"Nope\"/>.</summary>\npublic class P { }")]
+    [InlineData("CS1570", "/// <summary>A &euro; entity.</summary>\npublic class P { }")]
+    public void ACodeThatIsNotSuppressed_StillReachesTheGate(string code, string source)
+    {
+        Assert.Contains(EmitPipelineAccess.Collect(Emit(source).Diagnostics), w => w.Id == code);
     }
 
     /// <summary>The other codes the gate ratchets on are warnings too — never errors.</summary>

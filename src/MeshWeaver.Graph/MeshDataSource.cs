@@ -923,10 +923,28 @@ public static class MeshDataSourceExtensions
             _ => lease.Dispose(),
             ex =>
             {
+                // 🚨 RELEASE FIRST, LOG SECOND — A DIAGNOSTIC MUST NEVER PREVENT THE CLEANUP IT
+                // DESCRIBES (#5064). Control reaches this method only when `meshHub.IsDisposing`
+                // is already true (the guard above returned otherwise), so this arm runs while the
+                // hub's Autofac LifetimeScope is being closed underneath it and the resolve below
+                // can throw `ObjectDisposedException: … this LifetimeScope … has already been
+                // disposed`. With the resolve ahead of the release, that throw propagated out of
+                // the Rx error handler and `lease.Dispose()` never ran — so the collectible
+                // AssemblyLoadContext stayed held for the process lifetime, which is precisely the
+                // ALC leak this whole mechanism exists to bound. One statement of ordering removes
+                // that: the release cannot be skipped, and a lost warning is all a dead scope costs.
+                //
+                // 🚨 And the resolve deliberately stays HERE rather than being hoisted to the top
+                // of the method, which is the correction applied to the other sites in #5064.
+                // Hoisting it would put the same possible throw AHEAD of the release on EVERY
+                // path — including the normal-completion one, which does not resolve at all today
+                // — turning a lost log line into a guaranteed leak. The same precedent is already
+                // in `HostedHubsCollection.ReadOwnerCause`: a best-effort teardown diagnostic is
+                // read where it is needed and is never allowed to fault the teardown.
+                lease.Dispose();
                 meshHub.ServiceProvider.GetService<ILogger<MeshDataSource>>()?.LogWarning(ex,
                     "Teardown signal faulted before the NodeType assembly lease was released — "
                     + "releasing it now so the collectible context is not held for the process lifetime");
-                lease.Dispose();
             });
     }
 
@@ -1762,6 +1780,12 @@ public static class MeshDataSourceExtensions
         meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Test nodeType:Code"))
             .Take(1)
+            // 🚨 TWO arms, not one. This chain is the query FAN-IN, which terminates with a
+            // QueryProviderStalledException when a provider never answers — and a one-arm Subscribe
+            // hands an OnError to Rx's default handler, which RETHROWS it on whichever pool thread
+            // delivered the terminal. That is an unhandled exception AND a RunTestsRequest that
+            // never gets a response: the caller waits out its own RequestTimeout with nothing in
+            // the log to attribute it to. Answer the caller with the failure instead.
             .Subscribe(queryResult =>
             {
                 var testNodes = queryResult.Items
@@ -1821,7 +1845,10 @@ public static class MeshDataSourceExtensions
                                         o => o.ResponseFor(request));
                             });
                 }
-            });
+            },
+            ex => hub.Post(
+                new RunTestsResponse([], Error: $"Could not read the test nodes: {ex.Message}"),
+                o => o.ResponseFor(request)));
 
         return request.Processed();
     }

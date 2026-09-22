@@ -85,21 +85,136 @@ production bundle was obtainable while writing this, precisely because nothing r
 changed is that the attempt budget now bounds responsiveness rather than size, and the next
 occurrence will say which of the two it was. Settling #4528 needs that evidence.
 
-## Two findings this does not fix
+## Measured after the roll: the fix is live on every replica and the budget is still exceeded
 
-🚨 **The two budgets are inverted.** `RegistryUpdateReconciler.PerPackageAdoptBudget` is **3
-minutes**; the transfer pipeline's own `TotalRequestTimeout` is **5 minutes**
-(`ServiceDefaults`, `plugin-registry-bundles`). The outer wait therefore expires before the inner
-policy can finish retrying, so the retry is structurally unable to complete and the HTTP layer's
-cause is always discarded in favour of a bare `TimeoutException`. The finite outer bound is
-deliberate and correct — *a hang is worse than a failure* — but two independently authored budgets
-that contradict each other is a shape problem, not a tuning one, and the fix is to derive one from
-the other rather than to raise either.
+The paragraph above expected the next occurrence to be informative. It was informative in the
+direction nobody wrote down: **the shape fix did not stop the attempt timeout.**
+
+Read-only, from `Ops/Status/{memex,memex-cloud}` on the control instance and the incident node the log
+watcher folds these events onto. Each reading carries the sample time of the object it came from, so
+every number below is attributable to one read rather than to a session window:
+`Ops/Status/memex` **sampled 2026-09-19T18:53:11Z**, `Ops/Status/memex-cloud` **sampled
+2026-09-19T19:03:22Z**, and the incident node **re-read at 2026-09-19T19:07:24Z**.
+
+| deployment | image | commit | replicas | pods started | carries the shape fix? |
+|---|---|---|---|---|---|
+| `memex` | `3.0.0-ci.8968` | `96f88406` | 2/2, `converged: true` | 2026-09-19T08:10:37Z, 08:11:39Z | **yes** |
+| `memex-cloud` | `3.0.0-ci.8969` | `c25f86ae` | 3/3, `converged: true` | 2026-09-19T08:34:53Z, 08:39:58Z, 08:39:59Z | **yes** |
+
+All ten retained samples on the incident read
+`Source: 'plugin-registry-bundles-standard//Standard-AttemptTimeout'`, spanning
+**2026-09-19T19:00:52Z → 19:06:53Z** across five pods, and its shape counter advanced **375 → 397**
+between the node's own `lastSeen` of **18:51:53Z** and **19:06:53Z** — 22 occurrences in exactly
+fifteen minutes. So the 120 s *attempt* budget on this pipeline is exceeded roughly one and a half
+times a minute, on five replicas of two deployments, every one of which had been running the
+streaming transfer for between 10 h 23 m and 10 h 56 m at the time of these reads.
+
+**That relocates the cost, and the relocation is what the fix bought.** With
+`HttpCompletionOption.ResponseHeadersRead` the body leaves the Polly attempt and `CopyStallBounded`
+bounds the copy separately, so on these images an attempt timeout cannot be spent *streaming bytes*.
+It is spent before the response headers arrive — which points at the bundle **index** endpoint and
+its uncached per-request work rather than at the blob transfers this page was written about. The
+earlier attribution (*"it was the blob transfers, not the index"*) held for the pre-fix images and
+does not survive the roll.
+
+🚨 **A per-pod period is the reading that rules out "one large bundle".** The samples sit at a 180 s
+spacing with millisecond jitter — `…-2kcwk` at 19:00:52.047 · 19:03:52.052 · 19:06:52.052, five
+milliseconds of drift over six minutes. A fixed-period population is a repeating scheduled adopt
+whose attempt exceeds the budget *every time it runs*, not an unlucky request; the period is
+`PerPackageAdoptBudget`, i.e. the outer bound of the inversion below cutting each pass. So the
+inversion is no longer only a shape problem — it is the reason 397 occurrences in one day still
+cannot say which of the two call shapes timed out.
+
+## Every stage is bounded by the CLIENT, on silence, and the refusal names the stage
+
+The reading above left one question — *which* of the two call shapes was timing out — and one
+structural defect, the inverted budgets. Both are settled by moving the clock to the one place that
+can see every stage: the client's own receive path (`PluginBundleClient.Receive`), which the index
+and the bundle now share.
+
+A transfer can be refused in exactly three ways, and each wants a different remedy, so each is a
+named `BundleTransferStage` on a `BundleTransferException` carrying the registry, the elapsed time,
+the bytes received and the bytes declared:
+
+| stage | what happened | what it accuses |
+|---|---|---|
+| `NoResponse` | no status line or header arrived within one stall budget | everything **before the first byte** — name resolution, the connection, the handshake or the registry's own work; the transport cannot say which, so the stage claims only that. Paired with a fast `/api/version` from the same host it is the registry (#4963) |
+| `StalledMidBody` | headers arrived, then the body went quiet for one stall budget; the byte count says how far it got | the **transport** (or the registry, at zero bytes) |
+| `OverSize` | the declared `Content-Length`, or the bytes actually streamed, exceed what the client accepts | the **archive** — a smaller or resumable bundle, never a larger bound |
+
+**The two stall bounds are bounds on silence, never on total duration.** The response start gets
+`TransferStallBudget` (120 s) from the moment the request goes out; every chunk of the body that
+arrives resets a deadline of the same length. A transfer that trickles for longer than the budget
+completes — that is the property #4549 bought, and `BundleTransferFailsOnSilenceTest` proves it
+against a Kestrel socket that streams for two and a half budgets with no gap reaching one. **The
+size bound is the one the buffering read always carried** (`HttpClient.MaxResponseContentBufferSize`),
+re-established explicitly because streaming had removed the only bound a caller had; a declared
+length over it is refused before a byte is read.
+
+**The fallback client's own clock is switched off** (`HttpClient.Timeout = InfiniteTimeSpan`). With
+headers read first that clock bounded only the header stage, at 100 s, under a message that names no
+stage; the standard resilience handler the hosts register already leaves it infinite, which the same
+test pins.
+
+**The index is read once per client.** The `PromiseSlot` used to hold a cold `pool.Invoke(...)`,
+which every subscriber re-subscribes and therefore re-sends — so "one index read per install pass"
+was one per package, and a stalled registry was paid for by every package in turn, which is
+precisely the 180 s per-package period the incident showed. It now holds a `pool.Run(...)`: hot,
+replayed to every package of the pass, evicted on a fault so the next package asks again.
+
+### The inverted budgets, resolved by derivation
+
+`RegistryUpdateReconciler.PerPackageAdoptBudget` is no longer a second number authored beside the
+client's: it is `TransferStallBudget + 1 min` — one silence budget, the longest any single stage may
+stay quiet, plus headroom for the index read, the decision and the landing write. It therefore
+always fires **after** the client's own refusal of a stalled stage, which is what keeps the cause in
+the log. Neither number was raised; the value is the same 180 s.
+
+The transport pipeline's retry — three attempts of 120 s inside a five-minute total — was
+structurally unable to finish inside that bound, and that is why the 09-15/16 failures left "The
+operation has timed out" as their only sentence. It is not reachable for a stall any more: the
+client's clock is armed before the request leaves and cancels the pipeline's retry of a stall it
+could never complete, while a fast transient failure (a 5xx, a refused connection) is retried
+exactly as before. The pipeline's own attempt timer still exists and may win the race with the
+client's by a millisecond; the client's filter reads its **own** stall token rather than the
+exception's type, so the refusal is named `NoResponse` in every ordering, and the pipeline's
+`OnTimeout` event — when it fires — is a duplicate of the client's line, never the discriminator.
+
+### #4963 is a different root, and this change makes it legible rather than fixing it
+
+The stall the fleet is living with since the roll is the registry **never beginning a response** to
+an authenticated `GET /api/plugins/bundles/index.json` — #4963 measured it from outside the mesh
+with a plain `curl`: 180 s, **0 bytes received**, three times in 12.5 hours, while `/api/version`
+and the unauthenticated 401 answer in an eighth of a second. That is a server-side defect on the
+registry, and no client budget can cure it: a bound on bytes cannot fire on a stream that sends none,
+and a bound on silence can only *name* it. This page's change does exactly that — the consumer now
+logs `Bundle index over HTTP from https://… did NOT complete after 120000 ms — 0 of an undeclared
+number of byte(s) had arrived. Cause: Bundle index: the registry at … did not begin a response
+within 120 s` — and the reconciler moves on after one budget per pass instead of one per package.
+The two issues share a symptom surface and nothing else: #4528 is the consumer's instrument, #4963
+is what the instrument is currently reading.
+
+## One finding this does not fix
 
 🚨 **The incident fingerprint masks `Source:`**, so every Polly `OnTimeout` on every pipeline folds
-onto one incident node. The listing pipeline (#4222) and this transfer pipeline share a counter,
-which means neither can be closed on *"occurrences stopped advancing"*. That formula lives in the
-log watcher in MeshWeaver.Plugins.
+onto one incident node — the samples on it have also included `Orleans.Placement/(null)/Timeout`.
+That formula lives in the log watcher in MeshWeaver.Plugins and is unchanged.
+
+**What the masking costs is an attribution, and the attribution has to be repaired by hand.** The
+listing pipeline (#4222) and this transfer pipeline shared one counter, so neither could be closed on
+*"occurrences stopped advancing"*. When the listing fix reached the registry on 2026-09-19 the listing
+samples stopped and the transfer samples did not — so the counter's `issueNumber` was pointing at a
+defect that was fixed, and the recurrence bot would have reopened the fixed issue on the next tick,
+inside the hour. The step that makes such a close hold is to **repoint the incident node at the issue
+its current samples name** (`content.issueNumber` / `issueUrl`, an ordinary patch; the same operation
+had already been done once on this fingerprint, 1134 → 4222). The superseded predecessor node is left
+pointing at the closed issue on purpose: it is that issue's historical record, and if *it* ever
+advances again the reopen would be correct.
+
+🚨 **So the discriminator is `samples[]`, never the count.** Read the `Source:` value on a reopen of
+any issue attributed to a masked fingerprint before believing the reopen is about that issue. Two
+issues have now been reopened against fixed defects by this mechanism (#1134, then #4222 repeatedly),
+which is the argument for deriving the fingerprint from `Source:` rather than masking it.
 
 ## Where this sits
 

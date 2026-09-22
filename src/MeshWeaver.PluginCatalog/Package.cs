@@ -250,6 +250,17 @@ public record PackageManifest
     public bool PreInstalled { get; init; }
 
     /// <summary>
+    /// What this package must be TOLD before it works, as its own manifest declares it — carried
+    /// from the plugin's <c>content.configuration</c> so a CONSUMER (the first-run setup wizard)
+    /// can render the declaration instead of hard-coding a form per plugin.
+    ///
+    /// <para>Empty, the default, means "nothing", which is every package's behaviour today: it
+    /// installs and nothing is asked. Adoption is additive, and a reader that predates the field
+    /// ignores it.</para>
+    /// </summary>
+    public ImmutableList<PackageConfigRequirement> Configuration { get; init; } = [];
+
+    /// <summary>
     /// 🚨 Set on a catalog entry the registry declares in this instance's default set but REFUSES
     /// by plan tier (#4097) — the typed verdict the listing carries beside the granted packages
     /// (<see cref="RegistryListing.Refused"/>), folded into a manifest so the package card and the
@@ -339,6 +350,36 @@ public record PackageManifest
     /// round-trips loss-free under default-suppressing serialization.
     /// </summary>
     public ImmutableList<string> PublicSegments { get; init; } = [];
+
+    /// <summary>
+    /// The partition's declared PROTECTED child segments (the root content's
+    /// <c>protectedSegments</c>) — the segments that must stay CLOSED to the Public/Anonymous
+    /// subjects even on a partition that is otherwise published in full. The inverse of
+    /// <see cref="PublicSegments"/>: that one names the only public surfaces of an otherwise gated
+    /// partition, this one names the only gated surfaces of an otherwise public one. Underscore
+    /// satellites are allowed and are the normal case — a submission inbox lives at
+    /// <c>{partition}/_Submissions</c>.
+    ///
+    /// <para>🚨 <b>Read here because the ACCESS SHAPE keys on it, and leaving it unread published a
+    /// submission inbox (MeshWeaver#4716).</b> This was dead metadata in core — the same defect class
+    /// <c>preInstalled</c>, <c>publicSegments</c> and <c>contactEmail</c> each had (#920) — while the
+    /// Store's <c>PluginGate</c> (in-mesh source in MeshWeaver.Plugins, invisible to any build or
+    /// grep over this repository) authored and honoured it. Two consequences followed, and both are
+    /// core's:</para>
+    /// <list type="number">
+    ///   <item>a partition declaring one still got the fully-public shape
+    ///     (<c>_Policy · PublicRead = true</c>), under which a Public/Anonymous deny is INERT on the
+    ///     C# read path — so the protection the Store applied was none there
+    ///     (<c>PublicReadIsNotSuppressedByADenyTest</c>); and</item>
+    ///   <item>the legacy-gate heal on
+    ///     <see cref="PackageInstaller.EnsureDeclaredAccess"/>'s fully-public branch read those very
+    ///     denies as pre-#902 damage and RETIRED them on the next boot, republishing the segment.</item>
+    /// </list>
+    /// <para>With the declaration visible, such a partition is published through root
+    /// Public+Anonymous Viewer GRANTS instead — the one mechanism the C# evaluator and the SQL
+    /// projection resolve identically — and the declared denies are never retired.</para>
+    /// </summary>
+    public ImmutableList<string> ProtectedSegments { get; init; } = [];
 
     // ── install-record metadata (null on catalog entries; set when written to the registry) ──
 
@@ -600,3 +641,29 @@ public interface IPackageSource
                         .ToList();
                 });
 }
+
+/// <summary>
+/// One configuration value a package needs — the registry-side twin of the plugin's own
+/// <c>PluginConfigDeclaration</c>, so the wizard reads one shape whatever source served the catalog.
+/// </summary>
+/// <param name="Key">The configuration key in double-underscore form, e.g. <c>Reinsurance__ApiKey</c>.</param>
+/// <param name="Secret">
+/// Whether the value is a secret. A secret goes to the vault the instance's record names, never to a
+/// node, a log line or a URL, and reaches the vault through the control instance — the portal
+/// identity holds only read there.
+/// </param>
+/// <param name="Kind">
+/// What it is about, which decides who answers it: <c>database</c>, <c>storage</c>, <c>registry</c>,
+/// <c>observability</c> and <c>certificate</c> are platform-provided on an SME-tier instance;
+/// <c>signIn</c>, <c>modelKey</c> and <c>mail</c> are the client's at either tier.
+/// </param>
+/// <param name="Purpose">What stops working without it.</param>
+/// <param name="Validation">A regular expression the answer must match, or null for any non-empty value.</param>
+/// <param name="ResourceHelp">How to obtain the RESOURCE this names, kept beside the field it fills.</param>
+public sealed record PackageConfigRequirement(
+    string Key,
+    bool Secret = false,
+    string? Kind = null,
+    string? Purpose = null,
+    string? Validation = null,
+    string? ResourceHelp = null);

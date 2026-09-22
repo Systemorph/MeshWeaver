@@ -68,6 +68,21 @@ public record DeploymentContent
     public string? UpdatePolicy { get; init; }
 
     /// <summary>
+    /// The version PATTERN the platform self-update follows under <c>Continuous</c> — a glob over the
+    /// registry tag, e.g. <c>3.0.0-ci*</c> (the fleet's line while no clean release above 3.0.0
+    /// exists). <c>Continuous</c> without a pattern is Stable (clean releases only).
+    ///
+    /// <para>🚨 This and <see cref="UpdatePolicy"/> are what a NEW instance STARTS with: they render
+    /// as <c>SelfUpdate__DefaultPolicy</c> / <c>SelfUpdate__DefaultPattern</c>, which the
+    /// self-updater seeds onto <c>Admin/UpdatePolicy</c> the first time that node is created. An
+    /// EXISTING node is never touched by configuration — it is edited on the instance (Settings →
+    /// Updates). Maintainer, 2026-09-19: <i>"need to put this to the config where we start"</i>, after
+    /// memex-cloud sat frozen for a week on a policy node that had no <c>policy</c> field at all.</para>
+    /// </summary>
+    [Description("Version pattern the Continuous self-update follows, e.g. 3.0.0-ci* — seeds a NEW instance's Admin/UpdatePolicy")]
+    public string? UpdatePattern { get; init; }
+
+    /// <summary>
     /// The DEFAULT per-package (module) update policy this instance seeds onto every install
     /// record it creates — <c>Auto</c> (track the registry unattended), <c>Notify</c> (remind,
     /// a person clicks Update) or <c>None</c> (pinned). Renders as
@@ -308,6 +323,15 @@ public record DeploymentContent
     [Description("Run an in-cluster Postgres (self-host only)")]
     public bool InClusterPostgres { get; init; }
 
+    /// <summary>
+    /// The instance's OWN database release — a CloudNativePG Cluster in its namespace on the
+    /// cluster's <c>db</c> pool (Doc/Architecture/InClusterDatabases). Present → the portal connects
+    /// to <c>{release}-rw</c> with credentials generated in-cluster; exclusive with
+    /// <see cref="InClusterPostgres"/>, <see cref="DatabaseServer"/> and <see cref="DatabaseHost"/>.
+    /// </summary>
+    [Description("The instance's own database release (in-cluster, CloudNativePG)")]
+    public InClusterDatabaseSpec? InClusterDatabase { get; init; }
+
     /// <summary>The migration image repository. Blank → the portal repository with <c>memex-portal-ai</c> replaced by <c>memex-migration</c> (the fleet's pairing).</summary>
     [Description("Migration image repository — blank derives it from the portal's")]
     public string? MigrationImageRepository { get; init; }
@@ -442,6 +466,22 @@ public record DeploymentContent
     /// <summary>The GitHub App identity (identifiers only).</summary>
     [Description("GitHub App")]
     public GitHubAppIdentity? GitHubApp { get; init; }
+
+    /// <summary>
+    /// The App that OPERATES this deployment — the identity a CONTROL instance dispatches this
+    /// deployment's pipelines as (infra deploy, helm release, cluster operations). A client estate
+    /// gets its OWN App, installed on that client's config repository only, so one client's
+    /// pipelines can never be started with another client's credential and revoking a client is
+    /// one uninstall (the maintainer's decision, 2026-09-15).
+    ///
+    /// <para><b>Unset means the control instance's own App</b> — how <c>memex</c>,
+    /// <c>memex-cloud</c> and <c>build</c> keep working: the dispatcher falls back to the App the
+    /// portal is configured with (<c>GitHub:App:*</c>). This block is read by the CONTROL instance
+    /// about ANOTHER deployment; it is never rendered into this deployment's own portal
+    /// configuration, and a portal that reads its own <see cref="GitHubApp"/> is unaffected.</para>
+    /// </summary>
+    [Description("The App the control instance dispatches this deployment's pipelines as")]
+    public GitHubAppIdentity? OpsGitHubApp { get; init; }
 
     /// <summary>The lifecycle operator — the control instance only.</summary>
     [Description("Hosting operator")]

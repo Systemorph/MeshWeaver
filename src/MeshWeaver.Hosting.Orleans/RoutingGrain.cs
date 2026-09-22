@@ -89,9 +89,11 @@ internal class RoutingGrain(
         ?? MessageSizeGuard.DefaultGrainTransportBodyBytes;
 
     /// <summary>
-    /// Per-destination FIFO for the stream-routed branch. Instance field — its lifetime is this
-    /// activation's, and it holds an entry only while a destination has work in flight.
-    /// See <see cref="OrderedRouteDispatcher"/> for why the order is a correctness requirement.
+    /// Per-CHANNEL FIFO for the stream-routed branch, a channel being (destination, payload
+    /// identity). Instance field — its lifetime is this activation's, and it holds an entry only
+    /// while a channel has work in flight.
+    /// See <see cref="OrderedRouteDispatcher"/> for why the order is a correctness requirement, and
+    /// why the channel is not the destination alone (issue #5009).
     /// </summary>
     private readonly OrderedRouteDispatcher orderedDispatcher = new(
         meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Routing)
@@ -262,12 +264,23 @@ internal class RoutingGrain(
         if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
         {
             ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+            // 🚨 THE ORDERED CHANNEL IS (destination, payload identity) — issue #5009. A
+            // stream-routed address is a MULTIPLEXER: the node-stream cache hub fronts one
+            // sync/{streamId} sub-hub per observed node, so keying the FIFO on the address alone
+            // serialised a whole process's data-sync traffic into ONE lane with ONE in-flight grain
+            // call, and 62 of 64 in-flight legs stacked behind one cache/… address in prod. The
+            // ordering invariant the FIFO protects is per MIRROR, i.e. per stream, and
+            // DeliveryIdentity reads exactly that off the ENVELOPE — one dictionary lookup of a
+            // string that MessageDelivery.Package already stamped, no payload cast, nothing parsed.
+            // Null (no identity) keeps the destination-wide channel, i.e. today's behaviour.
+            var orderingKey = DeliveryIdentity.Read(delivery);
             // Claimed at ENQUEUE like the in-flight slot — a leg queued behind another leg is work
             // this silo has accepted and must let land before it stops (#2638). Labelled so the
             // shutdown residual can NAME it if it never lands (#2833).
             var slot = quiescence?.Track($"stream-routed → {addressPath} (delivery {delivery.Id})");
             orderedDispatcher.Enqueue(
                 addressPath,
+                orderingKey,
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
                 () =>
                 {
@@ -341,11 +354,22 @@ internal class RoutingGrain(
     /// stuck.</para>
     ///
     /// <para><b>So report the discriminators, never a cause.</b> <c>Deepest</c> counts legs QUEUED
-    /// BEHIND the one executing leg of a destination, so <c>Deepest &gt;= 1</c> already means a leg
-    /// is waiting on a leg — head-of-line blocking on one stream destination. <c>Deepest = 0</c>
-    /// with many destinations, or a backlog that clears in milliseconds, is load.
+    /// BEHIND the one executing leg of an ordered CHANNEL, so <c>Deepest &gt;= 1</c> already means a
+    /// leg is waiting on a leg — head-of-line blocking within one channel. <c>Deepest = 0</c>
+    /// with many channels, or a backlog that clears in milliseconds, is load.
     /// <see cref="ReportDrained"/> prints how long the episode lasted, which separates a throughput
     /// burst from a real stall without anyone having to profile a pod.</para>
+    ///
+    /// <para>🚨 <b>A channel is (destination, stream), not a destination — issue #5009, and it
+    /// changes what a non-zero <c>Deepest</c> MEANS.</b> Until that issue the channel was the
+    /// destination address, so a deep queue could be — and on memex-cloud was — 62 unrelated
+    /// streams waiting behind each other at one multiplexer hub, which is not head-of-line blocking
+    /// on anything, merely a channel key too coarse to let them overlap. Now a non-zero
+    /// <c>Deepest</c> means frames of the SAME stream are stacking up, which really is one
+    /// destination not keeping up with one producer. Both counts are printed because their RATIO is
+    /// the remaining discriminator: many channels over FEW destinations is a busy multiplexer
+    /// draining in parallel (load); few channels with a deep queue is a stream that is not
+    /// draining.</para>
     /// </summary>
     private void ReportSaturation(int inFlight, string addressPath)
     {
@@ -354,24 +378,64 @@ internal class RoutingGrain(
         var startedUtc = DateTime.UtcNow;
         Volatile.Write(ref saturationSinceTicks, startedUtc.Ticks);
         var episode = Interlocked.Increment(ref saturationEpisode);
-        var (destinations, deepest) = orderedDispatcher.QueueSnapshot();
+        var (channels, destinations, deepest) = orderedDispatcher.QueueSnapshot();
         logger.LogCritical(
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
             + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
-            + "stream destinations queued {Destinations}, deepest per-destination queue {Deepest}, routing pool subscribing {PoolInFlight}. "
+            + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
+            + "deepest per-channel queue {Deepest}, routing pool subscribing {PoolInFlight}, "
+            + "waiting for a pool slot {PoolWaiting}; oldest leg in flight {OldestLeg}. "
             + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
             + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
             + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
-            + "A deepest queue of 1 or more means legs are blocked behind a leg (head-of-line on one destination); "
-            + "0 means nothing is waiting on anything, so read it as load. "
+            + "A CHANNEL is (destination, stream), so a deepest queue of 1 or more means legs of the SAME stream are "
+            + "blocked behind one another (head-of-line within one channel); 0 means nothing is waiting on anything, "
+            + "so read it as load. Many channels over FEW destinations is a multiplexer hub draining in parallel, "
+            + "which is load too — before issue #5009 those legs shared one channel and read as head-of-line. "
+            + "🚨 THE TWO POOL GAUGES ANSWER DIFFERENT QUESTIONS AND ONLY ONE SEES THE WAIT NAMED ABOVE — issue #5018. "
+            + "'subscribing' counts legs inside their SUBSCRIBE PROLOGUE only, so a leg still waiting for a ThreadPool "
+            + "thread and a leg already past its subscribe BOTH read 0 there; 'waiting for a pool slot' is the gauge "
+            + "that sees the pre-subscribe wait. High while subscribing is below the pool's cap is a THREAD shortage; "
+            + "both near zero means the legs are past their subscribe and the wait is downstream I/O. "
+            + "🚨 READ THE OLDEST LEG FIRST: it is the only load-vs-leak discriminator available from a SINGLE line — "
+            + "every leg young is load the silo is absorbing, one leg minutes old is a slot that never came back and "
+            + "the label names it — whereas the episode stamp below needs a SECOND line to say anything. "
             + "🚨 Deepest is sampled AT THE CROSSING, so like the in-flight count it is partly an artefact of the "
-            + "threshold: with N destinations sharing the backlog it is ~InFlight/N whatever is wrong. "
+            + "threshold: with N channels sharing the backlog it is ~InFlight/N whatever is wrong. "
             + "READ THE EPISODE STAMP, not the depth: a later line with a HIGHER episode on this activation means "
             + "this episode drained; a line with a DIFFERENT activation id means the grain was recycled; and if "
             + "neither a clear nor a higher episode ever follows, the in-flight count never fell below half the "
             + "threshold — which means a leg never terminated and its slot leaked, not that the silo was busy.",
             activationId, episode, startedUtc, inFlight, SaturationThreshold,
-            destinations, deepest, routingPool.CurrentInFlight, addressPath);
+            channels, destinations, deepest, routingPool.CurrentInFlight, routingPool.CurrentlyWaiting,
+            DescribeOldestLeg(), addressPath);
+    }
+
+    /// <summary>
+    /// The oldest in-flight routing leg, as ONE phrase the report prints — its age and the label that
+    /// identifies it, or a sentence saying why there is none.
+    ///
+    /// <para>🚨 <b>Why a composed phrase and not a number plus a string.</b> The two "no reading"
+    /// cases are not zero and must never render as a number: a sentinel age of <c>-1</c> or <c>0</c> is
+    /// exactly the shape that gets read as "the oldest leg is brand new", which is the *opposite* of
+    /// what it would mean. "nothing in flight" and "not tracked on this host" (the quiescence gauge is
+    /// resolved with <c>GetService</c>, so a host that registered none has none) are therefore printed
+    /// as words. Everything else on this line is a number precisely because a number is a fair summary
+    /// of it; this one is not.</para>
+    ///
+    /// <para>Called once per saturation EPISODE, from the latched branch of
+    /// <see cref="ReportSaturation"/> — never per route. The scan behind it is O(in-flight legs), the
+    /// same cost argument <c>OrderedRouteDispatcher.QueueSnapshot</c> already makes on this turn, and
+    /// the count it walks is ~the reporting threshold at the moment the report fires.</para>
+    /// </summary>
+    private string DescribeOldestLeg()
+    {
+        if (quiescence is null)
+            return "not tracked on this host";
+        var oldest = quiescence.OldestInFlight();
+        return oldest is null
+            ? "none in flight"
+            : $"{(long)oldest.Value.Age.TotalMilliseconds} ms — {oldest.Value.Label}";
     }
 
     private void ReportDrained(int inFlight)
@@ -534,24 +598,12 @@ internal class RoutingGrain(
             return BuildStreamRoute(delivery, address, addressPath, streamProvider, grainFactory);
         }
 
-        IObservable<Unit> TerminalCallFailure(Exception ex)
-        {
-            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
-            // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally. See
-            // ClassifyDeliveryException: a silo leaving mid-roll and a directory mid-handoff are
-            // TRANSIENT, and telling the sender otherwise tears down mirrors that would have resumed.
-            var errorType = ClassifyDeliveryException(ex, IsServiceScopeDisposed);
-            // 🚨 A container that is already gone is not an incident to page on — it is this process
-            // exiting, and the delivery it could not carry is being retried against a live pod by a
-            // sender that now (correctly) reads ShuttingDown. Error there filed #2638 for a pod that
-            // was merely finishing; the failure is still reported, at the level it deserves.
-            var level = errorType == ErrorType.ShuttingDown ? LogLevel.Information : LogLevel.Error;
-            logger.Log(level, ex,
-                "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
-                addressPath, errorType, delivery.Sender);
-            PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
-            return Observable.Return(Unit.Default);
-        }
+        // A one-line delegation ON PURPOSE — the whole decision lives in the tested function, so
+        // the classifier this leg uses and the level it logs at cannot be changed without a fact
+        // going red. See AnswerPodHubCallFailure.
+        IObservable<Unit> TerminalCallFailure(Exception ex) =>
+            AnswerPodHubCallFailure(
+                ex, addressPath, delivery, PostFailureToSender, IsServiceScopeDisposed, logger);
     }
 
     /// <summary>
@@ -1727,7 +1779,12 @@ internal class RoutingGrain(
                     var detail = string.IsNullOrEmpty(activationError) ? ex.Message : activationError;
                     // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally, which is the same
                     // defect #2346/#2451 removed from the result arm above and left standing here.
-                    var errorType = ClassifyDeliveryException(ex, scopeDisposed);
+                    // 🚨 `activationError` IS the discriminator this classifier needs (review on
+                    // #4914): non-empty means the registry holds a real activation error for this
+                    // grain, i.e. the persistent fault loop above — which emits the SAME Orleans
+                    // rejection text as an ordinary idle deactivation and must stay terminal.
+                    var errorType = ClassifyDeliveryException(
+                        ex, scopeDisposed, activationErrorRecorded: !string.IsNullOrEmpty(activationError));
                     logger.LogWarning(ex,
                         "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender as {ErrorType}: {Detail}",
                         grainKey, errorType, detail);
@@ -1769,7 +1826,12 @@ internal class RoutingGrain(
                 .Select((ex, i) => (Exception: ex, Attempt: i))
                 .SelectMany(t =>
                 {
-                    if (t.Attempt >= maxRetries || !IsTransientFailure(t.Exception))
+                    // 🚨 IsResendableDeliveryFailure, NOT IsTransientFailure — issue #1172. The
+                    // predicate that decides whether to SEND THE DELIVERY AGAIN is narrower than the
+                    // one that decides whether the fault is transient, by exactly the response-timeout
+                    // class, because neither grain call below carries an idempotency key. See
+                    // OrleansRoutingService.IsResendableDeliveryFailure for the whole argument.
+                    if (t.Attempt >= maxRetries || !IsResendableDeliveryFailure(t.Exception))
                         return Observable.Throw<long>(t.Exception);
                     var d = delay(t.Attempt);
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_RETRY id={deliveryId} grainKey={grainKey} attempt={t.Attempt + 1} delayMs={d.TotalMilliseconds}");
@@ -1781,9 +1843,42 @@ internal class RoutingGrain(
     }
 
     /// <summary>
+    /// 🚨 <b>May this DELIVERY be sent again? — issue #1172.</b> The gate on
+    /// <see cref="DeliverToGrainObservable"/>'s <c>RetryWhen</c>, and the only predicate any
+    /// re-send of <c>IMessageHubGrain.DeliverMessage</c> / <c>IPodHubGrain.Deliver</c> may consult.
+    ///
+    /// <para>Narrower than <see cref="IsTransientFailure"/> by exactly the response-timeout class:
+    /// a REJECTION means the callee refused and holds nothing, so re-invoking the call re-resolves
+    /// placement and the message lands on a fresh activation (#2314, the case this retry exists for);
+    /// a TIMEOUT means the callee accepted the request and has not answered yet, so re-sending
+    /// DUPLICATES a delivery nothing on the receive path can recognise as a repeat. The full
+    /// argument, the amplification it produced under CPU starvation, and why declining to re-send
+    /// suppresses nothing, are on
+    /// <see cref="OrleansRoutingService.IsResendableDeliveryFailure"/>.</para>
+    ///
+    /// <para>🚨 <b>Do NOT collapse this back into <see cref="IsTransientFailure"/>.</b> That one is
+    /// still the right answer to "is this fault transient" and is pinned as such by
+    /// <c>OrleansDirectoryInstabilityClassificationTest</c> and
+    /// <c>StreamPostTimeoutAttributionTest</c>; the three predicates here form a deliberate ladder —
+    /// <see cref="IsTransientFailure"/> (is another attempt conceivable) ⊇ this one (may we send the
+    /// same delivery again) ⊇ <see cref="ClassifyDeliveryException"/>'s transient set (should the
+    /// SENDER keep its unbounded recovery armed).</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <returns><c>true</c> when the delivery may be sent again.</returns>
+    internal static bool IsResendableDeliveryFailure(Exception ex) =>
+        !OrleansRoutingService.IsResponseTimeout(ex) && IsTransientFailure(ex);
+
+    /// <summary>
     /// A failure that should be RETRIED because a later attempt is likely to succeed — chiefly an Orleans
     /// rejection from a grain that is mid-<c>DeactivateOnIdle</c> ("invalid activation. Rejecting now"),
     /// plus the usual transport-level timeouts. Mirrors <c>OrleansRoutingService.IsTransientFailure</c>.
+    ///
+    /// <para>🚨 <b>This is NOT the gate on the delivery retry any more — issue #1172.</b> It answers
+    /// "is this fault transient", which is a weaker question than "may this request be sent again":
+    /// a timed-out request is still sitting in the callee's queue. The retry gates on
+    /// <see cref="IsResendableDeliveryFailure"/>; this predicate is kept because the classification
+    /// itself is correct and is pinned by tests that read it as a statement about the FAULT.</para>
     /// </summary>
     internal static bool IsTransientFailure(Exception ex) =>
         ex is TimeoutException
@@ -1831,12 +1926,176 @@ internal class RoutingGrain(
     /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
     /// <see cref="IsScopeTeardown"/>. Null (the default) keeps the pre-#2638 answer for callers that
     /// have no container to probe, such as a pure classification test.</param>
-    internal static ErrorType ClassifyDeliveryException(Exception ex, Func<bool>? scopeDisposed = null) =>
+    internal static ErrorType ClassifyDeliveryException(
+        Exception ex, Func<bool>? scopeDisposed = null, bool activationErrorRecorded = true) =>
         OrleansRoutingService.IsDirectoryUnstable(ex)
         || IsShutdownShaped(ex)
+        || IsDeactivatedActivation(ex, activationErrorRecorded)
         || IsScopeTeardown(ex, scopeDisposed)
             ? ErrorType.ShuttingDown
             : ErrorType.Failed;
+
+    /// <summary>
+    /// The same classification for the POD-HUB leg, where the one ambiguity
+    /// <see cref="IsDeactivatedActivation"/> guards against <b>cannot arise</b> — issue #2299.
+    ///
+    /// <para><b>The defect this closes.</b> <see cref="ClassifyDeliveryException"/> defaults
+    /// <c>activationErrorRecorded</c> to <c>true</c> — "assume the worse case" — so a caller that
+    /// cannot consult <see cref="GrainActivationFailureRegistry"/> leaves the verdict TERMINAL.
+    /// <see cref="BuildPodHubRoute"/> is such a caller, and it passed the default: the
+    /// deactivated-activation arm was therefore unreachable on this leg, and the very shape it was
+    /// written for — Orleans' <c>… after "DeactivateOnIdle was called." to invalid activation.
+    /// Rejecting now.</c> — kept being reported as <see cref="ErrorType.Failed"/>. That is the
+    /// verdict production printed verbatim on this leg, and #2299's own evidence is almost entirely
+    /// this shape (947 occurrences, all of the newest samples). So the predicate existed, was
+    /// correct, and was inert exactly where the fault lives.</para>
+    ///
+    /// <para><b>Why <c>false</c> is a FACT here, not an assumption.</b> The registry is documented
+    /// as holding the last activation failure "for each per-node-hub grain" and is written only by
+    /// <c>MessageHubGrain</c>. The ambiguity it resolves is a per-node hub in a PERSISTENT
+    /// activation-fault loop — a NodeType whose compile cannot materialise a hub configuration, so
+    /// the activation faults instantly and every delivery lands in a deactivation window. A
+    /// <see cref="PodHubGrain"/> has no NodeType, no configuration to materialise and no such loop:
+    /// its <c>OnActivateAsync</c> deliberately never throws (the refusal is the CALL's answer,
+    /// <see cref="PodHubNotHereException"/>), so it never records an activation error and never
+    /// could. An "invalid activation" rejection from this grain is therefore always the idle
+    /// deactivation it requested of itself, which is a lifecycle transition by construction — the
+    /// bar <see cref="ClassifyDeliveryException"/> sets.</para>
+    ///
+    /// <para><b>What the corrected verdict buys.</b> The consumers that carry their own recovery
+    /// machinery (<c>SynchronizationStream</c>'s resubscribe latch, <c>MeshNodeStreamCache</c>'s
+    /// transient-owner rule) RIDE OUT <see cref="ErrorType.ShuttingDown"/> and TEAR DOWN on
+    /// <see cref="ErrorType.Failed"/>. The newest #2299 sample's sender is an agent thread, so the
+    /// terminal verdict ended one agent round that the address's next claim would have served.</para>
+    ///
+    /// <para>🚨 <b>Nothing else is widened.</b> Every other arm is evaluated unchanged, and a
+    /// rejection that is not one of the recognised shapes stays terminal — so a genuine defect on
+    /// this leg is still reported as one. The delivery-driven re-activation bounce recorded on
+    /// #2299 is prevented at its source in <see cref="PodHubGrain.Deliver"/>; this classifier still
+    /// covers a real owner handoff or a silo departure while a delivery is in flight.</para>
+    /// </summary>
+    /// <param name="ex">The exception the pod-hub delivery attempt faulted with.</param>
+    /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
+    /// <see cref="IsScopeTeardown"/>.</param>
+    /// <returns>The <see cref="ErrorType"/> the sender's NACK should carry.</returns>
+    internal static ErrorType ClassifyPodHubDeliveryException(
+        Exception ex, Func<bool>? scopeDisposed = null) =>
+        ClassifyDeliveryException(ex, scopeDisposed, activationErrorRecorded: false);
+
+    /// <summary>
+    /// <see cref="BuildPodHubRoute"/>'s terminal arm, as ONE tested function: the delivery call
+    /// failed for real (transient retries exhausted, or a non-transient fault), so classify it,
+    /// log it at the level the verdict deserves, and NACK the sender.
+    ///
+    /// <para>🚨 <b>Why it is a function rather than three lines at the call site.</b> The defect
+    /// this arm was fixed for — see <see cref="ClassifyPodHubDeliveryException"/> — was an ARGUMENT
+    /// THAT WAS NOT WRITTEN at a call site, and a fix pinned only by facts about the classifiers
+    /// would have reproduced the same shape one level out: reverting the one line that chooses the
+    /// classifier would have left every fact green (review on #5174). Both decisions now live here,
+    /// where a test drives the same code production does — capturing the
+    /// <paramref name="postFailureToSender"/> verdict and the level handed to
+    /// <paramref name="logger"/> — so neither can be changed back silently.</para>
+    ///
+    /// <para>The two decisions, and what each is for:</para>
+    /// <list type="number">
+    ///   <item><b>The POD-HUB classifier, not the general one.</b> The general one's
+    ///     deactivated-activation arm defaults to the terminal answer for a caller that cannot
+    ///     consult the activation-failure registry, which made it inert on this leg — the leg the
+    ///     rejection names and where the evidence lives. A silo leaving mid-roll and a directory
+    ///     mid-handoff are TRANSIENT, and telling the sender otherwise tears down mirrors that
+    ///     would have resumed.</item>
+    ///   <item><b>The level follows the verdict.</b> A container that is already gone is not an
+    ///     incident to page on — it is this process exiting, and the delivery it could not carry is
+    ///     being retried against a live pod by a sender that now correctly reads
+    ///     <see cref="ErrorType.ShuttingDown"/>. <c>Error</c> there filed #2638 for a pod that was
+    ///     merely finishing. The failure is still reported, at the level it deserves.</item>
+    /// </list>
+    ///
+    /// <para>Returns a completed leg, so the route observable finishes having answered the sender —
+    /// it never faults past its own NACK.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <param name="addressPath">The pod-hub address the delivery was directed to.</param>
+    /// <param name="delivery">The delivery being answered — read for its id and its sender.</param>
+    /// <param name="postFailureToSender">Posts the NACK: the message and the classified verdict.</param>
+    /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
+    /// <see cref="IsScopeTeardown"/>.</param>
+    /// <param name="logger">Logger for the one report this arm makes.</param>
+    /// <returns>A completed leg emitting a single <see cref="Unit"/>.</returns>
+    internal static IObservable<Unit> AnswerPodHubCallFailure(
+        Exception ex,
+        string addressPath,
+        IMessageDelivery delivery,
+        Action<string, ErrorType> postFailureToSender,
+        Func<bool>? scopeDisposed,
+        ILogger logger)
+    {
+        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
+        var errorType = ClassifyPodHubDeliveryException(ex, scopeDisposed);
+        var level = errorType == ErrorType.ShuttingDown ? LogLevel.Information : LogLevel.Error;
+        logger.Log(level, ex,
+            "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
+            addressPath, errorType, delivery.Sender);
+        postFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
+        return Observable.Return(Unit.Default);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The TARGET GRAIN deactivated while the message was in flight — issue #2299.</b> Orleans
+    /// forwards a message whose activation has gone away, and when the forwards are exhausted it
+    /// rejects with <c>… after "DeactivateOnIdle was called." to invalid activation. Rejecting
+    /// now.</c>
+    ///
+    /// <para><b>Why it belongs here.</b> The rule this classifier states is that only conditions
+    /// that are <i>a lifecycle transition by construction</i> qualify. A grain deactivating on idle
+    /// is exactly that — the grain-level analogue of the host going away, which
+    /// <see cref="IsShutdownShaped"/> already accepts — and the target re-activates on the next
+    /// call. Reported as <see cref="ErrorType.Failed"/> it tore down consumers that carry their own
+    /// recovery machinery, which is the damage #2346/#2357 removed for the silo-level shapes and
+    /// left standing for this one. Measured on memex 2026-09-17, 191 occurrences against a single
+    /// address.</para>
+    ///
+    /// <para>🚨 <b>This matches Orleans' own message text, which is a weaker signal than a type and
+    /// is known to be fragile</b> — the same shape <see cref="OrleansRoutingService.IsDirectoryUnstable"/>
+    /// already uses beside it. There is no typed rejection reason to read:
+    /// <c>OrleansMessageRejectionException</c> (a subclass of the <c>OrleansException</c> tested
+    /// here) carries every rejection kind, and accepting the type alone would classify genuine
+    /// refusals as transient — the one direction this file says must
+    /// not happen (<i>"Anything this does not recognise stays terminal, so a genuine defect is still
+    /// reported as one"</i>). So the test is the narrowest phrase that means "the activation is
+    /// gone", and if Orleans re-words it this silently returns to the pre-#2299 answer rather than
+    /// misclassifying anything — the safe direction to fail in, and the reason the test beside this
+    /// pins the PRODUCTION string verbatim rather than a paraphrase.</para>
+    ///
+    /// <para>🚨 <b>AND THE TEXT ALONE IS AMBIGUOUS — the SAME rejection means two opposite
+    /// things</b> (review on #4914). <see cref="GrainActivationFailureRegistry"/> documents the
+    /// other one: a per-node hub in a PERSISTENT activation-fault loop — a broken NodeType compile
+    /// that cannot materialise a hub configuration — has an alive window of about zero, so every
+    /// delivery lands in a deactivation window and Orleans answers with this exact sentence. That
+    /// grain never recovers, and reporting it as a lifecycle transition would hide a real defect
+    /// behind a transient NACK.
+    ///
+    /// <para>So the text is a NECESSARY condition and the registry is the discriminator: the grain
+    /// recorded its true activation error on every faulted activation, so
+    /// <paramref name="activationErrorRecorded"/> being FALSE is what separates "deactivated on
+    /// idle, will be back" from "cannot activate at all". The default is <c>true</c> — assume the
+    /// worse case — so a caller that cannot consult the registry leaves the verdict terminal,
+    /// exactly as before this predicate existed.</para></para>
+    ///
+    /// <para>The walk is <see cref="ExceptionChain"/>'s, for the same reason
+    /// <see cref="IsScopeTeardown"/> uses it: this arrives through Rx <c>Catch</c> arms and
+    /// <c>PostFailure</c>'s two-transport <see cref="AggregateException"/>.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <param name="activationErrorRecorded">Whether the failure registry holds a real activation
+    /// error for this grain — i.e. it is the persistent loop, not an idle deactivation. Defaults to
+    /// <c>true</c> at every caller that cannot answer, which keeps the verdict terminal.</param>
+    /// <returns><c>true</c> when the target activation was deactivated, not broken.</returns>
+    internal static bool IsDeactivatedActivation(Exception ex, bool activationErrorRecorded) =>
+        !activationErrorRecorded
+        && ExceptionChain.Contains(ex, e =>
+            e is global::Orleans.Runtime.OrleansException
+            && e.Message.Contains("to invalid activation", StringComparison.Ordinal));
 
     /// <summary>
     /// 🚨 <b>The routing turn is executing after the process's DI container was disposed — issue
@@ -1877,11 +2136,135 @@ internal class RoutingGrain(
     /// never a defect. Kept beside <see cref="IsTransientFailure"/> because the two answer different
     /// questions: that one decides whether to try AGAIN, this one decides what to TELL the sender
     /// once trying again has run out.
+    ///
+    /// <para>🚨 <b>The two TYPE tests were the whole rule, and prod's departed-silo rejections carry
+    /// neither of them — issue #2299 / #2307.</b> See <see cref="IsDepartedSiloRejection"/> for the
+    /// two shapes and why they belong here rather than in a wider predicate.</para>
+    ///
+    /// <para>The walk is <see cref="ExceptionChain"/>'s, not <c>InnerException</c>'s, for the reason
+    /// <see cref="IsScopeTeardown"/> already gives: this arrives through Rx <c>Catch</c> arms and
+    /// <c>PostFailure</c>'s two-transport <see cref="AggregateException"/>, where
+    /// <c>AggregateException.InnerException</c> yields index 0 ONLY — so a fault carrying the
+    /// rejection at any other index was invisible to the old line-walk. That narrowness applied to
+    /// the two type tests below as well; widening the walk fixes both at once.</para>
     /// </summary>
     /// <param name="ex">The exception the delivery attempt faulted with.</param>
     /// <returns><c>true</c> when the failure is a silo/host shutdown.</returns>
     internal static bool IsShutdownShaped(Exception ex) =>
-        ex is global::Orleans.Runtime.SiloUnavailableException
-            or global::Orleans.Runtime.OrleansLifecycleCanceledException
-        || (ex.InnerException != null && IsShutdownShaped(ex.InnerException));
+        ExceptionChain.Contains(ex, static e =>
+            e is global::Orleans.Runtime.SiloUnavailableException
+                or global::Orleans.Runtime.OrleansLifecycleCanceledException
+            || IsDepartedSiloRejection(e));
+
+    /// <summary>
+    /// 🚨 <b>The silo this message was addressed to is GONE — issues #2299 and #2307, which are one
+    /// root seen from two logs.</b> A SINGLE-node test (<see cref="IsShutdownShaped"/> owns the
+    /// walk).
+    ///
+    /// <para><b>The two production shapes.</b> Both arrive as
+    /// <c>OrleansMessageRejectionException</c>, and neither is a
+    /// <see cref="global::Orleans.Runtime.SiloUnavailableException"/>, so the rule this predicate
+    /// joins matched neither and the sender was told <see cref="ErrorType.Failed"/>, terminally:</para>
+    /// <list type="number">
+    ///   <item><b>The endpoint is not listening.</b> <c>Exception while sending message:
+    ///     …ConnectionFailedException: Unable to connect to S10.244.4.87:11111:146498551, will retry
+    ///     after 585.8766ms</c>, and the socket-level form <c>Unable to connect to endpoint
+    ///     S10.244.3.122:11111:147265510. See InnerException ---> SocketConnectionException: …
+    ///     Error: HostUnreachable</c> (equally <c>ConnectionRefused</c>). Four of the ten samples
+    ///     carried by <c>Admin/_LogIncident/e849e4a7795e0c92</c> (#2299, 191 occurrences) and all
+    ///     three newest samples of <c>f367c5512327cc57</c> (#2307, 3959 occurrences, last
+    ///     2026-09-19 09:03:41Z).</item>
+    ///   <item><b>The generation was superseded.</b> <c>The target silo is no longer active: target
+    ///     was S10.244.4.183:11111:146524552, but this silo is S10.244.4.183:11111:146534005</c> —
+    ///     the SAME pod address with a NEW generation, named verbatim in #2307's body.</item>
+    /// </list>
+    ///
+    /// <para><b>Why these are a lifecycle transition BY CONSTRUCTION</b> — the bar this classifier
+    /// sets, and the reason a bare <see cref="TimeoutException"/> deliberately fails it. A
+    /// <c>SiloAddress</c> is GENERATION-STAMPED (<c>S&lt;ip&gt;:&lt;port&gt;:&lt;generation&gt;</c>),
+    /// so both shapes are statements about one specific silo INCARNATION, and an incarnation that
+    /// refuses connections or has been superseded never answers at that address again. A timeout is
+    /// the opposite statement: the silo ACCEPTED the connection and did not answer, i.e. plausibly
+    /// wedged, and demoting that would arm a resubscribe against a hub that never comes back.</para>
+    ///
+    /// <para><b>And the sender's recovery is BOUNDED, which is what makes
+    /// <see cref="ErrorType.ShuttingDown"/> safe to say here.</b> The objection this file raises
+    /// against a generous rule is that the verdict arms something unbounded on the other side. It
+    /// does not: <c>MeshNodeStreamCache</c>'s transient-fault breaker gives a transient claim three
+    /// grace failures and then backs re-probes off exponentially (1 s → 60 s cap) precisely because
+    /// a STREAK is empirical proof the transient claim was false. So a persistent departed-silo
+    /// condition costs a bounded, backing-off retry — against the old answer's cost, which was every
+    /// live mirror on that path torn down permanently for a roll.</para>
+    ///
+    /// <para>🚨 <b>TWO ARMS, and neither of them is the <c>OrleansException</c> BASE.</b> An earlier
+    /// revision guarded both phrases on that base, mirroring
+    /// <see cref="OrleansRoutingService.IsDirectoryUnstable"/>, and review on #4923 was right that it
+    /// is broader than the signal: an application-level <c>OrleansException</c> quoting the same
+    /// words — a clustering provider that cannot reach its table, say — is a genuine defect, and
+    /// demoting it is the one direction this file says must not happen.</para>
+    /// <list type="bullet">
+    ///   <item><b>Arm 1 — a TYPE, with no prose at all.</b>
+    ///     <c>Orleans.Runtime.Messaging.ConnectionFailedException</c> is thrown only by
+    ///     <c>ConnectionManager.GetConnectionAsync(SiloAddress)</c>, so it is only ever about a
+    ///     CLUSTER endpoint. That makes the type strictly stronger than the phrase and immune to an
+    ///     Orleans re-wording. It is also what covers the mechanism
+    ///     <see cref="OrleansRoutingService.IsDirectoryUnstable"/> exists for: Orleans resolves a
+    ///     rejection as <c>rejection?.Exception ?? new OrleansMessageRejectionException(…)</c> —
+    ///     <b>the CARRIED exception WINS</b> — so the caller can receive this bare, with no rejection
+    ///     wrapper anywhere in the graph. Narrowing to the rejection type and stopping there would
+    ///     have re-opened #1742/#2357 for this shape.</item>
+    ///   <item><b>Arm 2 — the phrase, guarded by the CONCRETE rejection.</b> The
+    ///     superseded-generation shape needs it: Orleans rejects that one with NO carried exception,
+    ///     so the caller does get <c>OrleansMessageRejectionException</c> and its detail exists only
+    ///     as text. The connect shape is covered twice over, because production's wrapper embeds the
+    ///     inner's text.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>Arm 2 is prose, which is weaker than a type and known to be</b> — the same shape
+    /// <see cref="OrleansRoutingService.IsDirectoryUnstable"/> already carries. There is no typed
+    /// rejection reason to read, and <c>OrleansMessageRejectionException</c> carries EVERY refusal
+    /// kind, so accepting even that type alone would classify genuine refusals as transient. The
+    /// phrases are therefore the narrowest ones that mean "that silo incarnation is gone", and they
+    /// are pinned against the shipped Orleans build by <c>DepartedSiloClassificationTest</c>: <b>if
+    /// that test fails after an Orleans upgrade this arm has gone INERT — repair the phrase, never
+    /// delete the test.</b> If Orleans re-words them this quietly returns to the pre-fix answer
+    /// rather than misclassifying anything, which is the safe direction to fail in.</para>
+    ///
+    /// <para><b>The RETRY half needs nothing here</b> — <see cref="IsTransientFailure"/>'s
+    /// <c>OrleansMessageRejectionException</c> type test already matches both shapes, so
+    /// <see cref="DeliverToGrainObservable"/> has been re-resolving them six times since #2314. This
+    /// is only about what the sender is told once that budget is spent.</para>
+    /// </summary>
+    /// <param name="e">One exception from the graph.</param>
+    /// <returns><c>true</c> when Orleans refused the send because the target silo incarnation is gone.</returns>
+    internal static bool IsDepartedSiloRejection(Exception e) =>
+        e is global::Orleans.Runtime.Messaging.ConnectionFailedException
+        || (e is global::Orleans.Runtime.OrleansMessageRejectionException
+            && (e.Message.Contains(SiloEndpointUnreachableMarker, StringComparison.OrdinalIgnoreCase)
+                || e.Message.Contains(SupersededSiloGenerationMarker, StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>
+    /// Orleans' own wording from <c>ConnectionManager</c>: <c>"Unable to connect to {endpoint}, will
+    /// retry after {delay}"</c> and <c>"Unable to connect to endpoint {endpoint}. See
+    /// InnerException"</c>. The endpoint is always a <c>SiloAddress</c> — <c>ConnectionManager</c>
+    /// addresses cluster members and gateways, nothing else — so a
+    /// <c>OrleansMessageRejectionException</c> carrying this phrase is always a host that could not be
+    /// reached. Read ONLY off that concrete rejection type: on a bare
+    /// <see cref="global::Orleans.Runtime.OrleansException"/> these same words can be an
+    /// application-level connect failure, which is a genuine defect.
+    ///
+    /// <para>A literal of <b>Orleans.Core</b>, where <c>ConnectionManager</c> lives — not of
+    /// Orleans.Runtime, which is where the other markers in this codebase come from.</para>
+    /// </summary>
+    internal const string SiloEndpointUnreachableMarker = "Unable to connect to";
+
+    /// <summary>
+    /// Orleans' own wording when a silo has restarted and reclaimed its address: <c>"The target silo
+    /// is no longer active: target was {0}, but this silo is {1}"</c>. Kept in its verbatim, longest
+    /// form deliberately — the bare <c>"is no longer active"</c> would also match prose about other
+    /// subjects.
+    ///
+    /// <para>A literal of <b>Orleans.Runtime</b>.</para>
+    /// </summary>
+    internal const string SupersededSiloGenerationMarker = "The target silo is no longer active";
 }

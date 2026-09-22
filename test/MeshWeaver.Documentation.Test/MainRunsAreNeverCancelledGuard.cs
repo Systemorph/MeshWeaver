@@ -193,15 +193,21 @@ public class MainRunsAreNeverCancelledGuard
     /// </summary>
     [Theory]
     // The shipped pair: silent.
-    [InlineData("false", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "")]
+    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}", "")]
     // The flag flipped, as a literal and as an expression that spares only the reconcile.
-    [InlineData("true", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "run in flight")]
-    [InlineData("${{ github.event_name != 'schedule' }}", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "run in flight")]
+    [InlineData("true", "main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}", "run in flight")]
+    [InlineData("${{ github.event_name != 'schedule' }}", "main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}", "run in flight")]
     // The reconcile folded back into the push lane's group (#2490's shape).
     [InlineData("false", "main-cd-${{ github.ref }}", "reconcile")]
     // A per-run or per-commit group: serializes nothing, every delivery publishes concurrently.
     [InlineData("false", "main-cd-${{ github.run_id }}", "its own group")]
     [InlineData("false", "main-cd-${{ github.sha }}", "its own group")]
+    // 🚨 The pre-#4652 shape: a DEFAULT dispatch falls to the ref arm, i.e. into the push lane,
+    // where a merge discards the handoff's publisher before it runs a step.
+    [InlineData("false", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "DEFAULT workflow_dispatch outside the reconcile lane")]
+    // 🚨 …and its over-correction, which #4656's review caught: EVERY dispatch in the reconcile
+    // lane drops the operator's explicit rebuild into a slot the next tick overwrites.
+    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'reconcile' || github.ref }}", "operator's `rebuild` dispatch")]
     public void DeliveryGuard_FiresOnEachMutation_AndStaysSilentOnTheShippedShape(string cancel, string group, string expectedProblem)
     {
         var problems = DeliveryConcurrencyProblems(cancel, group);
@@ -237,6 +243,7 @@ public class MainRunsAreNeverCancelledGuard
             {
                 ["github.event_name"] = eventName,
                 ["github.ref"] = "refs/heads/main",
+                ["inputs.rebuild"] = "",
             });
 
             if (cancels)
@@ -245,23 +252,55 @@ public class MainRunsAreNeverCancelledGuard
                     + "run in flight (mid image push or mid seal) would be killed, leaving a torn set");
         }
 
-        string GroupFor(string eventName, string sha, string runId) => EvaluateValue(groupExpression,
-            new Dictionary<string, string>
-            {
-                ["github.event_name"] = eventName,
-                ["github.ref"] = "refs/heads/main",
-                ["github.sha"] = sha,
-                ["github.run_id"] = runId,
-            });
+        // 🚨 `inputs.rebuild` is modelled as ""/"true", NEVER "false". `Truthy` here reads any
+        // NON-EMPTY string as true, so the string "false" would model the exact opposite of what
+        // GitHub does with a `type: boolean` input — the unticked box would come out true and every
+        // assertion below would be about the wrong lane. Absent (`workflow_run`, `schedule`: the
+        // `inputs` context is empty) and unticked are both "".
+        string GroupFor(string eventName, string sha, string runId, string rebuild = "") =>
+            EvaluateValue(groupExpression,
+                new Dictionary<string, string>
+                {
+                    ["github.event_name"] = eventName,
+                    ["github.ref"] = "refs/heads/main",
+                    ["github.sha"] = sha,
+                    ["github.run_id"] = runId,
+                    ["inputs.rebuild"] = rebuild,
+                });
 
         var firstDelivery = GroupFor("workflow_run", "aaaaaaaaaaaa", "1001");
         var secondDelivery = GroupFor("workflow_run", "bbbbbbbbbbbb", "1002");
         var reconcile = GroupFor("schedule", "aaaaaaaaaaaa", "1003");
+        var plainDispatch = GroupFor("workflow_dispatch", "aaaaaaaaaaaa", "1004");
+        var rebuildDispatch = GroupFor("workflow_dispatch", "aaaaaaaaaaaa", "1005", rebuild: "true");
 
         if (reconcile == firstDelivery)
             problems.Add(
                 $"group '{groupExpression}' puts the reconcile in the push lane's group ('{reconcile}') — "
                 + "six no-op push runs held that slot on 2026-08-27 and the cron never fired (#2490)");
+
+        // 🚨 A DEFAULT dispatch is how the lane's handoff creates a publisher for a HEAD that has
+        // none (`delivery-verdict`'s `handoff` step, MeshWeaver#4652). In the push lane the next
+        // merge's arrival replaces it in the single pending slot before it runs a step — a
+        // publisher GitHub may delete is not a publisher, and the hole the handoff closes reopens.
+        if (plainDispatch != reconcile)
+            problems.Add(
+                $"group '{groupExpression}' leaves a DEFAULT workflow_dispatch outside the reconcile "
+                + $"lane ('{plainDispatch}' vs '{reconcile}') — it lands in the push lane, where the "
+                + "next merge evicts it before it runs a job, so the handoff's publisher can be "
+                + "discarded and delivery is back to waiting on the hourly tick (#4652)");
+
+        // 🚨 …and a `rebuild: true` dispatch is the OPPOSITE case. It is the operator's explicit
+        // override (#2622) carrying an input no other entry reproduces, so it must not go in the
+        // reconcile lane's single pending slot: the next schedule tick replaces it, the survivor
+        // takes rebuild=false, finds the set complete and no-ops — the button appears to work and
+        // does nothing. (Caught in review on #4656.)
+        if (rebuildDispatch == reconcile)
+            problems.Add(
+                $"group '{groupExpression}' puts an operator's `rebuild` dispatch in the reconcile "
+                + $"lane ('{rebuildDispatch}') — the next schedule tick replaces it in the single "
+                + "pending slot, the survivor carries rebuild=false and no-ops on a complete set, so "
+                + "the explicit rebuild is dropped SILENTLY while the button reports success (#2622)");
 
         if (firstDelivery != secondDelivery)
             problems.Add(

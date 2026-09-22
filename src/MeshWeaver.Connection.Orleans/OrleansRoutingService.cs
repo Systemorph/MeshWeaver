@@ -19,6 +19,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Runtime;
+using Orleans.Runtime.Placement;
 using Orleans.Streams;
 
 namespace MeshWeaver.Connection.Orleans;
@@ -612,7 +613,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 .Select((ex, i) => (Exception: ex, Attempt: i))
                 .SelectMany(t =>
                 {
-                    if (t.Attempt >= 5 || !IsTransientFailure(t.Exception))
+                    // 🚨 IsResendableDeliveryFailure, NOT IsTransientFailure — issue #1172.
+                    // RouteMessage is not idempotent: it routes the delivery on. A response timeout
+                    // means the routing grain ACCEPTED this delivery and has not answered yet (its
+                    // turn is [StatelessWorker(1)] and non-reentrant, so a timeout here means that
+                    // one turn is busy), and re-sending queues a SECOND copy behind the first — on
+                    // the very queue whose depth was the 2026-08-07 541-deep NonReentrancyQueueSize
+                    // incident. The delay ladder below is sized for a rejection returned instantly;
+                    // a timed-out attempt costs the whole ResponseTimeout, so on the timeout class
+                    // the "bounded budget" that licensed retrying at all is minutes of held slots
+                    // plus up to six duplicate deliveries.
+                    if (t.Attempt >= 5 || !IsResendableDeliveryFailure(t.Exception))
                         return Observable.Throw<long>(t.Exception);
                     var delay = TimeSpan.FromMilliseconds(Math.Min(200 * Math.Pow(2, t.Attempt), 30_000));
                     logger.LogDebug(t.Exception, "Transient failure delivering to {Address}, attempt {Attempt}/5, retrying in {Delay}ms",
@@ -774,6 +785,13 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// A failure worth another attempt: a transport-level blip, an Orleans rejection, or the grain
     /// directory mid-handoff. Mirrors <c>RoutingGrain.IsTransientFailure</c>; <c>internal</c> so a
     /// test can pin the PREMISE of the attach retry (issue #2633) rather than only its effect.
+    ///
+    /// <para>🚨 <b>This answers "is another attempt worth making", NOT "may this request be SENT
+    /// AGAIN" — see <see cref="IsResendableDeliveryFailure"/>.</b> The two differ on exactly one
+    /// class, the response timeout, and a NON-idempotent call must gate on the narrower predicate.
+    /// This one stays as it is because its other caller — <see cref="AttachWithBoundedRetry{T}"/>'s
+    /// <c>IPodHubGrain.Attach</c> claim — IS idempotent (it sets flags and re-pins an activation),
+    /// so re-sending it after a timeout costs nothing and is how the claim converges.</para>
     /// </summary>
     /// <param name="ex">The exception a cluster call faulted with.</param>
     /// <returns><c>true</c> when re-attempting is worthwhile.</returns>
@@ -786,6 +804,62 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             || IsDirectoryUnstable(ex)
             || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
     }
+
+    /// <summary>
+    /// 🚨 <b>The CALLER gave up waiting; the CALLEE may still hold the request — issue #1172.</b>
+    ///
+    /// <para>Orleans' <c>ResponseTimeout</c> is a caller-side give-up timer, never a cancellation.
+    /// When it fires, the request has already been handed to the target activation and sits in its
+    /// work queue until that activation gets to it; nothing recalls it. So a timeout says something
+    /// categorically different from a REJECTION: a rejection means the callee refused and holds
+    /// nothing (<c>"… to invalid activation. Rejecting now."</c> — a grain mid-<c>DeactivateOnIdle</c>,
+    /// which is the whole case the delivery retry was built for in #2314), while a timeout means the
+    /// callee accepted and has not answered yet.</para>
+    ///
+    /// <para>The walk is <see cref="ExceptionChain"/>'s — the exception GRAPH, not the
+    /// <c>InnerException</c> line — for the same reason <c>RoutingGrain.IsScopeTeardown</c> uses it:
+    /// these arrive through Rx <c>Catch</c> arms and two-transport <see cref="AggregateException"/>s
+    /// where which fault sits at index 0 is a race.</para>
+    /// </summary>
+    /// <param name="ex">The exception a cluster call faulted with.</param>
+    /// <returns><c>true</c> when the fault is — or carries — a transport response timeout.</returns>
+    internal static bool IsResponseTimeout(Exception ex) =>
+        ExceptionChain.Contains<TimeoutException>(ex);
+
+    /// <summary>
+    /// 🚨 <b>May this request be SENT AGAIN? Narrower than <see cref="IsTransientFailure"/> by
+    /// exactly the response-timeout class, and the difference is issue #1172.</b>
+    ///
+    /// <para>This is the predicate every retry over a NON-IDEMPOTENT call must use. Neither
+    /// <c>IMessageHubGrain.DeliverMessage</c> nor <c>IPodHubGrain.Deliver</c> nor
+    /// <c>IRoutingGrain.RouteMessage</c> carries an idempotency key — nothing on the receive path
+    /// reads <c>IMessageDelivery.Id</c> to recognise a repeat, and <c>DeliverMessage</c> ends in
+    /// <c>hub.DeliverMessage(delivery)</c>, an unconditional post onto the target hub's queue. So a
+    /// re-send after <see cref="IsResponseTimeout"/> does not retry the delivery, it DUPLICATES it:
+    /// the copy already queued at the callee still runs, and the handler runs once per attempt.</para>
+    ///
+    /// <para><b>Why that was the amplifier behind #1172.</b> The standing rationale for letting
+    /// <see cref="IsTransientFailure"/> be generous was that "it is bounded by a retry budget" — and
+    /// the budget's DELAYS (200 ms → capped) are sized for a rejection, which is returned instantly.
+    /// An attempt that ends in a timeout does not cost 200 ms, it costs the transport's whole
+    /// <c>ResponseTimeout</c>. So the same six-retry ladder means ~10 s for a rejection and MINUTES
+    /// for a timeout, during which the delivery holds a router dispatch slot and has deposited up to
+    /// seven copies of itself on a target that was already too slow to answer one. A response
+    /// timeout is most likely precisely when the silo is CPU/thread starved — so the retry multiplied
+    /// the starved silo's own work at the moment it had least capacity, which is a positive feedback
+    /// loop, not a recovery.</para>
+    ///
+    /// <para><b>Nothing is suppressed by declining to re-send.</b> The fault reaches the same arm it
+    /// reached after the retries were exhausted, and <c>RoutingGrain.ClassifyDeliveryException</c>
+    /// already answers a bare <see cref="TimeoutException"/> with the TERMINAL
+    /// <c>ErrorType.Failed</c> — deliberately, because "a target silent across the whole budget is
+    /// plausibly wedged". The sender therefore gets the identical verdict it always got, one
+    /// <c>ResponseTimeout</c> after the first attempt instead of seven of them later.</para>
+    /// </summary>
+    /// <param name="ex">The exception a delivery attempt faulted with.</param>
+    /// <returns><c>true</c> when the delivery may be sent again.</returns>
+    internal static bool IsResendableDeliveryFailure(Exception ex) =>
+        !IsResponseTimeout(ex) && IsTransientFailure(ex);
 
     /// <summary>
     /// Orleans could not ADDRESS the call because its own grain directory is mid-handoff — a silo is
@@ -983,7 +1057,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // (null) or cancelled attach must degrade to today's behavior, never hold outbound
         // traffic hostage. ContinueWith swallows the terminal state, so the stored task never
         // faults; once completed the DeliverMessage gate is a no-op (dispatch stays synchronous).
-        subscriptionReady[address] = subscriptionTask.ContinueWith(_ => { }, TaskScheduler.Default);
+        // Held in a local so the teardown below can remove exactly THIS entry rather than
+        // whatever is registered at the address by then — see the note on the disposal.
+        var readyGate = subscriptionTask.ContinueWith(_ => { }, TaskScheduler.Default);
+        subscriptionReady[address] = readyGate;
         // Observe the task's terminal state so a fault is NEVER an unobserved-task exception (the gated
         // attach RETURNS NULL — not a throw — when it gives up, so a fault here is genuinely unexpected).
         // Accessing t.Exception marks it observed; this is trace-only, teardown still awaits the handle below.
@@ -1002,8 +1079,20 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // disposing hub/grain scheduler). Fire-and-forget on the pool — teardown is best-effort.
         return Disposable.Create(() =>
         {
-            streams.TryRemove(address, out _);
-            subscriptionReady.TryRemove(address, out _);
+            // 🚨 A registration removes WHAT IT REGISTERED, never "whatever is registered at this
+            // address now". `streams[address] = callback` is last-writer-wins, so removing by KEY
+            // let a departing registration erase a LATER one at the same address — and the local
+            // route is the authority for "this process hosts that hub", so that takes the address
+            // dark with no exception and nothing to grep. Found while tracing #5136 (a hosted hub
+            // handed out after its disposal had begun); no production occurrence of the erase
+            // itself is on record, because nothing currently re-registers an address while its
+            // predecessor's teardown is still running — and it is exactly that property a future
+            // retire-and-replace would remove, so the invariant belongs here and not in a caller.
+            // (The pod-hub claim below is the OTHER half and is NOT claim-aware: `Detach` stamps a
+            // 10-minute terminal `Released` tombstone on the address, which a successor's `Attach`
+            // clears only if it runs after. See Doc/Architecture/DisposedScopeAndDyingHubs.)
+            streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback));
+            subscriptionReady.TryRemove(new KeyValuePair<Address, Task>(address, readyGate));
             // Release the cluster-wide claim FIRST: a hub that MOVES pods (a portal/{user} circuit
             // reconnecting is the everyday case) must not leave a pinned activation behind on the
             // pod it left, or the new owner's Attach lands on the old one and has to bounce off it.
@@ -1253,6 +1342,34 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal IObservable<Unit>? PodHubClaimSettled(Address address) =>
         podHubClaimSettled.TryGetValue(address, out var settled) ? settled : null;
 
+    private IObservable<bool> AttachPodHubOnOwner(IPodHubGrain grain)
+    {
+        var localSilo = serviceProvider.GetService<ILocalSiloDetails>();
+        if (localSilo is null)
+            return grain.Attach().ToObservable();
+
+        // PreferLocalPlacement prefers the silo PERFORMING placement. A stale directory entry
+        // can keep recreating the grain on the previous silo without running placement again
+        // (#2299/#5177). Carry the actual owner so a refused Attach can MigrateOnIdle to it.
+        // Orleans snapshots RequestContext synchronously when the call is issued. Restore the
+        // ambient hint immediately; it must not affect another grain call in this execution flow.
+        // The caller's Defer already owns laziness. Invoke here, before its claimActivity window
+        // closes; another Defer would let disposal overtake the actual Attach invocation.
+        var previous = RequestContext.Get(IPlacementDirector.PlacementHintKey);
+        try
+        {
+            RequestContext.Set(IPlacementDirector.PlacementHintKey, localSilo.SiloAddress);
+            return grain.Attach().ToObservable();
+        }
+        finally
+        {
+            if (previous is null)
+                RequestContext.Remove(IPlacementDirector.PlacementHintKey);
+            else
+                RequestContext.Set(IPlacementDirector.PlacementHintKey, previous);
+        }
+    }
+
     /// <summary>
     /// Claims <paramref name="address"/> for THIS process, so the rest of the cluster can deliver to
     /// it with a directed grain call instead of a stream publish (#1742).
@@ -1358,7 +1475,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         void ReleaseClaim(IPodHubGrain? selectedGrain = null)
         {
             // Fire-and-forget: teardown is best-effort, and an activation that outlives its owner is
-            // recovered anyway — Deliver on a silo with no local route steps aside (see PodHubGrain).
+            // reclaimed by a later owner's Attach on a silo with no local route (see PodHubGrain).
             // Wrapped because this runs during teardown, where the cluster client may already be
             // gone: releasing a claim that nobody can hear is a no-op, never a throw out of Dispose.
             try
@@ -1474,7 +1591,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         // counts as a claim because the remote runtime may have accepted it.
                         attachCallEntered = true;
                         Volatile.Write(ref claimAttempted, 1);
-                        return grain.Attach().ToObservable();
+                        return AttachPodHubOnOwner(grain);
                     }
                     finally
                     {

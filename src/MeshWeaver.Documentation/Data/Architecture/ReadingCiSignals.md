@@ -96,6 +96,69 @@ gh pr view <N> --repo <repo> --json statusCheckRollup \
 Every required name must be **present** and read `=SUCCESS`. Count them — a missing row is a fail,
 not an absence.
 
+### 🚨 A skip-trapdoor made by STEP ORDERING — the first failing step silences every guard behind it
+
+A gate that carries no `continue-on-error:` and no `if:` can still stop enforcing, and nothing in the
+file looks wrong. **GitHub's implicit condition on a step is `success()`**, so in a job that runs many
+*independent* guards as consecutive steps, the first failure skips all of them — and a `skipped` step
+publishes no failure, while the job's one required context reports a single red about whichever guard
+happened to be first.
+
+**Measured 2026-09-19 on MeshWeaver.SocialMedia#210**, run `35431670104`, job `105867277548`. The
+shared `validate` lane's vendored-resolver drift check failed with `32 code line(s) differ` and **16
+steps reported `skipped` behind it**, among them:
+
+| step | what stopped being enforced |
+|---|---|
+| `Every PR-reachable secret in this repo is asserted by a preflight` | the gate for the shape that bit Reinsurance#128 |
+| `Every manifest.lock is current (and carries a version)` | a stale lock reaching a publish |
+| `Every module's version matches its content` | a feature shipping to nobody (#878) |
+| `No mapping in this repo's workflows writes a key twice` | the duplicate-key guard |
+| `No pin comment names a commit this repo no longer pins` | abbreviated-sha / pin drift |
+| `This repo's no-op set agrees with the platform's` | no-op parity |
+
+`validate / Validate node repos` is a **required** context in all five satellites. Because
+`platform-ref` defaults to `main` and the drift check fetches the canonical live, *every* satellite is
+drifted from the instant a canonical change merges — so for the length of each re-copy wave, every
+pull request in that repository was unguarded by all six of those checks, with one red about an
+unrelated file as the only symptom.
+
+**The reading to take from it:** a red does not tell you what a job *checked*. Only the steps that
+reported a verdict were checked, and in a long guard job the count of `skipped` steps is the count of
+guards that said nothing. `.../actions/jobs/<id>` lists each step's own conclusion — read that, not
+the job's.
+
+**The fix is two halves, and `!cancelled()` alone is only the first.** Dropping the implicit
+`success()` also stops the *prerequisites* from masking, so a failed checkout would let every guard run
+against an empty workspace — a wall of secondary reds, and for any guard that passes on an empty tree a
+vacuous pass. So the last prerequisite publishes one output and every guard requires it:
+
+```yaml
+- name: The workspace and the tools are present — the ONE prerequisite every guard shares
+  id: ready
+  run: echo "ok=true" >> "$GITHUB_OUTPUT"
+- name: <any independent guard>
+  if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+```
+
+That keeps the two failure modes apart, which is the whole property:
+
+| what failed | what happens |
+|---|---|
+| a **prerequisite** (checkout, its history fetch, the tool/Python setup) | `ready` is skipped, its output is empty, every guard is skipped, and the prerequisite's own red is the verdict |
+| a **guard** | `ready` is untouched, so every other guard still reports |
+
+`.github/scripts/check-guard-step-masking.py` enforces both halves on two declared subjects —
+`node-repo-validate.yml`'s `validate` (39 guards) and `dotnet-test.yml`'s `workflow-shell` (61 guards,
+the job that gates `main-cd.yml`, the module lanes and every script a satellite fetches). It also
+requires the prerequisites to *be* a prefix, matched exactly (a prefix comparison let
+`actions/checkout-foo` satisfy `uses:actions/checkout`), refuses a job whose guard list is empty so it
+cannot pass by having nothing to check, and refuses a readiness step that stopped publishing `ok=true`.
+
+A guard's own *fetch* is deliberately **not** a prerequisite: its consumers run and fail naming the file
+they could not open, which is a second red rather than a silent skip, and the fetch's `::error::` is the
+root.
+
 ## Required ≠ meaningful, in both directions
 
 Two independent facts, and confusing them costs time in both directions:
@@ -163,6 +226,28 @@ Publishing the gap is not — each row above was repaired only after someone els
 - **A healthy meter standing in for the thing that actually refused.** Read the **refusal**, not the
   meter. `5000/5000 remaining` while every call is refused is the documented signature of the
   secondary limit — the meter is honest and answering a different question.
+- **A WINDOW standing in for a result set.** `grep … | head -N`, `| tail`, `--per_page`, a listing's
+  first page: each shows a window, and an absence read off one is not a measurement. Measured
+  2026-09-18 on MeshWeaver.Plugins, asserting its `ci.yml` never calls the shared validate lane —
+  `grep -nE '…|node-repo-|…' ci.yml | head -20`. **The pattern matched.** `ci.yml:2745` is
+  `uses: …/node-repo-validate.yml@main`, and it was **match 36 of 50**; `head -20` cut at match 20
+  (line 1039) of a 4,983-line file. 🚨 **A CORRECT pattern is the dangerous case** — a wrong one
+  announces itself by returning nothing plausible, while a right one in a truncated window returns
+  real, on-topic hits, so the window looks like the answer. The habit is `grep -c` **before**
+  `grep | head` — if the count exceeds the window, the window is not the answer — and to
+  positive-control the *window*, not the query: grep for something the subject is KNOWN to contain
+  and confirm that hit lands **inside the window you are actually reading**. State it as *N of M*,
+  never as *N*. It is the same shape as
+  [Adoption and the Sweep Count Different Things](/Doc/Architecture/AdoptionAndTheSweepCountDifferentThings),
+  arriving by a different road: 20 shown, 50 matched, and nobody asked how many there were.
+- **A SUBSET standing in for the sweep.** In the same measurement, five of six vendored copies were
+  compared by **blob sha** against the canonical and correctly reported byte-identical; the sixth was
+  settled by a *title search for an open PR* instead. The five were a set being compared and the
+  sixth was a question about existence, so it felt like a different kind of question — **it was
+  not**, and the weaker check was the one load-bearing for the conclusion. A sweep gets its hole
+  exactly where a cheaper instrument was substituted, so name the check that decides and run *that*
+  one on every member. Here the blob comparison would have caught the gap whatever the other answer
+  had been: the sixth copy had been merged and never applied (`changed_files=0`).
 - **A declaration standing in for an effective capability.** An App's own page lists what it *asked
   for*; the **installation** lists what it was *granted*. Measured 2026-09-12: `meshweaver-cloud`
   declares `contents, emails, issues, metadata, pull_requests, workflows`, and its installation on
@@ -184,6 +269,60 @@ Two neighbouring pages carry the same lesson from other directions:
 (two instruments, neither wrong, neither a census) and
 [The Release Gate's Denominator](/Doc/Architecture/ReleaseGateDenominator) (a rate is meaningless
 until you state what it is over).
+
+## 🚨 An annotation belongs to an ATTEMPT, not to a run — a partial re-run erases it
+
+**`GET /actions/runs/{id}/jobs` answers with the LATEST attempt's job records.** After
+`rerun-failed-jobs`, GitHub re-creates a record for *every* job of the new attempt — including the
+ones it did not re-run — and **those records carry none of the earlier attempt's annotations**. The
+run still reads `success`. Anything that reads a fact out of an annotation therefore loses it, with
+no error and no red anywhere.
+
+Measured 2026-09-16 on MeshWeaver.Plugins (#4491):
+
+```
+main run 35073843357 resolved 3.0.0-ci.8721, died on an artifact-service 403
+(FinalizeArtifact; tests failed: 0), was re-run, concluded SUCCESS
+
+attempt 1, job 104721425856 (Resolve the released platform)  ->  annotation present
+attempt 2, job 104732056546 (same job, NOT re-run)           ->  0 annotations
+a PR's resolver, 6 minutes later                             ->  "no 'Platform for this run'
+                                                                  annotation — skipped"
+                                                             ->  pinned every PR to #8716
+```
+
+`main` had demonstrably passed on 8721, and every open pull request in the repo went on resolving
+8716 — including the one adopting a core capability that only exists from 8721 onwards. The
+resolver's sentence for this was *"`main` has not passed on it yet"*, which was **false**.
+
+**If you read an annotation, say which attempt you mean.** `/actions/runs/{id}/attempts/{n}/jobs`
+serves one attempt's records. Walk attempts **newest-first** and take the first that carries what
+you are looking for: a genuine re-resolution (a full re-run, or a re-run *of that job*) then still
+decides, and an older attempt is consulted only where the newer record is silent — which is exactly
+the carried-over case. Taking the oldest instead would let a stale verdict outrank a fresh one.
+
+This is the same attempt-scoping trap as `rerun-failed-jobs` reusing the previous attempt's
+artefact (#4303): a re-run is not a re-execution of the run, and the parts it did not re-run keep
+neither their outputs nor their annotations in the new attempt's records.
+
+🚨 **An attempt you could not READ is not an attempt that was SILENT — and only silence licenses
+the walk.** The fallback above is sound because "this attempt's records came back, and carried no
+such annotation" is a fact about the attempt. An HTTP failure is a fact about the *network*: it
+proves nothing, and the newer attempt is precisely the one that may hold a genuine re-resolution.
+Treating the two the same publishes an older attempt's stale verdict under a note asserting the
+newer attempt carried none — false in exactly the way the sentence this page opens with was false,
+and harder to catch because it now cites an attempt number. So an unreadable attempt **stops the
+walk and skips the run**, and the note says which of the two happened. A reader who cannot tell
+"nothing was there" from "I could not look" has the same defect as a sweep that reports `0` without
+its denominator.
+
+The second-order version bit the same change: the fallback added a **second** note for each run it
+rescued, and the loop's bound was `len(notes) >= limit` — a proxy for "runs examined" that was only
+ever true while every run emitted exactly one note. Twelve rescued runs reached the bound after
+six, halving the evidence and answering with a lower ceiling. **A bound must count the thing it
+names.**
+
+---
 
 ## The same trap in the tools you write to watch CI
 
@@ -207,6 +346,119 @@ Two bugs that make a monitor lie, both hit in one session:
   pages were requested, not consumed, and `gh api --paginate --jq …` piped into a `read -r` still
   takes the first line. The failure grows with the repository's check volume, so a reader that
   works today starts lying later, silently.
+
+### 🚨 A comparison against an UNVALIDATED read turns a refusal into "ACT NOW"
+
+The watcher bugs above withhold an action. This one **manufactures** one, which makes it strictly
+worse: it arrives wearing urgency and a ready-made remedy.
+
+A watcher polled a file's sha and compared it to a baseline:
+
+```bash
+gh api "repos/.../contents/scripts/resolve-platform.py?ref=main" --jq '.sha' || true
+```
+
+Measured 2026-09-19 09:08:35Z, under a secondary rate limit, `--jq '.sha'` yielded the **refusal
+body**, `!=` against the 40-hex baseline was therefore true, and the watcher announced:
+
+```
+ACT NOW: main's resolve-platform.py MOVED (3361378ce5e2… -> {"message":"API rate limit exceeded
+for user ID …","status":"403"}) — merge origin/main into <branch> and push
+```
+
+Nothing had moved; the file was byte-for-byte unchanged, confirmed locally with no network. Acting on
+it would have merged `main` without the awaited fix and spent a CI run during the limit.
+
+Two individually-correct decisions compose into it. `|| true`, so one transient refusal cannot kill a
+long watch — right. `!=` against the previous value as the change test — right. Together they mean
+**any failed read is a positive result.**
+
+**The question to ask before arming any watcher: what does this print on a 403? If that is its success
+branch, it is not a watcher.** Three guards, and the first is the one that matters:
+
+- **Validate the value's SHAPE before comparing it.** A sha must match `^[0-9a-f]{40}$`, an md5
+  `^[0-9a-f]{32}$`, a count must be all digits. Anything else is not a value.
+- **Make "could not read" its own printed outcome**, distinct from both *changed* and *unchanged*, and
+  back off after it. Three states, never two.
+- **Dry-run it against a forced failure** — unset the token, or point it at a 404 path — and read what
+  it says. A watcher whose failure branch has never been exercised is a guess.
+
+The same hole is easy to leave in an equality test rather than an inequality one: a monitor comparing
+two digests and announcing agreement on equality would, under a total refusal, digest two error bodies
+and declare them identical. On this occasion they differed only because each 403 carries a distinct
+request id. That is luck, not a design.
+
+### 🚨 The CREATION limit is a second secondary limit, and `gh` porcelain exits 0 under it
+
+The primary/secondary table above concerns reads. There is a **separate** secondary limit on content
+creation — issues, pull requests, comments, and review-thread replies — and it is reached
+independently. Measured 2026-09-19 08:51:44Z:
+
+```
+$ gh issue create --repo … --title … --body-file …  > out.txt 2> err.txt
+exit=0        out.txt: empty        err.txt: empty        issue: DOES NOT EXIST
+```
+
+**Exit 0, both streams empty, nothing created.** The same request over REST named it at once:
+
+```
+$ gh api --method POST repos/…/issues --input payload.json
+{"message":"You have exceeded a secondary rate limit and have been temporarily blocked from
+content creation. …","status":"403"}
+```
+
+So create over REST, and build the JSON with `python3 json.dumps` rather than interpolating a body
+into a shell string. Two consequences worth stating plainly:
+
+- **A lost review-thread reply is invisible in exactly the way that matters.** The review gate stays
+  red, `mergeable_state` stays `blocked`, and the agent that "replied" has no signal it did not. Then
+  re-running the gate looks like the gate is broken when the thread is genuinely unanswered.
+- **The two limits are not ordered.** Creation was refused at 08:51Z while reads still worked; reads
+  were refused at 09:11Z with `/rate_limit` reporting `core: 5000/5000`. Neither one predicts the
+  other, and the read meter reports neither.
+
+🚨 **And the refusal wears a DIFFERENT SHAPE per endpoint, so never key a retry or a watcher on its
+text.** Measured 2026-09-19, one limiter with three faces:
+
+| what you called | how it refuses |
+|---|---|
+| `POST …/issues` over REST | `403`, and the body names the secondary limit |
+| `POST …/pulls/{n}/comments/{id}/replies` | **`422 {"resource":"PullRequestReview","code":"abuse","field":"base"}`** — not a 403, and it names no rate limit at all |
+| `gh issue create` (GraphQL porcelain) | exit 0, both streams empty, nothing created |
+
+A review reply was refused four times over 43 minutes that way and landed on the fifth attempt. A
+watcher grepping for *"secondary rate limit"* sees nothing in that case, and a watcher checking only for
+`403` sees nothing either. **So key the decision on whether the `id` or `number` you asked for came
+back, not on what the refusal said.**
+
+🚨 **But an absent id means NOT CONFIRMED, never "it did not happen"** — and that difference decides
+whether a retry is safe. A response can be lost or suppressed *after* the server has committed, so
+retrying on the absent id is how a duplicate gets created. It matters most in the case this section is
+about: a stub reply is repaired with `PATCH`, and a second `POST` leaves the first standing beside it.
+**Before retrying, re-read the collection and look for your own content** — the same baseline rule
+stated below for auditing somebody else's posts, applied to your own retry.
+
+The two API-boundary shapes above, the `403` and the `422`, genuinely did create nothing. It is the
+porcelain's silent exit 0 that is ambiguous, because silence from a wrapper says nothing about what the
+server did.
+
+The read limit is independent of the creation one and can land immediately after a successful write — it
+did, six seconds after that reply finally posted, delaying its verification by eight minutes. So budget
+for the verification read as well as the write, and do not treat a failed read-back as a failed write.
+
+**Verify every creation by reading it back — and note that this is TWO questions, not one.**
+
+- **Did THIS write create a comment?** Only the `id` (or `number`) in the write's own REST response
+  answers it, re-fetched by that id. Nothing derived from the body can: a stub, or an earlier session's
+  reply, matches a length as easily as it matches an `in_reply_to_id`.
+- **Does that comment carry the content intended?** A byte-compare of the fetched body against the file
+  that was posted.
+
+So an existence predicate such as `select(.in_reply_to_id == <ID>)` proves neither — it passes on a
+stub, and a retrier keyed that way reported success while a wrong reply sat there untouched. A length
+check proves neither either. Where no response id is available, for instance when auditing somebody
+else's earlier posts, an existence check is sound **only** against a baseline measured *before* the
+write; that baseline is what makes it proof, not the read-back.
 
 ### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
 
@@ -298,6 +550,79 @@ answered by different contexts.
 **And the acceptance criterion for a fix in this class is REPEATED green.** A defect that alternates
 run to run produces single greens by itself; one green run is what it looks like, not evidence it is
 gone.
+
+### 🚨 The SANCTIONED version of this — two greens on one sha, from one workflow, one of which ran nothing
+
+Green-tree reuse is this same shape **by design**, which is what makes it the easiest instance to
+misread as coverage. Measured on core sha `cb8a9b8fd6fe0ac9f9d824f1e8be8db56463fc13` — the *same*
+workflow, `MeshWeaver Build and Test`, twice:
+
+| run | event | elapsed | jobs | what it proves |
+|---|---|---|---|---|
+| #13632 | `merge_group` | **19 min 40 s** | 15 success / 6 skipped; all six `Run tests (shard N)` **success** | ran the suite |
+| #13634 | `push` | **3 min 31 s** | `Check for an already-green tree` success, then build, doc gate and every shard **skipped** | ran nothing |
+
+Both report `completed` / `success`, same workflow name, same commit. **Nothing in the run list and
+nothing in `conclusion` over REST separates them** — the rollup conclusion is one enum, so "nineteen
+minutes of evidence" and "a marker lookup" render identically.
+
+The workflow is not concealing it. The reuse job writes *"This run **did not execute the suite**"*
+into the step summary with the marker ref, the TTL and a link to the run that gathered the evidence;
+the `main is red` job refuses to take its bisect window from the run list for exactly this reason;
+and `Consolidate test results` carries a zero-evidence gate that fails on zero `.trx` unless the run
+was a reuse or an affected-tests `none`. **The whole gap is in the reader.**
+
+🚨 **So never cite a run's `success` as coverage without reading whether its shards ran.** One REST
+call answers it — `actions/runs/<id>/jobs` — and `Run tests (shard …) | skipped` is the entire tell.
+A reuse green is a true statement about the **tree** and says nothing about **this run**, so it can
+never serve as a positive control: not for a suite, and not for infrastructure the run would have
+exercised, such as artifact upload.
+
+🚨 **And do not reach for the first two same-sha greens you find — check they are the same workflow.**
+The same commit also carries `Continuous Delivery (main)` #9115 (`workflow_run`, **75 min**, the real
+delivery) and #9116 (`schedule`, **2 min 5 s**, a scheduled run with nothing to deliver). That pair is
+also two greens of one workflow name on one sha, but the short one is an idle *schedule*, not the
+green-tree short-circuit — a different mechanism that happens to look the same from the run list.
+Attributing it to reuse would be right about the symptom and wrong about the cause.
+
+### 🚨 `mergeable_state: clean` + `auto_merge: false` is a TWO-POLE ambiguity, not a state
+
+Same class as the reuse green above — a field pair that reads like an answer — and here the two
+readings demand **opposite** actions. A pull request that is not a draft, has 0 red, both required
+contexts `success`, `mergeable_state: clean` and `auto_merge: false` is in one of two states:
+
+- **Pole A — the arming was CONSUMED on entry to the merge queue.** It is queued, it merges within
+  minutes, and **no human action is needed or wanted.** Entry is what clears the flag.
+- **Pole B — the arming was LOST** (a force-push, a manual disarm, or a required check that went red
+  and disabled auto-merge without re-enabling when it later passed). It is finished and **nothing will
+  ever merge it.**
+
+**The two are byte-identical over REST.** Measured on three core PRs at once: all three read
+clean-and-unarmed while sitting at queue positions 1, 2 and 3, all `AWAITING_CHECKS`, and each one's
+enqueue timestamp matched its `auto_merge` flip one-for-one — so the flip that reads as "stranded" was
+the entry itself.
+
+🚨 **The cheap proxy does not work either.** A `gh-readonly-queue/main/pr-<N>-…` ref is not evidence of
+membership: **stale ones persist indefinitely** for long-merged PRs (`pr-2850`, `pr-2941`, `pr-2949`,
+`pr-4150` and `pr-4152` were all present in the listing and all long merged), and a *live* entry's
+branch also comes and goes as GitHub re-groups batches. Presence and absence are both uninformative.
+
+**Only the merge-queue ENTRY LIST separates the poles**, and it is one of the few things REST cannot
+express — which is exactly why a REST-only discipline walks into this:
+
+```bash
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  mergeQueue(branch:"main"){entries(first:20){nodes{position state enqueuedAt pullRequest{number}}}}}}'
+```
+
+One call, never in a loop. `gh pr merge --auto` answering *"already queued to merge"* is the cheaper
+confirmation of pole A when you only care about one PR.
+
+**Why the distinction is load-bearing and not pedantic.** In pole A, "merge it yourself" is wrong
+because it is already happening — and **a merge HOLD cannot be honoured by declining to merge**, since
+the queue needs no human; only `dequeuePullRequest` holds, and dequeuing one PR buys nothing while
+another sits ahead of it in the queue. In pole B the opposite holds: waiting achieves nothing and the
+PR rots until someone re-arms it. State which pole you measured, never which one is usual.
 
 ### 🚨 A green PRODUCER that SKIPPED its upload — the red lands four jobs downstream, naming an artifact
 
@@ -1168,8 +1493,57 @@ right now its "no retry" line tells you nothing about ANY red. In core and MeshW
 `Retry known transients` run sampled from 2026-09-10 to 2026-09-16 printed `log unreadable (the
 response contains terminal escape sequences; pass --allow-escape-sequences …) — cannot prove a
 transient`. The hosted runner's `gh` refuses any response body with escape sequences, and every
-Actions log has them. Crm, Reinsurance and SocialMedia make the same `gh api …/logs` call but were
-not sampled (#4534).
+Actions log has them.
+
+**Crm, Reinsurance and SocialMedia are no longer unsampled — measured 2026-09-17, and it is worse
+there.** Every one of their newest `Retry known transients` runs declined on its **first** failed job
+with that same sentence and then `exit 0`, so the shell steward never looked at the rest; and
+MeshWeaver.Plugins' steward declined **22 jobs in one run** (`35245934949`, 16:21Z) the same way.
+
+### What `/actions/jobs/<id>/logs` actually serves
+
+Read straight from REST — 30 failed jobs across MeshWeaver.Plugins, .Crm, .Reinsurance, .SocialMedia
+and MeshWeaver, deliberately not one payload:
+
+| outcome | n | shape |
+|---|--:|---|
+| served a log | **23** | `200 text/plain`; **all 23** with a UTF-8 BOM; **all 23** carrying ANSI escapes (30–1,932 each); all strict UTF-8; all with the timestamped line; **none** carrying any other control character |
+| `404` *"The specified blob does not exist"* | 1 | the job uploaded no log at all |
+| `410 Gone` | 6 | the log outlived its retention |
+
+So there was never anything exotic to parse. **Three** rules follow — and read the next paragraph
+before assuming any given steward keeps them:
+
+- 🚨 **Three outcomes, not one.** `404` and `410` are **facts about the job** — nothing was uploaded
+  (what a runner that died before writing one looks like), or the log expired — and they *decline*,
+  naming which. **Everything else** (5xx, a permission refusal, a transport failure, a non-UTF-8
+  body, a body with no timestamped line) is the steward **blind to its own input** and is a **RED**.
+  Collapsing those into one "unreadable, no retry" is what made a week-long outage look like a
+  judgement.
+- 🚨 **Strip the BOM and the escapes before matching.** The raw bytes are not what anyone reading the
+  run sees: every echoed `run:` line arrives wrapped in `\e[36;1m…\e[0m`, so a pattern anchored near
+  the start or end of such a line cannot match the raw form.
+- 🚨 **A decline that happens 22 times in one run may not live only in a green job's log.** That is
+  the same defect shape as a scheduled lane whose honest red goes into an empty room. The decision
+  belongs in the job **summary**, and a job judged without a log should raise a `::warning::` — which
+  is visible on the run without pretending the steward itself failed.
+
+🚨 **WHICH STEWARD KEEPS WHICH — do not read the three rules as a description of the fleet.** They are
+what the four stewards fixed on 2026-09-17 do (MeshWeaver.Plugins and the three satellites). **Core's
+`#4554` fix implements the READ and none of the three**, verified against
+`.github/scripts/retry-known-transients.py` on `main`:
+
+| | core (`#4554`) | Plugins + the three satellites |
+|---|---|---|
+| reads the log at all | ✅ REST, no `gh` | ✅ REST / `curl`, no `gh` |
+| `404`/`410` distinguished from a blind read | ❌ `read_job_log` maps **every** `HTTPError` to one `LogUnreadable` → RED | ✅ they decline, naming which |
+| BOM and escapes stripped before matching | ❌ the raw decoded body is matched directly | ✅ |
+| the decision reaches the summary / a `::warning::` | ❌ neither appears in the script | ✅ |
+
+Core's choice is defensible on its own terms — its contract is *"I cannot see my input ⇒ RED"* and it
+has no annotation path to fall back on — but it means a **runner death in core reds the steward job**,
+because a job that uploaded no log is indistinguishable there from an API failure. That is named
+follow-up, not a claim about today.
 
 > **Fixed in core, 2026-09-17 (#4534).** Core's steward is now
 > `.github/scripts/retry-known-transients.py`: it reads the logs endpoint over plain REST — no `gh`,
@@ -1191,6 +1565,34 @@ not sampled (#4534).
 > platform ceiling until the next merge. Core has no such ceiling (it only ever runs the resolver's
 > `--self-test`), which is why core could be fixed first and alone. Fix #4491, then re-enable the
 > satellites.
+>
+> **2026-09-17, the other four: the reader is fixed in all of them, and the #4491 hold turns out to
+> be narrower than "all four".**
+> * **MeshWeaver.Plugins** (Plugins#2042) is *not* held by #4491, because **its retry was never
+>   disabled**: its annotation path — runner death, budget refusal — reads no log at all, so
+>   `rerun-failed-jobs` has been reachable there throughout. The log fix adds a second proof shape
+>   to a lane that already acts.
+> * **Crm / Reinsurance / SocialMedia** (Crm#125, Reinsurance#218, SocialMedia#202) were the ones the
+>   hold applied to — their shell stewards could retry **nothing**, so merging is the moment retries
+>   begin there. They were parked as **drafts** while that call was open, because each of those
+>   repos runs `auto-arm.yml` and would otherwise have merged them on green with the call never
+>   made. **The maintainer took the call on 2026-09-17 and it is MERGE**, on this reasoning: humans
+>   press re-run today *because* the steward is blind, so an evidence-gated automatic retry is
+>   narrower than the status quo. The `#4491`/`#4493` wave that closes the annotation erasure is
+>   being landed separately.
+>
+> 🚨 **And the hazard belongs to `rerun-failed-jobs`, not to the steward.** #4491's own measurement
+> is a re-run of an infrastructure death — *the ordinary response* — and a human pressing the same
+> button erases the same annotation. Today humans press it **because** the steward is blind, so a
+> working reader *reduces* hand re-runs rather than adding a hazard class. That is an argument for
+> sequencing, not for leaving a reader that cannot read.
+>
+> 🚨 **The signature lists are a separate question, and they are thin.** The most frequent transient
+> on the wall right now is `GitHub served a STALE run listing (MeshWeaver#4433)` from
+> `Resolve the released platform`, whose own annotation ends *"Re-run this job"* — measured on
+> MeshWeaver.Plugins job `105249591894` and MeshWeaver.SocialMedia job `105239967968` the same day,
+> and it is in **no** steward's list. Adding it is a curation decision with its own evidence, not
+> something to fold into a reader fix.
 
 ## 🚨 A check that is red on EVERY pull request is not telling you about any of them
 

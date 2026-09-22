@@ -127,6 +127,36 @@ refuses "redirect needs a mode"            "must be 'suspend' or 'restore'"     
 refuses "deploy needs --release"           "missing required flag --release"    hosting-deploy --namespace n --database d
 refuses "verify needs --host"              "missing required flag --host"       hosting-verify
 refuses "unknown flags are not ignored"    "unknown argument"                   hosting-verify --host h --nope 1
+# ---------------------------------------------------------------------------
+# THE CERTIFICATE, end to end. A new instance is not provisioned until its own host answers over
+# its OWN certificate: an ingress without one is served the controller's fallback — another
+# instance's certificate — and pearl.meshweaver.cloud spent nine hours in exactly that state on
+# 2026-09-15 while its portal was healthy. These assert the two halves that were missing: the TLS
+# step refuses a record that asks cert-manager for nothing, and the verify step tells a wrong
+# certificate apart from a dead application instead of blaming the pods for both.
+# ---------------------------------------------------------------------------
+refuses "tls refuses an issuer of 'none'" "asks cert-manager for nothing" \
+  hosting-tls --namespace n --host h.example.com --issuer none
+refuses "tls needs --namespace"            "missing required flag --namespace" hosting-tls --host h.example.com
+refuses "tls rejects unknown flags"        "unknown argument"                  hosting-tls --namespace n --host h.example.com --nope 1
+
+VERIFY_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/verify" && pwd)"
+_verify() { env PATH="$VERIFY_STUBS:$PATH" HOSTING_VERIFY_ATTEMPTS=1 "$@" hosting-verify --host instance.example.com; }
+
+# The fallback-certificate shape: the host answers nothing over TLS and serves a certificate for
+# ANOTHER host. The refusal must name the certificate and send the reader to the certificate.
+refuses "verify names a WRONG certificate rather than blaming the pods" "served the WRONG certificate" \
+  _verify HOSTING_VERIFY_STUB_CN=memex.meshweaver.cloud HOSTING_VERIFY_STUB_SANS=memex.meshweaver.cloud
+# No certificate at all — DNS or the TLS step, not the application.
+refuses "verify says when NO certificate is served" "served NO certificate at all" \
+  _verify HOSTING_VERIFY_STUB_NOCERT=1
+# TLS is correct and the app is not: the one case where the pods ARE the answer.
+refuses "verify blames the application only when TLS is correct" "the APPLICATION did not answer" \
+  _verify HOSTING_VERIFY_STUB_CN=instance.example.com HOSTING_VERIFY_STUB_SANS=instance.example.com
+# A wildcard covers one label: *.example.com is this host's certificate, not a wrong one.
+refuses "verify accepts a wildcard certificate as this host's" "the APPLICATION did not answer" \
+  _verify HOSTING_VERIFY_STUB_CN='*.example.com' HOSTING_VERIFY_STUB_SANS='*.example.com'
+
 refuses "pull-secret needs --namespace"    "missing required flag --namespace"  hosting-pull-secret --registry r.example.test --vault V --secret S
 refuses "pull-secret needs --registry"     "missing required flag --registry"   hosting-pull-secret --namespace n --vault V --secret S
 refuses "pull-secret needs --vault"        "missing required flag --vault"      hosting-pull-secret --namespace n --registry r.example.test --secret S
@@ -1672,6 +1702,68 @@ refuses_hard "a vault name that is not a plain name is refused before anything r
   env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault 'kv;rm -rf /'
 rm -rf "$_vh_dir"
 
+# ── hosting-deploy keeps the RUNNING image when the values carry no portal.image KEY ────────────
+# 🚨 Systemorph/Memex#458, measured on pearl 2026-09-21 11:25Z. The record names an imagePullSecret
+# and pins no tag, so HelmValues rendered `portal:` + `  imagePullSecret:` and NO image. The old
+# test (`grep -q '^portal:'`) took that block as "the values carry an image", skipped the keep-running
+# read, and helm fell through to the chart default ghcr :latest (3.0.0-rc13, 2026-08-31) — a
+# Reconcile, documented never to move the image, rolled the instance back three weeks. These cases
+# pin the KEY as the question: a pull-Secret-only block keeps the running image; a real portal.image
+# is left to the values; `image:` under ANOTHER block does not count; and with nothing running and
+# no image anywhere, the first-install refusal still stands before helm.
+echo
+echo "── hosting-deploy: keeps the running image unless portal.image is set (Memex#458) ──"
+_ki_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_ki_dir/"; _ki_log="$_ki_dir/calls.log"; : > "$_ki_log"
+_ki_vals="$_ki_dir/values.yaml"
+_ki_running="cr.example.test/memex-portal-ai:3.0.0-ci.9101"
+printf '%s' "$_ki_running" > "$_ki_dir/running-image"
+_ki_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_ki_dir" HOSTING_DEPLOY_STUB_LOG="$_ki_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_ki_vals" 2>&1; }
+# pearl's shape: the pull Secret alone under portal:
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\nselfUpdate:\n  registry: "cr.example.test"\n' > "$_ki_vals"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+if [ "$_ki_rc" -eq 0 ] && printf '%s' "$_ki_up" | grep -q -- "--set portal.image=${_ki_running}" \
+   && printf '%s' "$_ki_up" | grep -q -- "--set migration.image=cr.example.test/memex-migration:3.0.0-ci.9101" \
+   && printf '%s' "$_ki_out" | grep -q "keeping the running ${_ki_running}"; then
+  ok "a portal: block carrying only imagePullSecret keeps the RUNNING image (portal + migration)"
+else
+  bad "a pull-Secret-only portal: block keeps the running image" "rc=${_ki_rc} upgrade: '${_ki_up}' out: ${_ki_out}"
+fi
+# `image:` under a DIFFERENT top-level block (migration:) is not portal.image.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\nmigration:\n  image: "cr.example.test/memex-migration:1"\n' > "$_ki_vals"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+[ "$_ki_rc" -eq 0 ] && printf '%s' "$_ki_up" | grep -q -- "--set portal.image=${_ki_running}" \
+  && ok "an image: under another block (migration:) does not count as portal.image" \
+  || bad "an image: under another block does not count as portal.image" "rc=${_ki_rc} upgrade: '${_ki_up}'"
+# An EMPTY portal.image is no image either.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  image: ""\n  imagePullSecret: "registry-pull"\n' > "$_ki_vals"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+[ "$_ki_rc" -eq 0 ] && printf '%s' "$_ki_up" | grep -q -- "--set portal.image=${_ki_running}" \
+  && ok "an empty portal.image (\"\") keeps the running image" \
+  || bad "an empty portal.image keeps the running image" "rc=${_ki_rc} upgrade: '${_ki_up}'"
+# A record that DOES render portal.image (a pinned tag) is left to the values: no override, no read.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  image: "cr.example.test/memex-portal-ai:7"\n  imagePullSecret: "registry-pull"\nmigration:\n  image: "cr.example.test/memex-migration:7"\n' > "$_ki_vals"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+if [ "$_ki_rc" -eq 0 ] && [ -n "$_ki_up" ] && ! printf '%s' "$_ki_up" | grep -q -- '--set portal.image=' \
+   && ! grep -q 'get deploy memex-portal-deployment' "$_ki_log"; then
+  ok "a rendered portal.image is left to the values — no --set override, no running-image read"
+else
+  bad "a rendered portal.image is left to the values" "rc=${_ki_rc} upgrade: '${_ki_up}' log: $(cat "$_ki_log")"
+fi
+# Nothing running and no image anywhere: still the first-install refusal, before helm.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\n' > "$_ki_vals"; rm -f "$_ki_dir/running-image"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+if [ "$_ki_rc" -ne 0 ] && printf '%s' "$_ki_out" | grep -q 'no image to deploy' && ! grep -q '^helm upgrade' "$_ki_log"; then
+  ok "nothing running and no portal.image is refused before helm — never the chart default"
+else
+  bad "nothing running and no portal.image is refused before helm" "rc=${_ki_rc} out: ${_ki_out} log: $(cat "$_ki_log")"
+fi
+rm -rf "$_ki_dir"
+
 # ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
 # Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
 # and its --atomic rollback erred too. The preflight asks `kubectl auth can-i` per rendered kind
@@ -1700,6 +1792,96 @@ else
 fi
 rm -rf "$_pf_dir"
 
+echo
+echo "── hosting-kv-set: pasted values reach the vault through --file, never argv, never a log ──"
+# The onboarding secret step (MeshWeaver.Plugins): a person pastes a value on the control instance,
+# the mesh hands it to the Job as HOSTING_SECRETS (base64 JSON), and this step writes it. The stubs
+# record every argv (az) and answer a synced Secret (kubectl), so the decisions — write through
+# --file, every named object or nothing, never print, wait by hash — are asserted here.
+KVS_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-set" && pwd)"
+kvs() {  # kvs [env…] -- <args…> — runs against a fresh state dir; sets $_kvs_out $_kvs_rc $_kvs_log $_kvs_state
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _kvs_state="$(mktemp -d)"
+  _kvs_out="$(env "${envs[@]}" PATH="$KVS_STUBS:$PATH" HOSTING_KVS_STATE="$_kvs_state" HOSTING_KV_SYNC_ATTEMPTS=2 HOSTING_KV_SYNC_INTERVAL=0 hosting-kv-set "$@" 2>&1)"; _kvs_rc=$?
+  _kvs_log="$(cat "$_kvs_state/az.log" 2>/dev/null || true)"
+}
+KVS_SECRET="pasted-client-secret-NEVER-PRINTED"
+KVS_JSON="$(printf '{"acme-Authentication-Microsoft-ClientSecret":"%s","acme-Email-ClientSecret":"second-value-NEVER-PRINTED"}' "$KVS_SECRET" | base64 | tr -d '\n')"
+
+# Two objects, both values present → both written through --file, read back, reported by name.
+kvs HOSTING_SECRETS="$KVS_JSON" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --object acme-Email-ClientSecret
+[ "$_kvs_rc" -eq 0 ] && ok "kv-set writes every named object" || bad "kv-set writes" "exited ${_kvs_rc}: ${_kvs_out}"
+[ "$(cat "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" 2>/dev/null)" = "$KVS_SECRET" ] && ok "…byte-for-byte, no trailing newline" || bad "value stored" "vault got: '$(cat "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" 2>/dev/null)'"
+[ "$(cat "$_kvs_state/set.acme-Email-ClientSecret" 2>/dev/null)" = "second-value-NEVER-PRINTED" ] && ok "…the second object too" || bad "second value" "vault got: '$(cat "$_kvs_state/set.acme-Email-ClientSecret" 2>/dev/null)'"
+case "$_kvs_out" in *NEVER-PRINTED*) bad "kv-set never prints a value" "it did: ${_kvs_out}" ;; *) ok "kv-set never prints a value" ;; esac
+case "$_kvs_log" in *NEVER-PRINTED*) bad "…and never puts one on an az command line" "az saw: ${_kvs_log}" ;; *) ok "…and never puts one on an az command line" ;; esac
+case "$_kvs_log" in *"--file"*) ok "…the write goes through --file" ;; *) bad "through --file" "az saw: ${_kvs_log}" ;; esac
+case "$_kvs_out" in *"::hosting:: kv_set=acme-Authentication-Microsoft-ClientSecret:"*"::hosting:: kv_set=acme-Email-ClientSecret:"*"::hosting:: kv_set_count=2"*) ok "…reported by NAME with a hash prefix, and the count" ;; *) bad "kv_set facts" "said: ${_kvs_out}" ;; esac
+rm -rf "$_kvs_state"
+
+# A named object with NO value → nothing written at all, the missing one named.
+kvs HOSTING_SECRETS="$KVS_JSON" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --object acme-Missing
+[ "$_kvs_rc" -ne 0 ] && ok "an object the request carries no value for refuses" || bad "missing value refuses" "exited 0: ${_kvs_out}"
+case "$_kvs_out" in *"acme-Missing"*"Nothing was written"*) ok "…naming it, and stating nothing was written" ;; *) bad "missing message" "said: ${_kvs_out}" ;; esac
+[ ! -f "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" ] && ok "…and the present one was NOT written either (all or nothing)" || bad "all or nothing" "it wrote the present one"
+rm -rf "$_kvs_state"
+
+# An empty value is a missing value.
+kvs HOSTING_SECRETS="$(printf '{"acme-X":""}' | base64 | tr -d '\n')" -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "an EMPTY value refuses like a missing one" || bad "empty refuses" "exited 0"
+rm -rf "$_kvs_state"
+
+# No HOSTING_SECRETS at all → refuse, naming the contract.
+kvs -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "no HOSTING_SECRETS is a refusal, not a no-op" || bad "no env refuses" "exited 0"
+case "$_kvs_out" in *"HOSTING_SECRETS is empty"*) ok "…naming the variable" ;; *) bad "env message" "said: ${_kvs_out}" ;; esac
+rm -rf "$_kvs_state"
+
+# Not base64 / not an object → refuse.
+kvs HOSTING_SECRETS='not base64!' -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "garbage HOSTING_SECRETS refuses" || bad "garbage refuses" "exited 0"
+rm -rf "$_kvs_state"
+kvs HOSTING_SECRETS="$(printf '["a"]' | base64 | tr -d '\n')" -- --vault Systemorph --object acme-X
+[ "$_kvs_rc" -ne 0 ] && ok "a JSON array (not an object) refuses" || bad "array refuses" "exited 0"
+rm -rf "$_kvs_state"
+
+# The vault refuses the write → RED, names the object and the role, prints nothing.
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SET_FAIL=acme-Authentication-Microsoft-ClientSecret -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret
+[ "$_kvs_rc" -ne 0 ] && ok "a vault that refuses the write fails the step" || bad "set fail" "exited 0"
+case "$_kvs_out" in *"Key Vault Secrets Officer"*) ok "…naming the role the operator identity needs" ;; *) bad "role named" "said: ${_kvs_out}" ;; esac
+case "$_kvs_out" in *NEVER-PRINTED*) bad "…without printing the value on the failure path" "it did: ${_kvs_out}" ;; *) ok "…without printing the value on the failure path" ;; esac
+rm -rf "$_kvs_state"
+
+# --wait: the synced Secret carries the new value → done; carries a stale one → RED after the attempts.
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SYNCED="$KVS_SECRET" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --namespace acme --wait acme-Authentication-Microsoft-ClientSecret=acme-portal-keyvault/Authentication__Microsoft__ClientSecret
+[ "$_kvs_rc" -eq 0 ] && ok "kv-set waits for the synced Secret and returns when it carries the value" || bad "wait ok" "exited ${_kvs_rc}: ${_kvs_out}"
+case "$_kvs_out" in *"::hosting:: kv_synced=acme-Authentication-Microsoft-ClientSecret"*) ok "…reporting the sync" ;; *) bad "kv_synced fact" "said: ${_kvs_out}" ;; esac
+case "$(cat "$_kvs_state/kubectl.log")" in *"-n acme get secret acme-portal-keyvault"*) ok "…by reading the named Secret in the namespace" ;; *) bad "kubectl read" "kubectl saw: $(cat "$_kvs_state/kubectl.log")" ;; esac
+rm -rf "$_kvs_state"
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SYNCED="stale" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --namespace acme --wait acme-Authentication-Microsoft-ClientSecret=acme-portal-keyvault/Authentication__Microsoft__ClientSecret
+[ "$_kvs_rc" -ne 0 ] && ok "a Secret that never picks the value up is a RED step (the vault holds it, the pods do not)" || bad "wait stale" "exited 0"
+case "$_kvs_out" in *"The vault HOLDS the new value"*) ok "…saying exactly what state that leaves" ;; *) bad "stale message" "said: ${_kvs_out}" ;; esac
+[ -f "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" ] && ok "…and the value WAS written before the wait" || bad "written before wait" "it was not"
+rm -rf "$_kvs_state"
+
+# Dry run: narrates, writes nothing, needs no HOSTING_SECRETS.
+kvs HOSTING_DRY_RUN=true -- --vault Systemorph --object acme-X --namespace acme --wait acme-X=s/k
+[ "$_kvs_rc" -eq 0 ] && ok "a dry run needs no values and succeeds" || bad "dry run" "exited ${_kvs_rc}: ${_kvs_out}"
+case "$_kvs_out" in *"would set acme-X"*"::hosting:: kv_set_count=1"*) ok "…narrating the object and the count" ;; *) bad "dry facts" "said: ${_kvs_out}" ;; esac
+[ -z "$_kvs_log" ] && ok "…and az saw nothing" || bad "dry az" "az saw: ${_kvs_log}"
+rm -rf "$_kvs_state"
+
+refuses_hard "kv-set needs --vault"                       "missing required flag --vault"  hosting-kv-set --object o
+refuses_hard "kv-set needs --object"                      "missing required flag --object" hosting-kv-set --vault V
+refuses_hard "kv-set refuses an object with a metacharacter" "is not a plain name"        hosting-kv-set --vault V --object 'o;id'
+refuses_hard "kv-set refuses a vault with a metacharacter"   "is not a plain name"        hosting-kv-set --vault 'V`id`' --object o
+refuses_hard "kv-set refuses a malformed --wait"          "is not <object>=<syncedSecret>/<configKey>" hosting-kv-set --vault V --object o --namespace n --wait 'o=broken'
+refuses_hard "kv-set refuses --wait without --namespace"  "--wait needs --namespace"       hosting-kv-set --vault V --object o --wait o=s/k
+refuses_hard "kv-set refuses a --wait for an object it does not set" "which no --object writes" hosting-kv-set --vault V --object o --namespace n --wait other=s/k
+refuses_hard "kv-set rejects unknown flags"               "unknown argument"               hosting-kv-set --vault V --object o --nope 1
+unset _kvs_out _kvs_rc _kvs_log _kvs_state KVS_JSON KVS_SECRET
+
 # ── every kind the CHART renders is writable by the operator's ClusterRole ─────────────────────
 # core #3774 rendered a PodDisruptionBudget; the role could only read them; the next Reconcile of
 # memex failed inside helm. A chart change that renders a new kind lands with its grant, or this
@@ -1709,6 +1891,135 @@ if [ "$ck_rc" -eq 0 ]; then
   ok "every kind the chart renders is writable by operator-rbac.yaml ($(printf '%s' "$ck_out" | tail -1 | sed 's/^check-chart-kinds-granted: //'))"
 else
   bad "every kind the chart renders is writable by operator-rbac.yaml" "$ck_out"
+fi
+
+# ── hosting-db-release: DENIED and ABSENT are different answers (MeshWeaver#4722) ────────────────
+#
+# 🚨 The defect these pin. The platform-layer preflight reads two CLUSTER-SCOPED things — the CNPG
+# CRD and whether a `workload=db` node pool exists. The probes were written `2>/dev/null`, which
+# discards the reason, so a Forbidden (the operator's ClusterRole lacking the grant) came out as
+# "a node pool labelled workload=db" being MISSING: the operator announcing a platform layer is
+# ABSENT when it was merely NOT PERMITTED TO LOOK, sending the reader off to provision a pool that
+# already exists. Same shape as the `Not found` that closed #1391 and was re-filed as #3883.
+#
+# The grant exists now, so these do not guard today's cluster — they guard the FUTURE one. An RBAC
+# change that takes the permission away must make the script say "refused", never "absent".
+DBR_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/db-release" && pwd)"
+DBR_CHART="$(mktemp -d)"
+
+# <forbid> <absent> — run the command with the stub in front of PATH, in a subshell so the exported
+# knobs cannot leak into any later test.
+dbr() {
+  ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
+           HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
+    hosting-db-release --namespace pearl --release pearl-db --database pearl )
+}
+
+refuses_hard "a Forbidden on nodes is REFUSED, not an absent node pool" \
+  "REFUSED, not absent" dbr "nodes" ""
+refuses_hard "a Forbidden on the CNPG CRD is REFUSED, not an absent operator" \
+  "REFUSED, not absent" dbr "crd" ""
+refuses_hard "an EMPTY node list is still ABSENT — the discrimination cuts both ways" \
+  "lacks the database platform layer" dbr "" "nodes"
+refuses_hard "an absent CRD is still ABSENT" \
+  "lacks the database platform layer" dbr "" "crd"
+
+# 🚨 THE CONTROL THAT MATTERS, and the one the phrase checks above cannot make: a refusal must not
+# ALSO claim the layer is absent. Reporting both would restore the very confusion — the reader still
+# goes and provisions a node pool — while every "does it say REFUSED" assertion stayed green.
+_dbr_out="$(dbr "nodes" "" 2>&1)"
+case "$_dbr_out" in
+  *"lacks the database platform layer"*)
+    bad "a Forbidden never also claims the platform layer is absent" "it said BOTH: ${_dbr_out}" ;;
+  *"REFUSED, not absent"*)
+    ok  "a Forbidden never also claims the platform layer is absent" ;;
+  *)
+    bad "a Forbidden never also claims the platform layer is absent" "said neither: ${_dbr_out}" ;;
+esac
+
+# And the happy path reaches PAST the preflight — otherwise every assertion above would pass on a
+# command that refuses unconditionally, which is the "guard that checked nothing" shape.
+_dbr_ok="$(dbr "" "" 2>&1)"
+case "$_dbr_ok" in
+  *"REFUSED, not absent"*|*"lacks the database platform layer"*)
+    bad "a healthy platform layer passes the preflight" "it refused: ${_dbr_ok}" ;;
+  *) ok "a healthy platform layer passes the preflight" ;;
+esac
+
+# ── the SAME defect forty lines below the fix: the credentials Secret (MeshWeaver#4722) ─────────
+#
+# 🚨 WHY THESE EXIST. #4436 fixed the three platform-layer probes above and left this read alone:
+#   pw_len="$(kubectl … get secret "${release}-app" -o jsonpath='{.data.password}' 2>/dev/null | wc -c …)"
+# — the same `2>/dev/null`, in the same file, inside a PIPE where no `||` could have caught it.
+# Measured on main before this change, ALL THREE of Forbidden, absent-Secret and
+# present-but-no-password-key produced ONE sentence, byte for byte:
+#   "its credentials Secret pearl-db-app carries no password … Read the operator's log in
+#    cnpg-system."
+# So a missing ClusterRole grant sent the reader to CloudNativePG's log, and the operator stated
+# the CONTENTS of a Secret it had never read. Three states, three sentences, or this is red.
+_dbs_out() { ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
+                      HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
+               hosting-db-release --namespace pearl --release pearl-db --database pearl ) 2>&1; }
+
+_dbs="$(_dbs_out "secret" "")"
+case "$_dbs" in
+  *"carries no password"*|*"carries NO password key"*)
+    bad "a Forbidden on the credentials Secret is REFUSED, not an empty password" "it stated the Secret's contents: ${_dbs}" ;;
+  *"REFUSED, not absent"*) ok "a Forbidden on the credentials Secret is REFUSED, not an empty password" ;;
+  *) bad "a Forbidden on the credentials Secret is REFUSED, not an empty password" "said neither: ${_dbs}" ;;
+esac
+
+_dbs="$(_dbs_out "" "secret")"
+case "$_dbs" in
+  *"REFUSED"*) bad "an ABSENT credentials Secret is ABSENT, not refused" "the discrimination points the wrong way: ${_dbs}" ;;
+  *"is ABSENT in pearl"*) ok "an ABSENT credentials Secret is ABSENT, not refused" ;;
+  *) bad "an ABSENT credentials Secret is ABSENT, not refused" "said neither: ${_dbs}" ;;
+esac
+
+# 🚨 THE CONTROL ON THE OTHER SIDE — the state the old sentence was actually ABOUT must keep its
+# own answer. A discrimination that renamed every case would pass both assertions above while
+# losing the one reading that was correct all along.
+_dbs="$(_dbs_out "" "password")"
+case "$_dbs" in
+  *"carries NO password key"*) ok "a Secret that EXISTS with no password key still says so — the reading that was right all along" ;;
+  *) bad "a Secret that EXISTS with no password key still says so" "said: ${_dbs}" ;;
+esac
+
+# …and the whole command still SUCCEEDS when everything is there, reporting the two facts the mesh
+# reads. Without this every assertion above would pass on a command that refuses unconditionally.
+_dbs="$(_dbs_out "" "")"; _dbs_rc=$?
+case "$_dbs" in
+  *"::hosting:: db_release=pearl-db"*)
+    [ "$_dbs_rc" -eq 0 ] && ok "a healthy database release reports db_release and exits 0" \
+      || bad "a healthy database release reports db_release and exits 0" "rc=${_dbs_rc}: ${_dbs}" ;;
+  *) bad "a healthy database release reports db_release and exits 0" "never reported it: ${_dbs}" ;;
+esac
+
+# ── hosting::probe itself: the primitive every one of those sites now depends on ─────────────────
+# It moved out of hosting-db-release into _common.sh because a discrimination only one script can
+# reach is one the next script will not make — which is exactly how the five sites above survived
+# the fix that named them. Three answers, pinned directly.
+_probe_case() {  # <expected rc> <what> <cmd…>
+  local want="$1" what="$2"; shift 2
+  ( set +u; . "$(dirname -- "${BASH_SOURCE[0]}")/../bin/_common.sh" 2>/dev/null
+    hosting::probe "$@" ); local rc=$?
+  [ "$rc" = "$want" ] && ok "hosting::probe: $what" || bad "hosting::probe: $what" "returned ${rc}, expected ${want}"
+}
+_probe_case 0 "a read that answers is PRESENT"                  any    printf 'x'
+_probe_case 2 "a Forbidden on stderr is REFUSED (2)"            any    bash -c 'echo "Error from server (Forbidden): nodes is forbidden" >&2; exit 1'
+_probe_case 1 "any other failure is ABSENT (1)"                 any    bash -c 'echo "Error from server (NotFound): x not found" >&2; exit 1'
+_probe_case 1 "exit 0 with no output is ABSENT under 'output'"  output true
+_probe_case 0 "exit 0 with no output is PRESENT under 'any'"    any    true
+
+# ── every kubectl READ in bin/ that discards stderr is DECLARED, with its reason ─────────────────
+# The static half of the same defect. #4436 fixed three probes by hand and nothing compared the fix
+# against its subject, so two more reads in that file and three in other commands kept collapsing
+# REFUSED into ABSENT. Undeclared is red; a declaration whose call is gone is stale and red.
+sd_out="$(bash "$(dirname -- "${BASH_SOURCE[0]}")/check-stderr-discarded.sh" 2>&1)"; sd_rc=$?
+if [ "$sd_rc" -eq 0 ]; then
+  ok "every kubectl read in bin/ that discards stderr is declared ($(printf '%s' "$sd_out" | tail -1 | sed 's/^check-stderr-discarded: //'))"
+else
+  bad "every kubectl read in bin/ that discards stderr is declared" "$sd_out"
 fi
 
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────

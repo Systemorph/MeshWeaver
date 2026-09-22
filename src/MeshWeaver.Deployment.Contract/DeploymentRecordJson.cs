@@ -54,6 +54,22 @@ public static class DeploymentRecordJson
         JsonSerializer.Serialize(record, indented ? new JsonSerializerOptions(Options) { WriteIndented = true } : Options);
 
     /// <summary>
+    /// The record as the DESCRIBED deployment's own portal may see it. 🚨 <see cref="DeploymentContent.OpsGitHubApp"/>
+    /// is read BY a control instance ABOUT this deployment — the App the control instance dispatches
+    /// this deployment's pipelines as — and it never belongs in the described portal's configuration:
+    /// a client portal handed the ops client id would advertise, in its own environment, the App that
+    /// can start its infrastructure. So the portal-bound projection drops it. Everything else is the
+    /// record unchanged, and <see cref="Write"/> (the control-side, round-tripping form) keeps the
+    /// block — the two are different audiences, not two serialisations of one.
+    /// </summary>
+    public static DeploymentContent ForPortal(DeploymentContent record) =>
+        record with { OpsGitHubApp = null };
+
+    /// <summary>The <c>Deployment__Record</c> payload handed to the described portal — <see cref="Write"/> over <see cref="ForPortal"/>.</summary>
+    public static string WritePortal(DeploymentContent record, bool indented = false) =>
+        Write(ForPortal(record), indented);
+
+    /// <summary>
     /// A record from JSON — the configuration value, a record file, or the mesh node's
     /// <c>content</c> object. Throws on malformed JSON; returns null for an empty value.
     /// </summary>

@@ -7,16 +7,27 @@
 # the Secret minutes later, so a step that returns as soon as the object exists reports success over
 # an ingress still serving another host's default certificate — which is what a browser shows the
 # first visitor. This waits for the Secret to carry an actual key pair, and fails if it never does.
+#
+# 🚨 IT ALSO READS THE CERTIFICATE BACK. The Secret is the outcome; the Certificate's Ready
+# condition is the REASON, and it is what separates "the challenge is still running" from "the
+# challenge cannot succeed" (DNS not resolving to this ingress publicly — HTTP-01 validates over
+# the internet, from Let's Encrypt's resolver, not from inside the cluster). The refusal names
+# which of the two it was. The explicit `kubectl get certificates` below is also what makes the
+# grant visible to deploy/aks/operator/test/check-rbac-coverage.sh: a Certificate created through
+# `kubectl apply -f -` is invisible to that check, which is why this script reached main without
+# its ClusterRole rule and failed pearl's Provision at step 15/18 on 2026-09-15 with
+# `certificates.cert-manager.io "pearl-tls" is forbidden`.
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-tls"
 
-namespace="" host="" timeout="${HOSTING_TLS_TIMEOUT:-600}"
+namespace="" host="" issuer="" timeout="${HOSTING_TLS_TIMEOUT:-600}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --namespace) namespace="${2:-}"; shift 2 ;;
     --host)      host="${2:-}";      shift 2 ;;
+    --issuer)    issuer="${2:-}";    shift 2 ;;
     --timeout)   timeout="${2:-}";   shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
@@ -28,12 +39,42 @@ hosting::safe_name namespace "$namespace"
 hosting::safe_host host "$host"
 
 secret="${HOSTING_TLS_SECRET:-${namespace}-tls}"
-issuer="${HOSTING_TLS_ISSUER:-letsencrypt-prod}"
+# --issuer is what the RECORD says (the plan passes it); the env var is the fleet fallback for a
+# hand-run. `none` would mean "ask cert-manager for nothing", which is not this step's business:
+# the plan does not compose a TLS step for such a record, so seeing it here is a contradiction.
+[ -n "$issuer" ] || issuer="${HOSTING_TLS_ISSUER:-letsencrypt-prod}"
+[ "$issuer" = "none" ] && hosting::die "the issuer is 'none' — that record asks cert-manager for nothing, so this step must not have been composed. Nothing was created."
 
+# 🚨 Both reads below are called from the WAIT LOOP, so a refusal that reads as "not yet" does not
+# merely mislead — it spends the entire budget first and only then lies (MeshWeaver#4722). Measured
+# shape before this change: a Forbidden on `certificates` left $state empty for the full timeout and
+# the step then died with `Certificate Ready: no such object`, asserting the object does not exist.
+# The pearl Provision of 2026-09-15 stopped on exactly that Forbidden, which is why the ClusterRole
+# grants `certificates` today — and why a future RBAC change must not be able to bring the sentence
+# back. A refusal ends the wait immediately; nothing is ruled out and no budget is burned.
+#
+# 🚨 Both are called DIRECTLY, never in a command substitution: hosting::die inside $( ) ends only
+# the substitution and the caller carries on with an empty value (see hosting::safe_name).
 ready() {
-  local tls_crt
-  tls_crt="$(kubectl -n "$namespace" get secret "$secret" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)"
-  [ -n "$tls_crt" ]
+  local rc
+  hosting::probe output kubectl -n "$namespace" get secret "$secret" -o jsonpath='{.data.tls\.crt}'
+  rc=$?
+  [ "$rc" -ne 2 ] || hosting::die_refused "the TLS Secret ${secret} in ${namespace}"
+  [ "$rc" -eq 0 ]
+}
+
+# The Certificate's Ready condition — "True" once cert-manager has issued, plus its message while
+# it has not. Read explicitly (see the header) so the refusal can say WHY, not just that nothing
+# arrived.
+# Sets CERT_STATE rather than printing, for the command-substitution reason stated above.
+CERT_STATE=""
+cert_state() {
+  local rc
+  hosting::probe any kubectl -n "$namespace" get certificates "$secret" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.conditions[?(@.type=="Ready")].message}'
+  rc=$?
+  [ "$rc" -ne 2 ] || hosting::die_refused "the Certificate ${secret} in ${namespace}"
+  CERT_STATE="$HOSTING_PROBE_OUT"
 }
 
 if ready; then
@@ -66,10 +107,15 @@ spec:
     kind: ClusterIssuer
 YAML
 
+# WAIT for the certificate to exist, not for the request to be accepted. Both halves must hold:
+# the Certificate Ready, and the Secret carrying a key pair — the object can be Ready a moment
+# before the Secret is readable here, and a Secret without `tls.crt` serves nothing.
 deadline=$(( $(date +%s) + timeout ))
+state=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  if ready; then
-    hosting::log "certificate issued into ${secret}"
+  cert_state; state="$CERT_STATE"
+  if ready && [ "${state%% *}" = "True" ]; then
+    hosting::log "certificate issued into ${secret} (Certificate ${secret} is Ready)"
     hosting::say tls issued
     exit 0
   fi
@@ -79,5 +125,9 @@ done
 # Name what to look at. A cert that never issues is almost always DNS not yet resolving to the
 # ingress, and the Certificate's own events say so.
 reason="$(kubectl -n "$namespace" describe certificate "$secret" 2>/dev/null | tail -20 || true)"
-hosting::die "no certificate in ${secret} after ${timeout}s. Until one exists the ingress serves ANOTHER host's default certificate, so this is a failure rather than something to proceed past. Most often the A record has not propagated to the issuer's resolver yet. Certificate events:
+if [ "${state%% *}" = "True" ]; then
+  hosting::die "Certificate ${secret} reports Ready but the Secret still carries no key pair after ${timeout}s. The ingress therefore still serves another host's certificate. Certificate events:
+${reason}"
+fi
+hosting::die "no certificate in ${secret} after ${timeout}s (Certificate Ready: ${state:-no such object}). Until one exists the ingress serves ANOTHER host's default certificate, so this is a failure rather than something to proceed past. Most often the A record has not propagated to the issuer's resolver yet. Certificate events:
 ${reason}"

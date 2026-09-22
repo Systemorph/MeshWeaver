@@ -230,11 +230,20 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
         // to name because nothing ever threw). Saying "did not answer within 30s" about a
         // NullReferenceException would point the reader at a starving peer silo that was never
         // involved — the same mis-naming this fix exists to stop doing to the CALLER.
+        // 🚨 A FOURTH road, and it is the one that can NAME the culprit: the query fan-in serving a
+        // leg of the fold reached its own (strictly inner) bound with a provider that never emitted
+        // an Initial. Reporting that as "did not answer within {_establishmentBudget}s" would print
+        // THIS level's budget for a bound one rung down and name no provider — the same
+        // mis-attribution the TimeoutException arm exists to avoid, one level deeper. Say which
+        // provider starved, because nothing above the fan-in can.
         var why = cause is null
             ? "completed without producing a verdict (a source of the permission fold emitted nothing)"
-            : cause is TimeoutException
-                ? $"did not answer within {_establishmentBudget.TotalSeconds:0}s"
-                : $"failed ({cause.GetType().Name}: {cause.Message})";
+            : cause is QueryProviderStalledException stalled
+                ? $"could not be read: query provider(s) [{stalled.Providers}] did not emit an "
+                  + $"Initial within {stalled.Budget.TotalSeconds:0.###}s"
+                : cause is TimeoutException
+                    ? $"did not answer within {_establishmentBudget.TotalSeconds:0}s"
+                    : $"failed ({cause.GetType().Name}: {cause.Message})";
 
         _logger.LogWarning(cause,
             "RLS: the {Operation} permission check on {Path} could NOT be established — the "
@@ -281,7 +290,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             return Observable.Return<NodeValidationResult?>(null);
 
         var authenticated = WellKnownUsers.IsAuthenticated(userId);
-        return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
+        return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)
             .Select(owns => owns switch
             {
                 true when authenticated => NodeValidationResult.Valid(),

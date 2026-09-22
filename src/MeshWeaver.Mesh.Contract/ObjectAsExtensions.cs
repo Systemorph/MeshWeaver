@@ -99,7 +99,7 @@ public static class ObjectAsExtensions
                     // InvalidOperationException — neither derives from JsonException, so catching
                     // JsonException alone would let a read fault its caller, which is the one thing
                     // this accessor exists to prevent.
-                    LogRecoveryFailure(logger, typeof(T), ex);
+                    LogRecoveryFailure(logger, typeof(T), ex, what);
                     return null;
                 }
             case JsonNode jn:
@@ -109,7 +109,7 @@ public static class ObjectAsExtensions
                 }
                 catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
                 {
-                    LogRecoveryFailure(logger, typeof(T), ex);
+                    LogRecoveryFailure(logger, typeof(T), ex, what);
                     return null;
                 }
             default:
@@ -192,7 +192,7 @@ public static class ObjectAsExtensions
                 }
                 catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
                 {
-                    LogRecoveryFailure(logger, type, ex);
+                    LogRecoveryFailure(logger, type, ex, what);
                     return null;
                 }
             case JsonNode jn:
@@ -202,7 +202,7 @@ public static class ObjectAsExtensions
                 }
                 catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
                 {
-                    LogRecoveryFailure(logger, type, ex);
+                    LogRecoveryFailure(logger, type, ex, what);
                     return null;
                 }
             default:
@@ -231,13 +231,30 @@ public static class ObjectAsExtensions
     }
 
     /// <summary>
-    /// Record the failed conversion without exporting node content, node paths, or exception
-    /// messages. Custom converters can put the entire value into an exception, and JsonException
-    /// paths can contain user-controlled dictionary keys, so neither is safe diagnostic metadata.
+    /// Record the failed conversion without exporting node CONTENT or exception MESSAGES. Custom
+    /// converters can put the entire value into an exception, and JsonException paths can contain
+    /// user-controlled dictionary keys, so neither is safe diagnostic metadata.
+    ///
+    /// <para>🚨 <b>But the SUBJECT is, and withholding it made this line undiagnosable</b>
+    /// (Systemorph/MeshWeaver#4597). Every caller already supplies <c>what</c> — a node path, a
+    /// control name — and the sibling not-convertible branches in both overloads print it as
+    /// <c>{What}</c>; only this one dropped it on the floor. Production therefore carried
+    /// <c>"As&lt;MarkdownContent&gt; could not recover value: JsonException"</c> four times over
+    /// twelve days with nothing to look up: not the node, not the partition, not which of the many
+    /// writers of markdown content sent it. The incident's own review recorded that as the blocker —
+    /// <i>"LogRecoveryFailure deliberately withholds content AND carries no node path, so there is
+    /// nothing to look up"</i> — and the fix is to say the thing the caller already told us.</para>
+    ///
+    /// <para>This exports no new CLASS of information: a node path is already in this file's other
+    /// two log lines, <c>ContentAs&lt;T&gt;</c> is documented as "this same conversion with the
+    /// node's path in the diagnostics", and every neighbouring seam that reports a typing mismatch
+    /// (<c>NodeUpdatePipeline</c>'s two Warning branches) names the path. Content and exception text
+    /// stay withheld, which is the part of the contract that was load-bearing.</para>
     /// </summary>
-    private static void LogRecoveryFailure(ILogger? logger, Type target, Exception exception) =>
+    private static void LogRecoveryFailure(
+        ILogger? logger, Type target, Exception exception, string? what) =>
         logger?.LogError(
-            "As<{TargetType}> could not recover value: {ExceptionType}. "
+            "As<{TargetType}> for {What} could not recover value: {ExceptionType}. "
             + "Content and exception details withheld.",
-            target.Name, exception.GetType().Name);
+            target.Name, what ?? "value", exception.GetType().Name);
 }

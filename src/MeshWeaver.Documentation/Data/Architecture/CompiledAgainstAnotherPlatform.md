@@ -151,6 +151,65 @@ readiness gate — **when it is registered and armed** (the host registers it on
 and an unarmed gate admits traffic) — which refuses readiness for a type that REGRESSED on its image
 and passes one already at `Error`, so such a type is never named by it.
 
+## The live record census — `bake-report` after boot (#4632)
+
+The 2026-09-17 instance of this class was the mirror image of the one above. `memex.systemorph.com`
+was mid-roll (`Ops/Status/memex`: `generations: 2`, `converged: false` — two READY replicas on
+`3.0.0-ci.8710`, one not-ready on `ci.8812`). At 14:33 the `ci.8812` replica adopted a prebuilt for
+`Approvals/Desk` and stamped the shared record `compiledFrameworkVersion: saec4a2d…`,
+`buildProvenance: AdoptedVerified`; the serving replicas ran `s2902ab1…`. Their activation refuses a
+foreign build — `HasUsableBuild` is a pure record check and `NodeTypeBuildIdentity.ReportedStatus`
+folds that `Ok` to `Foreign` — so the type's areas never registered there, and a customer letter
+rendered *"No renderer is registered for area Approvals on hub Approvals/Workspace"*. **Every
+instrument was green**, and each for a structural reason, not a bug:
+
+| Instrument | Why it could not say it |
+|---|---|
+| `content-types` | records a degradation only when a content **read** degrades (`$type` unresolvable). An assembly that is never bound registers no area; that is not a content degradation, so the type is in no list until somebody reads its content — and nobody had. |
+| `bake-report` (plan) | `NodeTypeBakeStatus.Classify` DOES compare `CompiledFrameworkVersion` to the live identity (`FrameworkStale`), but the enumeration is taken **once, at boot** (`ProbeDynamicTypes` / `WarmDynamicTypes`, `Query(...).Take(1)`). The serving replicas booted before 14:33 and read `Approvals/Desk` as baked; nothing re-read. |
+| `bake-report` (outcome census, #4645) | per-type verdicts from the **compiling sweep**, which the default adopt-only deployment does not run; and it, too, is a sweep-time reading. |
+| `nodetype_bake` | boot-time; gates on a **regression on this image** and is registered only under `gateBake`. |
+| the `search` sweep | reads the shared field, which says `Ok` — true for the replica that wrote it. |
+
+**What closed it — a reading that is not taken at boot.** `bake-report` now carries a second half,
+`NodeTypeLiveRecordCensus`, fed by a standing subscription the pre-warmer hosted service holds for
+the process's life (`DynamicTypePreWarmer.ObserveLiveRecordCensus`: the synced NodeType catalog,
+`hub.GetQuery("nodetype-live-record-census", nodeType:NodeType partitions:all)`, System-scoped,
+whole-set emissions). Every emission is folded — purely, no store probe, no hub activation — with
+the SAME per-process verdict every load path applies, `NodeTypeBuildIdentity.ReportedStatus(def, live)`,
+so a census over records is faithful to what activation would decide. It publishes:
+
+- **`Foreign`** — records naming a build keyed to a framework this replica does not run, over the
+  denominator of dynamic records enumerated (and how many of those could not be typed here);
+- **`ForeignSinceBoot`** — the subset whose `LastCompileSucceededAt` is **after this replica's boot**.
+  This is the discriminator, and it is why the entry can degrade without becoming a check that cannot
+  pass: a foreign record stamped *before* boot is the ordinary every-deploy state (the previous
+  image's records, rebuilt by the bake or the first access — an adopt-only portal carries hundreds
+  for its whole life), while one stamped *after* boot means a process on another image re-keyed a
+  type this replica may have been serving, which no boot-time reading can know;
+- the detail as `<identity>×N in <partition>/… (M since boot)` — the **partition only**, never the
+  node title, because `/health` is public (#3890, #4258); identities print as the eight characters
+  the assembly-store filename carries, so a line can be compared by eye to a DLL name.
+
+`bake-report` reads **Degraded** only on `ForeignSinceBoot > 0` (`IsCleanIncludingLive`). An absent
+live reading prints as its own sentence — *"LIVE RECORD CENSUS: NONE taken on this replica … an
+absence of measurement, NOT a clean one"* — and degrades nothing, deliberately unlike the absent bake
+report: the bake report is published by every boot, so its absence means the enumeration faulted,
+whereas the live watch is a standing subscription that has simply not emitted yet on a replica still
+coming up. Controls: `LiveRecordCensusTest` (the fold, a case on each side), `HealthCensusTest`
+(the body), and `LiveRecordCensusFollowsTheCatalogTest`, which re-stamps a record over a real mesh
+and asserts the reading **moves** — a one-shot feed passes its first assertion and fails its second.
+
+What it does **not** do: it does not recompile anything (a census is an instrument, and #3472's
+reader half is explicit that a reader-relative verdict is never written — two replicas on two images
+would overwrite each other forever), and it does not decide *which* image is right. It clears when
+the fleet converges, or when the type is rebuilt against this replica's framework (the `recycle`
+verb or the Compile button — both force, see [Stale State Until Recycle](../StaleStateUntilRecycle)).
+Not established by the incident's read-only session, and still open: which activation path bound the
+**default** configuration on the serving replicas rather than the `FrameworkStale` overlay
+`RecompileForLiveFramework` reaches after `MaxRecompileAttempts` — the census names the state; it
+does not explain that bind.
+
 ## What would close this class
 
 Stated as options. None has been scoped by the maintainer, and the last one is a legitimate answer.

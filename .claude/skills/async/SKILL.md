@@ -78,12 +78,28 @@ test runs, and a green test proves the wrong thing.
 
 **What to write instead**
 
-```csharp
-// ✅ await the observable DIRECTLY (Rx's own awaiter), bounded so a hang is a failure
-await hub.DisposalCompleted.FirstOrDefaultAsync().Timeout(TimeSpan.FromSeconds(30));
+🚨 **Not by awaiting the observable directly.** That is the trap this page used to teach, in
+this very block: Rx's own awaiter is an `AsyncSubject<T>` that completes its continuation from
+inside `OnCompleted`, so `await source…` resumes on the signalling thread exactly as the bridge
+does. `InlineResumptionMechanismTest` measures both, and
+`ObservableToTaskBridgeGuard.NoProductionCodeAwaitsAnObservableDirectly` now holds `src/` at zero
+for it.
 
-// ✅ or stay reactive and assert on the stream
-await stream.Where(x => x is not null).FirstAsync().Timeout(30.Seconds());
+```csharp
+// ❌ NOT a fix — Rx's awaiter resumes the continuation on whichever thread signalled
+await hub.DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence);
+// ❌ nor this — the tail is an operator rather than a reducer, and it behaves identically
+await stream.Where(x => x is not null).Take(1).Timeout(TestTimeouts.Convergence);
+
+// ✅ stay reactive: the work belongs to the signal
+hub.DisposalCompleted.Take(1).Subscribe(_ => Unload(), ex => logger.LogError(ex, "…"));
+
+// ✅ in a test, assert on the stream — the assertion bridges once, correctly
+await stream.Where(x => x is not null).Should().Within(TestTimeouts.Convergence).Emit("the node arrives");
+
+// ✅ where a foreign signature genuinely hands you a Task to return, use the ONE bridge
+await stream.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);                 // last value, faults on empty
+await stream.FirstAsync().ObserveCompletion(ex => logger.LogWarning(ex, "late"), ct);  // …plus a late-fault arm
 ```
 
 **The one place it may work — and usually still should not:** inside an **activity**, where the

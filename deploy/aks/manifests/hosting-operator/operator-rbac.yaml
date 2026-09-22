@@ -7,9 +7,24 @@
 #  * apps/deployments: scale (quiesce/reactivate) and read rollout status.
 #  * ingresses: the suspension redirect and its undo.
 #  * secrets/configmaps/pvc/services: what a Helm release of the portal chart owns.
-#  * NO access to `nodes`, `clusterroles`, or the monitoring namespace — a lifecycle run has no
-#    business there, and the day someone needs it is the day to review this file, not to widen it
-#    pre-emptively.
+#  * NO access to `clusterroles` or the monitoring namespace — a lifecycle run has no business
+#    there, and a Job must never widen cluster-scoped RBAC.
+#  * READ on `nodes` and `customresourcedefinitions` — get + list, no watch.
+#    🚨 This bullet used to read "NO access to `nodes` … and the day someone needs it is the day to
+#    review this file, not to widen it pre-emptively." That day was 2026-09-18 and this is the
+#    review: widened deliberately, on the maintainer's decision, not pre-emptively.
+#    WHY: `hosting-db-release` must know, BEFORE it renders an instance's database release, whether
+#    the CloudNativePG CRD is installed and whether a `workload=db` node pool exists. Both are
+#    cluster-scoped facts belonging to no instance, and without them the step leaves a Cluster
+#    Pending forever on a pool that does not exist. Read-only because the platform layer is
+#    installed once, by the approved lane, and never by a lifecycle run
+#    (deploy/aks/manifests/db-platform/README.md). No `watch`: all three call sites are one-shot
+#    `get`s in a preflight.
+#    🚨 THE COST, stated where a reviewer sees it: anything that compromises an operator Job can now
+#    ENUMERATE the cluster's nodes and their labels — pool names, sizes, zones and topology. That is
+#    a real widening of what a compromised Job learns, accepted knowingly. It remains read-only, and
+#    still on a ServiceAccount that only ever backs a short-lived Job, never a pod and never the
+#    portal. See MeshWeaver#4722 for the measurement that prompted the review.
 #
 # 🚨 HOW THIS FILE REACHES THE CLUSTER. It is applied by the config repo's helm-release lane
 # (Systemorph/Memex `helm-release.yml`, actions adopt and deploy) from THIS repository at the
@@ -22,8 +37,12 @@
 #   "system:serviceaccount:memex-ops:hosting-operator" cannot get resource "storageclasses"
 # A grant that only a laptop can move is the same defect as an operator image that only a laptop
 # can move (core #3757 / Plugins #1542): the record and the chart are the inputs, and every one of
-# them needs a lane. deploy/aks/operator/test/check-rbac-coverage.py holds the other half — every
-# kubectl verb+resource a bin/ script names must be granted here, or the suite is red.
+# them needs a lane. deploy/aks/operator/test/check-rbac-coverage.sh holds the other half — every
+# kubectl verb+resource a bin/ script names must be granted here, or the suite is red. Its sibling
+# check-stderr-discarded.sh holds the half that matters while a grant is still IN FLIGHT: a read
+# that discards its stderr cannot tell a refusal from an absence, so until the lane above has run,
+# the operator's own diagnostics are all that stands between a missing grant and a reader sent off
+# to re-create something that is already there (MeshWeaver#4722, Doc/Architecture/DeniedIsNotAbsent).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -67,6 +86,15 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
+    verbs: ["get", "list"]
+  # READ-ONLY and CLUSTER-SCOPED, for hosting-db-release's platform-layer preflight — the scope note
+  # at the top carries the decision, the reason and the cost. get + list, never watch, never write:
+  # the platform layer is installed once by the approved lane, never by a lifecycle run.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
     verbs: ["get", "list"]
   # 🚨 EVERY KIND THE CHART RENDERS MUST BE WRITABLE HERE — helm applies the release under this
   # identity. Measured 2026-09-09 01:59Z (Deployments/memex-reconcile-20260909-adopt): the chart at
@@ -113,6 +141,17 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "delete"]
+  # For hosting-tls, the step that gives a new instance its certificate. cert-manager's own
+  # controller does the issuing; the operator only declares the Certificate and reads it back to
+  # learn whether it went Ready. Measured 2026-09-15 on pearl, step 15/18 of its Provision:
+  #   certificates.cert-manager.io "pearl-tls" is forbidden: User
+  #   "system:serviceaccount:memex-ops:hosting-operator" cannot get resource "certificates"
+  # The run stopped there, so TLS and all three verification steps never ran and the host served
+  # another instance's certificate. No delete: a Certificate is owned by the release that renders
+  # the ingress, and removing one is not something a provisioning run may do.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

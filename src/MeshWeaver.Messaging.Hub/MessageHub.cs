@@ -131,54 +131,9 @@ public sealed class MessageHub : IMessageHub
     public long Version => Interlocked.Read(ref version);
     private long version;
 
-    /// <summary>
-    /// 🚨 <b>Who asked for this teardown (#3510).</b> <c>null</c> until a routed
-    /// <see cref="DisposeRequest"/> is honoured, and then the sender that posted it.
-    ///
-    /// <para>The bake wedge of #3510 turned on one unknown the log could not answer: the Hosting
-    /// root was disposed at 23:37:51Z while its own 145-file install was in flight, its per-node
-    /// children went with it, and the writes they owed acks for were stranded — but <i>"who
-    /// disposed the root is not in the log at this level"</i>, so the leading hypothesis (a
-    /// NodeType rebind posting <c>DisposeRequest</c> to the root) stayed a hypothesis. The issue
-    /// asks for exactly this: <i>"[QUIESCE-START] on a root should name who asked"</i>.</para>
-    ///
-    /// <para><b>Why the ShutdownRequest's own sender cannot answer it.</b> <c>Dispose()</c> posts
-    /// that request to ITSELF, so its <c>Sender</c> is always this hub — the question it looks like
-    /// it answers is the one it cannot. The discriminating fact is one frame earlier: whether a
-    /// <c>DisposeRequest</c> arrived over the bus at all, and from where. A direct <c>Dispose()</c>
-    /// (host teardown, an owner tearing down its children, a <c>using</c>) leaves this null, and
-    /// that absence is itself the answer — it rules the message path out.</para>
-    /// </summary>
-    private volatile string? disposeRequestedBy;
 
-    /// <summary>
-    /// WHY, as stated by whoever posted the <see cref="DisposeRequest"/> — <c>null</c> when they
-    /// did not say, which prints as <see cref="DisposeRequest.ReasonNotStated"/> rather than as
-    /// nothing. See <see cref="DisposeRequest.Reason"/> for why the sender alone is not enough.
-    /// </summary>
-    private volatile string? disposeReason;
 
-    /// <summary>
-    /// 🚨 <b>Set when this hub goes down because its OWNER is going down (#3510).</b> A hosted hub
-    /// is torn down by <c>HostedHubsCollection.DisposeHubsReactive</c> calling <c>Dispose()</c> on
-    /// it — a DIRECT dispose, so before this field existed every cascaded child printed
-    /// <see cref="DirectDisposeSource"/>, indistinguishable from a <c>using</c> and from host
-    /// teardown.
-    ///
-    /// <para>That indistinguishability IS #3510's wedge one level down. The issue's trail is
-    /// <i>"the Hosting root was disposed while its own 145-file install was in flight; its per-node
-    /// children went with it, and the writes they owed acks for were stranded"</i> — and the
-    /// stranded writes were owed by those CHILDREN, whose own <c>[QUIESCE-START]</c> lines
-    /// attributed their teardown to nobody. Reading the child told you nothing about the root.</para>
-    /// </summary>
-    private volatile string? cascadeOwner;
 
-    /// <summary>
-    /// The ORIGINATING teardown, propagated unchanged down a cascade, so a leaf hub's line names
-    /// the event that actually started it rather than only its immediate parent. Set together with
-    /// <see cref="cascadeOwner"/>.
-    /// </summary>
-    private volatile string? cascadeOrigin;
 
     /// <summary>
     /// 🚨 <b>The ONE claim on this hub's teardown cause — FIRST CAUSE WINS, atomically.</b>
@@ -199,26 +154,46 @@ public sealed class MessageHub : IMessageHub
     /// a report that names the WRONG cause is worse than one that names none — it is the defect
     /// that issue was filed on, pointing somewhere else.</para>
     /// </summary>
-    private int teardownCauseClaimed;
+    /// <summary>
+    /// WHO, WHY and (for a cascade) the owner, as ONE reference — so a reader sees either nothing
+    /// claimed or a fully-formed cause, never a half-written one.
+    ///
+    /// <para>🚨 This replaced a claim FLAG plus separate fields, and the difference is a real race
+    /// (#4888 review). The CAS made the <i>claim</i> atomic and published nothing: a second
+    /// disposer could observe the claim taken, return without writing, and have its
+    /// <c>Dispose()</c> reach <c>HandleShutdownCore</c> while the winner's fields were still null —
+    /// rendering the teardown as <see cref="DirectDisposeSource"/>, "nobody asked", exactly when
+    /// somebody had. The window is small and its outcome is indistinguishable from the bug the
+    /// attribution exists to remove, which is the worst pairing for ever noticing it.</para>
+    /// </summary>
+    /// <param name="RequestedBy">WHO, for a routed or direct teardown; <c>null</c> for a cascade.</param>
+    /// <param name="Reason">WHY. For a cascade this is the ORIGINATING cause, passed to children
+    /// unchanged so the chain names the event that started it however deep the tree is.</param>
+    /// <param name="CascadeOwner">The owner whose teardown is taking this hub with it, or
+    /// <c>null</c> when this hub is the subject rather than a casualty.</param>
+    private sealed record TeardownCause(string? RequestedBy, string? Reason, string? CascadeOwner);
+
+    private TeardownCause? teardownCause;
 
     /// <summary>
     /// Claims the right to record this hub's teardown cause. Exactly one caller ever wins.
     /// </summary>
-    private bool TryClaimTeardownCause() =>
-        Interlocked.CompareExchange(ref teardownCauseClaimed, 1, 0) == 0;
+    /// <summary>FIRST CAUSE WINS, and the cause is complete before it is visible.</summary>
+    private bool TryPublishTeardownCause(TeardownCause cause) =>
+        Interlocked.CompareExchange(ref teardownCause, cause, null) is null;
 
     /// <summary>
     /// What <c>[QUIESCE-START]</c> prints when no routed <see cref="DisposeRequest"/> brought this
     /// hub down and no owner claimed the cascade — host teardown or a <c>using</c>. Spelled once so
     /// a log reader and a log QUERY agree on the token.
     /// </summary>
-    internal const string DirectDisposeSource = "a direct Dispose() (no routed DisposeRequest)";
+    public const string DirectDisposeSource = "a direct Dispose() (no routed DisposeRequest)";
 
     /// <summary>WHO — the first half of the <c>[QUIESCE-START]</c> attribution.</summary>
     private string DisposalRequestedBy =>
-        cascadeOwner is { } owner
+        teardownCause is { CascadeOwner: { } owner }
             ? $"a cascade from its owner {owner}"
-            : disposeRequestedBy ?? DirectDisposeSource;
+            : teardownCause?.RequestedBy ?? DirectDisposeSource;
 
     /// <summary>
     /// WHY — the second half. Never empty: a poster that said nothing is reported as having said
@@ -226,9 +201,9 @@ public sealed class MessageHub : IMessageHub
     /// printing no reason at all.
     /// </summary>
     private string DisposalReason =>
-        cascadeOwner is not null
-            ? $"the owner's own teardown — {cascadeOrigin ?? DisposeRequest.ReasonNotStated}"
-            : disposeReason ?? DisposeRequest.ReasonNotStated;
+        teardownCause is { CascadeOwner: not null } cascade
+            ? $"the owner's own teardown — {cascade.Reason ?? DisposeRequest.ReasonNotStated}"
+            : teardownCause?.Reason ?? DisposeRequest.ReasonNotStated;
 
     /// <summary>
     /// 🚨 WHO and WHY as ONE sentence, for the teardown reports that have room for a clause and
@@ -248,7 +223,7 @@ public sealed class MessageHub : IMessageHub
     /// having stated nothing, and a hub nobody asked about over the bus is reported as
     /// <see cref="DirectDisposeSource"/>. Both are answers.</para>
     /// </summary>
-    internal string DisposalAttribution =>
+    public string DisposalAttribution =>
         $"requested by {DisposalRequestedBy}; why: {DisposalReason}";
 
     /// <summary>
@@ -257,9 +232,10 @@ public sealed class MessageHub : IMessageHub
     /// started it however deep the tree is — and the string cannot grow with depth.
     /// </summary>
     internal string DisposalOriginForChildren =>
-        cascadeOrigin
-        ?? $"{Address} was torn down by {disposeRequestedBy ?? DirectDisposeSource}; why: "
-           + (disposeReason ?? DisposeRequest.ReasonNotStated);
+        teardownCause is { CascadeOwner: not null, Reason: { } origin }
+            ? origin
+            : $"{Address} was torn down by {teardownCause?.RequestedBy ?? DirectDisposeSource}; why: "
+              + (teardownCause?.Reason ?? DisposeRequest.ReasonNotStated);
 
     /// <summary>
     /// Records that this hub is going down because <paramref name="owner"/> is (#3510). Called by
@@ -275,14 +251,44 @@ public sealed class MessageHub : IMessageHub
     /// <see cref="DisposalOriginForChildren"/>.</param>
     internal void NoteCascadeFrom(Address owner, string originatingCause)
     {
-        // FIRST CAUSE WINS, and now as a CLAIM rather than a read-then-write over two volatile
-        // fields: the other writer (HandleDispose) runs on the action block while this runs on the
-        // disposing owner's thread, so the old pair of reads could both see "unset". See
-        // teardownCauseClaimed.
-        if (!TryClaimTeardownCause())
-            return;
-        cascadeOrigin = originatingCause;
-        cascadeOwner = owner.ToString();
+        // FIRST CAUSE WINS, as a single atomic PUBLICATION rather than a read-then-write over
+        // separate fields: the other writers (HandleDispose on the action block, and
+        // NoteDirectDisposalBy on whichever thread disposes) race this one, and both a pair of
+        // reads AND a claim-then-write leave a window where a reader sees no cause at all. See
+        // TeardownCause.
+        TryPublishTeardownCause(
+            new TeardownCause(RequestedBy: null, Reason: originatingCause, CascadeOwner: owner.ToString()));
+    }
+
+    /// <summary>
+    /// Records WHO tore this hub down and WHY when the teardown does NOT come over the bus (#4888).
+    /// Called by the external disposer immediately before <see cref="Dispose"/>, exactly as
+    /// <see cref="NoteCascadeFrom"/> is called by the owning collection.
+    ///
+    /// <para><b>Why it is needed.</b> A direct <c>Dispose()</c> could say nothing about itself, so
+    /// every such teardown rendered as <see cref="DirectDisposeSource"/> — literally "nobody asked
+    /// over the bus". That is honest but useless to a reader of a <c>[DISPOSE-DISCARD]</c>, which
+    /// is the Error that becomes an ISSUE: it names the discarded message, its sender and the gates
+    /// it sat behind, and then cannot say which teardown threw it away. The largest single source of
+    /// direct disposes is an Orleans grain deactivation, which KNOWS its reason — it logs the reason
+    /// code one line before disposing — and simply had nowhere to put it.</para>
+    ///
+    /// <para>FIRST CAUSE WINS, through the same claim as the cascade path: a hub already asked to
+    /// recycle by name keeps that attribution, because that request is what actually started its
+    /// teardown. Idempotent and safe from any thread.</para>
+    /// </summary>
+    /// <param name="requestedBy">WHO — a short phrase naming the disposer, e.g. the grain and its
+    /// deactivation.</param>
+    /// <param name="reason">WHY, or <c>null</c>/blank when the disposer genuinely has none, which
+    /// renders as <see cref="DisposeRequest.ReasonNotStated"/> rather than as an empty clause.</param>
+    public void NoteDirectDisposalBy(string requestedBy, string? reason)
+    {
+        // Normalised here for the same reason HandleDispose normalises: a blank is an UNSTATED
+        // reason, not a reason that renders as nothing.
+        TryPublishTeardownCause(new TeardownCause(
+            RequestedBy: requestedBy,
+            Reason: string.IsNullOrWhiteSpace(reason) ? null : reason,
+            CascadeOwner: null));
     }
 
     /// <summary>
@@ -2015,6 +2021,36 @@ public sealed class MessageHub : IMessageHub
     /// <para>Same exclusions as the receiver side, because it is literally the same predicate: a
     /// heartbeat is routing liveness, and a response the router posts is the undeliverable-mail NACK
     /// — routing's own duty (see <see cref="RouterTrafficRule.RoleOf(string?, string?, object?, bool)"/>).</para>
+    ///
+    /// <para>🚨 <b>The remedy the line prints is ROLE-DEPENDENT, and printing one remedy for both
+    /// roles manufactured a misdiagnosis</b>
+    /// (<see href="https://github.com/Systemorph/MeshWeaver/issues/4697">#4697</see>). For
+    /// <c>sender</c> the call site below IS the thing to move, and there are THREE seams to move it
+    /// onto — not the two this line named until #4697 — which are not interchangeable:
+    /// <c>ReadIssuingHub()</c> registers no handlers by design, so a stream SUBSCRIPTION hopped
+    /// onto it stops reporting and stops receiving data in the same breath, the worst available
+    /// failure mode because the instrument goes quiet with the subject (#4614).</para>
+    ///
+    /// <para>🚨 <b>And <c>target</c> is TWO populations with opposite fixes, which is why the line
+    /// asks a question there instead of asserting one.</b> The role fires whenever the delivery is
+    /// ADDRESSED at the router, and that covers real work someone SENT to it — see the
+    /// <c>isResponse</c> remark on
+    /// <see cref="RouterTrafficRule.RoleOf(string?, string?, object?, bool)"/>: <i>"real work SENT
+    /// TO the router is still reported at request time via the target role"</i> — as well as the
+    /// reply/fan-out case. In the first the call site CHOSE the destination and is the offender
+    /// (<c>NodeOperationTarget()</c>); in the second the target was read off an incoming request or
+    /// subscription (<c>request.Subscriber</c>, <c>ResponseFor(delivery)</c>) and the call site is
+    /// the innocent answering half, so the hub to move is the SUBSCRIBER. Nothing at the detector
+    /// separates them — a <c>DataChangedEvent</c> fan-out carries no request-id, so
+    /// <c>isResponse</c> is not that discriminator — but the reader AT the call site answers it in
+    /// one look, which is why the line hands them that test rather than a verdict.
+    /// <c>sender AND target</c> means both halves apply. #4697 was auto-filed off this line and its
+    /// "probable cause" repeated the printed two-seam advice verbatim about a target-role fan-out,
+    /// naming an innocent frame in <c>JsonSynchronizationStream</c>; the real defect was one hub
+    /// away and already fixed. (Copilot on #4712 caught the first draft of this fix asserting the
+    /// reply case just as confidently — the same defect, pointed the other way.)
+    /// <c>RouterOriginAdviceNamesEverySeamGuard</c> holds the text to the seam vocabulary the two
+    /// <c>src/</c> ratchets read with.</para>
     /// </summary>
     /// <param name="delivery">The delivery just created by this post, or <c>null</c> if none was.</param>
     private void ReportRouterTrafficOrigin(IMessageDelivery? delivery)
@@ -2052,9 +2088,22 @@ public sealed class MessageHub : IMessageHub
         logger.LogError(
             "ROUTER_TRAFFIC ORIGIN: {MessageType} was POSTED with the mesh hub as {Role} (sender: "
             + "{Sender}, target: {Target}). The mesh hub is the ROUTER and must not be an end of a "
-            + "work delivery — hop off it with MeshExtensions.NodeOperationIssuingHub() (writes) or "
-            + "MeshExtensions.ReadIssuingHub() (reads) before posting. Reported once per role+type "
-            + "for this hub. Call site:\n{CallSite}",
+            + "work delivery. If the role above includes 'sender', this post LEFT the router: hop "
+            + "it onto the seam that matches what this delivery IS — "
+            + "MeshExtensions.NodeOperationIssuingHub() for a node LIFECYCLE write, "
+            + "MeshExtensions.ReadIssuingHub() for a bounded one-shot READ, "
+            + "MeshExtensions.StreamSubscribingHub() for a remote stream SUBSCRIPTION. The three "
+            + "are NOT interchangeable and the wrong one fails SILENTLY: ReadIssuingHub() "
+            + "registers no handlers by design, so a subscription hopped onto it stops reporting "
+            + "AND stops receiving data (#4614). If the role above includes 'target', ask where "
+            + "that target CAME FROM, because the two cases have opposite fixes: if this call site "
+            + "CHOSE the router as the destination, the call site is the offender — address the "
+            + "owning node instead (MeshExtensions.NodeOperationTarget()); if the target was read "
+            + "off an incoming request or subscription (request.Subscriber, ResponseFor(delivery) "
+            + "— SubscribeAck, DataChangedEvent, StreamErrorEvent and StreamEndedEvent all are), "
+            + "then this call site is the innocent answering half and the hub to move is the one "
+            + "that SUBSCRIBED or REQUESTED (#4697). 'sender AND target' means both apply. "
+            + "Reported once per role+type for this hub. Call site:\n{CallSite}",
             messageType, role, delivery.Sender?.ToString() ?? "(none)",
             delivery.Target?.ToString() ?? "(none)", DescribeCallSite());
     }
@@ -2462,6 +2511,12 @@ public sealed class MessageHub : IMessageHub
     internal static readonly EventId DisposalQuiesceWaitCutOff = new(7315, nameof(DisposalQuiesceWaitCutOff));
     internal static readonly EventId DisposalPumpNeverDequeued = new(7316, nameof(DisposalPumpNeverDequeued));
     internal static readonly EventId DisposalStalledUnclassified = new(7317, nameof(DisposalStalledUnclassified));
+    // 7318 — a ShutdownRequest turn stalled BELOW the ShutDown phase, where no registrant has run.
+    // Its own event so it files as its own incident: 7314's finding is a blocking registrant and
+    // this one's is a phase transition that was never made, which are different investigations
+    // (#3593). Sharing 7314 would fold both onto one issue titled after the wrong one.
+    internal static readonly EventId DisposalPhaseBelowShutDownBlocked =
+        new(7318, nameof(DisposalPhaseBelowShutDownBlocked));
     private readonly Stopwatch disposalStopwatch = new();
 
     private bool DisposalSignalled => Volatile.Read(ref disposalSignalled) != 0;
@@ -2515,6 +2570,15 @@ public sealed class MessageHub : IMessageHub
 
     public void Dispose()
     {
+        // 🚨 THE GOODBYE GOES HERE, NOT ON THE ROUTED REQUEST (#3986) — and the difference is an
+        // ORLEANS DEACTIVATION.
+        //
+        // This is the FIRST statement of the teardown, so it runs while the hub is whole: IsDisposing
+        // is still false, the workspace's client-subscription registry is intact, and the carrier that
+        // will deliver after DisposalCompleted is still resolvable. Nothing here posts — see
+        // Workspace.AnnounceRecycleToClientSubscriptions.
+        AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt();
+
         var totalStopwatch = Stopwatch.StartNew();
         lock (locker)
         {
@@ -2720,24 +2784,68 @@ public sealed class MessageHub : IMessageHub
         {
             if (current == nameof(ShutdownRequest))
             {
-                // The turn on the block IS the shutdown phase itself. Its handler runs the
-                // registered cleanups synchronously (DisposeImpl → disposables.Dispose, then
-                // messageService.Dispose), so a ShutdownRequest that has held the block for a
-                // whole budget is a registrant that blocks — a subscription's Dispose waiting on
-                // a lock, a stream teardown joining something that needs this very turn. It runs
-                // with CancellationToken.None by design, so there is nothing to cancel; the
-                // finding is the blocking registrant, and the snapshot names the phase it is in.
-                // Measured in production (memex-cloud, 2026-08-29 → 09-03): sync/* hubs reported
-                // `(last progress: sync/… → ShutDown). RunLevel=ShutDown` dozens of times per
-                // shutdown, and the predecessor then tore them down out of band after 8–23 s.
-                logger.LogError(DisposalShutDownPhaseBlocked,
+                // The turn on the block IS a shutdown phase. Which phase decides what the finding
+                // is, and this verdict used to assert the ShutDown one unconditionally.
+                //
+                // 🚨 ONLY the ShutDown phase walks the registrants. `DisposeImpl` →
+                // disposables.Dispose and messageService.Dispose are reached exclusively from
+                // `case MessageHubRunLevel.ShutDown:` in HandleShutdownCore — so at Quiescing or
+                // DisposeHostedHubs the hub has not touched `disposables` at all, and "a registered
+                // cleanup is BLOCKING inside DisposeImpl" is false BY CONSTRUCTION. This is the
+                // same defect #3615 removed from the pump verdict (7313) and left in its sibling:
+                // a verdict asserting a cause the snapshot cannot support. It sent this issue's
+                // investigation through every disposal registrant of a `sync/*` hub — there are a
+                // dozen, none of them reachable — for a hub the report itself showed at Quiescing
+                // (#3593, measured 2026-09-19: `RunLevel=Quiescing … Executing(ShutdownRequest,
+                // 253055ms)`).
+                if (RunLevel >= MessageHubRunLevel.ShutDown)
+                {
+                    // Measured in production (memex-cloud, 2026-08-29 → 09-03): sync/* hubs reported
+                    // `(last progress: sync/… → ShutDown). RunLevel=ShutDown` dozens of times per
+                    // shutdown, and the predecessor then tore them down out of band after 8–23 s.
+                    // It runs with CancellationToken.None by design, so there is nothing to cancel;
+                    // the finding is the blocking registrant.
+                    logger.LogError(DisposalShutDownPhaseBlocked,
+                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
+                        + "(last progress: {LastProgress}). RunLevel={RunLevel}. The ShutDown phase itself has "
+                        + "held the action block for {ElapsedMs}ms — a registered cleanup is BLOCKING inside "
+                        + "DisposeImpl or messageService.Dispose (a Dispose waiting on a lock, a teardown "
+                        + "joining a turn it is itself occupying). Disposal is NOT forced; find the registrant.\n{Diagnostics}",
+                        Address, DisposalWatchdogTimeout, lastProgress, RunLevel,
+                        snapshot.Value.CurrentMessageElapsedMs, DescribeWedge());
+                    return;
+                }
+
+                // Below ShutDown. No registrant has run, so the only work this turn does is the
+                // phase transition itself.
+                //
+                // 🚨 The guidance is PER PHASE, because the two phases below ShutDown are bounded by
+                // different things and a verdict that cites the wrong one is this issue's own defect
+                // in miniature. Quiescing is bounded by QuiesceTimeout (default 2 s) ×
+                // MaxQuiesceRearms (20) ≈ 42 s with every re-arm logging [QUIESCE-WAIT], so an
+                // elapsed far past that with an idle pump means the transition was never made — and
+                // the [QUIESCE-*] lines say which half. DisposeHostedHubs has no such ceiling: it
+                // waits on the children, so the reading there is the recursive snapshot below.
+                var belowShutDownGuidance = RunLevel == MessageHubRunLevel.Quiescing
+                    ? $"Quiescing is bounded by QuiesceTimeout x {MaxQuiesceRearms} re-arms (~42s at the "
+                      + "default), each logging [QUIESCE-WAIT], so an elapsed far past that with an idle "
+                      + "pump means the transition was never made. Read this hub's [QUIESCE-START] / "
+                      + "[QUIESCE-OK] / [QUIESCE-WAIT] / [QUIESCE-TIMEOUT] lines: a [QUIESCE-START] with "
+                      + "none of the others means the quiesce wait never completed, while a [QUIESCE-OK] "
+                      + "or [QUIESCE-TIMEOUT] means it did and the phase-advancing Post is what did not land"
+                    : "this phase waits on the hosted hubs rather than on a budget, so the reading is the "
+                      + "recursive snapshot below — the child that has not reached Dead is the finding, and "
+                      + "its own detector carries the turn-level verdict";
+
+                logger.LogError(DisposalPhaseBelowShutDownBlocked,
                     "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
-                    + "(last progress: {LastProgress}). RunLevel={RunLevel}. The ShutDown phase itself has "
-                    + "held the action block for {ElapsedMs}ms — a registered cleanup is BLOCKING inside "
-                    + "DisposeImpl or messageService.Dispose (a Dispose waiting on a lock, a teardown "
-                    + "joining a turn it is itself occupying). Disposal is NOT forced; find the registrant.\n{Diagnostics}",
+                    + "(last progress: {LastProgress}). RunLevel={RunLevel} — BELOW ShutDown, so NO registered "
+                    + "cleanup has run and none can be blocking: DisposeImpl and messageService.Dispose are "
+                    + "reached only in the ShutDown phase. The ShutdownRequest turn has been on the block for "
+                    + "{ElapsedMs}ms. The finding is the phase TRANSITION, not a registrant: {Guidance}. "
+                    + "Disposal is NOT forced.\n{Diagnostics}",
                     Address, DisposalWatchdogTimeout, lastProgress, RunLevel,
-                    snapshot.Value.CurrentMessageElapsedMs, DescribeWedge());
+                    snapshot.Value.CurrentMessageElapsedMs, belowShutDownGuidance, DescribeWedge());
                 return;
             }
             if (!wedgedTurnCancelled)
@@ -3727,9 +3835,89 @@ public sealed class MessageHub : IMessageHub
             // shutting-down sibling still owes. Registered subscriptions are disposed
             // synchronously later, in the ShutDown phase (DisposeImpl →
             // disposables.Dispose) — there is no async dispose-action drain to await.
+            //
+            // 🚨 WRAPPED, for the reason the catch above states about itself: a throw here "would
+            // wedge the dispose state machine at Quiescing forever (worse than the original hang)"
+            // — and this Post sat OUTSIDE that catch, in the finally, so the one statement whose
+            // failure that comment warns about was the one statement not covered. Its sibling for
+            // the very next transition, PostShutDownPhase, has always force-faulted disposal on a
+            // failed Post so subscribers to DisposalCompleted never hang; this transition just did
+            // not. #3593's 2026-09-19 population is a hub parked at Quiescing with an EMPTY queue
+            // and an idle pump for 253 s — i.e. the request was never queued and nothing was
+            // running, which is exactly the shape a lost Post here leaves behind.
+            //
+            // This is not a swallow: SignalDisposalFaulted TERMINATES disposal with the fault, so
+            // the ancestors stop waiting and the failure is reported, instead of a silent park with
+            // no further line of its own.
             if (advance)
-                Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+                PostDisposeHostedHubsPhase();
         }
+    }
+
+    /// <summary>
+    /// Posts the DisposeHostedHubs phase once quiescing is done — the Quiescing→DisposeHostedHubs
+    /// half of what <see cref="PostShutDownPhase"/> does for the next transition, and wrapped for
+    /// the same reason (#3593).
+    ///
+    /// <para>🚨 This used to be a bare <c>Post</c> in the Quiescing branch's <c>finally</c>. The
+    /// <c>catch</c> a few lines above it exists because a throw in that branch <i>"would wedge the
+    /// dispose state machine at Quiescing forever (worse than the original hang)"</i> — and the
+    /// <c>Post</c> sat outside it, so the single statement that comment is about was the one
+    /// statement unprotected. A lost Post leaves the hub at <c>Quiescing</c> with an EMPTY queue, an
+    /// idle pump and <c>Disposal=Pending</c>, emitting no further line of its own: no queued
+    /// request, nothing running, and every ancestor blocked behind it in DisposeHostedHubs until an
+    /// outer bound ends the process.</para>
+    ///
+    /// <para>Force-faulting is the opposite of swallowing: <see cref="SignalDisposalFaulted"/>
+    /// terminates <see cref="DisposalCompleted"/> with the fault, so the waiters above are released
+    /// and the failure is REPORTED rather than becoming a silent permanent park.</para>
+    /// </summary>
+    private void PostDisposeHostedHubsPhase()
+    {
+        try
+        {
+            RequirePhaseAccepted(
+                Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version)),
+                MessageHubRunLevel.DisposeHostedHubs);
+        }
+        catch (Exception postEx)
+        {
+            TryLog(LogLevel.Warning, postEx,
+                "[POSTED-DISPOSE-HOSTED-FAILED] {Address}: posting the DisposeHostedHubs request faulted — "
+                + "the disposal state machine cannot advance out of Quiescing on its own, so disposal is "
+                + "force-faulted instead of parking here forever.",
+                Address);
+            SignalDisposalFaulted(postEx);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>A phase request can be REFUSED without throwing, and a discarded return is the same
+    /// silent park as an uncaught throw</b> (Copilot review, #4931). <c>MessageService.Post</c> has
+    /// three paths that hand back a non-accepted delivery rather than raising: the shutting-down arm
+    /// (<c>Failed(…, ErrorType.ShuttingDown)</c> / <c>FailedAndNacked</c>), the storm
+    /// circuit-breaker and the aggregate shedder (both <c>Ignored()</c>). All three exempt
+    /// lifecycle traffic today, so this is a guard rather than a live bug — but "it cannot happen"
+    /// is exactly the reasoning that left the Post unwrapped to begin with.
+    ///
+    /// <para>Throwing here is deliberate: the caller already force-faults disposal on a throw, so
+    /// the refusal joins the path that RELEASES the waiters instead of inventing a second one.</para>
+    /// </summary>
+    /// <param name="posted">What <c>Post</c> handed back.</param>
+    /// <param name="phase">The phase that was being requested, for the message.</param>
+    private void RequirePhaseAccepted(IMessageDelivery? posted, MessageHubRunLevel phase)
+    {
+        // Submitted is the accepted outcome for a self-posted phase request; Processed/Forwarded are
+        // accepted too. Everything else means nothing is queued and nobody will advance the phase.
+        if (posted is null
+            || posted.State is MessageDeliveryState.Submitted
+                or MessageDeliveryState.Processed
+                or MessageDeliveryState.Forwarded)
+            return;
+        throw new InvalidOperationException(
+            $"Hub {Address}: the {phase} phase request was not accepted — Post returned "
+            + $"State={posted.State}. Nothing is queued, so no turn will advance the disposal state "
+            + "machine; disposal is force-faulted rather than parked at this phase forever.");
     }
 
     /// <summary>
@@ -3743,7 +3931,12 @@ public sealed class MessageHub : IMessageHub
         {
             TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
                 Address, Version);
-            Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
+            // Same refusal check as the sibling above: this one caught a THROW and discarded the
+            // returned state, so a refused ShutDown request parked the hub at DisposeHostedHubs
+            // exactly as a refused DisposeHostedHubs request parked it at Quiescing (#4931).
+            RequirePhaseAccepted(
+                Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version)),
+                MessageHubRunLevel.ShutDown);
         }
         catch (Exception postEx)
         {
@@ -4055,23 +4248,31 @@ public sealed class MessageHub : IMessageHub
         // its last frame (the compile-progress overlay) until the page was reloaded. On a
         // framework-identity bump that is every instance hub in the fleet at once.
         //
-        // Hence: announce FIRST, on this turn, while the hub is whole — the workspace's client
-        // subscription registry is intact and the parent hub is resolvable. The announcement
-        // implementation captures what it needs now and delivers AFTER DisposalCompleted through a
-        // carrier that outlives this hub, so nothing is posted from a dying hub and no re-ask races
-        // the teardown it is a response to.
+        // Hence: announce FIRST, while the hub is whole — the workspace's client subscription
+        // registry is intact and the parent hub is resolvable. The announcement implementation
+        // captures what it needs now and delivers AFTER DisposalCompleted through a carrier that
+        // outlives this hub, so nothing is posted from a dying hub and no re-ask races the teardown
+        // it is a response to.
         //
-        // NOT for an ancestor's cascade (IsShuttingDown is already true because CloseCreation has
-        // frozen this subtree): there the address is NOT coming back, telling subscribers to re-ask
-        // is exactly the resurrection the suppression above exists to prevent, and the carrier
-        // (our parent) is going down with us.
-        // 🚨 Read ONCE. The same fact answers two questions — may this recycle announce itself, and
-        // is this request the CAUSE of the teardown — and two reads of a flag another thread can
-        // flip would let them disagree.
+        // 🚨 …and the announcement is NOT made here (#3986). It is made at the top of
+        // <see cref="Dispose()"/> — see AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt — because
+        // "a routed DisposeRequest" is the wrong discriminator for "this address is coming back".
+        // Orleans DEACTIVATION is a direct Dispose() of an address that IS coming back, and it is
+        // the largest single source of direct Dispose() in the mesh (MessageHubGrain.OnDeactivateAsync,
+        // #4888): keyed on the routed request, a deactivating owner told its live subscribers
+        // NOTHING. HandleDispose still ends in Dispose(), on this same turn and with the hub still
+        // whole, so the routed recycle announces exactly as before.
+        //
+        // 🚨 Read ONCE. The same fact answers two questions — may this recycle cascade, and is this
+        // request the CAUSE of the teardown — and two reads of a flag another thread can flip would
+        // let them disagree.
         var startsTheTeardown = !IsShuttingDown;
 
-        if (startsTheTeardown)
-            AnnounceRecycle();
+        // The dependency network first, while this hub is still whole enough to compute it: the
+        // set is derived HERE, once, and delivered by a surviving hub. A request that is itself a
+        // cascade never fans out again (RecycleCascade / DisposeRequest.CascadedFrom).
+        if (startsTheTeardown && request.Message.CascadedFrom is null)
+            CascadeRecycle(request.Message);
 
         // Recorded BEFORE Dispose(), because Dispose() is what logs [QUIESCE-START] (#3510). Set
         // here rather than at the top of the handler so it means what it says: this request was
@@ -4100,29 +4301,36 @@ public sealed class MessageHub : IMessageHub
         //     DisposeRequest arriving in that window still sees RunLevel=Started, is admitted by
         //     RefusesIntake, and its turn runs after the teardown has begun.
         //
-        //   `TryClaimTeardownCause()` — the atomic half, against NoteCascadeFrom on another thread.
+        //   `TryPublishTeardownCause()` — the atomic half, against NoteCascadeFrom and
+        //   NoteDirectDisposalBy on other threads. First cause wins; the cause is complete
+        //   before it is visible.
         //
         // What remains is a genuinely SIMULTANEOUS pair — a direct Dispose() and a routed request
         // landing within the same instant — where both really happened and either attribution is
         // true. That is the honest residue; it is not an overwrite of an earlier cause.
-        if (startsTheTeardown && TryClaimTeardownCause())
+        if (startsTheTeardown)
         {
             // 🚨 A BLANK REASON IS AN UNSTATED ONE. `DisposeRequest.Reason` is free text from the
             // poster, and `null` was the only value the renderers treated as "not stated" — so an
             // empty or whitespace string produced a literal `why: ` with nothing after it, which
             // is precisely the "renders as nothing, reads as nothing to report" failure this whole
             // change exists to remove. Normalised HERE, at the single capture point, so every
-            // reader of the field (DisposalReason AND DisposalOriginForChildren) inherits it
-            // instead of each having to remember.
-            disposeReason = string.IsNullOrWhiteSpace(request.Message.Reason)
-                ? null
-                : request.Message.Reason;
-            disposeRequestedBy = request.Sender is null
-                ? "an unnamed sender (routed DisposeRequest)"
-                : Equals(request.Sender, Address)
-                    ? $"itself — a self-posted DisposeRequest ({request.Sender}), i.e. a rebind or "
-                      + "self-heal recycle"
-                    : $"{request.Sender} (routed DisposeRequest)";
+            // reader (DisposalReason AND DisposalOriginForChildren) inherits it instead of each
+            // having to remember.
+            //
+            // Built in full BEFORE publication: the cause becomes visible as one reference, so no
+            // reader can catch it half-written (#4888 review).
+            TryPublishTeardownCause(new TeardownCause(
+                RequestedBy: request.Sender is null
+                    ? "an unnamed sender (routed DisposeRequest)"
+                    : Equals(request.Sender, Address)
+                        ? $"itself — a self-posted DisposeRequest ({request.Sender}), i.e. a rebind or "
+                          + "self-heal recycle"
+                        : $"{request.Sender} (routed DisposeRequest)",
+                Reason: string.IsNullOrWhiteSpace(request.Message.Reason)
+                    ? null
+                    : request.Message.Reason,
+                CascadeOwner: null));
         }
 
         Dispose();
@@ -4134,6 +4342,78 @@ public sealed class MessageHub : IMessageHub
     /// that type for the contract. Best-effort by design: a recycle that cannot announce must
     /// still recycle, so a faulting announcement is logged and never propagated into the teardown.
     /// </summary>
+    private void CascadeRecycle(DisposeRequest request)
+    {
+        try
+        {
+            Get<RecycleCascade>()?.Cascade(request);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Recycle cascade for hub {Address} faulted — its dependency network keeps its live "
+                + "activations until each is recycled by hand",
+                Address);
+        }
+    }
+
+    /// <summary>
+    /// Gives this hub's live subscribers their ONE goodbye, when this teardown is this hub's OWN —
+    /// the <see cref="RecycleAnnouncement"/> seam, keyed on the fact that actually decides whether
+    /// telling them to re-ask is right (issue #3986).
+    ///
+    /// <para>🚨 <b>"Routed <c>DisposeRequest</c>" was the wrong discriminator, and the route it
+    /// missed is the commonest one there is.</b> The seam was introduced for the automatic recycles
+    /// (#2533 / #2551) and hung on <see cref="HandleDispose"/>, on the stated reasoning that a routed
+    /// request means "the address is coming back" while a direct <c>Dispose()</c> means "the whole
+    /// tree is going down". The second half is false for <c>MessageHubGrain.OnDeactivateAsync</c> —
+    /// which this codebase calls "the largest single source of direct <c>Dispose()</c> in the mesh"
+    /// (#4888) — where the address IS coming back (Orleans reactivates it on the next message) and the
+    /// subscribers are NOT going down with it: they are live mirrors in other hubs, other circuits,
+    /// other pods. So an owner grain that deactivated told nobody, and because
+    /// <c>JsonSynchronizationStream</c>'s per-stream <c>StreamEndedEvent</c> is deliberately
+    /// suppressed once the owning hub is disposing, nothing else spoke either. The subscriber kept
+    /// replaying its last snapshot — the page still rendered — and every user action it sent
+    /// afterwards was refused "NO sync hub for this stream was EVER registered on the current
+    /// activation" and thrown away. Measured in production on memex-cloud 2026-09-18: four clicks on
+    /// <c>Catalog/Categories/Cat-Education</c> from ONE still-live sender over twelve seconds, all
+    /// refused (issue #3986, occurrences 5–8).</para>
+    ///
+    /// <para><b>The fact that actually decides it is whether a CARRIER OUTLIVES US</b>, and it is
+    /// answered in two independent places, neither of them a guess:</para>
+    /// <list type="bullet">
+    ///   <item><description>HERE: <see cref="IsShuttingDown"/> is already true when an ANCESTOR is
+    ///     taking us with it — <c>HostedHubsCollection.CloseCreation</c> freezes the whole subtree
+    ///     the instant the ancestor's own <c>Dispose()</c> starts, strictly before it disposes its
+    ///     children. Then the carrier (our parent) is going down too, the address is NOT coming
+    ///     back, and telling subscribers to re-ask is exactly the resurrection
+    ///     <c>JsonSynchronizationStream</c>'s suppression exists to prevent. Silent, as before.</description></item>
+    ///   <item><description>In the announcement itself: <c>Workspace.AnnounceRecycleToClientSubscriptions</c>
+    ///     resolves a non-router carrier that outlives this hub and returns without posting when
+    ///     there is none — which is what keeps a ROOT hub's host teardown silent (its parent
+    ///     resolves to itself) without this method having to know about hosts at all.</description></item>
+    /// </list>
+    ///
+    /// <para>Exactly ONE goodbye per hub: more than one multiplies the bounded re-ask a subscriber
+    /// answers with (<c>JsonSynchronizationStream</c>'s recycle re-arm), and the routed path reaches
+    /// this through <see cref="HandleDispose"/>'s own call to <see cref="Dispose"/>, on the same turn
+    /// it used to announce from.</para>
+    /// </summary>
+    private void AnnounceRecycleUnlessAnAncestorIsTakingUsWithIt()
+    {
+        if (IsShuttingDown)
+            return;
+        // One-shot against two concurrent Dispose() callers: both can read IsShuttingDown as false
+        // before either sets disposalStarted, and the idempotency guard inside Dispose() is taken
+        // after this point.
+        if (Interlocked.Exchange(ref recycleAnnounced, 1) != 0)
+            return;
+        AnnounceRecycle();
+    }
+
+    /// <summary>0 until this hub's one recycle announcement has been handed its turn.</summary>
+    private int recycleAnnounced;
+
     private void AnnounceRecycle()
     {
         try

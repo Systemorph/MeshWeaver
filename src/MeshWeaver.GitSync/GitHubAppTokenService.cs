@@ -21,6 +21,13 @@ namespace MeshWeaver.GitSync;
 /// the sanctioned promise-cache: the in-flight fetch observable is stored on an instance field
 /// (ReplaySubject-backed via <c>IIoPool.Run</c>), so concurrent callers share one HTTP
 /// round-trip; a failed fetch invalidates itself so the next caller retries.</para>
+///
+/// <para>🚨 <b>Every fault out of <see cref="GetInstallationToken"/> is a
+/// <see cref="GitHubAppTokenMintException"/></b> (only a cancellation passes as itself). A caller
+/// therefore never has to read a message to know it is looking at a credential that was NEVER
+/// OBTAINED rather than one GitHub REJECTED — the two look identical once a mint failure has
+/// degraded to an anonymous fetch and surfaced, one layer later, as Octokit's
+/// <c>AuthorizationException: Bad credentials</c> (#4736).</para>
 /// </summary>
 public sealed class GitHubAppTokenService
 {
@@ -71,7 +78,8 @@ public sealed class GitHubAppTokenService
     public IObservable<string> GetInstallationToken()
     {
         if (!IsConfigured)
-            return Observable.Throw<string>(new InvalidOperationException(
+            return Observable.Throw<string>(new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.NotConfigured,
                 "The GitHub App is not configured (set GitHub:App:ClientId + GitHub:App:PrivateKey)."));
 
         // Deferred: the promise is read at SUBSCRIPTION time, not when this observable was built.
@@ -91,8 +99,30 @@ public sealed class GitHubAppTokenService
                 tok.ExpiresAt > now().AddMinutes(5)
                     ? Observable.Return(tok.Token)
                     : Refresh(source).Select(t => t.Token));
-        });
+        })
+        // 🚨 EVERY fault out of this method is a GitHubAppTokenMintException — translate all of it
+        // or let it through, never half. A caller degrading to an anonymous fetch (the Store's
+        // package feed does, so a public source keeps working) must be able to say WHICH failure it
+        // is degrading over, and the only thing that survives every layer between here and its log
+        // is the TYPE. Without it the degraded fetch is reported one layer later as Octokit's
+        // "Bad credentials", and a mint that never happened reads as a credential GitHub rejected
+        // (#4736). Cancellation is deliberately NOT translated: a cancelled mint is not a failed one.
+        .Catch((Exception exception) => Observable.Throw<string>(AsMintFailure(exception)));
     }
+
+    /// <summary>
+    /// The one translation point: anything that is not already a mint failure — and is not a
+    /// cancellation — becomes one, with the underlying fault kept as the inner exception.
+    /// </summary>
+    private static Exception AsMintFailure(Exception exception) => exception switch
+    {
+        GitHubAppTokenMintException => exception,
+        OperationCanceledException => exception,
+        _ => new GitHubAppTokenMintException(
+            GitHubAppTokenMintStage.Transport,
+            "The GitHub App installation token could not be minted: " + exception.Message,
+            exception),
+    };
 
     /// <summary>Swap the stale promise for a fresh fetch (only once — concurrent refreshers share it).</summary>
     private IObservable<InstallationToken> Refresh(IObservable<InstallationToken> stale)
@@ -111,14 +141,29 @@ public sealed class GitHubAppTokenService
             {
                 lock (gate)
                     cached = null;   // never cache a failure — the next caller retries
-                return Observable.Throw<InstallationToken>(ex);
+                return Observable.Throw<InstallationToken>(AsMintFailure(ex));
             });
 
     // ── HTTP leaves (run inside the I/O pool) ────────────────────────────────
 
     private async Task<InstallationToken> FetchInstallationTokenAsync(CancellationToken ct)
     {
-        var jwt = BuildAppJwt(now());
+        string jwt;
+        try
+        {
+            jwt = BuildAppJwt(now());
+        }
+        catch (Exception exception)
+        {
+            // Nothing reached GitHub, so this can never be a credential GitHub rejected. The key
+            // itself is never named — only what could not be done with it.
+            throw new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.Signing,
+                "The GitHub App JWT could not be signed — GitHub:App:PrivateKey is not a usable RSA "
+                + "private key. No credential was presented to GitHub.",
+                exception);
+        }
+
         var installationId = options.InstallationId
             ?? await DiscoverInstallationIdAsync(jwt, ct).ConfigureAwait(false);
 
@@ -130,13 +175,19 @@ public sealed class GitHubAppTokenService
         using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
         var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException(
-                $"GitHub App installation-token request failed ({(int)resp.StatusCode}): {Truncate(json)}");
+            throw new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.TokenExchange,
+                $"GitHub App installation-token request failed ({(int)resp.StatusCode}): {Truncate(json)}")
+            {
+                StatusCode = (int)resp.StatusCode,
+            };
 
         using var doc = JsonDocument.Parse(json);
         var token = doc.RootElement.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String
             ? t.GetString()!
-            : throw new InvalidOperationException("GitHub App token response carried no 'token'.");
+            : throw new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.Response,
+                "GitHub App token response carried no 'token'.");
         var expiresAt = doc.RootElement.TryGetProperty("expires_at", out var e)
                         && e.ValueKind == JsonValueKind.String
                         && DateTimeOffset.TryParse(e.GetString(), out var dto)
@@ -156,12 +207,17 @@ public sealed class GitHubAppTokenService
         using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
         var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException(
-                $"GitHub App installation discovery failed ({(int)resp.StatusCode}): {Truncate(json)}");
+            throw new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.InstallationDiscovery,
+                $"GitHub App installation discovery failed ({(int)resp.StatusCode}): {Truncate(json)}")
+            {
+                StatusCode = (int)resp.StatusCode,
+            };
 
         using var doc = JsonDocument.Parse(json);
         if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0)
-            throw new InvalidOperationException(
+            throw new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.InstallationDiscovery,
                 "The GitHub App has no installations — install it on the organization (with Contents: Read " +
                 "on the repos to sync) first.");
 
@@ -178,7 +234,9 @@ public sealed class GitHubAppTokenService
                 return id;
         }
         if (first is null)
-            throw new InvalidOperationException("GitHub App installation list carried no usable id.");
+            throw new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.InstallationDiscovery,
+                "GitHub App installation list carried no usable id.");
         if (doc.RootElement.GetArrayLength() > 1)
             logger?.LogWarning(
                 "GitHub App has {Count} installations and none matched InstallationOwner '{Owner}' — using the first. " +

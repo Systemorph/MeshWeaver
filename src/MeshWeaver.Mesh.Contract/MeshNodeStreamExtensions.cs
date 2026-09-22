@@ -315,6 +315,32 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         => ex is BaseStateTimeoutException census ? " " + census.Message : string.Empty;
 
     /// <summary>
+    /// 🚨 True when this fault IS the base read running out its own <see cref="BaseStateWaitBound"/> —
+    /// the typed test for the terminal <see cref="BaseStateSource"/> raises, at any wrapping depth.
+    ///
+    /// <para><b>Why a consumer needs it.</b> The caller-facing abort is a
+    /// <see cref="TimeoutException"/>, and so is the terminal of an owner that missed the REQUEST
+    /// budget — two different defects with two different remedies wearing one exception type. A
+    /// consumer that wants to tell them apart has exactly two options: ask here, or match the
+    /// sentence, and the sentence is prose that has already been reworded twice (#1174, #2387). Both
+    /// wrapper sites carry the original as INNER precisely so this question stays answerable, so the
+    /// walk is over the inner chain rather than the outermost type.</para>
+    ///
+    /// <para>Deliberately NOT a widening of any transient-failure predicate: a base-state timeout is
+    /// retry-worthy in exactly the same way as before, and nothing about that changes. This answers
+    /// "WHICH timeout is this" for a caller that has to NAME the condition — the recompile channel's
+    /// release-failure class (<c>Doc/Architecture/ReleaseFailureClasses</c>) is the first.</para>
+    /// </summary>
+    /// <param name="ex">The fault to test; may be null.</param>
+    public static bool IsBaseStateTimeout(Exception? ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is BaseStateTimeoutException)
+                return true;
+        return false;
+    }
+
+    /// <summary>
     /// 🚨 The emission a (re)attempt rebuilds its patch from — and the whole of the #1910 fix.
     ///
     /// <para><b>The defect.</b> A cross-hub <c>stream.Update</c> reads this hub's MIRROR, runs the

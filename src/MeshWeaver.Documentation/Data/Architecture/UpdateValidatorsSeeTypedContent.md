@@ -50,8 +50,9 @@ of `As` (`ObjectAsExtensions.As(object, Type, options, …)`) — a concrete-typ
 needs no registry entry for the discriminator. It is the same recovery `ContentAs<T>` performs at a
 consumer, done once for every validator instead of being each one's problem.
 
-A snapshot that will not deserialise as the proposal's type is left as it was and logged at Error by
-`As`: hiding a shape mismatch from the validators would be a second silent pass.
+A snapshot that will not deserialise as the proposal's type is left as it was: hiding a shape
+mismatch from the validators would be a second silent pass. Whether that is reported as a *failure*
+depends on whether the recovery was owed at all — see "The NodeType string is the proxy" below.
 
 `UpdateValidatorSeesTypedExistingContentTest` (MeshWeaver.Graph.Test) pins the contract with a
 content type registered on no hub, records the CLR type the validator actually saw, and asserts the
@@ -117,6 +118,64 @@ allow-list by design. Seeding a live, REGISTERED value of a foreign same-short-n
 this defect through the mechanism a running mesh actually produces, degrades nothing, and leaves the
 gate with nothing to report. If you are modelling "present but unreadable as `T`" anywhere, that is
 the shape to reach for.
+
+## 🚨 The NodeType string is the proxy — the content type is the precondition
+
+`RetypesTheNode` asks whether the update changes the node's `NodeType`. That is a **proxy** for the
+question the recovery actually depends on — *do the two sides carry the same content record?* — and
+the two come apart in the other direction as well: a writer can propose a **different record under
+an unchanged (or omitted) `NodeType`**. Production does it routinely. A markdown-shaped writer saves
+over a node whose NodeType declares a plugin record; an importer whose fallback parser could not
+parse a declared `nodeType` produces `MarkdownContent` for it (see
+[Import-side content degradation](../ImportSideContentDegradation)). The NodeType never moves, so the
+retype gate does not fire, and the pipeline deserialises the stored snapshot as the proposal's type.
+
+**Everything the section above says about manufacture applies verbatim here.** `UnmappedMemberHandling
+= Skip` binds the old bytes into the proposed record whenever its members are defaultable, and the
+validators get a ghost — the old values under new member names, the rest defaulted. It is #1379's
+lesson arriving by a second road, and it is the one road the two guards that already learned it did
+not cover: `IMeshContentTypeRegistry.TryRecoverForNodeType` and `ContentSchemaValidator` both refuse
+to reshape content whose own `$type` names a different record, and this seam did not ask.
+
+**The other half is why it was reported as a fault.** Where the conversion *cannot* happen —
+a stored value that is already a live instance of a differently-named record — `As` returns null,
+the snapshot is correctly left alone, and `As` logs that refusal at **Error** as a failed recovery:
+
+```text
+As<MarkdownContent> for PartnerRe/Esl/EmailDraft-DueDiligence-2026-09-05:
+    value is EmailContent (DynamicNode_Essentials_Email), not convertible
+```
+
+Nothing had failed. The update proceeded and the snapshot was left exactly as it should have been;
+the seam had simply asked a question it had no business asking and then filed the answer as a
+defect — four incidents in twelve days on one node (#4597), each one a legitimate write.
+
+**So the pipeline asks first, and the content itself is the authority.** Before converting, it puts
+the stored content and the proposal's type to `ContentDiscriminator.Admits` — the short-name rule
+extracted from the two guards above, now single-sourced, so it cannot drift between the three seams
+that apply it:
+
+| Stored content | Admits the proposal's type when |
+|---|---|
+| a live CLR instance | it IS one, or carries the same short name from another assembly |
+| `JsonElement` / `JsonNode` | its `$type` is absent, or names the same record |
+| `null` | always — there is no claim to contradict |
+
+When the answer is no, the snapshot is left alone and the pipeline logs a **Warning** naming both
+content types and the true consequence: the validators are seeing the two sides typed differently,
+so a typed comparison will skip. Warning, not Error, for exactly the reason the retype branch uses
+it — the update is legitimate and proceeds.
+
+**Absent is not contradicting**, and that half is load-bearing: bytes that name no type are the
+ordinary discriminator-less snapshot, the proposal is then the only evidence available, and refusing
+there would reopen #3056 wholesale.
+
+`NodeUpdateContentTypeChangeTest` (MeshWeaver.Hosting.Test) pins all four states against the real
+hub's `JsonSerializerOptions` and a recording logger: the silent manufacture (stored bytes naming
+another record must come back untouched — before the fix they came back as the proposed record,
+carrying the stored subject under a new member name), the false Error (a typed foreign snapshot must
+produce no Error and one Warning naming both types), and the two counterparties the gate must not
+swallow — a same-short-named record still converts, and discriminator-less bytes still convert.
 
 ## What this does not change
 

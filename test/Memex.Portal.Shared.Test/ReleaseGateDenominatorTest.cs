@@ -165,6 +165,71 @@ public class ReleaseGateDenominatorTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 <b>A publication pointer that cannot be followed REFUSES, because the only other answer
+    /// shrinks the denominator</b> (#3461 phase 5).
+    ///
+    /// <para>Every reading of a published source resolves <c>_current</c> and falls back to the
+    /// source directory. Until phase 5 that fall-back landed on the flat compatibility copy — a
+    /// sealed publication — so an unusable pointer cost nothing here. Since a generation
+    /// publication DISPOSES of that copy, the fall-back lands on a directory holding no
+    /// publication, and this source then declares NOTHING: the floor comes back smaller, which is
+    /// the one direction that EXEMPTS a package from the gate rather than holding it.</para>
+    /// </summary>
+    [Fact]
+    public void APointerThatCannotBeFollowed_Refuses_RatherThanShrinkingTheFloor()
+    {
+        var root = EducationRegressedRoot();
+        // The EARLIER identity is the one whose Education publication the floor is read from, so a
+        // fault here is measurable: without the refusal the nine courses simply drop out.
+        var source = Path.Combine(root, Earlier, "education");
+        Assert.Contains(
+            EducationPackages[0], PublishedBundleCatalogue.EverSealedBundles(root).Bundles);
+        // The phase-5 state, and the reading a pointer caught mid-replacement gives: `_current`
+        // exists, names a generation that is not there, and no flat copy sits behind it.
+        foreach (var file in Directory.GetFiles(source))
+            File.Delete(file);
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName),
+            "Systemorph-MeshWeaver-9999-9\n");
+
+        var floor = PublishedBundleCatalogue.EverSealedBundles(root);
+
+        Assert.NotNull(floor.Refusal);
+        Assert.Contains("pointer", floor.Refusal);
+        Assert.Contains("education", floor.Refusal);
+        Assert.Empty(floor.Bundles);
+        // The same construction the service uses: a refusal becomes a HOLD naming an availability
+        // incident, never a compatibility verdict over a floor read short.
+        var verdict = UpdatabilityVerdict.Unavailable(floor.Refusal!);
+        Assert.False(verdict.IsUpdatable);
+        Assert.True(verdict.IsIndeterminate);
+    }
+
+    /// <summary>
+    /// The control: the SAME prefix with the pointer RESOLVING to a sealed generation reads the
+    /// generation's declaration — so the case above refuses on the fault, not on the layout.
+    /// </summary>
+    [Fact]
+    public void APointerThatResolves_ReadsTheGenerationsDeclaration()
+    {
+        var root = EducationRegressedRoot();
+        var source = Path.Combine(root, Earlier, "education");
+        var generation = Path.Combine(source, "Systemorph-MeshWeaver-1-1");
+        Directory.CreateDirectory(generation);
+        foreach (var file in Directory.GetFiles(source))
+            File.Move(file, Path.Combine(generation, Path.GetFileName(file)));
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName),
+            "Systemorph-MeshWeaver-1-1\n");
+
+        var floor = PublishedBundleCatalogue.EverSealedBundles(root);
+
+        Assert.Null(floor.Refusal);
+        foreach (var package in EducationPackages)
+            Assert.Contains(package, floor.Bundles);
+    }
+
+    /// <summary>
     /// 🚨 The denominator reads the sentinel's DECLARATION, so a publication that is sealed but has
     /// LOST a bundle still counts that package as content-bearing.
     ///

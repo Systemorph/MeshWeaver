@@ -157,6 +157,142 @@ Build-and-Test is running and when it never ran at all, so a conclusion-only rea
 cannot be published" for a perfectly healthy commit on any tick landing shortly after a merge.
 Running, or merged minutes ago with no check yet, means **wait silently**.
 
+**🚨 A `pending` run is ambiguous, and NO snapshot predicate can resolve it — measured both ways
+(2026-09-17). OPEN DECISION.** The reconciler's first question is *"is an older run of this workflow
+already publishing this commit?"* (#3376, so one commit yields ONE image set), and both that probe
+and the stuck-delivery verdict below answer it with `.status != "completed"`. GitHub reports a run
+held behind a concurrency group as **`pending`**, and that status has been observed resolving **both
+ways**:
+
+| date | the pending run | deferring to it was |
+|---|---|---|
+| 2026-09-10 | `workflow_run 34506317727`, pending behind the preceding delivery — **subsequently built** | **right**; not deferring duplicated `c3b6fdf`'s whole image set |
+| 2026-09-17 | `35252764043` and `35246058388`, pending in the same lane — **evicted, zero jobs each** | **wrong**; delivery stopped |
+
+🚨 **And the two are indistinguishable at decision time.** This lane is `cancel-in-progress: false`,
+so GitHub holds one in-progress run **plus one pending** and evicts the pending one *when the next
+merge arrives* — a run that did not exist when the decision was made. At 17:26:42Z run `35252764043`
+was five seconds old and the newest in its lane; it looked exactly like 09-10's. What tipped it was
+the future.
+
+What the 09-17 side cost: **77 of 150** runs of this workflow `cancelled`, every sampled one with
+`total_count: 0` jobs; reconcile **#8842** deferred to pending **#8841** and **#8847** to pending
+**#8846**, both evicted; **nothing published after run #8839 (15:53Z)** — including `6e21e91b`, the
+commit carrying the #4602 gate fix. Every run reported `success` or `cancelled`; none reported a
+failure, because the *same* predicate suppresses the stuck-delivery alarm below *"only while a run is
+observably live"*.
+
+**So the defect is NOT the predicate's snapshot — it is that a deferral is never revisited.** The
+design says *"if that run fails, the next reconcile tick heals HEAD"*, and that recovery did not fire
+because each hourly tick found a **new** pending run on a **new** HEAD and deferred again. Two
+consecutive ticks deferred; a quiet hour would have healed it, which is why this is a stall rather
+than a permanent stop — but "eventually, if merges pause" is not a delivery guarantee, and the alarm
+is silent throughout.
+
+🚨 **Do not "fix" this by narrowing the predicate to `in_progress`/`queued`.** That was tried on
+2026-09-17 and `.github/scripts/test-cd-steps.py` rejected it in two cases written for the 09-10
+incident — correctly: it trades a visible stall for a silent duplicate delivery, and the duplicate is
+the one that mints two digests for one commit.
+
+### Revisiting a deferral needs a CARRIER, and there is none today
+
+The obvious repair is *"the next tick resolves what this tick could not: the run we deferred to
+either executed jobs or it did not"*. The **evidence** for that is real and unambiguous —
+`/runs/<id>/jobs --jq .total_count` is `0` for a run that never executed a step. What is missing is
+the **carrier**, and both halves were checked on 2026-09-17:
+
+- **Nothing persists the deferral.** The `#3376` defer path calls `decision false …` and `exit 0`;
+  `decision` writes `publish=` to `$GITHUB_OUTPUT` and a line to the job summary. The verdict step's
+  `deferred_to` / `deferred_status` are read by exactly one consumer — the summary step of **the same
+  run** (`main-cd.yml`, the `DEFERRED_TO`/`DEFERRED_STATUS` env of the summary). Nothing survives the
+  run.
+- **And the target MOVES between ticks**, so the next tick cannot rediscover it: reconcile **#8842**
+  targeted `cf64edd`, reconcile **#8847** targeted `92c13083`. Both probes filter `head_sha=$SHA`, so
+  last tick's deferred-to run is on a different commit and is invisible to this tick — recorded or
+  not.
+- **Where the target *does* hold still, the evidence is redundant**: at the next tick the deferred-to
+  run is `completed`, so `.status != "completed"` already stops deferring and the tick publishes.
+  That is the "a quiet hour heals it" path, and it already works.
+
+That reads like a call for a **durable, run-id-keyed** record of the deferral, revisited on a later
+tick whatever its target — and the contract's healing ledger is deliberately *"the `ci-failure`
+issue … no new state store"*, so the carrier looked like a decision rather than a detail.
+
+**It is neither: no carrier is needed, because the question does not have to be asked at the next
+tick.** See the section below — the run that HOLDS the lane can answer it, and it answers it at the
+one moment the answer is free.
+
+### The answer is DISCHARGED at release time, not carried to the next tick (#4652)
+
+Two shapes were weighed against the measured lane. The measurement, over the 21.7 h to
+2026-09-17T19:29Z, is the whole argument:
+
+| | measured |
+|---|---|
+| push-lane arrivals | **77** (median gap 8.3 min) |
+| of those, **discarded** by the one-pending-slot rule | **61** |
+| runs that actually executed | **14** — 12 success, 2 failure |
+| wall clock of an executing run | **35–107 min**, median ~67 |
+| lane busy | **16.1 h of 21.7 h — 74 % saturated** |
+
+**Shape A — "stop discarding queued work" — is wrong, and the numbers say so without appeal to
+taste.** The lane is one group with `cancel-in-progress: false`, so *not* discarding means every
+arrival executes in turn: 77 × ~67 min ≈ **86 h of lane time inside a 21.7 h window**. The lane
+would fall behind without bound and every publication would ship a commit hours stale — the
+opposite of continuous delivery. Runner minutes are the lesser objection; latency growing without
+bound is the fatal one. (Two runs publishing one framework identity concurrently is separately
+forbidden — see #3461.) **The supersede rule is correct and stays.** Discarding queued work is the
+only reason the lane keeps up at all.
+
+**Shape B — "hand off on completion" — is right, with one correction.** The run holding the lane is
+the only party that can see both *what it built* and *what HEAD is now*, and it sees it at the exact
+moment the lane frees. So `delivery-verdict` ends with a `handoff` step: if main's HEAD is green,
+this run is not its publication, and **no run of this workflow is queued or running on HEAD**, it
+dispatches one. The correction shape B needed: a dispatch used to land in the **push** lane, where
+GitHub can discard it — reproducing the defect one level along. `workflow_dispatch` now shares the
+**reconcile** lane, which the file had already wanted for an unrelated reason (the seal step's
+claim-then-rank workaround exists because the two lanes could overlap; they no longer can).
+
+Why it does not become a retry loop, and why it costs almost nothing:
+
+- **Bounded at one hop, by construction.** A run that was itself dispatched does not dispatch again,
+  so one terminating lane holder produces at most one extra run. Without that, a deterministic
+  promote failure would hand itself on forever. The dispatched run also consumes the ordinary
+  per-commit heal budget.
+- **A queued successor counts as covered** — not because queuing is a promise, but because whichever
+  run finally executes runs this same step when *it* terminates. That is what closes the loop the
+  discard used to open, and it is why the saturated case dispatches nothing at all.
+- **It is gated on a GREEN head**, so it never invents a run the gate would decline. A green HEAD
+  normally already has its own `workflow_run` run; the step therefore fires in precisely the two
+  holes — HEAD's run was **discarded**, or it **executed and failed**.
+- **An unanswered probe dispatches nothing** and says so as a warning naming the unanswered
+  question. This step *creates* work, so guessing would cost a duplicate image set (#3376); not
+  dispatching degrades to the hourly reconcile, which is where delivery stood before it existed. A
+  dispatch that is *refused*, by contrast, is RED — that is the state where HEAD is green and nobody
+  at all is publishing it.
+
+🚨 **The root, stated plainly: the ambiguity exists only because a pending run can be evicted, and it
+is irreducible AT PROBE TIME** — `pending` genuinely means "will build" whenever the run survives
+(2026-09-10), and a pending run has no job count to tell the two apart. It is *not* irreducible at
+RELEASE time, which is why the fix lives there and why narrowing either probe was the wrong move.
+
+🚨 **And do not read the eviction as the cause of every stall.** On the night this was diagnosed the
+2-hour gap was **two consecutive executed runs failing** — 35257430439 on a real test failure in the
+module-pack leg, 35261268480 on an `azure/login` OIDC token-fetch timeout — each with a queued
+successor that started immediately. The deferral defect was live and measured on all three ticks,
+but what cost the two hours was that a single failed leg costs a whole ~67-minute publication.
+Measure which of the two you have before fixing either: `gh api …/actions/runs/<id>/jobs
+--jq .total_count` is `0` for a discarded run and non-zero for one that failed.
+
+> 🚨 **The registry was never the problem, and this is how to tell.** The same night produced
+> `az exit 3` / *"the registry did not answer"* reports, which read like a credential outage. Run
+> **#8839** — 1h40m before the stall was diagnosed — ran `Build + push` (×3), `Mirror portal-ai to
+> the fleet registry`, `Promote: tag the full set` and **`Verify every image shipped`**, all
+> `success`. That is the whole credential path exercised end to end. When delivery stops, ask first
+> **whether any job ran at all**: `gh api …/actions/runs/<id>/jobs --jq .total_count`. A run that
+> executed zero jobs cannot have hit the registry, and reading its cancellation as an outage sends
+> the next hour to Azure instead of to the workflow.
+
 **It terminates.** Each tick is one attempt and does not re-trigger itself. Persistent failure is
 bounded at **3 attempts per commit**, with the `ci-failure` issue as the ledger — no new state store.
 The slot is consumed when an attempt *starts*, so a run that dies without reporting cannot buy
@@ -505,6 +641,54 @@ seal never registers the publication with memex, so the availability predicate h
 read. **The number of images promoted was never the question.** The operator-facing checklist for
 choosing a target is [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) →
 "What makes a tag a safe target".
+
+### 🚨 …and a GREEN `main-cd` run can have sealed nothing at all
+
+The section above is the case where the seal **failed**. The commoner and nastier one is where it
+never ran: **a `main-cd` run concludes `success` with every publishing job `skipped`.** That is the
+skipped-reads-as-passed trap sitting on the seal signal itself, and lifting a hold on it sends
+someone to merge against a platform set that never existed.
+
+Measured, with a positive control:
+
+| run | conclusion | Promote | Verify | Bake platform | Plugins seal | sealed? |
+|---|---|---|---|---|---|---|
+| **#8860** (`35259738026`, 18:35Z) | **success** | skipped | skipped | skipped | skipped | **NO** |
+| **#8844** (`35250215485`, 17:01Z) | success | success | success | success | success | yes |
+
+**So the test for "a set was sealed carrying commit X" is those four job conclusions, never the
+run's** — each `success`, none `skipped`:
+
+```text
+Promote: tag the full set (all-or-nothing)
+Verify every image shipped
+Bake platform content in the shipped image + publish (…)
+Plugins: bake + seal the publication for this identity
+```
+
+Two reading tells, both from the measurement:
+
+- the bake job's name renders the **literal** `${{ matrix.arch }}` when it was skipped (no matrix to
+  expand) and a real arch — `linux-x64` — when it ran, so the name itself distinguishes them;
+- the seal is **two** nested jobs when it actually runs (`… / Bake + publish NodeType assemblies to
+  portal storage` and `… / Register the publication with memex`), so match on the prefix.
+
+🚨 **The green is CORRECT, and that is the point.** #8860 was a scheduled reconcile that deferred —
+its gate log reads `⏳ An older run of this workflow is still publishing cfa87e9 … deferring`, and
+not publishing was the right answer. Nothing in the run misbehaved. What is wrong is reading its
+conclusion as *"a set was sealed"*. (Worse, in that instance the run it deferred to was then
+discarded with zero jobs — see "The answer is DISCHARGED at release time" above — so nothing
+published for that commit at all.)
+
+**The run's conclusion answers neither question, in either direction.** A green run can have shipped
+nothing, as here; and a **red** run can have shipped everything — that is the `satellite-compat`
+case this page already describes, where delivery completed and the colour is about compatibility.
+Read the jobs.
+
+**Downstream, this explains a satellite red that has nothing wrong with the satellite.** A persistent
+`no sealed publication for source 'plugins' under framework identity <id>` in a dependent repo is
+exactly what a green CD run that skipped the Plugins seal produces. Check the four jobs on the
+sealing run **before** concluding anything about the dependent repo.
 
 ### A set is named by its RUN — and the pending slot cancels runs under commits that stay valid
 

@@ -167,12 +167,49 @@ internal static class NodeUpdatePipeline
     // content type that is not registered yet. A snapshot still untyped by the time it reaches
     // this method is untyped because nothing in the process can type it. So on a retype: leave
     // it, and SAY SO, rather than fabricating an answer no one asked for.
+    //
+    // 🚨 AND THE NODETYPE STRING IS NOT THE PRECONDITION — THE CONTENT TYPE IS (#4597). The two
+    // coincide for almost every update, which is why the retype gate above was written on the
+    // NodeType alone; they come apart whenever a writer proposes content of a DIFFERENT record
+    // under an unchanged (or omitted) NodeType. Production does that routinely: a markdown-shaped
+    // writer saving over a node whose NodeType declares a plugin record, an importer whose fallback
+    // parser produced MarkdownContent for a type it could not parse. In that state the proposal is
+    // no more the type authority than it is on a retype, and the SAME manufacture follows —
+    // UnmappedMemberHandling.Skip binds the stored bytes into the proposed record whenever its
+    // members are defaultable, so the validators get a ghost: the old values under new member
+    // names, everything else defaulted. That is #1379's lesson, which
+    // IMeshContentTypeRegistry.TryRecoverForNodeType and ContentSchemaValidator both already apply
+    // and this seam did not: "the map said so" — here, "the proposal said so" — must never be
+    // enough on its own to reshape content.
+    //
+    // 🚨 It is also why #4597 reads as a pipeline FAILURE in the log when nothing failed. Where the
+    // conversion cannot happen, As reports it as a recovery failure at Error ("value is
+    // EmailContent (DynamicNode_Essentials_Email), not convertible") — and a plugin-typed node
+    // saved by a markdown-shaped writer produced exactly that, four times in twelve days, each
+    // filed as an incident. Nothing was broken: the update proceeded and the snapshot was left
+    // alone, which is the correct outcome. Asking a question we have no business asking, and then
+    // reporting the answer as a fault, is what made it look otherwise. So ASK FIRST — the content
+    // itself is the authority on what it is — and when the answer is no, say the true thing at
+    // Warning: the validators are deciding on a snapshot typed differently from the proposal, so a
+    // typed comparison will skip.
     private static MeshNode WithExistingContentTyped(IMessageHub hub, MeshNode node, MeshNode existing)
+        => WithExistingContentTyped(
+            node,
+            existing,
+            hub.JsonSerializerOptions,
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeUpdatePipeline)));
+
+    /// <summary>
+    /// The seam itself, with its two dependencies passed rather than resolved — so the contract
+    /// above can be measured against the hub's REAL serializer options while the diagnostics are
+    /// captured (<c>NodeUpdateContentTypeChangeTest</c>).
+    /// </summary>
+    internal static MeshNode WithExistingContentTyped(
+        MeshNode node, MeshNode existing, JsonSerializerOptions options, ILogger? logger)
     {
         var proposed = node.Content;
         if (proposed is null or JsonElement or JsonNode || existing.Content is null)
             return existing;
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeUpdatePipeline));
 
         if (RetypesTheNode(node, existing))
         {
@@ -194,11 +231,56 @@ internal static class NodeUpdatePipeline
             return existing;
         }
 
-        var typed = existing.Content.As(proposed.GetType(), hub.JsonSerializerOptions, logger, existing.Path);
+        var proposedType = proposed.GetType();
+        if (!ContentDiscriminator.Admits(existing.Content, proposedType))
+        {
+            // Warning, not Error, and for the same reason as the retype branch above: the update is
+            // legitimate and proceeds. What is worth knowing is that the two sides are typed
+            // differently, so a validator's typed comparison will skip — the one state in which it
+            // silently answers Valid. Names both content types and the path; carries no content.
+            logger?.LogWarning(
+                "Update of {Path} proposes content typed '{ProposedContentType}' while the stored "
+                + "content is {ExistingContentType}, and the node's NodeType is unchanged. The "
+                + "proposal is therefore NOT the type authority for the stored snapshot, which is "
+                + "left as it is: reading it as the proposed type would bind the old bytes into "
+                + "the new record and manufacture a state the node was never in. Update validators "
+                + "will see the two sides typed differently, so a typed comparison will skip — "
+                + "write content of the type this NodeType declares, or change the NodeType with "
+                + "the content.",
+                existing.Path, proposedType.Name, Describe(existing.Content));
+            return existing;
+        }
+
+        var typed = existing.Content.As(proposedType, options, logger, existing.Path);
         return typed is null || ReferenceEquals(typed, existing.Content)
             ? existing
             : existing with { Content = typed };
     }
+
+    /// <summary>
+    /// How the stored content NAMES ITS OWN TYPE, for the diagnostic above — the CLR type and its
+    /// assembly for a live instance (dynamic node assemblies compile without namespaces, so the
+    /// bare name alone is not diagnosable), the <c>$type</c> discriminator for JSON. Type names
+    /// only: content is never exported to a log (see <c>ObjectAsExtensions.LogRecoveryFailure</c>).
+    /// </summary>
+    private static string Describe(object content) => content switch
+    {
+        JsonElement je => $"JSON carrying $type '{Discriminator(je)}'",
+        JsonNode jn => $"JSON carrying $type '{Discriminator(jn)}'",
+        _ => $"{content.GetType().FullName} ({content.GetType().Assembly.GetName().Name})",
+    };
+
+    private static string Discriminator(JsonElement content)
+        => content.ValueKind == JsonValueKind.Object
+           && content.TryGetProperty("$type", out var t)
+           && t.ValueKind == JsonValueKind.String
+            ? t.GetString() ?? "<null>"
+            : "<none>";
+
+    private static string Discriminator(JsonNode content)
+        => (content as JsonObject)?["$type"] is { } t && t.GetValueKind() == JsonValueKind.String
+            ? t.GetValue<string>()
+            : "<none>";
 
     // 🚨 BOTH SIDES MUST NAME A TYPE for this to be a retype. A proposal that omits NodeType is
     // not changing it — treating "absent" as "changed" would route ordinary partial updates down

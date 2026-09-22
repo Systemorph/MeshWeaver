@@ -57,7 +57,27 @@ public static class WebhookInboxEndpoints
             return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
         // 🚨 The cap the comment above always promised. Content-Length is advisory (absent on a
         // chunked request, and a client may lie); the reader enforces the byte limit itself.
-        var body = await BoundedBody.ReadAsync(request.Body, WebhookInbox.MaxBodyBytes, ct);
+        // 🚨 Same two outcomes, kept apart, as the GitHub endpoint (#4860): a client that drops
+        // mid-body raises Kestrel's "Unexpected end of request content" and is a 400, while `null`
+        // means over the cap and is a 413. Folding them would answer the wrong status AND report a
+        // cap breach that never happened. This is the OTHER BoundedBody call site — the fix is
+        // worth nothing if only the one the incident happened to name is corrected.
+        string? body;
+        try
+        {
+            body = await BoundedBody.ReadAsync(request.Body, WebhookInbox.MaxBodyBytes, ct);
+        }
+        catch (BadHttpRequestException ex)
+        {
+            // 🚨 The exception's own status, not a fixed 400 — Kestrel reuses this type with 413 for
+            // its MaxRequestBodySize breach, and this endpoint answers 413 for its OWN cap both
+            // above and below. See the same catch in GitHubWebhookEndpoints.
+            logger?.LogDebug(ex,
+                "Webhook body read for target '{Target}' failed with {Status}: {Reason}.",
+                target, ex.StatusCode, ex.Message);
+            return Results.StatusCode(ex.StatusCode);
+        }
+
         if (body is null)
             return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
 

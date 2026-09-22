@@ -55,8 +55,12 @@
 #                triggered by the SEAL, so a run is ahead of the volume by design, for up to one
 #                period plus one install.
 #   GONE         the caller's set is older than the oldest kept, or was overtaken (a newer set
-#                sealed before the refresh's next tick, and the refresh only ever takes the NEWEST
-#                sealed set, so this one will never be installed).
+#                sealed before the refresh's next tick). Whether it ever comes BACK is not a
+#                property of this state: since Systemorph/Memex#329 the refresh installs the newest
+#                sealed set AND the set each subscribed repository's main last PASSED, so a GONE set
+#                that is its repository's main-passed set is re-installed within a tick, and one
+#                that is not never returns. The refusals below decide that per case; do not
+#                re-introduce a blanket "will never be installed" here.
 #
 # The first two are WAITED OUT, on the actual condition — `<SET_DIR>/.complete` appearing — under a
 # bounded deadline; the third is RED at once, because waiting for it could never end. The wait
@@ -147,7 +151,9 @@ if [ "${1:-}" = "--self-test" ]; then
     return 0
   }
 
-  # 3a. The pinned set is simply not installed (the refresh keeps only the 3 newest).
+  # 3a. The pinned set is simply not installed (it is outside the refresh's kept window and
+  #     is no subscribed repository's main-passed set — never a number here, see the
+  #     refusals below).
   refuses "a set the volume does not carry" "$good" "$D2" "$P1"
   # 3b. A half-install: the directory exists, `.complete` does not.
   half="$tmp/half"; hdir="$(make_set "$half" "$D1" "$P1")"; rm "$hdir/.complete"
@@ -247,6 +253,29 @@ if [ "${1:-}" = "--self-test" ]; then
   grep -q 'PURGED' <<<"$o" || fail "the retention refusal must offer the purged history (got: $o)"
   grep -q 'OVERTAKEN' <<<"$o" || fail "the retention refusal must offer the overtaken history too (got: $o)"
   grep -q 'Memex#329' <<<"$o" || fail "the retention refusal must name the retention issue (got: $o)"
+  # 🚨 THE NEW CONTRACT, pinned — without these the diagnostic could regress to the old, WRONG
+  # remedy ("re-run the job so it re-resolves") while every assertion above still passed. That is
+  # the defect this whole change is about, so leaving it unguarded would be the same mistake again.
+  grep -q 'MAIN_PASSED_REPOS' <<<"$o" \
+    || fail "the refusal must name the list that decides whether the set comes back (got: $o)"
+  grep -q "cannot re-resolve AT ALL" <<<"$o" \
+    || fail "the refusal must say that re-running the FAILED jobs cannot re-resolve (got: $o)"
+  grep -q 'while your main is red, is forever' <<<"$o" \
+    || fail "the refusal must say a FULL re-run returns the same set while main is red (got: $o)"
+  grep -q 'WAIT FOR THE SET, NOT FOR THE TICK' <<<"$o" \
+    || fail "the refusal must not send the reader to re-run the moment a tick fires (got: $o)"
+  # \U0001f6a8 The SHAPE, not one word order. The first version of this guard rejected only
+  # `keeps ... the <n> newest`, so `retains the 3 newest`, `keeps the newest 3` and `keeps 3 sets`
+  # would all have walked a numeric retention claim back in while --self-test stayed green — a
+  # guard narrower than the contract it advertises is the bug it exists to prevent. Two patterns:
+  # a retention VERB reaching a digit, and a digit reaching a retention NOUN.
+  grep -qiE '(keep|retain|hold)[a-z]*( only)?( the)?( newest| most recent)? [0-9]+' <<<"$o" \
+    && fail "no refusal may assert a retention NUMBER — the window is the cluster's to set and a \
+number written here goes stale the first time it moves (got: $o)"
+  grep -qiE '[0-9]+ (newest|most recent|sealed set|sets kept)|(newest|most recent) [0-9]+' <<<"$o" \
+    && fail "no refusal may count the sets kept — see above (got: $o)"
+  grep -q 'only ever installs the NEWEST' <<<"$o" \
+    && fail "the refresh also installs a missing main-passed set — Memex#329 (got: $o)"
 
   # 5g. An EMPTY volume with a pinned caller: the refresh has completed no run, which is the same
   #     "has not caught up" family — waited out, then RED naming the empty volume, never retention.
@@ -404,6 +433,14 @@ SET_LABEL="${CALLER_SET:+set $CALLER_SET (core CD #$CALLER_RUN), }"
 NO_PULL="🚨 This shard does NOT fall back to 'docker pull': a gate that quietly reached the registry would hide a dead refresh job for as long as the registry answers."
 NOT_THE_DIGEST="Do NOT bump the caller's image-digest/platform-image-digest: this run resolved a set that exists and is sealed, and the pin is right."
 
+# 🚨 THE THREE CLAUSES EVERY RETENTION REFUSAL SHARES, hoisted so they cannot drift apart. Four
+# refusals used to each carry their own wording, and that is exactly how three of them ended up
+# still asserting "the refresh only ever installs the NEWEST sealed set" after Systemorph/Memex#329
+# stopped being true.
+KEPT="$REFRESH_JOB keeps three things and purges the rest: 'current' (the newest sealed set), a bounded window of the newest sets by install time, and THE SET EACH SUBSCRIBED REPOSITORY'S main LAST PASSED — the one a pull request in that repository resolves. Deliberately no number here: the window's size is the cluster's to set (Systemorph/Memex deployments/aks/ci-runners/ci-platform.yaml), and a number written into this message goes stale the first time it moves, which is exactly how this message came to tell three sessions that the volume kept three sets when it was keeping sixteen."
+REMEDY="WHAT ACTUALLY FIXES IT turns on one question — is this set the one your repository's main last passed? If YES and your repository is subscribed, the refresh INSTALLS it back (Systemorph/Memex#329 — rule 2 installs a missing main-passed set, it does not merely decline to purge it). 🚨 WAIT FOR THE SET, NOT FOR THE TICK: installing one takes roughly 200s of extraction after the tick that starts it, the share is SMB and caches a negative lookup for up to 30s, and a rule-2 install runs AFTER the newest set's, so re-running the moment a tick fires can still land before '.complete' is published. Re-run once the volume actually lists this digest. If your repository is NOT in the refresh's MAIN_PASSED_REPOS, no refresh will ever install this set — add it there; that, and not a re-run, is the fix."
+RERUN="🚨 A RE-RUN IS NOT ITSELF A REMEDY, and believing it is costs hours. 'Re-run failed jobs' cannot re-resolve AT ALL — the job that resolved this set SUCCEEDED, so it is not re-run and its output is replayed verbatim. A FULL re-run does re-resolve, and returns the SAME set for as long as your main has not PASSED on a newer one — which, while your main is red, is forever. Measured 2026-09-17 on MeshWeaver.Plugins#2040: three attempts, one resolution (3.0.0-ci.8820) each time. A re-run helps only AFTER the volume carries the set again."
+
 waited=0
 if ! set_is_complete; then
   refuse_if_marker_disagrees
@@ -429,12 +466,12 @@ if ! set_is_complete; then
     # newer set sealed first" — both leave exactly no trace. Naming one of them would be the same
     # mistake this whole change is about; the remedy happens to be the same for both.
     if [ -n "$CALLER_RUN" ] && [ -n "$oldest" ] && [ "$CALLER_RUN" -lt "$oldest" ]; then
-      die "the platform volume at '$VOLUME_ROOT' does not carry ${SET_LABEL}tester digest ${resolved}, and never will: core CD #$CALLER_RUN is below the OLDEST set kept (#$oldest), and $REFRESH_JOB only ever installs the NEWEST sealed set. Two histories end here and the volume cannot tell them apart: the set was installed and has since been PURGED (it keeps the 3 newest — a pull request following the newest set its own main PASSED outlives that window; Systemorph/Memex#329 asks for those to be kept too), or it was OVERTAKEN before its turn came and was never installed at all. Either way no future refresh will install it: re-run the job so it re-resolves. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+      die "the platform volume at '$VOLUME_ROOT' does not carry ${SET_LABEL}tester digest ${resolved}: core CD #$CALLER_RUN is below the OLDEST set kept (#$oldest). Two histories end here and the volume cannot tell them apart: the set was installed and has since been PURGED, or it was OVERTAKEN before its turn came and was never installed at all. $KEPT $REMEDY $RERUN $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
     fi
     if [ -n "$CALLER_RUN" ] && [ -n "$newest" ]; then
-      die "the platform volume at '$VOLUME_ROOT' will never carry ${SET_LABEL}tester digest ${resolved}: the refresh has moved PAST it — the volume's newest set is core CD #$newest and its oldest is #${oldest:-?}, so #$CALLER_RUN is INSIDE the kept window and absent, which means it was overtaken (a newer set sealed before the refresh's next tick) and never installed. $REFRESH_JOB only ever installs the NEWEST sealed set, so no future run will install it. Re-run the job so it resolves a set the volume has. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+      die "the platform volume at '$VOLUME_ROOT' will never carry ${SET_LABEL}tester digest ${resolved}: the refresh has moved PAST it — the volume's newest set is core CD #$newest and its oldest is #${oldest:-?}, so #$CALLER_RUN is INSIDE the kept window and absent, which means it was overtaken (a newer set sealed before the refresh's next tick) and never installed. $KEPT $REMEDY $RERUN $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
     fi
-    die "the platform volume at '$VOLUME_ROOT' carries no set for tester digest ${resolved}, and this caller passed no --set (or one carrying no core-CD run number — it got '${CALLER_SET:-}'), so which of the three absences this is cannot be told apart here. $REFRESH_JOB installs the newest SEALED set every 10 minutes and keeps the 3 newest, so a set is absent because it is (1) OLDER than the three kept — re-run to re-resolve; see Systemorph/Memex#329; (2) OVERTAKEN — a newer set sealed before the refresh's next tick and the refresh only takes the newest, so it will never arrive — re-run; or (3) ARRIVING — which this shard waits out on its own and would have said so. Pass --set <3.0.0-ci.N> (the resolver's \`set\` output) to have the three named apart. The volume holds:$(listing). $NO_PULL"
+    die "the platform volume at '$VOLUME_ROOT' carries no set for tester digest ${resolved}, and this caller passed no --set (or one carrying no core-CD run number — it got '${CALLER_SET:-}'), so which of the three absences this is cannot be told apart here. $REFRESH_JOB runs every 10 minutes. $KEPT So a set is absent because it is (1) PURGED — outside the window and not any subscribed repository's main-passed set; (2) OVERTAKEN — a newer set sealed before the refresh's next tick, so it was never installed; or (3) ARRIVING — which this shard waits out on its own and would have said so. For (1) and (2) alike, see Systemorph/Memex#329: the remedy is the main-passed rule carrying the set, never a re-run. Pass --set <3.0.0-ci.N> (the resolver's \`set\` output) to have the three named apart. The volume holds:$(listing). $NO_PULL"
   fi
 
   # ── the bounded wait, on the condition itself ───────────────────────────────────────────────
@@ -454,7 +491,7 @@ if ! set_is_complete; then
     # ends here rather than at the deadline — the remedy is a re-run, not more patience.
     if [ -z "$flight" ] && [ ! -d "$SET_DIR" ] && [ -n "$CALLER_RUN" ] && [ -n "$newest" ] \
        && [ "$newest" -gt "$CALLER_RUN" ]; then
-      die "while this shard waited ${waited}s for ${SET_LABEL}tester ${resolved}, $REFRESH_JOB installed core CD #$newest instead — it only ever takes the NEWEST sealed set, so #$CALLER_RUN was overtaken and will never be installed. Re-run the job so it resolves a set the volume has. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+      die "while this shard waited ${waited}s for ${SET_LABEL}tester ${resolved}, $REFRESH_JOB installed core CD #$newest instead — #$CALLER_RUN was overtaken. $KEPT $REMEDY $RERUN $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       if [ "$reason" = arriving ]; then

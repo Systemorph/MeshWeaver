@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -224,7 +226,7 @@ public static class MarkdownOverviewLayoutArea
         MeshNode? partitionRoot = null)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
-        var rawContent = GetMarkdownContent(node);
+        var read = ReadMarkdownContent(node);
 
         // Markdown pages render full width (max-width: 100%), not the centered 1200px reading column.
         var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, maxWidthOverride: "100%"));
@@ -238,7 +240,7 @@ public static class MarkdownOverviewLayoutArea
         // a DIRECT child of `container` so agents and tests can locate it without
         // walking through an intermediate Stack wrapper. An @@ embed (hideHeader) renders the
         // body WITHOUT collaboration UI — commenting happens on the embedded node's own page.
-        container = container.WithView(BuildMarkdownReadView(host, nodePath, rawContent, canComment, canEdit, hideAnnotations: hideHeader));
+        container = container.WithView(BuildMarkdownReadView(host, nodePath, read, canComment, canEdit, hideAnnotations: hideHeader));
 
         // No hardcoded children section: a node page is a markdown space — children (or any other
         // content) are injected INLINE with the @@(query) operator, never auto-listed (that doubled
@@ -286,46 +288,192 @@ public static class MarkdownOverviewLayoutArea
                     .WithShowProgress(false)
                 : Controls.Stack);
 
-    /// <summary>The e-Signature package's shared desk — the instance that serves every document.</summary>
-    internal const string SignatureDeskPath = "DeepSign/Workspace";
+    /// <summary>
+    /// The e-Signature package's shared desk, in PREFERENCE ORDER — the first one present on the
+    /// mesh renders the block.
+    ///
+    /// <para>🚨 <b>This is a list, not a constant, because the package was RENAMED and the old one
+    /// is still installed on live meshes.</b> <c>DeepSign/</c> no longer exists anywhere in
+    /// MeshWeaver.Plugins — it became <c>Signature/</c> — yet a single hard-coded
+    /// <c>"DeepSign/Workspace"</c> here kept pointing every document page at the retired desk while
+    /// the node menu (<c>Signature/RequestSignatureMenu</c>) wrote through the new one. A request
+    /// raised from the menu was then invisible in the block on the very page it was raised from,
+    /// and nothing errored: the probe found the stale desk node, so the section rendered — just
+    /// from the wrong package. Core's own <c>PublicationSealStarvation</c> had already recorded
+    /// GitSync reporting <i>"No files found under subdirectory 'DeepSign'"</i>.</para>
+    ///
+    /// <para>Order matters and legacy comes LAST: a mesh carrying both must render the maintained
+    /// package. Drop the legacy entry once no mesh reports <c>DeepSign/Workspace</c>.</para>
+    /// </summary>
+    internal static readonly ImmutableArray<string> SignatureDeskPaths =
+        ["Signature/Workspace", "DeepSign/Workspace"];
 
     /// <summary>The desk area rendering one document's signature block.</summary>
     internal const string SignatureArea = "Signature";
 
     /// <summary>
     /// The document's signatures, rendered by the e-Signature package when that package is on the
-    /// mesh — an empty stack otherwise, never an "area not found" card. The document path rides as
-    /// the layout-area REFERENCE, exactly as the approvals section hands it over.
+    /// mesh — an empty stack when the desk node is ABSENT. The document path rides as the
+    /// layout-area REFERENCE, exactly as the approvals section hands it over.
+    ///
+    /// <para>🚨 <b>"Never an area-not-found card" is what this guard aims at and NOT what it
+    /// guarantees</b>, and the same is true of the approvals section above. The probe asks the mesh
+    /// INDEX whether the desk NODE exists; whether the replica that ends up answering can RENDER its
+    /// areas is a different question, and a mid-roll makes the two disagree — the desk's NodeType
+    /// assembly can be stamped with a framework identity the serving replica does not run, so its
+    /// areas are never registered there while the shared <c>compilationStatus</c> still reads
+    /// <c>Ok</c> (Systemorph/MeshWeaver#4632). Measured 2026-09-17: the approvals section put the
+    /// framework's diagnostic, and sixty area names, inside a customer letter. The frame itself is
+    /// now a localized sentence with the diagnostic folded away, so the failure is survivable where
+    /// it lands — but do not read this line as a promise that it cannot land.</para>
     /// </summary>
     private static IObservable<UiControl?> SignaturesSection(LayoutAreaHost host, string nodePath)
-        => PluginSurfaceProbe
-            .Exists(host.Hub.ServiceProvider.GetService<IMeshService>(), SignatureDeskPath)
-            .Select(installed => installed
-                ? (UiControl?)Controls.LayoutArea(SignatureDeskPath, SignatureArea, nodePath)
-                    .WithShowProgress(false)
-                : Controls.Stack);
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+
+        // Each probe emits exactly once (true, or false at its 800 ms budget) and completes, so
+        // CombineLatest settles inside one budget however many desks are listed — it does not add
+        // them up. Preference order is the LIST order, never whichever probe answered first.
+        return Observable
+            .CombineLatest(SignatureDeskPaths.Select(path => PluginSurfaceProbe.Exists(mesh, path)))
+            .Select(present => SignatureBlockFor(
+                present.ToImmutableArray(),
+                nodePath,
+                host.Localize("signature.unconfigured.title"),
+                host.Localize("signature.unconfigured.body")));
+    }
+
+    /// <summary>
+    /// The whole decision this section makes, as a pure function of the probe answers: the block
+    /// delegated to the FIRST desk present in <see cref="SignatureDeskPaths"/> order, or the
+    /// unconfigured block when none is.
+    ///
+    /// <para>Separate from <see cref="SignaturesSection"/> on purpose. The properties that
+    /// actually broke — preference by LIST ORDER rather than by whichever probe answered first,
+    /// and a legible block instead of silence when nothing is installed — are decided here and are
+    /// testable here; pinning the array's contents alone (which is all the first version of
+    /// <c>SignatureDeskIsTheMaintainedPackageTest</c> did) leaves every one of them unguarded.</para>
+    /// </summary>
+    /// <param name="present">Each candidate desk's probe answer, in <see cref="SignatureDeskPaths"/> order.</param>
+    /// <param name="nodePath">The document whose signatures the desk is to render.</param>
+    /// <param name="unconfiguredTitle">Localized heading for the no-provider block.</param>
+    /// <param name="unconfiguredBody">Localized body for the no-provider block.</param>
+    internal static UiControl SignatureBlockFor(
+        IReadOnlyList<bool> present, string nodePath, string unconfiguredTitle, string unconfiguredBody)
+    {
+        for (var i = 0; i < SignatureDeskPaths.Length && i < present.Count; i++)
+            if (present[i])
+                return Controls.LayoutArea(SignatureDeskPaths[i], SignatureArea, nodePath)
+                    .WithShowProgress(false);
+
+        return UnconfiguredSignatureBlock(unconfiguredTitle, unconfiguredBody);
+    }
+
+    /// <summary>
+    /// What the signatures section renders when NO e-Signature package is on the mesh.
+    ///
+    /// <para>Deliberately a block rather than an empty stack: a page that simply omits the section
+    /// teaches the reader that this document cannot be signed, when the truth is only that nobody
+    /// has installed a provider. It states that, names the signature level a provider would give,
+    /// and stops — it records nothing, offers no button, and is emphatically NOT a tenth approval
+    /// mechanism (the estate already has nine).</para>
+    ///
+    /// <para>🚨 Composed from the platform's layout controls, never from markup. The first version
+    /// of this block was a <c>Controls.Html</c> string carrying its own flexbox card and a
+    /// hand-drawn <c>&lt;svg&gt;</c>, which is the "own UI framework in a node" shape the GUI rules
+    /// forbid: it renders on exactly one client, takes no theme token it is not told about, and the
+    /// certificate mark it drew already exists in the platform icon set.</para>
+    /// </summary>
+    internal static UiControl UnconfiguredSignatureBlock(string title, string body)
+        => Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(14)
+            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; "
+                       + "padding: 14px 16px; margin-top: 12px; align-items: flex-start;")
+            .WithView(UnconfiguredSignatureMark())
+            .WithView(UnconfiguredSignatureText(title, body));
+
+    /// <summary>
+    /// The certificate mark a completed signature carries, shown here as a legend so the standard
+    /// is legible before anyone has adopted one. The platform icon set already has it, and there is
+    /// nothing to attest yet, so it is the hint colour — the copy beside it must not promise
+    /// otherwise.
+    ///
+    /// <para>🚨 The colour rides on <c>WithStyle</c>, NOT on <c>WithColor</c>. <c>IconControl.Color</c>
+    /// is public and the Blazor icon view binds only <c>Data</c> and <c>Width</c> (plus <c>Style</c>
+    /// from the base view), so a colour set the other way is silently dropped — which is why
+    /// <c>MeshNodeLayoutAreas.BuildAccessDenied</c>, the same kind of card, colours its icon through
+    /// the style too.</para>
+    /// </summary>
+    internal static IconControl UnconfiguredSignatureMark()
+        => Controls.Icon(FluentIcons.Certificate())
+            .WithStyle("color: var(--neutral-foreground-hint);");
+
+    /// <summary>The heading and explanation of the no-provider block.</summary>
+    internal static StackControl UnconfiguredSignatureText(string title, string body)
+        => Controls.Stack
+            .WithView(Controls.Subject(title))
+            .WithView(Controls.Body(body).WithStyle("color: var(--neutral-foreground-hint);"));
 
     /// <summary>
     /// Returns the actual markdown body control (a <see cref="CollaborativeMarkdownControl"/>
-    /// when there is content, an HTML placeholder when empty) — NOT wrapped in an extra
+    /// when there is content, the authoring placeholder when the node is empty, and a DIAGNOSTIC
+    /// when its content is present but unreadable) — NOT wrapped in an extra
     /// Stack. The caller is expected to add this directly to its container so consumers
     /// can identify the markdown body via <c>OfType&lt;CollaborativeMarkdownControl&gt;</c>
     /// without skipping a wrapper layer.
+    ///
+    /// <para>🚨 <b>The empty state and the unreadable state must not be the same view</b> (#4600).
+    /// "No content yet. Use the menu to start editing." is an INVITATION, and rendering it over a
+    /// document whose bytes are still in the store invites the one action that destroys them: the
+    /// reader edits, and the first save replaces the payload nobody could read with whatever they
+    /// typed. The unreadable state therefore says what is stored and does not invite anything.</para>
     /// </summary>
-    private static UiControl BuildMarkdownReadView(
-        LayoutAreaHost host, string nodePath, string rawContent, bool canComment, bool canEdit, bool hideAnnotations)
+    internal static UiControl BuildMarkdownReadView(
+        LayoutAreaHost host, string nodePath, MarkdownRead read, bool canComment, bool canEdit, bool hideAnnotations)
     {
-        if (!string.IsNullOrWhiteSpace(rawContent))
+        if (read.State == MarkdownContentState.Present && !string.IsNullOrWhiteSpace(read.Text))
         {
             return new CollaborativeMarkdownControl()
-                .WithValue(rawContent)
+                .WithValue(read.Text)
                 .WithNodePath(nodePath)
                 .WithHubAddress(host.Hub.Address.ToString())
                 .WithCanComment(canComment)
                 .WithCanEdit(canEdit)
                 .WithHideAnnotations(hideAnnotations);
         }
-        return Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Use the menu to start editing.</p>");
+
+        if (read.State == MarkdownContentState.Unreadable)
+        {
+            // Warning, not Debug: this is a node whose authored text is in the store and reachable
+            // by nobody, and until it is repaired every render of the page is the only place that
+            // says so. Bounded by human page views. The read seam logs the SAME node only when its
+            // payload carries a `$type` — a discriminator-less one (the measured case) returns from
+            // MeshNodeTypeSource.ResolveJsonElementContent before any line is written, so without
+            // this there is nothing at all.
+            // A LOCAL and an explicit null check, not `factory?.CreateLogger(t).LogWarning(…)`:
+            // LogWarning is an EXTENSION method, so whether `?.` short-circuits past it is a
+            // question a reader should not have to answer (review on #4626). A host without a
+            // logger factory is a minimal test host, and it must render the notice all the same.
+            var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(MarkdownOverviewLayoutArea));
+            logger?.LogWarning(
+                "Markdown node '{Path}' has content that no reader can interpret — stored "
+                + "member(s)/kind: {Shape}. The page shows a diagnostic instead of the "
+                + "authoring placeholder, because inviting an edit over unreadable content is "
+                + "how the stored text gets overwritten. Systemorph/MeshWeaver#4600.",
+                nodePath, read.Shape);
+
+            // ONE control, not a Stack of two: the notice has to be legible as a whole, and a
+            // consumer (or a test) that asks what this page says must get the sentence rather than
+            // two anonymous sub-area references. Same idiom as the unresolved-content-type notice.
+            return Controls.Markdown(
+                $"**{host.Localize("ui.markdownContentUnreadable")}**\n\n"
+                + host.Localize("ui.markdownContentUnreadableHint", read.Shape));
+        }
+
+        return Controls.Body(host.Localize("ui.noContentYet"))
+            .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;");
     }
 
     /// <summary>
@@ -343,42 +491,152 @@ public static class MarkdownOverviewLayoutArea
     }
 
     /// <summary>
-    /// Extracts markdown content from a MeshNode.
+    /// How a node's content answered <see cref="ReadMarkdownContent"/>.
     /// </summary>
-    public static string GetMarkdownContent(MeshNode? node)
+    public enum MarkdownContentState
+    {
+        /// <summary>There is no content — the node is genuinely empty and inviting an edit is right.</summary>
+        Absent,
+
+        /// <summary>The markdown was read.</summary>
+        Present,
+
+        /// <summary>
+        /// Content is THERE and nothing here can interpret it — a payload no reader can
+        /// materialise. Distinct from <see cref="Absent"/> on purpose: see
+        /// <see cref="ReadMarkdownContent"/>.
+        /// </summary>
+        Unreadable,
+    }
+
+    /// <summary>The outcome of reading a node's markdown.</summary>
+    /// <param name="State">Absent / Present / Unreadable.</param>
+    /// <param name="Text">The markdown, empty unless <paramref name="State"/> is Present.</param>
+    /// <param name="Shape">
+    /// For <see cref="MarkdownContentState.Unreadable"/>, the actual shape of the stored payload —
+    /// the members it carries, or its JSON kind — so a diagnostic and a log line can SAY what is
+    /// there instead of the reader guessing. Empty otherwise.
+    /// </param>
+    public record MarkdownRead(MarkdownContentState State, string Text, string Shape);
+
+    /// <summary>
+    /// Reads a node's markdown, distinguishing "there is none" from "there is some and nothing here
+    /// can interpret it".
+    ///
+    /// <para>🚨 <b>Those two were the same answer, and that is the defect</b>
+    /// (Systemorph/MeshWeaver#4600). <see cref="GetMarkdownContent"/> returned
+    /// <see cref="string.Empty"/> from its final fall-through for every payload shape it does not
+    /// recognise, so the caller rendered the authoring placeholder — <i>"No content yet. Use the
+    /// menu to start editing."</i> — over a full document, with nothing logged. Measured on a
+    /// customer workspace 2026-09-17: a <c>Markdown</c> node whose v1 content was
+    /// <c>{"markdown": "# … Company Profile\n…"}</c>, a member <see cref="MarkdownContent"/> does not
+    /// declare, rendered as an empty node from birth. A reader who believes that placeholder starts
+    /// editing, and the first save overwrites the text that was still there.</para>
+    ///
+    /// <para><b>Only a raw <see cref="JsonElement"/> can be Unreadable.</b> Typed CLR content that
+    /// is not a markdown shape reads as Absent exactly as it always did — this area is registered on
+    /// the <c>Markdown</c> NodeType's hub alone, but <see cref="GetMarkdownContent"/> is called from
+    /// the version diff and the notebook view for other shapes too, and calling a node's own typed
+    /// content "unreadable" would be false. A JsonElement is the shape content has when NOTHING in
+    /// the process could type it, which is precisely the claim being made.</para>
+    /// </summary>
+    /// <param name="node">The node to read; may be null.</param>
+    /// <returns>The read outcome.</returns>
+    public static MarkdownRead ReadMarkdownContent(MeshNode? node)
     {
         if (node?.Content == null)
-            return string.Empty;
+            return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
 
         if (node.Content is MarkdownContent markdownContent)
-            return markdownContent.Content;
+            return Text(markdownContent.Content);
 
         if (node.Content is string stringContent)
-            return stringContent;
+            return Text(stringContent);
 
-        if (node.Content is System.Text.Json.JsonElement jsonElement)
+        if (node.Content is JsonElement jsonElement)
+            return FromJson(jsonElement);
+
+        // Typed content of some other shape: there is no markdown here, and saying so is honest.
+        return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
+
+        static MarkdownRead Text(string? value) =>
+            string.IsNullOrEmpty(value)
+                ? new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty)
+                : new MarkdownRead(MarkdownContentState.Present, value, string.Empty);
+    }
+
+    private static MarkdownRead FromJson(JsonElement jsonElement)
+    {
+        switch (jsonElement.ValueKind)
         {
-            if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.String)
-                return jsonElement.GetString() ?? string.Empty;
-
-            if (jsonElement.TryGetProperty("$type", out var typeProperty))
-            {
-                var typeName = typeProperty.GetString();
-                if ((typeName == "MarkdownDocument" || typeName == "MarkdownContent") && jsonElement.TryGetProperty("content", out var contentProperty))
-                {
-                    return contentProperty.GetString() ?? string.Empty;
-                }
-            }
-
-            // Fallback: try "content" property without $type check
-            if (jsonElement.TryGetProperty("content", out var fallbackContent) && fallbackContent.ValueKind == System.Text.Json.JsonValueKind.String)
-            {
-                return fallbackContent.GetString() ?? string.Empty;
-            }
+            case JsonValueKind.String:
+                var raw = jsonElement.GetString();
+                return string.IsNullOrEmpty(raw)
+                    ? new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty)
+                    : new MarkdownRead(MarkdownContentState.Present, raw, string.Empty);
+            case JsonValueKind.Null or JsonValueKind.Undefined:
+                return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
+            case JsonValueKind.Object:
+                break;
+            default:
+                // A number, a boolean, an array: content is there and it is not markdown.
+                return new MarkdownRead(
+                    MarkdownContentState.Unreadable, string.Empty,
+                    jsonElement.ValueKind.ToString().ToLowerInvariant());
         }
 
-        return string.Empty;
+        if (jsonElement.TryGetProperty("$type", out var typeProperty))
+        {
+            var typeName = typeProperty.GetString();
+            if ((typeName == "MarkdownDocument" || typeName == "MarkdownContent")
+                && jsonElement.TryGetProperty("content", out var contentProperty))
+                return Content(contentProperty);
+        }
+
+        // Fallback: try "content" property without $type check
+        if (jsonElement.TryGetProperty("content", out var fallbackContent)
+            && fallbackContent.ValueKind == JsonValueKind.String)
+            return Content(fallbackContent);
+
+        // Nothing here carries markdown. An object with NO authored member is an empty node; one
+        // that carries members is a payload holding something nobody can read.
+        var members = jsonElement.EnumerateObject()
+            .Select(p => p.Name)
+            .Where(n => !string.Equals(n, "$type", StringComparison.Ordinal))
+            .ToArray();
+        return members.Length == 0
+            ? new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty)
+            : new MarkdownRead(
+                MarkdownContentState.Unreadable, string.Empty, string.Join(", ", members));
+
+        // 🚨 A `content` member that is NOT a string is the same defect one level in (review on
+        // #4626): mapping it to Absent would put the invitation back over a payload that is there
+        // and unreadable — an object, an array, a number under the very member the declaration
+        // names. Only a string (or an explicit null / empty string) is an answer about emptiness.
+        static MarkdownRead Content(JsonElement value) =>
+            value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString() is { Length: > 0 } text
+                    ? new MarkdownRead(MarkdownContentState.Present, text, string.Empty)
+                    : new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty),
+                JsonValueKind.Null or JsonValueKind.Undefined =>
+                    new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty),
+                _ => new MarkdownRead(
+                    MarkdownContentState.Unreadable, string.Empty,
+                    "content: " + value.ValueKind.ToString().ToLowerInvariant()),
+            };
     }
+
+    /// <summary>
+    /// Extracts markdown content from a MeshNode, or the empty string when there is none.
+    ///
+    /// <para>🚨 This answer CANNOT tell an empty node from an unreadable one — both are
+    /// <see cref="string.Empty"/> — so a caller that renders an empty state off it renders that
+    /// state over a full document (#4600). Callers that only ask "is there prose to show or diff"
+    /// are unaffected and keep using this; a caller that tells the USER the node is empty must read
+    /// <see cref="ReadMarkdownContent"/> instead.</para>
+    /// </summary>
+    public static string GetMarkdownContent(MeshNode? node) => ReadMarkdownContent(node).Text;
 
     /// <summary>
     /// Writes <paramref name="markdown"/> back into <paramref name="node"/>, PRESERVING the content
