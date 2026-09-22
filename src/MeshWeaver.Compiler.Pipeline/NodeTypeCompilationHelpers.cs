@@ -3658,13 +3658,24 @@ internal static class NodeTypeCompilationHelpers
     /// </param>
     /// <param name="activityPath">The CONFIRMED compile-activity path, or null when none was created.</param>
     /// <param name="releasePath">The CONFIRMED release-node path, or null when the create didn't land.</param>
+    /// <param name="modulesHash">The installed-module fingerprint, when the caller can resolve one.</param>
+    /// <param name="unreleasedBuildPath">
+    /// 🚨 When <paramref name="releasePath"/> is null: the release path the failed attempt was
+    /// minting, stamped as <see cref="NodeTypeDefinition.UnreleasedBuildPath"/> so "this build has
+    /// no release" is READABLE on the node (#5057). Ignored — and the standing stamp CLEARED — when
+    /// a release landed. Null when this settle has nothing to say, which also clears a standing
+    /// stamp: the stamp describes THIS build, never an earlier one.
+    /// </param>
+    /// <param name="unreleasedBuildReason">Why, in the attempt's own words; travels with the path.</param>
     internal static NodeTypeDefinition ApplyCompileSuccess(
         NodeTypeDefinition def,
         NodeCompilationResult result,
         long currentNodeVersion,
         string? activityPath,
         string? releasePath,
-        string? modulesHash = null)
+        string? modulesHash = null,
+        string? unreleasedBuildPath = null,
+        string? unreleasedBuildReason = null)
     {
         var assemblyMvid = ServedBuildIdentity.OfFile(result.AssemblyLocation);
         var dependencies = result.CompiledDependencies;
@@ -3737,6 +3748,17 @@ internal static class NodeTypeCompilationHelpers
             LastCompiledVersion = result.Version ?? def.LastCompiledVersion,
             LastCompilationActivityPath = activityPath,
             LatestReleasePath = releasePath ?? def.LatestReleasePath,
+            // 🚨 #5057 — THE STAMPED FORM OF "THIS BUILD HAS NO RELEASE". When no release landed
+            // for these bytes, the path the attempt was minting and the reason it did not land are
+            // written on the node, so the state is readable (get @Type, the bake census, the UI)
+            // rather than existing only as an Error line at the moment of the settle — which is
+            // how the incident's node "read healthy from every field" while every instance kept
+            // binding a release cut for an earlier build. A landed release clears both; so does a
+            // settle that has nothing to say, because the stamp describes THIS build.
+            UnreleasedBuildPath = releasePath is not null ? null : unreleasedBuildPath,
+            UnreleasedBuildReason = releasePath is not null || unreleasedBuildPath is null
+                ? null
+                : unreleasedBuildReason,
             ReleaseNotes = releasePath is not null ? null : def.ReleaseNotes,
             CompiledSources = result.CompiledSources
                 ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
@@ -4468,8 +4490,8 @@ internal static class NodeTypeCompilationHelpers
                             ? ReleasePostCondition.Restore(
                                 hub, hubPath, outcome.Result!, outcome.PendingNode,
                                 resolvedActivityPath, firstAttempt, logger)
-                            : Observable.Return<(string? ReleasePath, LogMessage? Diagnosis)>(
-                                (firstAttempt.ReleasePath, null)))
+                            : Observable.Return(
+                                new ReleasePostCondition.Settle(firstAttempt.ReleasePath, null)))
                         // 🚨 #4469 — THE JOIN POINT. A failure on an unresolved NAME asks the
                         // partition's import bookkeeping whether it lost the file that would have
                         // defined it, so the operator who lands on the compile error is told about
@@ -4662,7 +4684,10 @@ internal static class NodeTypeCompilationHelpers
                                 hubPath, outcome.Result!.AssemblyLocation);
                             var succeeded = ApplyCompileSuccess(
                                 def, outcome.Result, curr.Version, resolvedActivityPath, newReleasePath,
-                                hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash);
+                                hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
+                                // #5057 — a build that ends with no release is STAMPED as such,
+                                // not only logged at the moment of the settle.
+                                settle.UnreleasedBuildPath, settle.UnreleasedBuildReason);
                             lifted = BuildDeliveryHold.EventOf(def, succeeded);
                             liftedDef = succeeded;
                             return curr with { Content = succeeded };

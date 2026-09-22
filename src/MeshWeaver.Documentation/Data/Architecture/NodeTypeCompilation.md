@@ -2652,6 +2652,7 @@ protocol lives in the `/code` skill.
 | Cancel a running compile | `hub.CancelActivity(activityPath)` |
 | List releases | The `Release/*` children of the NodeType |
 | Find the current release | `NodeTypeDefinition.LatestReleasePath` |
+| Tell whether the LATEST build has a release at all | `NodeTypeDefinition.UnreleasedBuildPath` — null when it does; otherwise the id the create was minting, with `UnreleasedBuildReason` beside it (#5057, [Release Failure Classes](../ReleaseFailureClasses)) |
 | Pin instances to a fixed release | Set `NodeTypeDefinition.RequestedReleasePath` |
 | Understand why it recompiled | `HasUsableBuild` failed rule 2 (assembly gone) or rule 3 (framework changed) |
 | Understand a "Compile leg '…' did not complete within Ns" error | That stage stopped answering — see [Every stage is bounded](#every-stage-is-bounded--a-compile-can-never-park-at-compiling) |

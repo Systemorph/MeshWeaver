@@ -84,6 +84,13 @@ public static class NodeTypeOperationalContent
         "requestedReleaseForce",
         "requestedReleaseBy",
         "lastReleaseRequestHandledAt",
+        // #5057 — the release path the last successful compile's create was minting when it did
+        // not confirmably land, and why. Operational for the same reason latestReleasePath is, and
+        // for a sharper one: it is the stamped form of "this build has no release", so an authored
+        // value would assert a missing release for a build this mesh never made, and an authored
+        // null would erase the one readable trace of a release create that expired its bound.
+        "unreleasedBuildPath",
+        "unreleasedBuildReason",
         "releaseNotes",
         "latestAssemblyCollection",
         "latestAssemblyPath",
