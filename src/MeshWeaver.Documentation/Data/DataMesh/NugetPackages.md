@@ -13,10 +13,23 @@ Interactive markdown in MeshWeaver is backed by a Roslyn scripting kernel (`Micr
 Place one or more `#r "nuget:..."` directives at the top of a code cell, then write code that depends on them:
 
 ```csharp --render HumanizeExample --show-code
-#r "nuget:Humanizer, 2.14.1"
+#r "nuget:Humanizer.Core, 2.14.1"
 using Humanizer;
 "hello_world_framework".Humanize()
 ```
+
+These English examples use `Humanizer.Core`, which includes the API and neutral English resources.
+For another language, add the matching `Humanizer.Core.<locale>` package at the same version.
+Use the `Humanizer` metapackage only when the application needs its full set of locale packages.
+
+Package choice also determines restore work: at version 2.14.1, the metapackage resolves 50 package
+identities, while `Humanizer.Core` resolves one for the kernel's .NET target. Dependency metadata
+is resolved before checking installed package files, so an installed package does not eliminate
+that work. In [the executable-documentation CI failure](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35739005506/job/106793868266),
+this first block was still awaiting NuGet resolution when its 60-second response wait expired;
+teardown then cancelled the wait. The trace does not identify the underlying HTTP or cache
+operation. Selecting the package these examples need keeps every executable block and the same
+kernel path, without increasing the timeout.
 
 When MeshWeaver renders a cell like this, it:
 
@@ -72,8 +85,8 @@ The return value is rendered into the `--render` area.
 > **Always pin a specific version.** Omitting the version resolves "latest" at render time, making articles non-reproducible and risking silent breaking changes.
 
 ```csharp
-#r "nuget:Humanizer, 2.14.1"   // good — reproducible
-#r "nuget:Humanizer"             // avoid — resolves latest at render
+#r "nuget:Humanizer.Core, 2.14.1"   // good — reproducible
+#r "nuget:Humanizer.Core"           // avoid — resolves latest at render
 ```
 
 ## Multiple packages
@@ -81,7 +94,7 @@ The return value is rendered into the `--render` area.
 List one directive per line. Order does not matter — all directives in the cell are resolved before any code runs:
 
 ```csharp --render MultiPackage --show-code
-#r "nuget:Humanizer, 2.14.1"
+#r "nuget:Humanizer.Core, 2.14.1"
 #r "nuget:Markdig, 0.37.0"
 using Humanizer;
 using Markdig;
@@ -94,7 +107,7 @@ Markdown.ToHtml($"# {heading}\n\nGenerated.")
 Once a package is resolved in any cell of an article, it stays available for every later cell in the same kernel session. You only need the `using` statement — the `#r` directive is not required again:
 
 ```csharp --render SharedFirst --show-code
-#r "nuget:Humanizer, 2.14.1"
+#r "nuget:Humanizer.Core, 2.14.1"
 using Humanizer;
 "first_cell".Humanize()
 ```
