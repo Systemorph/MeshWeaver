@@ -141,8 +141,8 @@ internal static class NodeTypeCompilationHelpers
         // .mesh-cache assembly that has since been cleaned up. Trusting it
         // strands the NodeType — the kickoff skips, no recompile runs, and
         // every instance hub falls back to the default config (no
-        // MeshNodeReference reducer → "No reducer defined for
-        // MeshNodeReference" on every subscribe). The ONLY safe skip condition
+        // MeshNodeReference reducer, so every subscribe is refused with "has no
+        // reducer from MeshNodeReference to MeshNode"). The ONLY safe skip condition
         // is "Ok AND the compiled assembly still exists on disk"
         // (<see cref="HasUsableBuild"/>); everything else — null / Unknown /
         // Compiling (interrupted) / Error / Ok-but-assembly-gone — recompiles.

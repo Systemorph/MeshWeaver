@@ -72,12 +72,32 @@ public static class DomainLayoutAreas
 
     /// <summary>
     /// Renders a catalog view listing all entities of the type named in the area reference Id.
-    /// Returns an actionable caution when no type is specified; throws when the named type is not
-    /// registered in the data context.
+    /// Returns an actionable, localized caution when no type is specified and when the named type is
+    /// not a collection of this host's workspace.
     /// </summary>
     /// <param name="area">The layout area host providing workspace and type-registry access.</param>
     /// <param name="ctx">The rendering context for this area.</param>
     /// <returns>A catalog UI control for the requested type.</returns>
+    // 🚨 THE GUARD MUST INTERROGATE THE REGISTRY THE RENDER ACTUALLY READS (#5065). This resolved the
+    // type from the hub's ITypeRegistry and then handed it to a render that streams
+    // `Workspace.GetStream(new CollectionReference(...))` — i.e. it checked one registry and read
+    // another. The two are NOT the same set and are not meant to be: ITypeRegistry is the hub's
+    // SERIALIZATION registry, which every content type a NodeType declares lands in (DataContext
+    // registers each type source into it, and PolymorphicTypeInfoResolver adds any type the hub
+    // merely serialises), while `DataContext.DataSourcesByCollection` holds only the collections a
+    // data source MAPS. A type in the first and not the second walked straight past the guard and
+    // died three frames deeper in `WorkspaceStreams.CreateWorkspaceStream`, as a bare
+    // `ArgumentException: Collections Harness are not mapped to any source` — an unhandled throw out
+    // of the render, so `LayoutAreaHost` logged it at ERROR ("Rendering failed for area Catalog",
+    // which auto-files an incident) and put that framework sentence in the viewer's face for what is
+    // an AUTHORING mistake: `@@Catalog/Harness` naming a type that is not a workspace collection.
+    //
+    // `DataContext.GetTypeSource(collection)` is the right question because it is the SAME map, keyed
+    // the same way: `DataContext.Initialize` builds `TypeSources` from `typeSource.CollectionName`
+    // and `DataSourcesByCollection` from `TypeRegistry.GetCollectionName(mappedType)` in the same
+    // pass, and it is also the set `AddTypesCatalogs` enumerates to OFFER catalog links. So after
+    // this the accept set and the offer set are one set, which is the invariant that stops the guard
+    // drifting from the read again.
     [Browsable(false)]
     public static UiControl Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
@@ -86,14 +106,15 @@ public static class DomainLayoutAreas
             // (@@Catalog) it has no Id — that used to throw a dead-end "No type specified" error.
             // Guide the author to the right syntax instead: a type catalog needs the type, and a
             // Space's own contents are the separate node-children "Search" area.
-            return Error(
-                "**Catalog needs a type.** Use `@@Catalog/TypeName` to list every entity of a "
-                + "registered type (e.g. `@@Catalog/User`). To embed this node's own contents, use "
-                + "`@@(\"area/Search\")` instead.");
-        var typeDefinition = area.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetTypeDefinition(collection);
+            return Error(area.Localize("catalog.needsType"));
+
+        var typeDefinition = area.Workspace.DataContext.GetTypeSource(collection)?.TypeDefinition;
         if (typeDefinition == null)
-            throw new DataSourceConfigurationException(
-                $"Collection {collection} is not mapped in Address {area.Hub.Address}.");
+            // An author naming a type this workspace does not hold as a collection is an authoring
+            // fault, so it renders as the same actionable caution as the missing-Id case above and
+            // is NOT thrown: a throw here is reported as a rendering DEFECT and files an incident.
+            // The type's own name is all an author needs; the framework's map is not their business.
+            return Error(area.Localize("catalog.notAWorkspaceCollection", collection));
 
         return DomainCatalogLayoutArea.GetCatalog(area, typeDefinition, ctx);
     }
