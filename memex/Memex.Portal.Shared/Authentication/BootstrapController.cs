@@ -45,7 +45,11 @@ public class BootstrapController(
 
         var user = (string.IsNullOrWhiteSpace(username) ? email.Split('@')[0] : username)
             .Trim().ToLowerInvariant();
-        var request = new UserOnboardingRequest(user, email.Trim(), name ?? user);
+        // The first global administrator: SEEDED with no learning path — they are setting the
+        // instance up, not learning it (UserOnboardingDefaults.PinnedPathsFor). The flag decides
+        // the seed only: this endpoint is re-runnable (see Step below), and on a user who already
+        // exists CreateUser keeps the pins as they are, so a re-run erases nothing they pinned since.
+        var request = new UserOnboardingRequest(user, email.Trim(), name ?? user) { IsPlatformBootstrap = true };
 
         logger.LogInformation("Bootstrap: materialising first admin '{User}' ({Email})", user, email);
 
