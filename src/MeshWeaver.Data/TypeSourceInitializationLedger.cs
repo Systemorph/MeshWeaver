@@ -41,10 +41,31 @@ internal sealed class TypeSourceInitializationLedger
     /// </summary>
     internal IReadOnlyCollection<string> Pending => pending
         .Select(kv => kv.Value is IReportsInitialLoadProgress progress
-                      && progress.DescribeInitialLoadProgress() is { Length: > 0 } detail
+                      && DescribeProgress(progress) is { Length: > 0 } detail
             ? $"{kv.Key} [{detail}]"
             : kv.Key)
         .ToArray();
+
+    /// <summary>
+    /// Asks an optional reporter for its sentence. This runs on the FAILURE path — inside
+    /// <c>SettleInitializationGate</c>, before the failure is recorded and the gate opened — so a
+    /// reporter that throws must not be able to take that path down with it and leave the hub
+    /// wedged instead of FAILED. The fault is not hidden: it is printed in place of the sentence,
+    /// naming the exception type, in the very message the operator reads.
+    /// </summary>
+    /// <param name="progress">The type source's reporter.</param>
+    /// <returns>Its sentence, or a sentence naming the fault it raised.</returns>
+    private static string? DescribeProgress(IReportsInitialLoadProgress progress)
+    {
+        try
+        {
+            return progress.DescribeInitialLoadProgress();
+        }
+        catch (Exception ex)
+        {
+            return $"progress report FAULTED ({ex.GetType().Name}: {ex.Message})";
+        }
+    }
 
     /// <summary>
     /// Marks every type source of <paramref name="stream"/> unsettled and hands back the claim the

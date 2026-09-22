@@ -53,6 +53,48 @@ public class MeshNodeTypeSourceInitialLoadProgressTest
         sentence.Should().EndWith("; the routing-supplied own-node stream has not emitted");
     }
 
+    /// <summary>
+    /// The WIRING, driven through the same helpers <c>Initialize</c> composes: nothing is recorded
+    /// until the read is SUBSCRIBED, an unanswered read reads as storage, its value settles it, and a
+    /// routing emission is counted only once the routing leg is subscribed and emits.
+    /// </summary>
+    [Fact]
+    public void TrackedSeedAndRouting_RecordAtSubscriptionSettlementAndEmission()
+    {
+        var progress = new MeshNodeTypeSource.InitialLoadProgress();
+        var read = new System.Reactive.Subjects.Subject<MeshWeaver.Mesh.MeshNode?>();
+        var routing = new System.Reactive.Subjects.Subject<MeshWeaver.Mesh.MeshNode?>();
+
+        var seed = progress.TrackSeed(read);
+        var counted = progress.TrackRouting(routing);
+        progress.Describe(HubPath, concatenatesRoutingStream: true).Should().StartWith("no durable seed read",
+            "composing the pipeline must record nothing — only a subscription starts the read");
+
+        using var seedSub = seed.Subscribe(_ => { }, _ => { });
+        progress.Describe(HubPath, concatenatesRoutingStream: true).Should().EndWith(
+            "— a storage read that has not come back");
+
+        read.OnNext(null);
+        progress.Describe(HubPath, concatenatesRoutingStream: true).Should().Contain("found no row after ");
+
+        using var routingSub = counted.Subscribe(_ => { });
+        routing.OnNext(null);
+        progress.Describe(HubPath, concatenatesRoutingStream: true).Should().EndWith(
+            "emitted 1 time(s) and none was accepted");
+    }
+
+    [Fact]
+    public void TrackedSeed_Fault_IsRecordedAsTheOutcome()
+    {
+        var progress = new MeshNodeTypeSource.InitialLoadProgress();
+        using var sub = progress
+            .TrackSeed(System.Reactive.Linq.Observable.Throw<MeshWeaver.Mesh.MeshNode?>(new System.TimeoutException("x")))
+            .Subscribe(_ => { }, _ => { });
+
+        progress.Describe(HubPath, concatenatesRoutingStream: false).Should().StartWith(
+            "durable seed read of 'Collaboration' FAULTED (TimeoutException) after ");
+    }
+
     [Fact]
     public void RoutingEmittedButNothingAccepted_SaysSo()
     {

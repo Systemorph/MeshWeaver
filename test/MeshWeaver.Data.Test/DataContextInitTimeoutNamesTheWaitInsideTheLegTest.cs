@@ -34,6 +34,8 @@ public class DataContextInitTimeoutNamesTheWaitInsideTheLegTest(ITestOutputHelpe
 
     private record HangingItem(string Id);
 
+    private record FaultingReporterItem(string Id);
+
     private record ProbeRequest : IRequest<ProbeResponse>;
 
     private record ProbeResponse;
@@ -52,6 +54,18 @@ public class DataContextInitTimeoutNamesTheWaitInsideTheLegTest(ITestOutputHelpe
         public string DescribeInitialLoadProgress() => ProgressSentence;
     }
 
+    /// <summary>A reporter that THROWS — it must not be able to take the failure path down with
+    /// it (the hub must still reach FAILED), and its fault must be named, not hidden.</summary>
+    private sealed record FaultingReporterTypeSource(IWorkspace Workspace, object DataSource)
+        : TypeSourceWithType<FaultingReporterItem>(Workspace, DataSource), IReportsInitialLoadProgress
+    {
+        protected override IObservable<InstanceCollection> Initialize(
+            WorkspaceReference<InstanceCollection> reference, CancellationToken cancellationToken)
+            => Observable.Never<InstanceCollection>();
+
+        public string DescribeInitialLoadProgress() => throw new InvalidOperationException("reporter broke");
+    }
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
             .WithTypes(typeof(ProbeRequest), typeof(ProbeResponse))
@@ -67,6 +81,11 @@ public class DataContextInitTimeoutNamesTheWaitInsideTheLegTest(ITestOutputHelpe
                     {
                         var typed = (TypeSourceWithType<HangingItem>)t;
                         return new ReportingHangingTypeSource(typed.Workspace, typed.DataSource);
+                    })
+                    .WithType<FaultingReporterItem>(t =>
+                    {
+                        var typed = (TypeSourceWithType<FaultingReporterItem>)t;
+                        return new FaultingReporterTypeSource(typed.Workspace, typed.DataSource);
                     }),
                     "reporting-source"));
 
@@ -93,5 +112,10 @@ public class DataContextInitTimeoutNamesTheWaitInsideTheLegTest(ITestOutputHelpe
             "the pending leg must carry what the type source says is outstanding inside it — for a "
             + "per-node hub that is what separates a storage read that never returned from a routing "
             + "stream that never delivered");
+
+        message.Should().Contain(
+            $"/{nameof(FaultingReporterItem)} [progress report FAULTED (InvalidOperationException: reporter broke)]",
+            "a reporter that throws runs on the failure path: the hub must still reach FAILED (the probe "
+            + "above was rejected, not wedged) and the fault must be printed where the operator reads");
     }
 }

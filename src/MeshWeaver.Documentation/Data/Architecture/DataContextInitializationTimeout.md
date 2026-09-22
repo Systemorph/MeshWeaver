@@ -127,8 +127,10 @@ leg, and `MeshNodeTypeSource` reports which half is outstanding:
 Still diagnostic only: the progress is written from the load's own callbacks and read by the
 failure path; nothing waits on it. Pinned by `DataContextInitTimeoutNamesTheWaitInsideTheLegTest`
 (the rendering — red with the ledger printing keys only) and `MeshNodeTypeSourceInitialLoadProgressTest`
-(the four sentences). **Not pinned by a test:** that `MeshNodeTypeSource.Initialize` calls the
-recorder at the right moments — read the diff at `DurableSeed` and the routing `.Do`.
+(the sentences, and the `TrackSeed`/`TrackRouting` wiring `Initialize` composes, driven with
+controllable streams). A reporter that throws is printed as `[progress report FAULTED (…)]` rather
+than escaping: the rendering runs inside `SettleInitializationGate`, and with that guard removed the
+hub wedges instead of reaching FAILED — measured, it is the second assertion of the Data test.
 
 ## A failed init errors every stream it holds, and creates none
 
