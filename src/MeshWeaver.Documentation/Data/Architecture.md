@@ -142,6 +142,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Mesh Graph Architecture](MeshGraph)
 - [MeshNode Versioning](MeshNodeVersioning)
 - [Query Provider Parity](QueryProviderParity)
+- [A Failed Read Is Not An Absent Node](AFailedReadIsNotAnAbsentNode) — a store fault caught inside a query provider arrived downstream as a COMPLETE answer, so a read that failed reported a node that does not exist and a per-node hub was refused over a working node; the one provider-side verdict that closes it, why it folds into `SilentProviders` instead of adding a second decider, and the two sides a test of it must have
 - [Search Coverage and Refusal](SearchCoverageAndRefusal) — the `search` tool answered an unanchored query with a clean 0 for nodes it returned when anchored; it now refuses a query that names no partition and declares no fan-out, and every envelope carries `coverage.partitions` — the denominator a zero is read against
 - [Query Result Scoring](QueryResultScoring)
 - [Reading a Write Verdict](ReadingAWriteVerdict)
