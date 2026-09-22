@@ -52,11 +52,20 @@ declaration, and everything uncertain resolves. That is hole C, below.
 | `IMeshService.UpdateNode` (the MCP `update` tool) | `NodeUpdatePipeline` | `DanglingNodeTypeValidator`, refusing a **change** to an unresolvable type |
 | `CreateOrUpdateNodeRequest` (import, install, copy, webhook, sync) | `MeshExtensions.ApplyUpdateViaStream` | Same rule, inline — the upsert verb runs no `INodeValidator` at all |
 | `patch` | `MeshOperations` | `nodeType` is not in `PatchableFields`; refused outright |
+| `PackageInstaller.ValidateBulkTypes` | the install path, ahead of its bulk write | Same rule again — the installer pre-validates its own manifest before writing |
 | `GetMeshNodeStream(path).Update(...)` | the owning hub | **Unguarded, deliberately** — see [Residuals](#residuals) |
 
-All three guarded rows call the **same** `NodeTypeResolution`, and since hole C that predicate also
+Every guarded row calls the **same** `NodeTypeResolution`, and since hole C that predicate also
 refuses a path an occupant holds — so none of them can accept a type the activation boundary will
 then refuse.
+
+🚨 **There are FOUR of them, not three, and the bulk two are the ones that matter in production** —
+packages and the static importer write in bulk, so a rule applied to the singular create only is
+cosmetic. That is not hypothetical: the first revision of the hole-C fix moved the singular create,
+`DanglingNodeTypeValidator` and the upsert, and left `CreateNodesRequest`'s phase-4 probe and
+`ValidateBulkTypes` on bare `Exists` — under a comment claiming "the same recognition order as the
+singular create", which the same diff had just made untrue. A review caught it. **When this
+predicate changes, the unit of work is the whole table.**
 
 ## Hole A — `update` accepted a NodeType that did not exist
 
@@ -288,6 +297,29 @@ instances over 117 readable partitions, every one naming the qualified declarati
 exactly **one** node mesh-wide names the bare path — the instance the incident's own log line
 quotes. Refusing the bare form costs nothing that works, and that reading is what
 `AnInstanceOfARealDeclaration_IsStillAccepted` pins in `NodeTypePathOccupancyTest`.
+
+### 🚨 The probe must not be able to WRITE
+
+`Resolve` reads the row to test its content, and the obvious call — `IStorageAdapter.Read` — is
+**not a pure lookup**. `PersistenceService.Read` wraps `ReadCore` in
+`LegacyUserPartitionRepair.ReadWithRepair` and is handed a *write* closure: on a miss for a **bare
+one-segment path** it can durably write a partition root and a self-admin assignment. Every
+built-in NodeType name is exactly that shape — `Markdown`, `Code`, `Space`, `User` — so probing
+with `Read` would let a validation check mutate an unrelated partition on every create and every
+retype in the mesh, which `Exists` never could.
+
+The seam is `ReadMany`, which the platform already names repair-free in its own words ("No
+legacy-partition repair, deliberately") and which `PartitionOwningTypes` reaches for on the same
+grounds. It also settles what an unanswered read means: `ReadMany` omits what it cannot produce, so
+**absent and unanswered arrive identically** and both fall through to `Exists` — the predicate this
+boundary has always used, which is what makes the fallback preserve the previous ACCEPT decision
+exactly rather than approximately.
+
+There is deliberately **no** `DefaultIfEmpty(false)` on that `Exists` leg: it would mint "absent"
+out of "no answer", and the upsert boundary is built to keep those apart. The **validator** leg is
+the one place where silence used to decide — an empty `Validate` meets `NodeUpdatePipeline`'s
+`DefaultIfEmpty(null)` and reads as success — and it now refuses, exactly as it already refused a
+faulted probe.
 
 ### The refusal had to change too
 

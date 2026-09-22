@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Immutable;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -149,17 +151,22 @@ public class NodeTypePathOccupancyTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// A seam nobody registered answers nothing, and because the test is one-sided an absent probe
-    /// convicts NOTHING — i.e. the whole fix silently reverts to the old behaviour. That is the
-    /// failure mode this fact exists to make impossible.
+    /// A seam nobody registered answers nothing, and because the test is ONE-SIDED an absent probe
+    /// convicts NOTHING — so the whole change would silently revert to occupancy-only on every
+    /// write boundary, with nothing red anywhere. That is the failure mode this fact exists to make
+    /// impossible, and it is why the registration is load-bearing rather than plumbing.
+    ///
+    /// <para><c>GetRequiredService</c>, not <c>GetService</c> + a null assertion (review finding):
+    /// the house rule, and it fails better — the throw names
+    /// <c>INodeTypeDeclarationProbe</c> at the DI boundary instead of reporting
+    /// "expected value not to be null".</para>
     /// </summary>
     [Fact(Timeout = 60000)]
     public void TheProbe_IsWiredIntoTheLiveMesh()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        Mesh.ServiceProvider.GetService<INodeTypeDeclarationProbe>().Should().NotBeNull(
-            "AddGraph must register it, or NodeTypeResolution falls back to occupancy-only on "
-            + "every write boundary with nothing to show for it");
+        Mesh.ServiceProvider.GetRequiredService<INodeTypeDeclarationProbe>().Should().NotBeNull(
+            "AddGraph must register it — see this fact's summary for why an absent one is silent");
     }
 
     // ——— the three write boundaries ————————————————————————————————————————————————————
@@ -210,6 +217,104 @@ public class NodeTypePathOccupancyTest(ITestOutputHelper output) : MonolithMeshT
                 "an instance of a REAL declaration is the normal case and must be untouched by the "
                 + "occupancy test",
                 cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// 🚨 <b>A STATIC CLAIM ENDS THE QUESTION — the control that stops this change being an
+    /// outage.</b> Measured read-only across two live meshes: <c>Agent</c> is a <c>Space</c> row
+    /// carrying 43 + 48 instances and <c>Skill</c> a <c>Space</c> row carrying 121 + 120, with no
+    /// declaration for either in the control instance's untruncated 155-row
+    /// <c>nodeType:NodeType</c> sweep. Those are the platform's OWN documented values
+    /// (<c>nodeType: Agent</c>/<c>Skill</c> front matter), and they work because a static provider
+    /// claims the path — the AI engine's, which lives in MeshWeaver.Plugins, so core cannot see it.
+    ///
+    /// <para><c>FindStaticNode</c> deliberately includes DEFINITION-ONLY entries, which is exactly
+    /// that arrangement: an in-memory type-def supplying the <c>HubConfiguration</c> by name while
+    /// Postgres owns a different row at the path. Content-testing the static winner would convict
+    /// 164 of 168 live instances across both meshes.</para>
+    ///
+    /// <para>The activation boundary is the authority this must agree with, and it already
+    /// settles it: its static fast-path returns before <c>ProbeCollision</c> runs, which is why the
+    /// occupancy incident names <c>Feedback</c> — claimed by no provider — and never <c>Agent</c>
+    /// or <c>Skill</c>.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task AStaticallyClaimedPath_IsNeverConvicted_EvenWhenItsNodeLooksLikeAnOccupant()
+    {
+        // 🚨 The static node is built to FAIL the content test on purpose — non-empty NodeType,
+        // not "NodeType", content typed as something else. That is the measured `Agent`/`Skill`
+        // shape, and it is what makes this control DISCRIMINATE: a first attempt used `Markdown`,
+        // whose static node clears the predicate on its own, so it passed with and without the
+        // change and measured nothing.
+        var claimed = "occstatic" + Guid.NewGuid().ToString("N")[..8];
+        var hub = Mesh.GetHostedHub(new Address("occstaticmesh", "1"), c => c
+            .AddData()
+            .WithServices(services => services.AddSingleton<IStaticNodeProvider>(
+                new OccupantShapedStaticProvider(new MeshNode(claimed, null)
+                {
+                    Name = claimed,
+                    NodeType = "Space",
+                    Content = new MarkdownContent { Content = "# looks like an occupant" },
+                }))));
+
+        var verdict = await NodeTypeResolution.Resolve(hub, claimed)
+            .Should().Within(TestTimeouts.Convergence).Emit("the predicate must reach a verdict",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        verdict.Resolves.Should().BeTrue(
+            "a path a static provider CLAIMS resolves, full stop. Measured across two live meshes, "
+            + "`Agent` (43 + 48 instances) and `Skill` (121 + 120) are each a `Space` row with no "
+            + "declaration anywhere, and they work because the AI engine's provider claims the "
+            + "path — content-testing the static winner would refuse 164 of 168 live instances of "
+            + "the platform's OWN documented node types");
+        verdict.Occupant.Should().BeNull("a static claim carries no occupant to name");
+    }
+
+    /// <summary>Serves one static node — the definition-only shape a NodeType catalog registers
+    /// while persistence owns a different row at the same path.</summary>
+    private sealed class OccupantShapedStaticProvider(MeshNode node) : IStaticNodeProvider
+    {
+        public IEnumerable<MeshNode> GetStaticNodes() => [node];
+    }
+
+    /// <summary>
+    /// 🚨 <b>The BULK create — the verb installers and the static importer actually use.</b>
+    /// A review finding on this change: the singular create moved onto the shared verdict while
+    /// phase 4 of <c>CreateNodesRequest</c> kept probing with <c>persistence.Exists</c>, under a
+    /// comment claiming "the same recognition order as the singular create" — which that same diff
+    /// made untrue. A bulk writer that accepts what the singular one refuses is the #2993 drift
+    /// wearing a different verb, and it is the half that would have mattered in production, since
+    /// packages install in bulk.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task BulkCreate_NamingAnOccupiedPathAsItsNodeType_IsRefused()
+    {
+        var occupant = Occupant(NewId());
+        await MeshService.CreateNode(occupant).Take(1)
+            .Should().Within(60.Seconds()).Emit("the occupant must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var batch = ImmutableList.Create(
+            Instance(NewId(), "Markdown"),
+            Instance(NewId(), occupant.Path));
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var response = await access
+            .RunAsSystem(() => ObserveNodeOperation(new CreateNodesRequest(batch)))
+            .FirstAsync()
+            .Select(d => d.Message)
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+        Output.WriteLine($"bulk create success={response.Success} reason={response.RejectionReason} "
+            + $"failedPath={response.FailedPath} error={response.Error}");
+
+        response.Success.Should().BeFalse(
+            "the bulk create must apply the SAME verdict as the singular one — otherwise an "
+            + "installer lands exactly the instance a hand-written create is refused");
+        response.RejectionReason.Should().Be(NodeCreationRejectionReason.InvalidNodeType);
+        response.Error.Should().Contain(occupant.Path,
+            "and the bulk refusal must name the occupant too: a caller should not learn the "
+            + "remedy or not depending on which verb they used");
     }
 
     /// <summary>

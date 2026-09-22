@@ -2070,14 +2070,22 @@ public static class MeshExtensions
                     .Select(t => t!)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray();
+                // 🚨 THE SAME VERDICT AS THE SINGULAR CREATE, not a second predicate. This probed
+                // with `persistence.Exists` while claiming "the same recognition order as the
+                // singular create" — true until the singular path gained the content test, after
+                // which a CreateNodesRequest could still land an instance naming a path a
+                // Store/Plugin root occupies, exactly as the singular create refused it. A bulk
+                // writer that accepts what the singular one refuses is the #2993 drift wearing a
+                // different verb, and installers use the bulk one. Review finding on the #5008
+                // change; `NodeTypeResolution.Resolve` already consults the static provider first,
+                // so the fast path is kept by the predicate rather than duplicated here.
                 var probeTypes = typesToProbe
-                    .Select(type => hub.ServiceProvider.FindStaticNode(type) is not null
-                        ? Observable.Return((Type: type, Exists: true))
-                        : persistence.Exists(type).Select(exists => (Type: type, Exists: exists)))
+                    .Select(type => NodeTypeResolution.Resolve(hub, type)
+                        .Select(verdict => (Type: type, Verdict: verdict)))
                     .Concat()
-                    .Where(t => !t.Exists)
+                    .Where(t => !t.Verdict.Resolves)
                     .Take(1)
-                    .Select(t => ((string Type, bool Exists)?)t)
+                    .Select(t => ((string Type, NodeTypeVerdict Verdict)?)t)
                     .DefaultIfEmpty(null);
 
                 return bootstrap
@@ -2102,9 +2110,16 @@ public static class MeshExtensions
                             {
                                 var offender = toCreate.First(n => string.Equals(
                                     n.NodeType, missing.Type, StringComparison.Ordinal));
+                                // The occupant travels with the verdict, so the BULK refusal names
+                                // what is in the way exactly as the singular one does — otherwise a
+                                // caller learns the remedy or not depending on which verb they used.
                                 PostFail(
-                                    LocalizableText.Keyed($"NodeType '{missing.Type}' is not registered",
-                                        NodeTypeNotRegisteredKey, ("nodeType", missing.Type)),
+                                    missing.Verdict.Occupant is { } occupant
+                                        ? NodeTypeResolution.Occupied(
+                                            offender.Path, missing.Type, occupant)
+                                        : LocalizableText.Keyed(
+                                            $"NodeType '{missing.Type}' is not registered",
+                                            NodeTypeNotRegisteredKey, ("nodeType", missing.Type)),
                                     NodeCreationRejectionReason.InvalidNodeType, offender.Path);
                                 return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
                             }

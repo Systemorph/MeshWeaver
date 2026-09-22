@@ -91,12 +91,32 @@ public static class NodeTypeResolution
     /// that matters here: the write boundary accepted a NodeType the activation boundary will
     /// not.</para>
     ///
-    /// <para><b>Read, then Exists — in that order, and the fallback is not redundant.</b> One read
-    /// answers both questions on the common path. A <c>null</c> read is NOT taken as absence,
-    /// because <see cref="IStorageAdapter.Exists"/> is the predicate this boundary has always
-    /// used and the two can disagree (a provider that answers existence without handing over the
-    /// row); falling back preserves the previous ACCEPT decision exactly, so the only behaviour
-    /// this change adds is a refusal the probe positively convicts.</para>
+    /// <para>🚨 <b><see cref="IStorageAdapter.ReadMany"/>, never <see cref="IStorageAdapter.Read"/>
+    /// — the point read is NOT a pure lookup and this is a VALIDATION probe.</b>
+    /// <c>PersistenceService.Read</c> wraps <c>ReadCore</c> in
+    /// <c>LegacyUserPartitionRepair.ReadWithRepair</c> and is handed a WRITE closure: on a miss for
+    /// a BARE ONE-SEGMENT path it can durably write a partition root and a self-admin assignment.
+    /// Every built-in NodeType name is exactly that shape — <c>Markdown</c>, <c>Code</c>,
+    /// <c>Space</c>, <c>User</c> — so probing with <c>Read</c> would let a type check mutate an
+    /// unrelated partition on every create and every retype in the mesh, which
+    /// <see cref="IStorageAdapter.Exists"/> could never do. <c>ReadMany</c> is the seam the
+    /// platform already names repair-free ("No legacy-partition repair, deliberately"), with
+    /// <c>ReadCore</c>'s own first-provider-wins semantics. Review finding on this pull request.</para>
+    ///
+    /// <para><b>ReadMany, then Exists — in that order, and the fallback is not redundant.</b> One
+    /// read answers both questions on the common path. An absent row and an UNANSWERED read arrive
+    /// identically here (<c>ReadMany</c> simply omits what it cannot produce), and neither is taken
+    /// as absence: both fall through to <see cref="IStorageAdapter.Exists"/>, the predicate this
+    /// boundary has always used. That is what makes the fallback preserve the previous ACCEPT
+    /// decision EXACTLY — an earlier revision reached it only on an emitted <c>null</c>, so an
+    /// empty read produced no verdict at all, which is not the same claim this paragraph makes.
+    /// The only behaviour this change adds is a refusal the probe positively convicts.</para>
+    ///
+    /// <para>🚨 There is deliberately NO <c>DefaultIfEmpty</c> on the <c>Exists</c> leg. That would
+    /// mint "absent" out of "no answer", and the upsert boundary is built to keep those apart — an
+    /// empty probe there becomes <see cref="ProbeFailedMessage"/> / <c>Unknown</c> precisely so a
+    /// caller cannot read it as "go create that type". Folding it here would defeat that from
+    /// underneath.</para>
     ///
     /// <para>A faulted probe propagates rather than being swallowed: every caller already
     /// distinguishes "not registered" from "could not tell" (<see cref="ProbeFailedMessage"/>),
@@ -112,13 +132,31 @@ public static class NodeTypeResolution
         if (string.IsNullOrEmpty(nodeType))
             return Observable.Return(NodeTypeVerdict.Registered);
         var probe = hub.ServiceProvider.GetService<INodeTypeDeclarationProbe>();
-        if (hub.ServiceProvider.FindStaticNode(nodeType) is { } staticNode)
-            return Observable.Return(Judge(staticNode, probe));
+        // 🚨 A STATIC CLAIM ON THE PATH IS THE END OF THE QUESTION — never content-tested.
+        // An earlier revision applied the probe here too, and that would have convicted the
+        // platform's OWN documented arrangement at scale. `FindStaticNode` deliberately includes
+        // DEFINITION-ONLY entries, and its sibling's doc says what those are: "a DB-synced NodeType
+        // catalog's in-memory type-def supplies its HubConfiguration BY NAME but is NOT the runtime
+        // node at its path — Postgres owns that row" (Doc/Architecture/NodeTypeCatalogs). So a
+        // static definition coexisting with a PERSISTED NON-DECLARATION row at the same path is
+        // normal, not a collision: measured across two live meshes, `Agent` and `Skill` are each a
+        // `Space` row carrying 43+48 and 121+120 instances, and both are platform values.
+        //
+        // The activation boundary settles it, and it is the authority this predicate must agree
+        // with: `EnrichWithNodeType`'s static fast-path returns on a provider node with a
+        // HubConfiguration BEFORE `ProbeCollision` ever runs. That test has shipped since #2245
+        // against these same rows and has never once named `Agent` or `Skill` — only `Feedback`,
+        // which no provider claims. Convicting here would refuse writes that activate perfectly.
+        if (hub.ServiceProvider.FindStaticNode(nodeType) is not null)
+            return Observable.Return(NodeTypeVerdict.Registered);
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
             return Observable.Return(NodeTypeVerdict.Absent);
-        return persistence.Read(nodeType, hub.JsonSerializerOptions)
+        return persistence.ReadMany([nodeType], hub.JsonSerializerOptions)
             .Take(1)
+            .Select(node => (MeshNode?)node)
+            // Absent and UNANSWERED arrive identically, and neither decides anything here.
+            .DefaultIfEmpty(null)
             .SelectMany(node => node is not null
                 ? Observable.Return(Judge(node, probe))
                 : persistence.Exists(nodeType).Take(1).Select(exists =>
