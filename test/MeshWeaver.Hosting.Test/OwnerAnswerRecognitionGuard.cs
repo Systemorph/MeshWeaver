@@ -66,6 +66,21 @@ public class OwnerAnswerRecognitionGuard(ITestOutputHelper output)
                 "GetDataRequest (id=abc) was accepted before disposal began and its turn came "
                 + "too late to process"));
 
+        // The SEVENTH terminal, and the one #4866 was filed on: the disposal drain, which answers
+        // every delivery still parked behind an initialization gate when the hub goes down. It
+        // hand-wrote its sentence ("Hub X was disposed while …") instead of composing it here, so
+        // it carried no banner and matched no transient marker — the envelope said ShuttingDown
+        // while the text read terminal, and the consumers decide on the text. Listed here so the
+        // shrink that hid a producer for six terminals cannot hide it for a seventh.
+        yield return ("MessageService disposal drain (ShutdownNack.RetryForTheAuthoritativeAnswer)",
+            ShutdownNack.RetryForTheAuthoritativeAnswer(
+                Owner,
+                $"RunLevel=ShutDown, {ShutdownNack.ActivationMarker}DEADBEEF",
+                "GetDataRequest (id=abc) was still deferred; initialization gates closed at "
+                + "deferral: [DataContextInit,MeshNodeInit] — the message was never processed. "
+                + "The teardown was requested by mesh/1 (routed DisposeRequest); why: "
+                + "Overlay self-heal"));
+
         // The typed refusal a handler throws, both constructors — they build the sentence
         // independently of each other.
         yield return ("HubDisposingException(address, what)",
@@ -173,7 +188,7 @@ public class OwnerAnswerRecognitionGuard(ITestOutputHelper output)
     [Fact]
     public void TheProducerSetCoversEverySeam()
     {
-        OwnerAnswers().Should().HaveCountGreaterThanOrEqualTo(7,
+        OwnerAnswers().Should().HaveCountGreaterThanOrEqualTo(8,
             "one case per owner-side seam, plus the relayed shape — if a producer was genuinely "
             + "consolidated away, lower this number deliberately rather than letting the coverage "
             + "drop unnoticed");

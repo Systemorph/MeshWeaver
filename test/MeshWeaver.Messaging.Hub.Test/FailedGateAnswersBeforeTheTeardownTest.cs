@@ -107,9 +107,13 @@ public class FailedGateAnswersBeforeTheTeardownTest(ITestOutputHelper output) : 
         failure.Failure!.Message.Should().NotContain("transient infrastructure fault",
             "this is the loss #4261 names: the requester is told the generic disposal sentence "
             + "instead of the cause the retirement exists to carry");
-        failure.Failure.Message.Should().Contain("was disposed while",
+        failure.Failure.Message.Should().Contain("was still deferred",
             "the generic sentence is what it does get — asserted positively so 'the cause is "
-            + "missing' cannot be satisfied by the requester hearing nothing at all");
+            + "missing' cannot be satisfied by the requester hearing nothing at all. The clause "
+            + "is the drain's own ('… was still deferred; initialization gates closed at "
+            + "deferral: …'), not its opening: since #4866 the drain composes through "
+            + "ShutdownNack, so the sentence now OPENS with the owner banner every transient "
+            + "classifier reads, and the old literal 'was disposed while' is gone");
     }
 
     /// <summary>

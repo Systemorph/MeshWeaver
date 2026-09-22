@@ -39,8 +39,8 @@ thread**.
 So on the `DataContext` seam the two live on different threads, and both of them drain the *same*
 deferred backlog through `MessageService.DrainDeferredDeliveries`:
 
-- the teardown's drain answers *"Hub X was disposed while &lt;message&gt; was still deferred — the
-  message was never processed"*;
+- the teardown's drain answers *"Hub X is shutting down (…) — &lt;message&gt; was still deferred;
+  initialization gates closed at deferral: […] — the message was never processed"*;
 - `FailGate` → `FailDeferredBacklog` answers with the transient cause.
 
 `DrainDeferredDeliveries` claims each entry with `TryRemove`, so exactly one of them answers any
@@ -118,8 +118,17 @@ Hub host/1 is shutting down — its DataContext initialization met a transient i
 reactivate (recycle / restart); retry to get the authoritative answer.
 ```
 
-If instead you read *"…was disposed while X was still deferred … the message was never processed"*,
-the retirement lost its own race: something failed the gate after the teardown had begun.
+If instead you read *"…X was still deferred; initialization gates closed at deferral: […] — the
+message was never processed"*, the retirement lost its own race: something failed the gate after the
+teardown had begun.
+
+🚨 **Tell them apart by the CLAUSE, never by the banner.** Since #4866 the teardown's drain composes
+through `ShutdownNack.RetryForTheAuthoritativeAnswer` too — it was the last owner-side refusal that
+did not, and the omission made it unrecognisable to every transient classifier, which is
+[the defect that page records](/Doc/Architecture/RidingOutAShuttingDownAddress). So
+`IsAnsweredByOwner` is now true of *both* answers, as it should be: both really are this owner
+speaking. What separates them is what they say — a named fault, or a delivery that was still parked
+behind its gates.
 
 ## Related
 
