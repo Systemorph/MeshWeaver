@@ -835,12 +835,39 @@ public static class BuildProtocolDriver
                     // Loud, and it NAMES what it could not reach. The bare TimeoutException this
                     // replaces said "no response ... → target Admin/Build" and was read as a
                     // compile problem for as long as anyone looked at it.
+                    //
+                    // 🚨 IT STATES WHAT IT KNOWS AND NOT THE READINESS VERDICT (#3404). This
+                    // sentence used to end "This is a refusal, not a pass: readiness stays refused
+                    // and the rollout holds the previous image." That was true when the
+                    // subscription was the ONLY door, and it became false the moment
+                    // WhenTheSubscriptionDoorIsShut started catching this exception: the verdict is
+                    // decided AFTER this line runs, by a door that may GRANT readiness on a durable
+                    // GO the transport could not reach. This line cannot know which, because it is
+                    // logged first.
+                    //
+                    // The cost of claiming it anyway was measured, and it is not cosmetic. The
+                    // red-log watcher fingerprints on the NORMALIZED MESSAGE and captures only
+                    // `fail:`/`crit:` — Error and Critical. The grant branch reports itself at
+                    // WARNING, so it is never captured. So every benign transport blip published
+                    // one red line asserting that pods refused readiness and a rollout was held,
+                    // with nothing in the pipeline able to contradict it: on memex-cloud,
+                    // 2026-09-19T06:32:23Z, one such line reopened the issue about held rollouts on
+                    // an image three framework builds NEWER than the door that fixed them.
+                    //
+                    // Nothing here reduces visibility. This stays an Error, it still names the node
+                    // and the attempt count, it still says the sweep never ran, and the three
+                    // branches downstream still state the verdict they actually decide — two of
+                    // them at Error, with the refusal in as many words.
                     var unreachable = new BuildCoordinationUnreachableException(
                         $"BuildProtocol: could not reach the build coordination node "
-                        + $"'{BuildNodeType.RootPath}' in {total} attempt(s) — the pre-warm sweep "
-                        + "never started, so this process has verified NOTHING about its NodeTypes "
-                        + "on this image. This is a refusal, not a pass: readiness stays refused "
-                        + "and the rollout holds the previous image. A restart re-attempts.",
+                        + $"'{BuildNodeType.RootPath}' in {total} attempt(s) — the subscription-borne "
+                        + "pre-warm sweep never started, so this process has verified NOTHING about "
+                        + "its NodeTypes on this image THROUGH THAT DOOR. The readiness verdict is "
+                        + "NOT decided here: the durable witness is asked next, and it may already "
+                        + "carry the GO for this framework. Whichever door answers says so on its "
+                        + "own line — read that one for the verdict. This line reports the transport "
+                        + "fault only, and the fault is real: the path from this process to the "
+                        + $"'{BuildNodeType.RootPath}' hub is broken.",
                         ex);
                     logger?.LogError(unreachable, "{Message}", unreachable.Message);
                     return Observable.Throw<T>(unreachable);

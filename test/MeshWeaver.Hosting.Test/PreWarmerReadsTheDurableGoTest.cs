@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Threading;
@@ -80,17 +81,30 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
             .Add("TestData/Widget", new NodeTypeDefinition());
 
     /// <summary>
-    /// The verbatim production refusal: a <see cref="BuildCoordinationUnreachableException"/> whose
-    /// inner is the hub's own request-budget <see cref="TimeoutException"/> naming
-    /// <c>Admin/Build</c> — what <c>RetryUnreachableCoordination</c> throws after its attempts are
-    /// exhausted, copied from the incident's log lines.
+    /// The verbatim production transport fault: a
+    /// <see cref="BuildCoordinationUnreachableException"/> whose inner is the hub's own
+    /// request-budget <see cref="TimeoutException"/> naming <c>Admin/Build</c> — what
+    /// <c>RetryUnreachableCoordination</c> throws after its attempts are exhausted, kept in step
+    /// with it word for word so a reader of this test sees what the incident saw.
+    ///
+    /// <para>🚨 It is the FAULT, not a refusal, and the wording says so (#3404). It used to end
+    /// "readiness stays refused and the rollout holds the previous image" — a verdict this
+    /// exception is in no position to state, since the door that catches it decides the verdict
+    /// afterwards and these very cases are the ones where it decides GRANT. The invariant is
+    /// pinned on the PRODUCTION message by
+    /// <see cref="TheTransportFaultStatesNoVerdict_WhenTheDurableGoGrants"/>, which does not use
+    /// this fixture at all; this is only the injection.</para>
     /// </summary>
     private static BuildCoordinationUnreachableException TheSubscriptionDoorIsShut() =>
         new(
             "BuildProtocol: could not reach the build coordination node 'Admin/Build' in 3 "
-            + "attempt(s) — the pre-warm sweep never started, so this process has verified NOTHING "
-            + "about its NodeTypes on this image. This is a refusal, not a pass: readiness stays "
-            + "refused and the rollout holds the previous image. A restart re-attempts.",
+            + "attempt(s) — the subscription-borne pre-warm sweep never started, so this process "
+            + "has verified NOTHING about its NodeTypes on this image THROUGH THAT DOOR. The "
+            + "readiness verdict is NOT decided here: the durable witness is asked next, and it may "
+            + "already carry the GO for this framework. Whichever door answers says so on its own "
+            + "line — read that one for the verdict. This line reports the transport fault only, "
+            + "and the fault is real: the path from this process to the 'Admin/Build' hub is "
+            + "broken.",
             new TimeoutException(
                 "No response received in hub cache/UE4Wtq7CgkiAqGLfYRiJPQ within 00:01:00 for "
                 + "request SubscribeRequest (id=ASCknHcTgkSMVRR-dy6F3Q) → target Admin/Build."));
@@ -277,6 +291,131 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
         recorder.Entries.Should().Contain(
             e => e.Message.Contains("Admin/Build"),
             "naming what could not be reached is what makes the line actionable");
+    }
+
+    // ── the fault does not state a verdict it does not decide ───────────────────────────────────
+
+    /// <summary>
+    /// The three sentences by which a log line CLAIMS the readiness verdict went against this
+    /// process. Matched case-insensitively because the driver writes "refused" in two casings.
+    ///
+    /// <para>🚨 This predicate is the instrument of the two cases below, so it is pinned from BOTH
+    /// sides: the refusing arm asserts it FIRES on the door's real refusal line, and the granting
+    /// arm asserts it does NOT fire. A predicate that matched nothing — a typo, a reworded
+    /// production line — would make the granting arm pass having checked nothing, which is the
+    /// exact failure shape this whole issue is about.</para>
+    /// </summary>
+    private static bool ClaimsReadinessWasRefused(string message) =>
+        message.Contains("readiness stays refused", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("readiness stays REFUSED", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("rollout holds the previous image", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Drives the WHOLE PRODUCTION CHAIN — <c>RetryUnreachableCoordination</c> composed with
+    /// <c>WhenTheSubscriptionDoorIsShut</c>, exactly as <c>FollowGo</c> composes them — against a
+    /// coordination node that never answers.
+    ///
+    /// <para>🚨 It does NOT inject <see cref="TheSubscriptionDoorIsShut"/>. That fixture carries a
+    /// message this test file wrote, so asserting on its wording would test the fixture and pass
+    /// whatever production did. The exception here is minted by the production retry from a
+    /// production <see cref="TimeoutException"/>, so the wording under assertion is the wording a
+    /// pod logs.</para>
+    /// </summary>
+    private Task<IList<PreWarmOutcome>> DriveTheProductionChain(
+        ILogger logger, CancellationToken cancellationToken) =>
+        BuildProtocolDriver.WhenTheSubscriptionDoorIsShut(
+                BuildProtocolDriver.RetryUnreachableCoordination(
+                    () => Observable.Throw<PreWarmOutcome>(new TimeoutException(
+                        "No response received in hub cache/1jLL2ehwTUapFRjOpw5d_A within 00:01:00 "
+                        + "for request SubscribeRequest (id=VO-6v2lhBkWU8s8yIssx6A) → target "
+                        + "Admin/Build.")),
+                    BuildProtocolDriver.CoordinationAttempts,
+                    _ => TimeSpan.Zero,
+                    Scheduler.Immediate,
+                    logger),
+                Mesh,
+                MyFingerprint,
+                Definitions,
+                Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>(),
+                logger)
+            .ToList()
+            .Await(cancellationToken);
+
+    /// <summary>
+    /// 🚨 THE TRANSPORT FAULT STATES NO VERDICT (#3404, second occurrence). The durable GO is
+    /// present, so the door GRANTS — and no line this process logged may claim that readiness was
+    /// refused or that a rollout is being held, because neither happened.
+    ///
+    /// <para><b>What went wrong.</b> The message <c>RetryUnreachableCoordination</c> mints ended
+    /// "This is a refusal, not a pass: readiness stays refused and the rollout holds the previous
+    /// image." That sentence was true while the subscription was the only door. Once this door
+    /// started catching the exception the sentence became a claim about a verdict decided AFTER it
+    /// is logged — and in this very case the verdict is the opposite of what it claims.</para>
+    ///
+    /// <para><b>Why it is not cosmetic, measured.</b> The red-log watcher fingerprints on the
+    /// normalized message and captures only <c>fail:</c>/<c>crit:</c>, so the Error above is
+    /// ticketed and the Warning this door writes to say it GRANTED is never captured at all. Every
+    /// benign transport blip therefore filed one red line asserting held rollouts, with nothing in
+    /// the pipeline able to contradict it: on <c>memex-cloud</c> at 2026-09-19T06:32:23Z one such
+    /// line reopened this issue on an image three framework builds NEWER than the door — its
+    /// <c>Queue(…)</c> diagnostic carried <c>handledWhileWaiting</c> and a <c>Trail:</c> block that
+    /// the 2026-09-06 samples do not have.</para>
+    ///
+    /// <para><b>Visibility is untouched, and this case proves it</b> — the fault is still reported,
+    /// still names the node, and still says the sweep never ran.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TheTransportFaultStatesNoVerdict_WhenTheDurableGoGrants()
+    {
+        await WriteTheDurableBuildRoot(Go(MyFingerprint), TestContext.Current.CancellationToken);
+        var recorder = new RecordingLogger();
+
+        var outcomes = await DriveTheProductionChain(recorder, TestContext.Current.CancellationToken);
+
+        outcomes.Should().NotBeEmpty(
+            "the durable GO grants readiness — so any line claiming a refusal is describing "
+            + "something that did not happen");
+        recorder.Entries.Should().NotContain(
+            e => ClaimsReadinessWasRefused(e.Message),
+            "NOTHING may assert the readiness verdict before the door decides it, and here the "
+            + "door GRANTED: an Error saying 'readiness stays refused and the rollout holds the "
+            + "previous image' is the only thing the red-log watcher captures, so that claim "
+            + "becomes the permanent record of a rollout that was never held");
+        recorder.Entries.Should().Contain(
+            e => e.Message.Contains("could not reach the build coordination node")
+                 && e.Message.Contains("Admin/Build"),
+            "the transport fault stays fully visible — this fix changes what the line CLAIMS, "
+            + "never whether it is reported");
+    }
+
+    /// <summary>
+    /// 🚨 THE CONTROL, on the other side of the change. Same production chain, same fault — but no
+    /// durable GO, so the door REFUSES, and now a line MUST claim the refusal in as many words.
+    ///
+    /// <para>This is what makes the case above non-vacuous. <see cref="ClaimsReadinessWasRefused"/>
+    /// is the instrument of both, and a predicate that could never match would make the granting
+    /// arm pass having checked nothing. Here it has to match, on a line at <c>Error</c> or above —
+    /// so the pair establishes that the claim MOVED to the door that decides it, rather than that
+    /// it was deleted.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TheDoorThatRefuses_DoesStateTheRefusal()
+    {
+        await WriteTheDurableBuildRoot(ready: null, TestContext.Current.CancellationToken);
+        var recorder = new RecordingLogger();
+
+        var refuse = () => DriveTheProductionChain(recorder, TestContext.Current.CancellationToken);
+
+        await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>(
+            "fail-closed is unchanged: no GO for this image means readiness is refused");
+        recorder.Entries.Should().Contain(
+            e => e.Level >= LogLevel.Error
+                 && ClaimsReadinessWasRefused(e.Message)
+                 && e.Message.Contains("witness"),
+            "the verdict is stated by the door that DECIDES it, at Error, so the operator-facing "
+            + "claim about held rollouts is still made exactly when it is true — and the line "
+            + "carrying the claim must be the one that read the witness, not some other line that "
+            + "happens to contain the words");
     }
 
     /// <summary>
