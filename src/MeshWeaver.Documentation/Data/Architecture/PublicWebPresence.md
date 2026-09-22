@@ -115,7 +115,9 @@ page. The node's mirrored HTML, then the content's `prerenderedHtml`, are fallba
 that carry no markdown source. Neither cache records which source or renderer produced it, so
 neither can establish freshness. SEO resolution refreshes the admitted node from its owner, then
 rechecks anonymous access before returning its current title and body. A signed-in caller's own
-read grant cannot turn a newly private page into public HTML. It is computed only for a node the
+read grant cannot turn a newly private page into public HTML. The owner read carries the original
+HTTP or circuit viewer across the asynchronous permission result; it does not rely on that result's
+thread retaining an ambient identity. It is computed only for a node the
 gate admitted, and it is rendered **visibly** in the server response, not inside `<noscript>`:
 Googlebot renders with JavaScript on and may ignore noscript content. The document, head and body
 await the same per-request resolution, so they use one current source and access decision.
