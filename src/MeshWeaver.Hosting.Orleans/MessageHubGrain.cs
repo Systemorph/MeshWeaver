@@ -445,8 +445,23 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                         if (_hub is not null) return;
                         logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path}",
                             streamId, addressPath);
+                        // 🚨 ONE cause, not a union (MeshWeaver#1186). The sentence used to offer
+                        // "either the node does not exist or no query provider claims its partition",
+                        // and BOTH halves were measured false in the cases that actually fire: three
+                        // of three failing paths were read back present on the live mesh, and the
+                        // provider that produced the gap had claimed the partition and answered.
+                        // A resolution that reaches here has COMPLETED with nothing, and a completed
+                        // resolution whose snapshot was short now refuses instead
+                        // (PathResolutionService's floor refusal, armed by
+                        // QueryResultChange.SnapshotIncomplete) — so this arm is the determinate case
+                        // and may say so without hedging. A reader sent to "does this node exist?"
+                        // when the answer was "the store timed out" pays for the union twice.
                         var noNodeError =
-                            $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition.";
+                            $"No MeshNode resolvable for address '{addressPath}'. Resolution COMPLETED and "
+                            + "matched nothing — every provider answered, and none of them holds this path. "
+                            + "This is a determinate absence, not a silent read: a read that did not complete "
+                            + "faults with \"neither answered nor terminated\", and one that completed over "
+                            + "reads it could not finish is refused as a FLOOR before it reaches here.";
                         activationFailures?.Record(streamId, noNodeError);
                         _hubReadyRaw.OnError(new InvalidOperationException(noNodeError));
                         TryDeactivateOnIdle();

@@ -558,6 +558,14 @@ public class MeshQuery : IMeshQueryCore
                             {
                                 sawInitial = true;
                                 singleProbe.MarkSeen(0);
+                                // 🚨 The SAME fold the multi-provider merge does (MeshWeaver#1186) —
+                                // and it has to be here too, because a lone provider is the shape
+                                // PathResolutionService actually reads on a Monolith and in every
+                                // test. Naming it on the frame is what makes the floor refusal fire;
+                                // a consumer reading SilentProviders must not have to know how many
+                                // providers happened to be registered.
+                                if (change.SnapshotIncomplete && change.SilentProviders is null or { Count: 0 })
+                                    change = change with { SilentProviders = [singleProviderName] };
                             }
                             observer.OnNext(change);
                         }
@@ -745,6 +753,16 @@ public class MeshQuery : IMeshQueryCore
                                 }
                                 lastQuery ??= change.Query;
                                 providerPartitions[idx] ??= change.Partitions;
+                                // 🚨 A provider that ANSWERED over reads it could not complete is
+                                // named here, exactly like one that answered not at all
+                                // (MeshWeaver#1186). SnapshotIncomplete is the provider's own verdict
+                                // on its own frame; the name is ours, because this loop is what knows
+                                // it. Folding both into SilentProviders means every consumer that
+                                // already refuses to read absence off a floor — PathResolutionService,
+                                // the plugin gate's grant read, MeshNodeStreamCache's no-cache rule —
+                                // covers this case with no change of its own.
+                                if (change.SnapshotIncomplete && !silentProviders.Contains(providerName))
+                                    silentProviders.Add(providerName);
                                 if (!initialSeen[idx])
                                 {
                                     initialSeen[idx] = true;

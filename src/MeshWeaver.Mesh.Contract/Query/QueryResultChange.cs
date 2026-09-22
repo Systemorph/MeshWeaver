@@ -109,6 +109,31 @@ public record QueryResultChange<T>
     public IReadOnlyList<string>? SilentProviders { get; init; }
 
     /// <summary>
+    /// Set by a PROVIDER on its own frame when it answered over reads it could not complete — it
+    /// caught a store fault, dropped the rows it could not get, and is emitting what survived.
+    ///
+    /// <para>🚨 <b>This is the other half of <see cref="SilentProviders"/>, and it was the missing
+    /// half.</b> That field names a provider that produced NO Initial; a provider that produces a
+    /// SHORTER one is the same lie with a frame attached, and until this existed there was nothing
+    /// on the wire to tell them apart. A provider that swallows a read fault into an empty result
+    /// and still emits an Initial is not recorded as silent, so a downstream consumer that guards on
+    /// <see cref="SilentProviders"/> — <c>PathResolutionService</c>'s floor refusal, the plugin
+    /// gate's grant read — cannot fire and reads the gap as absence.</para>
+    ///
+    /// <para><b>Why it is a provider-side flag and not a provider name.</b> The aggregator already
+    /// knows which stream it subscribed (<c>MeshQuery.MergeProviderObservables</c> carries the
+    /// provider's name beside its observable), so a provider naming itself would put the same string
+    /// in two places and let them drift. The provider states the FACT; the aggregator attaches the
+    /// NAME and folds it into <see cref="SilentProviders"/>, which is what every existing consumer
+    /// already reads.</para>
+    ///
+    /// <para><see langword="false"/> — the default — means every read behind this frame either
+    /// succeeded or genuinely found nothing. It says nothing about OTHER providers: that is the
+    /// merged frame's <see cref="SilentProviders"/>.</para>
+    /// </summary>
+    public bool SnapshotIncomplete { get; init; }
+
+    /// <summary>
     /// The original query that produced this change.
     /// </summary>
     public ParsedQuery Query { get; init; } = null!;
