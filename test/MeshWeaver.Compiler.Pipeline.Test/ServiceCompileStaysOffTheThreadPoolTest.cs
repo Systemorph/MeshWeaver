@@ -68,10 +68,12 @@ public class ServiceCompileStaysOffTheThreadPoolTest(ITestOutputHelper output) :
         var observed = 0;
         var onPoolThread = true;
         var concurrentBuild = true;
+        string? threadName = null;
         service.OnEmitStarting = compilation =>
         {
             onPoolThread = Thread.CurrentThread.IsThreadPoolThread;
             concurrentBuild = compilation.Options.ConcurrentBuild;
+            threadName = Thread.CurrentThread.Name;
             Interlocked.Increment(ref observed);
         };
         try
@@ -93,8 +95,11 @@ public class ServiceCompileStaysOffTheThreadPoolTest(ITestOutputHelper output) :
             "the seam must have seen the ONE emit this compile ran — otherwise the two readings below "
             + "are defaults, not observations");
         onPoolThread.Should().BeFalse(
-            "the service's Roslyn half must run on a CompileThread, never on a ThreadPool worker the "
-            + "silo's grain turns and routing legs need");
+            "the service's Roslyn half must never run on a ThreadPool worker the silo's grain turns and "
+            + "routing legs need");
+        threadName.Should().Be("mw-cpu-lane",
+            "the emit must run on the BOUNDED CPU lane (IoPoolNames.CompileCpu) — an unbounded dedicated "
+            + "thread per distinct NodeType turns a roll's hundreds of compiles into hundreds of threads");
         concurrentBuild.Should().BeFalse(
             "the compilation the service emits must not fan out onto the ThreadPool either");
     }

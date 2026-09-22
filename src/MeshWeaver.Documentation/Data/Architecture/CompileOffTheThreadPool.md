@@ -61,10 +61,47 @@ silo's grain-turn threads to finish it.
 - The canonical factory is **unchanged**, and the content key (`EmitPipeline.OptionsFingerprint`) still
   renders it — `ConcurrentBuild` is a scheduling choice that does not change the emitted bytes, and
   changing the fingerprinted factory would re-key every NodeType in the fleet.
-- `CompileAsyncCore` keeps its IO prefix and hands the synchronous half (`EmitCompiled`) to
-  `CompileThread.Run`.
+- `CompileAsyncCore` keeps its IO prefix and hands the synchronous half (`EmitCompiled`) to the
+  **CPU lane** (below). The first cut of this fix handed it to `CompileThread.Run` — off the pool, but
+  one new thread per distinct NodeType compiling at once, which a roll turns into hundreds.
 
-`RoslynEmitStaysOffTheThreadPoolTest` pins it deterministically: an `AsyncLocal` change handler counts
+### The CPU lane (`IoPoolNames.CompileCpu`)
+
+Every purely CPU-bound Roslyn leaf goes through ONE bounded lane: an `IIoPool` whose
+`InvokeBlocking` leaves run on at most `IoPoolOptions.CompileCpu` (default: processor count) threads
+the lane starts itself — named `mw-cpu-lane`, never ThreadPool workers. The bound is the pool's
+ordinary blocking scheduler (`LimitedConcurrencyLevelTaskScheduler`) with `dedicatedThreads: true`:
+the same queue and the same cap, only the drain loops run on their own threads. A burst of hundreds of
+distinct-type compiles now QUEUES behind the cap instead of becoming hundreds of threads, and the OS
+time-slices the lane's threads fairly against the ThreadPool the grain turns run on.
+
+Its leaves:
+
+- a NodeType's `EmitCompiled` (generators, bind, emit, artifact write) and the failure-path
+  `CompileDiagnostics.DiagnoseInputs`;
+- every language-service diagnostics bind — the node workspace (`GetDiagnostics`), a speculative
+  proposal (`SpeculativeCompilation.Diagnose`) and a script cell. The IO half of each (NuGet refs,
+  `Project.GetCompilationAsync`) stays on the `Compile` pool; only the bind moves. The script
+  workspace now also binds with `ConcurrentBuild` off.
+
+🚨 **The lane is separate from the `Compile` pool on purpose.** `Compile` also runs kernel SCRIPTS — user
+code that may activate a NodeType and wait for its compile — and cell-surface assembly loads. An emit
+queued behind the same cap is the nested-gate deadlock the compile leaf already hit once (every slot
+held by a script waiting for a compile that needs a slot). A lane leaf does nothing but compute: no
+pool call, no mesh read, no wait on another leaf, so it cannot nest by construction. Keep it that way —
+a leaf that needs IO splits it off, as the three diagnostics arms do.
+
+Tests, each with a negative control that fails on the unfixed code:
+
+- `CompileCpuLaneIsBoundedAndOffThePoolTest` (Hosting.Test) — six parked leaves on a cap-2 lane: at
+  most 2 run at once, all 6 run, none on a pool worker; the control, the ordinary `Compile` pool with
+  the same cap, runs all 6 on pool workers. With the registry building the lane without dedicated
+  threads the first test fails.
+- `ServiceCompileStaysOffTheThreadPoolTest` — a real compile through the service reaches Roslyn on an
+  `mw-cpu-lane` thread with `ConcurrentBuild` off. Fails when the emit is routed through the `Compile` pool.
+- `LanguageServiceDiagnosticsRunOnTheCpuLaneTest` — all three diagnostics arms bind on `mw-cpu-lane`
+  threads. Fails when the binds are routed through the `Compile` pool.
+- `RoslynEmitStaysOffTheThreadPoolTest` pins the emit itself deterministically: an `AsyncLocal` change handler counts
 every ThreadPool worker that starts running under the emit's `ExecutionContext` (Roslyn's fan-out tasks
 flow it). With the run options the count is 0; the negative control — the same emit with
 `ConcurrentBuild` on — counts more than 0. A third case pins that the content key did not move.
@@ -90,12 +127,11 @@ roll" is the expected state of most samples, not a rare one.
 What was NOT established: the portal's own ThreadPool metrics for those windows (the control instance
 was unavailable, so no `Logs`/Prometheus read was taken), and therefore how much of each window's
 starvation the compiles account for. Other CPU on a rolling survivor — re-activating the grains of the
-pods being replaced — competes for the same cores and is not addressed here. The Compile `IIoPool`'s
-blocking leaves (the language service) still run on pool workers by that pool's design. And nothing
-bounds how many DISTINCT NodeTypes compile at once — the service single-flights per type only — so a
-burst of hundreds now costs hundreds of dedicated threads (it cost as many pool-injected threads
-before); a bound needs an `IIoPool` lane over dedicated threads, since the Compile pool's gate
-deadlocked the compile against itself and its leaves run on the pool.
+pods being replaced — competes for the same cores and is not addressed here. Still on the ThreadPool
+by design: the language service's hover and completion requests (Roslyn's async `QuickInfoService` /
+`CompletionService`, which schedule their own work with `ConfigureAwait(false)` and cannot be pinned
+to a thread), the IO halves of the diagnostics requests, and `CompileResultFromAssembly` (assembly load
+and user type initializers — bounded by its own timeout, on `CompileThread`, not a CPU compile).
 
 ## Related
 
