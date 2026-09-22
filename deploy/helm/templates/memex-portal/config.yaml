@@ -373,11 +373,13 @@ data:
 {{- range $key, $value := (.Values.hostingOperator).environment }}
   Hosting__Operator__Environment__{{ $key }}: "{{ $value }}"
 {{- end }}
-{{- /* The SECRET half of the Job environment (Memex#132). `environment` above renders into this
-       ConfigMap, one plaintext key each — fine for AZ_RESOURCE_GROUP or INGRESS_IP, and NOT fine for
-       PGPASSWORD, which is the shared admin credential for every instance database on the flexible
-       server. hosting-operator-secrets.yaml renders a SecretProviderClass and a synced Secret in the
-       OPERATOR's namespace for those; these three keys are how HostingOperator.Resolve finds them.
+{{- /* The SECRET half of the Job environment. `environment` above renders into this ConfigMap,
+       one plaintext key each — fine for AZ_RESOURCE_GROUP, INGRESS_IP or a vault object's NAME
+       (AZ_POSTGRES_PASSWORD_SECRET: the Postgres steps read the admin password from the vault by
+       that name, Memex#132, so no PGPASSWORD is ever an env entry), and NOT fine for a credential a
+       script cannot fetch itself. hosting-operator-secrets.yaml renders a SecretProviderClass and a
+       synced Secret in the OPERATOR's namespace for those; these three keys are how a
+       HostingOperator.Resolve that attaches the class would find them (none does today).
 
        🚨 All THREE, not just the Secret name. The CSI driver creates the synced Secret only as a
        side effect of a pod mounting the volume, so on a Job's first run it does not exist yet. A Job

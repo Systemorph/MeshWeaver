@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # hosting-restore --database <db> --server <pg> --store-uri <uri>
+#                 [--vault <key vault> --password-secret <vault object>]
 #
 # Restore an archive over an instance's database.
 #
@@ -12,12 +13,14 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-restore"
 
-database="" server="" store_uri=""
+database="" server="" store_uri="" vault="" password_secret=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --database)  database="${2:-}";  shift 2 ;;
     --server)    server="${2:-}";    shift 2 ;;
     --store-uri) store_uri="${2:-}"; shift 2 ;;
+    --vault)           vault="${2:-}";           shift 2 ;;
+    --password-secret) password_secret="${2:-}"; shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -26,6 +29,10 @@ hosting::need_flag database "$database"
 hosting::need_flag server "$server"
 hosting::need_flag store-uri "$store_uri"
 hosting::safe_name database "$database"
+# The two vault names are interpolated into an az command line: validated HERE, before anything
+# is reported, like every other name — hosting::pg_password checks them again for by-hand callers.
+[ -z "$vault" ] || hosting::safe_name vault "$vault"
+[ -z "$password_secret" ] || hosting::safe_name password-secret "$password_secret"
 
 if hosting::dry; then
   echo "  DRY-RUN would restore ${store_uri} into ${database} on ${server}"
@@ -33,7 +40,8 @@ if hosting::dry; then
   exit 0
 fi
 
-hosting::need_env PGPASSWORD "the admin password for the flexible server"
+# The admin password is read from the vault by NAME (Memex#132) — see hosting::pg_password.
+hosting::pg_password "$vault" "$password_secret"
 pg_user="${PGUSER:-memexadmin}"
 archive="/tmp/restore.dump"
 

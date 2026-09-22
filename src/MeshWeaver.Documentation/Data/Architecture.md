@@ -522,6 +522,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Merge Queue Mechanics](MergeQueueMechanics)
 - [The fleet's ONE CI process](FleetCiProcess) — the mechanism lives here as a lane or a shared script; a satellite carries a thin caller (verdict adoption, the lock resolver, the cancellation rule)
 - [Operating from the portal, not the cluster](OperatingFromThePortal)
+- [Operator Credentials Travel by Name](OperatorCredentialsByName) — the operator's only environment is a ConfigMap, so a step is handed a Key Vault object's NAME and reads the value with the identity it already runs as; why every database action failed at step 1 (Memex#132), why the CSI class built for it was consumed by nobody, and the one contract the Postgres steps now share with hosting-kv-ensure on both executors
 - [The Payment Provider Contract](PaymentProviderContract)
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
 - [Project Templates](ProjectTemplates)

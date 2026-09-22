@@ -292,18 +292,26 @@ hostingOperator:
   #   PAYWALL_URL:           https://<control instance>/suspended
   #   CATALOG_CONFIG:        /tmp/hosting-catalog-config
   #   HOSTING_VALUES_FILE:   /tmp/hosting-values.yaml   (where run.sh materialises the RECORD-rendered values)
-  # ── The SECRET half of that environment (Memex#132) ────────────────────────────────────────
-  # `environment` above renders into the portal's ConfigMap, one plaintext key each. That is right
-  # for AZ_RESOURCE_GROUP or INGRESS_IP and WRONG for a credential: PGPASSWORD is the shared
-  # `memexadmin` password for the flexible server, i.e. the one credential that reaches EVERY
-  # instance database on it. Putting it in `environment` means a ConfigMap readable by anything with
-  # configmap read in the namespace, and git if committed. Declaring it here instead renders a
-  # SecretProviderClass and a CSI-synced Secret in the OPERATOR's namespace (memex-ops), which is
-  # where the Jobs run and where a portal-namespace Secret is not visible.
+  #   AZ_POSTGRES_PASSWORD_SECRET: memex-postgres-password
+  #     — the NAME of the Key Vault object holding the flexible server's admin password, never the
+  #       password. Every step that needs the value (hosting-kv-ensure composing a connection string;
+  #       hosting-backup / hosting-restore / hosting-verify-restore, Memex#132) receives this name
+  #       and the record's keyVault as flags from the plan and reads the object itself, as the
+  #       identity the Job (or the aks-ops lane) already runs as. `environment` is a ConfigMap and
+  #       is the right place for a NAME; there is no PGPASSWORD entry, on any executor.
+  # ── The SECRET half of that environment ─────────────────────────────────────────────────────
+  # `environment` above renders into the portal's ConfigMap, one plaintext key each — right for a
+  # resource group, an IP or a vault object's NAME, and wrong for a credential. Declaring a key here
+  # renders a SecretProviderClass and a CSI-synced Secret in the OPERATOR's namespace (memex-ops),
+  # where the Jobs run and where a portal-namespace Secret is not visible, for a credential a script
+  # cannot fetch by name itself. 🚨 The Postgres admin password is NOT such a credential and does not
+  # go here: the scripts resolve it from AZ_POSTGRES_PASSWORD_SECRET above (Memex#132), and nothing
+  # in the fleet declares a key under this block today — a HostingOperator.Resolve that attaches the
+  # class to the Job does not exist yet, so a key declared here renders a class NO pod mounts, which
+  # syncs nothing, silently.
   #
   # NAMES ONLY — `<ENV KEY>: <Key Vault object name>`. No value ever enters values or the render.
   secretEnvironment: {}
-  #   PGPASSWORD: memex-postgres-password
   #
   # Vault coordinates. Each falls back to the portal's .Values.keyVaultSecrets, so an environment
   # that already declares those needs only `secretEnvironment` above.
