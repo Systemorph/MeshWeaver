@@ -1087,7 +1087,7 @@ internal static class NodeTypeEnrichmentHelpers
         /// <summary>The recompile budget is spent: show the framework-stale overlay and its version-gated self-heal.</summary>
         Overlay,
 
-        /// <summary>A NEWER generation stamped the record after this process started: leave it, overlay, never recompile.</summary>
+        /// <summary>This process is LEAVING and another generation stamped the record after it started: leave it, overlay, never recompile.</summary>
         Yield,
     }
 
@@ -1098,11 +1098,25 @@ internal static class NodeTypeEnrichmentHelpers
     /// and null can never yield: an absent boundary is the benign side, the heal as it always was.
     /// Yield outranks the budget: a record a newer generation owns is not this process's to heal
     /// however many attempts remain, because each attempt would re-key it backwards.
+    ///
+    /// <para>🚨 <b>Yield needs <paramref name="leaving"/> as well as the since-boot foreign stamp.</b>
+    /// A framework identity is a hash with no order, so "foreign and stamped after I booted" says
+    /// only that ANOTHER generation wrote the record while this process was up — never which of the
+    /// two is newer. Both ends of a mid-roll pair read it: the draining replica sees the new
+    /// generation's stamp, and the SURVIVOR sees every stamp a draining replica re-keyed backwards
+    /// after the survivor booted (the 34 records the census counted on memex's new replica were
+    /// exactly those). Yielding on the stamp alone therefore left the survivor — the process that
+    /// stays — overlaying those types as framework-stale for its whole life, with nothing left to
+    /// heal them (status stays <c>Ok</c>, so no watcher recompiles). What tells the two ends apart is
+    /// which one is going away: <see cref="HubLeavingExtensions.IsLeaving"/>, true from SIGTERM for
+    /// the whole termination grace, the same predicate #3129 gave every sweep that touches state
+    /// other generations share. A leaving process yields; the survivor heals.</para>
     /// </summary>
     internal static FrameworkStaleAction DecideFrameworkStale(
-        NodeTypeDefinition judged, string liveFrameworkVersion, DateTimeOffset? bootedAt, int recompileAttempts)
+        NodeTypeDefinition judged, string liveFrameworkVersion, DateTimeOffset? bootedAt, bool leaving, int recompileAttempts)
     {
-        if (bootedAt is { } boot
+        if (leaving
+            && bootedAt is { } boot
             && NodeTypeBuildIdentity.OwnedByANewerGeneration(judged, liveFrameworkVersion, boot))
             return FrameworkStaleAction.Yield;
         return recompileAttempts >= MaxRecompileAttempts
@@ -1675,13 +1689,14 @@ internal static class NodeTypeEnrichmentHelpers
             return ActOnFrameworkStale(def);
 
             // 🚨 ONE decision, three actions, and the decision is pure (DecideFrameworkStale) so its
-            // contract is held without a hub: YIELD when a NEWER generation stamped the record
-            // after this process started (#4632's other half), OVERLAY once the recompile budget is
+            // contract is held without a hub: YIELD when this process is LEAVING and another
+            // generation stamped the record after it started (#4632's other half), OVERLAY once the recompile budget is
             // spent, RECOMPILE otherwise — the heal every ordinary platform roll relies on.
             IObservable<MeshNode> ActOnFrameworkStale(NodeTypeDefinition judged) =>
                 DecideFrameworkStale(
                     judged, NodeTypeCompilationHelpers.FrameworkVersion,
-                    meshHub.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc, recompileAttempts) switch
+                    meshHub.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc,
+                    leaving: meshHub.IsLeaving(), recompileAttempts) switch
                 {
                     FrameworkStaleAction.Yield => YieldToNewerGeneration(judged),
                     FrameworkStaleAction.Overlay => OverlayFrameworkStale(),
@@ -1692,8 +1707,8 @@ internal static class NodeTypeEnrichmentHelpers
                         requireUsableBuild: true),
                 };
 
-            // 🚨 A replica on ANOTHER image stamped this record AFTER this process started: a newer
-            // platform generation owns the type now, mid-roll, and this replica is the one draining.
+            // 🚨 A replica on ANOTHER image stamped this record AFTER this process started, and this
+            // process is LEAVING (SIGTERM, IsLeaving): the generation that stays owns the type now.
             // Recompiling here would re-key the record back to THIS framework, the newer replica
             // would heal it forward again, and every activation on both would flip Pending in
             // between — the ping-pong that re-keyed 34 records on memex's control instance within

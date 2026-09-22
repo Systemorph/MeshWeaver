@@ -12,8 +12,8 @@ namespace MeshWeaver.Graph.Test;
 /// and its three outcomes map one-to-one onto the branch's three actions (yield: overlay and leave
 /// the record; overlay: the recompile prompt; recompile: flip Pending and rebuild).
 ///
-/// <para>The case that mattered on 2026-09-22: a record a NEWER generation stamped after this
-/// process started must never be recompiled from here — each attempt would re-key it backwards
+/// <para>The case that mattered on 2026-09-22: a LEAVING process must never recompile a record
+/// another generation stamped after it started — each attempt would re-key it backwards
 /// and the newer replica would heal it forward again, 34 records deep on memex's control instance.
 /// The controls on the other side are the ordinary post-roll heal (a foreign stamp from BEFORE
 /// boot still recompiles) and a mesh with no registered clock, which must never yield.</para>
@@ -36,13 +36,27 @@ public class FrameworkStaleDecisionTest
     };
 
     [Fact]
-    public void AStampByANewerGeneration_AfterBoot_Yields_OnEveryAttempt()
+    public void ALeavingProcess_YieldsOnAStampAnotherGenerationMadeAfterBoot_OnEveryAttempt()
     {
         var owned = Foreign(BootedAt.AddMinutes(7));
         Assert.Equal(NodeTypeEnrichmentHelpers.FrameworkStaleAction.Yield,
-            NodeTypeEnrichmentHelpers.DecideFrameworkStale(owned, Live, BootedAt, recompileAttempts: 0));
+            NodeTypeEnrichmentHelpers.DecideFrameworkStale(owned, Live, BootedAt, leaving: true, recompileAttempts: 0));
         Assert.Equal(NodeTypeEnrichmentHelpers.FrameworkStaleAction.Yield,
-            NodeTypeEnrichmentHelpers.DecideFrameworkStale(owned, Live, BootedAt, recompileAttempts: 5));
+            NodeTypeEnrichmentHelpers.DecideFrameworkStale(owned, Live, BootedAt, leaving: true, recompileAttempts: 5));
+    }
+
+    [Fact]
+    public void TheSurvivor_HealsAStampAnotherGenerationMadeAfterBoot()
+    {
+        // The other end of the same mid-roll pair: a draining replica re-keyed the record backwards
+        // after THIS process booted. The stamp reads exactly as it does on the draining side (a
+        // framework identity has no order), so only "who is leaving" separates them — and the
+        // process that stays must heal, or it overlays the type as framework-stale for its whole
+        // life. OrleansCompileActivityAccessTest.FrameworkStaleAssembly_SelfHealsOnInstanceActivation
+        // drives this end through a real activation.
+        var reKeyedBackwards = Foreign(BootedAt.AddMinutes(7));
+        Assert.Equal(NodeTypeEnrichmentHelpers.FrameworkStaleAction.Recompile,
+            NodeTypeEnrichmentHelpers.DecideFrameworkStale(reKeyedBackwards, Live, BootedAt, leaving: false, recompileAttempts: 0));
     }
 
     [Fact]
@@ -50,9 +64,9 @@ public class FrameworkStaleDecisionTest
     {
         var previous = Foreign(BootedAt.AddHours(-3));
         Assert.Equal(NodeTypeEnrichmentHelpers.FrameworkStaleAction.Recompile,
-            NodeTypeEnrichmentHelpers.DecideFrameworkStale(previous, Live, BootedAt, recompileAttempts: 0));
+            NodeTypeEnrichmentHelpers.DecideFrameworkStale(previous, Live, BootedAt, leaving: true, recompileAttempts: 0));
         Assert.Equal(NodeTypeEnrichmentHelpers.FrameworkStaleAction.Overlay,
-            NodeTypeEnrichmentHelpers.DecideFrameworkStale(previous, Live, BootedAt, recompileAttempts: 1));
+            NodeTypeEnrichmentHelpers.DecideFrameworkStale(previous, Live, BootedAt, leaving: true, recompileAttempts: 1));
     }
 
     [Fact]
@@ -63,7 +77,7 @@ public class FrameworkStaleDecisionTest
         // boundary nobody measured.
         var owned = Foreign(BootedAt.AddMinutes(7));
         Assert.Equal(NodeTypeEnrichmentHelpers.FrameworkStaleAction.Recompile,
-            NodeTypeEnrichmentHelpers.DecideFrameworkStale(owned, Live, bootedAt: null, recompileAttempts: 0));
+            NodeTypeEnrichmentHelpers.DecideFrameworkStale(owned, Live, bootedAt: null, leaving: true, recompileAttempts: 0));
     }
 
     [Fact]
@@ -71,6 +85,6 @@ public class FrameworkStaleDecisionTest
     {
         var undated = Foreign(stampedAt: null);
         Assert.Equal(NodeTypeEnrichmentHelpers.FrameworkStaleAction.Recompile,
-            NodeTypeEnrichmentHelpers.DecideFrameworkStale(undated, Live, BootedAt, recompileAttempts: 0));
+            NodeTypeEnrichmentHelpers.DecideFrameworkStale(undated, Live, BootedAt, leaving: true, recompileAttempts: 0));
     }
 }

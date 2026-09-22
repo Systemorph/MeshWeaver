@@ -234,11 +234,28 @@ point. The boundary is the PROCESS start, read once at service registration into
 `ProcessBootClock` (never a static touched from a hub turn), so the census and the bind path
 cannot split on different instants; a mesh that registered no clock never yields. The bind path's
 three-way decision (`DecideFrameworkStale`: Yield / Overlay / Recompile) is pure and held by
-`FrameworkStaleDecisionTest`. A foreign stamp from BEFORE boot is still healed
+`FrameworkStaleDecisionTest`.
+
+🚨 **The stamp alone cannot say WHICH end of the pair this process is, so the yield also needs
+`hub.IsLeaving()`.** A framework identity is a hash with no order: "foreign and stamped after I
+booted" reads identically on the draining replica (the new generation's stamp) and on the
+SURVIVOR (every record a draining replica re-keyed backwards after the survivor booted — the 34
+the census counted on memex's new replica were exactly those). Yielding on the stamp alone left the
+survivor overlaying those types as framework-stale for its whole life, since a persisted `Ok` is
+recompiled by no watcher; `OrleansCompileActivityAccessTest.FrameworkStaleAssembly_SelfHealsOnInstanceActivation`
+caught it by stamping a foreign framework mid-run on a process that is not stopping and demanding
+the heal. What separates the two ends is which one is going away: `IsLeaving` — the hub shutting
+down, or the host's `ApplicationStopping`, live from SIGTERM for the whole termination grace — the
+same predicate #3129 gave every sweep that touches state other generations share. A leaving process
+yields; the survivor heals. What this does NOT stop: an old-image replica that has not yet been
+signalled (a one-at-a-time roll keeps some un-signalled until their successor is Ready) still heals
+backwards until its SIGTERM, so the ping-pong is bounded to that window rather than removed.
+
+A foreign stamp from BEFORE boot is still healed
 (the ordinary post-roll state), and a stamp with no time is never treated as since-boot — the same
 absent-reading rule the census has always applied. `OwnedByANewerGenerationTest` holds the reader
 against the incident's own mixed population and asserts, record by record, that what the census
-counts since-boot is exactly what the bind path refuses to touch.
+counts since-boot is exactly what the bind path refuses to touch while it is leaving.
 
 ## What would close this class
 

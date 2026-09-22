@@ -200,8 +200,12 @@ public static class NodeTypeBuildIdentity
     /// cross-stamp from a newer generation mid-roll, and "healing" it from here re-keys the record
     /// backwards, which the newer replica then heals back — the ping-pong that re-keyed 34 records
     /// on memex's control instance within minutes of its new replica booting. The live record
-    /// census reports exactly this set (<c>ForeignSinceBoot</c>); the bind path must YIELD on it
-    /// rather than recompile, and both read it through this one function so they cannot disagree.
+    /// census reports exactly this set (<c>ForeignSinceBoot</c>); the bind path YIELDS on it rather
+    /// than recompile, and both read it through this one function so they cannot disagree.
+    /// 🚨 The reading cannot tell which generation is NEWER (a framework identity has no order): the
+    /// survivor of a roll reads the same verdict for a record a draining replica re-keyed backwards.
+    /// So the bind path yields only while this process is also LEAVING
+    /// (<c>NodeTypeEnrichmentHelpers.DecideFrameworkStale</c>); the survivor heals.
     /// </summary>
     public static bool OwnedByANewerGeneration(
         NodeTypeDefinition? definition, string liveFrameworkVersion, DateTimeOffset bootedAt)
