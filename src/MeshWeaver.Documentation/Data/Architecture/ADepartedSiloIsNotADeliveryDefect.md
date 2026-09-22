@@ -157,10 +157,21 @@ flips on `activationErrorRecorded` alone — so the discriminator cannot be coll
 unconditional text match. It also pins that the container probe is forwarded and that a rejection
 carrying no recognised phrase stays terminal on this leg too.
 
-🚨 **It does not pin the WIRING.** Reverting `BuildPodHubRoute` to the general classifier leaves every
-fact green: the facts are about the two classifiers, and the leg's choice is one line with one call
-site. That is stated rather than implied, because the defect this section describes *was* an un-pinned
-argument at a call site.
+🚨 **And it pins the WIRING, which took a second pass.** The first version of this change pinned only
+the two classifiers, and review caught the obvious consequence: reverting the one line in
+`BuildPodHubRoute` that chooses between them left all eight facts green — **the same shape as the
+defect being fixed**, an argument not written at a call site, one level out. So the arm is now one
+tested function: `TerminalCallFailure` delegates to `AnswerPodHubCallFailure`, which holds both
+decisions (which classifier, and the level the verdict deserves), and two facts drive that function
+and capture what it hands the sender and the logger.
+
+Measured, with the revert applied as a control: **2 of the 10 facts go red and 8 stay green** — which
+is exactly the blindness the review named, now visible from inside the suite rather than only in
+prose. The remaining unpinned surface is a one-line delegation with no logic in it.
+
+The transferable half: **when the defect is "a decision was not expressed at a call site", a fix
+pinned only by facts about the decision's INPUTS reproduces it.** The fix has to move the decision
+somewhere a test can execute the same code production does.
 
 ## The bar, and why a timeout deliberately fails it
 

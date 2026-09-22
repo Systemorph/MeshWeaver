@@ -598,28 +598,12 @@ internal class RoutingGrain(
             return BuildStreamRoute(delivery, address, addressPath, streamProvider, grainFactory);
         }
 
-        IObservable<Unit> TerminalCallFailure(Exception ex)
-        {
-            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
-            // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally. See
-            // ClassifyDeliveryException: a silo leaving mid-roll and a directory mid-handoff are
-            // TRANSIENT, and telling the sender otherwise tears down mirrors that would have resumed.
-            // 🚨 And it must be THE POD-HUB classifier, not the general one: the general one's
-            // deactivated-activation arm defaults to the terminal answer for a caller that cannot
-            // consult the activation-failure registry, which made it INERT on this leg — see
-            // ClassifyPodHubDeliveryException.
-            var errorType = ClassifyPodHubDeliveryException(ex, IsServiceScopeDisposed);
-            // 🚨 A container that is already gone is not an incident to page on — it is this process
-            // exiting, and the delivery it could not carry is being retried against a live pod by a
-            // sender that now (correctly) reads ShuttingDown. Error there filed #2638 for a pod that
-            // was merely finishing; the failure is still reported, at the level it deserves.
-            var level = errorType == ErrorType.ShuttingDown ? LogLevel.Information : LogLevel.Error;
-            logger.Log(level, ex,
-                "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
-                addressPath, errorType, delivery.Sender);
-            PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
-            return Observable.Return(Unit.Default);
-        }
+        // A one-line delegation ON PURPOSE — the whole decision lives in the tested function, so
+        // the classifier this leg uses and the level it logs at cannot be changed without a fact
+        // going red. See AnswerPodHubCallFailure.
+        IObservable<Unit> TerminalCallFailure(Exception ex) =>
+            AnswerPodHubCallFailure(
+                ex, addressPath, delivery, PostFailureToSender, IsServiceScopeDisposed, logger);
     }
 
     /// <summary>
@@ -1998,6 +1982,64 @@ internal class RoutingGrain(
     internal static ErrorType ClassifyPodHubDeliveryException(
         Exception ex, Func<bool>? scopeDisposed = null) =>
         ClassifyDeliveryException(ex, scopeDisposed, activationErrorRecorded: false);
+
+    /// <summary>
+    /// <see cref="BuildPodHubRoute"/>'s terminal arm, as ONE tested function: the delivery call
+    /// failed for real (transient retries exhausted, or a non-transient fault), so classify it,
+    /// log it at the level the verdict deserves, and NACK the sender.
+    ///
+    /// <para>🚨 <b>Why it is a function rather than three lines at the call site.</b> The defect
+    /// this arm was fixed for — see <see cref="ClassifyPodHubDeliveryException"/> — was an ARGUMENT
+    /// THAT WAS NOT WRITTEN at a call site, and a fix pinned only by facts about the classifiers
+    /// would have reproduced the same shape one level out: reverting the one line that chooses the
+    /// classifier would have left every fact green (review on #5174). Both decisions now live here,
+    /// where a test drives the same code production does — capturing the
+    /// <paramref name="postFailureToSender"/> verdict and the level handed to
+    /// <paramref name="logger"/> — so neither can be changed back silently.</para>
+    ///
+    /// <para>The two decisions, and what each is for:</para>
+    /// <list type="number">
+    ///   <item><b>The POD-HUB classifier, not the general one.</b> The general one's
+    ///     deactivated-activation arm defaults to the terminal answer for a caller that cannot
+    ///     consult the activation-failure registry, which made it inert on this leg — the leg the
+    ///     rejection names and where the evidence lives. A silo leaving mid-roll and a directory
+    ///     mid-handoff are TRANSIENT, and telling the sender otherwise tears down mirrors that
+    ///     would have resumed.</item>
+    ///   <item><b>The level follows the verdict.</b> A container that is already gone is not an
+    ///     incident to page on — it is this process exiting, and the delivery it could not carry is
+    ///     being retried against a live pod by a sender that now correctly reads
+    ///     <see cref="ErrorType.ShuttingDown"/>. <c>Error</c> there filed #2638 for a pod that was
+    ///     merely finishing. The failure is still reported, at the level it deserves.</item>
+    /// </list>
+    ///
+    /// <para>Returns a completed leg, so the route observable finishes having answered the sender —
+    /// it never faults past its own NACK.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <param name="addressPath">The pod-hub address the delivery was directed to.</param>
+    /// <param name="delivery">The delivery being answered — read for its id and its sender.</param>
+    /// <param name="postFailureToSender">Posts the NACK: the message and the classified verdict.</param>
+    /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
+    /// <see cref="IsScopeTeardown"/>.</param>
+    /// <param name="logger">Logger for the one report this arm makes.</param>
+    /// <returns>A completed leg emitting a single <see cref="Unit"/>.</returns>
+    internal static IObservable<Unit> AnswerPodHubCallFailure(
+        Exception ex,
+        string addressPath,
+        IMessageDelivery delivery,
+        Action<string, ErrorType> postFailureToSender,
+        Func<bool>? scopeDisposed,
+        ILogger logger)
+    {
+        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
+        var errorType = ClassifyPodHubDeliveryException(ex, scopeDisposed);
+        var level = errorType == ErrorType.ShuttingDown ? LogLevel.Information : LogLevel.Error;
+        logger.Log(level, ex,
+            "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
+            addressPath, errorType, delivery.Sender);
+        postFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
+        return Observable.Return(Unit.Default);
+    }
 
     /// <summary>
     /// 🚨 <b>The TARGET GRAIN deactivated while the message was in flight — issue #2299.</b> Orleans

@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
 using Xunit;
 using MeshWeaver.Fixture;
@@ -188,6 +191,95 @@ public class PodHubDeactivatedActivationClassificationTest
             .Should().Be(ErrorType.ShuttingDown,
                 "#2299's first shape is classified by IsDepartedSiloRejection and must be unaffected "
                 + "by the deactivated-activation default this change corrects");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE WIRING, not just the decision — review on #5174.</b> The facts above are about the
+    /// two classifiers, so reverting the one line in <c>BuildPodHubRoute</c> that chooses between
+    /// them would leave them all green: the same shape as the defect being fixed, an argument not
+    /// written at a call site. <c>TerminalCallFailure</c> is therefore a one-line delegation to
+    /// <c>AnswerPodHubCallFailure</c>, and this drives that function — the SAME code production runs
+    /// — capturing what it hands the sender.
+    ///
+    /// <para>Putting <c>ClassifyDeliveryException(ex, scopeDisposed)</c> back inside it flips the
+    /// captured verdict to <see cref="ErrorType.Failed"/> and turns this red.</para>
+    /// </summary>
+    [Fact]
+    public void ThePodHubTerminalArm_HandsTheSenderTheTransientVerdict()
+    {
+        var captured = new List<(string Message, ErrorType ErrorType)>();
+        var logged = new List<LogLevel>();
+        var delivery = new MessageDelivery<string>();
+
+        RoutingGrain.AnswerPodHubCallFailure(
+                Rejection(NewestForwardingRejectionText),
+                "cache/OF-_1OFvNkOxMFqzIG3gyQ",
+                delivery,
+                (message, errorType) => captured.Add((message, errorType)),
+                scopeDisposed: null,
+                new RecordingLogger(logged))
+            .Subscribe();
+
+        captured.Should().ContainSingle(
+                "the arm answers the sender exactly once — a delivery that faulted must never be "
+                + "left waiting out its budget in silence")
+            .Which.ErrorType.Should().Be(ErrorType.ShuttingDown,
+                "this is the WIRING fact: the leg must reach the pod-hub classifier, and the general "
+                + "one with its defaults answers Failed for this very exception (asserted above)");
+
+        captured[0].Message.Should().Contain("cache/OF-_1OFvNkOxMFqzIG3gyQ",
+            "the NACK names the address the sender could not reach");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The LEVEL follows the verdict, and it was equally unpinned.</b> A transient lifecycle
+    /// transition reported at <see cref="LogLevel.Error"/> is what files an incident for a pod that
+    /// was merely finishing (#2638) — and it is what kept #2299 collecting recurrences. Asserted on
+    /// both sides so the level cannot be pinned to one value: an unrecognised fault is still
+    /// <see cref="LogLevel.Error"/>, because it is still a defect to report.
+    /// </summary>
+    [Fact]
+    public void TheReportedLevel_FollowsTheVerdict_OnBothSides()
+    {
+        var transient = new List<LogLevel>();
+        var terminal = new List<LogLevel>();
+
+        RoutingGrain.AnswerPodHubCallFailure(
+                Rejection(NewestForwardingRejectionText), "cache/x", new MessageDelivery<string>(),
+                (_, _) => { }, scopeDisposed: null, new RecordingLogger(transient))
+            .Subscribe();
+
+        RoutingGrain.AnswerPodHubCallFailure(
+                Rejection("Grain extension not installed on target grain."), "cache/x",
+                new MessageDelivery<string>(),
+                (_, _) => { }, scopeDisposed: null, new RecordingLogger(terminal))
+            .Subscribe();
+
+        transient.Should().Equal([LogLevel.Information],
+            "a lifecycle transition is not an incident to page on, and reporting it at Error is what "
+            + "kept this fingerprint collecting recurrences");
+        terminal.Should().Equal([LogLevel.Error],
+            "an unrecognised fault on this leg is still a defect, and must still be reported as one");
+    }
+
+    /// <summary>
+    /// Records the level of every entry written, so a fact can assert the level the arm CHOSE rather
+    /// than merely that it logged. Deliberately minimal — it is a recorder, not a stand-in for a
+    /// logging framework.
+    /// </summary>
+    /// <param name="levels">The list every logged level is appended to.</param>
+    private sealed class RecordingLogger(List<LogLevel> levels) : ILogger
+    {
+        /// <inheritdoc />
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        /// <inheritdoc />
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        /// <inheritdoc />
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => levels.Add(logLevel);
     }
 
     /// <summary>
