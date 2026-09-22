@@ -713,9 +713,20 @@ public sealed class MessageHub : IMessageHub
                 $"Hub {Address} was told to shut down before its initialization completed", ct))));
 
         var skipLogged = false;
+        // 🚨 Which action the sequential Concat is ON, so the timeout below can NAME what did not
+        // finish (issue #2886). Semantics: the index of the LAST action the Concat subscribed to
+        // before the bound fired; -1 while none has been. Written on whichever thread delivered
+        // the previous action's completion, read on the Timeout's scheduler thread — so the write
+        // is an Interlocked exchange and the read a Volatile read: a FENCE, never a gate (a lock in
+        // a hub parks the action block, and a Subject would be a channel for one integer). The
+        // only ambiguity is a bound firing inside the transition from action i to i+1, microseconds
+        // wide, where either reading names an action adjacent to where the Concat stood when it was
+        // disposed; the timeout tears the whole chain down either way.
+        var pendingAction = -1;
         return Observable
-            .Concat(actions.Select(a => Observable.Defer(() =>
+            .Concat(actions.Select((a, index) => Observable.Defer(() =>
             {
+                Interlocked.Exchange(ref pendingAction, index);
                 if (!IsShuttingDown)
                     return a(this).DefaultIfEmpty(Unit.Default).Take(1);
                 if (!skipLogged)
@@ -799,11 +810,22 @@ public sealed class MessageHub : IMessageHub
                 // above). Do NOT leave the gate closed (→ the 30s-per-message deferral wedge): enter a
                 // FAILED state that surfaces a clear DeliveryFailure for every later request, then
                 // ALWAYS open the gate so those rejections (and disposal) can flow.
+                // 🚨 NAME what did not finish; never guess at it (#1122, and #2886 for this line).
+                // This sentence used to read "a BuildupAction did not complete within 120s (a hung
+                // dependency or stuck compile)" — two candidates, neither measured, and no way to
+                // tell WHICH of the hub's actions was the one still pending. It was unanswerable by
+                // construction for the commonest case: DataContext's own initialization bound is
+                // the same length as this one and starts a few milliseconds later, so on a hang
+                // this outer Timeout always fires first, disposes the Concat, and unsubscribes the
+                // inner bound before it can print its per-source diagnosis. Naming the pending
+                // action here is the part this layer CAN say; the action's own report, if it has
+                // one, is the next layer's to give when it is disposed incomplete.
+                var pending = Volatile.Read(ref pendingAction);
                 var reason = ex is TimeoutException
-                    ? $"a BuildupAction did not complete within "
+                    ? $"BuildupAction {DescribeBuildupAction(actions, pending)} did not complete within "
                       + $"{(Configuration.StartupTimeout ?? DefaultInitializationTimeout).TotalSeconds:F0}s "
-                      + "(a hung dependency or stuck compile)"
-                    : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
+                      + "— the actions before it had signalled; a dependency it waits on hung, or a compile inside it never finished"
+                    : $"BuildupAction {DescribeBuildupAction(actions, pending)} faulted ({ex.GetType().Name}: {ex.Message})";
                 logger.LogError(ex,
                     "Hub {Address} initialization failed — {Reason}. Hub is now in FAILED state.{Recovery}",
                     Address, reason, TransientLatchNote(ex));
@@ -811,6 +833,28 @@ public sealed class MessageHub : IMessageHub
                 OpenGate(MessageHubConfiguration.InitializeGateName);
                 return Observable.Return(request.Failed($"Hub '{Address}' initialization failed — {reason}"));
             });
+    }
+
+    /// <summary>
+    /// Names one of a hub's BuildupActions by position and by the method behind its delegate, for
+    /// the initialization failure line — <c>3 of 3 (DataExtensions.StartDataSourcesAndOpenGate)</c>.
+    /// A method group names itself; a lambda names the compiler's closure method, which still
+    /// identifies the registration site by its enclosing method. <paramref name="index"/> is
+    /// <c>-1</c> when no action was ever subscribed, which the sentence says rather than
+    /// pretending an action was.
+    /// </summary>
+    /// <param name="actions">The hub's BuildupActions, in Concat order.</param>
+    /// <param name="index">The zero-based position of the action the Concat was on, or -1.</param>
+    /// <returns>A short label for the log line.</returns>
+    internal static string DescribeBuildupAction(
+        ImmutableList<Func<IMessageHub, IObservable<Unit>>> actions, int index)
+    {
+        if (index < 0 || index >= actions.Count)
+            return $"(none of {actions.Count} started)";
+        var method = actions[index].Method;
+        var owner = method.DeclaringType?.Name;
+        var name = owner is null ? method.Name : $"{owner}.{method.Name}";
+        return $"{index + 1} of {actions.Count} ({name})";
     }
 
     /// <summary>

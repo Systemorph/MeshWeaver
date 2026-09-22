@@ -808,7 +808,36 @@ hub.Observe<CreateOrUpdateNodeResponse>(
 - The caller doesn't need to check existence — the handler reads persistence and either dispatches `CreateNodeRequest` (when missing) or applies the update branch internally via `stream.Update` (when existing). One audit log. One response shape (`CreateOrUpdateNodeResponse` with `WasCreated`).
 - **Never delete-then-create.** That pattern races the per-node hub's disposal — a `GetNode` issued shortly after the create returns null because the new request hits the still-tearing-down hub. The upsert handler applies the update via `stream.Update` instead, which routes the merge patch to the live owning hub and keeps `GetNode` consistent.
 - **Permissions stay specific.** Missing target = `Permission.Create` checked by the inner `CreateNodeRequest`. Existing target = `Permission.Update`, enforced on the patch path by the owning hub's `[RequiresPermission(Update)]` pipeline that `stream.Update` routes to (surfaced to the caller as `UnauthorizedAccessException` by `UpdateRemote`). The upsert request itself declares both via `[CreateOrUpdateNodePermission]` so the routing-layer gate still denies callers that have neither.
-- **Patch mode is reserved** for incremental edits (log-line append, view-count bump, status flip): set `request.Patch` to a `Json.Patch.JsonPatch` payload. The handler will apply the patch to the existing node (or to `Node` as the seed when missing) and write the result. (Currently surface-only — patch mode lands when its caller does.)
+- **Patch mode is reserved and refused.** A non-null `request.Patch` returns `PatchFailed`; it is not an implemented mutation route. Use `WithFolds<T>` for create-if-missing counters and timestamps, as below.
+
+### Create-if-missing with a live content fold
+
+`CreateOrUpdateNodeRequest.WithFolds<T>` carries a rule and operand to the upsert handler.
+The create leg takes the supplied seed verbatim; the update leg evaluates the rules against
+its live node inside `stream.Update`. No query or caller-side content read decides which leg runs.
+
+```csharp
+var request = new CreateOrUpdateNodeRequest(seed)
+    .WithFolds<UserActivityRecord>(hub.JsonSerializerOptions, folds => folds
+        .Sum(record => record.AccessCount, 1)
+        .KeepExisting(record => record.FirstAccessedAt)
+        .Max(record => record.LastAccessedAt, now));
+```
+
+`HandleTrackActivity` uses this shape with a seed count of one. It first checks the user's
+partition root in storage so navigation cannot create a partition before onboarding, then issues
+one upsert from the stable activity hub with the caller's identity. A stale positive activity
+query can no longer select an update whose initial state never arrives (#1174). The tracking
+hub's in-flight register still accounts for the detached write until it terminates.
+
+Folds remove the stale caller read; they do **not** add cluster-wide atomic arithmetic. The
+cross-hub write still carries an RFC 7396 patch, with the existing conflict and rebase semantics.
+`ActivityTrackingUpsertTest` proves the real handler creates despite a stale positive index,
+then preserves the first-access timestamp and increments the stored count on later tracks.
+A structured conflict remains `FailureKind = NodeUpsertFailureKind.Conflict` across the response
+boundary. This open string vocabulary supplements the unchanged legacy rejection enum; unknown
+values remain named failures, and a teardown does not claim that nothing was written.
+Activity tracking retains its existing conflict and teardown classification without adding retries.
 
 Bulk upserts (e.g. node-tree copy) compose the per-node observable and merge with bounded concurrency so a wide subtree doesn't open every per-node hub simultaneously on the receiving side:
 

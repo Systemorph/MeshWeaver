@@ -181,6 +181,18 @@ Two things the declared sweep still cannot see, and no query form can:
 - **A NodeType in a partition you hold no grant on.** That is the denominator M; the census is the
   only instrument that counts past it.
 
+### The cap is the other half of the same rule
+
+A `count` is read against `coverage.partitions`; a `truncated: true` is read against the ORDER the
+result was clipped over. The failure has the same shape (MeshWeaver #4950): a `limit:25` listing of
+`Hosting/InstanceAction` came back truncated, its newest row six days old, and was read as "no
+action for six days" — the rows that explained the outage were there, outside the first 25, in an
+order nobody had asked for. A filter-only query now defaults to newest first at every clip site
+(`ParsedQuery.EffectiveOrderBy`, [Query Result Scoring](../QueryResultScoring)), so a truncated
+page is at least the recent end of the set — but it is still a page, and a reader who needs the
+whole set raises the limit until `truncated` reads `false`, exactly as the sweep above raises it
+until N stops being a floor.
+
 ## What is still open
 
 - **The provider's report is the Plugins half.** `QueryResultChange.Partitions` is the core seam;

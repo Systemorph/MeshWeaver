@@ -131,11 +131,12 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         await Sync.ReimportAtCommit(Space, CommitA, UserId)
             .Timeout(TestTimeouts.CrossSilo).Await(cancellationToken);
 
-        // Reimport requests the initial release without awaiting its compile. A source fingerprint
-        // only says the inputs arrived: seeding at that point races the still-running compile's
-        // terminal stamp, which can replace AdoptedVerified with Compiled after adoption. Join the
-        // release this fixture initiated before establishing the adopted-type premise below.
-        var initialBuild = await DefinitionWhen(d =>
+        // Importing activates the type and can already dispatch its first compile. A source
+        // fingerprint does not mean that compile has finished: seeding at that point races its
+        // terminal stamp, which honestly changes provenance back to Compiled. Establish the
+        // completed initial build and the import's handled release request before replacing them
+        // with the adoption this test exercises.
+        var adoptedFingerprint = await FingerprintWhen(d =>
                 d.CurrentSourceFingerprint is { Length: > 0 }
                 && d.CompilationStatus is CompilationStatus.Ok
                 && d.BuildProvenance is BuildProvenance.Compiled
@@ -143,7 +144,6 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
                 && d.RequestedReleaseAt is { } requested
                 && d.LastReleaseRequestHandledAt >= requested,
             cancellationToken);
-        var adoptedFingerprint = initialBuild.CurrentSourceFingerprint!;
         Output.WriteLine($"live fingerprint at {CommitA[..8]}: {adoptedFingerprint}");
         StageBundle("widget-a.zip", adoptedFingerprint);
 
@@ -318,6 +318,10 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
 
     private async Task<NodeTypeDefinition> Definition(CancellationToken cancellationToken)
         => await Definitions.FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
+
+    private async Task<string> FingerprintWhen(
+        Func<NodeTypeDefinition, bool> predicate, CancellationToken cancellationToken)
+        => (await DefinitionWhen(predicate, cancellationToken)).CurrentSourceFingerprint!;
 
     /// <summary>The config once it satisfies <paramref name="predicate"/>, or — when it never does
     /// within the bound — whatever it says RIGHT NOW, so the caller's assertion is what fails and
