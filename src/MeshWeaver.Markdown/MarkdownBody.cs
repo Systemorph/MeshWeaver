@@ -54,19 +54,40 @@ public static class MarkdownBody
         if (node is null)
             return null;
 
-        var markdown = node.Content switch
+        var content = node.Content;
+        var isSpace = string.Equals(node.NodeType, "Space", StringComparison.OrdinalIgnoreCase);
+        if (isSpace)
+        {
+            var raw = content switch
+            {
+                string text => text,
+                JsonElement { ValueKind: JsonValueKind.String } json => json.GetString(),
+                _ => null,
+            };
+            // The Space view recovers legacy serialized objects before reading body/content.
+            // Do not apply that recovery to Markdown: a JSON document can be its authored text.
+            if (raw?.TrimStart().StartsWith('{') == true)
+            {
+                try { content = JsonSerializer.Deserialize<JsonElement>(raw); }
+                catch (JsonException) { /* Not a serialized Space; keep the authored text. */ }
+            }
+        }
+
+        var markdown = content switch
         {
             string text => text,
             JsonElement { ValueKind: JsonValueKind.String } json => json.GetString(),
             JsonValue value when value.TryGetValue<string>(out var text) => text,
-            _ => StringMember(node.Content, "content") ?? StringMember(node.Content, "body"),
+            _ => isSpace
+                ? StringMember(content, "body") ?? StringMember(content, "content")
+                : StringMember(content, "content") ?? StringMember(content, "body"),
         };
         if (markdown is not null)
             return MarkdownViewLogic.Render(markdown, node.Path, node.Path).Html;
 
         if (!string.IsNullOrWhiteSpace(node.PreRenderedHtml))
             return node.PreRenderedHtml;
-        var cached = StringMember(node.Content, "prerenderedHtml");
+        var cached = StringMember(content, "prerenderedHtml");
         return string.IsNullOrWhiteSpace(cached) ? null : cached;
     }
 
