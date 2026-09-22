@@ -78,8 +78,11 @@ public class BuildCoordinationRetryTest
             .Await(TestContext.Current.CancellationToken);
 
         var thrown = await act.Should().ThrowAsync<BuildCoordinationUnreachableException>();
-        // The refusal NAMES what it could not reach, and says it is a refusal — the bare
-        // TimeoutException it replaces read as a compile problem for as long as anyone looked.
+        // The fault NAMES what it could not reach — the bare TimeoutException it replaces read as a
+        // compile problem for as long as anyone looked. 🚨 It does NOT name the readiness verdict:
+        // that is decided downstream by WhenTheSubscriptionDoorIsShut, which may GRANT on a durable
+        // GO, and the claim it used to make here is #3404's second occurrence. Pinned from both
+        // sides by PreWarmerReadsTheDurableGoTest.
         thrown.Which.Message.Should().Contain("Admin/Build");
         thrown.Which.Message.Should().Contain("verified NOTHING");
         thrown.Which.InnerException.Should().BeOfType<TimeoutException>();

@@ -143,8 +143,28 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
                 f"{instance.source}). Identity is qualified by the declaring repository upstream, "
                 "but this lane's credential maps (`COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS`) are "
                 "keyed by NAME: both would be handed the same instance key and admin token, and "
-                "one's verdict would land on the other's `Admin/UpdatePolicy`. Rename one "
-                "installation, or key the maps by the qualified `repo:id` and say so here.")
+                "one's verdict would land on the other's `Admin/UpdatePolicy`. TWO ways out exist "
+                "TODAY, and they do not carry the same cost. (1) Rename one installation — its "
+                "`Hosting__Deployment` is its inventory identity, so this moves whichever estate "
+                "owns the one that changes. (2) Key the maps by the qualified `repo:id` and say so "
+                "here — this removes the collision and then demands a credential for every "
+                "installation named, including any in an estate this fleet holds none for. "
+                "🚨 A THIRD ANSWER IS THE RIGHT ONE IN PRINCIPLE AND IS NOT IMPLEMENTED: scoping "
+                "the DENOMINATOR, so that an installation which can never receive this candidate "
+                "is not in it — one whose overlay pins a registry declared `out-of-estate`, since "
+                "the image this lane verifies is then not the image that installation runs. "
+                "Nothing here expresses that, and NEITHER existing flag can stand in for it: "
+                "`.github/acr-retention/instances.json`'s instance states are LIVENESS only "
+                "(`live` / `not-installed` / `retired`), so declaring a LIVE installation "
+                "`not-installed` would record a falsehood in order to obtain an exclusion; and the "
+                "`out_of_scope` flag the retention table derives belongs to the LOCK lane's "
+                "registry scoping, which this derivation never reads — a live out-of-scope "
+                "installation is still returned here. Building it means an explicit combo-scope "
+                "declaration this script CONSUMES, with its own self-test arm. 🚨 And when it is "
+                "built it is still the LOOSER DIRECTION, the only one of the three that can be "
+                "silently wrong: it SHRINKS the denominator, so an installation excluded by "
+                "mistake is one this lane then reports nothing about while reading green — the "
+                "exact failure the derived roster replaced a hand-maintained list to prevent.")
             continue
         names[instance.id] = instance.source
         # 🚨 CANONICALISE BEFORE COMPARING. A HOSTNAME IS CASE-INSENSITIVE and the overlay extractor
@@ -329,6 +349,21 @@ def self_test() -> int:
           and any("both named `memex`" in b and "Systemorph/PartnerRe.Memex" in b
                   and "Systemorph/Memex" in b for b in blockers),
           "one NAME declared by two repositories is a RED naming both, though upstream allows it")
+
+    # 🚨 The refusal names the two ways out that EXIST and the third that does NOT, and every one of
+    # those claims is load-bearing. A refusal naming only the two sends the reader to move another
+    # estate's inventory identity or to ask for credentials nobody holds, with no hint that the right
+    # answer is a missing mechanism. A refusal offering the third as if it were available is WORSE
+    # than either: the only exclusion lever `instances.json` has is a LIVENESS state, so an operator
+    # following that advice about a LIVE installation records a falsehood to obtain an exclusion —
+    # and the `out_of_scope` flag that would be the honest input is the lock lane's and is never read
+    # here. That is exactly what a review caught in the first version of this message, so the arm
+    # asserts each claim rather than the shape of the paragraph: a message is the only part of this
+    # refusal anybody acts on, and nothing else in the suite reads it.
+    check(any("NOT IMPLEMENTED" in b and "LIVENESS" in b and "LOOSER DIRECTION" in b
+              and "out_of_scope" in b for b in blockers),
+          "the duplicate-name refusal names denominator-scoping as NOT IMPLEMENTED, says why neither "
+          "existing flag expresses it, and still flags it as the looser direction")
 
     # …and two repositories declaring DIFFERENT names is the ordinary multi-repo fleet: no blocker.
     rows, _, blockers = derive([

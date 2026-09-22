@@ -174,24 +174,36 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// expression.</para>
     /// </summary>
     private static readonly ImmutableArray<string> DirectAwaitZeroRoots =
-        ["src", "tools", "samples", "clients"];
+        ["src", "tools", "samples", "clients", "memex"];
 
     /// <summary>
     /// The trees carrying a seeded inventory for the direct-await shape, measured 2026-09-18.
     ///
-    /// <para><c>test/</c> carries 223 sites in 66 files and <c>memex/</c> 5 in one — and they are
-    /// not an accident: <c>AGENTS.md</c>, the <c>/async</c> skill, the <c>/testing</c> skill and
+    /// <para><c>test/</c> carries 223 sites in 66 files — and they are not an accident:
+    /// <c>AGENTS.md</c>, the <c>/async</c> skill, the <c>/testing</c> skill and
     /// <c>Doc/Architecture/AsynchronousCalls</c> all PRESCRIBED "await the observable directly with
     /// a <c>.Timeout(...)</c>" as the replacement for <c>.ToTask()</c>, while four other pages said
     /// the opposite and correctly. This change corrects the four; the inventory they produced may
     /// only shrink.</para>
+    ///
+    /// <para>🚨 <c>memex/</c> WAS in this set with 5 sites in one file and has MOVED to
+    /// <see cref="DirectAwaitZeroRoots"/> (MeshWeaver#4756). It is production code — an ASP.NET
+    /// controller, not a suite — so a ratchet was the wrong home for it: a ratchet says "this may
+    /// only shrink", and what is wanted for a production root is "there are none". The five were
+    /// all in the DevLogin sign-in action and all now wait through
+    /// <c>.Await(HttpContext.RequestAborted)</c>. Moving the root rather than merely deleting the
+    /// allow line is the point: the next one added under <c>memex/</c> is refused outright, with no
+    /// line to add.</para>
     /// </summary>
-    private static readonly ImmutableArray<string> DirectAwaitRatchetedRoots = ["memex", "test"];
+    private static readonly ImmutableArray<string> DirectAwaitRatchetedRoots = ["test"];
 
     private const string DirectAwaitAllowFileName = "DirectObservableAwaitSites.allow";
 
-    /// <summary>The seeded inventory's size for <see cref="DirectAwaitRatchetedRoots"/>.</summary>
-    private const int DirectAwaitTotalBudget = 228;
+    /// <summary>
+    /// The seeded inventory's size for <see cref="DirectAwaitRatchetedRoots"/>. 228 at seeding;
+    /// 223 since <c>memex/</c>'s five left the ratchet for the zero set (MeshWeaver#4756).
+    /// </summary>
+    private const int DirectAwaitTotalBudget = 223;
 
     /// <summary>
     /// The member names that END an expression whose static type is an
@@ -791,6 +803,75 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             + string.Join("\n", found
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .Select(kv => $"  {kv.Key} ({kv.Value})")));
+    }
+
+    /// <summary>
+    /// 🚨 EVERY zero-tolerance root EXISTS, and each one's contribution is PRINTED (review finding on
+    /// #5153).
+    ///
+    /// <para><c>SourceScan.SourceFiles</c> drops a root that does not exist and raises only when the
+    /// COMBINED result is empty. With one root that is a perfect instrument; with five it is not —
+    /// <c>src/</c> alone keeps the combined set enormous, so a renamed, moved or mistyped
+    /// <c>memex/</c> would leave <see cref="NoProductionCodeAwaitsAnObservableDirectly"/> and the
+    /// three <c>.ToTask(</c> rules reporting zero **having scanned nothing there**, with nothing red.
+    /// That is the failure this repository names most often: a guard whose subject moved and whose
+    /// roots did not, answering green.</para>
+    ///
+    /// <para>The exposure is older than #5153 — <see cref="ProductionRoots"/> has carried five roots
+    /// since <c>memex/</c>'s <c>.ToTask(</c> sweep reached zero (#2764) — but widening
+    /// <see cref="DirectAwaitZeroRoots"/> to the same list is what made it worth closing: before it,
+    /// a vanished <c>memex/</c> at least turned that root's allow-file entry STALE and printed it. A
+    /// zero root has no allow file, so it has no such signal.</para>
+    ///
+    /// <para>🚨 <b>EXISTENCE is the assertion; a count of zero is REPORTED, not failed</b> — and that
+    /// distinction is what this test measured on its first run. <c>clients/</c> is a declared root
+    /// that holds Python, Docker and a README and <b>no</b> <c>.cs</c>, <c>.razor</c> or <c>.csx</c>
+    /// at all, so it has contributed nothing to any of these rules since it was listed. That is not a
+    /// broken scan — the root is there, it is polyglot, and the day someone adds a C# file to it the
+    /// rules cover it automatically. Failing on it would push the next reader toward DELETING the
+    /// root, which is the one change that WOULD leave a future file there unguarded. So the rule is
+    /// the one the <c>/health</c> census follows: a root that does not exist FAILS, and every root's
+    /// count is printed, so that "I measured nothing there" and "I measured, and it was clean" are two
+    /// different printed sentences rather than one silence.</para>
+    /// </summary>
+    [Fact]
+    public void EveryZeroToleranceRootExistsAndItsContributionIsPrinted()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var declared = ProductionRoots
+            .Concat(DirectAwaitZeroRoots)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(r => r, StringComparer.Ordinal)
+            .ToArray();
+
+        var missing = new List<string>();
+        foreach (var scanned in declared)
+        {
+            var dir = Path.Combine(root, scanned);
+            if (!Directory.Exists(dir))
+            {
+                missing.Add($"  {scanned} — no such directory under {root}");
+                continue;
+            }
+
+            // Counted through the SAME extension and exclusion predicate SourceScan.SourceFiles uses,
+            // so the number printed is the number the rules scanned — not a re-implementation that
+            // could agree today and drift tomorrow. A zero is legitimate for a polyglot root and is
+            // printed rather than failed; see the remarks.
+            var count = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                .Count(f => Path.GetExtension(f) is ".cs" or ".razor" or ".csx"
+                            && !SourceScan.IsExcluded(root, f));
+            output.WriteLine($"{scanned}: {count} file(s) reach these rules"
+                             + (count == 0 ? "  ← carries no C# at all; covered the moment it does" : ""));
+        }
+
+        Assert.True(missing.Count == 0,
+            "🚨 A declared zero-tolerance root DOES NOT EXIST, so every rule over it is reporting zero "
+            + "having checked nothing there. `SourceScan.SourceFiles` only raises when the COMBINED "
+            + "result is empty, and `src/` alone keeps it full — so this is invisible to the rules "
+            + "themselves. Fix the root name or the repository layout; never drop the root to make this "
+            + "pass, because dropping it is what leaves the next file there unguarded.\n"
+            + string.Join("\n", missing));
     }
 
     /// <summary>

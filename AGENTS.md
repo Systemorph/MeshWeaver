@@ -7,6 +7,10 @@ obey. Where one ends in `Full reference: [/name]`, the skill under `.claude/skil
 the worked examples, commands, war stories and incident history — load it when the task calls for
 it, not before.
 
+The shared skill source is `.claude/skills/`. Codex discovers that same directory through the
+tracked `.agents/skills` relative symlink. Edit the canonical files; never copy skills into a
+second tree. New skills become available to both clients through the directory link.
+
 | Skill | Load it when |
 |---|---|
 | [/worktree](.claude/skills/worktree/SKILL.md) | starting any change: branch, edit, build, push |
@@ -363,6 +367,16 @@ Full reference: [/mesh-data](.claude/skills/mesh-data/SKILL.md) · [CqrsAndConte
 ## Collections Policy
 
 **NEVER use mutable collections.** Always `System.Collections.Immutable`: `List<T>` → `ImmutableList<T>`, `Dictionary<K,V>` → `ImmutableDictionary<K,V>`, `HashSet<T>` → `ImmutableHashSet<T>`, `Queue<T>` → `ImmutableQueue<T>`. Exception: `ConcurrentDictionary` for concurrent mutation — **as an instance field on a mesh-scoped singleton, never `static`**.
+
+## 🚨 Vocabularies are OPEN string constants, never enums — policy `open-vocabulary-string-constants`
+
+**A set of named values that is persisted, serialised, or extended by a module is a `static class` of `const string`, named EXACTLY as the enum would have been — never a C# `enum`.** Keeping the name and the member spellings makes converting a shipped enum a drop-in: `TransportKind.Email` still reads the same at every call site, and only the declaration and the field type change. Widening a `public` enum instead breaks every exhaustive `switch` under `-warnaserror` — in `src/` **and** in in-mesh NodeType sources that no `dotnet build` ever type-checks, where it is invisible until a portal compiles it at runtime — and an enum deserialising an unknown value yields the **zero member**, which is almost always a real, meaningful value (`InApp`, `Person`, `Running`): a silent wrong answer with nothing logged.
+
+🚨 **The set stays OPEN.** The platform's constants are a starting set, never the permitted set: any module, satellite, deployment or agent declares its **own** constants class and uses its own values in the same field, with no registration and no change to core. So **never validate a value against the platform's own constants** (that re-closes it), and **never let an unknown value take a default branch that means something** (that is the zero-member bug again) — unknown stays unknown, named and logged.
+
+🚨 **Resolution is therefore a DURABLE CHAIN OF RULES, never a switch.** The rules are **mesh nodes** — queryable, versioned, editable without a redeploy, and never a `static` list — each claiming its own values, ordered by an explicit `Order` field (never registration or load order), with the platform's own handlers as ordinary entries holding no privileged position. The chain is read LIVE so a new rule needs no recycle, and it ends in a **loud** terminal: an unclaimed value is a reportable fact, never a silent drop. A rule's `Handler` may be a **Code node** the backend compiles and caches, so a new value can ship with no deployment at all — which also means its source is invisible to CI and shows up only as `compilationStatus` on its own node. An `enum` remains right only for a vocabulary that is never persisted, never serialised, closed by nature, and exhaustively handled in one assembly.
+
+Full reference: [OpenVocabulariesAsStringConstants.md](src/MeshWeaver.Documentation/Data/Architecture/OpenVocabulariesAsStringConstants.md) · [CommunicationHub.md](src/MeshWeaver.Documentation/Data/Architecture/CommunicationHub.md).
 
 ## Architecture Overview
 

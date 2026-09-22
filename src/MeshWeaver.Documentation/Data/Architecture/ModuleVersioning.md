@@ -297,6 +297,39 @@ Both settings are *declared*, never inferred from whether a file happens to exis
 degrades silently on a missing input is the skip-trapdoor shape AGENTS.md forbids, and here it would
 change what a published version means without saying so.
 
+### 🚨 The declared `skip` is NOT the whole rule — ask `--list-packages` for the effective answer
+
+`plugin_dirs()` applies the declared `skip` **and** an implicit rule of its own: a top-level
+**dot-directory is never a package**. Tooling writes them (`check-examples.py` builds under
+`.example-check/`, `platform-script.py` caches under `.platform-scripts/`) and hashing one as a
+module is how a scratch build ends up demanding a `manifest.lock`.
+
+That second half is what makes `check-skip-sets.py` — which asserts
+`validate-repos.SKIP == skip_set(root)` — **unable to see a divergence it exists to catch** (#4774).
+A repo enumerates its top-level packages twice: here, and in its own `validate-repos.py`. Measured on
+five satellites' `main`, the second enumerator has no dot rule, so an undeclared top-level `.foo` is
+**skipped by the canonical and walked by the validator** — validated as nodes it does not contain —
+while the two *declared* sets are identical and the guard passes. That is the failure
+`check-skip-sets.py`'s own docstring names: *"a guard whose subject moved out from under it and that
+answers green has checked nothing, which is worse than the drift it exists to catch."*
+
+So a guard compares **effective enumerations**, never declarations:
+
+```bash
+MW_REPO_ROOT=$PWD python3 <platform>/.github/scripts/gen-manifests.py --list-packages
+```
+
+stdout carries only the package names, one per line, sorted — a caller diffs its own enumerator's
+output against that and needs no copy of either rule; the count goes to stderr so an empty answer can
+still be told from a broken one. The canonical's `--self-test` pins both directions over a fixture
+tree holding a `.example-check/`, a declared skip and two real packages.
+
+**What is still owed, and the ordering matters.** Each satellite's own `check-skip-sets.py` has to
+start comparing against `--list-packages` (and its `validate-repos.py` enumerator gain the dot rule).
+🚨 Tighten the guard **last**: doing it first reds five satellites' required `validate` context at
+once for a condition none of them can fix without their own PR — the fleet-wide-red shape a dated
+guard already produced here. Canonical first, repos adopt, guard tightens when it can only pass.
+
 Adoption is one commit per repo — add the config, drop the vendored copy, point `validate-repos.py`
 and `check-skip-sets.py` at the platform copy, and pass `centralized-gen-manifests: true` to the lane.
 Before merging one, prove it moves nothing:

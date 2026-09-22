@@ -40,7 +40,16 @@ public sealed class MemexClient : IDisposable
     public Task<string> Delete(string paths, CancellationToken ct) => Post("api/mesh/delete", new { paths }, ct);
     public Task<string> Move(string sourcePath, string targetPath, CancellationToken ct) => Post("api/mesh/move", new { sourcePath, targetPath }, ct);
     public Task<string> Copy(string sourcePath, string targetNamespace, bool force, CancellationToken ct) => Post("api/mesh/copy", new { sourcePath, targetNamespace, force }, ct);
-    public Task<string> Recycle(string path, CancellationToken ct) => Post("api/mesh/recycle", new { path }, ct);
+    public Task<string> Recycle(string path, CancellationToken ct) => Recycle(path, reason: null, ct);
+
+    /// <summary>
+    /// <c>mw recycle &lt;path&gt; [--reason "…"]</c>. An OVERLOAD rather than a defaulted parameter, for
+    /// the reason <c>MeshOperations.Recycle</c> states for its own pair: a defaulted parameter
+    /// REPLACES the signature an already-built caller compiled against. <c>reason</c> is the
+    /// operator's own <i>why</i>, carried into the target's <c>[QUIESCE-START]</c> (MeshWeaver#4782).
+    /// </summary>
+    public Task<string> Recycle(string path, string? reason, CancellationToken ct) =>
+        Post("api/mesh/recycle", new { path, reason }, ct);
     public Task<string> Compile(string path, CancellationToken ct) => Post("api/mesh/compile", new { path }, ct);
     public Task<string> Diagnostics(string path, CancellationToken ct) => Post("api/mesh/diagnostics", new { path }, ct);
     public Task<string> ExecuteScript(string path, int timeoutSeconds, CancellationToken ct) => Post("api/mesh/execute-script", new { path, timeoutSeconds }, ct);

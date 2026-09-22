@@ -201,8 +201,9 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         MeshQueryRequest request,
         JsonSerializerOptions options,
         bool useSecurityFilter,
-        bool projectSelect = false)
-        => CollectMatched(request, options, useSecurityFilter)
+        bool projectSelect = false,
+        ReadCompleteness? completeness = null)
+        => CollectMatched(request, options, useSecurityFilter, completeness)
             .Select(collected =>
             {
                 var (matched, parsedQuery, _) = collected;
@@ -482,7 +483,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         CollectMatched(
             MeshQueryRequest request,
             JsonSerializerOptions options,
-            bool useSecurityFilter)
+            bool useSecurityFilter,
+            ReadCompleteness? completeness = null)
     {
         var effectiveQueries = request.EffectiveQueries;
         var userId = GetEffectiveUserId(request);
@@ -507,7 +509,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // (when useSecurityFilter) inline. Dedup runs once on the materialised
             // set below — cheaper to express, identical union result.
             perQuery.Add(
-                FindMatchingNodes(parsedQuery, effectiveScope, basePath, userId, context, request, options)
+                FindMatchingNodes(parsedQuery, effectiveScope, basePath, userId, context, request, options, completeness)
                     .SelectMany(node =>
                     {
                         if (node is MeshNode meshNode)
@@ -587,7 +589,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         string userId,
         string? context,
         MeshQueryRequest request,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options,
+        ReadCompleteness? completeness)
     {
         // source:activity is a join with the `_activity` satellites — pushed
         // down to SQL by PostgreSqlSqlGenerator (INNER JOIN activities ON
@@ -609,7 +612,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
             const string activitySegment = "/_activity/";
             var seenMains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            return WalkAdapter(basePath, QueryScope.Subtree)
+            return WalkAdapter(basePath, QueryScope.Subtree, completeness)
                 .Select(path =>
                 {
                     if (string.IsNullOrEmpty(path)) return null;
@@ -631,13 +634,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     // TimeoutException disappear into "node dropped by Where(!= null)" — visible
                     // cause when a query mysteriously returns fewer rows than expected. Teardown
                     // cancellation is NOT swallowed: it terminates the walk (see SwallowedReadOrStop).
-                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "SourceActivity.ReadMain", mainPath!)))
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "SourceActivity.ReadMain", mainPath!, completeness)))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
                     && !IsExcludedByContext(node, context)
                     && !IsExcludedByIsMain(node, parsedQuery))
-                .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "SourceActivity", request, basePath))
+                .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "SourceActivity", request, basePath, completeness))
                 .Cast<object>();
         }
 
@@ -653,20 +656,20 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 return Observable.Empty<object>();
 
             var emittedFrontier = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            return WalkAdapter(basePath, QueryScope.Descendants)
+            return WalkAdapter(basePath, QueryScope.Descendants, completeness)
                 .Where(path => !string.IsNullOrEmpty(path))
                 .ToList()
                 .SelectMany(allPaths => NamespaceFrontier.Frontier(basePath, allPaths).ToInlineObservable())
                 .Where(path => emittedFrontier.Add(path))
                 .SelectMany(path => persistence.Read(path, options)
                     .Take(1)
-                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "NextLevel.Read", path)))
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "NextLevel.Read", path, completeness)))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
                     && !IsExcludedByContext(node, context)
                     && !IsExcludedByIsMain(node, parsedQuery))
-                .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "NextLevel", request, basePath))
+                .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "NextLevel", request, basePath, completeness))
                 .Cast<object>();
         }
 
@@ -696,6 +699,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     try { return persistence.ReadMany(nonEmptyPaths, options); }
                     catch (Exception ex)
                     {
+                        completeness?.RecordDroppedRead();
                         logger?.LogWarning(ex,
                             "[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously paths=[{Paths}]",
                             string.Join(",", nonEmptyPaths));
@@ -706,7 +710,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
             .Do(node => { if (!string.IsNullOrEmpty(node.Path)) emittedPaths.Add(node.Path); })
-            .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "ExactScope", request, basePath));
+            .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "ExactScope", request, basePath, completeness));
 
         // Children / Descendants / Hierarchy / Subtree / AncestorsAndSelf scopes —
         // walk via the adapter. Each scope expands to a list of (root, scope)
@@ -758,7 +762,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
         var matchedScopeNodes = walkPairs
             .ToInlineObservable()
-            .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope))
+            .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope, completeness))
             .Where(path => !string.IsNullOrEmpty(path))
             .Where(path => emittedPaths.Add(path))
             .SelectMany(path =>
@@ -767,13 +771,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     // Surface swallowed read errors at warning level so a timeout / RLS-deny /
                     // corrupt-row doesn't silently drop the node out of the result set. Teardown
                     // cancellation is NOT swallowed: it terminates the walk (see SwallowedReadOrStop).
-                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "MatchScope.Read", path)))
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "MatchScope.Read", path, completeness)))
             .Where(node => node != null)
             .Select(node => node!)
             .Where(node => _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
-            .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "MatchScope", request, basePath));
+            .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "MatchScope", request, basePath, completeness));
 
         // Sequential composition: exact-path probes complete first (populating
         // emittedPaths), then scope-walk filters via the shared HashSet. The
@@ -789,10 +793,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// Composes via <c>SelectMany</c>; no <c>await</c>, no <c>.ToTask()</c> —
     /// runs end-to-end reactively (per AsynchronousCalls.md).
     /// </summary>
-    private IObservable<string> WalkAdapter(string basePath, QueryScope scope)
+    private IObservable<string> WalkAdapter(string basePath, QueryScope scope, ReadCompleteness? completeness)
     {
         var recursive = scope != QueryScope.Children;
-        return WalkLevel(string.IsNullOrEmpty(basePath) ? null : basePath, recursive);
+        return WalkLevel(string.IsNullOrEmpty(basePath) ? null : basePath, recursive, completeness);
     }
 
     /// <summary>
@@ -810,14 +814,44 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private static bool IsTeardownCancellation(Exception ex) => ex is OperationCanceledException;
 
     /// <summary>
+    /// Records, for ONE query run, that this provider answered over reads it could not complete —
+    /// so the frame it emits can say so (<see cref="QueryResultChange{T}.SnapshotIncomplete"/>).
+    ///
+    /// <para>🚨 <b>Why a sink and not a field.</b> A field on the provider would be process-wide
+    /// mutable state shared by every concurrent query on this adapter: one partition's timeout would
+    /// mark every other caller's snapshot incomplete, and nothing would ever clear it. The sink is
+    /// created per subscription by the method that emits the Initial and threaded down to the catches
+    /// — one instance per run, collected with the run, visible to nobody else.</para>
+    ///
+    /// <para>Monotone on purpose: it only ever goes from complete to incomplete. A run whose FIRST
+    /// read faulted and whose second succeeded still produced a short snapshot.</para>
+    /// </summary>
+    private sealed class ReadCompleteness
+    {
+        private volatile bool dropped;
+
+        /// <summary>True once any read behind this run was caught and its rows dropped.</summary>
+        public bool AnyReadDropped => dropped;
+
+        /// <summary>Marks this run's snapshot as short of what the query asked for.</summary>
+        public void RecordDroppedRead() => dropped = true;
+    }
+
+    /// <summary>
     /// The per-path read catch: a genuine read fault (timeout / RLS-deny / corrupt row) is surfaced
     /// at Warning and the node dropped (<c>null</c>) so the rest of the result set survives; a
     /// teardown cancellation propagates so the walk terminates — see <see cref="IsTeardownCancellation"/>.
+    ///
+    /// <para>🚨 The drop is RECORDED on <paramref name="completeness"/>. Keeping the surviving rows is
+    /// deliberate and stays; what was wrong was serving them as a COMPLETE answer, which is how a
+    /// store fault reached <c>MessageHubGrain</c> as "the node does not exist" (MeshWeaver#1186).</para>
     /// </summary>
-    private IObservable<MeshNode?> SwallowedReadOrStop(Exception ex, string site, string path)
+    private IObservable<MeshNode?> SwallowedReadOrStop(
+        Exception ex, string site, string path, ReadCompleteness? completeness)
     {
         if (IsTeardownCancellation(ex))
             return Observable.Throw<MeshNode?>(ex);
+        completeness?.RecordDroppedRead();
         logger?.LogWarning(ex, "[{Site}] swallowed for path={Path}; returning null", site, path);
         return Observable.Return<MeshNode?>(null);
     }
@@ -827,21 +861,31 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// expected end of a walk whose pool has been drained — recorded at Debug (it is not a fault, and
     /// a Warning-with-exception here would still feed the fault sink once per in-flight query at every
     /// teardown) — and either way the query answers empty. See <see cref="IsTeardownCancellation"/>.
+    ///
+    /// <para>🚨 A fault — never a teardown cancellation — is recorded on
+    /// <paramref name="completeness"/> so the emitted Initial carries
+    /// <see cref="QueryResultChange{T}.SnapshotIncomplete"/>. A cancellation is NOT recorded: the
+    /// query is not answering at all, it is stopping, and marking that incomplete would label every
+    /// in-flight snapshot at every mesh teardown.</para>
     /// </summary>
-    private IObservable<T> PipelineFaultOrStopped<T>(Exception ex, string site, MeshQueryRequest request, string basePath)
+    private IObservable<T> PipelineFaultOrStopped<T>(
+        Exception ex, string site, MeshQueryRequest request, string basePath, ReadCompleteness? completeness)
     {
         if (IsTeardownCancellation(ex))
             logger?.LogDebug(
                 "[StorageAdapterMeshQueryProvider.{Site}] stopped — the adapter's I/O pool was drained (mesh teardown) query=[{Query}] basePath={BasePath}",
                 site, string.Join(" | ", request.EffectiveQueries), basePath);
         else
+        {
+            completeness?.RecordDroppedRead();
             logger?.LogWarning(ex,
                 "[StorageAdapterMeshQueryProvider.{Site}] pipeline threw query=[{Query}] basePath={BasePath}",
                 site, string.Join(" | ", request.EffectiveQueries), basePath);
+        }
         return Observable.Empty<T>();
     }
 
-    private IObservable<string> WalkLevel(string? parent, bool recursive)
+    private IObservable<string> WalkLevel(string? parent, bool recursive, ReadCompleteness? completeness)
         => Observable.Defer(() =>
             {
                 try
@@ -850,6 +894,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 }
                 catch (Exception ex)
                 {
+                    completeness?.RecordDroppedRead();
                     logger?.LogWarning(ex,
                         "[StorageAdapterMeshQueryProvider.WalkLevel] ListChildPaths threw parent={Parent}", parent);
                     return Observable.Empty<(IEnumerable<string>, IEnumerable<string>)>();
@@ -867,9 +912,9 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 if (!recursive)
                     return nodePaths;
                 var nodesAndDeeper = nodePaths.SelectMany(p =>
-                    Observable.Return(p).Concat(WalkLevel(p, recursive: true)));
+                    Observable.Return(p).Concat(WalkLevel(p, recursive: true, completeness)));
                 var dirs = (level.Item2 ?? Enumerable.Empty<string>()).ToInlineObservable()
-                    .SelectMany(d => WalkLevel(d, recursive: true));
+                    .SelectMany(d => WalkLevel(d, recursive: true, completeness));
                 return nodesAndDeeper.Concat(dirs);
             })
             .Catch<string, Exception>(ex =>
@@ -878,6 +923,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 // stops at this level instead of continuing over dead siblings (see IsTeardownCancellation).
                 if (IsTeardownCancellation(ex))
                     return Observable.Throw<string>(ex);
+                completeness?.RecordDroppedRead();
                 logger?.LogWarning(ex, "[StorageAdapterMeshQueryProvider.WalkLevel] parent={Parent} failed", parent);
                 return Observable.Empty<string>();
             });
@@ -1343,9 +1389,15 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // no _ioPool.Run / await-foreach bridge that re-entered the single-threaded
             // hub pump and deadlocked under bulk fan-out. useSecurityFilter selects the
             // RLS-filtered (IMeshQueryProvider) vs raw (IMeshQueryCore) read.
+            // 🚨 ONE sink per subscription (MeshWeaver#1186): every read behind every RunQuery() on
+            // this stream records a dropped read here, and the Initial below carries the verdict.
+            // Per-subscription, never a field — see ReadCompleteness for why a field would mark
+            // every other concurrent caller's snapshot incomplete and never clear.
+            var completeness = new ReadCompleteness();
             IObservable<List<(string? Path, T Item)>> RunQuery() =>
                 RunQueryNodes(request, options, useSecurityFilter,
-                        projectSelect: typeof(T) != typeof(MeshNode))
+                        projectSelect: typeof(T) != typeof(MeshNode),
+                        completeness: completeness)
                     .Select(nodes =>
                     {
                         var results = new List<(string?, T)>();
@@ -1514,6 +1566,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             Query = parsedQuery,
                             Version = Interlocked.Increment(ref _version),
                             Timestamp = DateTimeOffset.UtcNow,
+                            // 🚨 The snapshot says whether it is COMPLETE (MeshWeaver#1186). A store
+                            // fault caught in the walk or the exact-path probe drops rows and still
+                            // arrives here; without this the frame claimed a full answer, the merge
+                            // recorded no silent provider, and PathResolutionService's floor refusal
+                            // could not fire — so a failed read reached MessageHubGrain as "the node
+                            // does not exist" and a per-node hub was refused over a working node.
+                            SnapshotIncomplete = completeness.AnyReadDropped,
                         });
 
                         // Push backlog through the same Concat-serialized

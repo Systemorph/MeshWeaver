@@ -107,13 +107,17 @@ this:
   Reduced by a factor of up to 7 on the timeout path, but still reachable under genuine load, and
   still inflated by the unbounded wait for a ThreadPool thread that a slot is held across *before*
   the leg's own timeouts start.
-- **`deepest per-destination queue 62` on one `cache/…` destination** — head-of-line blocking in
-  `OrderedRouteDispatcher`'s per-destination FIFO. The FIFO's key is the **destination address**
-  while the ordering invariant it protects (`SynchronizationStream`'s receive-side monotonicity
-  guard) is **per stream**, so all traffic to one process's cache hub is serialised whether or not
-  any ordering relationship exists between two frames. That over-broadness is what lets one slow
-  destination stack ~62 legs. Measured on memex-cloud 2026-09-19 in two independent episodes
-  (`fcf31578#14`, `67341d12#7`). Not addressed here.
+- **`deepest per-destination queue 62` on one `cache/…` destination** — the FIFO's key was the
+  **destination address** while the ordering invariant it protects (`SynchronizationStream`'s
+  receive-side monotonicity guard) is **per stream**, so all traffic to one process's cache hub was
+  serialised whether or not any ordering relationship existed between two frames. That
+  over-broadness is what let one destination stack ~62 legs. Measured on memex-cloud 2026-09-19 in
+  two independent episodes (`fcf31578#14`, `67341d12#7`) and again 2026-09-20 on both pods. Not
+  addressed here — addressed in
+  [Ordered Route Channels](../OrderedRouteChannels), which narrows the channel key to
+  (destination, stream) and re-words this field of the report accordingly. Note that this page's own
+  fix lowered the *arrival rate* of that lane, which moves the threshold a single-lane channel
+  saturates at but cannot remove it.
 
 The earlier root already fixed on this path was O(node-size) JSON patch construction on hub action
 blocks (#1341), and the earlier slot LEAK was `IoPool.SubscribeThroughPool` terminating an observer

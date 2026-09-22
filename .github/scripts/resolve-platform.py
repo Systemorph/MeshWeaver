@@ -1848,9 +1848,26 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 source += f" — {len(skipped)} newer run(s) passed over, see the log"
             lag = ""
             if newer_than_main and newer_than_main != set_name:
+                # 🚨 THE SECOND SENTENCE IS THE POINT (#4348). The ceiling is correct and stays —
+                # a pull request resolving a set `main` has never validated is the hole #1826/#4265
+                # record. But when `main` is behind BECAUSE the set moved, the lane holds the pull
+                # request on the set from BEFORE the break, so it can go green having proven nothing
+                # about the regression the pull request exists to fix — and worse, a fix that names
+                # any symbol the newer set introduced cannot compile here at all. Measured on
+                # Plugins#1873: CS0103 / CS0117 / CS1061 against the older set, for the very API the
+                # change was about. Nothing in the run said so, so the author had to infer it from a
+                # skip line. The lane stays honest and the author is TOLD what this run cannot
+                # measure; making the ceiling escapable instead is a skip-trapdoor wearing a
+                # justification, and is deliberately NOT what this does.
                 lag = (f"this run resolved {set_name}, not the newer sealed {newer_than_main}: "
                        "pull requests follow `main`, and main has not passed on it yet. A core "
-                       "change lands here once main's own run goes green on the set carrying it.")
+                       "change lands here once main's own run goes green on the set carrying it. "
+                       f"🚨 SO THIS RUN CANNOT PROVE ANYTHING ABOUT {newer_than_main}: if this "
+                       f"change is a fix for something that broke on arrival in {newer_than_main}, "
+                       f"a green here does NOT exercise it — the suites ran against {set_name}, "
+                       "from before the break — and a fix that names any symbol that set introduced "
+                       f"cannot compile here at all. Verify it against {newer_than_main} outside "
+                       "this lane and say so in the pull request body.")
                 log(f"  {lag}")
             chosen = Chosen(sha, number, str(run.get("html_url", "")), set_name, digests,
                             v.plugins, source, lag=lag)
@@ -2422,11 +2439,16 @@ def self_test() -> int:
                         log=logs.append),
          lambda c: c.set_name == "3.0.0-ci.8207" and c.lag == ""
          and "`main` has passed" not in c.source)
-    case("…the SAME fixture WITH a ceiling: the unvouched set is passed over, lag names both", True,
+    # 🚨 `CANNOT PROVE` is asserted, not incidental (#4348). Naming both sets says the lane is
+    # BEHIND; it does not say the run may be unable to exercise the very regression the pull request
+    # is for, which is the half an author acts on. A lag notice that loses that sentence is back to
+    # making the deadlock inferable from a skip line, so the case fails without it.
+    case("…the SAME fixture WITH a ceiling: the unvouched set is passed over, lag names both "
+         "AND says this run cannot prove anything about the newer one", True,
          lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
                         log=logs.append, passed_ceiling=8203),
          lambda c: c.set_name == "3.0.0-ci.8203" and "8207" in c.lag and "8203" in c.lag
-         and "follow" in c.lag and "`main` has passed" in c.source)
+         and "follow" in c.lag and "CANNOT PROVE" in c.lag and "`main` has passed" in c.source)
     case("a ceiling AT the newest sealed set takes it, with no lag", True,
          lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
                         log=logs.append, passed_ceiling=8207),

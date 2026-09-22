@@ -89,9 +89,11 @@ internal class RoutingGrain(
         ?? MessageSizeGuard.DefaultGrainTransportBodyBytes;
 
     /// <summary>
-    /// Per-destination FIFO for the stream-routed branch. Instance field — its lifetime is this
-    /// activation's, and it holds an entry only while a destination has work in flight.
-    /// See <see cref="OrderedRouteDispatcher"/> for why the order is a correctness requirement.
+    /// Per-CHANNEL FIFO for the stream-routed branch, a channel being (destination, payload
+    /// identity). Instance field — its lifetime is this activation's, and it holds an entry only
+    /// while a channel has work in flight.
+    /// See <see cref="OrderedRouteDispatcher"/> for why the order is a correctness requirement, and
+    /// why the channel is not the destination alone (issue #5009).
     /// </summary>
     private readonly OrderedRouteDispatcher orderedDispatcher = new(
         meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Routing)
@@ -262,12 +264,23 @@ internal class RoutingGrain(
         if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
         {
             ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+            // 🚨 THE ORDERED CHANNEL IS (destination, payload identity) — issue #5009. A
+            // stream-routed address is a MULTIPLEXER: the node-stream cache hub fronts one
+            // sync/{streamId} sub-hub per observed node, so keying the FIFO on the address alone
+            // serialised a whole process's data-sync traffic into ONE lane with ONE in-flight grain
+            // call, and 62 of 64 in-flight legs stacked behind one cache/… address in prod. The
+            // ordering invariant the FIFO protects is per MIRROR, i.e. per stream, and
+            // DeliveryIdentity reads exactly that off the ENVELOPE — one dictionary lookup of a
+            // string that MessageDelivery.Package already stamped, no payload cast, nothing parsed.
+            // Null (no identity) keeps the destination-wide channel, i.e. today's behaviour.
+            var orderingKey = DeliveryIdentity.Read(delivery);
             // Claimed at ENQUEUE like the in-flight slot — a leg queued behind another leg is work
             // this silo has accepted and must let land before it stops (#2638). Labelled so the
             // shutdown residual can NAME it if it never lands (#2833).
             var slot = quiescence?.Track($"stream-routed → {addressPath} (delivery {delivery.Id})");
             orderedDispatcher.Enqueue(
                 addressPath,
+                orderingKey,
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
                 () =>
                 {
@@ -341,11 +354,22 @@ internal class RoutingGrain(
     /// stuck.</para>
     ///
     /// <para><b>So report the discriminators, never a cause.</b> <c>Deepest</c> counts legs QUEUED
-    /// BEHIND the one executing leg of a destination, so <c>Deepest &gt;= 1</c> already means a leg
-    /// is waiting on a leg — head-of-line blocking on one stream destination. <c>Deepest = 0</c>
-    /// with many destinations, or a backlog that clears in milliseconds, is load.
+    /// BEHIND the one executing leg of an ordered CHANNEL, so <c>Deepest &gt;= 1</c> already means a
+    /// leg is waiting on a leg — head-of-line blocking within one channel. <c>Deepest = 0</c>
+    /// with many channels, or a backlog that clears in milliseconds, is load.
     /// <see cref="ReportDrained"/> prints how long the episode lasted, which separates a throughput
     /// burst from a real stall without anyone having to profile a pod.</para>
+    ///
+    /// <para>🚨 <b>A channel is (destination, stream), not a destination — issue #5009, and it
+    /// changes what a non-zero <c>Deepest</c> MEANS.</b> Until that issue the channel was the
+    /// destination address, so a deep queue could be — and on memex-cloud was — 62 unrelated
+    /// streams waiting behind each other at one multiplexer hub, which is not head-of-line blocking
+    /// on anything, merely a channel key too coarse to let them overlap. Now a non-zero
+    /// <c>Deepest</c> means frames of the SAME stream are stacking up, which really is one
+    /// destination not keeping up with one producer. Both counts are printed because their RATIO is
+    /// the remaining discriminator: many channels over FEW destinations is a busy multiplexer
+    /// draining in parallel (load); few channels with a deep queue is a stream that is not
+    /// draining.</para>
     /// </summary>
     private void ReportSaturation(int inFlight, string addressPath)
     {
@@ -354,24 +378,64 @@ internal class RoutingGrain(
         var startedUtc = DateTime.UtcNow;
         Volatile.Write(ref saturationSinceTicks, startedUtc.Ticks);
         var episode = Interlocked.Increment(ref saturationEpisode);
-        var (destinations, deepest) = orderedDispatcher.QueueSnapshot();
+        var (channels, destinations, deepest) = orderedDispatcher.QueueSnapshot();
         logger.LogCritical(
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
             + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
-            + "stream destinations queued {Destinations}, deepest per-destination queue {Deepest}, routing pool subscribing {PoolInFlight}. "
+            + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
+            + "deepest per-channel queue {Deepest}, routing pool subscribing {PoolInFlight}, "
+            + "waiting for a pool slot {PoolWaiting}; oldest leg in flight {OldestLeg}. "
             + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
             + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
             + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
-            + "A deepest queue of 1 or more means legs are blocked behind a leg (head-of-line on one destination); "
-            + "0 means nothing is waiting on anything, so read it as load. "
+            + "A CHANNEL is (destination, stream), so a deepest queue of 1 or more means legs of the SAME stream are "
+            + "blocked behind one another (head-of-line within one channel); 0 means nothing is waiting on anything, "
+            + "so read it as load. Many channels over FEW destinations is a multiplexer hub draining in parallel, "
+            + "which is load too — before issue #5009 those legs shared one channel and read as head-of-line. "
+            + "🚨 THE TWO POOL GAUGES ANSWER DIFFERENT QUESTIONS AND ONLY ONE SEES THE WAIT NAMED ABOVE — issue #5018. "
+            + "'subscribing' counts legs inside their SUBSCRIBE PROLOGUE only, so a leg still waiting for a ThreadPool "
+            + "thread and a leg already past its subscribe BOTH read 0 there; 'waiting for a pool slot' is the gauge "
+            + "that sees the pre-subscribe wait. High while subscribing is below the pool's cap is a THREAD shortage; "
+            + "both near zero means the legs are past their subscribe and the wait is downstream I/O. "
+            + "🚨 READ THE OLDEST LEG FIRST: it is the only load-vs-leak discriminator available from a SINGLE line — "
+            + "every leg young is load the silo is absorbing, one leg minutes old is a slot that never came back and "
+            + "the label names it — whereas the episode stamp below needs a SECOND line to say anything. "
             + "🚨 Deepest is sampled AT THE CROSSING, so like the in-flight count it is partly an artefact of the "
-            + "threshold: with N destinations sharing the backlog it is ~InFlight/N whatever is wrong. "
+            + "threshold: with N channels sharing the backlog it is ~InFlight/N whatever is wrong. "
             + "READ THE EPISODE STAMP, not the depth: a later line with a HIGHER episode on this activation means "
             + "this episode drained; a line with a DIFFERENT activation id means the grain was recycled; and if "
             + "neither a clear nor a higher episode ever follows, the in-flight count never fell below half the "
             + "threshold — which means a leg never terminated and its slot leaked, not that the silo was busy.",
             activationId, episode, startedUtc, inFlight, SaturationThreshold,
-            destinations, deepest, routingPool.CurrentInFlight, addressPath);
+            channels, destinations, deepest, routingPool.CurrentInFlight, routingPool.CurrentlyWaiting,
+            DescribeOldestLeg(), addressPath);
+    }
+
+    /// <summary>
+    /// The oldest in-flight routing leg, as ONE phrase the report prints — its age and the label that
+    /// identifies it, or a sentence saying why there is none.
+    ///
+    /// <para>🚨 <b>Why a composed phrase and not a number plus a string.</b> The two "no reading"
+    /// cases are not zero and must never render as a number: a sentinel age of <c>-1</c> or <c>0</c> is
+    /// exactly the shape that gets read as "the oldest leg is brand new", which is the *opposite* of
+    /// what it would mean. "nothing in flight" and "not tracked on this host" (the quiescence gauge is
+    /// resolved with <c>GetService</c>, so a host that registered none has none) are therefore printed
+    /// as words. Everything else on this line is a number precisely because a number is a fair summary
+    /// of it; this one is not.</para>
+    ///
+    /// <para>Called once per saturation EPISODE, from the latched branch of
+    /// <see cref="ReportSaturation"/> — never per route. The scan behind it is O(in-flight legs), the
+    /// same cost argument <c>OrderedRouteDispatcher.QueueSnapshot</c> already makes on this turn, and
+    /// the count it walks is ~the reporting threshold at the moment the report fires.</para>
+    /// </summary>
+    private string DescribeOldestLeg()
+    {
+        if (quiescence is null)
+            return "not tracked on this host";
+        var oldest = quiescence.OldestInFlight();
+        return oldest is null
+            ? "none in flight"
+            : $"{(long)oldest.Value.Age.TotalMilliseconds} ms — {oldest.Value.Label}";
     }
 
     private void ReportDrained(int inFlight)
@@ -534,24 +598,12 @@ internal class RoutingGrain(
             return BuildStreamRoute(delivery, address, addressPath, streamProvider, grainFactory);
         }
 
-        IObservable<Unit> TerminalCallFailure(Exception ex)
-        {
-            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
-            // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally. See
-            // ClassifyDeliveryException: a silo leaving mid-roll and a directory mid-handoff are
-            // TRANSIENT, and telling the sender otherwise tears down mirrors that would have resumed.
-            var errorType = ClassifyDeliveryException(ex, IsServiceScopeDisposed);
-            // 🚨 A container that is already gone is not an incident to page on — it is this process
-            // exiting, and the delivery it could not carry is being retried against a live pod by a
-            // sender that now (correctly) reads ShuttingDown. Error there filed #2638 for a pod that
-            // was merely finishing; the failure is still reported, at the level it deserves.
-            var level = errorType == ErrorType.ShuttingDown ? LogLevel.Information : LogLevel.Error;
-            logger.Log(level, ex,
-                "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
-                addressPath, errorType, delivery.Sender);
-            PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
-            return Observable.Return(Unit.Default);
-        }
+        // A one-line delegation ON PURPOSE — the whole decision lives in the tested function, so
+        // the classifier this leg uses and the level it logs at cannot be changed without a fact
+        // going red. See AnswerPodHubCallFailure.
+        IObservable<Unit> TerminalCallFailure(Exception ex) =>
+            AnswerPodHubCallFailure(
+                ex, addressPath, delivery, PostFailureToSender, IsServiceScopeDisposed, logger);
     }
 
     /// <summary>
@@ -1882,6 +1934,111 @@ internal class RoutingGrain(
         || IsScopeTeardown(ex, scopeDisposed)
             ? ErrorType.ShuttingDown
             : ErrorType.Failed;
+
+    /// <summary>
+    /// The same classification for the POD-HUB leg, where the one ambiguity
+    /// <see cref="IsDeactivatedActivation"/> guards against <b>cannot arise</b> — issue #2299.
+    ///
+    /// <para><b>The defect this closes.</b> <see cref="ClassifyDeliveryException"/> defaults
+    /// <c>activationErrorRecorded</c> to <c>true</c> — "assume the worse case" — so a caller that
+    /// cannot consult <see cref="GrainActivationFailureRegistry"/> leaves the verdict TERMINAL.
+    /// <see cref="BuildPodHubRoute"/> is such a caller, and it passed the default: the
+    /// deactivated-activation arm was therefore unreachable on this leg, and the very shape it was
+    /// written for — Orleans' <c>… after "DeactivateOnIdle was called." to invalid activation.
+    /// Rejecting now.</c> — kept being reported as <see cref="ErrorType.Failed"/>. That is the
+    /// verdict production printed verbatim on this leg, and #2299's own evidence is almost entirely
+    /// this shape (947 occurrences, all of the newest samples). So the predicate existed, was
+    /// correct, and was inert exactly where the fault lives.</para>
+    ///
+    /// <para><b>Why <c>false</c> is a FACT here, not an assumption.</b> The registry is documented
+    /// as holding the last activation failure "for each per-node-hub grain" and is written only by
+    /// <c>MessageHubGrain</c>. The ambiguity it resolves is a per-node hub in a PERSISTENT
+    /// activation-fault loop — a NodeType whose compile cannot materialise a hub configuration, so
+    /// the activation faults instantly and every delivery lands in a deactivation window. A
+    /// <see cref="PodHubGrain"/> has no NodeType, no configuration to materialise and no such loop:
+    /// its <c>OnActivateAsync</c> deliberately never throws (the refusal is the CALL's answer,
+    /// <see cref="PodHubNotHereException"/>), so it never records an activation error and never
+    /// could. An "invalid activation" rejection from this grain is therefore always the idle
+    /// deactivation it requested of itself, which is a lifecycle transition by construction — the
+    /// bar <see cref="ClassifyDeliveryException"/> sets.</para>
+    ///
+    /// <para><b>What the corrected verdict buys.</b> The consumers that carry their own recovery
+    /// machinery (<c>SynchronizationStream</c>'s resubscribe latch, <c>MeshNodeStreamCache</c>'s
+    /// transient-owner rule) RIDE OUT <see cref="ErrorType.ShuttingDown"/> and TEAR DOWN on
+    /// <see cref="ErrorType.Failed"/>. The newest #2299 sample's sender is an agent thread, so the
+    /// terminal verdict ended one agent round that the address's next claim would have served.</para>
+    ///
+    /// <para>🚨 <b>Nothing else is widened.</b> Every other arm is evaluated unchanged, and a
+    /// rejection that is not one of the recognised shapes stays terminal — so a genuine defect on
+    /// this leg is still reported as one. The delivery-driven re-activation bounce recorded on
+    /// #2299 is prevented at its source in <see cref="PodHubGrain.Deliver"/>; this classifier still
+    /// covers a real owner handoff or a silo departure while a delivery is in flight.</para>
+    /// </summary>
+    /// <param name="ex">The exception the pod-hub delivery attempt faulted with.</param>
+    /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
+    /// <see cref="IsScopeTeardown"/>.</param>
+    /// <returns>The <see cref="ErrorType"/> the sender's NACK should carry.</returns>
+    internal static ErrorType ClassifyPodHubDeliveryException(
+        Exception ex, Func<bool>? scopeDisposed = null) =>
+        ClassifyDeliveryException(ex, scopeDisposed, activationErrorRecorded: false);
+
+    /// <summary>
+    /// <see cref="BuildPodHubRoute"/>'s terminal arm, as ONE tested function: the delivery call
+    /// failed for real (transient retries exhausted, or a non-transient fault), so classify it,
+    /// log it at the level the verdict deserves, and NACK the sender.
+    ///
+    /// <para>🚨 <b>Why it is a function rather than three lines at the call site.</b> The defect
+    /// this arm was fixed for — see <see cref="ClassifyPodHubDeliveryException"/> — was an ARGUMENT
+    /// THAT WAS NOT WRITTEN at a call site, and a fix pinned only by facts about the classifiers
+    /// would have reproduced the same shape one level out: reverting the one line that chooses the
+    /// classifier would have left every fact green (review on #5174). Both decisions now live here,
+    /// where a test drives the same code production does — capturing the
+    /// <paramref name="postFailureToSender"/> verdict and the level handed to
+    /// <paramref name="logger"/> — so neither can be changed back silently.</para>
+    ///
+    /// <para>The two decisions, and what each is for:</para>
+    /// <list type="number">
+    ///   <item><b>The POD-HUB classifier, not the general one.</b> The general one's
+    ///     deactivated-activation arm defaults to the terminal answer for a caller that cannot
+    ///     consult the activation-failure registry, which made it inert on this leg — the leg the
+    ///     rejection names and where the evidence lives. A silo leaving mid-roll and a directory
+    ///     mid-handoff are TRANSIENT, and telling the sender otherwise tears down mirrors that
+    ///     would have resumed.</item>
+    ///   <item><b>The level follows the verdict.</b> A container that is already gone is not an
+    ///     incident to page on — it is this process exiting, and the delivery it could not carry is
+    ///     being retried against a live pod by a sender that now correctly reads
+    ///     <see cref="ErrorType.ShuttingDown"/>. <c>Error</c> there filed #2638 for a pod that was
+    ///     merely finishing. The failure is still reported, at the level it deserves.</item>
+    /// </list>
+    ///
+    /// <para>Returns a completed leg, so the route observable finishes having answered the sender —
+    /// it never faults past its own NACK.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <param name="addressPath">The pod-hub address the delivery was directed to.</param>
+    /// <param name="delivery">The delivery being answered — read for its id and its sender.</param>
+    /// <param name="postFailureToSender">Posts the NACK: the message and the classified verdict.</param>
+    /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
+    /// <see cref="IsScopeTeardown"/>.</param>
+    /// <param name="logger">Logger for the one report this arm makes.</param>
+    /// <returns>A completed leg emitting a single <see cref="Unit"/>.</returns>
+    internal static IObservable<Unit> AnswerPodHubCallFailure(
+        Exception ex,
+        string addressPath,
+        IMessageDelivery delivery,
+        Action<string, ErrorType> postFailureToSender,
+        Func<bool>? scopeDisposed,
+        ILogger logger)
+    {
+        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
+        var errorType = ClassifyPodHubDeliveryException(ex, scopeDisposed);
+        var level = errorType == ErrorType.ShuttingDown ? LogLevel.Information : LogLevel.Error;
+        logger.Log(level, ex,
+            "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
+            addressPath, errorType, delivery.Sender);
+        postFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
+        return Observable.Return(Unit.Default);
+    }
 
     /// <summary>
     /// 🚨 <b>The TARGET GRAIN deactivated while the message was in flight — issue #2299.</b> Orleans

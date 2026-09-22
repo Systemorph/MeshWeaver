@@ -92,13 +92,7 @@ public class NoConflictMarkersGuard
         var symlinks = new List<string>();
         foreach (var relative in tracked)
         {
-            if (BinaryExtensions.Contains(Path.GetExtension(relative)))
-                continue;
-
             var full = Path.Combine(root, relative);
-            if (!File.Exists(full))
-                continue;   // a delete staged but not yet written to disk
-
             // 🚨 A SYMLINK IS NOT THIS GUARD'S BUSINESS, AND A DANGLING ONE USED TO KILL IT.
             // `File.Exists` answers TRUE for a tracked symlink entry while `File.OpenRead` throws
             // `FileNotFoundException` on the missing target, so the scan died on the first one and
@@ -109,14 +103,21 @@ public class NoConflictMarkersGuard
             //
             // A symlink's CONTENT is its target path; it cannot carry a conflict marker, so
             // skipping it loses no coverage. What it must not do is fail silently — a link is
-            // still something nobody meant to commit, which is why the sibling assertion below
-            // reports them rather than this loop swallowing them.
+            // rejected except for the exact repository-relative shared-skills alias. Inspect it
+            // BEFORE File.Exists or extension checks: directory and dangling links must not
+            // silently disappear from the scan. The alias's target files are themselves tracked
+            // and scanned; SkillFrontMatterGuard also requires the alias to exist and resolve.
             var info = new FileInfo(full);
             if (info.LinkTarget is not null)
             {
-                symlinks.Add($"{relative} → {info.LinkTarget}");
+                if (relative != SkillFrontMatterGuard.CodexSkillsPath
+                    || info.LinkTarget != SkillFrontMatterGuard.CodexSkillsTarget)
+                    symlinks.Add($"{relative} → {info.LinkTarget}");
                 continue;
             }
+
+            if (!File.Exists(full) || BinaryExtensions.Contains(Path.GetExtension(relative)))
+                continue;
 
             // Extension lists are guesses; a NUL byte is evidence. Catches an unlisted binary
             // without the blocklist having to know its name.
@@ -133,10 +134,10 @@ public class NoConflictMarkersGuard
 
         // Reported SEPARATELY from the markers, and after them, because they are a different
         // defect with a different fix. An ABSOLUTE link is never legitimate here — it names one
-        // machine's filesystem — and this repository tracks none at all, so the bar is simply zero.
+        // machine's filesystem. Only the shared-skills alias has a repository-owned target.
         Assert.True(
             symlinks.Count == 0,
-            "Tracked symlink(s), which this repository does not use:\n  "
+            "Unexpected tracked symlink(s); only the shared-skills alias is supported:\n  "
             + string.Join("\n  ", symlinks)
             + "\n\nThese are almost always local dev-convenience links caught by a `git add -A` — "
             + "an absolute one names the committer's own checkout and resolves nowhere else, so "

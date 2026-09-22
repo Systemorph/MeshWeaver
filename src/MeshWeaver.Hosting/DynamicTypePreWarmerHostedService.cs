@@ -509,25 +509,14 @@ public sealed class DynamicTypePreWarmerHostedService(
                             if (slowest.Count > SlowestReported)
                                 slowest.RemoveAt(slowest.Count - 1);
                         }
-                    switch (outcome.Status)
+                    switch (CounterFor(outcome.Status))
                     {
-                        case PreWarmStatus.Compiled: Interlocked.Increment(ref compiled); break;
-                        case PreWarmStatus.AlreadyBaked: Interlocked.Increment(ref alreadyBaked); break;
-                        case PreWarmStatus.CompileError: Interlocked.Increment(ref errored); break;
-                        case PreWarmStatus.TimedOut: Interlocked.Increment(ref timedOut); break;
-                        // A type skipped because its upstream failed — or because its upstream was
-                        // never evaluated — is not a FAULT; it is a deliberate, reported outcome.
-                        // Counting it as one made the summary read like the warmer had crashed N
-                        // times when one dependency was broken. (Which of the two it was is not
-                        // lost: the gate files UpstreamUnevaluated under "not evaluated" and names
-                        // it in the health payload, while UpstreamFailed gates.)
-                        case PreWarmStatus.UpstreamFailed:
-                        case PreWarmStatus.UpstreamUnevaluated: Interlocked.Increment(ref skipped); break;
-                        // Broken by deleted CONTENT, not by this image — the gate files these
-                        // under ContentBroken (never gating); the count keeps them visible here.
-                        case PreWarmStatus.NoSources:
-                        case PreWarmStatus.DeclaredSourcesMissing:
-                        case PreWarmStatus.UpstreamContentBroken: Interlocked.Increment(ref contentBroken); break;
+                        case PreWarmCounters.Compiled: Interlocked.Increment(ref compiled); break;
+                        case PreWarmCounters.AlreadyBaked: Interlocked.Increment(ref alreadyBaked); break;
+                        case PreWarmCounters.Errored: Interlocked.Increment(ref errored); break;
+                        case PreWarmCounters.TimedOut: Interlocked.Increment(ref timedOut); break;
+                        case PreWarmCounters.Skipped: Interlocked.Increment(ref skipped); break;
+                        case PreWarmCounters.ContentBroken: Interlocked.Increment(ref contentBroken); break;
                         default: Interlocked.Increment(ref faulted); break;
                     }
                 },
@@ -754,6 +743,79 @@ public sealed class DynamicTypePreWarmerHostedService(
         _liveCensus = null;
         _recoveryWatches.Dispose();
     }
+
+    /// <summary>
+    /// Which summary counter one <see cref="PreWarmStatus"/> belongs to. Pure, and extracted for
+    /// ONE reason: an inline <c>switch</c> whose <c>default</c> arm means "a fault" silently
+    /// mis-files any member nobody remembered to name, and two of the twelve were mis-filed that
+    /// way — <see cref="PreWarmStatus.Retired"/> and <see cref="PreWarmStatus.Removed"/>, both
+    /// content verdicts the gate already treats as non-gating, both counted here as crashes
+    /// (caught by review on <see href="https://github.com/Systemorph/MeshWeaver/pull/5163">#5163</see>).
+    ///
+    /// <para>🚨 The gate and this summary must AGREE: an operator reads the summary and a health
+    /// payload reads the gate, so two numbers for one fact is how "the warmer faulted N times" gets
+    /// investigated instead of the partition that was actually torn down.</para>
+    ///
+    /// <para>Being a pure function, the exhaustiveness is now ASSERTED — every status but
+    /// <see cref="PreWarmStatus.Faulted"/> must map to something other than
+    /// <see cref="PreWarmCounters.Faulted"/>, so a future member added without a case here fails a
+    /// test instead of quietly inflating the fault count.</para>
+    /// </summary>
+    /// <param name="status">The outcome's status.</param>
+    internal static string CounterFor(PreWarmStatus status) => status switch
+    {
+        PreWarmStatus.Compiled => PreWarmCounters.Compiled,
+        PreWarmStatus.AlreadyBaked => PreWarmCounters.AlreadyBaked,
+        PreWarmStatus.CompileError => PreWarmCounters.Errored,
+        PreWarmStatus.TimedOut => PreWarmCounters.TimedOut,
+        // A type skipped because its upstream failed — or because its upstream was never evaluated
+        // — is not a FAULT; it is a deliberate, reported outcome. Counting it as one made the
+        // summary read like the warmer had crashed N times when one dependency was broken. (Which
+        // of the two it was is not lost: the gate files UpstreamUnevaluated under "not evaluated"
+        // and names it in the health payload, while UpstreamFailed gates.)
+        PreWarmStatus.UpstreamFailed => PreWarmCounters.Skipped,
+        PreWarmStatus.UpstreamUnevaluated => PreWarmCounters.Skipped,
+        // Broken by CONTENT, not by this image — the gate files all of these as non-gating; the
+        // count keeps them visible here. Retired: the repository withdrew the type's sources.
+        // Removed: the definition node, or the partition it lived in, is gone.
+        PreWarmStatus.NoSources => PreWarmCounters.ContentBroken,
+        PreWarmStatus.DeclaredSourcesMissing => PreWarmCounters.ContentBroken,
+        PreWarmStatus.Retired => PreWarmCounters.ContentBroken,
+        PreWarmStatus.Removed => PreWarmCounters.ContentBroken,
+        PreWarmStatus.UpstreamContentBroken => PreWarmCounters.ContentBroken,
+        // Faulted — and any member added without a case above, which the exhaustiveness test
+        // refuses rather than leaving to be discovered in an operator summary.
+        _ => PreWarmCounters.Faulted,
+    };
+}
+
+/// <summary>
+/// The sweep summary's counter names — <c>const string</c> rather than an enum, per policy
+/// <c>open-vocabulary-string-constants</c>: named exactly as the enum members would have been, so
+/// every call site reads identically.
+/// </summary>
+internal static class PreWarmCounters
+{
+    /// <summary>Reached a usable compiled build on this sweep.</summary>
+    public const string Compiled = nameof(Compiled);
+
+    /// <summary>Not attempted — the assembly store already held this build.</summary>
+    public const string AlreadyBaked = nameof(AlreadyBaked);
+
+    /// <summary>An image verdict: the compile settled at Error.</summary>
+    public const string Errored = nameof(Errored);
+
+    /// <summary>No verdict — the per-type budget elapsed before the compile settled.</summary>
+    public const string TimedOut = nameof(TimedOut);
+
+    /// <summary>Not attempted because an upstream type failed or was never evaluated.</summary>
+    public const string Skipped = nameof(Skipped);
+
+    /// <summary>A CONTENT verdict no image caused and no rollout can fix.</summary>
+    public const string ContentBroken = nameof(ContentBroken);
+
+    /// <summary>The sweep genuinely faulted on this type.</summary>
+    public const string Faulted = nameof(Faulted);
 }
 
 /// <summary>Opt-in registration for the dynamic-NodeType startup pre-warm (portal hosts).</summary>

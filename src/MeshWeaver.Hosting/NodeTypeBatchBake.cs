@@ -1140,13 +1140,27 @@ internal static class NodeTypeBatchBake
         var releaseObservable = ok
             ? NodeTypeBuildState.TryCreateReleaseNode(
                 mesh, typePath, result!, typeNode, activityPath: null, logger)
-            : Observable.Return<string?>(null);
+            : Observable.Return(NodeTypeBuildState.ReleaseCreateOutcome.NotAttempted);
 
         return releaseObservable
             .Take(1)
-            .DefaultIfEmpty()
-            .SelectMany(releasePath => WriteStamp(
-                mesh, typeNode, ok, result, error, releasePath, startedAt, logger))
+            .DefaultIfEmpty(NodeTypeBuildState.ReleaseCreateOutcome.Failed(
+                "the release create completed without emitting"))
+            .Do(outcome =>
+            {
+                // 🚨 This path runs NO post-condition check (#5057), so the stamp below silently
+                // keeps the PREVIOUS release path and nothing else ever mentions it. The bake is
+                // unwatched by design — which is exactly why the reason has to be in its log rather
+                // than inferred from a release that did not appear.
+                if (outcome is { Attempted: true, Succeeded: false })
+                    logger?.LogWarning(
+                        "[BatchBake] {NodeTypePath}: no release was cut for this build{Because}. The "
+                        + "stamp below keeps the previous release path, so the type will advertise a "
+                        + "build no release names.",
+                        typePath, outcome.Because);
+            })
+            .SelectMany(outcome => WriteStamp(
+                mesh, typeNode, ok, result, error, outcome.ReleasePath, startedAt, logger))
             .Select(_ =>
             {
                 if (ok)

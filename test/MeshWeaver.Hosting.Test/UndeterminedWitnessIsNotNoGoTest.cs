@@ -200,17 +200,28 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     private IAssemblyStore Store => Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
 
     /// <summary>
-    /// The verbatim production refusal: a <see cref="BuildCoordinationUnreachableException"/> whose
-    /// inner is the hub's own request-budget <see cref="TimeoutException"/> naming
-    /// <c>Admin/Build</c> — what <c>RetryUnreachableCoordination</c> throws after its attempts are
-    /// exhausted, copied from the incident's log lines.
+    /// The verbatim production transport fault: a
+    /// <see cref="BuildCoordinationUnreachableException"/> whose inner is the hub's own
+    /// request-budget <see cref="TimeoutException"/> naming <c>Admin/Build</c> — what
+    /// <c>RetryUnreachableCoordination</c> throws after its attempts are exhausted, kept in step
+    /// with it word for word so a reader of this test sees what the incident saw.
+    ///
+    /// <para>🚨 It is the FAULT, not a refusal, and the wording says so (#3404). The verdict is
+    /// decided by the door that catches this, on its own line; the invariant that this message
+    /// states no verdict is pinned on the PRODUCTION message — not on this fixture — by
+    /// <c>PreWarmerReadsTheDurableGoTest.TheTransportFaultStatesNoVerdict_WhenTheDurableGoGrants</c>.
+    /// </para>
     /// </summary>
     private static BuildCoordinationUnreachableException TheSubscriptionDoorIsShut() =>
         new(
             "BuildProtocol: could not reach the build coordination node 'Admin/Build' in 3 "
-            + "attempt(s) — the pre-warm sweep never started, so this process has verified NOTHING "
-            + "about its NodeTypes on this image. This is a refusal, not a pass: readiness stays "
-            + "refused and the rollout holds the previous image. A restart re-attempts.",
+            + "attempt(s) — the subscription-borne pre-warm sweep never started, so this process "
+            + "has verified NOTHING about its NodeTypes on this image THROUGH THAT DOOR. The "
+            + "readiness verdict is NOT decided here: the durable witness is asked next, and it may "
+            + "already carry the GO for this framework. Whichever door answers says so on its own "
+            + "line — read that one for the verdict. This line reports the transport fault only, "
+            + "and the fault is real: the path from this process to the 'Admin/Build' hub is "
+            + "broken.",
             new TimeoutException(
                 "No response received in hub cache/UE4Wtq7CgkiAqGLfYRiJPQ within 00:01:00 for "
                 + "request SubscribeRequest (id=ASCknHcTgkSMVRR-dy6F3Q) → target Admin/Build."));

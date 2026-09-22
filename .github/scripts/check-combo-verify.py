@@ -11,8 +11,11 @@ production. That is the same blind spot `check-workflow-shell.py` was written fo
 shell, unopened by anything.
 
 A gate you have never seen fail is not a gate. This script EXECUTES the preflight's real `run:`
-text — extracted from the shipped YAML by path, never retyped — under five input scenarios and
-asserts the exit code AND that the message names the specific shortfall:
+text — extracted from the shipped YAML by path, never retyped — under the input scenarios listed
+below, and asserts the exit code AND that the message names the specific shortfall. 🚨 No total is
+stated here or in the prose that describes this script: a count in a comment has no mechanism keeping
+it true, and adding a scenario has now invalidated such a sentence twice. The script's own summary
+line carries the number, and `--self-test` carries how many of them a gutted preflight must fail.
 
 🚨 THE ROSTER IS DERIVED, SO THE PREFLIGHT ASSERTS IN TWO STEPS (#3848), and this drives both.
 `vars.COMBO_VERIFY_INSTANCES` is gone: `derive-combo-instances.py` reads the fleet's deployment
@@ -20,12 +23,42 @@ overlays between them. So `assert` asks whether the inputs that come from outsid
 all, and `roster` — which cannot run before the derivation — asks whether every instance the fleet
 ACTUALLY has carries both credentials. Splitting the assertion split the scenarios with it:
 
-  assert:
-  1. nothing provisioned                    → RED, naming secrets.COMBO_VERIFY_KEYS
-  2. one secret absent                      → RED, naming that secret
+🚨 AND THE SPLIT IS BY WHETHER AN INPUT IS NEEDED TO *REACH* THE DERIVATION — not by what is knowable
+yet, and NOT by whether provisioning it is reversible. All three `COMBO_*` inputs are asserted in
+`roster`, after the derivation; `assert` carries only `AZURE_*` (the login) and `FLEET_READER_*` (the
+token the derivation reads the overlays with). The workflow's own history is the argument: every run
+in it died in `assert`, so the derivation had NEVER ONCE executed in CI and the lane's red named
+absent inputs while the state that must change first was invisible to every reader.
+
+🚨 AN EARLIER VERSION OF THIS SPLIT GOT THE RULE WRONG, and the wrong rule was written here — that the
+two credential MAPS move because they are SPENT rather than fetched (an `mwi_` key is
+issued-never-recovered, an `mw_` admin token minted per instance, so demanding them before the roster
+exists spends them against a roster that may not derive) while `vars.COMBO_VERIFY_SOURCES` stays
+because it is plain data, free to provision and free to correct. The spend argument is TRUE and is
+still why the maps' guidance must not be emitted early; it is simply not the CRITERION. Measured on
+the first run that reached the step afterwards: the preflight still died in `assert` naming
+`vars.COMBO_VERIFY_SOURCES` and nothing else, and the derivation still did not run. Any unprovisioned
+input in the first step defeats the whole reorder, whatever it costs to provision. Do not move an
+input back on the grounds that it is cheap.
+
+  assert:  (only what is needed to REACH the derivation)
+  1. nothing provisioned                    → RED, naming secrets.FLEET_READER_APP_ID — the input
+                                              without which the derivation cannot even be attempted.
+  2. ONLY what this repository actually      → GREEN, and this is the scenario that would have caught
+     has provisioned                          the earlier mistake. Every other case starts from
+                                              FULLY_PROVISIONED, which holds all three COMBO_* inputs
+                                              CONSTANT at "present"; production varies them to ABSENT,
+                                              all three. So the guard was green over a preflight that
+                                              reddened one step above the derivation in the only
+                                              configuration that matters. Spelled as production's own
+                                              input state, it goes RED if an unprovisioned input is
+                                              ever added to this step again.
   3. everything provisioned                 → GREEN
 
-  roster:
+  roster:  (what is only answerable, or only worth answering, once the installations are known)
+  3a. the source map absent                 → RED, naming vars.COMBO_VERIFY_SOURCES. Here rather than
+                                              in `assert` for the reachability reason above, not
+                                              because it is expensive to provision — it is not.
   4. the derivation emitted NOTHING         → RED. This is the one that matters most: an empty or
      (and the same for an EMPTY array)        absent roster yields an empty matrix, an empty matrix
                                               SKIPS the verify job, and GitHub paints a skipped job
@@ -34,11 +67,15 @@ ACTUALLY has carries both credentials. Splitting the assertion split the scenari
                                               🚨 A DERIVED zero paints exactly the green a DECLARED
                                               zero did, which is why this scenario did not move
                                               with the input it used to be about.
-  5. an instance with no admin token        → RED, naming the instance. Otherwise the shortfall
+  5. the key map absent entirely            → RED, naming secrets.COMBO_VERIFY_KEYS and carrying the
+                                              issued-never-recovered guidance. Asserted here so the
+                                              instruction to MINT arrives only once minting is useful.
+  6. the token map absent entirely          → RED, naming secrets.COMBO_VERIFY_TOKENS.
+  7. an instance with no admin token        → RED, naming the instance. Otherwise the shortfall
                                               surfaces deep inside the verify job as an HTTP 401
                                               that names no secret — the shape that made an absent
                                               MW_REGISTRY_KEY read as a script bug (Reinsurance#128).
-  6. every derived instance credentialled   → GREEN, and it emits the matrix it promised.
+  8. every derived instance credentialled   → GREEN, and it emits the matrix it promised.
 
 🚨 It resolves each step BY ID into the parsed workflow (`jobs.preflight.steps[?id]`) and asserts a
 sentinel is present, so if a step is renamed, reordered or moved into a script this fails LOUD
@@ -111,14 +148,33 @@ SCENARIOS = [
         "nothing provisioned",
         {name: "" for name in FULLY_PROVISIONED},
         1,
-        "secrets.COMBO_VERIFY_KEYS",
+        # The input without which the derivation cannot even be ATTEMPTED, so it is the one this
+        # scenario pins. Naming a credential map here would be asserting the old order.
+        "secrets.FLEET_READER_APP_ID",
     ),
     (
+        # 🚨 THE SCENARIO THAT WOULD HAVE CAUGHT THE FIRST ATTEMPT AT THIS REORDER, and the reason it
+        # is spelled as PRODUCTION'S OWN INPUT STATE rather than as one absent name. Every other
+        # scenario starts from FULLY_PROVISIONED, which holds all three COMBO_* inputs CONSTANT at
+        # "present" — and production varies them to ABSENT, all three. So the guard was green over a
+        # preflight that, in production, still died in `assert` one step above the derivation, naming
+        # `vars.COMBO_VERIFY_SOURCES`. This asserts the property the reorder exists for: given
+        # exactly what this repository actually has provisioned, `assert` PASSES and the derivation
+        # is REACHED. If a future input is added to that step unprovisioned, this goes red.
         "assert",
-        "one secret absent",
-        {**FULLY_PROVISIONED, "COMBO_VERIFY_TOKENS": ""},
+        "ONLY what this repository actually has provisioned ⇒ the derivation is reached",
+        {**{k: "" for k in FULLY_PROVISIONED}, "AZURE_CLIENT_ID": "cid", "AZURE_TENANT_ID": "tid",
+         "AZURE_SUBSCRIPTION_ID": "sid", "FLEET_READER_APP_ID": "app",
+         "FLEET_READER_APP_PRIVATE_KEY": "pem"},
+        0,
+        "Every external input is present",
+    ),
+    (
+        "roster",
+        "the source map absent",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_SOURCES": ""},
         1,
-        "secrets.COMBO_VERIFY_TOKENS",
+        "vars.COMBO_VERIFY_SOURCES",
     ),
     (
         "assert",
@@ -142,6 +198,25 @@ SCENARIOS = [
         {**FULLY_PROVISIONED, "INSTANCES": "[]"},
         1,
         "not a non-empty JSON array",
+    ),
+    (
+        # 🚨 THESE TWO MOVED HERE FROM `assert`, and that is the whole point of the reorder: the
+        # instruction to MINT an irreversible credential is now emitted only once the roster the
+        # credential is for has been derived. The message must still carry the provisioning
+        # guidance — asserting later must not mean saying less — so the expected text is the part a
+        # person acts on, not merely the secret's name.
+        "roster",
+        "the key map absent entirely",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_KEYS": ""},
+        1,
+        "ISSUED, never recovered",
+    ),
+    (
+        "roster",
+        "the token map absent entirely",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_TOKENS": ""},
+        1,
+        "secrets.COMBO_VERIFY_TOKENS",
     ),
     (
         "roster",
@@ -386,6 +461,18 @@ def main() -> int:
     print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) over "
           f"{len(SENTINELS)} assertion step(s) + {len(NODE_SHAPES)} verdict-merge shape(s), "
           "0 violation(s).")
+    # 🚨 WHAT THIS GREEN DOES NOT COVER, said by the gate rather than left to a reader.
+    # Every `roster` scenario feeds a SUCCESSFUL derivation (`INSTANCES=DERIVED`), because that is
+    # the only state in which the step it exercises is reachable. So this green proves the relocated
+    # credential assertion behaves GIVEN a derived roster; it says nothing about whether the live
+    # fleet produces one. That dimension is held CONSTANT here and VARIES in production — and today
+    # it varies to a refusal (#3848: two live installations both named `memex`), so in production
+    # the block these scenarios cover is not currently reached at all. A gate that cannot vary a
+    # dimension must not let its green be read as coverage of it.
+    print("  NOT COVERED by the above: whether the live fleet derives a roster at all. Every "
+          "`roster` scenario assumes one (INSTANCES=DERIVED). That question belongs to "
+          "derive-combo-instances.py — run its --self-test beside this, and read the LANE's own "
+          "run for the live answer.")
     return 0
 
 

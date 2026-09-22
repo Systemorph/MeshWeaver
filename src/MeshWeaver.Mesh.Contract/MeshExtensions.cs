@@ -3231,6 +3231,15 @@ public static class MeshExtensions
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        // 🚨 RESOLVED HERE, NOT IN THE COMMIT STAGE'S CONTINUATION (#5064). The commit stage runs
+        // inside a `SelectMany` several `Timeout`-bounded stages deep, and by then this delete has
+        // begun disposing the per-node hubs of the paths it removed — `hub.ServiceProvider` is an
+        // Autofac child LifetimeScope that can be closed under it, and Autofac then throws
+        // `ObjectDisposedException` at RESOLUTION, outside every `.Catch` in the pipeline, failing
+        // the whole delete with `partial-deleted=0`. The registry is a mesh-lifetime singleton, so
+        // only the lookup path was short-lived; the SNAPSHOT still has to be taken where the stage
+        // opens, and it is.
+        var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
         var meshHub = ResolveMeshHub(hub);
         // 🚨 THE HUB THIS DELETE'S TWO FAN-OUTS ARE ISSUED ON — never the router (issue #2477).
         // A recursive delete posts one request PER DESCENDANT twice over: the pre-flight
@@ -3718,7 +3727,9 @@ public static class MeshExtensions
                                         // the depth is zero. Differencing the wait buckets against
                                         // this makes the reading cover the WINDOW, which is the
                                         // only thing the watchdog's verdict is about.
-                                        var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+                                        // The REGISTRY was resolved at handler entry (#5064); only
+                                        // the SNAPSHOT belongs here, because it is a point-in-time
+                                        // reading taken as the stage opens.
                                         var poolsAtStageStart = ioPools?.Snapshot();
 
                                         var drainProgress = new Subject<string>();
@@ -3917,8 +3928,47 @@ public static class MeshExtensions
                 ex =>
                 {
                     var isTimeout = ex is TimeoutException;
-                    var partial = ex.Data[DeletedPathsDataKey] as IReadOnlyList<string>
+                    // 🚨 BOTH SOURCES, UNION'd — neither one alone can be trusted to be complete
+                    // (#1198).
+                    //
+                    // `ex.Data["DeletedPaths"]` is written by SEVERAL sites, and they are fed by the
+                    // same set of real removals: the commit stage's own TimeoutAtStage arm and the
+                    // drain-pass fold read `SnapshotProgress()` directly, the max-pass branch writes
+                    // the drain fold's accumulated total, and `HierarchicalPathDeletion` attaches its
+                    // OWN builder — which is appended in a `.Do(...)` on the same `deleteOne` emission
+                    // `RecordDeleted` appends from. (Two of those spell the key as a bare literal
+                    // rather than through DeletedPathsDataKey, which is why an inventory taken by
+                    // grepping the constant reads short.)
+                    //
+                    // So neither side is provably a SUPERSET of the other: two builders fed off one
+                    // emission with no ordering between them means an in-flight removal can be in
+                    // either and not yet the other. Hence the union rather than a preference.
+                    //
+                    // What `ex.Data` CAN be is absent entirely. A terminal raised by a plain
+                    // `.Timeout(...)` that is not one of the six stages — `ConfirmDescendantGone`'s
+                    // absence probe, a leaf's own re-entrant NestedTimeout surfacing through this
+                    // handler, i.e. exactly the `stage=unattributed` case — carries no `Data` at all,
+                    // and reading `partial` off it alone printed `partial-deleted=0`. That zero is NOT
+                    // A MEASUREMENT: it is "not measured" wearing the same rendering as "none", which
+                    // is the defect class the `unanswered=` comment below spells out for its own
+                    // field, and the ORIGINAL #1198 occurrence is an instance of it — a bare
+                    // `System.TimeoutException: The operation has timed out.` reported over a subtree
+                    // whose real progress this closure knew.
+                    //
+                    // Reading the accumulator too closes it for EVERY terminal, not just for the ones
+                    // that stamped: a torn subtree is reported as torn whatever raised the fault. The
+                    // union costs nothing and cannot under-report either side.
+                    var recordedProgress = SnapshotProgress();
+                    var stampedProgress = ex.Data[DeletedPathsDataKey] as IReadOnlyList<string>
                         ?? Array.Empty<string>();
+                    var partial = stampedProgress.Count == 0
+                        ? recordedProgress
+                        : recordedProgress.Count == 0
+                            ? stampedProgress
+                            : (IReadOnlyList<string>)stampedProgress
+                                .Concat(recordedProgress)
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToArray();
                     // Which of the pipeline's six bounded stages ran out of time. Unset means the
                     // exception came from somewhere that is not one of them (a nested Timeout — e.g.
                     // a leaf's own ValidateDeleteRequest read — surfacing through this handler).
@@ -4374,6 +4424,32 @@ public static class MeshExtensions
             progress.OnNext(deleted);
         }
 
+        // 🚨 RESOLVE THE MESH SINGLETONS HERE, ONCE, WHILE THE SCOPE IS ALIVE — never inside the
+        // per-path continuations below (Systemorph/MeshWeaver#5064).
+        //
+        // `meshHub.ServiceProvider` is an Autofac child LifetimeScope, and these continuations run
+        // as each leaf's delete COMMITS — by which point this delete has already disposed the
+        // per-node hubs of the paths it removed (`hostedHub?.Dispose()` below is this pipeline's
+        // own act). A resolution against a closed scope throws
+        // `ObjectDisposedException: … this LifetimeScope … has already been disposed` at RESOLUTION,
+        // which is outside every per-item `.Catch` in the pipeline, so the whole delete aborted:
+        // measured in production as `[DeleteNode] unexpected path=… partial-deleted=0` for
+        // `Northwind/Guide/_Access/Anonymous_Access`, `Store/Licences/Enterprise` and
+        // `Store/Licences/Free` — three silently failed deletes, subtrees left in place.
+        //
+        // 🚨 Hoisting, not guarding. Both services are MESH-LIFETIME SINGLETONS — only the child
+        // scope used to LOOK THEM UP is short-lived, so the captured instance is the same object
+        // the continuation would have resolved, and it stays valid for the whole operation.
+        // Guarding the resolution instead (`?.` on a null service) would silently skip the change
+        // publish and the stream-cache invalidation, which is how a deleted node keeps being
+        // served from a `Replay(1)` entry.
+        //
+        // This is the same correction, and for the same reason, that `ResolvePostDeletionHandlers`
+        // already applies to step 5's handlers — the pattern, swept to every site in this
+        // pipeline rather than only the one an incident happened to name.
+        var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
+        var streamCache = meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+
         return HierarchicalPathDeletion.DeleteSubtree(
             rootPath,
             descendantPaths.Remove(rootPath),
@@ -4391,7 +4467,6 @@ public static class MeshExtensions
                     // Descendant deletes re-enter this same handler and hit this
                     // branch for THEIR own path, so each leaf publishes once.
                     logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
-                    var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
 
                     if (rootAlreadyDeleted)
                         // Drain pass: the root row was deleted in pass 1. DeleteIfExists
@@ -4414,8 +4489,10 @@ public static class MeshExtensions
                             // 🚨 Invalidate the process-wide MeshNodeStreamCache so
                             // subsequent reads of this path don't see the pre-delete
                             // value held in the Replay(1) entry.
-                            meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>()?
-                                .Invalidate(path);
+                            // Resolved once at the top of this method, NOT here: this
+                            // continuation runs post-commit, after the hub disposal
+                            // below has closed scopes under it (#5064).
+                            streamCache?.Invalidate(path);
                             // 🚨 Dispose the per-node hub at this path if one was
                             // activated — the cache invalidate clears the
                             // process-wide cache entry, but the hub itself retains

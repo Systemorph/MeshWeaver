@@ -96,6 +96,69 @@ gh pr view <N> --repo <repo> --json statusCheckRollup \
 Every required name must be **present** and read `=SUCCESS`. Count them — a missing row is a fail,
 not an absence.
 
+### 🚨 A skip-trapdoor made by STEP ORDERING — the first failing step silences every guard behind it
+
+A gate that carries no `continue-on-error:` and no `if:` can still stop enforcing, and nothing in the
+file looks wrong. **GitHub's implicit condition on a step is `success()`**, so in a job that runs many
+*independent* guards as consecutive steps, the first failure skips all of them — and a `skipped` step
+publishes no failure, while the job's one required context reports a single red about whichever guard
+happened to be first.
+
+**Measured 2026-09-19 on MeshWeaver.SocialMedia#210**, run `35431670104`, job `105867277548`. The
+shared `validate` lane's vendored-resolver drift check failed with `32 code line(s) differ` and **16
+steps reported `skipped` behind it**, among them:
+
+| step | what stopped being enforced |
+|---|---|
+| `Every PR-reachable secret in this repo is asserted by a preflight` | the gate for the shape that bit Reinsurance#128 |
+| `Every manifest.lock is current (and carries a version)` | a stale lock reaching a publish |
+| `Every module's version matches its content` | a feature shipping to nobody (#878) |
+| `No mapping in this repo's workflows writes a key twice` | the duplicate-key guard |
+| `No pin comment names a commit this repo no longer pins` | abbreviated-sha / pin drift |
+| `This repo's no-op set agrees with the platform's` | no-op parity |
+
+`validate / Validate node repos` is a **required** context in all five satellites. Because
+`platform-ref` defaults to `main` and the drift check fetches the canonical live, *every* satellite is
+drifted from the instant a canonical change merges — so for the length of each re-copy wave, every
+pull request in that repository was unguarded by all six of those checks, with one red about an
+unrelated file as the only symptom.
+
+**The reading to take from it:** a red does not tell you what a job *checked*. Only the steps that
+reported a verdict were checked, and in a long guard job the count of `skipped` steps is the count of
+guards that said nothing. `.../actions/jobs/<id>` lists each step's own conclusion — read that, not
+the job's.
+
+**The fix is two halves, and `!cancelled()` alone is only the first.** Dropping the implicit
+`success()` also stops the *prerequisites* from masking, so a failed checkout would let every guard run
+against an empty workspace — a wall of secondary reds, and for any guard that passes on an empty tree a
+vacuous pass. So the last prerequisite publishes one output and every guard requires it:
+
+```yaml
+- name: The workspace and the tools are present — the ONE prerequisite every guard shares
+  id: ready
+  run: echo "ok=true" >> "$GITHUB_OUTPUT"
+- name: <any independent guard>
+  if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+```
+
+That keeps the two failure modes apart, which is the whole property:
+
+| what failed | what happens |
+|---|---|
+| a **prerequisite** (checkout, its history fetch, the tool/Python setup) | `ready` is skipped, its output is empty, every guard is skipped, and the prerequisite's own red is the verdict |
+| a **guard** | `ready` is untouched, so every other guard still reports |
+
+`.github/scripts/check-guard-step-masking.py` enforces both halves on two declared subjects —
+`node-repo-validate.yml`'s `validate` (39 guards) and `dotnet-test.yml`'s `workflow-shell` (61 guards,
+the job that gates `main-cd.yml`, the module lanes and every script a satellite fetches). It also
+requires the prerequisites to *be* a prefix, matched exactly (a prefix comparison let
+`actions/checkout-foo` satisfy `uses:actions/checkout`), refuses a job whose guard list is empty so it
+cannot pass by having nothing to check, and refuses a readiness step that stopped publishing `ok=true`.
+
+A guard's own *fetch* is deliberately **not** a prerequisite: its consumers run and fail naming the file
+they could not open, which is a second red rather than a silent skip, and the fetch's `::error::` is the
+root.
+
 ## Required ≠ meaningful, in both directions
 
 Two independent facts, and confusing them costs time in both directions:
@@ -487,6 +550,79 @@ answered by different contexts.
 **And the acceptance criterion for a fix in this class is REPEATED green.** A defect that alternates
 run to run produces single greens by itself; one green run is what it looks like, not evidence it is
 gone.
+
+### 🚨 The SANCTIONED version of this — two greens on one sha, from one workflow, one of which ran nothing
+
+Green-tree reuse is this same shape **by design**, which is what makes it the easiest instance to
+misread as coverage. Measured on core sha `cb8a9b8fd6fe0ac9f9d824f1e8be8db56463fc13` — the *same*
+workflow, `MeshWeaver Build and Test`, twice:
+
+| run | event | elapsed | jobs | what it proves |
+|---|---|---|---|---|
+| #13632 | `merge_group` | **19 min 40 s** | 15 success / 6 skipped; all six `Run tests (shard N)` **success** | ran the suite |
+| #13634 | `push` | **3 min 31 s** | `Check for an already-green tree` success, then build, doc gate and every shard **skipped** | ran nothing |
+
+Both report `completed` / `success`, same workflow name, same commit. **Nothing in the run list and
+nothing in `conclusion` over REST separates them** — the rollup conclusion is one enum, so "nineteen
+minutes of evidence" and "a marker lookup" render identically.
+
+The workflow is not concealing it. The reuse job writes *"This run **did not execute the suite**"*
+into the step summary with the marker ref, the TTL and a link to the run that gathered the evidence;
+the `main is red` job refuses to take its bisect window from the run list for exactly this reason;
+and `Consolidate test results` carries a zero-evidence gate that fails on zero `.trx` unless the run
+was a reuse or an affected-tests `none`. **The whole gap is in the reader.**
+
+🚨 **So never cite a run's `success` as coverage without reading whether its shards ran.** One REST
+call answers it — `actions/runs/<id>/jobs` — and `Run tests (shard …) | skipped` is the entire tell.
+A reuse green is a true statement about the **tree** and says nothing about **this run**, so it can
+never serve as a positive control: not for a suite, and not for infrastructure the run would have
+exercised, such as artifact upload.
+
+🚨 **And do not reach for the first two same-sha greens you find — check they are the same workflow.**
+The same commit also carries `Continuous Delivery (main)` #9115 (`workflow_run`, **75 min**, the real
+delivery) and #9116 (`schedule`, **2 min 5 s**, a scheduled run with nothing to deliver). That pair is
+also two greens of one workflow name on one sha, but the short one is an idle *schedule*, not the
+green-tree short-circuit — a different mechanism that happens to look the same from the run list.
+Attributing it to reuse would be right about the symptom and wrong about the cause.
+
+### 🚨 `mergeable_state: clean` + `auto_merge: false` is a TWO-POLE ambiguity, not a state
+
+Same class as the reuse green above — a field pair that reads like an answer — and here the two
+readings demand **opposite** actions. A pull request that is not a draft, has 0 red, both required
+contexts `success`, `mergeable_state: clean` and `auto_merge: false` is in one of two states:
+
+- **Pole A — the arming was CONSUMED on entry to the merge queue.** It is queued, it merges within
+  minutes, and **no human action is needed or wanted.** Entry is what clears the flag.
+- **Pole B — the arming was LOST** (a force-push, a manual disarm, or a required check that went red
+  and disabled auto-merge without re-enabling when it later passed). It is finished and **nothing will
+  ever merge it.**
+
+**The two are byte-identical over REST.** Measured on three core PRs at once: all three read
+clean-and-unarmed while sitting at queue positions 1, 2 and 3, all `AWAITING_CHECKS`, and each one's
+enqueue timestamp matched its `auto_merge` flip one-for-one — so the flip that reads as "stranded" was
+the entry itself.
+
+🚨 **The cheap proxy does not work either.** A `gh-readonly-queue/main/pr-<N>-…` ref is not evidence of
+membership: **stale ones persist indefinitely** for long-merged PRs (`pr-2850`, `pr-2941`, `pr-2949`,
+`pr-4150` and `pr-4152` were all present in the listing and all long merged), and a *live* entry's
+branch also comes and goes as GitHub re-groups batches. Presence and absence are both uninformative.
+
+**Only the merge-queue ENTRY LIST separates the poles**, and it is one of the few things REST cannot
+express — which is exactly why a REST-only discipline walks into this:
+
+```bash
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  mergeQueue(branch:"main"){entries(first:20){nodes{position state enqueuedAt pullRequest{number}}}}}}'
+```
+
+One call, never in a loop. `gh pr merge --auto` answering *"already queued to merge"* is the cheaper
+confirmation of pole A when you only care about one PR.
+
+**Why the distinction is load-bearing and not pedantic.** In pole A, "merge it yourself" is wrong
+because it is already happening — and **a merge HOLD cannot be honoured by declining to merge**, since
+the queue needs no human; only `dequeuePullRequest` holds, and dequeuing one PR buys nothing while
+another sits ahead of it in the queue. In pole B the opposite holds: waiting achieves nothing and the
+PR rots until someone re-arms it. State which pole you measured, never which one is usual.
 
 ### 🚨 A green PRODUCER that SKIPPED its upload — the red lands four jobs downstream, naming an artifact
 

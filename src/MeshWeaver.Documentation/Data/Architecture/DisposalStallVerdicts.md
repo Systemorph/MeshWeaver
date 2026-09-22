@@ -250,12 +250,30 @@ untouched**, and the verdict still names them if they ever fire.
 🚨 **The negative control ran.** With only the flag removed and the test project rebuilt, the test
 fails in 12 s with the verdict above; with it, green in 406 ms. One line is the whole difference.
 
-🚨 **What this does NOT fix, stated so the next reader does not assume it.** `DrainLoop`'s trampoline
-still owns its worker for an unbounded run of synchronous turns, so a continuously-posted hub can
-still hold a pool thread indefinitely. That is a *precondition* of the wedge (it is one way the pool
-gets saturated), not the wedge: with the drain on the global queue a saturated pool is answered by
-thread injection. If pool exhaustion is ever measured as a defect in its own right, the remedy is a
-bounded trampoline (TPL Dataflow's `MaxMessagesPerTask`), and it is a different change.
+### A running drain also has to return its worker
+
+Global queueing does not preempt a drain that is already running. The original `DrainLoop`
+trampoline ran synchronous turns until its queue became empty. A handler that posts its next turn
+before completing can therefore keep the queue nonempty forever and hold one scheduler worker
+indefinitely. This is a separate source of starvation from the local-queue defect above; #4847
+records queued drains receiving no worker even with `PreferFairness` deployed.
+
+Each drain now processes at most **64 synchronous turns**, then schedules its continuation on the
+same configured scheduler. The `draining` latch stays set during that handoff, so posts only append
+to the existing FIFO and cannot start a competing drain. An asynchronous turn retains its existing
+completion-driven handoff. An empty queue releases the latch without scheduling more work. The
+batch size amortizes task scheduling without permitting unbounded worker ownership; it does not
+change any handler deadline, retry policy, or queue capacity.
+
+`PumpDrainFairnessTest` uses two real hubs sharing a single-worker scheduler. The first turn of a
+1,024-turn self-post chain disposes its peer. Before this change the peer starts Quiescing only
+after all 1,024 turns have run; after it, the peer advances while the chain still has work. The test
+also checks that every original turn arrives in order and on the original scheduler. It does not
+depend on wall-clock starvation or on changing the process-wide thread pool.
+
+This proves the unbounded worker-ownership defect and its correction. It does not establish which
+work occupied every production worker during #4847's historical snapshots; that attribution still
+requires the per-pod evidence described by the incident.
 
 ---
 

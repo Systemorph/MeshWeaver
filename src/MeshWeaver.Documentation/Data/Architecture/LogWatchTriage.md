@@ -787,6 +787,19 @@ A recurrence is therefore always folded onto the ticket that exists:
   ticket's own defect, the fix is to
   [repoint the link](#-when-a-fingerprint-outlives-its-issue-repoint-the-link-never-suppress),
   never to suppress the incident.
+- 🚨 **A close is a DECISION, and `State` + `ClosedAt` do not carry it.** "Fixed", "won't do" and
+  "this is tracked on another issue" are three different statements about the same closed ticket, and
+  a predicate that reads only the close TIME treats them identically — which is how a deliberate
+  consolidation is undone by a fault that is, by construction, still firing
+  (Systemorph/MeshWeaver.Plugins#2177: 35 tickets closed as `duplicate` onto 9 roots, two of them
+  reopened within 11 and 14 minutes). `GitHubIssue.StateReason` carries GitHub's `state_reason` so the
+  decision is readable: `Completed`, `NotPlanned`, `Duplicate`, `Reopened`, or **`Unknown`**, which
+  means *the reason was not established* — an open issue carries none, GitHub omits it for anything
+  closed before the field existed, and a list read never asks. `Unknown` is never a synonym for
+  `Completed`.
+  🚨 It is parsed from the RAW wire token, not through Octokit's `StringEnum<ItemStateReason>.Value`:
+  that enum has three members and no `duplicate`, so `.Value` throws `ArgumentException` on exactly
+  the value this exists to read (measured against Octokit 14.0.0).
 - A comment that lands writes the incident back to `Filed`, clearing a stale `Failed` — leaving it
   is what let ingest re-triage a ticketed incident in the first place.
 
@@ -1159,8 +1172,25 @@ Two clusters in that sweep were one condition each, reported once per shard and 
 activation. The discriminators were already in the evidence: the memory-stream tickets differ only in
 the per-queue log **category** (`…Memory.memory-0` … `memory-7`, 8 registered queues, one provider),
 and the `[ROUTE] Routing back-pressure` tickets are split by a field the line itself explains —
-`deepest per-destination queue` ≥ 1 is head-of-line blocking, `0` is load. Consolidating on the title
+`deepest per-channel queue` ≥ 1 is head-of-line blocking, `0` is load. Consolidating on the title
 instead would have merged the two readings and lost the only thing that tells them apart.
+
+🚨 **That field was named `deepest per-destination queue` until the channel key was narrowed to
+(destination, stream), so a line from an older image reads the field the old way and a large depth
+there is over-serialisation rather than one slow leg** — see
+[Ordered Route Channels](../OrderedRouteChannels). A ticket whose samples span the change carries
+both spellings, which is the only way to tell which image produced which sample.
+
+🚨 **And the one field to read BEFORE deciding whether a crossing is a fault at all is
+`oldest leg in flight`.** The depth and the in-flight count cannot tell a busy silo from one holding a
+slot that will never be released; the line's own advice for that — *a later line with a higher episode
+means this episode drained* — needs a SECOND sample, which a per-sample filer does not have. The age
+does it in one: every leg young is load, one leg minutes old is a leaked slot **and the label names the
+leg**. `not tracked on this host` means the quiescence gauge is not registered there, and is not a
+clean reading. The companion `waiting for a pool slot` separates a thread shortage from downstream I/O,
+which `routing pool subscribing` provably cannot — it counts only the subscribe prologue, so both
+states read ~0. Full reading order:
+[Reading a Routing Saturation Report](../ReadingARoutingSaturationReport).
 
 ## What this is not
 

@@ -37,7 +37,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTestBase(output)
 {
     /// <summary>A release: the only thing that would ever free what the sink is holding.</summary>
-    private record StreamRelease : IReleasesRemoteState;
+    private record StreamRelease(bool Control = false) : IReleasesRemoteState;
 
     /// <summary>
     /// The growing-direction control. Same size, same route, same teardown phase — and NOT a
@@ -48,7 +48,10 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
     private record OrdinaryEvent;
 
     private readonly AsyncSubject<Unit> releaseArrived = new();
+    private readonly AsyncSubject<Unit> controlArrived = new();
     private int ordinaryEventArrived;
+    private Address? releaseSender;
+    private Address? liveSender;
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -56,8 +59,13 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
             .WithTypes(typeof(StreamRelease), typeof(OrdinaryEvent))
             .WithHandler<StreamRelease>((_, delivery) =>
             {
-                releaseArrived.OnNext(Unit.Default);
-                releaseArrived.OnCompleted();
+                if (delivery.Message.Control)
+                    liveSender = delivery.Sender;
+                else
+                    releaseSender = delivery.Sender;
+                var arrived = delivery.Message.Control ? controlArrived : releaseArrived;
+                arrived.OnNext(Unit.Default);
+                arrived.OnCompleted();
                 return delivery.Processed();
             })
             .WithHandler<OrdinaryEvent>((_, delivery) =>
@@ -72,10 +80,48 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
             .WithTypes(typeof(StreamRelease), typeof(OrdinaryEvent));
 
     [HubFact]
-    public async Task AReleaseLeavesWhileAnOrdinaryEventIsStillRefused()
+    public Task AReleaseLeavesWhileAnOrdinaryEventIsStillRefused()
+        => AssertReleaseLeaves(0);
+
+    [HubFact]
+    public Task AReleaseCrossesEveryTearingDownAncestor()
+        => AssertReleaseLeaves(2);
+
+    [HubFact]
+    public async Task AReleaseWithoutASurvivingCarrierIsRefusedAndTeardownCompletes()
+    {
+        var subscriber = GetClient();
+        var hosted = subscriber.GetHostedHub(new Address("releasing-child", "root-stop"),
+            c => c.WithPostingIdentity(PostingIdentity.System).WithTypes(typeof(StreamRelease)));
+        IMessageDelivery? verdict = null;
+        hosted.RegisterForDisposal(Disposable.Create(() =>
+            verdict = subscriber.Post(new StreamRelease(), o => o.WithTarget(CreateHostAddress()))));
+
+        Mesh.Dispose();
+
+        await Mesh.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "forwarding a release must terminate at the construction-captured null parent of the "
+            + "root, even though Configuration.ParentHub can resolve the root itself");
+        verdict.Should().NotBeNull("the child's release disposable must have run");
+        verdict!.State.Should().Be(MessageDeliveryState.Failed,
+            "a release with no surviving carrier must report refusal instead of an untrue success");
+        verdict.GetFailureErrorType(ErrorType.Unknown).Should().Be(ErrorType.ShuttingDown);
+    }
+
+    private async Task AssertReleaseLeaves(int nestedParents)
     {
         var sink = GetHost();
-        var subscriber = GetClient();
+        var subtree = GetClient();
+        var subscriber = subtree;
+        foreach (var index in Enumerable.Range(0, nestedParents))
+            subscriber = subscriber.GetHostedHub(
+                new Address("subscriber-parent", index.ToString()),
+                c => c.WithPostingIdentity(PostingIdentity.System)
+                    .WithTypes(typeof(StreamRelease), typeof(OrdinaryEvent)));
+
+        subscriber.Post(new StreamRelease(Control: true), o => o.WithTarget(sink.Address));
+        await controlArrived.Should().Within(TestTimeouts.Convergence).Emit(
+            "a live delivery establishes the owner's exact sender identity, including routing hosts");
 
         // A hosted hub whose ShutDown runs both posts — the shape of a client-side sync/{id} hub
         // releasing its owner-side twin.
@@ -93,9 +139,9 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
             releaseVerdict = subscriber.Post(new StreamRelease(), o => o.WithTarget(sink.Address));
         }));
 
-        subscriber.Dispose();
+        subtree.Dispose();
 
-        await subscriber.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+        await subtree.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
             "the subscribing hub must finish its own teardown — both posts happen inside it, so "
             + "until it has completed neither verdict has been produced");
 
@@ -109,6 +155,10 @@ public class ReleaseLeavesATearingDownHubTest(ITestOutputHelper output) : HubTes
         await releaseArrived.Should().Within(TestTimeouts.Convergence).Emit(
             "and carrying it must mean ARRIVAL: a verdict that says 'not refused' while the message "
             + "goes nowhere is the same silent loss wearing a better label");
+
+        releaseSender.Should().Be(liveSender,
+            "the owner must see the SAME subscriber identity as a live delivery, including every "
+            + "host qualifier added by the routing hops that teardown bypasses");
 
         ordinaryVerdict.Should().NotBeNull();
         ordinaryVerdict!.State.Should().Be(MessageDeliveryState.Failed,

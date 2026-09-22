@@ -2055,10 +2055,30 @@ jobs:
     # check below must be shown to FIRE on its defect and stay SILENT on its fix before its
     # verdict on the real tree means anything. (Same posture as `affected-modules.py --self-test`
     # in MeshWeaver.Plugins.)
+
+    # 🚨 THE PREREQUISITE LINE, AND THE ONLY THING ALLOWED TO MASK A GUARD (#4784). Everything
+    # below is an INDEPENDENT guard, and GitHub's implicit step condition is `success()` — so the
+    # first one to fail used to skip all 60 behind it, and a skipped step publishes no failure.
+    # This job is the one that gates `main-cd.yml`, the module lanes and every fetched script, so
+    # a single red here silently withdrew the rest of CI's self-enforcement for that run.
+    #
+    # The checkout and the tool assertion ARE prerequisites: a guard cannot read a tree that was
+    # never checked out. So they publish one output, every guard carries
+    # `!cancelled() && steps.ready.outputs.ok == 'true'`, and the two failure modes stay separate:
+    #   * a PREREQUISITE fails ⇒ `ready` is skipped, its output is empty, every guard is skipped,
+    #     and the prerequisite's own red is the verdict — nothing runs against an empty workspace.
+    #   * a GUARD fails        ⇒ `ready` is untouched, so every other guard still reports.
+    # `check-guard-step-masking.py` asserts this shape on this job and on the shared validate lane.
+    - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+      id: ready
+      run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
     - name: "Prove the gate is non-vacuous (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-shell.py --self-test
 
     - name: "Image-set reads retain registry failures"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-check-image-set.py
 
     # 🚨 This repo's .github/scripts/compile-check.py is the CANONICAL NodeType gate: every node
@@ -2068,6 +2088,7 @@ jobs:
     # only `X.Y.Type`, re-emitting `global using X.Y.Type;` and failing CS0138 on source the mesh
     # compiles. It ran here unproven because nothing invoked it. It is proven now.
     - name: "NodeType import-scope parser can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/compile-check.py --self-test
 
     # 🚨 THE LOCAL LOOP, RUN WHERE ITS INPUT CHANGES (#4785). `run-node-tests.py` is the command
@@ -2081,6 +2102,7 @@ jobs:
     # renaming `build_unit` reds 1 naming the symbol, and reverting to one `<Compile>` per file
     # reds 1. No reference set and no dotnet build — it is textual and takes under a second.
     - name: "The local node-test harness compiles what the gate compiles (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/run-node-tests.py --self-test
 
     # 🚨 The module-pack lane's static-asset assertion (#2384). It replaced
@@ -2091,6 +2113,7 @@ jobs:
     # its 14 cases — 6 that must FAIL the gate, 8 that must PASS it — are proven here, where core
     # owns it.
     - name: "A bundle declaring only SOME of its static assets is caught (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-bundle-static-assets.py --self-test
 
     # The gate host every node-repo bake and gate RUNS AS since MeshWeaver#3022 — the portal's /app
@@ -2098,6 +2121,7 @@ jobs:
     # platform-ref). Its rules are load-bearing (the portal's bytes win, the tester's deps.json and
     # manifest never ride), so the script proves it enforces them on every platform PR.
     - name: "The gate host composes by its rules and refuses a partial one (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/compose-gate-host.sh --self-test
 
     # 🚨 The other half of the same property since MeshWeaver#4113: WHERE a gate shard's platform
@@ -2108,6 +2132,7 @@ jobs:
     # worth having if they can fire, so the script proves each one against a synthetic volume here,
     # on every platform PR, exactly as compose-gate-host.sh does above.
     - name: "A gate shard refuses a platform volume it cannot trust (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/resolve-gate-platform.sh --self-test
 
     # …and the lane hands that script the set NAME a pinned caller already resolved. Without it a
@@ -2115,6 +2140,7 @@ jobs:
     # which every satellite run hits when it resolves a set sealed minutes earlier (Crm#108, 09-15).
     # Reads node-repo-gate.yml and EXECUTES its plan/shard steps on the pinned path.
     - name: "The gate lane carries a pinned caller's set name to the volume lookup"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-gate-lane-forwards-the-callers-set.py
 
     # The platform resolver the node-repo gate and publish-bake lanes run when a caller pins no
@@ -2123,6 +2149,7 @@ jobs:
     # a purged or unsealed newer set is passed over and SAID, a freeze never substitutes, and a
     # re-run takes a newer set and keeps its baseline otherwise.
     - name: "The lane platform resolver chooses by the rule and refuses every dead end (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/resolve-platform.py --self-test
 
     # The recorder that writes a DEAD test host into its own trx (#2495) — here and, from the
@@ -2131,6 +2158,7 @@ jobs:
     # 2026-09-15: `[Errno 2]`, the crash unrecorded). Offline cases: no directory, a streamed trx,
     # a truncated trx.
     - name: "The host-crash recorder writes a dead host into its trx, directory and all (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/record-host-crash.py --self-test
 
     # 🚨 THE STEWARD THAT SPENT A WEEK DECIDING WITHOUT READING ANYTHING (#4534). Its `gh api …/logs`
@@ -2143,6 +2171,7 @@ jobs:
     # steward went blind again" and "the steward retried a real red" both arrive as a red here,
     # on the pull request, instead of as a week of quiet green.
     - name: "The transient steward reads its input, or reds (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/retry-known-transients.py --self-test
 
     # 🚨 Every job in every workflow carries a LITERAL `timeout-minutes` <= 45 (maintainer, 2026-09-02:
@@ -2150,9 +2179,24 @@ jobs:
     # the module-pack lane held a runner for six hours per run across 19 concurrent Plugins runs and
     # blocked every required check behind it. Self-test first — an unproven gate is no gate.
     - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-timeouts.py --self-test
     - name: "Every job is capped at 45 minutes"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 🚨 A FAILING GUARD MUST NOT SKIP THE GUARDS AFTER IT (#4784). `node-repo-validate.yml`'s
+    # `validate` job is ~36 independent guards in one step list, and GitHub's implicit step condition
+    # is `success()` — so measured on MeshWeaver.SocialMedia#210, one drift red skipped 16 later
+    # guards including `check-pr-secret-preflight.py` and the manifest-lock currency check. A skipped
+    # step publishes no failure and a skipped required context counts as SATISFIED, so every pull
+    # request in that repository was silently unguarded by all six. The trapdoor is made by step
+    # ORDERING, not by a `continue-on-error:` or an `if:`, which is why it needs a gate.
+    - name: "An independent guard reports rather than being masked by an earlier one — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-guard-step-masking.py --self-test
+    - name: "No guard in the shared validate lane is masked by the guard before it"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-guard-step-masking.py --root .
     # 💸 GitHub Actions cost is zero (maintainer, 2026-09-17: "we still incur cost for github actions.
     # wtf? please see that it goes to 0"). A `workflow_call` lane's hosted minutes bill the CALLER, and
     # every caller of these lanes but core itself is private — so no job inside one may name a literal
@@ -2160,8 +2204,10 @@ jobs:
     # (the caller's `vars`), falling back to `ubuntu-latest` only where they are invisible: here. The
     # self-test takes --root so every real runner expression is mutated back to a literal and must fire.
     - name: "Reusable workflows pick runners through the caller's runner variables — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-reusable-workflow-runners.py --self-test --root .
     - name: "Reusable workflows pick runners through the caller's runner variables"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-reusable-workflow-runners.py --root .
     # 🚨 THE SELF-TEST TAKES --root AND --fleet ON PURPOSE. Without them only the unit cases run,
     # and those pass against hand-written dicts while the real tree is broken — which is exactly
@@ -2170,8 +2216,10 @@ jobs:
     # With them, the controls MUTATE THE REAL LANE FILES in both directions, so a fixture can no
     # longer be right while the tree is wrong.
     - name: "A caller grants what its lane demands — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-permission-pairing.py --self-test --root . --fleet .github/lane-caller-grants.yml
     - name: "Core's own callers grant every permission their lanes demand"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-permission-pairing.py --root .
     # 🚨 THIS IS THE STEP THAT PREVENTS RATHER THAN REPORTS, and the step above cannot do its job.
     # Core has exactly TWO caller→lane edges of its own (both in main-cd.yml), and #3933 updated
@@ -2181,6 +2229,7 @@ jobs:
     # recorded in .github/lane-caller-grants.yml and checked here. Reading a file needs no
     # credential, so this runs on forks and on Dependabot exactly as it runs on main.
     - name: "Every lane this repo publishes is paired in every repository that calls it"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-permission-pairing.py --root . --fleet .github/lane-caller-grants.yml
 
     # 🚨 `yaml.safe_load` accepts a DUPLICATE MAPPING KEY silently and keeps the LAST one — and
@@ -2196,36 +2245,11 @@ jobs:
     # after a full run. This one is the general form, at the first job, with no credential.
     # Self-test first — an unproven gate is no gate.
     - name: "No workflow mapping writes a key twice — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-yaml-keys.py --self-test
     - name: "No workflow mapping writes a key twice"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-yaml-keys.py --root .
-
-    # 🚨 A SKIP-TRAPDOOR MADE BY STEP ORDERING (#4784). GitHub skips every step after a failed one,
-    # and a skipped step publishes no failure — so in a job that IS a required status-check context,
-    # one red silently disarms every guard behind it, and a required context reporting `skipped`
-    # counts as SATISFIED under both classic protection and rulesets.
-    #
-    # Measured on MeshWeaver.SocialMedia#210 (2026-09-19 08:22Z): the vendored-resolver drift check
-    # failed mid-job and 16 steps were skipped behind it — the PR-secret preflight, the stale-lock
-    # check, the module-version check, the duplicate-key guard, the pin-comment guard and the no-op
-    # parity guard. `validate / Validate node repos` is required in all five satellites, so every
-    # pull request in those repositories was unguarded by all six, and the only visible symptom was
-    # one red about an unrelated file.
-    #
-    # AGENTS.md already forbids the CLASS, but names `continue-on-error:` and an input-testing `if:`
-    # as its shapes. This one is made by ORDERING alone: nothing in the file looks wrong on
-    # inspection, and no other guard can see it.
-    # 🚨 …including THESE two. Caught in review on the pull request that added them: a control that
-    # can itself be skipped behind an earlier failure inspects nothing, silently, which is the exact
-    # shape it exists to refuse. (The neighbouring guards here share the exposure; extending the
-    # rule to them is a separate change, because THIS job also builds and tests, so it has genuine
-    # step dependencies and a blanket sweep would be wrong rather than merely bigger.)
-    - name: "A guard behind a failing guard still reports — the gate can fail (self-test)"
-      if: ${{ !cancelled() }}
-      run: python3 .github/scripts/check-guard-step-masking.py --self-test
-    - name: "No guard step in a required lane is masked by an earlier failure"
-      if: ${{ !cancelled() }}
-      run: python3 .github/scripts/check-guard-step-masking.py --root .
 
     # 🚨 The ledger every repository's red `main` is routed onto (node-repo-ci-failure.yml, maintainer
     # 2026-09-12: "put the ci-failure on all repos, in main") — proven here because core OWNS the
@@ -2236,6 +2260,7 @@ jobs:
     # ownership mark in the body — never main-cd.yml's `ci-failure`). A guard that could not say no
     # would file a second issue per red day, or close CD's.
     - name: "The ci-failure ledger can say no (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-failure-ledger.py --self-test
 
     # 🚨 The CI object store (ci-artifact-store.py) — the seam that lets a module bundle's DURABLE
@@ -2250,12 +2275,19 @@ jobs:
     # that cannot be reached is RED under --require and never a quiet return to GitHub artifacts, and
     # an `az` failure names the account rather than being swallowed.
     - name: "The CI artifact store degrades to GitHub artifacts, and can say no (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-artifact-store.py --self-test
 
     - name: "Own-store named artifacts preserve rerun inputs and reject corrupt archives"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test_ci_run_artifacts.py
     - name: "The composite actions execute the own-store transport contract"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-ci-artifact-actions.py
+
+    - name: "The artifact-store resolver refuses a wrong share before publishing outputs"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: python3 .github/scripts/test-ci-artifact-resolver.py
 
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
@@ -2269,8 +2301,10 @@ jobs:
     # instance's recorded history rather than fail. Self-test first: both parts must be shown to
     # fire on their own defect.
     - name: "The combo-verify preflight and verdict merge can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-combo-verify.py --self-test
     - name: "The combo-verify preflight names what to provision, and the verdict merge loses nothing"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-combo-verify.py --root .
 
     # 🚨 WHICH instances that lane covers is DERIVED from the fleet's deployment overlays (#3848),
@@ -2285,6 +2319,7 @@ jobs:
     # fixtures and then BLINDED, so "the extractor stopped matching" can never arrive wearing "the
     # fleet declares no installations".
     - name: "The combo-verification roster derivation refuses an empty fleet (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/derive-combo-instances.py --self-test
 
     # 🚨 A Dependabot run resolves `secrets.X` against a SECOND, SEPARATE store (Settings → Secrets
@@ -2297,8 +2332,10 @@ jobs:
     # job instead of surfacing as, e.g., `compose-sealed-modules.sh: --registry-url needs
     # --registry-key` eight minutes later (measured, MeshWeaver.Reinsurance#128). Self-test first.
     - name: "Every PR-reachable secret is asserted by a preflight — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pr-secret-preflight.py --self-test
     - name: "Every PR-reachable secret is asserted by a preflight"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pr-secret-preflight.py --root .
 
     # 🚨 review-answered.yml runs its own self-test before every verdict, but only on the events it
@@ -2307,6 +2344,7 @@ jobs:
     # somebody ELSE's review event. Proving it here puts that red on the pull request that caused it.
     # No credential, no network: every case is a fixture (#4299).
     - name: "An unanswered or unreviewed pull request goes red — the check can say no (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-review-answered.py --self-test
 
     # 🚨 THE TWO SCRIPTS THAT DECIDE WHAT A SATELLITE'S PULL REQUEST DOES *NOT* REBUILD, proven
@@ -2316,12 +2354,14 @@ jobs:
     # run; running it here as well is what makes a core PR that breaks the narrowing red on the
     # core PR, rather than on the next satellite to bump its pin.
     - name: "The build-scope selector can say no, and every fallback still falls back (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: |
         python3 .github/scripts/node-repo-scope.py --self-test
         python3 .github/scripts/node-repo-publication-base.py --self-test
         python3 .github/scripts/node-repo-publication-reuse.py --self-test
         python3 .github/scripts/node-repo-project-scope.py --self-test
     - name: "A satellite's no-op set stays comparable to ours — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-noop-scope-parity.py --self-test
 
     # 🚨 The fleet pins platform images BY DIGEST, and ACR retention deletes what is pinned
@@ -2345,6 +2385,7 @@ jobs:
     # that decides PROTECTED / UNPROTECTED / PENDING-LOCK is exercised on every branch — including
     # the one no live run can reach without UNLOCKING a production manifest.
     - name: "Every fleet image pin is extractable, and the lock still precedes the purge (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pinned-digests.py --self-test
 
     # 🚨 …and the OTHER question about the same pins, which existence answers nothing about:
@@ -2361,12 +2402,14 @@ jobs:
     # orphaned `MW_PLATFORM_REF`, a placeholder in EITHER shape, an unplaceable pin, an empty
     # repository, and five registry-tag cases — fires on its own.
     - name: "A repository's pins name ONE promoted build — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pin-set-consistency.py --self-test
 
     # Core itself pins no platform image (it IS the platform), so this is a MEASURED zero and it is
     # printed as one. Deliberately without `--require-pins`: the day core does start pinning, the
     # denominator above stops reading 0 and the arms engage — nothing here has to be remembered.
     - name: "…and this repository's own pin set is consistent"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pin-set-consistency.py --root .
 
     # 🚨 AND THE HALF THAT STOPS THE DELETION RATHER THAN REPORTING IT (MeshWeaver#3438,
@@ -2390,6 +2433,7 @@ jobs:
     # was; sabotaging the guard left the whole self-test green. Found by falsifying this file
     # rather than reading it, 2026-09-07.
     - name: "Every pinned manifest gets locked, and nothing gets unlocked — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/lock-pinned-digests.py --self-test
 
     # The premise the lock rests on, asserted with NO credential: a lock protects only because
@@ -2399,6 +2443,7 @@ jobs:
     # a pull request can break. A step that gained `--include-locked` would turn every lock into
     # decoration while the lock job kept reporting success.
     - name: "…and the recorded purge still skips locked manifests"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/lock-pinned-digests.py --check-retention-record .
 
     # 🚨 THE SECOND QUESTION ABOUT THE SAME REGISTRIES, AND IT HAD NO GATE AT ALL (MeshWeaver#4230).
@@ -2417,6 +2462,7 @@ jobs:
     # re-derived, files swept, files skipped and why) because "no deleter found" and "nothing was
     # swept" are the same output without one. Doc/Architecture/FleetRegistryRetention.
     - name: "…and every registry the fleet pins in still says what DELETES from it"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/lock-pinned-digests.py --check-registry-retention .
 
     # 🚨 THE GAP actionlint CLOSES (MeshWeaver#3228): every check above reads a workflow with
@@ -2457,6 +2503,7 @@ jobs:
     # workflows structurally, against 37 findings if shellcheck were left on — which is the
     # measurement behind the flags, not a guess.
     - name: "Install actionlint (pinned; a failed or unverified download fails this job RED)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: |
         set -euo pipefail
         ver=1.7.12
@@ -2480,6 +2527,7 @@ jobs:
     # exit 0 having checked nothing if discovery ever came up empty; and a `*.yml` glob silently
     # excludes a future `.yaml` workflow (check-workflow-shell.py already scans both extensions).
     - name: "Every workflow is structurally valid (actionlint)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: |
         set -euo pipefail
         workflows=()
@@ -2497,6 +2545,7 @@ jobs:
     # steward runs this same self-test before every real decision, but that lane only fires on a
     # dequeue — so a classifier regression would otherwise merge on a branch that never queued.
     - name: "The merge-queue steward's decision table holds (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/merge-queue-steward.py --self-test
 
     # This helper is executed by the reusable module lane in every satellite, while the framework
@@ -2504,11 +2553,13 @@ jobs:
     # workflow passed explicitly and refuses any select/pack/tests invocation that drifts back onto
     # that platform checkout.
     - name: "Module batching runs from build logic, independently of the platform pin"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: >-
         python3 .github/scripts/module-pack-batch.py --self-test
         --workflow .github/workflows/node-repo-module-pack.yml
 
     - name: "Gate the shell CI itself runs"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-shell.py
 
     # Deliverable that needs no credential: EXECUTE main-cd's release-version recovery — the step
@@ -2517,6 +2568,7 @@ jobs:
     # the harness fails red if it cannot find it or if the step stopped making the call being
     # stubbed. A copy passes while the real thing rots.
     - name: "Execute main-cd's decision steps against fixtures"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-cd-steps.py
       env:
         GITHUB_WORKSPACE: ${{ github.workspace }}
@@ -2530,6 +2582,7 @@ jobs:
     # republishes mid-composition, and asserts the precondition header was actually sent — a script
     # that stopped pinning would still compose its files and pass on the outputs alone.
     - name: "Execute compose-sealed-modules.sh against a republishing registry"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-sealed-module-compose.py
 
     # The lanes that run a SATELLITE's suites pick the test runner and the cwd `dotnet test` runs
@@ -2540,6 +2593,7 @@ jobs:
     # embedded Python — and fail red when they cannot find it. The canary harness also carries the
     # evidence comparator's cases, which no workflow ran until now.
     - name: "Execute module-pack's test-runner selection against temp checkouts"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-pack-test-runner.py
     # The SDK path's per-module pack additions (#4367): `module-pack --deps-closure` REFUSES a
     # RID-specific managed asset or an unprobed native unless something the module NAMES carries
@@ -2550,8 +2604,10 @@ jobs:
     # one, inside the sdk) case) and runs it under bash with `dotnet` stubbed to MSBuild's measured
     # -getItem JSON shape and the real jq — plus a falsification arm that deletes the append.
     - name: "Execute module-pack's per-module pack additions against temp csprojs"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-pack-with.py
     - name: "Execute the platform canary's evidence and runner code"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-platform-canary.py
 
     # The WRITER side of the same window (#3461). `prebuilt-bundles/<identity>/<source>/` has
@@ -2563,6 +2619,7 @@ jobs:
     # runs the REAL script twice, interleaved, against a stub share, and reads the verdict off the
     # BYTES rather than off the script's own log.
     - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-publish-bake-overlap.py
 
     # The READER side of the same lane, and a log-quality gate rather than a byte one (#3583).
@@ -2575,6 +2632,7 @@ jobs:
     # ask" as "the upstream has not published" — a smaller number in place of a refusal. A control
     # case must still PASS, so the harness cannot confuse "refuses correctly" with "always refuses".
     - name: "Execute check-release-availability.sh — the three refusals stay distinguishable"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-release-availability-refusals.py
 
     # The MODULE registry hand-over (MeshWeaver#3878). `node-repo-module-publish.yml` is a
@@ -2587,8 +2645,10 @@ jobs:
     #     stub registry that RECORDS every request — so "the registry was left untouched" is read
     #     off the request log rather than off an exit code.
     - name: "The module publication gate can refuse (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/module-publication.py --self-test
     - name: "Execute the module publication lane against a stub registry"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-publication.py
 
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
@@ -2605,6 +2665,7 @@ jobs:
     # are asserted, and both have their own falsification arm: the drop has no symptom short of a
     # DllNotFoundException at the first P/Invoke.
     - name: "Execute the lanes' external-module landing against real bundle shapes"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-asset-landing.py
 
     # The same composition step now also asserts ONE BUILD PER ASSEMBLY NAME across the whole set
@@ -2617,6 +2678,7 @@ jobs:
     # above: both lanes' step EXTRACTED by `id:` and executed, the verdict read off the exit status,
     # and both directions covered — divergent copies RED, identical copies GREEN.
     - name: "Execute the lanes' one-build-per-assembly-name assertion"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-set-consistency.py
 
     # The SAME invariant, over the population that actually had the defect (#3732). The assertion
@@ -2630,6 +2692,7 @@ jobs:
     # two zero-shapes that look like a clean measurement), pins the report-not-refusal posture in
     # both directions, and mutates the real subject to watch the finding disappear.
     - name: "Execute the publication-wide one-build-per-assembly-name reading"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-set-census.py
 
     # The gate's shard PLAN decides how many runners judge a run's packages, and it read the
@@ -2640,6 +2703,7 @@ jobs:
     # extracted by `id:` and executed: the clamp, the full-run path it must NOT touch, every
     # pre-existing refusal, and a falsification arm that reproduces the defect without the clamp.
     - name: "Execute the node-repo gate's shard plan (the fan-out never exceeds the work)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-gate-shard-plan.py
 
     # carry-forward-bundles.sh is the other half of that publication and had NO CI execution at
@@ -2647,6 +2711,7 @@ jobs:
     # production publish. Its self-test covers the shrink refusals it has always owed and the
     # one-publication postcondition #3461 added.
     - name: "Execute carry-forward-bundles.sh against its own fixtures"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/carry-forward-bundles.sh --self-test
 
     # 🚨 …and its SIBLING had none either, which is worse: bake-scope.sh decides what does NOT get
@@ -2654,6 +2719,7 @@ jobs:
     # for phase 2's reader half — measured 2026-09-13, nothing in .github/workflows/ ever ran it.
     # A proof a doc cites and no lane executes is a claim, not a control.
     - name: "Execute bake-scope.sh against its own fixtures"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/bake-scope.sh --self-test
 
     # THE TWO AZURE-DIRECT READERS of a sealed publication (#3461, phase 3). Phase 1 routed every
@@ -2667,6 +2733,7 @@ jobs:
     # same names with different bytes — so the verdict is which publication landed, and the
     # no-pointer controls prove today's flat behaviour is byte-identical.
     - name: "Execute the two Azure-direct publication readers against a share with a generation"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-publication-pointer-readers.py
 
   shared-rules:

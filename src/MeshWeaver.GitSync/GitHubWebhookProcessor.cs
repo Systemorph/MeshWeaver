@@ -1624,7 +1624,22 @@ public sealed class GitHubWebhookProcessor
         return false;
     }
 
-    private static GitHubIssue MapIssue(JsonElement e) => new()
+    /// <summary>
+    /// The webhook payload's issue object as a <see cref="GitHubIssue"/> snapshot.
+    ///
+    /// <para>🚨 <b>Every field a reader depends on must be here, because this snapshot REPLACES the
+    /// node's content</b> — a field this mapper omits is not merely absent, it is overwritten with the
+    /// default on the next event. <see cref="GitHubIssueStateReason.Unknown"/> makes that concrete:
+    /// it means "the reason was not established", so dropping <c>state_reason</c> would have a live
+    /// webhook assert something FALSE about a human's close decision. Pinned by
+    /// <c>AWebhookIssueSnapshotKeepsItsCloseDecisionTest</c>, which also holds this mapper and
+    /// <c>OctokitGitHubRepoClient.ToIssue</c> to the same answer, so the next field added to one and
+    /// forgotten in the other fails there rather than in production.</para>
+    ///
+    /// <para>Internal, not private, for the same reason the publish-signal predicates are: it is a
+    /// pure function of a payload and needs no mesh, so its table is pinned in core.</para>
+    /// </summary>
+    internal static GitHubIssue MapIssue(JsonElement e) => new()
     {
         Number = GetInt(e, "number"),
         Title = GetString(e, "title"),
@@ -1639,6 +1654,9 @@ public sealed class GitHubWebhookProcessor
         CreatedAt = GetDate(e, "created_at"),
         UpdatedAt = GetDate(e, "updated_at"),
         ClosedAt = GetDate(e, "closed_at"),
+        // GitHub sends `state_reason: null` for an open issue, which GetString reads as null and
+        // Parse answers Unknown for — correct, because an open issue carries no close decision.
+        StateReason = GitHubIssueStateReasons.Parse(GetString(e, "state_reason")),
     };
 
     private static GitHubIssueComment MapComment(JsonElement c) =>

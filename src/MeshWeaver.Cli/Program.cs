@@ -130,8 +130,18 @@ async Task<int> Run(
 // --- recycle / compile / diagnostics / execute-script ---------------------
 {
     var pathArg = new Argument<string>("path") { Description = "Path of the node (or NodeType) to recycle." };
-    var cmd = new Command("recycle", "Force a fresh hub initialisation by disposing the current one.") { pathArg };
-    cmd.SetAction((result, ct) => Run(result, ct, (c, t) => c.Recycle(result.GetValue(pathArg)!, t)));
+    // 🚨 --reason exists because AGENTS.md states carrying one as an ABSOLUTE, and this surface could
+    // not honour it (MeshWeaver#4782). The framework substitutes a self-describing fallback naming
+    // WHO asked; only the operator can say WHAT they were trying to fix, and that is the half a
+    // reader of a [QUIESCE-START] line needs.
+    var reasonOpt = new Option<string?>("--reason")
+    {
+        Description = "Why you are recycling — carried into the target's DisposeRequest and its "
+                      + "[QUIESCE-START] line, beside the framework's own sentence.",
+    };
+    var cmd = new Command("recycle", "Force a fresh hub initialisation by disposing the current one.") { pathArg, reasonOpt };
+    cmd.SetAction((result, ct) => Run(result, ct,
+        (c, t) => c.Recycle(result.GetValue(pathArg)!, result.GetValue(reasonOpt), t)));
     root.Subcommands.Add(cmd);
 }
 {
