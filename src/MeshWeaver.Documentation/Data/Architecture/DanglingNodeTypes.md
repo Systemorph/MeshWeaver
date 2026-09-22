@@ -28,17 +28,21 @@ counterparty, which is why issue #2993 was filed as a decision rather than fixed
 > NodeType is never blocked — it is reported, naming the instances it stranded.**
 
 The predicate is `NodeTypeResolution` (`src/MeshWeaver.Mesh.Contract/Services/NodeTypeResolution.cs`):
-a node at the type's **path**, found either as a static node or in persistence.
+a **NodeType declaration** at the type's **path**, found either as a static node or in persistence.
 
 ```csharp
-if (string.IsNullOrEmpty(nodeType))                                 return Observable.Return(true);
-if (hub.ServiceProvider.FindStaticNode(nodeType) is not null)       return Observable.Return(true);
-return persistence is null ? Observable.Return(false)
-                           : persistence.Exists(nodeType).Take(1);
+if (string.IsNullOrEmpty(nodeType))                            return NodeTypeVerdict.Registered;
+if (hub.ServiceProvider.FindStaticNode(nodeType) is { } s)     return Judge(s, probe);
+return persistence.Read(nodeType, options).Take(1).SelectMany(node => node is not null
+    ? Observable.Return(Judge(node, probe))                    // ← the content test
+    : persistence.Exists(nodeType).Take(1).Select(…));          // ← the old accept, preserved
 ```
 
 Not a `TypeRegistry` fact and not a compiled assembly — see
 [Import Write Ordering](../ImportWriteOrdering) for why those two are deliberately not conflated.
+
+**`Judge` is one-sided.** It refuses only what `INodeTypeDeclarationProbe` can *prove* is not a
+declaration, and everything uncertain resolves. That is hole C, below.
 
 ## Where each write verb stands
 
@@ -49,6 +53,10 @@ Not a `TypeRegistry` fact and not a compiled assembly — see
 | `CreateOrUpdateNodeRequest` (import, install, copy, webhook, sync) | `MeshExtensions.ApplyUpdateViaStream` | Same rule, inline — the upsert verb runs no `INodeValidator` at all |
 | `patch` | `MeshOperations` | `nodeType` is not in `PatchableFields`; refused outright |
 | `GetMeshNodeStream(path).Update(...)` | the owning hub | **Unguarded, deliberately** — see [Residuals](#residuals) |
+
+All three guarded rows call the **same** `NodeTypeResolution`, and since hole C that predicate also
+refuses a path an occupant holds — so none of them can accept a type the activation boundary will
+then refuse.
 
 ## Hole A — `update` accepted a NodeType that did not exist
 
@@ -212,6 +220,110 @@ And a regression already recorded on a type whose node then disappears is **with
 same bucket (`RetireRegression`), cascading to its derived verdicts exactly like a retraction — it is
 not laundered into a recovery. Pinned by `ARetiredNodeTypeIsNotARegressionTest`.
 
+## Hole C — occupancy is not registration
+
+The predicate above asked `IStorageAdapter.Exists`. That answers *"is a node there"*, and the two
+questions come apart the moment **two things want one name**:
+
+> A Store plugin installs its root at the bare path `Feedback`, while its NodeType declaration is
+> `Feedback/Feedback`.
+
+An instance naming the bare `Feedback` therefore passed every WRITE boundary — a node *is* at that
+path — and was then refused by ACTIVATION, which has applied the content test since #2245
+(`NodeTypeEnrichmentHelpers.ProbeCollision`). **A write that accepts and an activation that refuses
+is the drift**: the boundaries answer one question two ways.
+
+🚨 **The damage is narrower than hole A's, and saying it hole A's way overstates it.** A type
+resolving to *nothing* leaves a node with no per-node hub at all. A type resolving to an *occupant*
+does not — measured read-only on the live mesh, the stranded production instance
+`rbuergi/Feedback/20260920-1207-…` (`nodeType: Feedback`, version 3) returns its full content
+through an ordinary read, while the log for that same instance carries
+
+```
+EnrichWithNodeType: path 'Feedback' is occupied by a node that is not a NodeType declaration
+('Feedback' is a 'Store/Plugin' node) — instance 'rbuergi/Feedback/20260920-1207-…' has no type
+to bind to; applying error overlay
+```
+
+So the row is fine and the **hub** is wrong: the page serves the diagnostic instead of the type's
+views, and typed requests are NACKed. (That instance also carries `MarkdownContent` under a
+`Feedback` NodeType — the same write was malformed twice, and nothing refused either half.)
+
+### There is no fallback, and both tickets said there was
+
+The mechanism is smaller than it looked. Neither `Resolves` nor the activation probe ever looks at
+`Feedback/Feedback`: both ask about **one path — the one the instance names**. So "resolution lands
+on the plugin node because the declaration is absent from this partition" and "the lookup hits the
+plugin root *first* and does not continue on to the declaration" are both descriptions of a search
+that does not happen. The declaration's presence or absence is **not an input**, which is why one
+ticket filed against a partition that had it and one against a partition that did not produced a
+byte-identical log line from a byte-identical code path.
+
+What the platform gets wrong is the predicate, not the search: a path that is *occupied* was counted
+as a path where a type is *registered*.
+
+### Decision — one predicate, and it may only ever say "definitely not"
+
+`INodeTypeDeclarationProbe` (`MeshWeaver.Mesh.Contract`) is the seam;
+`NodeTypeDeclarationProbe.IsProvablyNotADeclaration` (`MeshWeaver.Graph`) is the single
+implementation, applied by the write boundaries **and** by `ProbeCollision`. It has to be a seam
+rather than a static helper because the test needs `NodeTypeDefinition`, and `Graph.Contract`
+references `Mesh.Contract` and never the reverse — the layer that owns the record supplies the test
+to the layer that owns the rule.
+
+It convicts only when **both** hold, for every candidate:
+
+| clause | why it is needed |
+|---|---|
+| `NodeType` is non-empty and is not `NodeType` | several built-in declarations (Role, Group) leave `NodeType` unset, and one that says `NodeType` is a declaration by construction |
+| content does not convert to a `NodeTypeDefinition` | untyped JSON deserialises into one happily, so a degraded row must fall through rather than be convicted |
+
+A false positive refuses a write that would have worked, and the mesh has no way back from that; a
+false negative merely leaves the previous behaviour. So the conviction returns a **description**
+rather than a `bool` — a non-answer and a clean answer are the same value — and a probe that is not
+registered at all convicts nothing.
+
+Measured on the live mesh, read-only: `nodeType:Feedback/Feedback partitions:all` returns **9**
+instances over 117 readable partitions, every one naming the qualified declaration path, while
+exactly **one** node mesh-wide names the bare path — the instance the incident's own log line
+quotes. Refusing the bare form costs nothing that works, and that reading is what
+`AnInstanceOfARealDeclaration_IsStillAccepted` pins in `NodeTypePathOccupancyTest`.
+
+### The refusal had to change too
+
+"NodeType 'X' is not registered" sends the reader off to **create a node that is already sitting at
+that path**. `NodeTypeResolution.OccupiedMessage` (catalog key `activity.nodeType.pathOccupied`) is
+the second negative, and it is worded as the activation boundary's already is — one fact, one
+sentence, whichever boundary a reader meets first.
+
+### The activation half, and why the fix is not complete without it
+
+`ProbeCollision` is reached only when the existence probe ANSWERS. Two routes go round it: an
+`Indeterminate` outcome — the 3 s lookup not answering, which is the ordinary state during a
+post-roll recompile wave — and a host with no `IMeshQueryCore`. On those the slow path did not wait
+at all. `IsCompileSettled`'s first arm says so in its own words:
+
+> *"Not a `NodeTypeDefinition` in ANY readable shape — a plain node at a path used as a type.
+> Nothing to wait for; `ApplyStreamResult` applies the default config **deliberately**."*
+
+So the instance bound the **bare default chain** — no type, no areas, no diagnostic — which is this
+page's own opening paragraph, reached on purpose. Measured with the fix disabled, the activation
+settled in ~3 s (the probe's budget, not `SlowPathTimeout`) with a null `HubConfiguration`, and the
+only trace of the cause was the bare `As<NodeTypeDefinition> for Feedback: value is PluginContent`
+line at `Error` that a *predicate* on the way emitted, naming neither instance nor reason.
+
+**So this decision REVERSES that branch for one case**, and the ground is that the other route
+through the same method already decided the opposite: when the probe answers, `ProbeCollision`
+refuses by name. One method giving opposite verdicts for one condition is the drift; the verdict
+that names the cause is the one to keep. A proven non-declaration is now a terminal state of the
+same bounded wait, ending on the overlay that names the occupant — and because the test is
+one-sided, every shape it cannot prove still takes the old branch.
+
+The predicates on the route also stop passing a logger, for the reason `ProbeCollision`'s own doc
+comment already gave: a non-convertible type node is their normal input, and reporting a normal
+input as a fault is how that line became the *fingerprint's own text* — which is why the incident
+could never go quiet however often the underlying defect was fixed.
+
 ## The repair path both decisions had to leave open
 
 `patch` refuses `nodeType` outright, so a **full-node `update` naming a type that does resolve** is
@@ -235,6 +347,15 @@ Named here rather than left for the next reader to rediscover:
 - **A node still readable is a precondition of repairing it.** Retyping is allowed, but a node whose
   type is already dangling answers a point read only after the slow-path budget expires. Repair works;
   it is slow, and `NodeUpdatePipeline` says so explicitly rather than reporting "not found" (#2992).
+- **The repair route races the recycle it triggers.** Retyping recycles the node's hub
+  (`NodeTypeRebindWatcher`, #1104), so a second write issued straight after the first can arrive
+  while that hub is mid-disposal and be refused — `Hub … is shutting down
+  (RunLevel=DisposeHostedHubs) — cannot process RawJson`, surfaced by the upsert as
+  `success=False reason=Unknown`. Seen once, in a full-project test run and not in the isolated
+  one, i.e. a timing race. It is **not established** whether a plain retry lands, whether an
+  ordinary caller can hit the window, or whether the shutdown NACK is already in
+  `MeshNodeStreamExtensions`' provably-safe re-enqueue set — that last question decides whether it
+  is a defect at all. Filed into bug triage rather than fixed here.
 - **A rename does not rewrite instances.** `MoveNodeRequest` on a NodeType leaves every instance
   pointing at the old path — the same stranding as a prune, from a different verb, and not covered by
   the probe.

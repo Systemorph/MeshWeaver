@@ -345,6 +345,23 @@ public static class GraphConfigurationExtensions
                 // hub's IMessageHub.
                 services.AddScoped<INodeValidator, Security.DanglingNodeTypeValidator>();
 
+                // 🚨 The content half of that same rule, and the reason the guard above could be
+                // green while the defect shipped: "a node exists at the type's path" was the WHOLE
+                // predicate, so a write naming a path a Store/Plugin root occupies (the bare
+                // `Feedback`, whose declaration is `Feedback/Feedback`) was ACCEPTED here and then
+                // REFUSED by activation, which has applied the content test since #2245 — so the
+                // instance binds the OCCUPANT's hub configuration (or the collision overlay) and
+                // serves the diagnostic instead of its type's views (#5008/#2231). The row still
+                // reads; it is the hub that is wrong.
+                // NodeTypeResolution cannot name NodeTypeDefinition — Graph.Contract references
+                // Mesh.Contract, not the reverse — so the layer that owns the record supplies the
+                // test through this seam. Scoped for the same reason the validator above is: it
+                // reads a stored $type through the hub's OWN TypeRegistry, so it must be the hub
+                // doing the asking — a singleton would pin one hub's registry (and one hub's
+                // lifetime) for every scope. The predicate is shared verbatim with the activation
+                // boundary's ProbeCollision.
+                services.AddScoped<INodeTypeDeclarationProbe, NodeTypeDeclarationProbe>();
+
                 // The RETROACTIVE half of the same fix (#2425/#2506): the validator above only
                 // refuses NEW writes, and #2245 only fixed the STATIC registrations — a
                 // declaration row PERSISTED self-typed before either landed keeps answering its
