@@ -136,23 +136,37 @@ public sealed class PartitionDropPostDeletionHandler : INodePostDeletionHandler
             return Observable.Return(Unit.Default);
 
         var partition = deletedNode.Id;
-        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToList();
 
-        // Sequential (.Concat) like provisioning, so concurrent DDL never races. A provider
-        // failure propagates — the delete pipeline surfaces it as a Warning on the activity.
-        var dropStores = providers
+        return DropStores(hub, partition, $"{deletedNode.NodeType} deletion by {deletedBy ?? "system"}", logger)
+            .Concat(DeletePartitionDefinition(partition))
+            .TakeLast(1)
+            .Do(_ => DropCachedPartitionQueries(hub, partition, logger));
+    }
+
+    /// <summary>
+    /// Drops <paramref name="partition"/>'s backing store on every <see cref="IPartitionStorageProvider"/>
+    /// — THE drop, shared by the two teardowns so they cannot drift: the root delete (this handler)
+    /// and the record delete of a partition whose root is already gone
+    /// (<see cref="StrandedPartitionRecordTeardownHandler"/>, #5073). Sequential (<c>Concat</c>)
+    /// like provisioning, so concurrent DDL never races; a provider failure propagates — the delete
+    /// pipeline surfaces it as a Warning on the activity. Emits exactly once.
+    /// </summary>
+    /// <param name="hub">Hub supplying the storage providers.</param>
+    /// <param name="partition">The partition (first path segment) whose stores are dropped.</param>
+    /// <param name="because">What triggered the drop, for the log line.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<Unit> DropStores(
+        IMessageHub hub, string partition, string because, ILogger? logger)
+    {
+        var providers = hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToList();
+        return providers
             .Select(p => p.DeletePartition(partition))
             .Concat()
             .ToList()
             .Do(_ => logger?.LogInformation(
-                "Dropped partition '{Partition}' across {Count} provider(s) after {NodeType} deletion by {User}",
-                partition, providers.Count, deletedNode.NodeType, deletedBy ?? "system"))
+                "Dropped partition '{Partition}' across {Count} provider(s) after {Because}",
+                partition, providers.Count, because))
             .Select(_ => Unit.Default);
-
-        return dropStores
-            .Concat(DeletePartitionDefinition(partition))
-            .TakeLast(1)
-            .Do(_ => DropCachedPartitionQueries(partition));
     }
 
     /// <summary>
@@ -186,9 +200,13 @@ public sealed class PartitionDropPostDeletionHandler : INodePostDeletionHandler
     /// <para>Runs only on a SUCCESSFUL teardown — a failed store drop leaves the partition (and
     /// therefore its caches) in place for a retry, which is the same reason the definition node
     /// stays. In-memory and synchronous; the cache is optional so a minimal fixture without one
-    /// simply has nothing to drop.</para>
+    /// simply has nothing to drop. Shared with <see cref="StrandedPartitionRecordTeardownHandler"/>
+    /// for the same reason <see cref="DropStores"/> is.</para>
     /// </summary>
-    private void DropCachedPartitionQueries(string partition)
+    /// <param name="hub">Hub whose container holds the stream cache.</param>
+    /// <param name="partition">The partition that was torn down.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static void DropCachedPartitionQueries(IMessageHub hub, string partition, ILogger? logger)
     {
         var cache = hub.ServiceProvider.GetService<Mesh.Services.IMeshNodeStreamCache>();
         if (cache is null)

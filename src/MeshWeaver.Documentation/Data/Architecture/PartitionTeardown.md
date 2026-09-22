@@ -346,9 +346,17 @@ alone. `scope:children` listings are partition-scoped and RLS-filtered — the `
 one, does not appear in an unscoped `nodeType:Space scope:children` even though its root exists — so
 a query's `count: 0` is not by itself evidence of absence.
 
-`V03_DropRogueSchemas` (MeshWeaver.Plugins, `src/Memex.Database.Migration/Migrations/`) is the
-precedent for the cleanup shape when a migration is warranted. A cleanup is a separate, deliberate
-decision from this fix, which only stops NEW orphans.
+**Finishing an orphan's teardown is the record delete.** A partition that no ordinary delete can
+reach — no root at all, or the bootstrap's ownerless `Space` shell over it — is torn down by
+deleting its RECORD, `delete @Admin/Partition/{partition}`: `StrandedPartitionRecordTeardownHandler`
+runs the same provider drop and cache eviction the root delete runs, under the same tombstone. It
+refuses a LIVE partition (a real root, an owner, a synced or static partition), so a record delete
+never drops somebody's schema; the full decision table is in
+[A Stale Index Row Confirms Itself](../AStaleIndexRowConfirmsItself) → *The verb*. Confirm the
+candidate is stranded (list 2 above, then `get @{partition}`) before deleting its record.
+
+`V03_DropRogueSchemas` (MeshWeaver.Plugins, `src/Memex.Database.Migration/Migrations/`) remains the
+precedent for a bulk cleanup when a migration is warranted.
 
 ## See also
 
