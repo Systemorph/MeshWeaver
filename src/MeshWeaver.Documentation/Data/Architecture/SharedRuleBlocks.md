@@ -169,7 +169,29 @@ not declare, in any of the seven repos it reads. So neither "satellites first" n
 lands green in one step. **Land it in three:** (1) a core change that wraps the hub's copy and
 registers the block with `required-in` naming only the hub — green on its own, and the id becomes
 known; (2) the spokes' copies, in any order; (3) a core change widening `required-in` to every repo.
-`never-hand-roll-ui` (2026-09-15) was the first block landed this way.
+`never-hand-roll-ui` (2026-09-15) was the first block landed this way; `dispose-to-serve-new-state`
+and `file-it-and-move-on` followed it.
+
+🚨 **Step 3 is the dangerous one, and the danger is silent until it is too late.** Widening
+`required-in` before a spoke carries the block turns that spoke's gate red on **every** pull request
+in that repository — including the one that would add the block. Run as a deliberate red control
+before `file-it-and-move-on`'s step 2 merged, the widened register named **all six** spokes MISSING
+while the other five blocks each read `✓ 6 spoke(s) match the hub` — six errors, one per repository,
+which is exactly what a premature step 3 does to the fleet. Run again after the six merged, the same
+command read `✅ All 6 shared rule block(s) are identical everywhere they are carried, across 7
+repos`. **Do step 3 as its own change set, after confirming all six, and read the spokes from their
+default branches rather than from a local copy** — the gate does that by default, and `--local` for
+the repo the gate runs in is what makes a pull request judged on its own diff.
+
+**The register lists seven repositories, not eight, and that is a decision rather than an omission.**
+`Systemorph/MeshWeaver.Crm` carries an `AGENTS.md` and is deliberately absent from `repos`, so this
+gate never reads it and no block can require it. Admitting it has a hard prerequisite: the gate fails
+CLOSED on a repository whose `AGENTS.md` it cannot read, so the read-only fleet-reader App has to be
+installed on Crm first — an organisation-level act no change set here can perform. It has a second:
+because `required-in` is per block and a listed repository with no markers is red for **each** block
+naming it, Crm has to carry every block already registered before it is listed. So adding it is its
+own rollout, and a reader who "tidies up" the missing line reddens the gate on an unreadable
+repository. The rationale is recorded in `.github/shared-rules.json`'s own header, once.
 
 **Changing the text of one:** the hub's copy is authoritative, so the hub's change merges first and
 every spoke's pull request stays red until it does. Never "fix" that red by reverting the hub.
