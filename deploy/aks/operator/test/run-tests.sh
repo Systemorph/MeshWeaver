@@ -2022,6 +2022,151 @@ else
   bad "every kubectl read in bin/ that discards stderr is declared" "$sd_out"
 fi
 
+# ── hosting-migrate: the Roll's migration runs as its OWN Job, and nothing moves until it succeeds ──
+# 🚨 Systemorph/Memex#458/#460. A Roll was `kubectl set image` alone; across a db_version bump the new
+# pod died on DbVersionGate behind old pods answering 200 (memex-cloud 2026-09-19, 8411 → 8955). The
+# step runs the release's OWN migration Job (read from `helm get manifest`) with only the migration
+# image moved, and its exit code is the gate the Roll's set-image sits behind. These cases pin: the
+# Job is the release's (pull Secret, budget, envFrom, wait-for-postgres kept), BOTH the rehearsal and
+# the migration container move to the target, succeeded is the only success, a failure / a vanished
+# Job / a Job past its budget is a non-zero exit naming it, a Forbidden is REFUSED not absent, a
+# release with no migration Job refuses, and a re-run per tag is idempotent.
+echo
+echo "── hosting-migrate: the migration runs as its own Job before the image moves ──"
+MG_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/migrate" && pwd)"
+MG_FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/migrate" && pwd)"
+_mg_img="cr.example.test/memex-migration:3.0.0-ci.9101"
+_mg_job="memex-migration-roll-3-0-0-ci-9101"
+_mg_new() { _mg_dir="$(mktemp -d)"; cp -R "$MG_FIXTURES/." "$_mg_dir/"; _mg_log="$_mg_dir/calls.log"; : > "$_mg_log"; }
+_mg_run() { env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
+  HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 "$@" \
+  hosting-migrate --namespace pearl --release pearl --image "$_mg_img" 2>&1; }
+
+# absent → created from the release's Job, retargeted, waited on, completed
+_mg_new; echo 2 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q "::hosting:: migration_job=${_mg_job}" \
+   && printf '%s' "$_mg_out" | grep -q '::hosting:: migration=completed' \
+   && printf '%s' "$_mg_out" | grep -q 'Database migration completed. Version: 57'; then
+  ok "an absent Job is created, waited on, and only then reported completed"
+else
+  bad "an absent Job is created, waited on and reported completed" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+_mg_c="$_mg_dir/created.json"
+if [ -f "$_mg_c" ] \
+   && [ "$(jq -r '.metadata.name' "$_mg_c")" = "$_mg_job" ] \
+   && [ "$(jq -r '.spec.template.spec.containers[0].image' "$_mg_c")" = "$_mg_img" ] \
+   && [ "$(jq -r '.spec.template.spec.initContainers[] | select(.name=="memex-migration-rehearsal") | .image' "$_mg_c")" = "$_mg_img" ] \
+   && [ "$(jq -r '.spec.template.spec.initContainers[] | select(.name=="wait-for-postgres") | .image' "$_mg_c")" = "busybox:1.36" ]; then
+  ok "BOTH migration containers (rehearsal + run) move to the target; wait-for-postgres keeps its image"
+else
+  bad "the migration containers move to the target and nothing else does" "$(cat "$_mg_c" 2>/dev/null)"
+fi
+if [ "$(jq -r '.spec.template.spec.imagePullSecrets[0].name' "$_mg_c")" = "registry-pull" ] \
+   && [ "$(jq -r '.spec.activeDeadlineSeconds' "$_mg_c")" = "660" ] \
+   && [ "$(jq -r '.spec.template.spec.containers[0].envFrom[1].secretRef.name' "$_mg_c")" = "memex-migration-secrets" ] \
+   && [ "$(jq -r '.metadata.labels["app.kubernetes.io/component"]' "$_mg_c")" = "memex-migration" ]; then
+  ok "the Job is the release's own: pull Secret, budget, envFrom and labels carried over"
+else
+  bad "the Job is the release's own" "$(cat "$_mg_c")"
+fi
+_mg_get="$(grep -n '^kubectl -n pearl get job' "$_mg_log" | tail -1 | cut -d: -f1)"
+_mg_create="$(grep -n '^kubectl -n pearl create -f -' "$_mg_log" | head -1 | cut -d: -f1)"
+[ -n "$_mg_create" ] && [ -n "$_mg_get" ] && [ "$_mg_get" -gt "$_mg_create" ] \
+  && ok "the Job's status is read AFTER it was created (the wait is real)" \
+  || bad "the Job's status is read after it was created" "$(cat "$_mg_log")"
+rm -rf "$_mg_dir"
+
+# already succeeded for this tag → reported, never re-run
+_mg_new; echo succeeded > "$_mg_dir/job-state"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q '::hosting:: migration=completed' && ! grep -q ' create -f -' "$_mg_log"; then
+  ok "a Job that already SUCCEEDED for this tag is reported, not run again"
+else
+  bad "an already-succeeded Job is not run again" "rc=${_mg_rc} log: $(cat "$_mg_log")"
+fi
+rm -rf "$_mg_dir"
+
+# failed before → deleted and run again
+_mg_new; echo failed > "$_mg_dir/job-state"; echo succeeded > "$_mg_dir/outcome"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+_mg_del="$(grep -n "delete job ${_mg_job}" "$_mg_log" | head -1 | cut -d: -f1)"
+_mg_create="$(grep -n ' create -f -' "$_mg_log" | head -1 | cut -d: -f1)"
+if [ "$_mg_rc" -eq 0 ] && [ -n "$_mg_del" ] && [ -n "$_mg_create" ] && [ "$_mg_del" -lt "$_mg_create" ]; then
+  ok "a Job that FAILED before is deleted and run again — the last failure is not this run's verdict"
+else
+  bad "a previously failed Job is deleted and re-run" "rc=${_mg_rc} log: $(cat "$_mg_log")"
+fi
+rm -rf "$_mg_dir"
+
+# the Job fails → non-zero, names the Job, says the image must not move, never "completed"
+_mg_new; echo 1 > "$_mg_dir/polls"; echo failed > "$_mg_dir/outcome"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q "${_mg_job} FAILED" \
+   && printf '%s' "$_mg_out" | grep -q 'must not either' && ! printf '%s' "$_mg_out" | grep -q 'migration=completed'; then
+  ok "a FAILED migration exits non-zero, names the Job, and never reports completed"
+else
+  bad "a failed migration is a failed step" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+
+# never finishes → stops at the Job's own budget, non-zero
+_mg_new; echo hang > "$_mg_dir/outcome"
+jq '(.items[] | select(.kind=="Job") | .spec.activeDeadlineSeconds) = 3' "$MG_FIXTURES/rendered.json" > "$_mg_dir/rendered.json"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'has not completed after' && ! printf '%s' "$_mg_out" | grep -q 'migration=completed'; then
+  ok "a migration still running past its own budget is a failed step, not a pass"
+else
+  bad "a migration past its budget fails" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+
+# REFUSED is not ABSENT: a Forbidden on the Job read stops before anything is created
+_mg_new; echo forbidden > "$_mg_dir/job-state"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'REFUSED, not absent' && ! grep -q ' create -f -' "$_mg_log"; then
+  ok "a Forbidden on the Job read is REFUSED (not absent) and nothing is created"
+else
+  bad "a Forbidden job read is refused" "rc=${_mg_rc} out: ${_mg_out} log: $(cat "$_mg_log")"
+fi
+rm -rf "$_mg_dir"
+
+# a release that renders no migration Job → refusal, nothing created
+_mg_new; jq '.items |= map(select(.kind != "Job"))' "$MG_FIXTURES/rendered.json" > "$_mg_dir/rendered.json"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'renders no migration Job' && ! grep -q ' create -f -' "$_mg_log"; then
+  ok "a release with no migration Job is a refusal — the image must not move without one"
+else
+  bad "a release with no migration Job refuses" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+
+# no release at all → refusal naming helm's answer
+_mg_new; rm -f "$_mg_dir/manifest.yaml"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+[ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'has no readable manifest' \
+  && ok "a release helm cannot find is a refusal naming helm's answer" \
+  || bad "a missing release refuses" "rc=${_mg_rc} out: ${_mg_out}"
+rm -rf "$_mg_dir"
+
+# dry run: reads, narrates the create, creates nothing, waits for nothing
+_mg_new
+_mg_out="$(_mg_run env HOSTING_DRY_RUN=true)"; _mg_rc=$?
+if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q 'DRY-RUN would run: kubectl -n pearl create -f -' \
+   && [ ! -f "$_mg_dir/created.json" ] && ! printf '%s' "$_mg_out" | grep -q 'migration=completed'; then
+  ok "a dry run narrates the Job, creates nothing and claims no migration"
+else
+  bad "a dry run creates nothing" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+
+refuses_hard "hosting-migrate refuses a PORTAL image — only memex-migration runs as the migration" "not a plain memex-migration image reference" \
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image cr.example.test/memex-portal-ai:3.0.0-ci.9101
+refuses_hard "hosting-migrate refuses an image reference with a metacharacter" "not a plain memex-migration image reference" \
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image 'cr.example.test/memex-migration:1;rm -rf /'
+refuses_hard "hosting-migrate needs --release" "missing required flag --release" \
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --image "$_mg_img"
+
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
 # The manifest lives three directories away from the scripts and is reviewed separately; twice a
 # script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile
