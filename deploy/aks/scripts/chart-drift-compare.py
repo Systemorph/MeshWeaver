@@ -27,6 +27,16 @@ Arguments, in order:
 The envFrom file is `secret/<name><TAB>key` and `configmap/<name><TAB>key` lines — the NAMES of the
 keys every OTHER envFrom source supplies (memex-portal-config is fetched in full separately), and
 nothing else. No secret VALUE is read by this script, and none may be added to it.
+
+🔒 NO VALUE OF ANY KIND IS PRINTED — not a Secret's, not an inline env's, and (MeshWeaver#4685) not
+a ConfigMap's either. A ConfigMap is non-secret by definition, but it is rendered from the
+deployment record's `config:` — the inventory chart-drift.yml refuses to publish — and this
+repository's Actions logs are public. The first real run's whole disclosure was one value (`'Job'`);
+the surface is data-dependent, and a `DIFFERS ConfigMap MEMEX_HOST` would print a production FQDN.
+A ConfigMap finding therefore says WHICH key and, per side, how LONG the value is — `36 chars` vs
+`35 chars` still tells a GUID from its placeholder — and never the bytes. No hash prefix either: for
+a guessable value that is a confirmation oracle, not a redaction. The operator who acts on a
+finding reads the values on the cluster, where they were always readable.
 The release manifest is REQUIRED, and its absence is a FAILURE rather than a silent "no pending
 deletions": a checker that answers "everything cluster-only survives" because it could not read the
 manifest is a gate that passed on missing input.
@@ -136,6 +146,17 @@ m_env = {e["name"] for e in (m_c.get("env") or []) if "name" in e}
 # sniffed back out of the message text, so the summary count cannot drift from the findings.
 pending_deletions = []
 
+def withheld(value):
+    """A ConfigMap value as this script is allowed to PRINT it (MeshWeaver#4685): its length, never
+    its bytes. See the module docstring — a public Actions log must not carry the deployment
+    inventory the ConfigMap renders from."""
+    if value is None:
+        return "<value withheld: absent>"
+    if value == "":
+        return "<value withheld: EMPTY>"
+    return f"<value withheld: {len(value)} chars>"
+
+
 def deletion_weight(value):
     """How much a pending deletion actually removes. The VALUE decides that, not the key name —
     all 13 owned-but-retired keys found on 2026-09-04 were zero-length, and reading only the names
@@ -158,7 +179,7 @@ def pending_deletion(what, weight, subject):
             f"ONE cluster-only shape a deploy does destroy. {weight} Decide before the next deploy: "
             f"put it back in the chart, or retire it on purpose.")
 
-# ---- 1. ConfigMap: every key, every value ----------------------------------
+# ---- 1. ConfigMap: every key, every value COMPARED — no value PRINTED (#4685) ----
 d_data, l_data = d_cm.get("data") or {}, l_cm.get("data") or {}
 if not d_data:
     print("::error::the rendered memex-portal-config has ZERO keys — the comparison would be "
@@ -169,7 +190,7 @@ for k in sorted(set(d_data) | set(l_data)):
     comparisons += 1
     if k not in l_data:
         finding("CHART-ONLY", f"ConfigMap {k}",
-                f"rendered '{d_data[k]}' — described but NOT running; nobody is getting it")
+                f"rendered {withheld(d_data[k])} — described but NOT running; nobody is getting it")
     elif k not in d_data:
         # The class splits HERE, on manifest membership — see the module docstring. Both halves are
         # "live and not rendered"; only one of them is one deploy away from being gone.
@@ -179,13 +200,13 @@ for k in sorted(set(d_data) | set(l_data)):
                                      "this ConfigMap key"))
         else:
             finding("CLUSTER-ONLY", f"ConfigMap {k}",
-                    f"live '{l_data[k]}' — edited on the cluster; helm never owned it (it is NOT "
+                    f"live {withheld(l_data[k])} — edited on the cluster; helm never owned it (it is NOT "
                     f"in the release manifest), so a `helm upgrade` PRESERVES it (measured), but "
                     f"it exists in no committed source, so it is lost on any rebuild or restore "
                     f"and is invisible to review")
     elif d_data[k] != l_data[k]:
         finding("DIFFERS", f"ConfigMap {k}",
-                f"chart '{d_data[k]}' vs live '{l_data[k]}' — a deploy does NOT resolve this "
+                f"chart {withheld(d_data[k])} vs live {withheld(l_data[k])} — a deploy does NOT resolve this "
                 f"(measured); it persists until one side is made authoritative")
 
 # ---- 2. inline env NAMES (values withheld — they hold tokens) --------------
