@@ -323,20 +323,35 @@ second's verdict would land on the FIRST's `Admin/UpdatePolicy`. So the derivati
 both declaring overlays, rather than emitting two rows called `memex`. Silently qualifying the name
 to `repo:id` would be worse — it would ask for credentials under a key nobody has provisioned.
 
-Resolving it is a decision, not a workaround, and the refusal now names **three** ways out with
-their risk direction: rename one installation (its `Hosting__Deployment` is its inventory identity,
-so this moves whichever estate owns the one that changes); key the maps by the qualified `repo:id`
-and record that here (which then demands a credential for every installation named, including any in
-an estate this fleet holds none for); or declare one of them **out of this lane's scope** in
-`.github/acr-retention/instances.json`, the way `partnerre` already is — the shape that fits an
-installation which can never receive this candidate at all, because its overlay pins a registry
-declared `out-of-estate`. 🚨 That third option is the **looser** direction and the only one that can
-be silently wrong: it SHRINKS the denominator, so an installation excluded by mistake is one this
-lane reports nothing about while reading green — the very failure the derived roster replaced a
-hand-maintained list to prevent. It is taken on the registry fact, never on the name, and the fact
-goes in the declaration. `derive-combo-instances.py`'s self-test asserts the refusal keeps naming
-all three **and** that it keeps naming which one is looser; reverting the message fails exactly that
-one arm of the fifteen.
+Resolving it is a decision, not a workaround, and **two ways out exist today**: rename one
+installation (its `Hosting__Deployment` is its inventory identity, so this moves whichever estate owns
+the one that changes), or key the maps by the qualified `repo:id` and record that here — which removes
+the collision and then demands a credential for every installation named, including any in an estate
+this fleet holds none for.
+
+🚨 **The right answer in principle is a third one, and it is NOT IMPLEMENTED — do not reach for a flag
+that looks like it.** Scoping the **denominator** is what fits here: an installation that can never
+receive this candidate — because its overlay pins a registry declared `out-of-estate`, so the image
+this lane verifies is not the image it runs — does not belong in the set this lane is measured over.
+Nothing expresses that today, and **neither existing flag can stand in for it**:
+
+| flag | what it actually means | why it cannot be used here |
+|---|---|---|
+| `instances.json` instance `state` | **liveness** — `live` / `not-installed` / `retired` (`ROSTER_STATES`) | it is the only exclusion lever that file has, and the installation in question IS live. Declaring it `not-installed` records a **falsehood** in order to obtain an exclusion. |
+| the retention table's derived `out_of_scope` | the **lock** lane's registry scoping | `derive-combo-instances.py` never reads it. `build` is live and `out_of_scope` and is still in the combo roster — the direct counter-example. |
+
+So `partnerre`'s exclusion is **not** the precedent it looks like: that is a `not-installed` liveness
+declaration with a reason that happens to mention the estate, not a scope mechanism. Building the real
+thing means an explicit combo-scope declaration this derivation **consumes**, with its own self-test
+arm. 🚨 And even then it is the **looser** direction, the only one of the three that can be silently
+wrong: it SHRINKS the denominator, so an installation excluded by mistake is one this lane reports
+nothing about while reading green — the very failure the derived roster replaced a hand-maintained
+list to prevent.
+
+`derive-combo-instances.py`'s self-test asserts each of those claims in the refusal — that the third
+answer is named, that it is NOT IMPLEMENTED, that the liveness states cannot express it, and that it is
+the looser direction — rather than the shape of the paragraph, so the earlier wrong advice cannot come
+back silently. Reverting the message fails exactly that one arm of the fifteen.
 
 ### 🚨 The preflight asserts in the order that makes its red actionable
 
