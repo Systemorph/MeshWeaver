@@ -41,6 +41,50 @@ namespace MeshWeaver.Markdown;
 public static class MarkdownBody
 {
     /// <summary>
+    /// Renders a node's current authored document for prerendering. Markdown <c>content</c>,
+    /// a Space or cover's <c>body</c>, and bare strings all use the interactive view's renderer.
+    /// Stored HTML is a fallback only when no source is available: neither HTML cache records
+    /// the source or renderer version that produced it. An empty source therefore renders empty,
+    /// rather than reviving content the author cleared.
+    /// </summary>
+    /// <param name="node">The node to render, or null when the requested node does not exist.</param>
+    /// <returns>The current HTML, cached HTML for a source-less node, or null for no document.</returns>
+    public static string? Render(MeshNode? node)
+    {
+        if (node is null)
+            return null;
+
+        var markdown = node.Content switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } json => json.GetString(),
+            JsonValue value when value.TryGetValue<string>(out var text) => text,
+            _ => StringMember(node.Content, "content") ?? StringMember(node.Content, "body"),
+        };
+        if (markdown is not null)
+            return MarkdownViewLogic.Render(markdown, node.Path, node.Path).Html;
+
+        if (!string.IsNullOrWhiteSpace(node.PreRenderedHtml))
+            return node.PreRenderedHtml;
+        var cached = StringMember(node.Content, "prerenderedHtml");
+        return string.IsNullOrWhiteSpace(cached) ? null : cached;
+    }
+
+    private static string? StringMember(object? content, string name) => content switch
+    {
+        JsonElement { ValueKind: JsonValueKind.Object } json
+            when (json.TryGetProperty(name, out var value)
+                  || json.TryGetProperty(char.ToUpperInvariant(name[0]) + name[1..], out value))
+                 && value.ValueKind == JsonValueKind.String
+            => value.GetString(),
+        JsonObject json when (json[name] ?? json[char.ToUpperInvariant(name[0]) + name[1..]]) is JsonValue value
+                             && value.TryGetValue<string>(out var text)
+            => text,
+        JsonElement or JsonNode or null => null,
+        _ => content.GetType().GetProperty(char.ToUpperInvariant(name[0]) + name[1..])?.GetValue(content) as string,
+    };
+
+    /// <summary>
     /// The node's markdown body, or <c>null</c> when it carries none that can be read.
     ///
     /// <para><c>null</c> rather than <c>""</c> so a caller can tell "this node is not

@@ -102,14 +102,52 @@ fix for the empty sitemap and the reason the body can be served.
 
 ### The body is in the first response
 
-`SeoPageData.Body` is the page text a crawler reads: the node's mirrored HTML when it carries one,
-else the content's own `prerenderedHtml`, else its markdown (`content` for a markdown node, `body`
-for a plugin cover) rendered through the portal's own pipeline, anchored on the node so links
-resolve as they do for a signed-in visitor. It is computed only for a node the gate admitted, and it
-is rendered **visibly** in the static server pass of the page, not inside `<noscript>`: Googlebot
-renders with JavaScript on and may ignore noscript content, and the visible article is what the
-interactive circuit replaces on hydration. The interactive page reads the same per-request stash
-the head resolved into, so the mesh is asked once per request.
+`SeoPageData.Body` is the page text a crawler reads: the node's current markdown (`content` for a
+markdown node, `body` for a Space or plugin cover, or a bare string) rendered by
+`MarkdownBody.Render`, which calls `MarkdownViewLogic.Render`, the same renderer the interactive
+markdown view uses. The signed-in prerender read (`IMeshService.GetPreRenderedHtml`) reads the node
+from its owner and uses this same source-first helper, so an eventually consistent query snapshot
+cannot keep showing the source from before an edit. Both pass the
+node path, so relative links and embeds resolve against the same page. An edit therefore reaches
+both views from the same source, even when the node still carries HTML generated before the edit
+or before a renderer update. An explicitly empty source renders empty; it never revives the old
+page. The node's mirrored HTML, then the content's `prerenderedHtml`, are fallbacks only for nodes
+that carry no markdown source. Neither cache records which source or renderer produced it, so
+neither can establish freshness. SEO resolution refreshes the admitted node from its owner, then
+rechecks anonymous access before returning its current title and body. A signed-in caller's own
+read grant cannot turn a newly private page into public HTML. It is computed only for a node the
+gate admitted, and it is rendered **visibly** in the server response, not inside `<noscript>`:
+Googlebot renders with JavaScript on and may ignore noscript content. The document, head and body
+await the same per-request resolution, so they use one current source and access decision.
+
+### Plain public documents finish on the server
+
+An anonymous visitor requesting an exact, authored Markdown page receives that HTML as the final
+page, without starting Blazor, Monaco or the reconnect UI. The same applies to authored Spaces in
+the configured landing subtree, and to Spaces that explicitly exclude their live contents
+catalog. `PublicPageResponse` makes the request decision and `PublicPageRendering` identifies
+supported document bodies in `MeshWeaver.Plugins`. There is **no separate static build**: each
+request reads the current node and renders its current source with the shared markdown renderer.
+An edit therefore reaches the next request without refreshing a second copy of the page.
+
+Public pages can still be interactive. Framework embeds, executable cells, Mermaid and math keep
+Blazor, as do custom node types, applications, layout-area routes, satellites, empty bodies and
+signed-in sessions. Query parameters that select another view also keep the interactive route;
+ordinary tracking parameters do not change presentation. Gated pages still go through their
+existing access and sign-in flow. Navigating from a circuit to an eligible static page performs a
+normal document load. Where interaction is needed, the visible server-rendered article remains
+the initial response and the circuit replaces it on hydration.
+
+The interactive Space view follows the same source-first priority and preserves an explicitly
+empty body. The generic Overview/Data markdown body uses the shared renderer on each live node
+emission too, keeping its source, HTML and node path together when embedded content needs Blazor.
+Navigation derives HTML for its current snapshot without persisting that result: a
+delayed cache write must not overwrite the HTML after another author has edited the source.
+The landing page and its descendants request the existing `showHeader=false` presentation, so
+the authored hero and headings survive hydration without an additional Space title. The SEO head
+and interactive public page titles use the same `PublicPageTitle` formatter; the landing title
+also follows the node stream when its name changes. These interactive changes live in
+`MeshWeaver.Plugins`, alongside the Space view and the portal pages.
 
 ### The sitemap descends
 
