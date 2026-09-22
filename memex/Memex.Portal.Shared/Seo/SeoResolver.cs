@@ -236,8 +236,15 @@ public static class SeoResolver
     /// <see cref="AnonymousGate.AllowAnonymous"/>. Emits null when the path is no node, the node
     /// is not anonymous-readable, or anything errors/times out. Cold.
     /// </summary>
-    public static IObservable<SeoPageData?> Resolve(IMessageHub hub, string path) =>
-        ResolveGated(hub, path)
+    public static IObservable<SeoPageData?> Resolve(IMessageHub hub, string path)
+    {
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context ?? access?.CircuitContext;
+        return ResolveGated(hub, path)
+            // The permission fold can emit outside the HTTP/circuit execution context. Carry
+            // the actual caller into the owner read; neither the anonymous verdict nor the
+            // emission thread's identity is a replacement for the requesting viewer.
+            .CarryAccessContext(hub.ServiceProvider, caller)
             .SelectMany(gated => gated is not { Readable: true } readable
                 ? Observable.Return<SeoPageData?>(null)
                 // Path resolution is discovery and may carry an older query snapshot. Read the
@@ -258,6 +265,7 @@ public static class SeoResolver
                                 : null)))
             .Timeout(ResolveBudget)
             .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
+    }
 
     /// <summary>
     /// 🚨 THE ONE RESOLVE-AND-GATE PASS. Every SEO surface — the page head, the share card route,
