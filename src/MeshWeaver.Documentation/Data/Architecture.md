@@ -99,6 +99,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Request a Hub Sends to Itself](SelfAddressedRequests) — node CRUD is issued on the hub that executes it, so routing and the reply leg cannot lose it; what that leaves, and why an empty queue at the timeout proves nothing when the handler answers from a detached observable
 - [Router Traffic Detection](RouterTrafficDetection) — the detector has two sites; the receiver names the two addresses, the origin names the call site, and a ratchet per tree keeps the seams adopted
 - [No Static State](NoStaticState)
+- [The Routing Entry Point](RoutingEntryPoint) — every routed message pays an Orleans grain PLACEMENT; the two measured ways it fails and drops live traffic, and the case for a local routing service where a silo is co-hosted
 - [Open Vocabularies Are String Constants](OpenVocabulariesAsStringConstants) — a persisted or module-extended vocabulary is `const string`, never an `enum`; it stays open for anyone to extend with their own constants, and resolution is a durable chain of rule nodes rather than a switch
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
 - [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
