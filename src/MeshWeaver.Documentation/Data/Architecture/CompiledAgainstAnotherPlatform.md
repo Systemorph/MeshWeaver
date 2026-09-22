@@ -210,6 +210,33 @@ Not established by the incident's read-only session, and still open: which activ
 `RecompileForLiveFramework` reaches after `MaxRecompileAttempts` — the census names the state; it
 does not explain that bind.
 
+### The bind path yields on the same reading
+
+The census names a cross-stamp; until MeshWeaver#4632's other half landed, the bind path then
+**healed** it. A fresh activation on a replica whose framework the record no longer names took the
+framework-stale branch of `NodeTypeEnrichmentHelpers` — flip the type `Pending`, recompile for the
+live framework, restamp — which is right after a platform roll (the previous image's build, stamped
+before this process started) and wrong mid-roll (a NEWER image's build, stamped after). Measured on
+the memex control instance's roll from `3.0.0-ci.9106` to `9162`: within minutes of the new replica
+booting its `/health` read *"34 NodeType record(s) were RE-KEYED to a framework this replica does not
+run AFTER it booted"* — the two draining replicas were healing the new generation's stamps backwards,
+the new replica was healing them forward, every activation on both flipped the same types `Pending`
+in turn, and the roll's second replica sat in *"NodeType bake in progress"* for a quarter of an hour.
+
+The rule is one pure function, and both consumers read through it:
+`NodeTypeBuildIdentity.OwnedByANewerGeneration(record, liveFramework, ProcessBoot.StartedAtUtc)` —
+foreign to this process **and** stamped after this process started. The census folds its
+`ForeignSinceBoot` count through the same time half (`StampedAfter`); the bind path, on that
+verdict, **yields**: it leaves the record exactly as the newer generation wrote it, logs which
+generation owns the type and when it stamped, and shows the framework-stale overlay with its
+version-gated self-heal — which on a draining replica means until the pod is gone, and that is the
+point. The boundary is the PROCESS start (`ProcessBoot`), not a hosted service's, so the census and
+the bind path cannot split on different instants. A foreign stamp from BEFORE boot is still healed
+(the ordinary post-roll state), and a stamp with no time is never treated as since-boot — the same
+absent-reading rule the census has always applied. `OwnedByANewerGenerationTest` holds the reader
+against the incident's own mixed population and asserts, record by record, that what the census
+counts since-boot is exactly what the bind path refuses to touch.
+
 ## What would close this class
 
 Stated as options. None has been scoped by the maintainer, and the last one is a legitimate answer.

@@ -1631,10 +1631,55 @@ internal static class NodeTypeEnrichmentHelpers
                                 chosen, node, nodeType, meshConfiguration, compilationService, meshHub,
                                 logger, recompileAttempts);
                         }
+                        // 🚨 YIELD, never heal, when the stamp is a NEWER generation's (#4632's
+                        // other half). The authoritative record is judged where it was read; the
+                        // mirror only where storage could not answer.
+                        var judged = !ReferenceEquals(chosen, typeNode)
+                            && chosen.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions) is { } authoritativeDef
+                                ? authoritativeDef
+                                : def;
+                        if (NodeTypeBuildIdentity.OwnedByANewerGeneration(
+                                judged, NodeTypeCompilationHelpers.FrameworkVersion, ProcessBoot.StartedAtUtc))
+                            return YieldToNewerGeneration(judged);
                         return RecompileForLiveFramework();
                     });
             }
+            if (NodeTypeBuildIdentity.OwnedByANewerGeneration(
+                    def, NodeTypeCompilationHelpers.FrameworkVersion, ProcessBoot.StartedAtUtc))
+                return YieldToNewerGeneration(def);
             return RecompileForLiveFramework();
+
+            // 🚨 A replica on ANOTHER image stamped this record AFTER this process started: a newer
+            // platform generation owns the type now, mid-roll, and this replica is the one draining.
+            // Recompiling here would re-key the record back to THIS framework, the newer replica
+            // would heal it forward again, and every activation on both would flip Pending in
+            // between — the ping-pong that re-keyed 34 records on memex's control instance within
+            // minutes of its new replica booting (2026-09-22), each old-generation activation
+            // "healing" a build it could never adopt. The record is left exactly as the newer
+            // generation wrote it; this instance shows the framework-stale overlay and its
+            // version-gated self-heal, which for a draining replica means: until the pod is gone.
+            // The census (bake-report's LIVE RECORD CENSUS) reports the same set through the same
+            // reader, so what it names since-boot is precisely what this branch refuses to touch.
+            IObservable<MeshNode> YieldToNewerGeneration(NodeTypeDefinition owned)
+            {
+                logger?.LogWarning(
+                    "EnrichWithNodeType: {NodeType} was compiled for framework {Compiled} at {StampedAt:O}, AFTER this "
+                    + "process started ({BootedAt:O}) — a replica on another image owns the type mid-roll; NOT "
+                    + "recompiling for the live framework {Live} (that would re-key the record backwards). "
+                    + "Overlaying '{InstancePath}' as framework-stale instead",
+                    nodeType, owned.CompiledFrameworkVersion ?? "(null)", owned.LastCompileSucceededAt,
+                    ProcessBoot.StartedAtUtc, NodeTypeCompilationHelpers.FrameworkVersion, node.Path);
+                var (yieldIntro, yieldCta, yieldGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
+                return Observable.Return(
+                    WithOverlaySelfHeal(
+                        WithCompilationErrorOverlay(node, nodeType,
+                            "Built against a previous framework version",
+                            guidance: yieldGuidance,
+                            intro: yieldIntro,
+                            callToAction: yieldCta,
+                            activityPath: owned.LastCompilationActivityPath),
+                        meshHub, nodeType, typeNode.Version, logger));
+            }
 
             IObservable<MeshNode> RecompileForLiveFramework()
             {

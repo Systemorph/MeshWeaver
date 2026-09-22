@@ -538,6 +538,19 @@ public record DeploymentContent
     public bool? AutoRecycleOnStaleBuild { get; init; }
 
     /// <summary>
+    /// 🚨 May this instance PATCH ITS OWN portal Deployment when it detects a newer release — the
+    /// chart's <c>selfUpdate.canPatch</c>, which renders the self-patch Role AND
+    /// <c>SelfUpdate__CanPatch</c> from one value. The fleet default is <c>false</c>: an instance
+    /// hands a detected release to the control instance's inbox and the control plane opens the
+    /// Roll. <c>true</c> is for an install that has no control instance to hand to — a standalone
+    /// Kubernetes install, and the CONTROL INSTANCE ITSELF, whose hand-over is a write into its own
+    /// mesh: when that mesh is degraded the hand-over is exactly what fails, and the roll that
+    /// would recover the mesh is the one it cannot open. Null → not stated, the chart default.
+    /// </summary>
+    [Description("Self-patch the portal Deployment on a detected release (renders selfUpdate.canPatch)")]
+    public bool? SelfPatch { get; init; }
+
+    /// <summary>
     /// Boot modules placed at an EXPLICIT index past the contiguous <see cref="RequiredModules"/>
     /// list — the by-index override. <c>Modules:Required</c> replaces the image's entry N and never
     /// appends, so "require MCP without touching the image's slots 5 and 6" is slot 7 here, not a

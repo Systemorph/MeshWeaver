@@ -238,7 +238,10 @@ public sealed class DynamicTypePreWarmerHostedService(
         // (adopt-only, lazy first access) that a mid-roll cross-stamp leaves with no instrument.
         // It does not wait for the seeding: a stamp the seeding lands is a change event it sees.
         if (census is not null)
-            _liveCensus = DynamicTypePreWarmer.ObserveLiveRecordCensus(mesh, startedAt, logger)
+            // 🚨 The PROCESS start, not this service's — the same boundary the bind-time yield
+            // splits on (NodeTypeBuildIdentity.OwnedByANewerGeneration), so a stamp the census
+            // reports as since-boot is exactly one the bind path refuses to heal. ProcessBoot.
+            _liveCensus = DynamicTypePreWarmer.ObserveLiveRecordCensus(mesh, ProcessBoot.StartedAtUtc, logger)
                 .Subscribe(
                     census.RecordLiveRecords,
                     ex =>
