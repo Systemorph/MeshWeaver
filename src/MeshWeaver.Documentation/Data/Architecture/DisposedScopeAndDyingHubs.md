@@ -206,6 +206,45 @@ cleanup blocking the ShutDown turn — and retiring it lets callers past it; it 
 turn. The `[HOSTED-RETIRE]` line names the address and the phase, so the next occurrence points at
 the wedged hub instead of at whoever asked for it.
 
+### 🚨 And the other half: retire-and-replace acts on the ADDRESS, so it cannot reach a CACHED reference
+
+Retire-and-replace fixes the LOOKUP. It takes the corpse out from under its address so the next
+caller to *ask* gets a successor — which does nothing at all for a caller that asked once and put
+the answer in a field. That caller keeps posting into the corpse, and a hub past `Started` serves
+nothing: its intake refuses every delivery and a direct `Observe(...)` faults synchronously. The
+line it produces is
+
+```
+Hub portal/nodeops-{meshId} is shutting down — cannot register new response subject for {id}.
+Object name: 'MessageHub'.
+```
+
+and it repeats for as long as the holder lives, with nothing short of a process restart to recover
+it. Measured on the control instance: a node-operation hub wedged then shutting down, after which
+every `Create` was answered that way for ten minutes and more.
+
+**The discriminator is what the cached value IS.**
+
+| cached value | safe to cache outright? | why |
+|---|---|---|
+| an **Address** (`MeshService.NodeOperationTarget`) | **yes** | the address is what is stable; the successor is minted at the same one |
+| a hub from an **issuing seam** (`NodeOperationIssuingHub`, `ReadIssuingHub`, `MeshReadHub`, `StreamSubscribingHub`, `GetHostedHub`) | **no** | it resolves-or-creates at an address, so its answer can be SUPERSEDED — and nothing tells the holder |
+| the **parent** hub (`MessageHubConfiguration.ParentHub`) | **yes** | a hub's parent is never replaced underneath it: the parent's lifetime strictly CONTAINS the child's, since the child is a hosted hub the parent tears down in its own `DisposeHostedHubs` phase. There is no successor to pick up, and re-resolving once the parent winds down would call `GetService` on a scope that may already be disposed — the fault that property's own remarks warn about |
+
+So a cached seam answer is **revalidated at the read**: return it while its `RunLevel <= Started`
+and it is not `IsDisposing`, resolve again otherwise. Below `ShutDown` that deliberately resolves
+the SAME hub — the registry answers an existing-hub lookup with it, because it is still draining
+accepted work — so the caller gets the documented transient `ShuttingDown` NACK exactly as before,
+and only past `ShutDown` does it get the successor. Nothing re-posts and nothing polls: it is a
+cache-validity check, O(1), at the one place the reference is read.
+
+Both sites in `src/` now do that (`MeshService.ResolveIssuingHub`, `MeshOperations.ResolveReadHub`),
+and `CachedHubReferenceGuard` holds the tree at zero — keyed on the right-hand side being a seam
+call, with its detector asserted in both directions (it fires on the two pre-fix lines verbatim, and
+stays silent on the address cache, on the revalidating form, and on `ParentHub`). The guard's first
+draft keyed on the field TYPE alone and flagged `ParentHub`, which is the row above: that is why the
+rule is about a seam's answer and not about every hub-typed field.
+
 *(An earlier revision of this page carried a lead that `HostedHubsCollection.Add` was unreferenced
 in `src/`, which would have meant a hosted hub never left the registry at all. It was settled by
 #4741: `Add` is called from `MessageHubConfiguration.Build`, the first statement after the hub is
