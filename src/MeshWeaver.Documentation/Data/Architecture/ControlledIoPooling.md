@@ -347,6 +347,49 @@ Pinned by `DelegationCancellationTest` (unit) and `DelegationDrainJoinsParkedToo
 (integration — a delegation that never resolves, asserting `DrainAll() == 0`), the sibling of
 `AiPoolDrainJoinsRoundTest` for a round parked on the model call.
 
+### 🚨 And when the inner call takes NO token, project the token onto the WAIT
+
+The section above assumes the leaf's work *has* a `CancellationToken` parameter to bind. Plenty
+does not — Orleans' `StreamSubscriptionHandle.UnsubscribeAsync()` takes none at all, and neither do
+most reactive-SDK bridges. **That is not an exemption**: `Invoke` is `return await io(ct)` and the
+gate permit is released in that `await`'s `finally`, so a task that cannot observe `ct` holds its
+permit for as long as the underlying call takes, whatever the drain does. `IoPool.Disposed` never
+fires, and the silo's bounded join reports over live work.
+
+The remedy is to stop AWAITING it rather than to cancel it:
+
+```csharp
+// the inner call takes no token — project the pool's token onto the wait instead
+pool.Invoke(ct => theUncancellableCall().WaitAsync(ct));
+```
+
+**Two things make that a fix and not a shrug.** First, the thing the join exists to prevent is a
+*pool thread* still executing a collectible node ALC's types when that ALC is unloaded; abandoned
+work that runs on another runtime's own threads over its own types is not that hazard, while the
+held permit is — it is what makes the silo release over every OTHER leaf too. Second, the
+abandonment must be **reported**: a leaf that settles on its token and then says nothing has traded
+a loud teardown residual for a silent one, which is the same defect with better manners.
+
+**Some entry points already do this projection for you, and knowing which is the whole rule.**
+`InvokeObservable` composes `source(ct).LastAsync().ObserveCompletion(report, ct)`, and
+`ObserveCompletion` cancels its task on that token — so every Octokit.Reactive call in
+`OctokitGitHubRepoClient` is safe however its lambda treats `ct`. `InvokeStream` (and `RunStream`,
+which forwards to it) enumerates as `source(ct).WithCancellation(ct)`, handing the token to the
+enumerator itself. `InvokeBlocking` (and `RunBlocking`) holds no gate permit and is joined on its own
+`_blockingIdle` signal. **`Invoke` has no projection, and `IoPoolExtensions.Run` composes straight
+onto it**, so those two are where a discarded token is unrecoverable — and they are what
+`PooledLeafObservesItsTokenGuard` scans. It holds `src/` at zero for a lambda that never references
+its own token parameter, asserts its detector in both directions, and asserts its own denominator:
+a zero over no sites scanned is not a reading.
+
+🚨 **And it states what it cannot see.** It is a LEXICAL scan of the LAMBDA form, so a leaf passed as
+a METHOD GROUP or a delegate variable — `_httpPool.Invoke(ReadIndex)`, `pool.Invoke(io)` — is
+outside it by construction, because deciding those means resolving the callee's body. That boundary
+is pinned by a test rather than left to a comment (a comment cannot fail), and a non-lambda argument
+is deliberately not failed: the sites using that form are correct today, and turning a correct form
+red to protect a lexical scan is the wrong trade. Real coverage for it is a call-graph pass or a
+Roslyn analyzer, not a wider regex.
+
 ---
 
 ## Scope — storage and Postgres are pooled too

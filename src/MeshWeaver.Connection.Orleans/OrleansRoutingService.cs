@@ -1259,10 +1259,24 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 .SelectMany(subscription => subscription is null
                     ? Observable.Return(Unit.Default)
                     // The genuinely-async leaf, bridged through the pool by RETURNING the task.
-                    : ioPool.Invoke(_ => subscription.UnsubscribeAsync()))
+                    : ioPool.Invoke(ct => UnsubscribeObservingToken(subscription, address, ct)))
                 .Catch<Unit, Exception>(ex =>
                 {
-                    logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
+                    // 🚨 A CANCELLED leaf is a DIFFERENT finding from a failed one, and it is the
+                    // one a reader needs: it says this unsubscribe was still in flight when the
+                    // pool was drained, i.e. the pub-sub record was left behind. Reported, never
+                    // folded into the Debug line below — a leaf that settles on its token and then
+                    // says nothing turns a loud teardown residual into a silent one.
+                    if (ex is OperationCanceledException)
+                        logger.LogWarning(
+                            "Orleans stream unsubscribe for {Address} was ABANDONED: the IO pool was "
+                            + "drained (mesh teardown / silo stop) while the grain call was still in "
+                            + "flight. The subscription record is left to the stream provider; this "
+                            + "process is going down. If this line is frequent outside shutdown, the "
+                            + "pub-sub grain is slow to answer — that is the thing to chase.",
+                            address);
+                    else
+                        logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
                     return Observable.Return(Unit.Default);
                 })
                 // Disposed only once the work above has finished. It used to run immediately after
@@ -1289,6 +1303,59 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             teardown.Subscribe(
                 _ => { },
                 ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
+    }
+
+    /// <summary>
+    /// The pool leaf that unsubscribes one Orleans stream handle — and the ONE reason it is a named
+    /// method rather than <c>ct =&gt; subscription.UnsubscribeAsync()</c> inline.
+    ///
+    /// <para>🚨 <b>A pooled leaf that discards its <see cref="CancellationToken"/> can never be
+    /// settled by the drain, and that is the documented precursor to the teardown
+    /// use-after-unload SIGSEGV.</b> <c>IoPool.Invoke</c> does <c>await io(ct)</c>: the leaf holds
+    /// its gate permit until the task it RETURNS completes, so if that task cannot observe
+    /// <c>ct</c>, cancelling the pool changes nothing. <c>IoPoolRegistry.Disposed</c> then never
+    /// fires, <c>IoPoolSiloTeardown</c>'s join sits out its whole budget and the silo releases over
+    /// live work — the exact shape reported by <c>IoPoolSiloTeardown: pooled I/O did not finish
+    /// within 00:00:30 … A leaf ignored its cancellation token</c> (Systemorph/MeshWeaver#2480).
+    /// The budget must NOT be widened; the LEAF is what gets fixed. 🚨 This is a leaf of that
+    /// class, not necessarily the subject of any particular occurrence — that is decided by the
+    /// pool and call site a residual report NAMES, never by a static sweep.</para>
+    ///
+    /// <para><b>Why the token is projected onto the WAIT rather than passed down.</b> Orleans'
+    /// <c>StreamSubscriptionHandle.UnsubscribeAsync()</c> takes no <see cref="CancellationToken"/>
+    /// — it is a grain call to the pub-sub rendezvous, and at silo stop that is precisely a grain
+    /// the catalog is deactivating, so it can sit until Orleans' own response timeout. There is no
+    /// token to hand it, so the only way this leaf can settle on the pool's token is to stop
+    /// AWAITING it. <c>Task.WaitAsync(ct)</c> is the established shape here
+    /// (<c>NuGetAssemblyResolver.ResolveAsync</c> projects a caller's token onto a shared
+    /// uncancellable resolution the same way).</para>
+    ///
+    /// <para><b>And abandoning it is the RIGHT trade, not a lesser evil.</b> What the join exists to
+    /// prevent is a pool thread still executing a collectible node ALC's types when that ALC is
+    /// unloaded. The abandoned work is a grain call running on Orleans' own threads over Orleans'
+    /// own types — it is not that hazard. The HELD PERMIT is: it is what makes the silo release
+    /// over every other leaf too. The abandonment is reported by the caller's cancellation arm, and
+    /// the task is still OBSERVED below so a late fault can never become an unobserved-task
+    /// exception.</para>
+    /// </summary>
+    /// <param name="subscription">The handle to unsubscribe.</param>
+    /// <param name="address">The address whose stream this is — for the late-fault trace only.</param>
+    /// <param name="ct">The leaf's token: the subscriber's, linked with the pool-wide drain token.</param>
+    /// <returns>A task that completes when the unsubscribe lands, or is cancelled when the pool drains.</returns>
+    private Task UnsubscribeObservingToken(
+        StreamSubscriptionHandle<IMessageDelivery> subscription, Address address, CancellationToken ct)
+    {
+        var unsubscribe = subscription.UnsubscribeAsync();
+        // Observe the terminal state so an ABANDONED task that later faults is never an unobserved
+        // exception — the same idiom the attach task above uses. Accessing t.Exception marks it
+        // observed; this continuation is trace-only and the wait below is what the leaf returns.
+        unsubscribe.ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                OrleansRouteTrace.Write(
+                    $"OrleansRoutingService.Unsubscribe FAULTED addr={address} ex={t.Exception?.InnerException?.Message}");
+        }, TaskScheduler.Default);
+        return unsubscribe.WaitAsync(ct);
     }
 
     /// <summary>
