@@ -88,10 +88,59 @@ internal sealed class MeshService(
     /// post originates from.</para>
     ///
     /// <para>Cached alongside <see cref="_nodeOperationTarget"/>: the parent chain is stable for
-    /// this scoped service's lifetime.</para>
+    /// this scoped service's lifetime. 🚨 <b>The HUB is not</b> — see
+    /// <see cref="IssuingHub"/>. The ADDRESS is what is stable, which is why
+    /// <see cref="_nodeOperationTarget"/> may be cached outright and this may not.</para>
     /// </summary>
     private IMessageHub? _issuingHub;
-    private IMessageHub IssuingHub => _issuingHub ??= hub.NodeOperationIssuingHub();
+
+    /// <summary>
+    /// 🚨 <b>A cached hub REFERENCE has to be revalidated; a cached ADDRESS does not.</b> The
+    /// previous form was <c>_issuingHub ??= hub.NodeOperationIssuingHub()</c>, which pins one
+    /// activation of <c>portal/nodeops-{meshId}</c> for this service's whole lifetime. That hub can
+    /// die underneath it — a routed <c>DisposeRequest</c>, a recycle, a teardown that wedges — and
+    /// a hub past <c>Started</c> can serve nothing: its intake refuses every delivery and a direct
+    /// <c>Observe(...)</c> faults. Every node operation this service issues from then on is
+    /// answered <i>"hub … is shutting down"</i>, for as long as the service lives, with nothing
+    /// that recovers it short of a process restart.
+    ///
+    /// <para><b>It is NOT reached by the registry's retire-and-replace</b> (Systemorph/MeshWeaver#5136).
+    /// That takes a hub at <c>RunLevel &gt;= ShutDown</c> out from under its ADDRESS so the next
+    /// LOOKUP mints a successor — it cannot reach a reference somebody has already put in a field.
+    /// Revalidating here is the other half of the same repair, and it is where a cached reference
+    /// belongs: at the read, once, O(1).</para>
+    ///
+    /// <para><b>Why the predicate is "winding down" and not "dead".</b> Below <c>ShutDown</c> the
+    /// re-ask deliberately resolves the SAME hub — the registry answers an existing-hub lookup with
+    /// it, by design, because it is still draining work it accepted and a successor there would put
+    /// two activations on one address. The caller then gets the documented transient
+    /// <c>ShuttingDown</c> NACK it is meant to re-ask on, exactly as before. At or past
+    /// <c>ShutDown</c> the same call gets the successor. So this changes nothing in the window where
+    /// the old reference was still correct, and only differs where it had become unusable.</para>
+    ///
+    /// <para>This is not a retry and not a watchdog: nothing re-posts, nothing polls, and a caller
+    /// that hits the transient NACK is answered by the existing protocol.</para>
+    ///
+    /// <para>🚨 The seam call stays INSIDE this expression, and that is load-bearing rather than
+    /// stylistic: <c>RouterAsNodeOperationOriginRatchetGuard</c> reads a post's receiver as
+    /// off-router by binding the receiver's NAME to a seam call it can see in the same file, and it
+    /// does not follow a method call. Hiding the resolve behind a helper method took all five of
+    /// this class's posts out of the compliant set and reported them as new router-origin sites —
+    /// a false positive, but one that would have been "fixed" by widening the guard.</para>
+    /// </summary>
+    private IMessageHub IssuingHub => _issuingHub = UsableIssuingHub ?? hub.NodeOperationIssuingHub();
+
+    /// <summary>
+    /// The cached issuing hub while it can still serve, otherwise <c>null</c> so
+    /// <see cref="IssuingHub"/> resolves again. <c>RunLevel &gt; Started</c> covers the phased
+    /// shutdown; <c>IsDisposing</c> covers the window where <c>Dispose()</c> has been entered and
+    /// the run level has not advanced yet — the same pair the data layer's own winding-down
+    /// predicate uses. A hub at <c>Starting</c> is deliberately NOT winding down.
+    /// </summary>
+    private IMessageHub? UsableIssuingHub =>
+        _issuingHub is { IsDisposing: false, RunLevel: <= MessageHubRunLevel.Started } cached
+            ? cached
+            : null;
 
     // 🗑️ `OpTimeout` lived here, declared and never read (#1270). It is gone rather than wired up
     // — see the class remarks for why a client-side ceiling on these writes is the wrong repair.

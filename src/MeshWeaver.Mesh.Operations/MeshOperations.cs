@@ -100,11 +100,45 @@ public class MeshOperations
     /// <para>Both seams are the IDENTITY FUNCTION for every hub whose address type is not the mesh
     /// type, so the MCP session / portal / per-node callers that dominate this surface are
     /// byte-for-byte unaffected. Cached like <c>MeshService.IssuingHub</c>: the parent chain is
-    /// stable for this facade's lifetime.</para>
+    /// stable for this facade's lifetime — 🚨 but the HUB is not, so the cache is REVALIDATED on
+    /// every read rather than resolved once (see <see cref="ReadHub"/>). The ADDRESS is the
+    /// stable thing; the activation behind it is not.</para>
     /// </summary>
     private IMessageHub? readHub;
 
-    private IMessageHub ReadHub => readHub ??= hub.ReadIssuingHub();
+    /// <summary>
+    /// 🚨 <b>A cached hub REFERENCE has to be revalidated.</b> The previous form was
+    /// <c>readHub ??= hub.ReadIssuingHub()</c>, which pins one activation of
+    /// <c>portal/reads-{meshId}</c> for this facade's whole lifetime. A hub past <c>Started</c> can
+    /// serve nothing — its intake refuses every delivery and a direct <c>Observe(...)</c> faults —
+    /// so once that activation dies every read this facade issues is answered <i>"hub … is shutting
+    /// down"</i> for as long as the facade lives.
+    ///
+    /// <para><b>The registry's retire-and-replace does not reach it</b>
+    /// (Systemorph/MeshWeaver#5136): that takes a hub at <c>RunLevel &gt;= ShutDown</c> out from
+    /// under its ADDRESS so the next LOOKUP mints a successor, which does nothing for a reference
+    /// already sitting in a field. Revalidating at the read is the other half of the same repair.
+    /// Below <c>ShutDown</c> the re-ask deliberately resolves the SAME hub and the caller gets the
+    /// documented transient NACK exactly as before; only past it does it get a successor. Not a
+    /// retry and not a watchdog — nothing re-posts and nothing polls.</para>
+    ///
+    /// <para>🚨 The seam call stays INSIDE this expression rather than behind a helper method, for
+    /// the reason <c>MeshService.IssuingHub</c> spells out: the router-origin ratchet binds a post's
+    /// receiver to a seam call it can SEE in the same file, and it does not follow a method call.
+    /// </para>
+    /// </summary>
+    private IMessageHub ReadHub => readHub = UsableReadHub ?? hub.ReadIssuingHub();
+
+    /// <summary>
+    /// The cached read hub while it can still serve, otherwise <c>null</c> so <see cref="ReadHub"/>
+    /// resolves again. <c>RunLevel &gt; Started</c> covers the phased shutdown; <c>IsDisposing</c>
+    /// covers the window where <c>Dispose()</c> has been entered and the run level has not advanced
+    /// yet. A hub at <c>Starting</c> is deliberately NOT winding down.
+    /// </summary>
+    private IMessageHub? UsableReadHub =>
+        readHub is { IsDisposing: false, RunLevel: <= MessageHubRunLevel.Started } cached
+            ? cached
+            : null;
 
     /// <summary>
     /// Looks up the cached compilation error for the owning NodeType of <paramref name="node"/>.
