@@ -1,4 +1,8 @@
+using System.Reactive;
+using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
@@ -45,4 +49,40 @@ public class BackPressureLevelByShapeTest
     [Fact]
     public void AnImpossibleNegativeDepth_IsNotTreatedAsBlocked()
         => Assert.Equal(LogLevel.Warning, RoutingGrain.SaturationLevel(-1));
+
+    /// <summary>
+    /// 🚨 THE ORDER OF THE REPORT DECIDES THE LEVEL — the hole Copilot found in the first cut of
+    /// this change.
+    ///
+    /// <para><c>ReportSaturation</c> classifies from <c>QueueSnapshot()</c>, which can only see legs
+    /// that are ALREADY queued. The first version reported BEFORE <c>Enqueue</c>, so the snapshot
+    /// excluded the very leg that was crossing: when the crossing leg is the first extra frame on a
+    /// channel that already has one executing, the sample reads 0, the rule calls it load, and the
+    /// Critical is suppressed at exactly the boundary this change exists to preserve.</para>
+    ///
+    /// <para>The pure-function test above could never catch that — it asserts the MAPPING and never
+    /// the ARGUMENT. This one pins the mechanism: the same channel, sampled either side of one
+    /// enqueue, yields two different verdicts.</para>
+    /// </summary>
+    [Fact]
+    public void SamplingBeforeTheEnqueue_WouldMisreadHeadOfLineAsLoad()
+    {
+        using var pool = new IoPool(2);
+        var dispatcher = new OrderedRouteDispatcher(pool, NullLogger.Instance);
+
+        // A leg that never terminates — the executing head of the channel.
+        dispatcher.Enqueue("cache/x", null, Observable.Never<Unit>(), () => { });
+        var (_, _, deepestBeforeCrossing) = dispatcher.QueueSnapshot();
+
+        // The crossing leg lands on the SAME channel and must queue behind it.
+        dispatcher.Enqueue("cache/x", null, Observable.Never<Unit>(), () => { });
+        var (_, _, deepestAfterCrossing) = dispatcher.QueueSnapshot();
+
+        Assert.Equal(0, deepestBeforeCrossing);
+        Assert.Equal(1, deepestAfterCrossing);
+
+        // The same crossing, classified either side of the enqueue — the bug, and the fix.
+        Assert.Equal(LogLevel.Warning, RoutingGrain.SaturationLevel(deepestBeforeCrossing));
+        Assert.Equal(LogLevel.Critical, RoutingGrain.SaturationLevel(deepestAfterCrossing));
+    }
 }

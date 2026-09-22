@@ -183,7 +183,8 @@ internal class RoutingGrain(
 
     /// <summary>
     /// In-flight route count at which routing is declared to be falling behind and reported at
-    /// <see cref="LogLevel.Critical"/> (once, until it recovers). Well above any healthy burst —
+    /// the level <see cref="SaturationLevel"/> gives it (once, until it recovers — the LATCH is
+    /// unconditional, only the LEVEL depends on the shape). Well above any healthy burst —
     /// routes terminate in milliseconds — and well below the 541-deep queue prod reached.
     /// </summary>
     internal const int SaturationThreshold = 64;
@@ -263,7 +264,9 @@ internal class RoutingGrain(
         // precisely because the turn is the last point at which the send order is authoritative.
         if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
         {
-            ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+            // 🚨 The slot is claimed HERE but the crossing is REPORTED AFTER the enqueue below —
+            // see the report call at the end of this branch for why the order is load-bearing.
+            var inFlight = Interlocked.Increment(ref inFlightRoutes);
             // 🚨 THE ORDERED CHANNEL IS (destination, payload identity) — issue #5009. A
             // stream-routed address is a MULTIPLEXER: the node-stream cache hub fronts one
             // sync/{streamId} sub-hub per observed node, so keying the FIFO on the address alone
@@ -287,6 +290,14 @@ internal class RoutingGrain(
                     ReportDrained(Interlocked.Decrement(ref inFlightRoutes));
                     slot?.Dispose();
                 });
+            // 🚨 REPORTED AFTER THE ENQUEUE, AND THAT ORDER DECIDES THE LEVEL.
+            // ReportSaturation classifies the crossing from orderedDispatcher.QueueSnapshot(), and
+            // the snapshot can only see legs that are ALREADY queued. Reporting before the Enqueue
+            // above therefore samples a depth that excludes the very leg that is crossing: when the
+            // crossing leg is the first extra frame on a channel that already has one executing,
+            // the sample reads 0 — head-of-line blocking, classified as load, and the Critical
+            // suppressed at exactly the boundary it exists to catch.
+            ReportSaturation(inFlight, addressPath);
         }
         else
             Dispatch(BuildGrainRoute(delivery, address, addressPath, streamProvider, grainFactory),
