@@ -329,6 +329,72 @@ identity I, on this replica"*. `DeploymentReportService` already carries `Framew
 **same shape that would answer the 23 CI failures above** — the gate's question, *"is `crm` sealed for
 `<identity>`?"*, is a readiness query against a published fact.
 
+## Draining a satellite PR the lag has parked
+
+The churn above reaches a reader as a **404 on a pull request that has nothing wrong with it**, and it
+is the one CI red where re-running is the remedy rather than the forbidden "see if it was a flake".
+Telling it apart from a real break takes two readings, and neither is "it went green".
+
+**1. The signature.** The failing step names the identity it could not find a publication for:
+
+```
+##[error]upstream 'plugins' answers 404 for the module set of identity <I> at
+https://<portal>/api/plugins/bundles/prebuilt/<I>/plugins/modules:
+{"error":"no sealed publication for source 'plugins' under framework identity '<I>'"}
+```
+
+The satellite lane resolves the newest sealed **platform content** and then asks the registry for
+`plugins` *under that identity*. `plugins` publishes per-identity and trails core, so between core
+sealing a commit and Plugins' publish-bake catching up, every satellite that seeds from `plugins`
+resolves an identity whose seal set is incomplete — stage ④ again, from the consumer's side. A
+transport variant of the same family reads *"could not REACH the registry for the bundle index …
+Re-run once it is healthy"*; that one is about the endpoint, not the identity, and
+`/api/plugins/bundles/index.json` answering **401** means reachable (it wants an instance key), not down.
+
+**2. Is the lag over?** The portal's public `/health` carries a `publication-seal` entry that states,
+for the identity it is serving, every source sealed under it. Read it before re-running — if the
+identity it names does not hold a `plugins` seal, a re-run reproduces the 404:
+
+```
+publication-seal: Healthy — framework identity <I> holds 8 publication(s): 'crm' ← … (sealed);
+'plugins' ← Systemorph/MeshWeaver.Plugins @ … (sealed); … no repository is currently held by the seal.
+```
+
+🚨 **That entry reports the identity the portal is RUNNING, not every identity the registry holds** —
+it answers "has the lag closed?", never "was identity `<I>` ever sealed?". Compare the core commit
+behind each: a lane that resolved a core commit *newer* than the one the portal serves is ahead of the
+seal, and waiting is the only remedy.
+
+**3. Re-run the WHOLE run, then read the identity it resolved.** `POST
+/repos/{o}/{r}/actions/runs/<id>/rerun`, not `rerun-failed-jobs`, so the platform resolution is redone.
+The positive signal is printed by the lane itself, once per gate:
+
+```
+this check resolves framework identity <I'>; registry-modules come from the seal of: plugins
+upstream 'plugins' sealed 4 module bundle(s) for identity <I'>
+── summary ──  N clean · 0 known-debt · 0 NEW break(s) · …
+```
+
+`<I'>` must differ from the 404's `<I>`. A green run that resolved the *same* identity did not test
+what you think it did.
+
+🚨 **Classify before re-running, because two unrelated reds wear this costume.** A whole run whose
+conclusion is `cancelled` has **no verdict at all** — its gate fan-out reports `the gate fan-out
+reported 'cancelled' across its N shard(s)` and `shard 1/1 produced NO gate log`, which is an absent
+reading, not a failing one. A genuine compile break, by contrast, names a NodeType and a diagnostic;
+that needs a fix, and re-running it is the forbidden retry. The discriminator is cheap: a lag or a
+cancellation fails *before or around* the composition step, a real break fails *after* it, with
+`composed=N` and a `── summary ──` line above the failure.
+
+🚨 **The two gates do not read the same reference set, so they can disagree about one line.**
+`node-repo-compile-check.yml` takes `refs/` from the **tester** image's `/app`;
+`node-repo-gate.yml` composes the **portal's** `/app`, which `compose-gate-host.sh` records as a
+strict superset. An assembly referenced only by the portal host therefore fails `compile-check` and
+passes the gate — the inverse of the principle `tools/MeshWeaver.PluginTester.csproj` states for its
+`Import` reference, that *the gate must judge against the surface content actually gets*. A
+`CS0234` from `compile-check` alone, with the gate silent on the same line, is that asymmetry and not
+a seal lag.
+
 ## Method
 
 Read-only. Public `/health` and `/api/version`; GitHub REST counted by job with full 40-char shas;
