@@ -360,6 +360,98 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             "normalising the reason must not cost the sender the attribution it travels with");
     }
 
+    private static readonly Address RecognisableAddress = new("recognisable", "1");
+
+    /// <summary>
+    /// Systemorph/MeshWeaver#4888 — the discard NACK read correct to a HUMAN and carried neither
+    /// thing a MACHINE needs, because it was the one owner-side refusal not composed by
+    /// <see cref="ShutdownNack"/>.
+    ///
+    /// <para><b>The two halves, and what each one costs.</b> The BANNER
+    /// (<c>"Hub {address} is shutting down"</c>) is the only evidence in a refusal that identifies
+    /// the SPEAKER, and the three classifiers that decide retry-vs-give-up key on it —
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c>,
+    /// <c>OrleansRoutingService.ClassifyRoutedFailure</c> and
+    /// <c>AreaErrorClassifier.IsTransientHubFailure</c> — so without it a TRANSIENT refusal reads
+    /// as terminal and the caller stops asking. The ACTIVATION TAG is what lets a rider count
+    /// DISTINCT owner activations instead of raw probes: <c>JsonSynchronizationStream</c>'s recycle
+    /// re-arm charges an untagged refusal against its distinct-activation budget rather than its
+    /// paced same-activation one, so repeated discards by ONE activation exhaust a budget sized for
+    /// several DIFFERENT ones and the give-up line then names a storm that never happened.</para>
+    ///
+    /// <para><b>Asserted through the PRODUCER, never against a copy of the sentence.</b> The banner
+    /// comes from <see cref="ShutdownNack.Banner"/> and the tag from
+    /// <see cref="ShutdownNack.FormatActivationTag"/>, so a future rewording moves both sides
+    /// together — asserting the literal would be a guard checking its own copy of the string.</para>
+    /// </summary>
+    [Fact]
+    public async Task ADiscardedDeferredDelivery_IsRecognisableAsTheOwnersTransientRefusal()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            RecognisableAddress,
+            c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse))
+                .WithInitializationGate("recognisable-gate-never-opens", _ => false)
+                .WithHandler<GatedRequest>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new GatedRequest(), o => o.WithTarget(RecognisableAddress))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        host.Post(new DisposeRequest { Reason = TheStatedReason },
+            o => o.WithTarget(RecognisableAddress));
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+        var message = failure.Failure!.Message;
+
+        // HALF 1 — the speaker. Derived from the producer, and read back by the producer's own
+        // predicate, which is what the classifiers downstream effectively do.
+        // The hub's OWN address, not the constant: a hosted address renders with its host chain
+        // (`path~host`), so the producer's rendering is the one to compare a substring against —
+        // while IsAnsweredByOwner below compares by PATH and takes the constant happily. Those two
+        // being different is exactly why that predicate exists.
+        message.Should().Contain(ShutdownNack.Banner(gated!.Address),
+            "the banner is the only evidence that names WHO refused, and the three classifiers "
+            + "that decide retry-vs-give-up key on it — a discard without it is a transient "
+            + "refusal that every consumer reads as terminal");
+        ShutdownNack.IsAnsweredByOwner(message, RecognisableAddress).Should().BeTrue(
+            "the owner answered, so the one predicate for that question must say so");
+
+        // NEGATIVE CONTROL for the predicate: it must not be true of just any address, or the
+        // assertion above would pass on a refusal minted by the routing layer.
+        ShutdownNack.IsAnsweredByOwner(message, GatedAddress).Should().BeFalse(
+            "a different hub's address must not match — the banner's SUBJECT is what is compared");
+
+        // HALF 2 — the activation. The EXACT tag for this instance, not merely 'some hex is
+        // present': a tag that did not identify this activation would defeat the counter in the
+        // opposite direction (a per-delivery id varies on every retry against the same corpse).
+        message.Should().Contain(ShutdownNack.FormatActivationTag(gated!),
+            "a rider counts DISTINCT owner activations off this tag; without it an untagged "
+            + "refusal is charged against the distinct-activation budget and N discards by ONE "
+            + "activation read as N activations refusing");
+
+        // POSITIVE CONTROLS — the facts the hand-written sentence already carried must survive the
+        // move onto the seam. A rewrite that traded one fact for another would otherwise read as a
+        // fix (#3712 put the attribution on this line, #3789 the gate names).
+        message.Should().Contain("recognisable-gate-never-opens",
+            "the gates that held the delivery are not traded for the banner");
+        message.Should().Contain(TheStatedReason,
+            "nor is the teardown attribution");
+        message.Should().Contain("deferred",
+            "nor is WHY the message was abandoned");
+        failure.Failure.ErrorType.Should().Be(ErrorType.ShuttingDown,
+            "and the classification is unchanged — this is about what the TEXT carries");
+    }
+
     /// <summary>
     /// Polls the public disposal diagnostics (which report <c>deferred=&lt;N&gt;</c> per hub,
     /// walking hosted hubs) until something is parked. The gated hub is the only hub in this test

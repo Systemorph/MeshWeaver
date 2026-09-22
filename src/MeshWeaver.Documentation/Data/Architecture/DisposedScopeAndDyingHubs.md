@@ -366,6 +366,29 @@ rather than a reconstruction. **What is not established is the subject**: no occ
 carried enough to name the offending leg or leaf, and guessing one would be worse than waiting for
 a report that names it.
 
+### What a STATIC sweep can settle, and what it cannot
+
+The pool side of R4 has one property the log side does not: *"a leaf that ignores its cancellation
+token"* is a **lexical** property of a call site, so the class can be swept without waiting for an
+occurrence. `Invoke` is the only entry point with no projection of its own (`InvokeObservable` waits
+through `ObserveCompletion(…, ct)`, `InvokeStream` enumerates `.WithCancellation(ct)`,
+`InvokeBlocking` holds no permit), and the sweep of `src/` for an `Invoke` lambda that never
+references its own token parameter returned **exactly one** site: `OrleansRoutingService`'s stream
+teardown, `ioPool.Invoke(_ => subscription.UnsubscribeAsync())` on the `RoutingStream` pool —
+Orleans' `UnsubscribeAsync` takes no token, so nothing the drain cancels could ever settle it. It
+now projects the token onto the wait and reports the abandonment, and
+`PooledLeafObservesItsTokenGuard` holds the tree at zero. The token-less-API clause is in
+[Controlled I/O Pooling](../ControlledIoPooling).
+
+🚨 **That does NOT name the subject of the production occurrences, and must not be read as having
+named it.** The sweep is static and every occurrence so far is the bare line with no pool, no site
+and no stack, so the two can only be joined by a reading — not by argument. What the fix changes is
+that the next occurrence becomes a **discriminator** rather than a repetition: `Did NOT report:`
+either names `RoutingStream` (this was it, and the fix is on the image or it is not), or names a
+different pool and call site (the subject is elsewhere, and now it is named), or is empty (a defect
+in `IoPoolRegistry.Dispose`'s `Zip`, not a leaf at all). One fixed instance of a class is not a
+measurement of the class's population in a running portal.
+
 ## R5 — Orleans dropping deliveries at silo stop
 
 `PlacementService` refuses to address a message to a silo that is shutting down, after Orleans has
