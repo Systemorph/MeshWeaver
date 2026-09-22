@@ -94,6 +94,8 @@ public class ADeletedPartitionIsNotPumpedTest(ITestOutputHelper output) : Monoli
     [InlineData("contradicted", "another provider says the partition IS there")]
     [InlineData("errored", "a probe that threw has not answered")]
     [InlineData("silent", "a probe that never emits is bounded, and a bound is not an answer")]
+    [InlineData("empty", "a probe that completes without emitting has not answered either")]
+    [InlineData("empty-among-answers", "and one empty probe must not void the others' answer")]
     [InlineData("none", "with no writable provider nobody owns a store to miss it from")]
     public async Task NothingButAProvidersOwnFalse_ConfirmsAbsence(string shape, string because)
     {
@@ -103,6 +105,8 @@ public class ADeletedPartitionIsNotPumpedTest(ITestOutputHelper output) : Monoli
             "contradicted" => [Provider("pg", (bool?)false), Provider("blob", (bool?)true)],
             "errored" => [ThrowingProvider("pg")],
             "silent" => [SilentProvider("pg")],
+            "empty" => [EmptyProvider("pg")],
+            "empty-among-answers" => [EmptyProvider("pg"), Provider("blob", (bool?)true)],
             "none" => [],
             _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "unknown shape"),
         };
@@ -141,6 +145,39 @@ public class ADeletedPartitionIsNotPumpedTest(ITestOutputHelper output) : Monoli
         absent.OrderBy(x => x, StringComparer.Ordinal).Should().Equal([GonePartition],
             "only the partition the provider denied is confirmed absent; duplicates collapse and "
             + "the live partitions are untouched");
+    }
+
+    /// <summary>
+    /// 🚨 THE PROBE MUST ALWAYS EMIT, and this is not a defensive nicety — it is the property that
+    /// keeps the whole bake sweep alive. The sweep is composed behind this with `SelectMany`, so a
+    /// probe that COMPLETED WITHOUT EMITTING would produce a sweep that emits no outcomes and
+    /// completes normally: the hosted service marks the gate Complete, readiness is granted, and a
+    /// pod certifies a bake it never performed. That is precisely the laundering
+    /// <c>WarmDynamicTypes</c> faults an enumeration error to avoid — *"finding nothing is not
+    /// passing"* — and it would have arrived through this new door.
+    ///
+    /// <para>`CombineLatest` never emits when ANY source completes empty, and `Timeout` does not
+    /// fire on an empty completion, so a single contract-breaking provider was enough. Asserted on
+    /// the SET form because that is the one the sweep actually composes behind.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task OneContractBreakingProvider_CannotVoidTheAnswer()
+    {
+        var absent = await PartitionExistenceProbe
+            .ConfirmedAbsentAmong(
+                [EmptyProvider("pg"), Provider("blob", (bool?)false)],
+                [GonePartition, "Admin"],
+                probeBudget: TestTimeouts.Quick)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the set form must emit a set even when a provider completes without emitting — "
+                + "a silent completion here makes the bake sweep behind it produce nothing at all "
+                + "and read as a clean bake",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        // The answering provider still decides: it denies both, and nothing contradicts it.
+        absent.OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Admin", GonePartition],
+            "the empty probe is indeterminate, not a veto — it must neither confirm absence on its "
+            + "own nor suppress a provider that did answer");
     }
 
     /// <summary>The partition of a path is its first segment — the whole address arithmetic here.</summary>
@@ -264,6 +301,16 @@ public class ADeletedPartitionIsNotPumpedTest(ITestOutputHelper output) : Monoli
 
     private static IPartitionStorageProvider SilentProvider(string name) =>
         new ProbeOnlyProvider(name, _ => Observable.Never<bool?>());
+
+    /// <summary>
+    /// A provider that COMPLETES WITHOUT EMITTING — contract-breaking, and the one shape that does
+    /// not merely answer wrongly but stops the answer existing. `CombineLatest` never emits if any
+    /// source completes empty, and `Timeout` does not fire on an empty completion, so this used to
+    /// make the probe complete silent — and the bake sweep, composed behind it with `SelectMany`,
+    /// would then emit NO outcomes and complete normally, which the gate certifies as a clean bake.
+    /// </summary>
+    private static IPartitionStorageProvider EmptyProvider(string name) =>
+        new ProbeOnlyProvider(name, _ => Observable.Empty<bool?>());
 
     /// <summary>
     /// A storage provider that implements ONLY the existence probe — which is all the probe under

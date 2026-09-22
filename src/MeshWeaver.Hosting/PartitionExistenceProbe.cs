@@ -78,6 +78,17 @@ public static class PartitionExistenceProbe
             .Select(p => p.PartitionExists(partition)
                 .Take(1)
                 .Timeout(budget)
+                // 🚨 A PROBE THAT COMPLETES WITHOUT EMITTING is indeterminate, and saying so here is
+                // load-bearing rather than defensive. The contract says a provider emits exactly one
+                // value and completes — but `CombineLatest` never emits if ANY source completes
+                // empty, and `Timeout` does not fire on an empty completion either. One
+                // silently-empty provider would therefore make this whole probe complete without a
+                // value, and the caller's `SelectMany` would then produce NOTHING: on the bake path
+                // that is a sweep which emits no outcomes and completes normally, i.e. exactly the
+                // "finding nothing is not passing" laundering that `WarmDynamicTypes` faults an
+                // enumeration error to avoid. An answer that can never arrive is settled from the
+                // known-terminal state rather than parked.
+                .DefaultIfEmpty(null)
                 .Catch<bool?, Exception>(ex =>
                 {
                     logger?.LogDebug(ex,
@@ -90,7 +101,10 @@ public static class PartitionExistenceProbe
 
         return Observable.CombineLatest(probes)
             .Take(1)
-            .Select(results => results.Any(r => r == false) && !results.Any(r => r == true));
+            .Select(results => results.Any(r => r == false) && !results.Any(r => r == true))
+            // The backstop for the same rule one level up: every probe above now emits, so this
+            // cannot be reached today — and it is what keeps that true if one ever stops.
+            .DefaultIfEmpty(false);
     }
 
     /// <summary>
@@ -131,6 +145,9 @@ public static class PartitionExistenceProbe
             .Select(results => results
                 .Where(r => r.Absent)
                 .Select(r => r.Partition)
-                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase))
+            // Same rule as ConfirmedAbsent's backstop: this must emit a set, never complete silent.
+            // A caller composing work behind it with SelectMany would otherwise do nothing at all.
+            .DefaultIfEmpty(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
     }
 }

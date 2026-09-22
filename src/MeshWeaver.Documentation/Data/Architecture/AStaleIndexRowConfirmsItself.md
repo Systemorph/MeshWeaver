@@ -107,6 +107,38 @@ and its place in the report, instead of each of those needing to be taught a new
 would be a far worse failure than the one this closes. The log line names the partition so an
 operator can clean it up; that is where the responsibility stops.
 
+## 🚨 A probe in front of the work can VOID the work — `CombineLatest` and the empty completion
+
+Putting a question in front of a pipeline means the pipeline is now composed **behind** it with
+`SelectMany`. That is a liveness coupling, and it has a sharp edge that is easy to introduce and
+invisible once shipped:
+
+- `Observable.CombineLatest` **never emits** if *any* source completes without emitting.
+- `Timeout` does **not** fire on an empty completion — it bounds silence, not absence.
+
+So a single provider that completes empty — contract-breaking, but a provider is an extension point
+and the contract is prose — makes the whole probe complete silent. The sweep behind it then produces
+**no outcomes and completes normally**, which the hosted service marks Complete and the gate
+certifies. A pod would report a clean bake it never performed: precisely the laundering
+`WarmDynamicTypes` faults an enumeration error to avoid — *"finding nothing is not passing"* — reached
+through a brand-new door.
+
+The rule, and it is the same one `HostedHubsCollection.CloseScopeWhenDisposed` already states for a
+hub's terminal signal: **an answer that can never arrive is settled from the known-terminal state
+rather than parked.** Every stage gets a `DefaultIfEmpty` — the per-provider probe (indeterminate),
+and each composite (the empty set) — so the question can be unanswerable but never absent.
+
+The two failure modes are worth separating, because they are pinned by different assertions:
+
+| Missing backstop | Symptom | What fails |
+|---|---|---|
+| the per-provider one | one empty probe **suppresses** a provider that did answer | a wrong VALUE — an empty set where a partition was denied |
+| the composite ones | the probe completes silent | NON-EMISSION — and the sweep behind it does nothing |
+
+A test that only asserts the *value* misses the second; a test that only asserts *emission* misses the
+first. One case covering both is `OneContractBreakingProvider_CannotVoidTheAnswer`: it requires an
+answer **and** requires it to be the answering provider's.
+
 ## What this does NOT fix
 
 Stated plainly, because the issue reported two defects and this page closes one of them:

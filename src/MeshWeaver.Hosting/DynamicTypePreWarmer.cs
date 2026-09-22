@@ -1353,7 +1353,16 @@ public static class DynamicTypePreWarmer
                     + "pending type is warmed exactly as before");
                 return Observable.Return(
                     ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
-            });
+            })
+            // 🚨 THE OUTERMOST BACKSTOP, and the one that matters most: the whole sweep is composed
+            // behind this with SelectMany, so a source that completed WITHOUT EMITTING would produce
+            // a sweep that emits no outcomes and completes normally — which the hosted service reads
+            // as a clean bake and the gate then certifies. That is the one failure mode
+            // WarmDynamicTypes faults an enumeration error to avoid, and a silent completion here
+            // would reintroduce it through the back door. The probe cannot do that today (see
+            // PartitionExistenceProbe's own DefaultIfEmpty); this is what keeps that a fact rather
+            // than a hope.
+            .DefaultIfEmpty(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
     }
 
     /// <summary>A NodeType has something for Roslyn to compile (so it is a dynamic type worth warming).</summary>
