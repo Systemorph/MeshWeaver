@@ -95,6 +95,51 @@ of the delivery at the callee instead of seven. The sender's own recovery — `S
 resubscribe latch, `MeshNodeStreamCache`'s transient-owner rule, an `Observe(...)` subject firing
 `OnError` — decides what happens next, as before.
 
+## A hub that is still being built no longer holds the call open (#5286, #5417)
+
+The ladder above decides what to do once a timeout has happened. The commonest reason one
+happened was that the callee made its caller wait on something that is **allowed** to take
+longer than the caller will wait.
+
+`MessageHubGrain.DeliverMessage` used to return a task that completed only when the grain's
+`HubReady` signal emitted — so the Orleans call's acknowledgement waited on the **whole hub
+activation**: node resolution, NodeType binding, assembly load, a cold compile. Activation is
+deliberately allowed to run past 30 s (`FirstNodeResolutionTimeout` bounds only the *first* node
+emission, and `WaitForCompileSettled` switches its own timer off while a compile is running). Orleans'
+`ResponseTimeout` is 30 s. So every delivery to a hub that took longer than that to build reached
+`RoutingGrain` as a `TimeoutException` and was reported to the sender as the terminal *"Delivery to
+'Store' failed: Response did not arrive on time in 00:00:30"* — while the delivery was still parked
+in the grain and was posted to the hub moments later. The sender had already been told it failed,
+and a Blazor view's control stream (`NamedAreaView`) was torn down on that answer.
+
+Production logged exactly that for `messagehub/Store`, `messagehub/Underwriting` and
+`messagehub/AgenticEngineering`: a young activation (`Total Enqueued=5; Total processed=5`),
+`NumRunning=5`, `QueuedWorkItems=0`, `IdlenessTimeSpan=00:00:00`. That is five reentrant
+`DeliverMessage` calls in flight, each one waiting on `HubReady`, and none queued behind a busy
+turn.
+
+**The rule now:** the grain answers the call when it has accepted the delivery, not when the hub has
+handled it.
+
+| When `HubReady` answers | The acknowledgement | A failure reaches the sender through |
+|---|---|---|
+| **Synchronously** — the hub is built (the steady state) | the hub's own verdict, as before (#3045: state, `SenderWasNacked`, failure text) | `RoutingGrain.DeliverToGrainRoute`'s result arm, unchanged |
+| **Later** — the hub is still being built | `Submitted`: accepted and parked, in the same ordered `HubReady` subscription as before | the grain itself: `NackParkedDelivery` posts the `DeliveryFailure` through the mesh (`o => o.ResponseFor(delivery)`) — the shape the Monolith router already uses for an activation fault |
+
+Classifications do not change with the path: an activation fault is still `Unavailable`, a hub
+disposed before delivery is still `ShuttingDown`, a hub-side refusal carries the verdict the hub
+recorded (falling back to the same `ClassifyRoutedFailure` text rule `RoutingGrain` applies), and an
+exception thrown while posting to the hub is classified by `RoutingGrain.ClassifyDeliveryException`
+exactly as when it used to fault the grain call. Answer-once holds because a parked acknowledgement
+never carries `Failed`, so `RoutingGrain` never sends a second NACK. `HubReady` emits on the
+activation chain's thread rather than the grain turn, so which side reached the verdict first is
+decided by a compare-and-swap (`DeliverySettlement`), not by timing.
+
+**Not changed:** `ResponseTimeout`. Raising it would only move the point at which a slow build turns
+into a false failure. A hub that never finishes building still ends in an activation fault, which
+NACKs the sender. That was always true, and it no longer depends on a timer that belongs to the
+caller.
+
 ## What this does NOT explain
 
 The back-pressure report is a **gauge, not a bound** — nothing throttles, queues or refuses at 64;
@@ -131,4 +176,6 @@ log site, and the first one that was a *classification* error rather than a cost
 | `OrleansRoutingService.IsResponseTimeout` | the one definition of "the callee may still hold it" |
 | `OrleansRoutingService.IsResendableDeliveryFailure` | the gate, client side (`RouteMessage`) |
 | `RoutingGrain.IsResendableDeliveryFailure` | the gate, router side (both forward delivery legs) |
+| `MessageHubGrain.DeliverMessage` / `NackParkedDelivery` | accept-and-park while the hub is built; the late NACK |
+| `ASlowActivationDoesNotTimeOutItsDeliveriesTest` | a hub build held for 3× the cluster's `ResponseTimeout`: the parked request is not failed during the hold and is answered after it |
 | `TimedOutDeliveryIsNotResentTest` | 6 facts: the delivery is sent exactly once, a rejection still spends its whole budget, both aggregate orderings agree, and all three rungs of the ladder |
