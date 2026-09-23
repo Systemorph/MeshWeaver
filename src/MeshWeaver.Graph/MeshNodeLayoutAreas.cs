@@ -649,10 +649,27 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Builds the right-aligned button row: Edit, Move, Copy, Delete, plus Configuration on
-    /// NodeType nodes and a node-type Configuration link on instance nodes.
-    /// All buttons use anchor-style navigation (no <c>await</c>); Delete routes through the
-    /// dedicated Delete area which uses Post + hub.Observe(...) with a progress indicator.
+    /// Builds the right-aligned OBJECT ACTIONS beside the node's title: Configuration on NodeType
+    /// nodes, <b>Edit</b> as the one labelled primary button, and a labelled <b>⋯ More</b> dropdown
+    /// carrying every other entry of the node's menu.
+    ///
+    /// <para>🧭 <b>Why here, and why this shape.</b> The node menu used to be reachable only from an
+    /// unlabelled cube icon in the portal's top bar — detached from the object it acts on, and
+    /// read by nobody as "the actions for this page". GitHub, and the
+    /// Fluent / Material guidance, put an object's actions BESIDE its title: one or two labelled
+    /// primary buttons, then an overflow menu, grouped with dividers, destructive entries last and
+    /// red. Copy / Move / Delete used to be separate buttons here as well; they now live in ⋯, so
+    /// the page offers each operation once.</para>
+    ///
+    /// <para>🚨 <b>⋯ renders the SAME <c>$Menu:Node</c> list the top bar reads</b> — it reads the
+    /// finished <see cref="MenuControl"/> the <c>RenderMenus</c> renderer writes on this host, so it
+    /// is permission-filtered, catalog-overlaid, localized and divider-derived exactly once, in one
+    /// place, and a data contribution (the e-Signature package's <c>Request signature</c>) appears
+    /// in it with no code here. It re-renders whenever that list changes (a grant landing, a
+    /// package installed) and is hidden while the list is empty.</para>
+    ///
+    /// <para>Every button is gated on its area rendering HERE (<see cref="CanRenderArea"/>, #3604)
+    /// — the menu list already dropped the unrenderable entries for the same reason.</para>
     /// </summary>
     private static UiControl BuildHeaderActionRow(
         LayoutAreaHost host, MeshNode? node, string nodePath, bool canEdit)
@@ -670,41 +687,148 @@ public static class MeshNodeLayoutAreas
                 .WithNavigateToHref(BuildUrl(nodePath, NodeTypeLayoutAreas.ConfigurationArea)));
         }
 
-        if (canEdit)
-        {
-            // 🚨 Each button is gated on its area actually rendering HERE — the same probe the node
-            // menu uses, for the same reason: Copy, Move and Delete render from the optional
-            // MeshWeaver.Graph.Views (DefaultViews) package, and this row is the SECOND way into
-            // those areas (#3604 named it). CanRenderArea fails OPEN, so on a portal carrying the
-            // package nothing changes at all.
-            if (CanRenderArea(host.LayoutDefinition, EditArea))
-                row = row.WithView(Controls.Button(host.Localize("common.edit"))
-                    .WithAppearance(Appearance.Neutral)
-                    .WithIconStart(FluentIcons.Edit())
-                    .WithNavigateToHref(BuildUrl(nodePath, EditArea)));
+        var editShown = canEdit && CanRenderArea(host.LayoutDefinition, EditArea);
+        if (editShown)
+            row = row.WithView(Controls.Button(host.Localize("common.edit"))
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Edit())
+                .WithNavigateToHref(BuildUrl(nodePath, EditArea)));
 
-            if (CanRenderArea(host.LayoutDefinition, CopyArea))
-                row = row.WithView(Controls.Button(host.Localize("menu.copy"))
-                    .WithAppearance(Appearance.Neutral)
-                    .WithIconStart(FluentIcons.Copy())
-                    .WithNavigateToHref(BuildUrl(nodePath, CopyArea)));
-
-            if (CanRenderArea(host.LayoutDefinition, MoveArea))
-                row = row.WithView(Controls.Button(host.Localize("menu.move"))
-                    .WithAppearance(Appearance.Neutral)
-                    .WithIconStart(FluentIcons.ArrowMove())
-                    .WithNavigateToHref(BuildUrl(nodePath, MoveArea)));
-
-            if (CanRenderArea(host.LayoutDefinition, DeleteArea))
-                row = row.WithView(Controls.Button(host.Localize("common.delete"))
-                    .WithAppearance(Appearance.Neutral)
-                    .WithStyle("color: var(--error, #d32f2f);")
-                    .WithIconStart(FluentIcons.Delete())
-                    .WithNavigateToHref(BuildUrl(nodePath, DeleteArea)));
-        }
-
-        return row;
+        return row.WithView(MoreActions(host, nodePath, editShown), area => area.WithId(NodeActionsArea));
     }
+
+    /// <summary>The named sub-area of the node header that holds the ⋯ More dropdown.</summary>
+    public const string NodeActionsArea = "NodeActions";
+
+    /// <summary>
+    /// The stable CSS class on the ⋯ More trigger — the hook for tests and client scripts, since
+    /// its visible word follows the viewer's language.
+    /// </summary>
+    public const string MoreActionsClass = "node-actions-more";
+
+    /// <summary>The CSS class on every entry inside the ⋯ More dropdown.</summary>
+    public const string MoreActionsItemClass = "node-actions-item";
+
+    /// <summary>Translation key for the ⋯ More trigger's word.</summary>
+    public const string MoreActionsKey = "node.actions.more";
+
+    /// <summary>
+    /// The live ⋯ More dropdown: the node menu's finished list, read off this host's own
+    /// <c>$Menu:Node</c> slot. Seeded EMPTY so the header paints at once (hidden ⋯) rather than
+    /// waiting on the menu's first emission.
+    /// </summary>
+    private static IObservable<UiControl?> MoreActions(LayoutAreaHost host, string nodePath, bool editShown)
+    {
+        // Resolved on the render turn — the viewer's locale is an AsyncLocal read at call time.
+        var more = host.Localize(MoreActionsKey);
+        return host.Stream
+            .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
+            .OfType<MenuControl>()
+            .Select(menu => menu.Items)
+            .StartWith((IReadOnlyList<NodeMenuItemDefinition>)[])
+            .DistinctUntilChanged(MenuItemsSequenceComparer.Instance)
+            .Select(items => (UiControl?)BuildMoreActions(ArrangeMoreActions(items, editShown), nodePath, more));
+    }
+
+    /// <summary>
+    /// The ⋯ list as a pure function of the node menu's finished entries: drops <b>Edit</b> when the
+    /// header already shows it as the primary button, moves <b>Delete</b> to the END behind its own
+    /// divider (destructive last), and leaves no divider leading, trailing or doubled.
+    /// </summary>
+    /// <param name="items">The node menu's finished entries, dividers included.</param>
+    /// <param name="editShown">True when the header renders Edit as a button of its own.</param>
+    internal static ImmutableList<NodeMenuItemDefinition> ArrangeMoreActions(
+        IReadOnlyList<NodeMenuItemDefinition> items, bool editShown)
+    {
+        var destructive = items.Where(IsDestructive).ToImmutableList();
+        var rest = items
+            .Where(i => !IsDestructive(i))
+            .Where(i => !(editShown && !i.IsAction && !i.IsSubmenuParent && i.Area == EditArea));
+
+        var arranged = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
+        foreach (var item in rest)
+        {
+            if (IsSeparator(item) && (arranged.Count == 0 || IsSeparator(arranged[^1])))
+                continue;
+            arranged.Add(item);
+        }
+        while (arranged.Count > 0 && IsSeparator(arranged[^1]))
+            arranged.RemoveAt(arranged.Count - 1);
+
+        if (!destructive.IsEmpty)
+        {
+            if (arranged.Count > 0)
+                arranged.Add(new NodeMenuItemDefinition("", NodeMenuItemDefinition.SeparatorArea));
+            arranged.AddRange(destructive);
+        }
+        return arranged.ToImmutable();
+    }
+
+    private static bool IsSeparator(NodeMenuItemDefinition item) => item.Area == NodeMenuItemDefinition.SeparatorArea;
+
+    private static bool IsDestructive(NodeMenuItemDefinition item)
+        => !item.IsAction && !item.IsSubmenuParent && item.Area == DeleteArea;
+
+    /// <summary>
+    /// The ⋯ More dropdown for an arranged list — a platform <see cref="MenuItemControl"/> whose
+    /// children are navigation buttons, dividers and nested submenus; an EMPTY stack (no ⋯ at all)
+    /// when there is nothing to offer.
+    /// </summary>
+    /// <param name="items">The arranged entries (<see cref="ArrangeMoreActions"/>).</param>
+    /// <param name="nodePath">The node the entries act on.</param>
+    /// <param name="moreLabel">The localized word on the trigger.</param>
+    internal static UiControl BuildMoreActions(
+        IReadOnlyList<NodeMenuItemDefinition> items, string nodePath, string moreLabel)
+    {
+        if (!items.Any(i => !IsSeparator(i)))
+            return Controls.Stack;
+
+        return AddMenuEntries(
+            Controls.MenuItem(moreLabel, FluentIcons.MoreHorizontal()).WithClass(MoreActionsClass),
+            items, nodePath);
+    }
+
+    private static MenuItemControl AddMenuEntries(
+        MenuItemControl menu, IEnumerable<NodeMenuItemDefinition> items, string nodePath)
+    {
+        foreach (var item in items)
+            menu = menu.WithView(MenuEntry(item, nodePath));
+        return menu;
+    }
+
+    private static UiControl MenuEntry(NodeMenuItemDefinition item, string nodePath)
+    {
+        if (IsSeparator(item))
+            return Controls.Stack.WithStyle(
+                "border-top: 1px solid var(--neutral-stroke-divider-rest); margin: 4px 8px; height: 0;");
+
+        var text = string.IsNullOrEmpty(item.Icon) ? item.Label : $"{item.Icon} {item.Label}";
+        if (item.IsSubmenuParent)
+            return AddMenuEntries(Controls.MenuItem(text).WithClass(MoreActionsItemClass),
+                item.Children ?? [], nodePath);
+
+        var style = "width: 100%; justify-content: flex-start; white-space: nowrap;";
+        if (IsDestructive(item))
+            style += " color: var(--error, #d32f2f);";
+        return Controls.Button(text)
+            .WithAppearance(Appearance.Stealth)
+            .WithLabel(item.Tooltip ?? item.Label)
+            .WithClass(MoreActionsItemClass)
+            .WithStyle(style)
+            .WithNavigateToHref(MoreActionHref(item, nodePath));
+    }
+
+    /// <summary>
+    /// Where a ⋯ entry goes. A <see cref="MenuActions.Recycle"/> ACTION navigates to the node's
+    /// <c>/{path}/Recycle</c> URL, which the portal intercepts and runs on the CIRCUIT — the one
+    /// place that survives the hub it tears down (#2202); this dropdown is hosted ON that hub, so it
+    /// must never run the recycle itself. Any other entry follows its href (an unknown action's
+    /// href is its documented graceful degradation), or the node's own area URL.
+    /// </summary>
+    internal static string MoreActionHref(NodeMenuItemDefinition item, string nodePath)
+        => item.Action == MenuActions.Recycle
+            ? BuildUrl(nodePath, RecycleArea)
+            : item.Href ?? BuildUrl(nodePath, item.Area);
 
     /// <summary>Translation key for the provenance line's node-type label.</summary>
     public const string MetaTypeKey = "node.meta.type";

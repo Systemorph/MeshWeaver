@@ -56,6 +56,50 @@ The portal's node context menu — the cube icon on every node — is fully data
 
 ---
 
+## Where the menu lives — beside the title, as ⋯ More
+
+🧭 **The node menu's primary entry point is the page header**, not the portal's top bar. Every node
+page built on `MeshNodeLayoutAreas.BuildHeader` carries its object actions to the right of the title:
+
+```
+ 📄  Quarterly Report                         [✏️ Edit] [⋯ More ▾]
+     Type: Markdown · Updated 2026-09-22            📌 Pin · ✍️ Request signature · …
+                                                    ──────
+                                                    🗑️ Delete   (red, always last)
+```
+
+**Why this shape.** The menu used to be reachable only from an unlabelled
+cube icon in the top bar — detached from the object it acts on, and not read by anyone as "the
+actions for this page". GitHub, and the Fluent / Material guidance, place an object's actions BESIDE
+its title: one or two **labelled primary** buttons, then an **overflow** menu, **grouped** with
+dividers, **destructive entries last and red**. Global actions (create, import) stay global — that
+is what the Mesh menu is for.
+
+| Piece | What it is |
+|---|---|
+| **Configuration** | Accent button, NodeType nodes only. |
+| **Edit** | The one primary button — shown when the viewer may edit AND the hub renders `Edit`. A Markdown page edits inline and passes `canEdit: false`, so it shows no Edit button and ⋯ keeps the Edit entry instead. |
+| **⋯ More** | A platform `MenuItemControl` in the named sub-area `NodeActions` (`MeshNodeLayoutAreas.NodeActionsArea`), trigger class `node-actions-more` (`MoreActionsClass`), word from the catalog key `node.actions.more`. Each entry is a stealth button with class `node-actions-item` (`MoreActionsItemClass`). Hidden when the list is empty. |
+
+🚨 **⋯ renders the SAME `$Menu:Node` list the top bar reads** — it reads the finished `MenuControl`
+the `RenderMenus` renderer writes on the SAME host, so permission filtering, the `MenuPresentation`
+overlay, localization, the unrenderable-area drop and the derived dividers all happen once, in one
+place. A data contribution (a `UiContribution` with `Context: "Node"`, e.g. the e-Signature package's
+*Request signature*) therefore appears in ⋯ with no header code. The only re-arrangement is the pure
+`MeshNodeLayoutAreas.ArrangeMoreActions`: Edit is dropped when the header shows it as a button,
+Delete moves to the end behind its own divider, and no divider leads, trails or doubles.
+
+🚨 **An ACTION entry navigates; it never runs on the node's hub.** The dropdown is hosted on the
+node's own hub, and Recycle tears that hub down (#2202). Its ⋯ entry therefore navigates to
+`/{node}/Recycle`, which the portal intercepts and runs on the circuit — the same door the
+stale-build banner uses (`MoreActionHref`). An unknown action id follows its `Href`, its documented
+graceful degradation.
+
+The top-bar cube still renders the same list while the portals roll; MeshWeaver.Plugins removes it
+once the header menu has reached a sealed platform.
+
+---
+
 ## Default Menu Items
 
 `AddDefaultMeshMenu()` — called automatically by `AddDefaultLayoutAreas()` — registers two default providers, one per menu context.
@@ -145,11 +189,11 @@ call that registers this menu, and nothing can unregister it), so a definition t
 `Overview` is one that cannot be trusted to answer for the rest: every entry is kept, and the visible
 diagnostic page remains the outcome.
 
-**The node header's button row is the second way in, and it uses the same probe.**
-`MeshNodeLayoutAreas.BuildHeaderActionRow` renders Edit / Copy / Move / Delete as buttons carrying
-the identical `/{node}/{area}` hrefs, so hiding the menu entry alone would have left the dead link
-one click away. Each button is gated on `CanRenderArea` for its own area. On a portal carrying the
-package, neither surface changes at all.
+**The node header's Edit button uses the same probe.** `MeshNodeLayoutAreas.BuildHeaderActionRow`
+renders Edit as a button carrying the identical `/{node}/{area}` href, gated on `CanRenderArea`, so
+hiding the menu entry alone would not leave a dead link one click away. Copy / Move / Delete used to
+be header buttons too; they are in the header's ⋯ More dropdown now, which reads the already-filtered
+menu list (below).
 
 Contributed providers are not filtered — a provider owns the applicability of what it emits, which is
 what `RequiredPermission` already expresses. If you contribute an entry pointing at an area, register
