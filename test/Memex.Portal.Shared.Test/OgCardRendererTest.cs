@@ -211,7 +211,7 @@ public class OgCardRendererTest
         var png = renderer.RenderSite("memex.systemorph.com");
         using var bitmap = SKBitmap.Decode(png);
         var left = OgCardRenderer.IconLeft;
-        var top = (OgCardRenderer.Height / 2) - (OgCardRenderer.IconSize / 2);
+        var top = (int)(OgCardRenderer.ContentCentreY - (OgCardRenderer.IconSize / 2f));
         int violets = 0, cyans = 0;
         for (var y = top; y < top + OgCardRenderer.IconSize; y += 2)
             for (var x = left; x < left + OgCardRenderer.IconSize; x += 2)
@@ -222,6 +222,39 @@ public class OgCardRendererTest
             }
         Assert.Equal(violet, violets > 200);
         Assert.Equal(!violet, cyans > 200);
+    }
+
+    /// <summary>The renderer's two mark drawings are the SAME drawing as the shipped icon
+    /// <c>src/MeshWeaver.Graph/Icons/meshweaver-logo.svg</c> (the portal's favicon and the tab icon
+    /// behind official third-party marks): the triangle path, the spokes path and the four node
+    /// centres. Whoever redraws the mark changes the icon and this renderer together, or this
+    /// goes red — the drift check Copilot asked for on #5441.</summary>
+    [Fact]
+    public void TheCardMark_IsTheShippedIconsDrawing()
+    {
+        var repoRoot = FindRepoRoot();
+        var icon = System.IO.File.ReadAllText(System.IO.Path.Combine(repoRoot, "src", "MeshWeaver.Graph", "Icons", "meshweaver-logo.svg"));
+        foreach (var svg in new[] { OgCardRenderer.MeshWeaverMarkTile, OgCardRenderer.MeshWeaverMarkGlyph })
+        {
+            foreach (var path in new[] { "M12 48 L32 14 L52 48 Z", "M32 38 L12 48 M32 38 L52 48 M32 38 L32 14" })
+            {
+                Assert.Contains(path, icon);
+                Assert.Contains(path, svg);
+            }
+            foreach (var centre in new[] { "cx='12' cy='48'", "cx='52' cy='48'", "cx='32' cy='14'", "cx='32' cy='38'" })
+            {
+                Assert.Contains(centre.Replace('\'', '"'), icon);
+                Assert.Contains(centre, svg);
+            }
+        }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "MeshWeaver.slnx")) && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, ".git")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("repository root not found above " + AppContext.BaseDirectory);
     }
 
     /// <summary>Every card carries the mark in its footer, beside the instance name — a node's own
@@ -258,7 +291,7 @@ public class OgCardRendererTest
 
         using var bitmap = SKBitmap.Decode(png);
         var left = OgCardRenderer.IconLeft;
-        var top = (OgCardRenderer.Height / 2) - (OgCardRenderer.IconSize / 2);
+        var top = (int)(OgCardRenderer.ContentCentreY - (OgCardRenderer.IconSize / 2f));
         // Just inside the tile's top-left corner: navy, not the badge's accent gradient.
         var corner = bitmap.GetPixel(left + 24, top + 24);
         Assert.True(Luminance(corner) < 40, $"the tile corner {corner} should be the mark's navy ground");
