@@ -220,6 +220,60 @@ public class RoutingQuiescenceTest
     }
 
     /// <summary>
+    /// 🚨 The residual must say HOW LONG each named leg has been in flight, not only which (#2833).
+    ///
+    /// <para>Every leg's own terminal bound — path resolution (30 s), an Orleans grain call's
+    /// response timeout (30 s per attempt), a memory-stream post (60 s) — is at least the 30 s hold
+    /// budget. So a label at expiry reads two opposite ways: a leg accepted just before the stop and
+    /// still inside its own bound (age ≈ the budget), or a slot that stopped coming back long before
+    /// the stop (age of minutes — a leak, and its label IS the defect). The populated occurrences on
+    /// #2833 printed labels only and could be read neither way.</para>
+    ///
+    /// <para>Fail-without: the label with no age. Pass-with: <c>"{label}, in flight {s}s"</c>, oldest
+    /// first. 🚨 The ORDER assertion alone does not falsify the unfixed code: the dictionary
+    /// enumerates in insertion order at this size, which coincides with oldest-first (the same
+    /// limit <c>RoutingSaturationNamesItsOwnVerdictTest</c> records for <c>OldestInFlight</c>). It is
+    /// here to pin the direction; the AGE is what the unfixed code fails on.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SiloStop_BudgetExpiry_SaysHowLongEachStuckLegHasBeenInFlight_OldestFirst()
+    {
+        using var quiescence = new RoutingQuiescence();
+        var logger = new CapturingLogger();
+        var participant = new RoutingQuiescenceSiloParticipant(quiescence, logger, TimeSpan.FromMilliseconds(200));
+
+        using var old = quiescence.Track("dispatch → acme/Old (delivery old1)");
+        var oldTrackedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        // A strictly later start for the second leg, on the same monotonic clock the ages come from.
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => System.Diagnostics.Stopwatch.GetElapsedTime(oldTrackedAt) > TimeSpan.FromMilliseconds(5),
+                Bound),
+            "the monotonic clock must advance between the two legs");
+        using var young = quiescence.Track("stream-routed → cache/Young (delivery young1)");
+        (await WaitForCount(quiescence, 2)).Should().Be(2);
+
+        await ((ILifecycleObserver)participant).OnStop(TestContext.Current.CancellationToken).WaitAsync(Bound);
+
+        var residual = logger.Entries.Single(e =>
+            e.Level == LogLevel.Error && e.Message.Contains("did not land", StringComparison.Ordinal)).Message;
+
+        System.Text.RegularExpressions.Regex.IsMatch(
+                residual, @"acme/Old \(delivery old1\), in flight \d+\.\ds")
+            .Should().BeTrue(
+                "a leg in flight for about the budget and a leg leaked minutes before the stop print the "
+                + "same label — only the age separates 'still inside its own bound' from 'never coming "
+                + $"back'. Residual was: {residual}");
+        System.Text.RegularExpressions.Regex.IsMatch(
+                residual, @"cache/Young \(delivery young1\), in flight \d+\.\ds")
+            .Should().BeTrue($"every sampled leg carries its age. Residual was: {residual}");
+        residual.IndexOf("acme/Old", StringComparison.Ordinal)
+            .Should().BeLessThan(residual.IndexOf("cache/Young", StringComparison.Ordinal),
+                "the sample is capped, and a leaked leg is by definition the oldest — it must be printed "
+                + "ahead of younger legs, never hidden behind '(+N more)'");
+    }
+
+    /// <summary>
     /// The sample is CAPPED, so a saturated silo cannot turn its own shutdown log into a flood —
     /// and the cap must say what it elided rather than silently truncating, or the reader cannot
     /// tell a complete list from a clipped one.

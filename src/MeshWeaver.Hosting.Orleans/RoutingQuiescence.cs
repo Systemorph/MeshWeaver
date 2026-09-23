@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -137,18 +138,45 @@ public sealed class RoutingQuiescence : IDisposable
     }
 
     /// <summary>
-    /// A snapshot of the labels of the work currently in flight, capped so a saturated silo cannot
-    /// turn its own shutdown log into a flood. The cap is on the REPORT, not on the tracking.
+    /// A snapshot of the work currently in flight — each entry the leg's label followed by how long
+    /// it has been in flight — OLDEST FIRST, capped so a saturated silo cannot turn its own shutdown
+    /// log into a flood. The cap is on the REPORT, not on the tracking.
+    ///
+    /// <para>🚨 <b>The age is what makes a named leg answerable</b> (#2833). The shutdown residual
+    /// printed labels only, and every leg's own terminal bounds — <c>RoutingGrain.ResolveTimeout</c>
+    /// (30 s), Orleans' <c>ResponseTimeout</c> per grain-call attempt (30 s), the memory-stream post's
+    /// <c>StreamPostTimeout</c> (60 s) — are at least the 30 s hold budget. So a label at expiry
+    /// could be either of two opposite facts: a leg accepted moments before the stop that is still
+    /// inside its own bound (age ≈ the budget — "why is that bound not shorter than the stop" is the
+    /// question), or a slot that stopped coming back long before the stop began (age of minutes —
+    /// a leaked leg, and its label is the defect). The three populated occurrences on the issue
+    /// could not be read either way. The same reading already separates load from leak on the
+    /// saturation report (<see cref="OldestInFlight"/>); the residual now carries it too.</para>
+    ///
+    /// <para><b>Oldest first</b> because the cap decides what is printed: a leaked leg is by
+    /// definition the oldest, and a report that happened to enumerate eleven young legs ahead of
+    /// it would hide exactly the one that matters behind "(+N more)".</para>
     /// </summary>
-    /// <param name="max">Maximum labels to return.</param>
-    /// <returns>Up to <paramref name="max"/> labels, and a count of any remainder.</returns>
+    /// <param name="max">Maximum entries to return.</param>
+    /// <returns>Up to <paramref name="max"/> entries (<c>"{label}, in flight {seconds}s"</c>),
+    /// oldest first, and a count of any remainder.</returns>
     public (IReadOnlyList<string> Labels, int NotShown) InFlightSample(int max = 10)
     {
-        var all = inFlightLegs.Values.Select(leg => leg.Label).ToArray();
+        var now = Stopwatch.GetTimestamp();
+        // One read of each (label, start) pair — a leg may land mid-enumeration, and whatever is
+        // named here WAS in flight with at least the age printed (same argument as OldestInFlight).
+        var all = inFlightLegs.Values
+            .OrderBy(leg => leg.StartedTimestamp)
+            .Select(leg => FormatLeg(leg, now))
+            .ToArray();
         return all.Length <= max
             ? (all, 0)
             : (all.Take(max).ToArray(), all.Length - max);
     }
+
+    private static string FormatLeg(TrackedLeg leg, long nowTimestamp) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"{leg.Label}, in flight {Stopwatch.GetElapsedTime(leg.StartedTimestamp, nowTimestamp).TotalSeconds:F1}s");
 
     /// <summary>
     /// The leg that has been in flight LONGEST, and for how long — or <c>null</c> when nothing is in
