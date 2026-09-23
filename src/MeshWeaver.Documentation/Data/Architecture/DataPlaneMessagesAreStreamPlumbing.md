@@ -105,7 +105,7 @@ fields are frozen whatever its C# visibility.
 
 | Site | Kind | Role | Stream surface | Plan |
 |---|---|---|---|---|
-| `MeshNodeStreamExtensions.GetMeshNodeOutcome` | `MeshNodeReference` | **the** one-shot node read behind `hub.GetMeshNode(...)` (100+ callers) | `IMeshNodeStreamCache` | own change, after [#5444](https://github.com/Systemorph/MeshWeaver/pull/5444) (which fixes this read's re-probe identity) — the stream cache answers an absent path by a routing NotFound that opens the storm-breaker, while `GetMeshNodeOutcome` must keep `Absent` / `DeleteInProgress` / `Unavailable` distinct |
+| `MeshNodeStreamExtensions.GetMeshNodeOutcome` | `MeshNodeReference` | **the** one-shot node read behind `hub.GetMeshNode(...)` (100+ callers) | `IMeshNodeStreamCache` — **not yet equivalent**, see [Moving GetMeshNode onto the node stream](#moving-getmeshnode-onto-the-node-stream) | blocked on a platform decision: the two reads do not grant the same things |
 | `MeshDataSource` — absence pipeline step, NodeType schema handler | server side of the above and of `SchemaReference` | answers | — | goes with its callers |
 | `ContentFileResolver`, `ContentStaging`, `HubStreamProviderFactory`, `MeshOperations` ×3, handler in `ContentCollectionsExtensions` | `ContentCollectionReference` | "which content collections does node X serve" | the owner already reduces `ContentCollectionReference` as a workspace stream (`CreateContentCollectionReferenceStream`) | one platform read surface for a node's collection configs, then migrate all six callers together |
 | `MeshOperations` Unified Path resolution (`get @X/data:…`, `layoutAreas:`, `schema:`, `collection:`) + handlers in `LayoutExtensions` (`layoutAreas:`) and `GraphConfigurationExtensions` (`NodeTypeReference`) | `UnifiedReference`, `NodeTypeReference` | a generic "resolve this reference at that address" | partly: `StandardReducers` reduces `data:` and `content:`; `layoutAreas:` and `NodeTypeReference` have NO reducer | needs a platform decision on the MCP `get` read surface; recorded, not forced |
@@ -148,6 +148,46 @@ not a zero.
 | Memex | 0 code (2 doc comments) |
 | MeshWeaver.Crm, .Education, .FundReporting, .Manufacturing | 0 |
 | live mesh | **not established.** `search_chunks` needs an anchored scope and cannot sweep every partition; the node `search` is semantic, so a hit list is not a literal match and an empty one would not be a zero. The control instance's MCP was unreachable (503). This sweep must be completed — literally, with `searched: true` — before step 3. |
+
+## Moving GetMeshNode onto the node stream
+
+`GetMeshNodeOutcome` is the last and largest node read on `GetDataRequest`, and the one the
+identity incidents come from. Swapping its transport for `IMeshNodeStreamCache` is **not** a
+transport swap: the two reads decide different things, in different places.
+
+| | `GetMeshNodeOutcome` (today) | `IMeshNodeStreamCache.GetStream` |
+|---|---|---|
+| who decides Read | the OWNER, per caller: the `[RequiresPermission(Read)]` delivery gate + every `INodeValidator` for `NodeOperation.Read` (`RlsNodeValidator`, `SatelliteAccessRule`, the User/VUser/Space/Partition rules, `AddAccessRule` rule sets) — all consulting `NodeTypeAccessRuleGate` | the READER, locally: one shared upstream per path (opened under the cache identity), then `GateOnRead` on `GetEffectivePermissions` — the permission fold only, no node-type rules; skipped entirely for no-user contexts and type-definition paths |
+| delete in flight | `Absence = DeleteInProgress` (owner tombstone, #1471) | no signal on the subscription protocol |
+| absent path | `Absent`, no state kept | NotFound recorded in the storm-breaker's negative cache — reads AND writes of that path fast-fail for the backoff window |
+| owner recycling | paced `ShuttingDown` re-probe within the caller's budget | transient-fault classification + transient breaker |
+
+**Measured** (local, Monolith, the `SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest` fixture,
+reading a system-owned Space's `_GitSync` as the platform admin, whose fold on that path is `None`
+and whose Read comes only from `GitHubSyncConfigAccessRule`):
+
+```
+GetMeshNodeOutcome:  Present
+StreamCache:         UnauthorizedAccessException: User 'platform-boss' lacks Read permission on 'Owned…/_GitSync'
+```
+
+So moving `GetMeshNode` onto the cache as it stands would DENY reads a node-type rule grants — and,
+for any type whose rule is narrower than the fold, ALLOW reads the owner refuses. That is a change to
+the authorization model of 100+ reads, not a refactor, and it needs a decision before code:
+
+1. **Reader-side rule parity.** Should the cache's read gate consult `NodeTypeAccessRuleGate` (and
+   the Read validators) the way the three documented seams do? That also changes what every
+   EXISTING `GetMeshNodeStream` reader sees — the measurement above is a live inconsistency today,
+   independent of `GetMeshNode`.
+2. **A delete tombstone on the subscription protocol**, so the stream can say `DeleteInProgress`.
+3. **An absent-aware one-shot read on the cache** (`NodeReadOutcome` out, no negative-cache
+   admission for a single bounded read), so an existence probe cannot arm the storm-breaker against
+   the create that follows it. The `scope:children` listing is not a substitute for `GetMeshNode`:
+   its negative can be minutes old, and read-after-create callers would read their own write as
+   absent.
+
+Until those land, `GetMeshNodeOutcome` stays on `GetDataRequest`, which after #5444 carries the
+read's identity on every probe.
 
 ## What changed first
 
