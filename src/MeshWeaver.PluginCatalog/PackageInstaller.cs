@@ -1039,6 +1039,115 @@ public static class PackageInstaller
         if (string.IsNullOrWhiteSpace(partition))
             return Observable.Return(Unit.Default);
 
+        // 🚨 PRE-INSTALLED IS READ OFF THE PARTITION'S LIVE ROOT, not off the manifest a caller
+        // happens to hold (MeshWeaver#5297 / #5578). See LiveDeclaration.
+        return LiveDeclaration(hub, manifest, partition!, logger)
+            .SelectMany(live => EnsureDeclaredAccessAsDeclared(
+                hub, live, partition!, logger, installedPaths));
+    }
+
+    /// <summary>
+    /// The manifest <see cref="EnsureDeclaredAccess"/> decides on: <paramref name="manifest"/>, with
+    /// <see cref="PackageManifest.PreInstalled"/> replaced by what the partition's ROOT node says
+    /// whenever that root is a plugin root carrying the declaration (<see cref="PreInstalledOnRoot"/>).
+    ///
+    /// <para>🚨 <b>Why the root wins.</b> The Store's gating reconcile (<c>PluginGate.SeedGating</c>,
+    /// in-mesh source in MeshWeaver.Plugins) decides the same question — open or gated — from the
+    /// root's <c>PluginContent.preInstalled</c>. This step used to decide it from whatever manifest
+    /// its caller held, and the boot repair pass hands it the INSTALL RECORD's stored copy. When a
+    /// package stops being pre-installed the root changes (a sync, an install) while a record stamped
+    /// earlier keeps the old <c>preInstalled: true</c> — and then the two components are each right
+    /// about a different fact. Measured on memex-cloud 2026-09-21 → 2026-09-23 for <c>Hosting</c>
+    /// (pre-installed → enterprise, MeshWeaver.Plugins#1959): the record said pre-installed until the
+    /// 17:52Z re-install of 2026-09-23, the root said gated, and <c>Hosting/_Policy</c> reached
+    /// version 238 alternating between the gate's shape and this step's legacy heal
+    /// (<c>publicRead: true</c> over the gate's own <c>redirectOnDenied</c>), with every child deny
+    /// the gate wrote retired again by the heal — which the gate then reported, correctly, as
+    /// "the gating shape is NOT STAYING". The flips stopped at the re-install that refreshed the
+    /// record. One fact, one source: the partition says what it is.</para>
+    ///
+    /// <para>A root that is absent, unreadable as a plugin root, or not a plugin root at all leaves
+    /// the manifest untouched — every non-plugin partition (the Agent / Skill catalogs, a Space) is
+    /// decided exactly as before. A read failure PROPAGATES, like every other read of this step.</para>
+    /// </summary>
+    private static IObservable<PackageManifest> LiveDeclaration(
+        IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return(manifest);
+        return persistence.Read(partition, hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Select(root =>
+            {
+                var live = PreInstalledOnRoot(root, hub.JsonSerializerOptions);
+                if (live is not { } declared || declared == manifest.PreInstalled)
+                    return manifest;
+                logger?.LogInformation(
+                    "[PackageInstaller] {Id}: the manifest in hand says preInstalled={Stated}, the "
+                    + "partition root {Partition} says preInstalled={Live} — deciding on the root, the "
+                    + "same fact the Store's gating reconcile reads (MeshWeaver#5297)",
+                    manifest.Id, manifest.PreInstalled, partition, declared);
+                return manifest with { PreInstalled = declared };
+            });
+    }
+
+    /// <summary>
+    /// The <c>preInstalled</c> a plugin ROOT declares, or <c>null</c> when <paramref name="root"/> is
+    /// not a plugin root (absent, or content that is not a <c>PluginContent</c>). The type lives in
+    /// MeshWeaver.Plugins, so it is recognised by its <c>$type</c> discriminator (JSON content) or its
+    /// short CLR name (content a hub that knows the type has materialised). An ABSENT
+    /// <c>preInstalled</c> is <c>false</c>: the serializer omits a <c>bool</c> holding its default,
+    /// which is exactly how a gated plugin root is stored. Pure.
+    /// </summary>
+    internal static bool? PreInstalledOnRoot(MeshNode? root, JsonSerializerOptions options)
+    {
+        const string pluginContent = "PluginContent";
+        var content = root?.Content;
+        if (content is null)
+            return null;
+        JsonElement element;
+        switch (content)
+        {
+            case JsonElement je:
+                element = je;
+                break;
+            case System.Text.Json.Nodes.JsonNode node:
+                element = JsonSerializer.SerializeToElement(node, options);
+                break;
+            default:
+                if (!string.Equals(content.GetType().Name, pluginContent, StringComparison.Ordinal))
+                    return null;
+                element = JsonSerializer.SerializeToElement(content, content.GetType(), options);
+                if (element.ValueKind != JsonValueKind.Object)
+                    return null;
+                return ReadPreInstalled(element);
+        }
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty("$type", out var type)
+            || type.ValueKind != JsonValueKind.String
+            || !string.Equals(type.GetString(), pluginContent, StringComparison.Ordinal))
+            return null;
+        return ReadPreInstalled(element);
+
+        static bool ReadPreInstalled(JsonElement plugin)
+        {
+            foreach (var property in plugin.EnumerateObject())
+                if (string.Equals(property.Name, "preInstalled", StringComparison.OrdinalIgnoreCase))
+                    return property.Value.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="EnsureDeclaredAccess"/> on a manifest already reconciled with the partition's live
+    /// root (<see cref="LiveDeclaration"/>).
+    /// </summary>
+    private static IObservable<Unit> EnsureDeclaredAccessAsDeclared(
+        IMessageHub hub, PackageManifest manifest, string partition, ILogger? logger,
+        IEnumerable<string>? installedPaths)
+    {
         // A commercial package — priced (positive = purchasable, negative = coupon-only) or
         // contact-sales — installs GATED: no public read of any kind, entitlement (PluginGate /
         // purchase / coupon / a grant issued after the sales conversation) is the only way in.
