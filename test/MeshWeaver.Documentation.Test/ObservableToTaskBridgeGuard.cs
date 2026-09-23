@@ -328,15 +328,9 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             + "when adding RunContinuationsAsynchronously fixed a live inline-resumption hazard on "
             + "the hub-reachable in-mesh callers. Exit: port those 58 sites, then move the shim to "
             + "MeshWeaver.Fixture (MeshWeaver.Reinsurance #102)."),
-
-        ("src/MeshWeaver.Hosting.Orleans/MessageHubGrain.cs",
-            "An Orleans grain method whose return type is Task BY CONTRACT, waiting on HubReady to "
-            + "deliver. It cannot route through ObserveCompletion as that stands: ObserveCompletion "
-            + "FAULTS the task on an error, whereas this site must map an activation fault to a "
-            + "SUCCESSFUL result carrying a classified DeliveryFailure (ErrorType.Unavailable, "
-            + "#1693) — faulting instead would re-report an availability fact as a defect. It is "
-            + "the safe form, so the inline-resumption defect is not present. A ReactiveCompletion "
-            + "overload that maps faults to values would retire this entry."),
+        // MessageHubGrain.cs left this register with #5286/#5417: DeliverMessage no longer waits on
+        // HubReady through a TaskCompletionSource — it answers the grain call on acceptance with
+        // Task.FromResult and NACKs a late failure through the mesh.
     ];
 
     /// <summary>
