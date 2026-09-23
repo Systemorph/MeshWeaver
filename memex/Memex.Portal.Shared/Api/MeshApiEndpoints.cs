@@ -93,9 +93,9 @@ public static class MeshApiEndpoints
         // access is per node, so the question is asked at an address and answered by the same
         // evaluator the gates use. No body (the SSR's call) is the identity-only answer, unchanged.
         reads.MapPost("/whoami", (HttpContext http, IMessageHub rootHub, WhoAmIBody? body, CancellationToken ct) =>
-            string.IsNullOrWhiteSpace(body?.Path)
-                ? Task.FromResult(HandleWhoAmI(http))
-                : RunString(http, rootHub, ct, ops => ops.WhoAmI(body.Path)));
+            AsksForAccess(body, out var path)
+                ? RunString(http, rootHub, ct, ops => ops.WhoAmI(path))
+                : Task.FromResult(HandleWhoAmI(http)));
 
         group.MapPost("/search", (HttpContext http, IMessageHub rootHub, SearchBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Search(body.Query, body.BasePath)));
@@ -237,6 +237,17 @@ public static class MeshApiEndpoints
     /// (<c>MeshOperations.WhoAmI</c>); without one it is the identity-only
     /// <see cref="WhoAmIResponse"/>.</summary>
     public record WhoAmIBody(string? Path = null);
+
+    /// <summary>
+    /// Which answer a <c>/whoami</c> body asks for: the access answer at <paramref name="path"/> when
+    /// it names a node, the identity-only answer when there is no body, no <c>path</c>, or a blank
+    /// one — the last two being what every existing caller (<c>{}</c>) sends.
+    /// </summary>
+    internal static bool AsksForAccess(WhoAmIBody? body, out string path)
+    {
+        path = body?.Path?.Trim() ?? "";
+        return path.Length > 0;
+    }
 
     /// <summary>Default budget for <c>/render-area</c>; clamped so a caller can neither hang the
     /// request forever nor force a sub-second flake.</summary>

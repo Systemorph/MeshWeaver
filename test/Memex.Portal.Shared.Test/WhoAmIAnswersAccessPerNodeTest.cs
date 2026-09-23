@@ -9,6 +9,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Memex.Portal.Shared.Api;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -126,6 +127,51 @@ public class WhoAmIAnswersAccessPerNodeTest(ITestOutputHelper output) : Monolith
         Assert.Equal(JsonValueKind.Null, answer.GetProperty("userId").ValueKind);
         Assert.False(answer.GetProperty("isGlobalAdmin").GetBoolean());
         Assert.DoesNotContain("Update", Permissions(answer));
+    }
+
+    /// <summary>
+    /// The REST dispatch: only a body naming a node asks for the access answer. No body, `{}` and a
+    /// blank path — what portal-next's SSR, the React-Native app and the e2e send today — must
+    /// stay the identity-only answer, or every existing caller changes shape.
+    /// </summary>
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData(" " + DocPath + " ", true)]
+    public void TheRestBody_AsksForAccessOnlyWhenItNamesANode(string? path, bool asks)
+    {
+        var body = path is null ? null : new MeshApiEndpoints.WhoAmIBody(path);
+        Assert.Equal(asks, MeshApiEndpoints.AsksForAccess(body, out var resolved));
+        if (asks)
+            Assert.Equal(DocPath, resolved);
+        Assert.False(MeshApiEndpoints.AsksForAccess(null, out _), "an omitted body is the identity-only answer");
+    }
+
+    /// <summary>
+    /// And the real mapped route binds that body OPTIONALLY: an SSR caller posting no body at all
+    /// must not be refused with 400 by the binder before the handler runs.
+    /// </summary>
+    [Fact]
+    public async Task TheWhoAmIRoute_BindsItsBodyOptionally()
+    {
+        var builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder();
+        Microsoft.AspNetCore.TestHost.WebHostBuilderExtensions.UseTestServer(builder.WebHost);
+        // Parameter binding must see IMessageHub as a SERVICE; never resolved — nothing is invoked.
+        builder.Services.AddSingleton<IMessageHub>(_ => null!);
+        var app = builder.Build();
+        await using (app)
+        {
+            Memex.Portal.Shared.Api.MeshApiEndpoints.MapMeshApi(app);
+            var endpoint = ((Microsoft.AspNetCore.Routing.IEndpointRouteBuilder)app).DataSources
+                .SelectMany(source => source.Endpoints)
+                .OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>()
+                .Single(e => e.RoutePattern.RawText == "/api/mesh/whoami");
+            var accepts = endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.Http.Metadata.IAcceptsMetadata>();
+            Assert.NotNull(accepts);
+            Assert.Equal(typeof(MeshApiEndpoints.WhoAmIBody), accepts!.RequestType);
+            Assert.True(accepts.IsOptional, "a missing body must reach the identity-only answer, not a 400");
+        }
     }
 
     [Fact]

@@ -3468,20 +3468,27 @@ public class MeshOperations
         var identified = userId != WellKnownUsers.Anonymous && !userId.Contains('@');
         var evaluateAs = identified ? userId : WellKnownUsers.Anonymous;
 
-        var permissions = hub.GetEffectivePermissions(resolvedPath, evaluateAs).TakeDecisionOutsideGate();
+        // 🚨 A fold can COMPLETE WITHOUT A VERDICT (AccessControl → "the fold can produce NO
+        // answer"), and Zip over an empty leg completes empty. That is not "no permission": it is
+        // "not evaluated", so it is answered as Unavailable (503 on the REST surface) — never folded
+        // to Permission.None / false, which would tell a caller they hold nothing when nobody decided.
+        var permissions = hub.GetEffectivePermissions(resolvedPath, evaluateAs).TakeDecisionOutsideGate()
+            .Select(p => (Permission?)p).DefaultIfEmpty(null);
         var globalAdmin = identified
-            ? hub.IsGlobalAdmin(evaluateAs).TakeDecisionOutsideGate()
-            : Observable.Return(false);
+            ? hub.IsGlobalAdmin(evaluateAs).TakeDecisionOutsideGate().Select(b => (bool?)b).DefaultIfEmpty(null)
+            : Observable.Return<bool?>(false);
 
         return permissions
-            .Zip(globalAdmin, (granted, isGlobalAdmin) => JsonSerializer.Serialize(new
+            .Zip(globalAdmin, (granted, isGlobalAdmin) => granted is not { } g || isGlobalAdmin is not { } admin
+                ? $"Unavailable: access at '{resolvedPath}' reached no verdict (the permission fold completed without an answer) — ask again."
+                : JsonSerializer.Serialize(new
             {
                 userId = identified ? userId : null,
                 name = identified ? ctx?.Name : null,
                 email = identified ? ctx?.Email : null,
                 path = resolvedPath,
-                permissions = PermissionNames(granted),
-                isGlobalAdmin,
+                permissions = PermissionNames(g),
+                isGlobalAdmin = admin,
                 // Web defaults, not the hub's options: the hub omits default values, and an
                 // absent `isGlobalAdmin` / `userId` is exactly the "not measured" that must never
                 // read like "false" / "nobody" in an answer about access.
