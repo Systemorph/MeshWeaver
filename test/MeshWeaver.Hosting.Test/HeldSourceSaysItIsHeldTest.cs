@@ -260,8 +260,19 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
 
         // ── the delivery the seal does not cover, to a source ALREADY on the seal ──────────
         // Nothing to import, so the only trace of this build is what the node says.
+        //
+        // The "never fetched" window closes on the delivery's OWN verdict — the config recording the
+        // hold — rather than on a fixed Quick window: once the hold is recorded, the delivery has
+        // been decided without an import, which is the claim. A fixed window cost this test a whole
+        // TestTimeouts.Quick on every run (≈36 s on a CI runner; MeshWeaver.Feedback#17) and proved
+        // nothing more. If the hold is never recorded, the window runs to its bound and the
+        // outcome assertion below is what fails.
+        var holdRecorded = Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is { } c
+                        && string.Equals(c.LastSyncOutcome, GitHubSyncService.HeldOutcome, StringComparison.Ordinal));
         var neverFetched = repoClient.FetchedRefs.Skip(repoClient.Requested.Count)
-            .Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
+            .TakeUntil(holdRecorded)
+            .Should().NotEmit(within: TestTimeouts.Convergence, cancellationToken: TestContext.Current.CancellationToken);
 
         await Deliver(LaterUnsealedSha, TestContext.Current.CancellationToken);
         await neverFetched;
