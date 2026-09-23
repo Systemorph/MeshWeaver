@@ -162,10 +162,13 @@ public sealed class RoutingQuiescence : IDisposable
     /// oldest first, and a count of any remainder.</returns>
     public (IReadOnlyList<string> Labels, int NotShown) InFlightSample(int max = 10)
     {
-        var now = Stopwatch.GetTimestamp();
         // One read of each (label, start) pair — a leg may land mid-enumeration, and whatever is
         // named here WAS in flight with at least the age printed (same argument as OldestInFlight).
-        var all = inFlightLegs.Values
+        // The clock is read AFTER the snapshot: a leg tracked during the enumeration must never be
+        // measured against an earlier end and print a negative age.
+        var legs = inFlightLegs.Values.ToArray();
+        var now = Stopwatch.GetTimestamp();
+        var all = legs
             .OrderBy(leg => leg.StartedTimestamp)
             .Select(leg => FormatLeg(leg, now))
             .ToArray();
