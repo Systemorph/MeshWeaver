@@ -111,10 +111,15 @@ public class ADeletedPartitionIsNotPumpedTest(ITestOutputHelper output) : Monoli
             _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "unknown shape"),
         };
 
+        // A budget a test can wait out — the silent case must be settled BY it, and the production
+        // default (5 s) is the same mechanism with a longer number. The SILENT shape is the only one
+        // that ever spends its budget, so it gets a short one: its assertion is that the probe is
+        // BOUNDED, which half a second proves as well as TestTimeouts.Quick did (≈36 s on a CI
+        // runner; MeshWeaver.Feedback#17). Every other shape keeps the long budget, because for them
+        // a probe that timed out would also read "not absent" and pass for the wrong reason.
+        var budget = shape == "silent" ? TimeSpan.FromMilliseconds(500) : TestTimeouts.Quick;
         var absent = await PartitionExistenceProbe
-            // A budget a test can wait out — the silent case must be settled BY it, and the
-            // production default (5 s) is the same mechanism with a longer number.
-            .ConfirmedAbsent(providers, GonePartition, probeBudget: TestTimeouts.Quick)
+            .ConfirmedAbsent(providers, GonePartition, probeBudget: budget)
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the probe must always answer, never fault or hang",
                 cancellationToken: TestContext.Current.CancellationToken);
