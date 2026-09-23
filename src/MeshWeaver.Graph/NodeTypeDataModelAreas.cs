@@ -243,9 +243,9 @@ internal static class NodeTypeDataModelAreas
 
     /// <summary>
     /// Applies the instance configuration to a short-lived hosted probe hub and
-    /// snapshots the type registry / content type / JSON schema. The initial
-    /// <see cref="GetDataRequest"/> round-trip doubles as the init gate: by the time
-    /// the response arrives, the probe's DataContext is fully built and safe to read.
+    /// snapshots the type registry / content type / JSON schema. The probe's own
+    /// <see cref="SchemaReference"/> stream doubles as the init gate: it first emits once
+    /// the probe's DataContext is fully built and safe to read.
     /// The probe is disposed after the snapshot; the snapshotted
     /// <see cref="ITypeDefinition"/>s stay valid (the assembly load context is owned
     /// by the compilation cache, not the probe).
@@ -272,15 +272,37 @@ internal static class NodeTypeDataModelAreas
         if (probe == null)
             return Observable.Return<NodeTypeInstanceModel?>(null);
 
-        var delivery = probe.Post(new GetDataRequest(new SchemaReference()))!;
-        return probe.Observe(delivery)
-            .Select(d => d.Message)
-            .OfType<GetDataResponse>()
+        // 🚨 THE INIT GATE is the probe reaching MessageHubRunLevel.Started — the moment its
+        // initialization gates open, which is exactly when a message posted to it would have been
+        // processed. This used to be a GetDataRequest the probe posted to ITSELF, whose reply
+        // doubled as that gate (Doc/Architecture/DataPlaneMessagesAreStreamPlumbing). The schema
+        // stream ALONE is not a gate: it can reduce off the initial empty store before the data
+        // sources have initialized — measured in CI, where the snapshot ran and the probe was
+        // disposed before a virtual source's provider had even subscribed.
+        return ProbeStarted(probe)
+            .SelectMany(_ => probe.GetWorkspace().GetNullableStream(new SchemaReference())
+                ?? Observable.Empty<ChangeItem<object>>())
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .Select(response => SnapshotModel(probe, response.Data as SchemaInfo))
+            // .As<T>, never a cast: an object-typed stream payload may arrive as JSON.
+            .Select(change => SnapshotModel(probe, change.Value.As<SchemaInfo>(probe.JsonSerializerOptions)))
+            .DefaultIfEmpty(null)
             .Finally(probe.Dispose);
     }
+
+    /// <summary>
+    /// Emits once when <paramref name="probe"/> has STARTED (its initialization gates are open), and
+    /// faults if it winds down first. <see cref="IMessageHub.RunLevelChanged"/> replays the current
+    /// level, so a probe that is already started answers at once.
+    /// </summary>
+    internal static IObservable<System.Reactive.Unit> ProbeStarted(IMessageHub probe)
+        => probe.RunLevelChanged
+            .Where(level => level >= MessageHubRunLevel.Started)
+            .Take(1)
+            .SelectMany(level => level == MessageHubRunLevel.Started
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Observable.Throw<System.Reactive.Unit>(new ObjectDisposedException(probe.Address.ToString(),
+                    $"The probe reached {level} before it started.")));
 
     private static NodeTypeInstanceModel? SnapshotModel(IMessageHub probe, SchemaInfo? defaultSchema)
     {

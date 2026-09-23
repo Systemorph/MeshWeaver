@@ -368,27 +368,21 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// The <see cref="ResetHomeArea"/> handler — a menu-reachable action area that clears the owner's
-    /// <see cref="User.Body"/> (one-shot read → transform → <see cref="DataChangeRequest"/> on the user
-    /// hub, the pin/unpin write pattern), then renders a confirmation linking back to the (now default)
-    /// home. No-op when the Body is already empty.
+    /// <see cref="User.Body"/> through the user node's stream (<see cref="ClearUserBody"/>), then
+    /// renders a confirmation linking back to the (now default) home. No-op when the Body is already
+    /// empty.
     /// </summary>
     public static IObservable<UiControl?> ResetHome(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
         var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, ActivityArea);
-        var userAddress = host.Hub.Address;
 
-        // EmitNull: fire-and-forget click action with no error sink — an OnError would
-        // rethrow on the timeout's timer thread. Stall behaviour unchanged (the reset does
-        // not happen); the read logs the timeout + hub diagnostics at Warning.
-        host.Hub.GetMeshNode(hubPath, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull)
-            .Subscribe(node =>
-            {
-                if (node?.Content is not User user || string.IsNullOrWhiteSpace(user.Body))
-                    return;
-                var newNode = node with { Content = user with { Body = null } };
-                host.Hub.Post(new DataChangeRequest { Updates = [newNode] }, o => o.WithTarget(userAddress));
-            });
+        ClearUserBody(host.Workspace, hubPath, host.Hub.JsonSerializerOptions)
+            .Subscribe(
+                _ => { },
+                ex => host.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(UserActivityLayoutAreas))
+                    .LogWarning(ex, "Resetting the home of {Path} failed", hubPath));
 
         return Observable.Return<UiControl?>(Controls.Markdown(
             $"### Home reset to default\n\nYour home page now shows the default welcome layout. [Back to your home]({backHref})"));
@@ -396,23 +390,38 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// A <c>WithClickAction</c> that clears <see cref="User.Body"/> on the user node at
-    /// <paramref name="userPath"/> — one-shot read, null the Body, post a <see cref="DataChangeRequest"/>
-    /// to the owning hub (which echoes to subscribers, so the editor / home re-renders to the default).
+    /// <paramref name="userPath"/> through its node stream (<see cref="ClearUserBody"/>) — the owning
+    /// hub applies it and echoes to subscribers, so the editor / home re-renders to the default.
     /// </summary>
     private static Func<UiActionContext, Task> ClearBodyAction(string userPath) => ctx =>
     {
-        var userAddress = new Address(userPath);
-        // EmitNull — same reason as ResetHomeAction above: no error sink on this
-        // fire-and-forget subscription.
-        ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull)
-            .Subscribe(node =>
-            {
-                if (node?.Content is not User user) return;
-                var newNode = node with { Content = user with { Body = null } };
-                ctx.Host.Hub.Post(new DataChangeRequest { Updates = [newNode] }, o => o.WithTarget(userAddress));
-            });
+        ClearUserBody(ctx.Host.Workspace, userPath, ctx.Host.Hub.JsonSerializerOptions)
+            .Subscribe(
+                _ => { },
+                ex => ctx.Host.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(UserActivityLayoutAreas))
+                    .LogWarning(ex, "Clearing the home body of {Path} failed", userPath));
         return Task.CompletedTask;
     };
+
+    /// <summary>
+    /// Clears <see cref="User.Body"/> on the user node at <paramref name="userPath"/> — a write THROUGH
+    /// the node's stream, applied by the owning hub to the node's CURRENT state and carrying the
+    /// caller's identity. This used to be a one-shot <c>GetMeshNode</c> followed by a
+    /// <c>DataChangeRequest</c> posting the whole node back: two round-trips, a stale copy written
+    /// wholesale, and a second write path beside the sanctioned one
+    /// (Doc/Architecture/DataPlaneMessagesAreStreamPlumbing). A node whose Body is already empty — or
+    /// whose content is not a <see cref="User"/> — is returned unchanged, which writes nothing.
+    /// </summary>
+    /// <param name="workspace">The caller's workspace.</param>
+    /// <param name="userPath">The user node's path.</param>
+    /// <param name="options">Serializer options used to read the content as a <see cref="User"/>.</param>
+    /// <returns>A COLD observable: the write happens on Subscribe.</returns>
+    internal static IObservable<MeshNode> ClearUserBody(IWorkspace workspace, string userPath, JsonSerializerOptions options)
+        => workspace.GetMeshNodeStream(userPath).Update<User>((node, user) =>
+            user is { Body: { Length: > 0 } }
+                ? node with { Content = user with { Body = null } }
+                : node);
 
     /// <summary>
     /// Node-menu items for the user home: re-adds <b>Edit</b> (the default provider suppresses generic

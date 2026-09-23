@@ -114,6 +114,10 @@ public static class AccessControlLayoutArea
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {
+                    // 🚨 Captured on the click's delivery turn: the upsert below runs in the form
+                    // stream's callback, where the AsyncLocal AccessContext may already be gone.
+                    var access = saveCtx.Hub.ServiceProvider.GetService<AccessService>();
+                    var caller = access?.Context ?? access?.CircuitContext;
                     // Subscribe to the form data stream (synchronous emission via Take(1) —
                     // one-shot read for a click action, per DataBinding doc rule).
                     saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
@@ -157,14 +161,19 @@ public static class AccessControlLayoutArea
                                 }
                             };
 
-                            // CREATE flow (not update) — DataChangeRequest is the framework
-                            // primitive for create-or-update; UpdateMeshNode requires the
-                            // node to already exist on the owning hub. The owning hub's
-                            // data layer (registered by AddData) processes the create
-                            // natively. See Doc/Architecture/AsynchronousCalls.md.
-                            saveCtx.Hub.Post(
-                                new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
-                                o => o.WithTarget(saveCtx.Hub.Address));
+                            // CREATE-OR-UPDATE through the sanctioned lifecycle verb. The node
+                            // id is derived from the subject, so re-adding a subject replaces
+                            // its assignment — the create-or-update semantics this dialog has
+                            // always had. It used to post a DataChangeRequest carrying the new
+                            // node to the CURRENT node's hub; CreateOrUpdateNode routes to the
+                            // assignment's own owner, which serialises both branches, and
+                            // carries the caller's identity (Doc/Architecture/
+                            // DataPlaneMessagesAreStreamPlumbing).
+                            var meshService = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                            access.RunAs(caller, () => meshService.CreateOrUpdateNode(newNode))
+                                .Subscribe(
+                                    _ => { },
+                                    ex => ShowValidationError(saveCtx, $"{saveCtx.Host.Localize("error.saveFailed")}: {ex.Message}"));
                         });
                 })));
 
