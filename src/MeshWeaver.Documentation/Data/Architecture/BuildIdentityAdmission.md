@@ -175,6 +175,39 @@ tag-carrying store is unchanged and the operator gains a line naming **both** id
 only one is how the bake gate's *"regressed on this image"* sent three investigations to the wrong
 repository on the same night.
 
+### How a refusal is logged — by who heals it, once ([#5066](https://github.com/Systemorph/MeshWeaver/issues/5066))
+
+The gate's verdict was right; its **report** was misclassified. All five logging sites above wrote
+the refusal at `Error` on **every** probe, under a sentence that began *"Nothing further is required:
+this is the state the compile watcher already heals."* During an unconverged roll — two replica
+generations, record `s7e280d1` against process `se271838`, the record's assembly version climbing
+v481 → v1338 under the one identity — the schema probe alone wrote **507 such lines in 60 minutes
+on one pod**, and that flood is what minted #5066. One level was being emitted for two populations
+whose required responses are opposite, so every site now reports through ONE mesh-scoped ledger,
+`NodeTypeAdoptionRefusalLog`:
+
+| this mesh | who heals it | level | recovery stated |
+|---|---|---|---|
+| compiles locally (the default) | the type's own hub, against the live framework | `Warning` | `RecoveryVerbHealedHere` — nothing required; if it persists read the census |
+| `Modules:RequirePrebuilt=true` | nothing on this process — only a rebake for this identity | `Error` | `RecoveryVerbRequirePrebuilt` |
+
+The predicate is `PrebuiltAssemblySeeder.RequirePrebuilt`, the same one the compile watcher's
+adopt-only gate reads, so the log cannot disagree with the behaviour about whether a compile will
+happen. The full-level line is written **once per (site, NodeType, record framework identity)**;
+repeats go to `Debug`. A new record identity — the next roll — is a new fact and is reported again;
+a climbing assembly version under the same identity is not. The ledger is an instance on a
+mesh-scoped singleton (registered in `AddGraph`), never static state.
+
+🚨 **A roll that never converges is therefore no longer announced by a line flood — and it was
+never the flood's job.** Its instruments are the [live record census](../CompiledAgainstAnotherPlatform)
+(`bake-report`'s `LIVE RECORD CENSUS`, which degrades on records re-keyed by another generation
+AFTER this replica booted) and the instance's `converged`/`generations` on `Ops/Status/<id>`. What
+the ledger does NOT separate: a mesh that allows local compiles but whose partition tracks no
+source for the type (the second "can this mesh compile" fact `PrebuiltAssemblySeeder` reads for
+#3583) is reported at `Warning`, although no compile will follow there either.
+`AdoptionRefusalIsClassifiedAndReportedOnceTest` pins both properties on a captured logger, and a
+guard over `src/` fails any site that logs the refusal around the ledger.
+
 ## Where the honest status is reported
 
 | surface | before | now |

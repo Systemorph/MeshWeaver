@@ -161,14 +161,15 @@ internal sealed class CellSurfaceAssemblyProvider(
         // It gated on CompilationStatus == Ok alone, and Ok is a claim scoped to
         // CompiledFrameworkVersion: the pair is what has to be read, never the verdict by itself.
         //
-        // Error, not Warning, and for the same reason as the provenance refusal above: this is a
-        // verdict about the bytes that only a rebuild or a rebake changes.
+        // The level follows WHO rebuilds it (#5066): where this mesh compiles locally the type's own
+        // hub rebuilds against the live framework — the ordinary post-roll state, Warning; on a
+        // Modules:RequirePrebuilt mesh only a rebake does — Error. Once per (type, record identity):
+        // every kernel session resolves the surface, and the verdict does not change between them.
         if (NodeTypeBuildIdentity.Refuses(definition))
         {
-            logger.LogError(
-                "{Summary} It is NOT being joined into this kernel session's cell surface. {Recovery}",
-                NodeTypeBuildIdentity.RefusalSummary(node.Path, definition),
-                NodeTypeBuildIdentity.RecoveryVerb);
+            serviceProvider.GetRequiredService<NodeTypeAdoptionRefusalLog>().Report(
+                logger, "CellSurface", node.Path, definition,
+                "It is NOT being joined into this kernel session's cell surface.");
             return Observable.Return<CellSurfaceAssembly?>(null);
         }
 
