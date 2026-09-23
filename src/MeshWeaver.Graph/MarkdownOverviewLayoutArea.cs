@@ -336,84 +336,35 @@ public static class MarkdownOverviewLayoutArea
         // them up. Preference order is the LIST order, never whichever probe answered first.
         return Observable
             .CombineLatest(SignatureDeskPaths.Select(path => PluginSurfaceProbe.Exists(mesh, path)))
-            .Select(present => SignatureBlockFor(
-                present.ToImmutableArray(),
-                nodePath,
-                host.Localize("signature.unconfigured.title"),
-                host.Localize("signature.unconfigured.body")));
+            .Select(present => SignatureBlockFor(present.ToImmutableArray(), nodePath));
     }
 
     /// <summary>
     /// The whole decision this section makes, as a pure function of the probe answers: the block
-    /// delegated to the FIRST desk present in <see cref="SignatureDeskPaths"/> order, or the
-    /// unconfigured block when none is.
+    /// delegated to the FIRST desk present in <see cref="SignatureDeskPaths"/> order, or NOTHING
+    /// when none is.
     ///
-    /// <para>Separate from <see cref="SignaturesSection"/> on purpose. The properties that
-    /// actually broke — preference by LIST ORDER rather than by whichever probe answered first,
-    /// and a legible block instead of silence when nothing is installed — are decided here and are
-    /// testable here; pinning the array's contents alone (which is all the first version of
-    /// <c>SignatureDeskIsTheMaintainedPackageTest</c> did) leaves every one of them unguarded.</para>
+    /// <para>🚨 <b>No package ⇒ no section, not a "no provider is configured" card.</b> An earlier
+    /// version rendered such a card on every Markdown page of a mesh without an e-Signature
+    /// package; that was reversed: the signature feature appears only where
+    /// a signature was explicitly REQUESTED. The package's own block already hides on a document
+    /// with no requests, and requesting one is the node menu's <c>Request signature</c> entry,
+    /// which the package contributes as data — so a mesh without the package shows neither.</para>
+    ///
+    /// <para>Separate from <see cref="SignaturesSection"/> on purpose: preference by LIST ORDER
+    /// rather than by whichever probe answered first is decided here and is testable here.</para>
     /// </summary>
     /// <param name="present">Each candidate desk's probe answer, in <see cref="SignatureDeskPaths"/> order.</param>
     /// <param name="nodePath">The document whose signatures the desk is to render.</param>
-    /// <param name="unconfiguredTitle">Localized heading for the no-provider block.</param>
-    /// <param name="unconfiguredBody">Localized body for the no-provider block.</param>
-    internal static UiControl SignatureBlockFor(
-        IReadOnlyList<bool> present, string nodePath, string unconfiguredTitle, string unconfiguredBody)
+    internal static UiControl SignatureBlockFor(IReadOnlyList<bool> present, string nodePath)
     {
         for (var i = 0; i < SignatureDeskPaths.Length && i < present.Count; i++)
             if (present[i])
                 return Controls.LayoutArea(SignatureDeskPaths[i], SignatureArea, nodePath)
                     .WithShowProgress(false);
 
-        return UnconfiguredSignatureBlock(unconfiguredTitle, unconfiguredBody);
+        return Controls.Stack;
     }
-
-    /// <summary>
-    /// What the signatures section renders when NO e-Signature package is on the mesh.
-    ///
-    /// <para>Deliberately a block rather than an empty stack: a page that simply omits the section
-    /// teaches the reader that this document cannot be signed, when the truth is only that nobody
-    /// has installed a provider. It states that, names the signature level a provider would give,
-    /// and stops — it records nothing, offers no button, and is emphatically NOT a tenth approval
-    /// mechanism (the estate already has nine).</para>
-    ///
-    /// <para>🚨 Composed from the platform's layout controls, never from markup. The first version
-    /// of this block was a <c>Controls.Html</c> string carrying its own flexbox card and a
-    /// hand-drawn <c>&lt;svg&gt;</c>, which is the "own UI framework in a node" shape the GUI rules
-    /// forbid: it renders on exactly one client, takes no theme token it is not told about, and the
-    /// certificate mark it drew already exists in the platform icon set.</para>
-    /// </summary>
-    internal static UiControl UnconfiguredSignatureBlock(string title, string body)
-        => Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(14)
-            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; "
-                       + "padding: 14px 16px; margin-top: 12px; align-items: flex-start;")
-            .WithView(UnconfiguredSignatureMark())
-            .WithView(UnconfiguredSignatureText(title, body));
-
-    /// <summary>
-    /// The certificate mark a completed signature carries, shown here as a legend so the standard
-    /// is legible before anyone has adopted one. The platform icon set already has it, and there is
-    /// nothing to attest yet, so it is the hint colour — the copy beside it must not promise
-    /// otherwise.
-    ///
-    /// <para>🚨 The colour rides on <c>WithStyle</c>, NOT on <c>WithColor</c>. <c>IconControl.Color</c>
-    /// is public and the Blazor icon view binds only <c>Data</c> and <c>Width</c> (plus <c>Style</c>
-    /// from the base view), so a colour set the other way is silently dropped — which is why
-    /// <c>MeshNodeLayoutAreas.BuildAccessDenied</c>, the same kind of card, colours its icon through
-    /// the style too.</para>
-    /// </summary>
-    internal static IconControl UnconfiguredSignatureMark()
-        => Controls.Icon(FluentIcons.Certificate())
-            .WithStyle("color: var(--neutral-foreground-hint);");
-
-    /// <summary>The heading and explanation of the no-provider block.</summary>
-    internal static StackControl UnconfiguredSignatureText(string title, string body)
-        => Controls.Stack
-            .WithView(Controls.Subject(title))
-            .WithView(Controls.Body(body).WithStyle("color: var(--neutral-foreground-hint);"));
 
     /// <summary>
     /// Returns the actual markdown body control (a <see cref="CollaborativeMarkdownControl"/>

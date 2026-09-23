@@ -23,7 +23,7 @@ namespace MeshWeaver.Graph.Test;
 ///
 /// <para>🚨 <b>Pinning the array alone is not coverage of the behaviour that changed</b>, which is
 /// what the first version of this class did. The selection could regress to "whichever probe
-/// answered first", or the no-provider case could go back to rendering an empty stack, and every
+/// answered first", or the no-provider case could start rendering a card again, and every
 /// assertion about the array would still pass. The selection and the fallback are therefore
 /// exercised through <see cref="MarkdownOverviewLayoutArea.SignatureBlockFor"/> — the pure function
 /// the reactive section is a wrapper over.</para>
@@ -83,7 +83,7 @@ public class SignatureDeskIsTheMaintainedPackageTest
         bool maintainedPresent, bool legacyPresent, string expectedDesk)
     {
         var block = MarkdownOverviewLayoutArea.SignatureBlockFor(
-            ImmutableArray.Create(maintainedPresent, legacyPresent), Doc, "title", "body");
+            ImmutableArray.Create(maintainedPresent, legacyPresent), Doc);
 
         var area = Assert.IsType<LayoutAreaControl>(block);
         Assert.Equal(expectedDesk, area.Address);
@@ -93,63 +93,35 @@ public class SignatureDeskIsTheMaintainedPackageTest
     }
 
     /// <summary>
-    /// With NO e-signature package installed the section must say so. It used to render an empty
-    /// stack, which teaches the reader that this document cannot be signed when the truth is only
-    /// that nobody installed a provider — a silent omission no test could tell from a real block.
+    /// With NO e-signature package installed the section renders NOTHING: the signature
+    /// feature must not show on every page, only where a signature was explicitly requested. An earlier version rendered a "No e-signature provider is configured" card on
+    /// every Markdown page of such a mesh.
     /// </summary>
     [Fact]
-    public void WithNoPackageInstalled_TheBlockSaysSoInsteadOfRenderingNothing()
+    public void WithNoPackageInstalled_TheSectionRendersNothing()
     {
-        var block = MarkdownOverviewLayoutArea.SignatureBlockFor(
-            ImmutableArray.Create(false, false), Doc, "title", "body");
+        var block = MarkdownOverviewLayoutArea.SignatureBlockFor(ImmutableArray.Create(false, false), Doc);
 
-        Assert.IsNotType<LayoutAreaControl>(block);
         var stack = Assert.IsType<StackControl>(block);
-        Assert.NotEmpty(stack.Areas);   // an EMPTY stack is the defect, not the fallback
+        Assert.Empty(stack.Areas);
     }
 
-    /// <summary>
-    /// 🚨 The fallback is composed from the platform's layout controls, never from markup. The
-    /// first version of it was a <c>Controls.Html</c> string carrying its own flexbox card and a
-    /// hand-drawn <c>&lt;svg&gt;</c> certificate — an own UI framework inside a node, which renders
-    /// on one client only and takes no theme token it is not handed. The mark it drew is in the
-    /// platform icon set already.
-    /// </summary>
+    /// <summary>A probe list SHORTER than the desk list (no answer yet for a desk) is "absent", never an index error.</summary>
     [Fact]
-    public void TheUnconfiguredBlockIsComposedFromPlatformControls()
+    public void AMissingProbeAnswerCountsAsAbsent()
     {
-        var block = MarkdownOverviewLayoutArea.UnconfiguredSignatureBlock("title", "body");
+        var block = MarkdownOverviewLayoutArea.SignatureBlockFor(ImmutableArray<bool>.Empty, Doc);
 
-        Assert.IsType<StackControl>(block);
-        Assert.IsType<IconControl>(MarkdownOverviewLayoutArea.UnconfiguredSignatureMark());
-        Assert.IsType<StackControl>(MarkdownOverviewLayoutArea.UnconfiguredSignatureText("t", "b"));
+        Assert.Empty(Assert.IsType<StackControl>(block).Areas);
     }
 
-    /// <summary>
-    /// The block renders localized copy, and the copy must not describe a rendering the block does
-    /// not produce: there is no signature to attest yet, so the mark is the hint colour. An earlier
-    /// version of these strings told the reader it was green.
-    /// </summary>
+    /// <summary>The no-provider card's copy is retired with the card — a leftover key would be dead text.</summary>
     [Theory]
     [InlineData("en")]
     [InlineData("de")]
-    public void TheUnconfiguredCopyIsLocalizedAndDoesNotPromiseAColour(string locale)
-    {
-        var title = LocalizationCatalog.Get("signature.unconfigured.title", locale);
-        var body = LocalizationCatalog.Get("signature.unconfigured.body", locale);
-
-        Assert.NotEqual("signature.unconfigured.title", title);   // a raw key means it is missing
-        Assert.NotEqual("signature.unconfigured.body", body);
-
-        // The mark is rendered in the hint token, so no wording may name a colour for it.
-        // 🚨 Asserted on Style, not on Color: IconControl.Color is bound by no view (the Blazor
-        // icon view binds Data and Width only), so pinning Color would pin a property nothing
-        // reads — a green assertion over a colour that never renders.
-        Assert.Contains("var(--neutral-foreground-hint)",
-            MarkdownOverviewLayoutArea.UnconfiguredSignatureMark().Style?.ToString());
-        foreach (var colour in new[] { "green", "grün", "gruen" })
-            Assert.DoesNotContain(colour, body, StringComparison.OrdinalIgnoreCase);
-    }
+    public void TheRetiredUnconfiguredCopyIsGoneFromTheCatalog(string locale)
+        => Assert.Equal("signature.unconfigured.title",
+            LocalizationCatalog.Get("signature.unconfigured.title", locale));
 
     /// <summary>
     /// The approvals section delegates the same way and has never been renamed — pinned here so a
