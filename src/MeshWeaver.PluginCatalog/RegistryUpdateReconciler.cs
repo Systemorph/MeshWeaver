@@ -269,11 +269,18 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose()
-    {
-        subscriptions.Dispose();
-        bootReconciled.Dispose();
-    }
+    /// <remarks>
+    /// 🚨 Disposes this service's OWN subscriptions and nothing else — never the <c>bootReconciled</c>
+    /// signal (#5557). The boot repair pass sequences on <see cref="BootReconciled"/>, and a sibling hosted service can subscribe
+    /// after this one has stopped (hosted services stop in reverse registration order; an aborted
+    /// startup skips <c>StopAsync</c> and disposes the container). A disposed
+    /// <see cref="System.Reactive.Subjects.AsyncSubject{T}"/> answers that late subscribe with an
+    /// <see cref="ObjectDisposedException"/> the reader then reports as its OWN failure. The one-shot
+    /// replay holds no resource, so leaving it readable costs nothing: a late reader sees the value
+    /// or waits, and its own owner's teardown ends the wait — the same rule
+    /// <c>PreWarmCompletion</c> follows.
+    /// </remarks>
+    public void Dispose() => subscriptions.Dispose();
 
     private void Start()
     {

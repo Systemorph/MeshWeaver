@@ -64,8 +64,23 @@ public enum PreWarmSettlement
 /// settled proceeds immediately; whoever subscribes before waits without polling. Deliberately
 /// NOT settled on host shutdown — a consumer's own subscription teardown is what cancels its
 /// wait, and settling mid-shutdown would START the very work being torn down.</para>
+///
+/// <para>🚨 <b>Deliberately NOT disposable (#5557).</b> This used to dispose its subject when the
+/// container went down, and that turned the ONE read a teardown can still make into a fault. The
+/// reader that hit it is the default install: it hops to the thread pool before it subscribes (so
+/// the install never runs on the host-startup thread), and on an ABORTED startup the host skips
+/// every <c>StopAsync</c> and disposes the container while that hop is still queued — see
+/// <c>AbortedStartupSkipsOrderedShutdownTest</c>. The container disposes singletons in reverse
+/// creation order, and this signal is first resolved from the installer's own <c>StartAsync</c> —
+/// after the host has already built every hosted service — so it went first; the queued subscribe
+/// then landed on a disposed <see cref="AsyncSubject{T}"/> and failed with
+/// <c>ObjectDisposedException</c> at <c>AsyncSubject.ThrowDisposed</c>, which the installer
+/// reported as "First-startup plugin provisioning failed" on a process that was already exiting.
+/// A one-shot replay owns nothing that needs releasing; disposing it only converts every later
+/// reader into an error. A reader that arrives after teardown now sees exactly what an earlier one
+/// sees — the settled value, or a wait that its own owner's disposal ends.</para>
 /// </summary>
-public sealed class PreWarmCompletion : IDisposable
+public sealed class PreWarmCompletion
 {
     private readonly AsyncSubject<PreWarmSettlement> settled = new();
 
@@ -86,7 +101,4 @@ public sealed class PreWarmCompletion : IDisposable
         settled.OnNext(settlement);
         settled.OnCompleted();
     }
-
-    /// <inheritdoc />
-    public void Dispose() => settled.Dispose();
 }

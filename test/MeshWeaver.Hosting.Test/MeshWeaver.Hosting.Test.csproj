@@ -16,6 +16,12 @@
          core sha — so a test of a core change cannot run there until the pin moves, which is
          precisely the window this defect shipped through. The pin belongs where the code is. -->
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+    <!-- AOneShotSignalOutlivesTeardownTest (#5557) pins the teardown contract of the boot writers'
+         one-shot signals — InstanceAutoRegistrationService.Completed and
+         RegistryUpdateReconciler.BootReconciled — next to the bake barrier they share it with. Same
+         reasoning as GitSync above: the PluginCatalog suite lives in MeshWeaver.Plugins against a
+         PINNED core, so a test of a core change belongs where the code is. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Concrete HostBuilder for MeshHostBuilderTeardownOrderingTest (the legacy
