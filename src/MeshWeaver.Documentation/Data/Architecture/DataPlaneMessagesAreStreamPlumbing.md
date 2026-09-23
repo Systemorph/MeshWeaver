@@ -151,13 +151,16 @@ not a zero.
 
 ## Moving GetMeshNode onto the node stream
 
-`GetMeshNodeOutcome` is the last and largest node read on `GetDataRequest`, and the one the
-identity incidents come from. Swapping its transport for `IMeshNodeStreamCache` is **not** a
+`GetMeshNodeOutcome` is the last and largest node read on `GetDataRequest`. Its recycling
+re-probe lost the read's identity until #5444; whether the wider incident family
+(#5431–#5439: `GetDataRequest`s from `portal/reads-*` to partition roots such as `Mail`,
+`Stripe`, `ThreeBody`) goes through this method or another `GetDataRequest` issued on the read
+hub is NOT established here — those log lines name the message and target, not the calling site. Swapping its transport for `IMeshNodeStreamCache` is **not** a
 transport swap: the two reads decide different things, in different places.
 
 | | `GetMeshNodeOutcome` (today) | `IMeshNodeStreamCache.GetStream` |
 |---|---|---|
-| who decides Read | the OWNER, per caller: the `[RequiresPermission(Read)]` delivery gate + every `INodeValidator` for `NodeOperation.Read` (`RlsNodeValidator`, `SatelliteAccessRule`, the User/VUser/Space/Partition rules, `AddAccessRule` rule sets) — all consulting `NodeTypeAccessRuleGate` | the READER, locally: one shared upstream per path (opened under the cache identity), then `GateOnRead` on `GetEffectivePermissions` — the permission fold only, no node-type rules; skipped entirely for no-user contexts and type-definition paths |
+| who decides Read | the OWNER, per caller, on two paths: the `[RequiresPermission(Read)]` delivery gate (`AccessControlPipeline`), which re-evaluates a denied fold through `NodeTypeAccessRuleGate`; then the read-validator pipeline, where every `INodeValidator` for `NodeOperation.Read` runs — `RlsNodeValidator` resolving the type's access rule itself (`_accessRules.Find` → `HasAccess`, not through the gate), plus `SatelliteAccessRule` and the User/VUser/Space/Partition and `AddAccessRule` rule sets | the READER, locally: one shared upstream per path (opened under the cache identity), then `GateOnRead` on `GetEffectivePermissions` — the permission fold only, no node-type rules; skipped entirely for no-user contexts and type-definition paths |
 | delete in flight | `Absence = DeleteInProgress` (owner tombstone, #1471) | no signal on the subscription protocol |
 | absent path | `Absent`, no state kept | NotFound recorded in the storm-breaker's negative cache — reads AND writes of that path fast-fail for the backoff window |
 | owner recycling | paced `ShuttingDown` re-probe within the caller's budget | transient-fault classification + transient breaker |
@@ -175,8 +178,8 @@ So moving `GetMeshNode` onto the cache as it stands would DENY reads a node-type
 for any type whose rule is narrower than the fold, ALLOW reads the owner refuses. That is a change to
 the authorization model of 100+ reads, not a refactor, and it needs a decision before code:
 
-1. **Reader-side rule parity.** Should the cache's read gate consult `NodeTypeAccessRuleGate` (and
-   the Read validators) the way the three documented seams do? That also changes what every
+1. **Reader-side rule parity.** Should the cache's read gate apply the node-type rules and the Read
+   validators the way the owner's delivery gate and validator pipeline do? That also changes what every
    EXISTING `GetMeshNodeStream` reader sees — the measurement above is a live inconsistency today,
    independent of `GetMeshNode`.
 2. **A delete tombstone on the subscription protocol**, so the stream can say `DeleteInProgress`.
