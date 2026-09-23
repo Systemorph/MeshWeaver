@@ -989,6 +989,40 @@ all three writers that can fulfil the request, so turning assert into check fixe
 mirrored onto the compile-state satellite, so a control plane can read it through
 `GetMeshNodeStream(path)`.
 
+#### "The write did not converge" means a CONFIRMED stamp is still standing, and nothing less
+
+`InstallAdoptedSourceStampWatcher` logs one line at Error: *"the adopted build's source stamp was
+committed for request {RequestedAt} and the request is still standing with IsDirty=true — the write
+did not converge"*. The watcher is not retried, because a reconcile that cannot converge must name
+itself once, not spin (#223). The line only means that if **committed** means that a write
+**landed and consumed** the request.
+
+The watcher used to advance its commit mark inside the write's lambda, before the stamp was applied,
+which made "committed" mean only that a pass had run. Two ordinary outcomes then produced the Error
+with nothing wrong (#1105):
+
+- **The write faulted after its lambda ran.** The failure was already reported at Warning, and the
+  request stayed open.
+- **The stamp deferred its own judgement.** `ApplyAdoptedSourceStamp` returns the definition
+  untouched, with the request standing, while the adoption cannot be judged because the live set is
+  still short of the paths the bundle was built from (#4280). The watcher's `Where` asked the same
+  question on the emission, but the lambda runs on the owner's *current* node, which can be earlier
+  in an install than the emission was.
+
+In both cases the next emission is the one that should fulfil the request. The mark reported it as a
+failure instead. Measured on memex.meshweaver.cloud: `Store/Order` logged the Error at 2026-09-22
+22:54:24Z. A read 74 s later showed `requestedSourceStampAt` absent,
+`currentSourceFingerprint == adoptedSourceFingerprint` and `buildProvenance: AdoptedVerified`. The
+request had converged; only the log said it had not.
+
+The mark now lives in `AdoptedSourceStampLedger` and moves only in the write's `onNext`, and only
+when the **committed** definition no longer carries the request. The write itself is the pure
+`StampOnce`, which touches no mark. A pass that leaves the request standing is logged at Debug, and
+a faulted write says the request stays open. So the Error now means one thing: a write was confirmed
+to consume the request, and a later emission of that same request is still dirty. That is real
+non-convergence, and it stays loud. Pinned by `AdoptedSourceStampCommitIsConfirmedTest`
+(`MeshWeaver.Compiler.Pipeline.Test`).
+
 #### Whether the refused bytes keep serving is CONDITIONAL
 
 `Seed` has already stamped the adopted build's assembly coordinates by the time the owner judges it,
