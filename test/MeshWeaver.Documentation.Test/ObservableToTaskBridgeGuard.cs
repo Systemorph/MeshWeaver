@@ -180,10 +180,18 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// with its five DevLogin sign-in sites. The ROOT moved rather than an allow file emptying, and
     /// the ratchet (<c>DirectObservableAwaitSites.allow</c>, its budget and its shrink-only test) is
     /// deleted rather than left at zero: a ratchet promises "this may only shrink", and what is wanted
-    /// is "there are none" — so the next site added anywhere in the repo is refused, with no line to
-    /// add. A suite is not exempt for being a suite: the thread a test resumes on is the one that
-    /// then runs the rest of the test, its mesh teardown and — under xUnit — the runner starting the
-    /// next class (#2301, #2377).</para>
+    /// is "there are none" — so the next site the matcher can see is refused anywhere in the repo,
+    /// with no line to add. A suite is not exempt for being a suite: the thread a test resumes on is
+    /// the one that then runs the rest of the test, its mesh teardown and — under xUnit — the runner
+    /// starting the next class (#2301, #2377).</para>
+    ///
+    /// <para>🚨 "The matcher can see" is the honest scope, and it is the SAME scope for every root in
+    /// this list: <see cref="ObservableTails"/> is a whitelist, so an await whose expression has no
+    /// Rx-named tail — <c>await source;</c> on a bare variable, <c>await Observable.Return(1);</c>
+    /// on a creation operator — is not counted. That is the deliberate trade documented on
+    /// <see cref="ObservableTails"/> (a missed site is safe; a false positive on a Task await gets
+    /// the rule suppressed). Closing it needs a SEMANTIC scan that knows the awaited expression's
+    /// static type, which is the same instrument #4756's name-keyed half is waiting for.</para>
     /// </summary>
     private static readonly ImmutableArray<string> DirectAwaitZeroRoots =
         ["src", "tools", "samples", "clients", "memex", "test"];
