@@ -159,7 +159,7 @@ public class OversizedContentTravelsOutOfBandTest(ITestOutputHelper output) : Hu
 
         var response = await Sync(GetClient(), files)
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         response.Success.Should().BeTrue(response.Error ?? string.Empty);
         response.FilesImported.Should().Be(files.Length, "every file must still be written");
@@ -205,11 +205,11 @@ public class OversizedContentTravelsOutOfBandTest(ITestOutputHelper output) : Hu
         var files = Fixture();
         var client = GetClient();
 
-        var first = await Sync(client, files).Timeout(TestTimeouts.Convergence).FirstAsync();
+        var first = await Sync(client, files).Timeout(TestTimeouts.Convergence).FirstAsync().Await();
         first.Success.Should().BeTrue(first.Error ?? string.Empty);
 
         var owned = files.Select(f => f.Path).ToArray();
-        var second = await Sync(client, files, owned).Timeout(TestTimeouts.Convergence).FirstAsync();
+        var second = await Sync(client, files, owned).Timeout(TestTimeouts.Convergence).FirstAsync().Await();
         second.Success.Should().BeTrue(second.Error ?? string.Empty);
 
         var onDisk = Directory.GetFiles(Path.Combine(contentPath, "videos"))
@@ -249,7 +249,7 @@ public class OversizedContentTravelsOutOfBandTest(ITestOutputHelper output) : Hu
         var files = Fixture();
         var response = await Sync(GetClient(), files, ["videos/retired.mp4"])
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         response.Success.Should().BeTrue(response.Error ?? string.Empty);
 
@@ -322,7 +322,7 @@ public class RefusedOutOfBandContentStillSaysWhyTest(ITestOutputHelper output) :
             .Mirror(true)
             .Post()
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         response.Success.Should().BeFalse("the destination collection does not exist on that node");
         response.Error.Should().Contain("not found",
@@ -379,7 +379,7 @@ public class UnresolvableStagedHandleIsALoudFailureTest(ITestOutputHelper output
             .Select(d => d.Message)
             .Take(1)
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         response.Success.Should().BeFalse(
             "a handle that does not resolve must never be folded into 'zero files' — that is the "

@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -79,13 +80,13 @@ public sealed class EmitReferenceCaptureBoundaryTest
             var error = new InvalidOperationException("original");
             scheduler.Schedule(CSharpCompilation.Create("Unused"), error);
             error.Data[EmitPipeline.EmitReferenceCaptureDataKey].Should().Be("incomplete:owner-disposed");
-            (await pool.InvokeBlocking(_ => Directory.Exists(directory)).Timeout(TimeSpan.FromSeconds(10)))
+            (await pool.InvokeBlocking(_ => Directory.Exists(directory)).Timeout(TimeSpan.FromSeconds(10)).Await())
                 .Should().BeFalse();
         }
         finally
         {
             pool.Dispose();
-            (await pool.Disposed.FirstAsync().Timeout(TimeSpan.FromSeconds(10))).Should().Be(0);
+            (await pool.Disposed.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await()).Should().Be(0);
             if (Directory.Exists(directory)) Directory.Delete(directory, true);
         }
     }
@@ -112,12 +113,12 @@ public sealed class EmitReferenceCaptureBoundaryTest
             {
                 scheduler.Schedule(compilation, failure);
                 return Environment.CurrentManagedThreadId;
-            }, actor).Timeout(TimeSpan.FromSeconds(10));
+            }, actor).Timeout(TimeSpan.FromSeconds(10)).Await();
 
             // The real single-slot file pool queues this read after the capture. The
             // actor itself never waits for a file or a diagnostic completion.
             var json = await pool.InvokeBlocking(_ => File.ReadAllText(Path.Combine(directory, "manifest.json")))
-                .Timeout(TimeSpan.FromSeconds(10));
+                .Timeout(TimeSpan.FromSeconds(10)).Await();
             using var manifest = JsonDocument.Parse(json);
             manifest.RootElement.GetProperty("complete").GetBoolean().Should().BeTrue();
             var captureId = manifest.RootElement.GetProperty("captureId").GetString();
@@ -127,14 +128,14 @@ public sealed class EmitReferenceCaptureBoundaryTest
                 .Should().NotBe(actorThread);
             registered.Should().NotBeNull();
             await Observable.Interval(TimeSpan.FromMilliseconds(10))
-                .Where(_ => registered!.IsDisposed).Take(1).Timeout(TimeSpan.FromSeconds(10));
+                .Where(_ => registered!.IsDisposed).Take(1).Timeout(TimeSpan.FromSeconds(10)).Await();
             registered!.IsDisposed.Should().BeTrue("a completed diagnostic must release its owner");
         }
         finally
         {
             owner.Dispose();
             pool.Dispose();
-            (await pool.Disposed.FirstAsync().Timeout(TimeSpan.FromSeconds(10))).Should().Be(0);
+            (await pool.Disposed.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await()).Should().Be(0);
             if (Directory.Exists(directory)) Directory.Delete(directory, true);
         }
     }
@@ -163,7 +164,7 @@ public sealed class EmitReferenceCaptureBoundaryTest
             errors.Count(error => Equals(error.Data[EmitPipeline.EmitReferenceCaptureDataKey],
                 "incomplete:already-requested")).Should().Be(63);
             var json = await pool.InvokeBlocking(_ => File.ReadAllText(Path.Combine(directory, "manifest.json")))
-                .Timeout(TimeSpan.FromSeconds(10));
+                .Timeout(TimeSpan.FromSeconds(10)).Await();
             using var manifest = JsonDocument.Parse(json);
             manifest.RootElement.GetProperty("complete").GetBoolean().Should().BeTrue();
             reservation.TryReserve().Should().BeFalse("completion does not re-arm capture");
@@ -172,7 +173,7 @@ public sealed class EmitReferenceCaptureBoundaryTest
         {
             owner.Dispose();
             pool.Dispose();
-            (await pool.Disposed.FirstAsync().Timeout(TimeSpan.FromSeconds(10))).Should().Be(0);
+            (await pool.Disposed.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await()).Should().Be(0);
             if (Directory.Exists(directory)) Directory.Delete(directory, true);
         }
     }

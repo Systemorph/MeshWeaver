@@ -106,7 +106,7 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var emissions = await Mesh.GetWorkspace().ObservePartitionRoot(Package)
             .ToList()
-            .FirstAsync().Timeout(ReadBudget);
+            .FirstAsync().Timeout(ReadBudget).Await();
 
         emissions.Should().ContainSingle().Which.Should().BeNull();
     }

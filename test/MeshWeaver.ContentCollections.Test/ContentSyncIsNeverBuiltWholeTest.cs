@@ -128,7 +128,7 @@ public class ContentSyncIsNeverBuiltWholeTest(ITestOutputHelper output) : HubTes
             .Mirror(true)
             .Post()
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         response.Success.Should().BeTrue(response.Error ?? string.Empty);
         response.FilesImported.Should().Be(FileCount, "every file must still be written");
@@ -166,7 +166,7 @@ public class ContentSyncIsNeverBuiltWholeTest(ITestOutputHelper output) : HubTes
             .SourceOwned(["TDD/videos/gone.mp4"])
             .Post()
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         var deliveries = received.ToArray();
         deliveries.Length.Should().BeGreaterThan(1);
@@ -200,7 +200,7 @@ public class ContentSyncIsNeverBuiltWholeTest(ITestOutputHelper output) : HubTes
             .Mirror(true)
             .Post()
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         var deliveries = received.ToArray();
         deliveries.Should().ContainSingle("a sync that fits is not split");
@@ -266,7 +266,7 @@ public class ContentSyncMirrorSurvivesTheSplitTest(ITestOutputHelper output) : H
             .SourceOwned(["videos/retired.mp4"])
             .Post()
             .Timeout(TestTimeouts.Convergence)
-            .FirstAsync();
+            .FirstAsync().Await();
 
         response.Success.Should().BeTrue(response.Error ?? string.Empty);
         response.FilesImported.Should().Be(FileCount);

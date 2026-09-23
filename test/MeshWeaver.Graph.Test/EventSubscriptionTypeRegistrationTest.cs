@@ -144,7 +144,7 @@ public class EventSubscriptionTypeRegistrationTest(ITestOutputHelper output) : M
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscriptionId))
             .Select(n => n.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
@@ -152,7 +152,7 @@ public class EventSubscriptionTypeRegistrationTest(ITestOutputHelper output) : M
         var granted = await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{InviteeId}_Access")
             .Where(n => n?.Content is AccessAssignment a
                         && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
         Assert.NotNull(granted);
     }
 }

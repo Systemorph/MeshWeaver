@@ -172,38 +172,21 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// statement has no reducer in that position at all. So this rule reads the expression's TAIL,
     /// whatever it is, and walks balanced brackets so a chain spread over four lines is ONE
     /// expression.</para>
+    ///
+    /// <para>🚨 <c>test/</c> JOINED this set when its seeded inventory — 223 sites in 66 files, which
+    /// <c>AGENTS.md</c>, the <c>/async</c> and <c>/testing</c> skills and
+    /// <c>Doc/Architecture/AsynchronousCalls</c> had all PRESCRIBED as the way off
+    /// <c>.ToTask()</c> — reached zero (MeshWeaver#4756). <c>memex/</c> made the same move before it
+    /// with its five DevLogin sign-in sites. The ROOT moved rather than an allow file emptying, and
+    /// the ratchet (<c>DirectObservableAwaitSites.allow</c>, its budget and its shrink-only test) is
+    /// deleted rather than left at zero: a ratchet promises "this may only shrink", and what is wanted
+    /// is "there are none" — so the next site added anywhere in the repo is refused, with no line to
+    /// add. A suite is not exempt for being a suite: the thread a test resumes on is the one that
+    /// then runs the rest of the test, its mesh teardown and — under xUnit — the runner starting the
+    /// next class (#2301, #2377).</para>
     /// </summary>
     private static readonly ImmutableArray<string> DirectAwaitZeroRoots =
-        ["src", "tools", "samples", "clients", "memex"];
-
-    /// <summary>
-    /// The trees carrying a seeded inventory for the direct-await shape, measured 2026-09-18.
-    ///
-    /// <para><c>test/</c> carries 223 sites in 66 files — and they are not an accident:
-    /// <c>AGENTS.md</c>, the <c>/async</c> skill, the <c>/testing</c> skill and
-    /// <c>Doc/Architecture/AsynchronousCalls</c> all PRESCRIBED "await the observable directly with
-    /// a <c>.Timeout(...)</c>" as the replacement for <c>.ToTask()</c>, while four other pages said
-    /// the opposite and correctly. This change corrects the four; the inventory they produced may
-    /// only shrink.</para>
-    ///
-    /// <para>🚨 <c>memex/</c> WAS in this set with 5 sites in one file and has MOVED to
-    /// <see cref="DirectAwaitZeroRoots"/> (MeshWeaver#4756). It is production code — an ASP.NET
-    /// controller, not a suite — so a ratchet was the wrong home for it: a ratchet says "this may
-    /// only shrink", and what is wanted for a production root is "there are none". The five were
-    /// all in the DevLogin sign-in action and all now wait through
-    /// <c>.Await(HttpContext.RequestAborted)</c>. Moving the root rather than merely deleting the
-    /// allow line is the point: the next one added under <c>memex/</c> is refused outright, with no
-    /// line to add.</para>
-    /// </summary>
-    private static readonly ImmutableArray<string> DirectAwaitRatchetedRoots = ["test"];
-
-    private const string DirectAwaitAllowFileName = "DirectObservableAwaitSites.allow";
-
-    /// <summary>
-    /// The seeded inventory's size for <see cref="DirectAwaitRatchetedRoots"/>. 228 at seeding;
-    /// 223 since <c>memex/</c>'s five left the ratchet for the zero set (MeshWeaver#4756).
-    /// </summary>
-    private const int DirectAwaitTotalBudget = 223;
+        ["src", "tools", "samples", "clients", "memex", "test"];
 
     /// <summary>
     /// The member names that END an expression whose static type is an
@@ -875,60 +858,6 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The shrinking half for <see cref="DirectAwaitRatchetedRoots"/>: 228 sites that GUIDANCE asked
-    /// for. Four pages told authors to "await the observable directly with a <c>.Timeout(...)</c>"
-    /// as the way OFF <c>.ToTask()</c>; this change corrects them, and the inventory they produced
-    /// may only shrink.
-    /// </summary>
-    [Fact]
-    public void NoNewDirectObservableAwaitInTheTreesStillBeingSwept()
-    {
-        var root = SourceScan.FindRepoRoot();
-        var allowed = SourceScan.ReadAllowFile(
-            Path.Combine(root, "test", DirectAwaitAllowFileName), DirectAwaitAllowFileName);
-        var found = ScanDirectAwaits(root, DirectAwaitRatchetedRoots);
-
-        var failures = new List<string>();
-
-        foreach (var (file, count) in found.OrderBy(kv => kv.Key, StringComparer.Ordinal))
-        {
-            if (!allowed.TryGetValue(file, out var budget))
-                failures.Add(
-                    $"  NEW SITE   {file} ({count}) — `await <an observable>` resumes the caller "
-                    + "INLINE on the signalling thread, exactly as `.ToTask()` does. Wait through "
-                    + "`.Await(ct)` or `.ObserveCompletion(reportLateFault, ct)`, or assert through "
-                    + "MeshWeaver.Reactive.Assertions (`await x.Should().Within(...).Emit(...)`). "
-                    + "Do NOT add a line to " + DirectAwaitAllowFileName + ".");
-            else if (count > budget)
-                failures.Add(
-                    $"  MORE       {file} ({count} > {budget} allowed) — a site was ADDED to a file "
-                    + "that already carries the shape.");
-        }
-
-        var total = allowed.Values.Sum();
-        if (total > DirectAwaitTotalBudget)
-            failures.Add(
-                $"  TOTAL      {total} allowances > {DirectAwaitTotalBudget} budgeted — the "
-                + "inventory GREW. Adding a line to " + DirectAwaitAllowFileName + " is not a fix.");
-
-        foreach (var (file, budget) in allowed.OrderBy(kv => kv.Key, StringComparer.Ordinal))
-        {
-            var count = found.GetValueOrDefault(file, 0);
-            if (count < budget)
-                output.WriteLine(
-                    $"STALE (please tidy): {file} — {count} found, {budget} allowed. "
-                    + $"{(count == 0 ? "Delete the line" : $"Lower it to {count}")} and lower "
-                    + $"DirectAwaitTotalBudget by {budget - count}.");
-        }
-
-        Assert.True(failures.Count == 0,
-            "Rx's awaiter is an AsyncSubject<T> that completes its continuation from inside "
-            + "OnCompleted, so `await source…` resumes on the producer's thread — the same defect "
-            + "`.ToTask()` was banned for. These trees are mid-sweep: the inventory may shrink, "
-            + "never grow.\n" + string.Join("\n", failures));
-    }
-
-    /// <summary>
     /// 🚨 THE FALSIFICATION for the direct-await matcher, re-run every CI run against planted text.
     /// Both directions, because this matcher's two plausible failures are opposite and both are
     /// silent: reading the tail too NARROWLY reports a clean tree (that is how the site this rule
@@ -1013,16 +942,6 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             "// await source.Take(1).Timeout(Deadline) is the defect this file is about."));
         Assert.Equal(0, CountDirectObservableAwaitsIn(
             "var doc = \"await source.Take(1).Timeout(Deadline)\";"));
-
-        // Non-vacuity against the REAL tree: the ratcheted roots must actually yield sites, or the
-        // ratchet above is passing on an empty scan.
-        var root = SourceScan.FindRepoRoot();
-        Assert.True(ScanDirectAwaits(root, DirectAwaitRatchetedRoots).Count > 0,
-            "The direct-await scanner found NO site anywhere under "
-            + string.Join(", ", DirectAwaitRatchetedRoots) + ". Either the sweep finished — in "
-            + "which case move those roots into DirectAwaitZeroRoots, empty "
-            + DirectAwaitAllowFileName + " and delete this assertion — or the scanner is broken, "
-            + "which would make the ratchet pass on no evidence.");
     }
 
     /// <summary>

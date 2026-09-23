@@ -95,7 +95,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
             organizationAddress,
             reference);
 
-        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync().Await();
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement), "Search view should render for Kernel");
     }
@@ -117,7 +117,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
             organizationAddress,
             reference);
 
-        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync().Await();
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Should().NotBe(default(JsonElement), "Default view should render for Kernel");
     }

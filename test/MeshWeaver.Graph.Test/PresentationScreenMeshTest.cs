@@ -76,10 +76,10 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
 
         var aliceScreen = await ScreenOf(Alice)
             .Where(s => s.Active && s.MarkedPaths.Contains(Space))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         var bobScreen = await ScreenOf(Bob)
             .Where(s => s.Active && s.MarkedPaths.Contains(Other))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         Output.WriteLine($"alice: active={aliceScreen.Active} marks=[{string.Join(",", aliceScreen.MarkedPaths)}]");
         Output.WriteLine($"bob:   active={bobScreen.Active} marks=[{string.Join(",", bobScreen.MarkedPaths)}]");
@@ -100,7 +100,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
     {
         await CreateUser(Alice, new User { Email = "alice@acme.com" });
 
-        var before = await Hub.GetEffectivePermissions(Space, Alice).FirstAsync().Timeout(30.Seconds());
+        var before = await Hub.GetEffectivePermissions(Space, Alice).FirstAsync().Timeout(30.Seconds()).Await();
 
         // Mark it, with the mode ON — the strongest form of the setting.
         await Hub.GetMeshNodeStream(Alice)
@@ -117,20 +117,20 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
 
         var screen = await ScreenOf(Alice)
             .Where(s => s.Active && s.MarkedPaths.Contains(Space))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         screen.Hides(Space).Should().BeTrue("the screen is up — this is the state under test");
 
         // 1. PERMITTED — unchanged, to the bit. The screen is not in the permission fold at all.
-        var after = await Hub.GetEffectivePermissions(Space, Alice).FirstAsync().Timeout(30.Seconds());
+        var after = await Hub.GetEffectivePermissions(Space, Alice).FirstAsync().Timeout(30.Seconds()).Await();
         Output.WriteLine($"effective permissions on {Space}: before={before} after={after}");
         after.Should().Be(before, "a display preference must not move a single permission bit");
 
         // 2. REACHABLE — direct navigation still resolves the node and its child.
         var direct = await Hub.GetMeshNodeStream(Space)
-            .Where(n => n is not null).FirstAsync().Timeout(30.Seconds());
+            .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).Await();
         direct.Path.Should().Be(Space);
         var child = await Hub.GetMeshNodeStream(Child)
-            .Where(n => n is not null).FirstAsync().Timeout(30.Seconds());
+            .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).Await();
         child.Path.Should().Be(Child);
 
         // 3. SEARCHABLE — the mesh query engine still returns it for this very viewer. The screen
@@ -139,7 +139,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
         var found = await meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{Space}").ForViewer(Alice))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         found.Items.Should().Contain(n => n.Path == Space,
             "hiding a tile must not remove the node from the viewer's own search");
     }
@@ -155,7 +155,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
 
         var marked = await ScreenOf(Alice)
             .Where(s => s.MarkedPaths.Contains(Space))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         marked.Active.Should().BeFalse();
         marked.Hides(Space).Should().BeFalse("a mark on its own hides nothing");
 
@@ -170,7 +170,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
         // The SAME subscription source now reports the screen up — no reload, no new circuit.
         var live = await ScreenOf(Alice)
             .Where(s => s.Active)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         live.Hides(Space).Should().BeTrue();
         live.Hides(Child).Should().BeTrue();
 
@@ -184,7 +184,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
 
         var off = await ScreenOf(Alice)
             .Where(s => !s.Active)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         off.Hides(Space).Should().BeFalse();
         off.MarkedPaths.Should().Contain(Space, "the mark survives, so the next presentation needs no setup");
     }

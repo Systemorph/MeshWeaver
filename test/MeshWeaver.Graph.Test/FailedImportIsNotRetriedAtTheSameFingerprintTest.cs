@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
@@ -162,13 +163,13 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
         };
 
         var first = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
         Output.WriteLine($"first  = {first.Outcome}");
         first.Outcome.Should().Be("Imported",
             "nothing here breaks a content rule");
 
         var second = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
         Output.WriteLine($"second = {second.Outcome}");
         second.Outcome.Should().Be("Skipped",
             "the green short-circuit is unchanged — this is the behaviour the marker exists for");
@@ -209,7 +210,7 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
         };
 
         var first = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
         Output.WriteLine($"first  = {first.Outcome}");
 
         first.Outcome.Should().Be("ImportedWithContentErrors",
@@ -218,7 +219,7 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
             + "This test exists because the opposite is the natural guess");
 
         var second = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
         Output.WriteLine($"second = {second.Outcome} writeRequests={second.WriteRequests}");
 
         second.WriteRequests.Should().Be(0,

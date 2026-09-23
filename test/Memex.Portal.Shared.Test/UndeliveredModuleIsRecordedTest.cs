@@ -100,12 +100,12 @@ public class UndeliveredModuleIsRecordedTest(ITestOutputHelper output) : Monolit
 
         var reconciler = Mesh.ServiceProvider.GetRequiredService<RegistryUpdateReconciler>();
         var reference = new PluginRegistryReference { Name = RegistryName, Url = RegistryUrl, Token = Token };
-        await reconciler.ReconcileRegistry(reference, _ => TimeSpan.Zero).Timeout(TestTimeouts.Convergence);
+        await reconciler.ReconcileRegistry(reference, _ => TimeSpan.Zero).Timeout(TestTimeouts.Convergence).Await();
 
         // ── The reconcile completed, and it recorded WHAT IT DOES NOT DELIVER ───────────────────
         var entries = await LedgerEntries()
             .Where(es => es.Any(e => e.Url == RegistryUrl && e.LastReconciledAt is not null))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         var entry = entries.Single(e => e.Url == RegistryUrl);
         Assert.Equal(RegistryReconcileEntry.ViaBoot, entry.LastReconciledVia);
 
@@ -151,7 +151,7 @@ public class UndeliveredModuleIsRecordedTest(ITestOutputHelper output) : Monolit
         };
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record))
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
     }
 
     /// <summary>The one package the registry offers — at the SAME module content identity the

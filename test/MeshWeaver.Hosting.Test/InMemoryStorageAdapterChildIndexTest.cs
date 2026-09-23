@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -27,7 +28,7 @@ public class InMemoryStorageAdapterChildIndexTest
 
     private static async Task<(string[] Nodes, string[] Dirs)> ListAsync(InMemoryStorageAdapter adapter, string? parent)
     {
-        var (nodes, dirs) = await adapter.ListChildPaths(parent).FirstAsync();
+        var (nodes, dirs) = await adapter.ListChildPaths(parent).FirstAsync().Await();
         return (nodes.OrderBy(x => x).ToArray(), dirs.OrderBy(x => x).ToArray());
     }
 
@@ -36,7 +37,7 @@ public class InMemoryStorageAdapterChildIndexTest
     {
         var adapter = new InMemoryStorageAdapter();
         foreach (var p in new[] { "Hosting", "Hosting/Build", "Hosting/Build/Source/BuildContent", "Store/Plugin", "Doc" })
-            await adapter.Write(Node(p), Options).FirstAsync();
+            await adapter.Write(Node(p), Options).FirstAsync().Await();
 
         var root = await ListAsync(adapter, null);
         Assert.Equal(new[] { "Doc", "Hosting" }, root.Nodes);
@@ -50,9 +51,9 @@ public class InMemoryStorageAdapterChildIndexTest
         Assert.Empty(build.Nodes);
         Assert.Equal(new[] { "Hosting/Build/Source" }, build.Dirs);
 
-        await adapter.Delete("Hosting/Build/Source/BuildContent").FirstAsync();
+        await adapter.Delete("Hosting/Build/Source/BuildContent").FirstAsync().Await();
         Assert.Empty((await ListAsync(adapter, "Hosting/Build")).Dirs);   // the implied directory went with its last descendant
-        Assert.True(await adapter.DeleteIfExists("Store/Plugin").FirstAsync());
+        Assert.True(await adapter.DeleteIfExists("Store/Plugin").FirstAsync().Await());
         Assert.Empty((await ListAsync(adapter, null)).Dirs);              // and so did Store
     }
 
@@ -63,7 +64,7 @@ public class InMemoryStorageAdapterChildIndexTest
         nodes["Seeded/Deep/Leaf"] = Node("Seeded/Deep/Leaf");            // behind the adapter's back
         var adapter = new InMemoryStorageAdapter(nodes, new(System.StringComparer.OrdinalIgnoreCase));
         Assert.Equal(new[] { "Seeded" }, (await ListAsync(adapter, null)).Dirs);   // rebuilt on first use
-        Assert.True(await adapter.WriteIfVersion(Node("Seeded/Fresh"), 0, Options).FirstAsync());
+        Assert.True(await adapter.WriteIfVersion(Node("Seeded/Fresh"), 0, Options).FirstAsync().Await());
         Assert.Equal(new[] { "Seeded/Fresh" }, (await ListAsync(adapter, "Seeded")).Nodes);
         Assert.Equal(new[] { "Seeded/Deep" }, (await ListAsync(adapter, "Seeded")).Dirs);
         // a second adapter over the SAME dictionary sees the same index

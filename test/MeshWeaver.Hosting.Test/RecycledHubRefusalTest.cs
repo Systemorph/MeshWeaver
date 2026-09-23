@@ -120,7 +120,7 @@ public class RecycledHubRefusalTest : HubTestBase
         live.Dispose();
         // Awaited DIRECTLY on the observable — no `.ToTask()` bridge anywhere, tests included
         // (maintainer, 2026-08-30). The Timeout keeps a hung disposal a failure, not a hang.
-        await live.DisposalCompleted.FirstOrDefaultAsync().Timeout(TimeSpan.FromSeconds(30));
+        await live.DisposalCompleted.FirstOrDefaultAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         AccessControlPipeline.IsHubGone(live, new InvalidOperationException("boom"))
             .Should().BeTrue("a hub that is shutting down qualifies whatever the failure was — its "
                 + "services are going away underneath every check");

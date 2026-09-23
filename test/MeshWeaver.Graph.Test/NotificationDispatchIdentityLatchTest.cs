@@ -103,7 +103,7 @@ public class NotificationDispatchIdentityLatchTest(ITestOutputHelper output) : M
                 $"path:{Recipient}/_Notification scope:children nodeType:Notification")
             .Where(nodes => (nodes ?? []).Any(n =>
                 n.ContentAs<Notification>(Json) is { NotificationType: NotificationType.AccessGranted }))
-            .FirstAsync().Timeout(60.Seconds());
+            .FirstAsync().Timeout(60.Seconds()).Await();
 
         Access.Context?.ObjectId.Should().BeNull(
             "and the enclosing scope restores the thread to what the test host left it");
