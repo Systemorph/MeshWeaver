@@ -225,6 +225,14 @@ circularity because seeded nodes are not permission-checked:
 Auth__GlobalAdmins__0: "the-user-id"
 ```
 
+On an AKS deployment that key is declared on the record/overlay as
+`config.memex_portal.Auth__GlobalAdmins__0` (up to `__2`), and the portal ConfigMap template renders
+each index **only when it is non-empty** (MeshWeaver#5217 — before that no template named the key,
+so a declared admin reached no container while helm reported success). A blank or duplicate id is
+refused by `GlobalAdminSeed` as well, so an empty value can never become an `Admin/_Access` grant for
+the empty username. A fourth admin needs a fourth guarded line in
+`deploy/helm/templates/memex-portal/config.yaml`, never an unguarded one.
+
 Dev-login does **not** confer this. Self-provisioning gives a user their own space and nothing more —
 "the first user becomes the platform admin" is folklore, and a harness that assumes it will fail on
 the first write into a framework partition.
