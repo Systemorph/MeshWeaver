@@ -197,6 +197,7 @@ If you write code that must survive a `ShuttingDown` answer:
 | `SubscribeDuringRecycleTest` (`MeshWeaver.Layout.Test`) | a layout area subscribing into the recycle window rendering an error instead of a "coming back" state |
 | `RecyclingShapeDiagnosticTest` (`MeshWeaver.Graph.Test`) | the diagnostic naming both shapes at once, or inventing one from zero observations |
 | `ChangeFeedResubscribeCoalesceTest` (`MeshWeaver.Data.Test`) | a burst of owner change events producing one resubscribe per event |
+| `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
 
 ## See also
 
@@ -289,3 +290,57 @@ parks with no value and no error. `AReAsksNotFoundIsAVerdictTest` pins the seque
 own parts: an initial subscribe refused by a real corpse (so the carrier re-asks), the re-ask answered
 with routing's `NotFound`, and the fault required within the convergence budget — unfixed, nothing else
 in that mesh can ever emit on the stream, so the test is red by construction rather than by chance.
+
+## 🚨 A leaving HOST must refuse, not answer into the void (#5256)
+
+Every rider above needs to be *told* something. On a pod that is being replaced, nothing was told.
+
+From `ApplicationStopping` on, `OrleansRoutingService` refuses every **outbound** delivery from the
+process (*"Host is shutting down, cannot route to …"*): once the silo leaves `Active` it can no longer
+place the local `RoutingGrain`, and the stopping signal is the router's early warning of that. But the
+silo's grains went on **accepting inbound** deliveries for the whole window. The silo is still `Active`
+in membership while it lingers, so the directory keeps routing to its activations, and on a pod that
+window is the termination grace period. An owner there received a `SubscribeRequest`, answered it with
+a `SubscribeAck` and its first Full within a millisecond, and the router refused both. The subscriber
+got no frame, no NACK and no `StreamEndedEvent`: the goodbye rides the same refused router. It waited
+out its own budget. That is the *"no initial state arrived … within 30s … NO change item at all
+reached the mirror"* of #5256 and #1114, and the 60 s request timeouts of #5230 and #2254. Every sample
+fell inside a roll window.
+
+The hypothesis first written on #5256 was that the owner deactivated between the ack and its first
+frame and that the teardown announcement was suppressed. That is **not** what the repro shows. The owner
+never deactivated, and its frame was produced; the frame just could not leave the process.
+`ADrainingSiloDoesNotSilenceItsSubscribersTest` pins it. Silo B is stopped with `StopApplication` and
+left lingering, and a cold subscriber on silo A subscribes to an owner B hosts. Before the fix the test
+timed out at its 10 s bound, and the route trace showed the Ack and the Full answered `SHUTTING_DOWN`
+at B's router. After the fix the answer arrives in about 50 ms, from a new activation on A.
+
+**The fix is symmetry, on the one leg that still works.** A grain call's **result** travels back to
+the *calling* silo's `RoutingGrain`, which NACKs the sender from a healthy process. So
+`MessageHubGrain.DeliverMessage` now refuses on a leaving host (`meshHub.IsLeaving()`, the same
+signal as the router's outbound gate). It returns a failed acknowledgement composed through
+`ShutdownNack.RejectingNow`: the owner banner, this activation's tag and the reactivation promise. It
+also hands the address off with `MigrateOnIdle` and a placement hint that names another active silo.
+It does **not** use a plain `DeactivateOnIdle`. The leaving silo is still `Active` while it lingers,
+and other silos' directory caches still point at it, so a deactivated address was re-placed locally
+(`[PreferLocalPlacement]`). The first bulk run measured five fresh activations on the leaving silo in
+five seconds, and they spent the subscriber's distinct-activation budget. A migration moves the
+directory entry together with the activation. The sender rides the refusal out through the machinery
+this page describes. The activation tag makes repeat refusals from the same grain count as **one**
+teardown on the time axis, not as a recycle loop. No timer, no retry and no widened bound.
+
+The refusal is **unconditional**, including while a hub build or a long-running operation holds the
+activation. Whatever such an activation would do with a delivery, its answer takes the same refused
+router, so accepting it would bring back the silent wait. The migration waits for the activation to go
+idle, so held work is not cut short by the hand-off.
+
+**Known limit:** membership cannot tell a lingering peer from a healthy one, because a leaving silo
+stays `Active`. When two silos stop at once, the hand-off target can be the other leaving silo. The
+migrated activation there refuses and hands off again, and each hop is a distinct activation on the
+subscriber's bounded re-arm budget. That is bounded and loud (the give-up logs a Warning), never a
+silent wait. A cluster-wide drain signal would remove it.
+
+What this does **not** cover: a subscriber that was already **warm** when the silo began stopping still
+gets no goodbye from the leaving host, because its `StreamEndedEvent` rides the refused router like any
+other outbound message. It recovers on its next request to the address, which is now refused
+honestly and handed off.
