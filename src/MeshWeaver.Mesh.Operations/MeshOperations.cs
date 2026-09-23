@@ -2989,12 +2989,15 @@ public class MeshOperations
                 // and reading only the verdict is what let two CRM types report green through a
                 // two-and-a-half-hour outage. Refusing answers as a store miss does — no hub
                 // configuration, so the schema falls back to the node's own registrations.
+                // The REPORT is classified, not the verdict (#5066): Error only where nothing
+                // heals it (Modules:RequirePrebuilt), and once per (type, record identity) — this
+                // probe runs on every schema read, and at Error per probe one unconverged roll
+                // wrote 507 identical incident-grade lines an hour on one pod.
                 if (NodeTypeBuildIdentity.Refuses(def))
                 {
-                    logger.LogError(
-                        "{Summary} No hub configuration is recovered from those bytes for the schema probe. {Recovery}",
-                        NodeTypeBuildIdentity.RefusalSummary(node!.Path, def),
-                        NodeTypeBuildIdentity.RecoveryVerb);
+                    hub.ServiceProvider.GetRequiredService<NodeTypeAdoptionRefusalLog>().Report(
+                        logger, "SchemaProbe", node!.Path, def,
+                        "No hub configuration is recovered from those bytes for the schema probe.");
                     return Observable.Return<NodeCompilationResult?>(null);
                 }
                 var version = def.LastCompiledVersion ?? node.Version;
