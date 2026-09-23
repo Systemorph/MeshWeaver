@@ -235,7 +235,7 @@ public class RoutingQuiescenceTest
     /// limit <c>RoutingSaturationNamesItsOwnVerdictTest</c> records for <c>OldestInFlight</c>). It is
     /// here to pin the direction; the AGE is what the unfixed code fails on.</para>
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [HubFact]
     public async Task SiloStop_BudgetExpiry_SaysHowLongEachStuckLegHasBeenInFlight_OldestFirst()
     {
         using var quiescence = new RoutingQuiescence();
