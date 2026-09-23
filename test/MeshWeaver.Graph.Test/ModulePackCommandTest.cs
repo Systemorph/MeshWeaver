@@ -12,7 +12,7 @@ namespace MeshWeaver.Graph.Test;
 /// The <c>module-pack</c> CLI (#1664 Slice B): its inputs flow into FILE PATHS (the entry-DLL
 /// probe, the closure entries, the output bundle name), so path-injection-shaped values must be a
 /// clear exit-2 refusal — and what it packs must read back through the ONE reader
-/// (<see cref="BundleReader.ReadModule"/>) the consumers use.
+/// (<see cref="BundleReader.ReadModule(byte[])"/>) the consumers use.
 /// </summary>
 public class ModulePackCommandTest : IDisposable
 {

@@ -456,7 +456,17 @@ public static class BundleReader
     public static IReadOnlyList<ModuleAsset> ReadModuleAssets(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+        return ReadModuleAssetsFrom(buffer);
+    }
+
+    /// <summary>
+    /// <see cref="ReadModuleAssets(byte[])"/> over a SEEKABLE stream — a spooled upload on disk (#5501), so
+    /// the archive's compressed bytes never have to sit in the managed heap to be read.
+    /// </summary>
+    /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
+    public static IReadOnlyList<ModuleAsset> ReadModuleAssetsFrom(Stream bundle)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
         if (manifestEntry is null)
@@ -493,7 +503,17 @@ public static class BundleReader
     public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssets(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+        return ReadModuleNativeAssetsFrom(buffer);
+    }
+
+    /// <summary>
+    /// <see cref="ReadModuleNativeAssets(byte[])"/> over a SEEKABLE stream — a spooled upload on disk (#5501), so
+    /// the archive's compressed bytes never have to sit in the managed heap to be read.
+    /// </summary>
+    /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
+    public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssetsFrom(Stream bundle)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
         if (manifestEntry is null)
@@ -534,7 +554,17 @@ public static class BundleReader
     public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+        return ReadModuleFrom(buffer);
+    }
+
+    /// <summary>
+    /// <see cref="ReadModule(byte[])"/> over a SEEKABLE stream — a spooled upload on disk (#5501), so
+    /// the archive's compressed bytes never have to sit in the managed heap to be read.
+    /// </summary>
+    /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
+    public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModuleFrom(Stream bundle)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
         if (manifestEntry is null)
@@ -560,11 +590,41 @@ public static class BundleReader
         return (manifest, files);
     }
 
+    /// <summary>
+    /// One entry's bytes, allocated ONCE at the size the archive declares (#5501).
+    ///
+    /// <para>🚨 The previous form copied into a growing <see cref="MemoryStream"/> and then called
+    /// <see cref="MemoryStream.ToArray"/>: every doubling left its predecessor for the GC, and the
+    /// final copy held the whole entry a second time — roughly THREE times an entry's size live at
+    /// the peak, on the large-object heap for any real assembly. The publish endpoint's OOM
+    /// (<c>MemoryStream.ToArray</c> under <c>MapPublish</c>) is that dance on the body; this is the
+    /// same dance per entry. The declared length is authoritative for a Deflate or Stored entry, and
+    /// a stream that ends short of it is a corrupt archive, which <see cref="Stream.ReadExactly(Span{byte})"/>
+    /// reports instead of returning a silently truncated assembly.</para>
+    /// </summary>
+    /// <summary>Deflate's maximum expansion ratio (a 258-byte match per ~2 bits, ≈1032:1).</summary>
+    private const long MaxDeflateExpansion = 1032;
+
+    /// <summary>Headroom for block headers on tiny entries, where the ratio bound alone is too tight.</summary>
+    private const long DeflateSlackBytes = 1024;
+
     private static byte[] ReadAll(ZipArchiveEntry entry)
     {
+        // 🚨 The declared length comes from the PRODUCER's central directory, so it is checked
+        // before anything is allocated from it. Deflate cannot expand beyond ~1032:1, and a Stored
+        // entry cannot expand at all, so a length past that bound is a lie. Allocating it would
+        // be the OOM this method exists to prevent, driven by one malformed entry.
+        if (entry.Length > entry.CompressedLength * MaxDeflateExpansion + DeflateSlackBytes
+            || entry.Length > Array.MaxLength)
+            throw new InvalidDataException(
+                $"bundle entry '{entry.FullName}' declares {entry.Length:N0} bytes from "
+                + $"{entry.CompressedLength:N0} compressed, which no Deflate stream can expand to");
         using var source = entry.Open();
-        using var target = new MemoryStream();
-        source.CopyTo(target);
-        return target.ToArray();
+        var bytes = GC.AllocateUninitializedArray<byte>((int)entry.Length);
+        source.ReadExactly(bytes);
+        if (source.ReadByte() != -1)
+            throw new InvalidDataException(
+                $"bundle entry '{entry.FullName}' holds more than the {entry.Length:N0} bytes it declares");
+        return bytes;
     }
 }

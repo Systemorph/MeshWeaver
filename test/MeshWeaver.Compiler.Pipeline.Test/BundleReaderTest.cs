@@ -296,6 +296,90 @@ public class BundleReaderTest
         Assert.Equal("SOCIAL", Encoding.UTF8.GetString(only.Bytes));
     }
 
+    /// <summary>
+    /// #5501 — a module read from a bundle ON DISK allocates each entry ONCE. The reader used to
+    /// copy every entry into a growing <see cref="MemoryStream"/> and then <c>ToArray()</c> it —
+    /// about three times the entry's size at the peak, on the large-object heap — the same dance that
+    /// took the publish endpoint down with <c>OutOfMemoryException</c> in <c>MemoryStream.ToArray</c>.
+    /// Synchronous and single-threaded on purpose, so the per-thread allocation counter measures
+    /// exactly this read.
+    /// </summary>
+    [Fact]
+    public void AModuleReadFromDiskAllocatesEachEntryOnce()
+    {
+        // Incompressible, so the archive's size tracks the entry's and Deflate hides nothing.
+        var payload = new byte[8 * 1024 * 1024];
+        new Random(5501).NextBytes(payload);
+        var bundle = WriteModuleBundle(
+            new { assemblyName = "MeshWeaver.Big", assemblies = new[] { "MeshWeaver.Big.dll" } },
+            ("MeshWeaver.Big.dll", payload));
+
+        var path = Path.Combine(Path.GetTempPath(), $"mw-5501-{Guid.NewGuid():N}.bundle");
+        File.WriteAllBytes(path, bundle);
+        try
+        {
+            using var file = File.OpenRead(path);
+            // Warm-up read: JIT, the manifest's JSON metadata and ZipArchive's statics are one-time
+            // costs, not what this measures.
+            BundleReader.ReadModuleFrom(file);
+            file.Position = 0;
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var (_, files) = BundleReader.ReadModuleFrom(file);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(payload, Assert.Single(files).Bytes);
+            Assert.True(allocated < payload.Length * 3L / 2,
+                $"reading one {payload.Length:N0}-byte entry allocated {allocated:N0} bytes — more "
+                + "than 1.5x the entry, so the reader still grows a buffer and copies it out (#5501) "
+                + "instead of allocating the declared length once");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// #5501 review — the declared length is the PRODUCER's claim, so an entry whose central
+    /// directory advertises far more than its compressed bytes can expand to is refused BEFORE a
+    /// buffer of that size is allocated. Without the bound, one malformed upload of a few hundred
+    /// bytes would allocate ~2 GB on the publish endpoint.
+    /// </summary>
+    [Fact]
+    public void AnEntryDeclaringMoreThanDeflateCanExpandIsRefusedBeforeAllocating()
+    {
+        var bundle = WriteModuleBundle(
+            new { assemblyName = "MeshWeaver.Liar", assemblies = new[] { "MeshWeaver.Liar.dll" } },
+            ("MeshWeaver.Liar.dll", "TINY"u8.ToArray()));
+        PatchDeclaredLength(bundle, NuGetPackageWriter.ModuleEntryPathFor("MeshWeaver.Liar.dll"), 0x7FF00000);
+
+        using var stream = new MemoryStream(bundle, writable: false);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Throws<InvalidDataException>(() => BundleReader.ReadModuleFrom(stream));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024 * 1024,
+            $"refusing a lying entry allocated {allocated:N0} bytes — the declared length was trusted");
+    }
+
+    /// <summary>Overwrites the uncompressed-size field of one central-directory record.</summary>
+    private static void PatchDeclaredLength(byte[] zip, string entryName, uint length)
+    {
+        var name = Encoding.UTF8.GetBytes(entryName);
+        for (var i = 0; i + 46 <= zip.Length; i++)
+        {
+            if (BitConverter.ToUInt32(zip, i) != 0x02014b50)
+                continue;
+            var nameLength = BitConverter.ToUInt16(zip, i + 28);
+            if (nameLength == name.Length && zip.AsSpan(i + 46, nameLength).SequenceEqual(name))
+            {
+                BitConverter.GetBytes(length).CopyTo(zip, i + 24);
+                return;
+            }
+        }
+        throw new InvalidOperationException($"no central-directory record for '{entryName}'");
+    }
+
     [Fact]
     public void AMixedBundleServesBothLanes()
     {
