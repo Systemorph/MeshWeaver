@@ -365,7 +365,8 @@ Proposed with the full measurement in #4776.
 `.github/workflows/node-repo-review-answered.yml` is that lane. It fetches
 `check-review-answered.py` from this repository at its `scripts-ref` input, asserts the file's
 identity, runs the self-test on every call and never falls back to a local copy; it takes no
-checkout of the caller at all. The caller contract — a separate `review-answered.yml` with the three
+checkout of the caller at all. The caller contract — the lane pinned to a 40-char core sha and that
+same sha passed as `scripts-ref`, in a separate `review-answered.yml` with the three
 pull-request triggers, the event-class concurrency block, and **no** job-level `if:`, path filter or
 `merge_group:` trigger — is written in the lane's header, because every one of those is either a
 skip-trapdoor or the #4649 eviction.

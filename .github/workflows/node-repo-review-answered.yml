@@ -48,11 +48,13 @@ name: Node repo review answered (reusable)
 #     cancel-in-progress: false
 #   jobs:
 #     review-answered:
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-review-answered.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-review-answered.yml@<40-char core sha>
 #       permissions:
 #         contents: read
 #         pull-requests: read
 #         issues: read
+#       with:
+#         scripts-ref: <the SAME 40-char core sha>
 #
 # 🛡️ What the caller must NOT add (each is a skip-trapdoor — a skipped required context counts as
 # SATISFIED under both classic protection and rulesets):
@@ -70,17 +72,21 @@ name: Node repo review answered (reusable)
 # comment-driven runs evict the read-eligible ones. review-answered.yml in core carries the full
 # measurement.
 #
-# 🔒 `@main` vs a pinned sha: the same trade as every other lane (CiContentBake.md → "The workflow
-# ref is PINNED"). A caller that pins the lane passes the same sha as `scripts-ref`.
+# 🔒 PIN THE REF — `@<40-char commit sha>`, never `@main` (CiContentBake.md → "The caller PINS the
+# workflow ref"): otherwise a caller's gate changes with no diff in the caller. And pass the SAME sha
+# as `scripts-ref`, so the lane and the predicate it fetches cannot come from two different commits.
+# (Core's own caller in review-answered.yml is the exception by construction: it calls the lane by
+# local path and passes `github.sha`, i.e. the tree under review.)
 
 on:
   workflow_call:
     inputs:
       scripts-ref:
         description: >-
-          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. Default `main`,
-          which is right for a caller that calls this lane at `@main`; a caller that pins the lane
-          to a sha passes the SAME sha here, so the lane and its predicate cannot disagree.
+          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. A caller pins the
+          lane to a 40-char sha and passes the SAME sha here, so the lane and its predicate cannot
+          come from two commits. The `main` default exists only so an unpinned call still fetches a
+          predicate rather than failing on an empty ref; it is not the recommended shape.
           `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a reusable called
           from another repository (measured 2026-08-30).
         required: false
