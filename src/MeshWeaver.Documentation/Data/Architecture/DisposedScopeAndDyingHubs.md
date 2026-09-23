@@ -366,6 +366,27 @@ rather than a reconstruction. **What is not established is the subject**: no occ
 carried enough to name the offending leg or leaf, and guessing one would be worse than waiting for
 a report that names it.
 
+### A named leg still needs its AGE
+
+The route side has named its legs since #2843, and three occurrences on
+[#2833](https://github.com/Systemorph/MeshWeaver/issues/2833) printed populated lists
+(`stream-routed → cache/…`, `dispatch → RiskTransfer`, five × `dispatch → Ops/Status/partnerre`) —
+and still could not be read, because **every leg's own terminal bound is at least the 30 s hold
+budget**: path resolution (`RoutingGrain.ResolveTimeout`, 30 s), an Orleans grain call's response
+timeout (30 s per attempt), a memory-stream post (`StreamPostTimeout`, 60 s). A label at expiry is
+therefore one of two opposite facts:
+
+| each leg's printed age | what it means | where to look |
+|---|---|---|
+| about the budget (30–40 s) | accepted just before the stop, still inside its own bound | why that leg's bound is not shorter than the stop — the grain it waits on (an activation still resolving its node), or the stream post it waits on |
+| minutes or more | a slot that stopped coming back long before the stop began | the leg itself: its label is the defect, the same leak the saturation report's `oldest leg` names at run time |
+
+So `RoutingQuiescence.InFlightSample` prints each leg as `"{label}, in flight {s}s"` and **oldest
+first**: the sample is capped at ten, and a leaked leg is by definition the oldest, so an unordered
+sample could hide exactly the one that matters behind `(+N more)`. It is the same reading
+[Reading a Routing Saturation Report](../ReadingARoutingSaturationReport) takes from
+`OldestInFlight` at run time, now carried by the shutdown residual too.
+
 ### What a STATIC sweep can settle, and what it cannot
 
 The pool side of R4 has one property the log side does not: *"a leaf that ignores its cancellation
