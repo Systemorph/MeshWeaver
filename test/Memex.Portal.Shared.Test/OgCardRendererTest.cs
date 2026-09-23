@@ -198,6 +198,80 @@ public class OgCardRendererTest
         Assert.NotEmpty(renderer.RenderSite(null));
     }
 
+    /// <summary>An instance's own colour (Portal:InstanceColor) colours the mark on its cards —
+    /// violet pixels in the icon square where the public instance has cyan — and a malformed
+    /// colour keeps the brand cyan rather than failing the card.</summary>
+    [Theory]
+    [InlineData("#7b61ff", true)]
+    [InlineData("purple", false)]
+    [InlineData(null, false)]
+    public void TheInstanceColour_ColoursTheMark(string? colour, bool violet)
+    {
+        using var renderer = new OgCardRenderer("Systemorph", colour);
+        var png = renderer.RenderSite("memex.systemorph.com");
+        using var bitmap = SKBitmap.Decode(png);
+        var left = OgCardRenderer.IconLeft;
+        var top = (OgCardRenderer.Height / 2) - (OgCardRenderer.IconSize / 2);
+        int violets = 0, cyans = 0;
+        for (var y = top; y < top + OgCardRenderer.IconSize; y += 2)
+            for (var x = left; x < left + OgCardRenderer.IconSize; x += 2)
+            {
+                var px = bitmap.GetPixel(x, y);
+                if (px.Blue > 200 && px.Red > 90 && px.Red < 150 && px.Green < 130) violets++;
+                if (px.Blue > 200 && px.Green > 170 && px.Red < 90) cyans++;
+            }
+        Assert.Equal(violet, violets > 200);
+        Assert.Equal(!violet, cyans > 200);
+    }
+
+    /// <summary>Every card carries the mark in its footer, beside the instance name — a node's own
+    /// icon on the right does not take it away: cyan pixels sit in the footer's left corner of a
+    /// card drawn with an authored red icon.</summary>
+    [Fact]
+    public void EveryCard_CarriesTheMarkInItsFooter()
+    {
+        using var renderer = NewRenderer();
+        var png = renderer.Render(Content() with
+        {
+            IconSvg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><rect width='48' height='48' fill='#ff0000'/></svg>",
+        });
+
+        using var bitmap = SKBitmap.Decode(png);
+        var cyan = 0;
+        for (var y = OgCardRenderer.Height - 90; y < OgCardRenderer.Height - 20; y++)
+            for (var x = 40; x < 120; x++)
+            {
+                var px = bitmap.GetPixel(x, y);
+                if (px.Blue > 200 && px.Green > 170 && px.Red < 90) cyan++;
+            }
+        Assert.True(cyan > 60, $"expected the cyan mark in the footer's left corner, found {cyan} cyan pixel(s)");
+    }
+
+    /// <summary>The instance card wears the MeshWeaver mark on its navy tile, not the default
+    /// badge with the site name's initial: the icon square's centre is the tile's navy, where the
+    /// badge would be a bright accent, and the mark's cyan is present inside the square.</summary>
+    [Fact]
+    public void SiteCard_CarriesTheMeshWeaverMark_NotTheInitialBadge()
+    {
+        using var renderer = NewRenderer();
+        var png = renderer.RenderSite("memex.meshweaver.cloud");
+
+        using var bitmap = SKBitmap.Decode(png);
+        var left = OgCardRenderer.IconLeft;
+        var top = (OgCardRenderer.Height / 2) - (OgCardRenderer.IconSize / 2);
+        // Just inside the tile's top-left corner: navy, not the badge's accent gradient.
+        var corner = bitmap.GetPixel(left + 24, top + 24);
+        Assert.True(Luminance(corner) < 40, $"the tile corner {corner} should be the mark's navy ground");
+        var cyan = 0;
+        for (var y = top; y < top + OgCardRenderer.IconSize; y += 2)
+            for (var x = left; x < left + OgCardRenderer.IconSize; x += 2)
+            {
+                var px = bitmap.GetPixel(x, y);
+                if (px.Blue > 200 && px.Green > 170 && px.Red < 90) cyan++;
+            }
+        Assert.True(cyan > 200, $"expected the cyan mark inside the icon square, found {cyan} cyan pixel(s)");
+    }
+
     // ── The endpoint's mapping: what of the node reaches the card ──────────────────────────
 
     private static MeshNode Typed(string path, string nodeType, string? category, string? icon, object? content) =>
