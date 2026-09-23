@@ -95,7 +95,15 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         "/api/email",
     };
 
-    public async Task InvokeAsync(HttpContext context)
+    public Task InvokeAsync(HttpContext context) => Continue(context, BuildPipeline(context));
+
+    /// <summary>
+    /// Everything after the identity decision is REQUESTED: wait for it, then act on it. Split from
+    /// <see cref="InvokeAsync"/> only so a test can supply a decision that is still IN FLIGHT when
+    /// the connection aborts — the race #4859 is about, which the synchronous pass-through of an
+    /// unauthenticated request can never reach.
+    /// </summary>
+    internal async Task Continue(HttpContext context, IObservable<OnboardingDecision> pendingDecision)
     {
         // Pull the reactive composition all the way up: the user-resolution
         // pipeline (FindUserByEmail → conditional LoadUserRoles → SetContext)
@@ -121,7 +129,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         //     unauthenticated / virtual / excluded path); fall through to next.
         //   • Result = "Unavailable" — identity could not be RESOLVED (not: resolved
         //     to "no account"); answers 503 + Retry-After, doesn't call next.
-        var decision = (await BuildPipeline(context).FirstAsync()
+        var decision = (await pendingDecision.FirstAsync()
             .ObserveCompletion(ex => logger.LogWarning(ex,
                 "Onboarding: the identity pipeline for {Path} faulted after the request had "
                 + "already been answered", context.Request.Path)))!;
@@ -216,7 +224,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                 context.Request.Method, context.Request.Path, outcome);
     }
 
-    private enum OnboardingOutcome { PassThrough, Redirect, RedirectHome, Unavailable }
+    internal enum OnboardingOutcome { PassThrough, Redirect, RedirectHome, Unavailable }
 
     /// <summary>
     /// What the middleware should do next, plus — for
@@ -224,7 +232,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// The reason is logged (never shown verbatim: it is engineering detail, and the page a
     /// user sees is localized).
     /// </summary>
-    private sealed record OnboardingDecision(OnboardingOutcome Outcome, string? UnavailableReason = null)
+    internal sealed record OnboardingDecision(OnboardingOutcome Outcome, string? UnavailableReason = null)
     {
         public static readonly OnboardingDecision PassThrough = new(OnboardingOutcome.PassThrough);
         public static readonly OnboardingDecision Redirect = new(OnboardingOutcome.Redirect);

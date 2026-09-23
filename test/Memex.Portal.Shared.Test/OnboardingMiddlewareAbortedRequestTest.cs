@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
@@ -23,7 +24,7 @@ namespace Memex.Portal.Shared.Test;
 public class OnboardingMiddlewareAbortedRequestTest
 {
     [Fact]
-    public async Task ARequestAbortedBeforeTheDecision_IsNotHandedToTheEndpoint()
+    public async Task ARequestAbortedWhileItsDecisionIsInFlight_IsNotHandedToTheEndpoint()
     {
         var endpointRan = false;
         var middleware = new OnboardingMiddleware(
@@ -33,9 +34,8 @@ public class OnboardingMiddlewareAbortedRequestTest
         using var aborted = new CancellationTokenSource();
         var context = new DefaultHttpContext { RequestAborted = aborted.Token };
         context.Request.Path = "/api/version";
-        aborted.Cancel();
 
-        await middleware.InvokeAsync(context);
+        await RunWithDecisionInFlight(middleware, context, aborted, abort: true);
 
         endpointRan.Should().BeFalse(
             because: "the connection was aborted before the identity decision arrived, so there is "
@@ -44,7 +44,7 @@ public class OnboardingMiddlewareAbortedRequestTest
     }
 
     [Fact]
-    public async Task ALiveRequest_IsStillHandedToTheEndpoint()
+    public async Task ALiveRequestWhoseDecisionArrivesLate_IsStillHandedToTheEndpoint()
     {
         // The control for the test above: the SAME request, not aborted, must pass through — so the
         // refusal above is about the abort and nothing else.
@@ -57,7 +57,7 @@ public class OnboardingMiddlewareAbortedRequestTest
         var context = new DefaultHttpContext { RequestAborted = notAborted.Token };
         context.Request.Path = "/api/version";
 
-        await middleware.InvokeAsync(context);
+        await RunWithDecisionInFlight(middleware, context, notAborted, abort: false);
 
         endpointRan.Should().BeTrue(because: "a request whose connection is alive must reach its endpoint");
     }
@@ -79,9 +79,8 @@ public class OnboardingMiddlewareAbortedRequestTest
                 .BuildServiceProvider(),
         };
         context.Request.Path = "/api/version";
-        aborted.Cancel();
 
-        await middleware.InvokeAsync(context);
+        await RunWithDecisionInFlight(middleware, context, aborted, abort: true);
 
         logger.Lines(LogLevel.Warning).Should().ContainSingle(
             line => line.Contains("ABORTED while the host is stopping") && line.Contains("/api/version"),
@@ -105,14 +104,30 @@ public class OnboardingMiddlewareAbortedRequestTest
                 .BuildServiceProvider(),
         };
         context.Request.Path = "/api/version";
-        aborted.Cancel();
 
-        await middleware.InvokeAsync(context);
+        await RunWithDecisionInFlight(middleware, context, aborted, abort: true);
 
         logger.Lines(LogLevel.Warning).Should().BeEmpty(
             because: "a client disconnecting from a running portal is routine, not a cut-short drain");
         logger.Lines(LogLevel.Debug).Any(line => line.Contains("client aborted")).Should().BeTrue(
             because: "the routine case is still recorded, at Debug");
+    }
+
+    /// <summary>
+    /// Runs the middleware with an identity decision that is still IN FLIGHT, aborts the connection
+    /// (when asked) while it is pending, and only then lets the decision arrive — the #4859 race.
+    /// </summary>
+    private static async Task RunWithDecisionInFlight(
+        OnboardingMiddleware middleware, HttpContext context, CancellationTokenSource connection, bool abort)
+    {
+        var decision = new Subject<OnboardingMiddleware.OnboardingDecision>();
+        var running = middleware.Continue(context, decision);
+        running.IsCompleted.Should().BeFalse(because: "the decision has not arrived yet, so the request must be parked");
+        if (abort)
+            connection.Cancel();
+        decision.OnNext(OnboardingMiddleware.OnboardingDecision.PassThrough);
+        decision.OnCompleted();
+        await running;
     }
 
     /// <summary>A lifetime whose <see cref="ApplicationStopping"/> the test fires.</summary>
