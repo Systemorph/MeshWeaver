@@ -3438,6 +3438,81 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Who the caller is AND what they may do AT <paramref name="path"/> — MeshWeaver#5189. Access
+    /// is per node, so the question is always asked at an address: the answer is the caller's
+    /// effective permissions on that node, computed by the SAME evaluator every gate consults
+    /// (<c>hub.GetEffectivePermissions(path, userId)</c>),
+    /// plus the one platform predicate (<c>hub.IsGlobalAdmin(userId)</c>).
+    ///
+    /// <para>🚨 Derived at read time, never stored: a stored "you are an admin" is a second verdict
+    /// free to drift from the assignments, and a display that disagrees with the gate is worse than
+    /// no display. And it answers for the CALLER only — never a listing of anyone's assignments —
+    /// so it discloses nothing the caller could not learn by trying the operation.</para>
+    ///
+    /// <para>A caller with no resolved identity is answered as <see cref="WellKnownUsers.Anonymous"/>
+    /// (identity fields null), which is exactly what every gate evaluates such a request as.</para>
+    /// </summary>
+    /// <param name="path">The node to evaluate the caller's access at (required).</param>
+    /// <returns>A cold observable emitting
+    /// <c>{userId,name,email,path,permissions:[…],isGlobalAdmin}</c> or an <c>Error: …</c> string.</returns>
+    public IObservable<string> WhoAmI(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required — access is evaluated per node.");
+        var resolvedPath = ResolvePath(path).Trim('/');
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return("Error: path is required — access is evaluated per node.");
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var ctx = accessService?.Context ?? accessService?.CircuitContext;
+        var userId = ResolveCallerUserId();
+        // An email-shaped id is not a mesh User id (see the whoami endpoint): it is answered as
+        // the anonymous caller the gates would also treat it as, never echoed as an identity.
+        var identified = userId != WellKnownUsers.Anonymous && !userId.Contains('@');
+        var evaluateAs = identified ? userId : WellKnownUsers.Anonymous;
+
+        // 🚨 A fold can COMPLETE WITHOUT A VERDICT (AccessControl → "the fold can produce NO
+        // answer"), and Zip over an empty leg completes empty. That is not "no permission": it is
+        // "not evaluated", so it is answered as Unavailable (503 on the REST surface) — never folded
+        // to Permission.None / false, which would tell a caller they hold nothing when nobody decided.
+        var permissions = hub.GetEffectivePermissions(resolvedPath, evaluateAs).TakeDecisionOutsideGate()
+            .Select(p => (Permission?)p).DefaultIfEmpty(null);
+        var globalAdmin = identified
+            ? hub.IsGlobalAdmin(evaluateAs).TakeDecisionOutsideGate().Select(b => (bool?)b).DefaultIfEmpty(null)
+            : Observable.Return<bool?>(false);
+
+        return permissions
+            .Zip(globalAdmin, (granted, isGlobalAdmin) => granted is not { } g || isGlobalAdmin is not { } admin
+                ? $"Unavailable: access at '{resolvedPath}' reached no verdict (the permission fold completed without an answer) — ask again."
+                : JsonSerializer.Serialize(new
+            {
+                userId = identified ? userId : null,
+                name = identified ? ctx?.Name : null,
+                email = identified ? ctx?.Email : null,
+                path = resolvedPath,
+                permissions = PermissionNames(g),
+                isGlobalAdmin = admin,
+                // Web defaults, not the hub's options: the hub omits default values, and an
+                // absent `isGlobalAdmin` / `userId` is exactly the "not measured" that must never
+                // read like "false" / "nobody" in an answer about access.
+            }, JsonSerializerOptions.Web))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "WhoAmI could not evaluate access at {Path}", resolvedPath);
+                return Observable.Return($"Error: could not evaluate access at '{resolvedPath}': {ex.Message}");
+            });
+    }
+
+    /// <summary>The individual <see cref="Permission"/> flags set in <paramref name="granted"/>, by
+    /// name, in declaration order — never the composite <c>All</c> or <c>None</c>, so a reader sees
+    /// exactly which verbs are open.</summary>
+    internal static ImmutableArray<string> PermissionNames(Permission granted) =>
+        [.. Enum.GetValues<Permission>()
+            .Where(flag => flag != Permission.None && flag != Permission.All
+                           && (granted & flag) == flag)
+            .Select(flag => flag.ToString())];
+
+    /// <summary>
     /// Resolves the caller's user id from the hub's <see cref="AccessService"/> context (the same
     /// precedence <c>HubPermissionExtensions</c> uses), defaulting to
     /// <see cref="WellKnownUsers.Anonymous"/> when no real identity is present.

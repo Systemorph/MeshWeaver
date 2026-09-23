@@ -209,6 +209,15 @@ hub.IsGlobalAdmin(userId)    // explicit user
 
 Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeType.GetGlobalAdminTabAsync` (Global Administration tab), `UserProfile`.
 
+### Asking "what may I do HERE?" — `whoami` at an address (#5189)
+
+Every surface above is a **gate**: it contributes a menu entry or does not, renders an area or refuses. None of them *tells* a person what they hold, so "am I an administrator here?" used to be answerable only by opening an admin area and reading its refusal — which looks exactly like a stale session. Access is per node, so the question is asked **at an address**:
+
+- `MeshOperations.WhoAmI(path)` → `{ userId, name, email, path, permissions: ["Read", "Update", …], isGlobalAdmin }`.
+- `POST /api/mesh/whoami` with `{ "path": "<node>" }` answers the same; with no `path` (what the SSR and the React clients send, `{}`) it stays the identity-only `{ userId, name, email }`.
+
+It is derived at read time from the **same evaluator the gates consult** (`GetEffectivePermissions` + `IsGlobalAdmin`), never stored — a stored "you are an admin" is a second verdict free to drift from the assignments. It answers for the **caller only** and lists no assignment, so it discloses nothing the caller could not learn by trying the operation. A caller with no resolved identity is answered as `Anonymous` with the identity fields null — exactly what the gates evaluate such a request as. `permissions` lists individual flags, never the composite `All`: a platform admin asked at a Space sees `isGlobalAdmin: true` beside an empty list, which is the not-a-data-superuser rule above stated to the person it applies to. Pinned by `WhoAmIAnswersAccessPerNodeTest`.
+
 ### The two type-scoped exceptions: a Space the platform itself owns
 
 "Not a data superuser" holds for every partition a **person** owns — there is always somebody to ask for a grant. It has no answer for a partition **nobody** can own: a Space with a ONE-WAY `_GitSync` is **system-owned** (`AccessAssignmentGuard.IsSystemOwned`) — the repo rewrites it on every sync, `IsForbiddenOnSystemOwned` refuses every Admin/Editor grant on it and `SystemOwnedAccessRetractionHandler` retracts the ones that predate the sync. Measured on memex.meshweaver.cloud 2026-09-12: `MeshWeaver/_GitSync`, created by the platform in a Space owned by `system-security`, re-imported the whole core repository on every green build (Memex#237), and the platform admin got `Not found` on `get` and *"Delete permission denied for 'MeshWeaver/_GitSync'"* on `delete` — no human could remove it through any API.
