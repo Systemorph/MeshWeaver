@@ -38,7 +38,8 @@ not fail. Adoption is one PR per satellite; red-on-absence before they land woul
 satellite's required `validate` context for a condition none of them can fix without that PR (the
 fleet-wide-red shape). The flip to red is a change to THIS file once every caller exposes the
 function, never a date. Everything else is RED: a missing or unloadable validate-repos.py, a
-`package_dirs` that raises or returns a non-list, an unloadable canonical, and any disagreement.
+`package_dirs` that raises or returns a non-list, a `main()` that does not call `package_dirs` or
+also walks the tree itself (`iterdir()`), an unloadable canonical, and any disagreement.
 
 No network, no credential: two files and directory listings, so it runs on fork PRs too.
 
@@ -49,6 +50,7 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import shutil
 import sys
@@ -89,9 +91,34 @@ def names_of(fn, root: Path, who: str) -> list[str]:
         raise Refusal(f"{who}({root}) exited ({ex.code})") from None
     except Exception as ex:                       # noqa: BLE001
         raise Refusal(f"{who}({root}) raised {type(ex).__name__}: {ex}") from None
-    if not isinstance(dirs, (list, tuple)):
+    if not isinstance(dirs, list):
         raise Refusal(f"{who} must return a list of directories, got {type(dirs).__name__}")
     return sorted(Path(d).name for d in dirs)
+
+
+def main_delegates(path: Path) -> str | None:
+    """None when validate-repos.py's main() enumerates THROUGH package_dirs, else why not.
+
+    🚨 Calling package_dirs proves only that the helper agrees with the canonical. The gate walks
+    what main() walks, so a helper added beside an untouched `root.iterdir()` comprehension would
+    pass this guard while the effective validator still disagreed. Static on purpose: main() runs
+    the whole gate and cannot be called here."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as ex:
+        return f"{path.name} cannot be parsed: {ex}"
+    mains = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"]
+    if len(mains) != 1:
+        return f"{path.name} defines {len(mains)} top-level main() — expected exactly one"
+    calls = [n for n in ast.walk(mains[0]) if isinstance(n, ast.Call)]
+    if not any(isinstance(c.func, ast.Name) and c.func.id == "package_dirs" for c in calls):
+        return f"{path.name}'s main() never calls package_dirs(root)"
+    private = [c.lineno for c in calls
+               if isinstance(c.func, ast.Attribute) and c.func.attr == "iterdir"]
+    if private:
+        return (f"{path.name}'s main() also walks the tree itself (iterdir() at line(s) "
+                f"{', '.join(map(str, private))}) beside package_dirs")
+    return None
 
 
 def diff(where: str, validator: list[str], canonical: list[str], say) -> bool:
@@ -129,6 +156,13 @@ def check(root: Path, canonical_path: Path, say) -> int:
             "(MeshWeaver#4774). Adopt: define package_dirs(root) — SKIP plus the dot-directory rule "
             "— and enumerate through it in main().")
         return 0
+
+    delegation = main_delegates(root / "scripts" / "validate-repos.py")
+    if delegation:
+        say(f"::error::package enumeration cannot be trusted: {delegation}")
+        say("  package_dirs is only the contract if the gate's own walk goes through it — route "
+            "main()'s enumeration through package_dirs(root) and drop the private iterdir().")
+        return 1
 
     try:
         tree_v = names_of(package_dirs, root, "validate-repos.package_dirs")
@@ -184,6 +218,11 @@ def package_dirs(root):
                    if d.is_dir() and d.name not in SKIP and not d.name.startswith(".")),
                   key=lambda d: d.name)
 '''
+MAIN_OK = '''
+def main():
+    return len(package_dirs(Path(".")))
+'''
+VALIDATE_AGREEING += MAIN_OK
 
 
 def self_test(canonical_path: Path) -> int:
@@ -235,10 +274,23 @@ def self_test(canonical_path: Path) -> int:
          run({vr: 'SKIP = {"scripts"}\n'}, ["Alpha"], cfg), "NOT compared")
     case("a missing validate-repos.py FAILS", 1, run({}, ["Alpha"], cfg), "does not exist")
     case("a package_dirs that raises FAILS", 1,
-         run({vr: "def package_dirs(root):\n    raise RuntimeError('boom')\n"}, ["Alpha"], cfg),
+         run({vr: "def package_dirs(root):\n    raise RuntimeError('boom')\n" + MAIN_OK},
+             ["Alpha"], cfg),
          "boom")
     case("a package_dirs that returns a non-list FAILS", 1,
-         run({vr: "def package_dirs(root):\n    return None\n"}, ["Alpha"], cfg), "NoneType")
+         run({vr: "def package_dirs(root):\n    return None\n" + MAIN_OK}, ["Alpha"], cfg),
+         "NoneType")
+    case("a package_dirs that returns a TUPLE FAILS (the contract is a list)", 1,
+         run({vr: "def package_dirs(root):\n    return ()\n" + MAIN_OK}, ["Alpha"], cfg),
+         "tuple")
+    case("a main() that never calls package_dirs FAILS", 1,
+         run({vr: VALIDATE_AGREEING.replace(MAIN_OK, "\ndef main():\n    return 0\n")},
+             ["Alpha"], cfg), "never calls package_dirs")
+    case("a main() that walks the tree itself beside package_dirs FAILS", 1,
+         run({vr: VALIDATE_AGREEING.replace(
+             MAIN_OK, "\ndef main():\n    package_dirs(Path('.'))\n"
+                      "    return [d for d in Path('.').iterdir()]\n")},
+             ["Alpha"], cfg), "walks the tree itself")
     case("a missing gen-manifests.config.json FAILS (the canonical never guesses)", 1,
          run({vr: VALIDATE_AGREEING}, ["Alpha"], None), "not found")
     # The canonical input is itself a precondition: an unreadable one is red, never "agree".
@@ -254,8 +306,8 @@ def self_test(canonical_path: Path) -> int:
         for f in failures:
             print(f"--- {f}")
         return 1
-    print("\n✓ check-package-enumeration self-test: 11/11 — both directions of a disagreement are "
-          "red on the tree AND on the fixture, the dot rule is caught with no dot-directory "
+    print("\n✓ check-package-enumeration self-test: 14/14 — both directions of a disagreement are "
+          "red on the tree AND on the fixture, main() must walk THROUGH package_dirs, the dot rule is caught with no dot-directory "
           "present, and every unreadable input is red rather than agreement")
     return 0
 

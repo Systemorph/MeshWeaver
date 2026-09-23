@@ -181,7 +181,8 @@ def config(root: Path) -> dict:
             raise SystemExit(
                 f"✗ gen-manifests: {path} not found. This is the PLATFORM's canonical script and it "
                 f"does not guess which top-level directories are packages — see the header for the "
-                f"file's shape. It must list the same directories as validate-repos.py's SKIP.")
+                f"file's shape. validate-repos.py's package_dirs(root) must return the same packages "
+                f"this file's plugin_dirs does — the lane's check-package-enumeration.py asserts it.")
         except (OSError, json.JSONDecodeError) as ex:
             raise SystemExit(f"✗ gen-manifests: {path} is unreadable: {ex}")
         if not isinstance(raw, dict):
