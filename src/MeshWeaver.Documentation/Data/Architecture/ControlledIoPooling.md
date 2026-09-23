@@ -376,8 +376,7 @@ a loud teardown residual for a silent one, which is the same defect with better 
 `ObserveCompletion` cancels its task on that token — so every Octokit.Reactive call in
 `OctokitGitHubRepoClient` is safe however its lambda treats `ct`. `InvokeStream` (and `RunStream`,
 which forwards to it) enumerates as `source(ct).WithCancellation(ct)`, handing the token to the
-enumerator itself. `InvokeBlocking` (and `RunBlocking`) holds no gate permit and is joined on its own
-`_blockingIdle` signal. **`Invoke` has no projection, and `IoPoolExtensions.Run` composes straight
+enumerator itself. **`Invoke` has no projection, and `IoPoolExtensions.Run` composes straight
 onto it**, so those two are where a discarded token is unrecoverable — and they are what
 `PooledLeafObservesItsTokenGuard` scans. It holds `src/` at zero for a lambda that never references
 its own token parameter, asserts its detector in both directions, and asserts its own denominator:
@@ -390,6 +389,42 @@ is pinned by a test rather than left to a comment (a comment cannot fail), and a
 is deliberately not failed: the sites using that form are correct today, and turning a correct form
 red to protect a lexical scan is the wrong trade. Real coverage for it is a call-graph pass or a
 Roslyn analyzer, not a wider regex.
+
+### 🚨 A blocking leaf that WALKS checks its token between steps
+
+`InvokeBlocking` (and `RunBlocking`) holds no gate permit — and that was once written here as if it
+put blocking leaves outside the drain. It does not: `Drain()` joins blocking leaves on their own
+`_blockingIdle` signal under the same budget, so a blocking leaf that never looks at its token holds
+the silo's teardown join exactly as an `Invoke` leaf does. There is no projection to rescue it
+either — the work IS the synchronous call, so the only thing that can end it early is the work
+itself noticing the cancel.
+
+This is the leaf #2480 turned out to be. Its 18 anonymous occurrences became, once #4921 made the
+report name what did not unwind:
+
+```text
+IoPoolSiloTeardown: pooled I/O did not finish within 00:00:30 — … Did NOT report:
+prebuilt:files=1 [MeshWeaver.Hosting.ShippedPrebuiltBundles+<>c__DisplayClass24_0.<SeedBundles>b__8].
+```
+
+`<SeedBundles>b__8` was `pool.InvokeBlocking(_ => enumerateBundles())` — a `Func<List<string>>`
+that walks the published bundle share one network round-trip per pointer, seal and archive, with
+the pool's token discarded at the call site. The fix hands the enumerator the token
+(`Func<CancellationToken, List<string>>`, passed to the pool as-is so no lambda sits between them
+to drop it) and the walks — `ShippedPrebuiltBundles.CompletePublishedBundlesOf`, its fallback over
+other identities, `ImageBundlesOf`, and `PrebuiltBundleInventory.Read` — check it before every
+step. The token parameter on `CompletePublishedBundlesOf` is REQUIRED, not defaulted: a defaulted
+token is how a caller drops it without writing anything. A cancelled walk surfaces as
+`OperationCanceledException` and is reported as the pool ending the pass, never as "seeding failed"
+or "the shelf is unreadable" — the read did not fail, the process is stopping.
+
+The distinction the guard cannot draw lexically, and a reviewer must: a blocking leaf that is **one
+short syscall** (`_ => File.ReadAllText(path)`) has no step at which to look and is correct as it
+stands; a blocking leaf that **walks** — a directory tree, a list of archives, a sweep — takes the
+token and checks it per step. What that does NOT cover, stated so it is not over-read: a single
+syscall that itself stalls past the budget (a hung SMB mount) cannot be interrupted from managed
+code at all, and would still be named by the teardown report — as a different finding about the
+mount, not about the leaf.
 
 ---
 

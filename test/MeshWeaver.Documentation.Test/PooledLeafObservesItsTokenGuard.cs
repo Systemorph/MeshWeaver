@@ -48,9 +48,18 @@ namespace MeshWeaver.Documentation.Test;
 /// <item><c>InvokeStream</c> (and <c>RunStream</c>, which forwards to it) enumerates
 /// <c>source(ct).WithCancellation(ct)</c>, so the framework hands the token to the enumerator
 /// itself.</item>
-/// <item><c>InvokeBlocking</c> (and <c>RunBlocking</c>) holds no gate permit and is joined on its
-/// own <c>_blockingIdle</c> signal; its leaf is synchronous CPU/file work whose API frequently has
-/// no token to take.</item>
+/// <item><c>InvokeBlocking</c> (and <c>RunBlocking</c>) is OUT OF THIS GUARD'S SCOPE — but 🚨 NOT
+/// because it cannot hold the drain. This bullet used to say it "holds no gate permit and is joined
+/// on its own <c>_blockingIdle</c> signal", and the second half is exactly why it CAN: <c>Drain</c>
+/// waits on that signal under the same budget, so a blocking leaf that never looks at its token
+/// holds the silo's join just as surely. #2480's production report, once it could name a leaf,
+/// named one of these: <c>prebuilt:files=1 [ShippedPrebuiltBundles+&lt;&gt;c__DisplayClass24_0.&lt;SeedBundles&gt;b__8]</c>
+/// — <c>InvokeBlocking(_ =&gt; enumerateBundles())</c>, a multi-step walk of a network share.
+/// It is excluded here only because the lexical question cannot be decided: a blocking leaf that
+/// is ONE short syscall (<c>_ =&gt; File.ReadAllText(path)</c>) has no step at which to look at a
+/// token and is correct, while a leaf that WALKS (a directory tree, a list of archives) must check
+/// it between steps, and the regex cannot tell the two apart. The rule for a walking blocking leaf
+/// is stated in <c>Doc/Architecture/ControlledIoPooling</c>.</item>
 /// </list>
 ///
 /// <para>🚨 <b>WHAT THIS GUARD DOES NOT COVER, stated because a claim wider than its coverage is
