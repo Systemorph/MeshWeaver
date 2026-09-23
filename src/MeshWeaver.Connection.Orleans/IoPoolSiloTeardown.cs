@@ -126,7 +126,7 @@ public sealed class IoPoolSiloTeardown(
     // The remaining secondary property, still checked:
     //   • every fault is observed BEFORE the wait — the .Catch below is inside the composition, so
     //     nothing can fault past it into an unobserved task;
-    //   • the .Timeout is a REPORTED budget on a join, not a silent race: expiry lands in Report(-1)
+    //   • the .Timeout is a REPORTED budget on a join, not a silent race: expiry lands in Report(joined: false)
     //     as a LogError naming the consequence. It is the weaker class #2488 lists at 4–5, kept
     //     because a silo that never releases is worse than one that releases loudly.
     //
@@ -170,10 +170,11 @@ public sealed class IoPoolSiloTeardown(
 
         return registry.Disposed
             .Timeout(budget)
-            // A timeout means a leaf never unwound. Report it as a residual rather than faulting:
+            // A timeout means a leaf never unwound. Report it as a failed join rather than faulting:
             // shutdown must continue, and the log below is the only attribution a later SIGSEGV gets.
-            .Catch<int, Exception>(_ => Observable.Return(-1))
-            .Do(leaked => Report(leaked, registry, budget))
+            .Select(_ => true)
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .Do(joined => Report(joined, registry, budget))
             .Select(_ => Unit.Default)
             .FirstAsync()
             .ObserveCompletion(
@@ -183,46 +184,43 @@ public sealed class IoPoolSiloTeardown(
     }
 
     /// <summary>
-    /// The teardown's verdict. <paramref name="leaked"/> is <c>-1</c> when the join budget expired,
-    /// otherwise the residual every pool reported.
+    /// The teardown's verdict. <paramref name="joined"/> is <c>false</c> when the join budget
+    /// expired, <c>true</c> when every pool reported.
     ///
-    /// <para>🚨 <b>The expiry branch must NAME the pool and the leaf, and it could not.</b> The
-    /// per-pool attribution added for #2480 rides each pool's own <c>Disposed</c> — a signal a pool
-    /// whose leaf never unwinds never publishes — so on the ONLY path this fault takes, nothing was
-    /// ever written but the bare sentence below. Three weeks and 18 occurrences later "fix the leaf"
-    /// still had no leaf to fix. <see cref="IoPoolRegistry.UnreportedResiduals"/> reads the pools the
-    /// join was waiting on directly, so the instruction the line gives is now actionable from the
-    /// line itself.</para>
+    /// <para>🚨 <b>There are exactly TWO outcomes, and that is by construction.</b> A pool's
+    /// <c>Disposed</c> fires only once its last leaf has unwound, so it carries no residual: live
+    /// work that outlives the join makes the aggregate NEVER fire, which is the timeout branch — not
+    /// a third "N leaves survived" branch, which this method used to carry and which could never be
+    /// reached (MeshWeaver.Feedback#24). The timeout branch is therefore the ONLY attribution a
+    /// subsequent SIGSEGV gets, and it must NAME the pool and the leaf: the per-pool record rides
+    /// each pool's own <c>Disposed</c>, a signal a pool whose leaf never unwinds never publishes, so
+    /// <see cref="IoPoolRegistry.UnreportedResiduals"/> reads the pools the join was waiting on
+    /// directly (#2480 — 18 occurrences of a bare sentence before it did).</para>
     /// </summary>
-    private void Report(int leaked, IoPoolRegistry registry, TimeSpan budget)
+    private void Report(bool joined, IoPoolRegistry registry, TimeSpan budget)
     {
-        if (leaked < 0)
+        if (joined)
         {
-            var stuck = registry.UnreportedResiduals();
-            logger.LogError(
-                "IoPoolSiloTeardown: pooled I/O did not finish within {Budget} — the silo is "
-                + "releasing over live work. A leaf ignored its cancellation token; fix the leaf, "
-                + "do not widen the budget. Did NOT report: {Stuck}.",
-                budget,
-                stuck.Count == 0
-                    // Not a clean join: the budget DID expire. Every pool having reported while the
-                    // aggregate never fired is a defect in the registry's own Zip, not in a leaf —
-                    // so it must read as the different finding it is rather than as no finding.
-                    ? "(no pool is still holding a leaf — every pool reported, yet the aggregate "
-                      + "join never completed: that is a defect in IoPoolRegistry.Dispose's Zip, "
-                      + "NOT a leaf ignoring its token)"
-                    : string.Join(" | ", stuck));
-        }
-        else if (leaked == 0)
             logger.LogInformation("IoPoolSiloTeardown: pooled I/O joined — no pool thread is running");
-        else
-            // The ONLY attribution a subsequent SIGSEGV will get. Never downgrade this: the silo is
-            // about to release (and any remaining ALC to unload) over a thread still in that code.
-            logger.LogError(
-                "IoPoolSiloTeardown: {Leaked} pooled I/O leaf(s) survived the join — the silo is "
-                + "releasing over live work. A leaf ignored its cancellation token; fix the leaf, "
-                + "do not widen the budget.",
-                leaked);
+            return;
+        }
+
+        // Never downgrade this: the silo is about to release (and any remaining ALC to unload) over
+        // a thread still in that code.
+        var stuck = registry.UnreportedResiduals();
+        logger.LogError(
+            "IoPoolSiloTeardown: pooled I/O did not finish within {Budget} — the silo is "
+            + "releasing over live work. A leaf ignored its cancellation token; fix the leaf, "
+            + "do not widen the budget. Did NOT report: {Stuck}.",
+            budget,
+            stuck.Count == 0
+                // Not a clean join: the budget DID expire. Every pool having reported while the
+                // aggregate never fired is a defect in the registry's own Zip, not in a leaf —
+                // so it must read as the different finding it is rather than as no finding.
+                ? "(no pool is still holding a leaf — every pool reported, yet the aggregate "
+                  + "join never completed: that is a defect in IoPoolRegistry.Dispose's Zip, "
+                  + "NOT a leaf ignoring its token)"
+                : string.Join(" | ", stuck));
     }
 }
 

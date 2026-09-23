@@ -87,15 +87,22 @@ public sealed class IoPool : IIoPool, IDisposable
     // two callers would both drain and both dispose the gate.
     private int _disposing;
     private int _disposalReported;
-    // Fires the residual leaf count once the join AND the resource release have happened, then
-    // completes. AsyncSubject so a subscriber attaching after disposal still gets the report —
-    // the same contract MeshTeardownSignal uses.
+    // Fires 0 once the join AND the resource release have happened, then completes. AsyncSubject
+    // so a subscriber attaching after disposal still gets the report — the same contract
+    // MeshTeardownSignal uses.
     private readonly System.Reactive.Subjects.AsyncSubject<int> _disposedSubject = new();
 
     /// <summary>
-    /// Emits the number of leaves that did NOT unwind (see <see cref="Drain"/>) once this pool has
-    /// been drained AND its gate/cancellation released, then completes. <c>0</c> means no pool
-    /// thread is running any more, so the caller may unload collectible node ALCs.
+    /// Emits <c>0</c> once this pool has been drained AND its gate/cancellation released, then
+    /// completes: no pool thread is running any more, so the caller may unload collectible node ALCs.
+    ///
+    /// <para>🚨 <b>The value is ALWAYS <c>0</c>, by construction</b> — it is not a residual count.
+    /// <see cref="TryFinishDisposal"/> fires only once the last leaf has unwound, so there is never a
+    /// residual to carry at that moment. A leaf that NEVER unwinds does not produce a non-zero value:
+    /// it produces NO emission, which the caller's bounded wait surfaces as the timeout it is, and
+    /// the attribution for that path is <see cref="IoPoolRegistry.UnreportedResiduals"/>. Residual
+    /// COUNTS belong to <see cref="Drain"/>, which returns them. Branching on a non-zero value here
+    /// writes a diagnostic that can never fire (MeshWeaver.Feedback#24).</para>
     ///
     /// <para>Await this — never <see cref="Dispose"/>'s return — before releasing anything the
     /// pooled work could still be executing. <see cref="IoPoolRegistry.Disposed"/> aggregates it
