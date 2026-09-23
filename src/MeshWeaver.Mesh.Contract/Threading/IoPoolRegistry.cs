@@ -35,9 +35,11 @@ public sealed class IoPoolRegistry : IDisposable
     private readonly ConcurrentDictionary<string, byte> _reported = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Emits the TOTAL number of leaves that did not unwind across every pool, once all of them
-    /// have been drained AND released, then completes. <c>0</c> is the contract: no pool thread is
-    /// running any more, so collectible node ALCs may be unloaded and the owning scope released.
+    /// Emits <c>0</c> once EVERY pool has been drained AND released, then completes: no pool thread
+    /// is running any more, so collectible node ALCs may be unloaded and the owning scope released.
+    /// The value is always <c>0</c> (see <see cref="IoPool.Disposed"/>): a pool whose leaf never
+    /// unwinds makes this NEVER fire rather than fire non-zero, so the caller's bounded wait is the
+    /// detector and <see cref="UnreportedResiduals"/> is the attribution.
     ///
     /// <para>🚨 This is what a silo must await before releasing — not <see cref="Dispose"/>'s
     /// return, and not <c>IMessageHub.DisposalCompleted</c> (which covers only action blocks and
@@ -357,37 +359,27 @@ public sealed class IoPoolRegistry : IDisposable
             return;
         }
 
-        // Per-pool attribution (issue #2480: the silo-teardown report named neither pool nor leaf).
-        // Logged the moment EACH pool's own Disposed fires — independent of the Zip below, and
-        // independent of whether the caller's own bounded wait (IoPoolSiloTeardown's 30 s Timeout
-        // on the aggregate) has already given up. A pool that unwinds AFTER that timeout still gets
-        // attributed here, which is strictly more than the aggregate -1 residual ever names.
+        // Per-pool JOIN record (issue #2480: the silo-teardown report named neither pool nor leaf).
+        // Recorded the moment EACH pool's own Disposed fires — independent of the Zip below, and of
+        // whether the caller's own bounded wait has already given up — because
+        // UnreportedResiduals() subtracts this set: it is what lets the TIMEOUT path name exactly
+        // the pools still holding a leaf. There is deliberately no residual-count arm here: a
+        // pool's Disposed carries 0 by construction (it fires only once its last leaf unwound), so
+        // a "left N leaves" warning on it could never fire (MeshWeaver.Feedback#24). A leaf that
+        // never unwinds shows up as a pool MISSING from this set, which is the attribution.
         foreach (var kvp in pools)
         {
             var name = kvp.Key;
-            kvp.Value.Disposed.Subscribe(residual =>
-            {
-                // 🚨 Recorded FIRST, and unconditionally — UnreportedResiduals() subtracts this set,
-                // so a pool that reported must leave it whatever its residual was. Doing it inside
-                // the `residual != 0` branch below would leave every CLEAN pool looking un-joined
-                // to the timeout report, which is the opposite lie to the one #2480 is about.
-                _reported[name] = 0;
-                if (residual != 0)
-                    _logger?.LogWarning(
-                        "IoPoolSiloTeardown: pool '{PoolName}' left {Residual} leaf(es) still "
-                        + "running at dispose — a leaf ignored its cancellation token; fix the "
-                        + "leaf, do not widen the budget.", name, residual);
-            });
+            kvp.Value.Disposed.Subscribe(_ => _reported[name] = 0);
         }
 
-        // Zip: one emission once EVERY pool has reported, carrying the total residual. A pool whose
-        // leaf never unwinds never reports, so this never fires — and the caller's bounded wait
-        // surfaces that as the timeout it is, rather than a false all-clear.
+        // Zip: one emission once EVERY pool has reported. A pool whose leaf never unwinds never
+        // reports, so this never fires — and the caller's bounded wait surfaces that as the timeout
+        // it is, rather than a false all-clear.
         Observable.Zip(pools.Select(kvp => kvp.Value.Disposed))
-            .Select(residuals => residuals.Sum())
             .Take(1)
             .Subscribe(
-                total => { _disposed.OnNext(total); _disposed.OnCompleted(); },
+                _ => { _disposed.OnNext(0); _disposed.OnCompleted(); },
                 _ => { _disposed.OnNext(0); _disposed.OnCompleted(); });
 
         foreach (var kvp in pools)
