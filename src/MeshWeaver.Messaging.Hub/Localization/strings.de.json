@@ -1229,6 +1229,8 @@
   "chat.noNamespace": "Kein Namespace, in dem ein Thread gestartet werden kann.",
   "chat.recording": "Aufnahme…",
   "chat.transcribing": "Transkription…",
+  "chat.recordingFailed": "Aufnahme fehlgeschlagen — bitte erneut versuchen",
+  "chat.transcriptionFailed": "Transkription fehlgeschlagen — bitte erneut versuchen",
   "search.meshPlaceholder": "Mesh durchsuchen... (z. B. nodeType:Story status:Open)",
   "analysis.kpi.empty": "Keine Kennzahlen vorhanden.",
   "analysis.tower.empty": "Keine Struktur zum Zeichnen.",
