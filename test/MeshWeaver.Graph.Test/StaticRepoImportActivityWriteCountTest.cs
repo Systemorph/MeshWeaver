@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -159,7 +160,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
                 },
                 Nodes = Pages(partition, 1, "v1")
             })
-            .FirstAsync().Timeout(120.Seconds());
+            .FirstAsync().Timeout(120.Seconds()).Await();
         imported.Outcome.Should().Be("Imported");
 
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -175,7 +176,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
             {
                 Id = activityId, HubPath = partition, Status = ActivityStatus.Running
             }
-        }).FirstAsync().Timeout(60.Seconds());
+        }).FirstAsync().Timeout(60.Seconds()).Await();
 
         var cumulative = 0L;
         var writes = 0;
@@ -188,7 +189,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
                     LogLevel.Information))
                 .ToArray();
             last = await ActivityLogAppender.Append(Mesh, activityPath, batch)
-                .FirstAsync().Timeout(60.Seconds());
+                .FirstAsync().Timeout(60.Seconds()).Await();
             writes++;
             cumulative += ContentBytes(last);
         }
@@ -226,7 +227,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
                 $"path:{ActivityLogAppender.SegmentNamespace(activityPath)} scope:children "
                 + $"nodeType:{ActivityLogAppender.SegmentNodeType}"))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         return change.Items
             .Select(n => n.ContentAs<ActivityLogSegment>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null)
@@ -261,7 +262,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
         };
 
         var first = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(120.Seconds());
+            .FirstAsync().Timeout(120.Seconds()).Await();
         first.Outcome.Should().Be("Imported");
         first.Count.Should().Be(items, "the first import must actually materialize the fixture");
 
@@ -280,10 +281,10 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
                 {
                     Content = new MarkdownContent { Content = $"# Page {i}\n\nedited on the server" }
                 })
-                .FirstAsync().Timeout(TestTimeouts.Convergence);
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
             await Mesh.GetWorkspace().GetMeshNodeStream(path)
                 .Where(n => n is not null && ImportConflictPolicy.IsHumanEdit(n))
-                .FirstAsync().Timeout(TestTimeouts.Convergence);
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         }
 
         // Same paths, different content → new fingerprint (no short-circuit) and a REAL conflict on
@@ -292,7 +293,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
         var conflicted = await StaticRepoImporter.ImportSource(
                 Mesh, source, null,
                 new ImportConflictPolicy(PreserveServerNewer: true, Since: DateTimeOffset.MinValue))
-            .FirstAsync().Timeout(120.Seconds());
+            .FirstAsync().Timeout(120.Seconds()).Await();
         conflicted.Preserved.Should().Be(items,
             "every node must take the kept-local-change branch — that is the phase being measured");
 
@@ -305,7 +306,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
         var attempt = await Mesh.GetWorkspace().GetMeshNodeStream(attemptPath)
             .Where(n => n.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)
                 is { Status: not ActivityStatus.Running })
-            .FirstAsync().Timeout(60.Seconds());
+            .FirstAsync().Timeout(60.Seconds()).Await();
 
         return attempt!.Version;
     }
@@ -318,7 +319,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{partition}/_Activity scope:children nodeType:{ActivityNodeType.NodeType}"))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         // The lock is `import-{fingerprint}`; an attempt is that id plus a per-run suffix, and its
         // Name carries "attempt" (StaticRepoImporter.Import). Manifests are separate ids.
         return change.Items

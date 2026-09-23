@@ -114,7 +114,7 @@ public class PartitionNameRefusalTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var accepted = await NodeFactory
             .CreateNode(new MeshNode("partition-name-control") { NodeType = "Space", Name = "control" })
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
         accepted.Path.Should().Be("partition-name-control");
 
         foreach (var name in Incident)
@@ -122,7 +122,7 @@ public class PartitionNameRefusalTest(ITestOutputHelper output) : MonolithMeshTe
             var fault = await Assert.ThrowsAnyAsync<Exception>(async () =>
                 await NodeFactory
                     .CreateNode(new MeshNode(name) { NodeType = "Space", Name = name })
-                    .Timeout(TestTimeouts.Convergence));
+                    .Timeout(TestTimeouts.Convergence).Await());
             fault.Message.Should().Contain(PartitionDefinition.PartitionSegmentRequirement,
                 $"'{name}' must be refused by the partition-name rule, not by anything downstream of it");
         }

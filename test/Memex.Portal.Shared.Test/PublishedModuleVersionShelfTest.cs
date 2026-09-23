@@ -105,7 +105,7 @@ public class PublishedModuleVersionShelfTest(ITestOutputHelper output) : Monolit
                 version: version,
                 staticAssets: [(MarkerPath, Encoding.UTF8.GetBytes(marker))])
             .FirstAsync()
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
     }
 
     private Task<InstallResult> InstallOlderRecord(CancellationToken cancellationToken) =>

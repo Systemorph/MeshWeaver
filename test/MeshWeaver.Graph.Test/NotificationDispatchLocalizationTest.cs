@@ -134,7 +134,7 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
                 .Select(n => n.ContentAs<Notification>(Json))
                 .FirstOrDefault(n => n is { NotificationType: NotificationType.AccessGranted }))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
 
         stored!.TitleKey.Should().Be("notification.accessGranted.title",
             "the dispatch must carry the key through to the bell write — flattening it here would "
@@ -192,7 +192,7 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
                     "notification.accessGranted.emailFooter"))
             .Timeout(TestTimeouts.Convergence).Await();
 
-        var sent = await mail.Sent.FirstAsync().Timeout(TestTimeouts.Convergence);
+        var sent = await mail.Sent.FirstAsync().Timeout(TestTimeouts.Convergence).Await();
 
         sent.To.Should().Be("de@acme.com");
         sent.Subject.Should().Be(
@@ -254,7 +254,7 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
                 createdBy: "admin")
             .Timeout(TestTimeouts.Convergence).Await();
 
-        var sent = await mail.Sent.FirstAsync().Timeout(TestTimeouts.Convergence);
+        var sent = await mail.Sent.FirstAsync().Timeout(TestTimeouts.Convergence).Await();
 
         sent.To.Should().Be("en@acme.com");
         sent.Subject.Should().Be("You've been given access to Quarterly Report");

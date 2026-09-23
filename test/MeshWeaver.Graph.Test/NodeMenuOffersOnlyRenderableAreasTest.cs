@@ -51,7 +51,7 @@ public abstract class NodeMenuRenderableAreaTestBase(ITestOutputHelper output)
         => await NodeMenu(new Address(Node))
             .Where(i => i.Any(m => m.Area == MeshNodeLayoutAreas.EditArea))
             .FirstAsync()
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
 }
 
 /// <summary>

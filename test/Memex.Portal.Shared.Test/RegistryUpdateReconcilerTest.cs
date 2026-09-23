@@ -88,7 +88,7 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
         // ── 1. The boot pass ran (the hosted service started with the mesh) ───────────────────
         await LedgerEntries()
             .Where(entries => entries.Any(e => e.Url == RegistryUrl && e.LastReconciledVia == RegistryReconcileEntry.ViaBoot))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Empty(registry.BundleDownloads);
         var feedReadsAfterBoot = registry.FeedReads;
 
@@ -105,17 +105,17 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
                     FrameworkMvid = ServedFramework,
                     PublishedAt = DateTimeOffset.UtcNow,
                 }.Serialize())
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Equal(WebhookInbox.DeliveryStatus.Accepted, delivered.Status);
 
         // ── 3. The drain reconciled A: the registry was asked for A's bundle ──────────────────
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => registry.BundleDownloads)
             .Where(downloads => downloads.Contains(PackageA))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         var drained = await LedgerEntries()
             .Where(entries => entries.Any(e => e.Url == RegistryUrl && e.LastReconciledVia == RegistryReconcileEntry.ViaBroadcast))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.NotNull(drained.Single(e => e.Url == RegistryUrl).LastReconciledAt);
 
         // ── 4. …and only A. The broadcast is per package, and B was never asked about ─────────
@@ -126,7 +126,7 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
         // ── 5. The delivery is consumed ───────────────────────────────────────────────────────
         await InboxDeliveries()
             .Where(deliveries => deliveries.Count == 0)
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
     }
 
     [Fact(Timeout = 240_000)]
@@ -135,7 +135,7 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
         await SeedInstallRecord(PackageA, "ModA", TestContext.Current.CancellationToken);
         await LedgerEntries()
             .Where(entries => entries.Any(e => e.Url == RegistryUrl && e.LastReconciledVia == RegistryReconcileEntry.ViaBoot))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         var requestsBefore = registry.Requests.Count;
 
         var delivered = await WebhookInbox.Deliver(
@@ -148,13 +148,13 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
                     Version = "1.0.0",
                     PublishedAt = DateTimeOffset.UtcNow,
                 }.Serialize())
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Equal(WebhookInbox.DeliveryStatus.Accepted, delivered.Status);
 
         // Consumed — and nothing was asked of the registry this installation does consume.
         await InboxDeliveries()
             .Where(deliveries => deliveries.Count == 0)
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Empty(registry.BundleDownloads);
         Assert.Equal(requestsBefore, registry.Requests.Count);
     }

@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -102,13 +103,13 @@ public class CodeNodeRoundTripTests : IDisposable
             LastExecutedBy = "user",
         });
 
-        await adapter.Write(node, Options).FirstAsync();
+        await adapter.Write(node, Options).FirstAsync().Await();
 
         Assert.True(File.Exists(Path.Combine(_dir, "Scripts", "exec.json")),
             "a config a .cs file cannot represent must persist as whole-node JSON");
         Assert.False(File.Exists(Path.Combine(_dir, "Scripts", "exec.cs")));
 
-        var read = await adapter.Read("Scripts/exec", Options).FirstAsync();
+        var read = await adapter.Read("Scripts/exec", Options).FirstAsync().Await();
         var config = read.ContentAs<CodeConfiguration>(Options)!;
         Assert.True(config.IsExecutable);
         Assert.Equal("me", config.ActivityParentPath);
@@ -122,13 +123,13 @@ public class CodeNodeRoundTripTests : IDisposable
         var adapter = new FileSystemStorageAdapter(_dir, _ioPools);
         var node = CodeNode("model", new CodeConfiguration { Code = "public record Person(string Name);" });
 
-        await adapter.Write(node, Options).FirstAsync();
+        await adapter.Write(node, Options).FirstAsync().Await();
 
         var csPath = Path.Combine(_dir, "Scripts", "model.cs");
         Assert.True(File.Exists(csPath), "pure C# source must stay a readable .cs source file");
         Assert.Equal("public record Person(string Name);", await File.ReadAllTextAsync(csPath));
 
-        var read = await adapter.Read("Scripts/model", Options).FirstAsync();
+        var read = await adapter.Read("Scripts/model", Options).FirstAsync().Await();
         Assert.Equal("public record Person(string Name);", read.ContentAs<CodeConfiguration>(Options)!.Code);
     }
 
@@ -140,15 +141,15 @@ public class CodeNodeRoundTripTests : IDisposable
         // stale .cs — the read side prefers .cs over .json, so a leftover .cs would shadow the
         // new file with the metadata-stripped version forever.
         var adapter = new FileSystemStorageAdapter(_dir, _ioPools);
-        await adapter.Write(CodeNode("cell", new CodeConfiguration { Code = "1+1" }), Options).FirstAsync();
+        await adapter.Write(CodeNode("cell", new CodeConfiguration { Code = "1+1" }), Options).FirstAsync().Await();
         Assert.True(File.Exists(Path.Combine(_dir, "Scripts", "cell.cs")));
 
         await adapter.Write(
-            CodeNode("cell", new CodeConfiguration { Code = "1+1", IsExecutable = true }), Options).FirstAsync();
+            CodeNode("cell", new CodeConfiguration { Code = "1+1", IsExecutable = true }), Options).FirstAsync().Await();
 
         Assert.False(File.Exists(Path.Combine(_dir, "Scripts", "cell.cs")),
             "the stale .cs must be cleaned up or it shadows the .json on read");
-        var read = await adapter.Read("Scripts/cell", Options).FirstAsync();
+        var read = await adapter.Read("Scripts/cell", Options).FirstAsync().Await();
         Assert.True(read.ContentAs<CodeConfiguration>(Options)!.IsExecutable);
     }
 }

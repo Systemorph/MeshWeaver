@@ -105,7 +105,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
             .GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(60.Seconds());
+            .FirstAsync().Timeout(60.Seconds()).Await();
 
         Assert.True(fired!.Status == EventSubscriptionStatus.Fired,
             $"timer ended {fired.Status}: {fired.LastError}");
@@ -115,7 +115,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
         await Mesh.GetWorkspace().GetMeshNodeStream($"{space}/_Access/{subject}_Access")
             .Where(n => n?.ContentAs<AccessAssignment>(Mesh.JsonSerializerOptions) is { } a
                         && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
     }
 
     /// <summary>
@@ -157,7 +157,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
             .GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(60.Seconds());
+            .FirstAsync().Timeout(60.Seconds()).Await();
 
         Assert.True(fired!.Status == EventSubscriptionStatus.Fired,
             $"an overdue timer ended {fired.Status}: {fired.LastError}");
@@ -172,5 +172,5 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
             .Select(nodes => nodes
                 .Select(n => n.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
                 .FirstOrDefault(s => s?.Id == id))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
 }

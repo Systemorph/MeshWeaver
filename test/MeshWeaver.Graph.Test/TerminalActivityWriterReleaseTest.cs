@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -76,7 +77,7 @@ public class TerminalActivityWriterReleaseTest(ITestOutputHelper output) : Monol
                 HubPath = Partition,
                 Status = ActivityStatus.Running,
             },
-        }).FirstAsync().Timeout(60.Seconds());
+        }).FirstAsync().Timeout(60.Seconds()).Await();
         return $"{Partition}/_Activity/{id}";
     }
 
@@ -111,9 +112,9 @@ public class TerminalActivityWriterReleaseTest(ITestOutputHelper output) : Monol
         // this test would report the regression it exists to catch. Production reaches completion:
         // CloseChunk's result is consumed through `.Concat().ToList()`, which waits for it.
         await BuildProtocolDriver.FinishActivity(Mesh, path, ActivityStatus.Succeeded)
-            .LastAsync().Timeout(60.Seconds());
+            .LastAsync().Timeout(60.Seconds()).Await();
 
-        var eviction = await released.FirstAsync().Timeout(60.Seconds());
+        var eviction = await released.FirstAsync().Timeout(60.Seconds()).Await();
 
         eviction.Reason.Should().Be("final",
             "the terminal status is the EVENT that proves the mirror is dead, so the release is "
@@ -139,7 +140,7 @@ public class TerminalActivityWriterReleaseTest(ITestOutputHelper output) : Monol
 
         CodeNodeType.FailActivity(Mesh, path, "no worker connected — release probe");
 
-        var eviction = await released.FirstAsync().Timeout(60.Seconds());
+        var eviction = await released.FirstAsync().Timeout(60.Seconds()).Await();
 
         eviction.Reason.Should().Be("final",
             "a failed code run is a terminal activity write like any other, and it bypassed the "
@@ -164,7 +165,7 @@ public class TerminalActivityWriterReleaseTest(ITestOutputHelper output) : Monol
         var sawRelease = await released
             .Select(_ => true)
             .Timeout(2.Seconds(), Observable.Return(false))
-            .FirstAsync();
+            .FirstAsync().Await();
 
         sawRelease.Should().BeFalse(
             "a Running activity is still writing to its mirror — releasing it would be the very "

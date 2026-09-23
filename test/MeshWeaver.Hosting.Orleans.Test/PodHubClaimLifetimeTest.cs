@@ -114,7 +114,7 @@ public class PodHubClaimLifetimeTest
                       ?? throw new InvalidOperationException(
                           "the routing service recorded no pod-hub claim for the address — the seam "
                           + "this test waits on is gone, and a poll would silently take its place.");
-        await settled.Timeout(TimeSpan.FromSeconds(30)).LastOrDefaultAsync();
+        await settled.Timeout(TimeSpan.FromSeconds(30)).LastOrDefaultAsync().Await();
         return factory.AttachCalls;
     }
 

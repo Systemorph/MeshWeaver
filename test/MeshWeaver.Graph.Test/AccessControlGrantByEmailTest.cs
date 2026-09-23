@@ -69,7 +69,7 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
         // The Access Control UI grants "Viewer" (a non-default role) at the granular node path, with NO pin.
         var outcome = await NewService()
             .GrantOrScheduleAccess(TargetPath, InviteeEmail, "Viewer", pin: false, invitedBy: "admin")
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.Equal(SpaceInviteOutcome.Invited, outcome);
 
         // A deferred subscription was scheduled carrying the SELECTED role + node path (not Space/Editor),
@@ -83,12 +83,12 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
                 && s.TargetPath == TargetPath
                 && s.Role == "Viewer"
                 && !s.Pin))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // An Invitation node was created for the email.
         await Mesh.GetWorkspace().GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(InviteeEmail)}")
             .Where(n => n?.Content is Invitation inv && inv.Email == InviteeEmail)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // The invitee signs up — their User node is created (as onboarding does).
         using (accessService.ImpersonateAsSystem())
@@ -106,7 +106,7 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subId))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
@@ -115,12 +115,12 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
             .Where(n => n?.Content is AccessAssignment a
                         && a.AccessObject == InviteeId
                         && a.Roles.Any(r => r.Role == "Viewer" && !r.Denied))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
         Assert.NotNull(granted);
 
         // No pin (Access Control grants are pin-free): the invitee's dashboard was NOT touched.
         var user = await Mesh.GetWorkspace().GetMeshNodeStream(InviteeId)
-            .Where(n => n?.Content is User).FirstAsync().Timeout(10.Seconds());
+            .Where(n => n?.Content is User).FirstAsync().Timeout(10.Seconds()).Await();
         Assert.DoesNotContain(TargetPath, ((User)user!.Content!).PinnedPaths);
     }
 
@@ -144,12 +144,12 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
         // Wait until the account is queryable by email (the primitive looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{InviteeEmail}"))
             .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == InviteeId))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // Grant "Commenter" (a non-default role) at the granular node path, with NO pin.
         var outcome = await NewService()
             .GrantOrScheduleAccess(TargetPath, InviteeEmail, "Commenter", pin: false, invitedBy: "admin")
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.Equal(SpaceInviteOutcome.Granted, outcome);
 
         // The assignment landed immediately at {nodePath}/_Access with the selected role.
@@ -157,11 +157,11 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
             .Where(n => n?.Content is AccessAssignment a
                         && a.AccessObject == InviteeId
                         && a.Roles.Any(r => r.Role == "Commenter" && !r.Denied))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
 
         // No pin: the user's dashboard was not touched.
         var user = await Mesh.GetWorkspace().GetMeshNodeStream(InviteeId)
-            .Where(n => n?.Content is User).FirstAsync().Timeout(10.Seconds());
+            .Where(n => n?.Content is User).FirstAsync().Timeout(10.Seconds()).Await();
         Assert.DoesNotContain(TargetPath, ((User)user!.Content!).PinnedPaths);
     }
 }

@@ -73,14 +73,14 @@ public class RegistryReconcileDeferralTest(ITestOutputHelper output) : MonolithM
         // ── 1. The boot reconcile, against a registry that 503s for the whole budget ────────────
         // Zero backoff: the budget is exhausted in milliseconds instead of ~26 s; the ATTEMPT count
         // below proves every retry in it was spent before the reconciler deferred.
-        await reconciler.ReconcileRegistry(reference, _ => TimeSpan.Zero).Timeout(TestTimeouts.Convergence);
+        await reconciler.ReconcileRegistry(reference, _ => TimeSpan.Zero).Timeout(TestTimeouts.Convergence).Await();
         // The whole boot budget is spent before the reconcile is deferred.
         Assert.Equal(RegistryUpdateReconciler.FeedReadRetries + 1, registry.Attempts);
 
         // ── 2a. The skipped reconcile is a durable fact on the node the reconciler owns ─────────
         var pending = await LedgerEntries()
             .Where(entries => entries.Any(e => e.Url == RegistryUrl && e.Pending))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         var deferred = pending.Single(e => e.Url == RegistryUrl);
         Assert.Equal(RegistryName, deferred.Name);
         Assert.Equal(RegistryUpdateReconciler.FeedReadRetries + 1, deferred.Attempts);
@@ -91,7 +91,7 @@ public class RegistryReconcileDeferralTest(ITestOutputHelper output) : MonolithM
         // ── 2b. Platform admins were told — ONE Admin-anchored bell pointing at the ledger ──────
         var notifications = await AdminNotifications()
             .Where(ns => ns.Any(n => n.TargetNodePath == RegistryUpdateReconciler.LedgerPath))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         var notification = notifications.Single(n => n.TargetNodePath == RegistryUpdateReconciler.LedgerPath);
         Assert.Equal(NotificationType.System, notification.NotificationType);
         Assert.Contains(RegistryName, notification.Title);
@@ -105,13 +105,13 @@ public class RegistryReconcileDeferralTest(ITestOutputHelper output) : MonolithM
         // install record, so a reconcile that actually runs has something observable to do.
         registry.Serve(HttpStatusCode.OK, [ServedManifest()]);
         var served = await new RegistryPackageSource(Mesh, RegistryUrl, Token)
-            .ListPackages("HEAD").FirstAsync().Timeout(TestTimeouts.Convergence);
+            .ListPackages("HEAD").FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Single(served, p => p.Id == PackageId);
 
         // ── 4. Drained: the ledger clears, and the reconcile ran ────────────────────────────────
         var drained = await LedgerEntries()
             .Where(entries => entries.Any(e => e.Url == RegistryUrl && !e.Pending && e.LastReconciledAt is not null))
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Equal(RegistryReconcileEntry.ViaFeedRead, drained.Single(e => e.Url == RegistryUrl).LastReconciledVia);
 
         // The reconcile's own witness: the install record opted OUT of unattended updates, so a
@@ -128,7 +128,7 @@ public class RegistryReconcileDeferralTest(ITestOutputHelper output) : MonolithM
             .Select(ns => ns.FirstOrDefault(n =>
                 n.Title.StartsWith("Update available", StringComparison.Ordinal)))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         Assert.Contains($"Served by registry '{RegistryName}'", reminder!.Message);
         Assert.Equal($"{PackageInstaller.InstalledPartition}/{PackageId}", reminder.TargetNodePath);
         Assert.Equal(StartupErrorNotifier.AdminPartition, reminder.Recipient);
@@ -159,7 +159,7 @@ public class RegistryReconcileDeferralTest(ITestOutputHelper output) : MonolithM
         };
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record))
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
     }
 
     private static PackageManifest ServedManifest() => new()

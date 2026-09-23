@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -175,7 +176,7 @@ public class RefusedContentSyncIsVisibleTest(ITestOutputHelper output) : Monolit
         var source = SourceWith(partition, SmallPoster());
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
 
         var entry = result.RefusedContent.Should().ContainSingle().Subject;
         Output.WriteLine($"refused: {entry.NodePath} — {entry.Reason}");
@@ -212,7 +213,7 @@ public class RefusedContentSyncIsVisibleTest(ITestOutputHelper output) : Monolit
         };
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
 
         result.Outcome.Should().Be("Imported");
         result.RefusedContent.Should().BeEmpty();
@@ -222,7 +223,7 @@ public class RefusedContentSyncIsVisibleTest(ITestOutputHelper output) : Monolit
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{partition}/_Activity scope:children"))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Select(c => c.Items)
-            .FirstAsync().Timeout(90.Seconds());
+            .FirstAsync().Timeout(90.Seconds()).Await();
 
         Output.WriteLine($"_Activity children = {string.Join(", ", children.Select(n => n.Id))}");
         children.Should().NotContain(n => n.Id == "content-sync",

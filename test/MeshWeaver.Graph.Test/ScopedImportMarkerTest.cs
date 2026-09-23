@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -100,11 +101,11 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
             Nodes = [Page(partition, "A", "v1")],
         };
 
-        (await StaticRepoImporter.ImportSource(Mesh, source).FirstAsync().Timeout(120.Seconds()))
+        (await StaticRepoImporter.ImportSource(Mesh, source).FirstAsync().Timeout(120.Seconds()).Await())
             .Outcome.Should().Be("Imported");
 
         var again = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(120.Seconds());
+            .FirstAsync().Timeout(120.Seconds()).Await();
         again.Outcome.Should().Be("Skipped",
             "the previous run WAS unscoped, so its marker is honest evidence and the short-circuit "
             + "must still fire — the fix narrows who may write the marker, not who may read it");
@@ -116,7 +117,7 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
     }
 

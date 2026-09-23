@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -45,7 +46,7 @@ public class StorageAdapterWriteManyTests
             Node("Exercise", "me/Course/Lesson"),
         };
 
-        var written = await ((IStorageAdapter)adapter).WriteMany(nodes, JsonOptions).FirstAsync();
+        var written = await ((IStorageAdapter)adapter).WriteMany(nodes, JsonOptions).FirstAsync().Await();
 
         Assert.Equal(
             new[] { "me/Course", "me/Course/Lesson", "me/Course/Lesson/Exercise" },
@@ -62,7 +63,7 @@ public class StorageAdapterWriteManyTests
 
         await ((IStorageAdapter)adapter).WriteMany(
             Enumerable.Range(0, 5).Select(i => Node($"N{i}", "me")).ToArray(),
-            JsonOptions).FirstAsync();
+            JsonOptions).FirstAsync().Await();
 
         Assert.Equal(1, adapter.MaxConcurrent);   // never more than one write in flight at a time
     }
@@ -76,7 +77,7 @@ public class StorageAdapterWriteManyTests
 
         var written = await ((IStorageAdapter)adapter).WriteMany(
             new[] { Node("Mine", "me"), Node("Theirs", "other") },
-            JsonOptions).FirstAsync();
+            JsonOptions).FirstAsync().Await();
 
         Assert.Equal(new[] { "me/Mine" }, written.Select(n => n.Path));
     }
@@ -85,7 +86,7 @@ public class StorageAdapterWriteManyTests
     public async Task Default_on_empty_input_emits_an_empty_list()
     {
         var written = await ((IStorageAdapter)new OrderRecordingAdapter())
-            .WriteMany([], JsonOptions).FirstAsync();
+            .WriteMany([], JsonOptions).FirstAsync().Await();
 
         Assert.Empty(written);
     }

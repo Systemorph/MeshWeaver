@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -58,7 +59,7 @@ public class IoPoolQueueWaitTest
         before.Mean.Should().Be(TimeSpan.Zero, "a mean over nothing is zero, never a divide by zero");
         pool.CurrentlyWaiting.Should().Be(0, "nothing is queued");
 
-        (await pool.Invoke(_ => Task.FromResult(7)).Timeout(Timeout5)).Should().Be(7);
+        (await pool.Invoke(_ => Task.FromResult(7)).Timeout(Timeout5).Await()).Should().Be(7);
 
         var after = pool.QueueWait;
         after.Samples.Should().Be(1, "one admission was granted");

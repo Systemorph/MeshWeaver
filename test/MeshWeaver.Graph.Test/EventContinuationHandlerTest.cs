@@ -126,7 +126,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
         var seen = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(_ => handler.Calls)
             .Where(calls => calls >= 2)
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(seen >= 2, $"a repeating timer must fire again — fired {seen}×");
 
         // …and it is still armed, with its slot moved into the future.
@@ -134,7 +134,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
             .GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(x => x?.FireAt > DateTimeOffset.UtcNow)
-            .FirstAsync().Timeout(20.Seconds()))!;
+            .FirstAsync().Timeout(20.Seconds()).Await())!;
         Assert.Equal(EventSubscriptionStatus.Pending, current.Status);
         Assert.True(current.FireAt > DateTimeOffset.UtcNow,
             "a repeater records its NEXT slot, or a restart replays the old one");
@@ -223,7 +223,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
         var seen = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(_ => handler.SeenCreatedBy)
             .Where(v => v is not null)
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.Equal("rbuergi", seen);
     }
 
@@ -254,7 +254,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
         (await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(id))
             .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds()))!;
+            .FirstAsync().Timeout(40.Seconds()).Await())!;
 
     private readonly List<EventSubscriptionRunner> runners = [];
 
@@ -298,7 +298,7 @@ public class EventContinuationHandlerMissingTest(ITestOutputHelper output) : Mon
         var final = (await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds()))!;
+            .FirstAsync().Timeout(40.Seconds()).Await())!;
 
         Assert.Equal(EventSubscriptionStatus.Failed, final.Status);
     }

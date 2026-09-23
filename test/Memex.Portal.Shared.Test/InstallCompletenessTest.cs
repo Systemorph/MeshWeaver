@@ -367,7 +367,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         // awaited, never bridged to a blocking wait — BlockingBridgeInTestRatchetGuard (#2013).
         var notObserved = await InstallCompleteness
             .Observe(null, Mesh.JsonSerializerOptions, Package, Package, record, Parsers(), identity)
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         notObserved.Kind.Should().Be(InstallCompletenessKind.NotObserved);
         notObserved.RecordIdentity.Should().Be(identity);
         notObserved.Provenance.Should().Be(identity);
@@ -376,7 +376,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         // an identified one — the same rule that makes NotObserved not a pass.
         var unattributed = await InstallCompleteness
             .Observe(null, Mesh.JsonSerializerOptions, Package, Package, record, Parsers())
-            .FirstAsync().Timeout(TestTimeouts.Convergence);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         unattributed.RecordIdentity.Should().BeNull();
         unattributed.Provenance.Should().Contain("NOT identified");
         unattributed.Provenance.Should().NotBeNullOrWhiteSpace(

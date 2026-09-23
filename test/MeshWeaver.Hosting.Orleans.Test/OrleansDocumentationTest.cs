@@ -122,7 +122,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var value = await stream.Timeout(30.Seconds()).FirstAsync();
+        var value = await stream.Timeout(30.Seconds()).FirstAsync().Await();
         Output.WriteLine($"Received: ValueKind={value.Value.ValueKind}");
 
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,

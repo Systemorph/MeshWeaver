@@ -99,7 +99,7 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
                 await meshService.CreateNode(new MeshNode(childId, SpaceId)
                 {
                     Name = childId, NodeType = "Markdown", State = MeshNodeState.Active,
-                }).Timeout(TestTimeouts.CrossSilo).FirstAsync());
+                }).Timeout(TestTimeouts.CrossSilo).FirstAsync().Await());
             Output.WriteLine($"{principal} → {thrown.Message}");
             return thrown.Message;
         }
