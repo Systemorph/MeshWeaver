@@ -293,6 +293,7 @@ data:
   Portal__SiteName: "{{ .Values.config.memex_portal.Portal__SiteName | default "" }}"
   Portal__PublicHost: "{{ .Values.config.memex_portal.Portal__PublicHost | default "" }}"
   Portal__LandingPath: "{{ .Values.config.memex_portal.Portal__LandingPath | default "" }}"
+  Portal__AuthHost: "{{ .Values.config.memex_portal.Portal__AuthHost | default "" }}"
 {{- if (.Values.instancesAdmin).clusterRead }}
   # ---- Platform-admin Instances overview (see .Values.instancesAdmin) -------
   # The SAME flag that grants the cluster-read RBAC also enables the Settings tab, so the

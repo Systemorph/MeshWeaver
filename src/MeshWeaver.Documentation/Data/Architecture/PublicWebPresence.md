@@ -89,6 +89,18 @@ unchanged:
 - `Portal:LandingPath` — the node a signed-out visitor sees at `/` (the landing Space). Unset, the
   root stays the portal's own welcome route.
 
+- `Portal:AuthHost` — the host that owns SIGN-IN (`memex.meshweaver.cloud`). An OAuth
+  challenge builds `redirect_uri` from the host the request arrived on, so a sign-in started on a
+  brand host asks every identity provider to redirect to a host none of them has registered — measured
+  on `www.meshweaver.cloud`, where Microsoft, Google and LinkedIn were each handed
+  `https://www.meshweaver.cloud/signin-*` while the registered value is the app host. With this set,
+  `UseAuthHostRedirect` sends a sign-in that STARTS anywhere else to this host with a temporary
+  redirect, query intact, so `redirect_uri` is always the registered one and each provider needs
+  one registration, not one per brand host. Only `/auth/login` moves; a `/signin-*` callback never
+  does, because it carries the correlation and nonce cookies of the host that issued the challenge.
+  Unset, nothing is redirected — a single-host deployment is untouched. The portal registers the
+  middleware beside `UsePublicHostRedirect`.
+
 ### Publicness is decided by one gate, per node
 
 Nothing here has its own notion of "public". A page is public because its node carries an
