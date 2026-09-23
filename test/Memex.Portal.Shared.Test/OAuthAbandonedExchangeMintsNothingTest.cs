@@ -62,7 +62,7 @@ public class OAuthAbandonedExchangeMintsNothingTest(ITestOutputHelper output) : 
         Storage,
         logger ?? Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>());
 
-    private OAuthConnectController Controller(ApiTokenService tokens)
+    private OAuthConnectController Controller(ApiTokenService tokens, ILogger<OAuthConnectController>? log = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(new OAuthCodeStore(
@@ -78,7 +78,7 @@ public class OAuthAbandonedExchangeMintsNothingTest(ITestOutputHelper output) : 
             ],
             authenticationType: "Test");
 
-        return new OAuthConnectController(provider, Log)
+        return new OAuthConnectController(provider, log ?? Log)
         {
             ControllerContext = new ControllerContext
             {
@@ -143,7 +143,8 @@ public class OAuthAbandonedExchangeMintsNothingTest(ITestOutputHelper output) : 
     [Fact]
     public async Task AnExchangeAbandonedBeforeTheMint_MintsNothing()
     {
-        var controller = Controller(TokenService());
+        var mints = new CapturingLogger<ApiTokenService>();
+        var controller = Controller(TokenService(mints));
         var clientId = "gone-early-" + Guid.NewGuid().ToString("N")[..8];
         var (code, verifier) = await Authorize(controller, clientId);
 
@@ -159,6 +160,11 @@ public class OAuthAbandonedExchangeMintsNothingTest(ITestOutputHelper output) : 
             "a client that has gone receives nothing — minting for it leaves a live credential nobody holds");
         Log.Lines(LogLevel.Information).Should().Contain(
             l => l.Contains(clientId) && l.Contains("abandoned the exchange before a token was minted"));
+        // The invariant itself, read from the TOKEN SERVICE rather than the controller's own words:
+        // it logs "Creating API token {Label} …" for every row it writes, and wrote none.
+        mints.Lines(LogLevel.Information).Should().NotContain(
+            l => l.Contains("Creating API token") && l.Contains(clientId),
+            "no token row may be written for a client that has already gone");
     }
 
     [Fact]
@@ -208,6 +214,81 @@ public class OAuthAbandonedExchangeMintsNothingTest(ITestOutputHelper output) : 
         Log.Lines(LogLevel.Information).Should().NotContain(
             l => l.Contains("superseding") && l.Contains(label),
             "the abandoned exchange must not retire the credential the client still holds");
+        await AssertStored(TokenPath(firstToken), present: true, "the credential the client holds is still live");
+        await AssertStored(RevokedPath(clientId), present: false, "the undelivered token's row is gone");
+    }
+
+    [Fact]
+    public async Task AnExchangeAbandonedDuringTheSupersede_DeletesNothingTheClientHolds()
+    {
+        var clientId = "gone-at-supersede-" + Guid.NewGuid().ToString("N")[..8];
+        var label = $"OAuth: {clientId}";
+
+        var held = Controller(TokenService());
+        var (code1, verifier1) = await Authorize(held, clientId);
+        var first = await held.ExchangeToken(Request(clientId, code1, verifier1), TestContext.Current.CancellationToken)
+            .ToObservable()
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        var firstBody = ((OkObjectResult)first).Value!;
+        var firstToken = (string)firstBody.GetType().GetProperty("access_token")!.GetValue(firstBody)!;
+
+        var listing = TokenService();
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => listing.GetTokensForUser(UserId).Take(1))
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(all => all.Any(t => t.Label == label && t.NodePath == TokenPath(firstToken)),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        // The client leaves AFTER the mint and the listing, at the moment the supersede has chosen
+        // its candidates — i.e. after the check that precedes the supersede, before any delete.
+        using var aborted = new CancellationTokenSource();
+        var midway = Controller(TokenService(), new AbortOn("OAuth: superseding", aborted, Log));
+        var (code2, verifier2) = await Authorize(midway, clientId);
+        _ = midway.ExchangeToken(Request(clientId, code2, verifier2), aborted.Token);
+
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Log.Lines(LogLevel.Information))
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(lines => lines.Any(l => l.Contains(clientId) && l.Contains("undelivered token")),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        Log.Lines(LogLevel.Information).Should().Contain(
+            l => l.Contains("superseded 0 of 1") && l.Contains(label),
+            "the candidate was chosen, and then NOT deleted, because the client had left");
+        await AssertStored(TokenPath(firstToken), present: true, "the credential the client holds is still live");
+        await AssertStored(RevokedPath(clientId), present: false, "the undelivered token's row is gone");
+    }
+
+    /// <summary>The path the revoke line names for this client.</summary>
+    private string RevokedPath(string clientId)
+    {
+        var line = Log.Lines(LogLevel.Information).Single(l => l.Contains(clientId) && l.Contains("undelivered token "));
+        var tail = line[(line.IndexOf("undelivered token ", StringComparison.Ordinal) + "undelivered token ".Length)..];
+        return tail[..tail.IndexOf(';')];
+    }
+
+    /// <summary>Reads the row straight from the store — the authority, not the lagging listing.</summary>
+    private async Task AssertStored(string path, bool present, string because)
+    {
+        var node = await Storage.Read(path, Mesh.JsonSerializerOptions)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        (node is not null).Should().Be(present, because + $" ({path})");
+    }
+
+    /// <summary>A controller logger that records every line and fires the abort on one of them.</summary>
+    private sealed class AbortOn(string marker, CancellationTokenSource abort, CapturingLogger<OAuthConnectController> sink)
+        : ILogger<OAuthConnectController>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            sink.Log(logLevel, eventId, state, exception, formatter);
+            if (formatter(state, exception).StartsWith(marker, StringComparison.Ordinal))
+                abort.Cancel();
+        }
     }
 
     /// <summary>Forwards to the real logger and fires the abort when the mint is in flight.</summary>

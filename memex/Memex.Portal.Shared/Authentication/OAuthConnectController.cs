@@ -394,12 +394,17 @@ public class OAuthConnectController(
                     // the mint was in flight never receives the new token, so it is REVOKED and the
                     // supersede is SKIPPED — superseding first would delete the credential the client
                     // still holds and leave it with none (MeshWeaver.Feedback#13).
-                    .SelectMany(creation => ct.IsCancellationRequested
-                        ? RevokeUndeliveredToken(tokens, creation, request.client_id)
-                        : SupersedePreviousTokens(
-                                tokens, entry.UserId, label, creation.Node.Path, MintedAt(creation))
-                            .Select(_ => (IActionResult?)null)
-                            .Select(abandoned => (Creation: creation, Abandoned: abandoned)))
+                    //
+                    // The check is not one snapshot: SupersedePreviousTokens re-reads it after its
+                    // listing and before EACH delete, and answers false when it stopped because the
+                    // client left — the new token is then revoked just the same.
+                    .SelectMany(creation => (ct.IsCancellationRequested
+                            ? Observable.Return(false)
+                            : SupersedePreviousTokens(
+                                tokens, entry.UserId, label, creation.Node.Path, MintedAt(creation), ct))
+                        .SelectMany(completed => completed
+                            ? Observable.Return((Creation: creation, Abandoned: (IActionResult?)null))
+                            : RevokeUndeliveredToken(tokens, creation, request.client_id)))
                     .Select(step =>
                     {
                         if (step.Abandoned is { } refused)
@@ -441,8 +446,9 @@ public class OAuthConnectController(
     /// <para>Never fails the exchange. The client has a valid token by this point; housekeeping
     /// that could not complete is a Warning and the next authorization tries again.</para>
     /// </summary>
-    private IObservable<System.Reactive.Unit> SupersedePreviousTokens(
-        ApiTokenService tokens, string userId, string label, string keepPath, DateTimeOffset mintedAt)
+    private IObservable<bool> SupersedePreviousTokens(
+        ApiTokenService tokens, string userId, string label, string keepPath, DateTimeOffset mintedAt,
+        CancellationToken abandoned)
     {
         return tokens.GetTokensForUser(userId)
             .Take(1)
@@ -467,7 +473,12 @@ public class OAuthConnectController(
                     .Select(t => t.NodePath)
                     .ToArray();
                 if (superseded.Length == 0)
-                    return Observable.Return(System.Reactive.Unit.Default);
+                    return Observable.Return(true);
+                // Re-checked AFTER the listing (it is a live read, and the client may have left while
+                // it ran) and again before each delete below: an abandoned exchange must not retire
+                // the credential the client still holds (MeshWeaver.Feedback#13).
+                if (abandoned.IsCancellationRequested)
+                    return Observable.Return(false);
 
                 // 🚨 Name the rows — twice, and the two lines say different things. The 401 a
                 // superseded holder gets is logged by the validator under the token's HASH
@@ -494,15 +505,17 @@ public class OAuthConnectController(
                 // sweep uses, so a client that re-authorized many times drains gently. Each
                 // delete's own bool is what it REMOVED (true) or found already absent (false);
                 // a fault is caught per path and counts as not removed.
-                return Observable.Concat(superseded.Select(path => tokens.DeleteToken(path)
-                        .Select(removed => (Path: path, Removed: removed))
-                        .Catch<(string Path, bool Removed), Exception>(ex =>
+                return Observable.Concat(superseded.Select(path => Observable.Defer(() => abandoned.IsCancellationRequested
+                        ? Observable.Return((Path: path, Removed: false, Skipped: true))
+                        : tokens.DeleteToken(path)
+                        .Select(removed => (Path: path, Removed: removed, Skipped: false))
+                        .Catch<(string Path, bool Removed, bool Skipped), Exception>(ex =>
                         {
                             logger.LogWarning(ex,
                                 "OAuth: could not supersede previous token {Path} — it stays live until "
                                 + "the next authorization or its expiry", path);
-                            return Observable.Return((Path: path, Removed: false));
-                        })))
+                            return Observable.Return((Path: path, Removed: false, Skipped: false));
+                        }))))
                     .ToList()
                     .Do(outcomes =>
                     {
@@ -513,13 +526,13 @@ public class OAuthConnectController(
                             removed.Length, outcomes.Count, userId, label,
                             removed.Length == 0 ? "(none)" : string.Join(", ", removed), keepPath);
                     })
-                    .Select(_ => System.Reactive.Unit.Default);
+                    .Select(outcomes => !outcomes.Any(o => o.Skipped));
             })
-            .Catch<System.Reactive.Unit, Exception>(ex =>
+            .Catch<bool, Exception>(ex =>
             {
                 logger.LogWarning(ex,
                     "OAuth: could not list previous tokens for user {UserId} to supersede them", userId);
-                return Observable.Return(System.Reactive.Unit.Default);
+                return Observable.Return(!abandoned.IsCancellationRequested);
             });
     }
 
