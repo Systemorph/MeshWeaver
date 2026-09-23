@@ -280,14 +280,40 @@ public static class ShippedPrebuiltBundles
         => Observable.Defer(() =>
         {
             var dir = string.IsNullOrWhiteSpace(directory) ? DefaultDirectory : directory;
-            return SeedBundles(mesh, dir,
-                () => Directory
-                    .EnumerateFiles(dir, "*.zip", SearchOption.TopDirectoryOnly)
-                    .OrderBy(f => f, StringComparer.Ordinal)
-                    .ToList(),
-                logger)
+            return SeedBundles(mesh, dir, ct => ImageBundlesOf(dir, ct), logger)
                 .Select(tally => tally.Covered);
         });
+
+    /// <summary>
+    /// The <c>*.zip</c> bundles directly under an image bundle directory, in ordinal order. Runs on
+    /// the seeding pool's blocking leg, and checks <paramref name="cancellationToken"/> between
+    /// entries: the leg is joined by <c>IoPool.Drain</c>, so a walk that ignores the pool's token
+    /// holds the silo's teardown join (MeshWeaver#2480).
+    /// </summary>
+    /// <param name="directory">The directory to list.</param>
+    /// <param name="cancellationToken">The pool leaf's token; cancelled when the pool drains.</param>
+    internal static List<string> ImageBundlesOf(string directory, CancellationToken cancellationToken)
+        => OrdinalListing(
+            Directory.EnumerateFiles(directory, "*.zip", SearchOption.TopDirectoryOnly), cancellationToken);
+
+    /// <summary>
+    /// Materializes a directory enumeration with a token check per ENTRY, then sorts it ordinally.
+    /// Never <c>Enumerate….OrderBy(…)</c>: a sort must drain the whole enumeration before its first
+    /// element reaches a check, so on a large or slow share the listing itself was invisible to the
+    /// drain (review on #5452).
+    /// </summary>
+    private static List<string> OrdinalListing(IEnumerable<string> entries, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var listed = new List<string>();
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            listed.Add(entry);
+        }
+        listed.Sort(StringComparer.Ordinal);
+        return listed;
+    }
 
     /// <summary>
     /// Seeds the CI-published bundles for THIS process's framework identity from the configured
@@ -358,8 +384,8 @@ public static class ShippedPrebuiltBundles
                 new SealedPublicationReading(
                     identity, publishedRoot, [.. exactSealed], DateTimeOffset.UtcNow));
             return SeedBundles(mesh, dir,
-                    () => CompletePublishedBundlesOf(dir, logger, publicationDirectories: publicationDirectories)
-                        .Concat(FallbackPublishedBundlesOf(publishedRoot, identity, exactSealed, context, logger))
+                    ct => CompletePublishedBundlesOf(dir, logger, ct, publicationDirectories: publicationDirectories)
+                        .Concat(FallbackPublishedBundlesOf(publishedRoot, identity, exactSealed, context, logger, ct))
                         .ToList(),
                     logger, context: context)
                 // 🚨 The publication and the SOURCES are one unit: hand what was sealed and what
@@ -367,6 +393,11 @@ public static class ShippedPrebuiltBundles
                 // sources onto the sealed commit. See IPublicationSyncReconciler.
                 .SelectMany(tally =>
                 {
+                    // 🚨 A pass the pool ended for teardown (#2480) reconciles NOTHING: its declined
+                    // set is whatever the walk reached before the cancel, and dispatching imports from
+                    // a process that is draining is starting work nobody will join (review on #5452).
+                    if (tally.Leaving > 0)
+                        return Observable.Return(tally.Covered);
                     var reconciler = mesh.ServiceProvider.GetService<IPublicationSyncReconciler>();
                     if (reconciler is null)
                         return Observable.Return(tally.Covered);
@@ -389,11 +420,13 @@ public static class ShippedPrebuiltBundles
     /// The bundles of OTHER identities the policy admits, for every source this identity has not
     /// sealed itself: newest platform version first (the <c>_releases</c> markers name each
     /// identity's version), sealed sources only, one publication per source name. Under
-    /// <see cref="VersionStrictness.Exact"/> this is empty. Runs on the seeding pool's blocking leg.
+    /// <see cref="VersionStrictness.Exact"/> this is empty. Runs on the seeding pool's blocking leg,
+    /// and checks <paramref name="cancellationToken"/> before each identity and each source — it is
+    /// the longest walk of the share this pass takes (MeshWeaver#2480).
     /// </summary>
     private static IEnumerable<string> FallbackPublishedBundlesOf(
         string publishedRoot, string liveIdentity, IReadOnlyList<SealedSource> exactSealed,
-        AdoptionContext context, ILogger? logger)
+        AdoptionContext context, ILogger? logger, CancellationToken cancellationToken)
     {
         if (context.Strictness == VersionStrictness.Exact)
             return [];
@@ -413,14 +446,16 @@ public static class ShippedPrebuiltBundles
         var bundles = new List<string>();
         foreach (var (identity, version) in candidates)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var identityDir = Path.Combine(publishedRoot, identity);
             if (!Directory.Exists(identityDir))
                 continue;
             // ONE enumeration + sentinel read per identity directory; the per-source filter below
             // is a string comparison over that list, never a second walk of the share.
-            var complete = CompletePublishedBundlesOf(identityDir, logger);
+            var complete = CompletePublishedBundlesOf(identityDir, logger, cancellationToken);
             foreach (var sealedSource in SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!sealedSource.IsSealed || !taken.Add(sealedSource.Source))
                     continue;
                 var sourceDir = PublicationDirectoryOf(Path.Combine(identityDir, sealedSource.Source), logger);
@@ -493,6 +528,14 @@ public static class ShippedPrebuiltBundles
     /// under the same identity. The read goes through <see cref="ReadSealLines"/>, which classifies
     /// absence at the open and lets every other I/O failure surface.</para>
     /// </summary>
+    /// <param name="identityDirectory">The published identity directory to walk.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="cancellationToken">🚨 The pool leaf's token, checked before every source and
+    /// every listed bundle — REQUIRED, never defaulted, so no caller can drop it by omission. This
+    /// walk runs as an <c>IIoPool.InvokeBlocking</c> leaf on a network share, one round-trip per
+    /// pointer, seal and bundle, and <c>IoPool.Drain</c> joins that leaf before the silo releases
+    /// the mesh. The leaf that discarded its token here is the one MeshWeaver#2480's teardown
+    /// report named (<c>prebuilt:files=1 [&lt;SeedBundles&gt;b__8]</c>).</param>
     /// <param name="readLines">Test seam: the seal read to perform. Production passes none.</param>
     /// <param name="publicationDirectories">🚨 The publication each source was ALREADY resolved to
     /// by this pass, when the caller took a snapshot (#3461). Two independent resolutions of one
@@ -500,14 +543,14 @@ public static class ShippedPrebuiltBundles
     /// seal index passes what it read there instead of letting this walk resolve again. Absent —
     /// every other caller — each source is resolved here exactly as before.</param>
     internal static List<string> CompletePublishedBundlesOf(
-        string identityDirectory, ILogger? logger, Func<string, string[]>? readLines = null,
+        string identityDirectory, ILogger? logger, CancellationToken cancellationToken,
+        Func<string, string[]>? readLines = null,
         IReadOnlyDictionary<string, string>? publicationDirectories = null)
     {
         var bundles = new List<string>();
-        foreach (var source in Directory
-                     .EnumerateDirectories(identityDirectory)
-                     .OrderBy(d => d, StringComparer.Ordinal))
+        foreach (var source in OrdinalListing(Directory.EnumerateDirectories(identityDirectory), cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // 🚨 #3461: the publication may live in a GENERATION subdirectory this source's
             // pointer names, and every path below is composed under the resolved directory — not
             // under `source`. Resolving and then composing against the source directory would
@@ -557,7 +600,13 @@ public static class ShippedPrebuiltBundles
                 .OrderBy(l => l, StringComparer.Ordinal)
                 .Select(name => Path.Combine(sourceDir, name))
                 .ToList();
-            var missing = listed.Where(p => !File.Exists(p)).ToList();
+            var missing = listed
+                .Where(p =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return !File.Exists(p);
+                })
+                .ToList();
             if (missing.Count > 0)
             {
                 logger?.LogWarning(
@@ -663,10 +712,7 @@ public static class ShippedPrebuiltBundles
             var seeds = new List<IObservable<SeedTally>>
             {
                 SeedBundles(mesh, imageDir,
-                    () => Directory
-                        .EnumerateFiles(imageDir, "*.zip", SearchOption.TopDirectoryOnly)
-                        .OrderBy(f => f, StringComparer.Ordinal)
-                        .ToList(),
+                    ct => ImageBundlesOf(imageDir, ct),
                     logger, paths, WitnessCovered, WitnessMatched),
             };
             var sources = new List<string> { imageDir };
@@ -675,7 +721,7 @@ public static class ShippedPrebuiltBundles
                 var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
                 sources.Add(identityDir);
                 seeds.Add(SeedBundles(mesh, identityDir,
-                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths,
+                    ct => CompletePublishedBundlesOf(identityDir, logger, ct), logger, paths,
                     WitnessCovered, WitnessMatched));
             }
             return seeds.Concat()
@@ -875,9 +921,19 @@ public static class ShippedPrebuiltBundles
     /// <paramref name="typePathFilter"/> replaces the mesh-wide NodeType enumeration when the
     /// caller already knows which types it is consuming for (#1707 slice 3).
     /// <paramref name="onMatched"/> witnesses every type path a bundle entry NAMED, before anything
-    /// can decline it — the half that lets a shortfall say whether the bytes were even here.</summary>
+    /// can decline it — the half that lets a shortfall say whether the bytes were even here.
+    ///
+    /// <para>🚨 <paramref name="enumerateBundles"/> TAKES the pool leaf's token (MeshWeaver#2480).
+    /// It was a <c>Func&lt;List&lt;string&gt;&gt;</c> run as <c>pool.InvokeBlocking(_ =&gt;
+    /// enumerateBundles())</c>, so the walk of the bundle share — one network round-trip per
+    /// pointer, seal and bundle — could not see the drain's cancel. <c>IoPool.Drain</c> joins
+    /// blocking leaves on their own idle signal, so that leaf held the silo's teardown join to its
+    /// full budget: the production report read
+    /// <c>Did NOT report: prebuilt:files=1 [ShippedPrebuiltBundles+&lt;&gt;c__DisplayClass24_0.&lt;SeedBundles&gt;b__8]</c>,
+    /// and <c>b__8</c> is that lambda. The delegate is now handed straight to the pool, so there is
+    /// no call site left at which the token can be discarded.</para></summary>
     private static IObservable<SeedTally> SeedBundles(
-        IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger,
+        IMessageHub mesh, string dir, Func<CancellationToken, List<string>> enumerateBundles, ILogger? logger,
         ImmutableHashSet<string>? typePathFilter = null, Action<string>? onCovered = null,
         Action<string>? onMatched = null, AdoptionContext? context = null)
         => Observable.Defer(() =>
@@ -962,7 +1018,7 @@ public static class ShippedPrebuiltBundles
             // so the IoPool work and every stamp write are still issued as System.
             return accessService.RunAsSystem(
                     () => pool
-                        .InvokeBlocking(_ => enumerateBundles())
+                        .InvokeBlocking(enumerateBundles)
                         .SelectMany(bundles =>
                         {
                             if (bundles.Count == 0)
@@ -1033,6 +1089,20 @@ public static class ShippedPrebuiltBundles
                                         BundlesSeen = bundles.Count,
                                     }));
                         }))
+                // 🚨 The POOL ended this pass (#2480): its drain cancelled the leaf, or refused it
+                // because it was already draining. That is teardown, not a seeding failure, and it
+                // must not be reported as one — "seeding failed, the sweep will compile instead"
+                // would be false on a process that is stopping. It is the same fact #3129 records
+                // for a pass that never started on a leaving hub, so it is counted the same way.
+                .Catch<SeedTally, OperationCanceledException>(_ =>
+                {
+                    logger?.LogInformation(
+                        "ShippedPrebuiltBundles: the seeding pass over {Directory} was cancelled by "
+                        + "its I/O pool (the pool is draining for teardown) — nothing more is adopted "
+                        + "on this process; the next generation seeds its own bundles", dir);
+                    return Observable.Return(default(SeedTally)
+                        with { SourcesConsulted = 1, SourcesPresent = 1, Leaving = 1 });
+                })
                 // The seeding is an optimisation in front of the sweep — a fault here must degrade
                 // to "compile as today", never hold or fail the boot. Loud, so an operator can see
                 // WHY an image that ships bundles still compiled.
@@ -1190,6 +1260,12 @@ public static class ShippedPrebuiltBundles
             })
             .Catch<SeedTally, Exception>(ex =>
             {
+                // 🚨 A pool cancel is not an unreadable bundle (#2480): the pool is draining for
+                // teardown, and every later bundle's leaf would be refused the same way. Hand it to
+                // SeedBundles, which reports the pass as cancelled ONCE instead of one "could not be
+                // read" warning per remaining bundle.
+                if (ex is OperationCanceledException)
+                    return Observable.Throw<SeedTally>(ex);
                 logger?.LogWarning(ex,
                     "ShippedPrebuiltBundles: bundle {Bundle} could not be read — skipped "
                     + "(the sweep compiles instead)", Path.GetFileName(bundlePath));

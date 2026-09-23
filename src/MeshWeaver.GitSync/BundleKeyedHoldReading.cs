@@ -225,7 +225,7 @@ internal static class BundleKeyedHoldReading
             return Observable.Return(PrebuiltBundleInventory.NotConfigured);
         }
         return pools.Get(IoPoolNames.FileSystem)
-            .InvokeBlocking(_ => PrebuiltBundleInventory.Read(
-                imageDirectory, publishedRoot, identity, logger));
+            .InvokeBlocking(ct => PrebuiltBundleInventory.Read(
+                imageDirectory, publishedRoot, identity, logger, ct));
     }
 }
