@@ -3312,6 +3312,22 @@ public static class MeshNodeStreamExtensions
             // handlers, so its block only ever dispatches replies to reads issued on it.
             var issuingHub = hub.ReadIssuingHub();
 
+            // 🪪 THE READ'S IDENTITY IS CAPTURED ONCE, HERE, AND PINNED ON EVERY PROBE.
+            // The first probe is posted from this Subscribe, where the caller's identity is ambient —
+            // but a re-probe is posted from the ShuttingDown NACK's OnError callback (and, from the
+            // second NACK on, from a pacing timer). hub.Observe restores the captured identity on
+            // OnNext only, so that callback runs under whatever the NACK delivery carries — and the
+            // Orleans router's NACK for a deactivating target grain (RoutingGrain.PostFailure)
+            // carries NONE. Re-reading the ambient there on portal/reads-{meshId} (a User hub with
+            // no user) failed the re-probe closed at the never-null guard — "hub=portal/reads-…,
+            // message=GetDataRequest, target=<page path> was posted with no AccessContext" — and
+            // the read settled Unavailable for every page whose root was recycling (#5227 and its
+            // siblings). The re-probe is the SAME read, so it carries the SAME identity; a caller
+            // with none keeps failing closed exactly as before (nothing is invented).
+            // Pinned by GetMeshNodeReProbeKeepsCallerIdentityTest.
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            var caller = accessService?.Context ?? accessService?.CircuitContext;
+
             // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — so reading its OWN address is a CYCLE,
             // and the only way it ever ended was by spending the entire budget.
             //
@@ -3548,7 +3564,11 @@ public static class MeshNodeStreamExtensions
                     innerSubscription.Disposable = issuingHub
                         .Observe<GetDataResponse>(
                             new GetDataRequest(new MeshNodeReference()),
-                            o => o.WithTarget(new Address(path)))
+                            o =>
+                            {
+                                o = o.WithTarget(new Address(path));
+                                return caller is null ? o : o.WithAccessContext(caller);
+                            })
                         .Subscribe(
                             d =>
                             {
