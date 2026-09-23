@@ -1066,6 +1066,36 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             TryDeactivateOnIdle();
             return Task.FromResult(Acknowledge(delivery).Ignored());
         }
+
+        // 🚨 A GRAIN ON A LEAVING HOST MUST NOT ACCEPT WORK IT CANNOT ANSWER (#5256).
+        //
+        // From ApplicationStopping on, OrleansRoutingService refuses EVERY outbound delivery from
+        // this process ("Host is shutting down, cannot route to …") — so a hub here can still
+        // RECEIVE, but nothing it says reaches a hub on another silo: not a SubscribeAck, not the
+        // first Full, not a response, not the RecycleAnnouncement's StreamEndedEvent. The grain
+        // used to go on accepting deliveries for that whole window (the silo is still Active in
+        // membership, so the directory keeps routing to it; on a pod that window is the length of
+        // the termination grace period). Every subscriber that reached an owner here during a roll
+        // was answered into the void and waited out its own budget — the "no initial state arrived
+        // within 30s" of #5256 / #1114, the 60 s request timeouts of #5230 / #2254.
+        // Measured in ADrainingSiloDoesNotSilenceItsSubscribersTest: the owner answered the
+        // subscribe with an Ack and a Full within 1 ms, and both were refused at the router.
+        //
+        // The one leg that still works from a leaving host is the RESULT of this very grain call —
+        // it travels back to the calling silo's RoutingGrain, which NACKs the sender from a
+        // healthy process. So refuse HERE, with the transient ShuttingDown verdict and this
+        // activation's tag: the sender rides it out through its existing recycle re-arm, exactly
+        // as it rides out any other recycle. And hand the address off: a MIGRATION to another active
+        // silo (HandOffTheAddress — not a plain deactivation, which this still-Active silo would
+        // re-place locally), so the ride-out ends on a live owner instead of on this one again.
+        // No timer, no retry here.
+        //
+        // Not while a long-running operation holds this activation: that operation (an activity,
+        // a round) may still take a one-way instruction such as a cancel, which is better applied
+        // than refused, and cutting it short is the keep-alive policy's call, not this gate's.
+        if (Volatile.Read(ref _activeOperations) == 0 && meshHub.IsLeaving())
+            return Task.FromResult(RefuseBecauseTheHostIsLeaving(delivery));
+
         EnsureActivationStarted();
 
         // Apply user identity from Orleans RequestContext to the delivery up-front.
@@ -1286,6 +1316,115 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <returns>The same verdict, without the body.</returns>
     private static IMessageDelivery Acknowledge(IMessageDelivery delivery) =>
         DeliveryPayloadBounds.WithoutEchoedPayload(delivery);
+
+    /// <summary>0 until this activation has reported that its host is leaving — the report is once per activation.</summary>
+    private int _leavingReported;
+
+    /// <summary>0 until this activation has asked Orleans to move it off its leaving host.</summary>
+    private int _handOffRequested;
+
+    /// <summary>
+    /// Moves this activation to another ACTIVE silo — once, and only from a leaving host (#5256).
+    ///
+    /// <para>🚨 <b>A migration with an explicit target, never <c>DeactivateOnIdle</c>.</b> A leaving
+    /// silo is still <c>Active</c> in membership for as long as it lingers, and a plain deactivation
+    /// frees the address while other silos' directory caches still point here: the next delivery is
+    /// forwarded back to this silo, which re-places it LOCALLY ([PreferLocalPlacement], and this silo
+    /// is compatible) — a fresh activation on the leaving host, which refuses again, and so on. Measured
+    /// in the bulk run of <c>ADrainingSiloDoesNotSilenceItsSubscribersTest</c>: five activations of one
+    /// address on the leaving silo inside five seconds, and the subscriber's distinct-activation budget
+    /// spent on them. <c>MigrateOnIdle</c> hands the placement director a hint naming another silo, and
+    /// the directory is re-pointed as part of the move, so forwarded deliveries follow it.</para>
+    ///
+    /// <para>No other active silo (the last one leaving): nothing is moved, and the refusals stand —
+    /// there is nowhere for the address to go.</para>
+    /// </summary>
+    private void HandOffTheAddress()
+    {
+        if (_deactivated || Interlocked.Exchange(ref _handOffRequested, 1) != 0)
+            return;
+        var target = AnotherActiveSilo();
+        if (target is null)
+        {
+            logger.LogInformation(
+                "Grain {GrainId}: its host is stopping and no other silo is active — keeping this "
+                + "activation; there is nowhere to hand the address to",
+                this.GetPrimaryKeyString());
+            return;
+        }
+        RequestContext.Set(global::Orleans.Runtime.Placement.IPlacementDirector.PlacementHintKey, target);
+        try
+        {
+            MigrateOnIdle();
+            logger.LogInformation(
+                "Grain {GrainId}: handing the address off to silo {Target} — its host is stopping",
+                this.GetPrimaryKeyString(), target);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Same TOCTOU as TryDeactivateOnIdle: the activation died between the check and the call,
+            // so the hand-off has already happened by other means.
+            logger.LogDebug(ex,
+                "Grain {GrainId}: MigrateOnIdle after the activation died — treating as no-op",
+                this.GetPrimaryKeyString());
+        }
+        finally
+        {
+            RequestContext.Remove(global::Orleans.Runtime.Placement.IPlacementDirector.PlacementHintKey);
+        }
+    }
+
+    /// <summary>
+    /// An ACTIVE silo other than this one, from Orleans' own membership view, or <c>null</c> when
+    /// there is none. Spread by the grain key so that the addresses of one leaving silo do not all
+    /// land on the same survivor.
+    /// </summary>
+    /// <returns>The target silo, or <c>null</c>.</returns>
+    private SiloAddress? AnotherActiveSilo()
+    {
+        var membership = ServiceProvider.GetService<IClusterMembershipService>();
+        var local = ServiceProvider.GetService<ILocalSiloDetails>()?.SiloAddress;
+        if (membership is null || local is null)
+            return null;
+        var candidates = membership.CurrentSnapshot.Members.Values
+            .Where(m => m.Status == SiloStatus.Active && !m.SiloAddress.Equals(local))
+            .Select(m => m.SiloAddress)
+            .OrderBy(s => s.ToParsableString(), StringComparer.Ordinal)
+            .ToArray();
+        if (candidates.Length == 0)
+            return null;
+        var spread = (uint)StringComparer.Ordinal.GetHashCode(this.GetPrimaryKeyString());
+        return candidates[spread % (uint)candidates.Length];
+    }
+
+    /// <summary>
+    /// The verdict for a delivery that reaches this grain after its host began stopping — see the
+    /// note in <see cref="DeliverMessage"/> (#5256). Returned as the grain call's RESULT, because
+    /// that is the one path from a leaving host that still reaches the sender: the calling silo's
+    /// <c>RoutingGrain</c> NACKs it. Transient (<see cref="ErrorType.ShuttingDown"/>), worded
+    /// through <see cref="ShutdownNack.RejectingNow"/> so every classifier reads it as "re-ask",
+    /// and tagged with this activation so a rider's budget counts one leaving owner as ONE
+    /// teardown rather than a recycle loop. Also hands the address off.
+    /// </summary>
+    /// <param name="delivery">The delivery being refused.</param>
+    /// <returns>The failed acknowledgement.</returns>
+    private IMessageDelivery RefuseBecauseTheHostIsLeaving(IMessageDelivery delivery)
+    {
+        var grainId = this.GetPrimaryKeyString();
+        if (Interlocked.Exchange(ref _leavingReported, 1) == 0)
+            logger.LogInformation(
+                "Grain {GrainId}: its host is stopping, so nothing this activation says can leave the "
+                + "process — refusing new deliveries as ShuttingDown and handing the address off "
+                + "(first refused: delivery {DeliveryId} from {Sender})",
+                grainId, delivery.Id, delivery.Sender);
+        HandOffTheAddress();
+        return Acknowledge(delivery).Failed(
+            ShutdownNack.RejectingNow(
+                grainId,
+                $"{ShutdownNack.FormatActivationTag(this)}, its host is stopping",
+                $"cannot answer delivery {delivery.Id}"),
+            ErrorType.ShuttingDown);
+    }
 
 
     /// <inheritdoc />
