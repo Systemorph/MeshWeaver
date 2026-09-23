@@ -1928,7 +1928,7 @@ public sealed class InstanceAutoRegistrationService(
         // Subscribe and closes on the way out of that same Subscribe, so the impersonation cannot
         // be left latched on whichever thread the access write happens to terminate on.
         return accessService
-            .RunAsSystem(() => PackageInstaller.EnsureDeclaredAccess(hub, package, partition, logger))
+            .RunAsSystem(() => PackageInstaller.ReassertDeclaredAccess(hub, package, partition, logger))
             .Catch((Exception exception) =>
             {
                 // A hold is not an install, so an access re-assert that could not run must not turn

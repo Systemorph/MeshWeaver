@@ -294,7 +294,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             }
 
             return PackageInstaller
-                .EnsureDeclaredAccess(hub, record.Manifest, record.Partition, logger)
+                .ReassertDeclaredAccess(hub, record.Manifest, record.Partition, logger)
                 .Catch<Unit, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
