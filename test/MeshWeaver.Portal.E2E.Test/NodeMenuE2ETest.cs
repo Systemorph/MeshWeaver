@@ -7,7 +7,7 @@ namespace MeshWeaver.Portal.E2E;
 /// The node menu must be driven by the routed page and reachable from it. Two ways in exist during
 /// the transition, and the test accepts either: the header's labelled <b>⋯ More</b> dropdown beside
 /// the page title (<c>.node-actions-more</c>, MeshNodeLayoutAreas.MoreActionsClass — the primary
-/// entry point since 2026-09-23), and the legacy top-bar cube (<c>#node-menu-anchor</c>), which
+/// entry point), and the legacy top-bar cube (<c>#node-menu-anchor</c>), which
 /// MeshWeaver.Plugins removes once the header menu reaches a sealed platform. Originally:
 /// the space "⋯" Node menu (Cube icon, <c>#node-menu-anchor</c>) must be driven by the routed
 /// page and show the standard per-node operations — headed by the node's own name. This guards

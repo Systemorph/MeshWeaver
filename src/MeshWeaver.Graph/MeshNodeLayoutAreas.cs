@@ -655,7 +655,7 @@ public static class MeshNodeLayoutAreas
     ///
     /// <para>🧭 <b>Why here, and why this shape.</b> The node menu used to be reachable only from an
     /// unlabelled cube icon in the portal's top bar — detached from the object it acts on, and
-    /// read by nobody as "the actions for this page" (maintainer, 2026-09-23). GitHub, and the
+    /// read by nobody as "the actions for this page". GitHub, and the
     /// Fluent / Material guidance, put an object's actions BESIDE its title: one or two labelled
     /// primary buttons, then an overflow menu, grouped with dividers, destructive entries last and
     /// red. Copy / Move / Delete used to be separate buttons here as well; they now live in ⋯, so

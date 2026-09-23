@@ -14,8 +14,7 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// The node header's object actions: <b>Edit</b> as the one primary button and a labelled
 /// <b>⋯ More</b> dropdown carrying the rest of the node menu — the GitHub / Fluent shape that
-/// replaced the unlabelled top-bar cube as the way into a node's operations (maintainer,
-/// 2026-09-23). These pin the pure arrangement; <see cref="NodeHeaderMoreActionsRenderTest"/>
+/// replaced the unlabelled top-bar cube as the way into a node's operations. These pin the pure arrangement; <see cref="NodeHeaderMoreActionsRenderTest"/>
 /// pins that the live header actually carries it.
 /// </summary>
 public class NodeHeaderMoreActionsTest

@@ -93,9 +93,8 @@ public class SignatureDeskIsTheMaintainedPackageTest
     }
 
     /// <summary>
-    /// With NO e-signature package installed the section renders NOTHING (maintainer, 2026-09-23:
-    /// the signature feature must not show on every page, only where a signature was explicitly
-    /// requested). An earlier version rendered a "No e-signature provider is configured" card on
+    /// With NO e-signature package installed the section renders NOTHING: the signature
+    /// feature must not show on every page, only where a signature was explicitly requested. An earlier version rendered a "No e-signature provider is configured" card on
     /// every Markdown page of such a mesh.
     /// </summary>
     [Fact]

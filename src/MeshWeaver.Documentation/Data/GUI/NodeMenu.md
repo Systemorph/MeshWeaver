@@ -68,7 +68,7 @@ page built on `MeshNodeLayoutAreas.BuildHeader` carries its object actions to th
                                                     🗑️ Delete   (red, always last)
 ```
 
-**Why this shape (maintainer, 2026-09-23).** The menu used to be reachable only from an unlabelled
+**Why this shape.** The menu used to be reachable only from an unlabelled
 cube icon in the top bar — detached from the object it acts on, and not read by anyone as "the
 actions for this page". GitHub, and the Fluent / Material guidance, place an object's actions BESIDE
 its title: one or two **labelled primary** buttons, then an **overflow** menu, **grouped** with

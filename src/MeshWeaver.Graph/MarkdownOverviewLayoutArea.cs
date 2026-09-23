@@ -346,7 +346,7 @@ public static class MarkdownOverviewLayoutArea
     ///
     /// <para>🚨 <b>No package ⇒ no section, not a "no provider is configured" card.</b> An earlier
     /// version rendered such a card on every Markdown page of a mesh without an e-Signature
-    /// package; the maintainer reversed that (2026-09-23): the signature feature appears only where
+    /// package; that was reversed: the signature feature appears only where
     /// a signature was explicitly REQUESTED. The package's own block already hides on a document
     /// with no requests, and requesting one is the node menu's <c>Request signature</c> entry,
     /// which the package contributes as data — so a mesh without the package shows neither.</para>
