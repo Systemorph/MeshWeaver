@@ -237,7 +237,10 @@ other is refused as unsealed, as it is today: the lane fails RED on either half.
   `ToArray()` on it. A bundle of N bytes then needed up to about 3N of contiguous large-object
   heap, so large publishes died with `OutOfMemoryException` in `MemoryStream.ToArray` (and before
   that in `MemoryStream.set_Capacity`). `BundleReader` also allocates each entry once, at the
-  length the archive declares, instead of growing a buffer and copying it out.
+  length the archive declares, instead of growing a buffer and copying it out. That length is the
+  producer's claim, so it is refused before anything is allocated when it exceeds what the
+  compressed bytes can expand to (Deflate's ~1032:1). The body itself is bounded by Kestrel's
+  `MaxRequestBodySize`; neither core nor the Plugins host raises that limit.
   `BundleReaderTest.AModuleReadFromDiskAllocatesEachEntryOnce` pins that per-entry bound; the old
   reader allocated about 5x the entry.
 * **`POST /api/instances/register`** and **`POST /api/instances/token`** — registration and the

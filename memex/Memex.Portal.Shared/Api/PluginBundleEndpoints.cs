@@ -632,16 +632,16 @@ public static class PluginBundleEndpoints
                 IReadOnlyList<BundleReader.ModuleAsset> natives;
                 try
                 {
-                    (manifest, files) = BundleReader.ReadModule(Rewound(bundle));
+                    (manifest, files) = BundleReader.ReadModuleFrom(Rewound(bundle));
                     // Inside the SAME guard: a bundle whose assemblies read cleanly can still carry
                     // a corrupt asset entry, and reading that outside here would throw out of the
                     // handler as a 500 — telling the publisher "the server broke" for what is
                     // simply an unreadable upload, the case this catch already classifies.
-                    assets = BundleReader.ReadModuleAssets(Rewound(bundle));
+                    assets = BundleReader.ReadModuleAssetsFrom(Rewound(bundle));
                     // Same guard, same reason (#4126): a declared native at a layout the loader
                     // never probes makes ReadModuleNativeAssets throw, and that is an unreadable
                     // UPLOAD — a 400 naming it, never a 500 telling the publisher the server broke.
-                    natives = BundleReader.ReadModuleNativeAssets(Rewound(bundle));
+                    natives = BundleReader.ReadModuleNativeAssetsFrom(Rewound(bundle));
                 }
                 catch (Exception exception)
                 {

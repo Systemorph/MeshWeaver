@@ -456,7 +456,7 @@ public static class BundleReader
     public static IReadOnlyList<ModuleAsset> ReadModuleAssets(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        return ReadModuleAssets(buffer);
+        return ReadModuleAssetsFrom(buffer);
     }
 
     /// <summary>
@@ -464,7 +464,7 @@ public static class BundleReader
     /// the archive's compressed bytes never have to sit in the managed heap to be read.
     /// </summary>
     /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
-    public static IReadOnlyList<ModuleAsset> ReadModuleAssets(Stream bundle)
+    public static IReadOnlyList<ModuleAsset> ReadModuleAssetsFrom(Stream bundle)
     {
         using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
@@ -503,7 +503,7 @@ public static class BundleReader
     public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssets(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        return ReadModuleNativeAssets(buffer);
+        return ReadModuleNativeAssetsFrom(buffer);
     }
 
     /// <summary>
@@ -511,7 +511,7 @@ public static class BundleReader
     /// the archive's compressed bytes never have to sit in the managed heap to be read.
     /// </summary>
     /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
-    public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssets(Stream bundle)
+    public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssetsFrom(Stream bundle)
     {
         using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
@@ -554,7 +554,7 @@ public static class BundleReader
     public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        return ReadModule(buffer);
+        return ReadModuleFrom(buffer);
     }
 
     /// <summary>
@@ -562,7 +562,7 @@ public static class BundleReader
     /// the archive's compressed bytes never have to sit in the managed heap to be read.
     /// </summary>
     /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
-    public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(Stream bundle)
+    public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModuleFrom(Stream bundle)
     {
         using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
@@ -602,11 +602,29 @@ public static class BundleReader
     /// a stream that ends short of it is a corrupt archive, which <see cref="Stream.ReadExactly(Span{byte})"/>
     /// reports instead of returning a silently truncated assembly.</para>
     /// </summary>
+    /// <summary>Deflate's maximum expansion ratio (a 258-byte match per ~2 bits, ≈1032:1).</summary>
+    private const long MaxDeflateExpansion = 1032;
+
+    /// <summary>Headroom for block headers on tiny entries, where the ratio bound alone is too tight.</summary>
+    private const long DeflateSlackBytes = 1024;
+
     private static byte[] ReadAll(ZipArchiveEntry entry)
     {
+        // 🚨 The declared length comes from the PRODUCER's central directory, so it is checked
+        // before anything is allocated from it. Deflate cannot expand beyond ~1032:1, and a Stored
+        // entry cannot expand at all, so a length past that bound is a lie. Allocating it would
+        // be the OOM this method exists to prevent, driven by one malformed entry.
+        if (entry.Length > entry.CompressedLength * MaxDeflateExpansion + DeflateSlackBytes
+            || entry.Length > Array.MaxLength)
+            throw new InvalidDataException(
+                $"bundle entry '{entry.FullName}' declares {entry.Length:N0} bytes from "
+                + $"{entry.CompressedLength:N0} compressed, which no Deflate stream can expand to");
         using var source = entry.Open();
-        var bytes = GC.AllocateUninitializedArray<byte>(checked((int)entry.Length));
+        var bytes = GC.AllocateUninitializedArray<byte>((int)entry.Length);
         source.ReadExactly(bytes);
+        if (source.ReadByte() != -1)
+            throw new InvalidDataException(
+                $"bundle entry '{entry.FullName}' holds more than the {entry.Length:N0} bytes it declares");
         return bytes;
     }
 }
