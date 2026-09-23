@@ -177,8 +177,11 @@ The guard is a second, independent fact rather than a clock:
   pull-request run, is on another branch or is a re-run of an older run proves nothing, and the page
   is used as served. A probe that could not be READ is noted in the log and never refused on — an
   unread probe is not evidence of staleness.
-- **Proven, so re-read, then refuse.** The same bounded budget as #4750, logged per re-read; a page
-  still missing the witness is refused with text beginning **`GitHub served a STALE run listing
+- **Proven, so re-read, then refuse.** The same bounded budget as #4750, logged per re-read. The
+  probe runs ONCE: after a witness is found, the page counts as settled only when a re-read
+  actually CONTAINS a run at least as new as the witness — so a probe that fails on a later read
+  cannot end the re-reads and resolve from the stale page (review finding on #5495, pinned by a
+  self-test case that fails on the re-probing version). A page still missing the witness is refused with text beginning **`GitHub served a STALE run listing
   (MeshWeaver#4433): page 1 of`** — the prefix MeshWeaver.Plugins' transient-retry steward keys its
   run-void signature on, so the run is re-run in full rather than its cascade classified as real
   reds. The self-test carries that prefix as an independent literal (`STEWARD_4433_PREFIX`).

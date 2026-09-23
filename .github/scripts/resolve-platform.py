@@ -1161,6 +1161,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     # `main_listing_witness`). Only a WITNESS run licenses a re-read: without one this is the single
     # read it always was, so a red or quiet `main` keeps its old ceiling exactly as before.
     rereads = 0
+    proven: dict | None = None
     while True:
         listed, runs, total, exhausted = [], [], None, False
         for page in range(1, MAIN_PAGES_EXAMINED + 1):
@@ -1215,13 +1216,26 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                     isinstance(total, int) and len(listed) >= total):
                 exhausted = True
                 break
-        witness, probe_note = main_listing_witness(fetch, repo, listed)
-        if witness is None:
-            notes.append(probe_note)
-            if rereads:
-                notes.append(f"the `status=success` page SETTLED after {rereads} re-read(s) — "
-                             "resolving from it")
-            break
+        # 🚨 ONCE PROVEN, THE PROOF STANDS UNTIL A POSITIVE FRESH READ RETIRES IT (Copilot review on
+        # MeshWeaver#5495). Re-probing on every re-read would let an UNREADABLE probe — which proves
+        # nothing, and so answers "no witness" — end the re-reads and resolve from a page that is
+        # still the stale one. So the probe runs once; after that the page is settled only when it
+        # CONTAINS a run at least as new as the witness, which is the fresh read itself.
+        if proven is None:
+            witness, probe_note = main_listing_witness(fetch, repo, listed)
+            if witness is None:
+                notes.append(probe_note)
+                break
+            proven = witness
+        else:
+            newest_listed = max((int(r["id"]) for r in listed if r.get("id") is not None),
+                                default=None)
+            if newest_listed is not None and newest_listed >= int(proven["id"]):
+                notes.append(f"the `status=success` page SETTLED after {rereads} re-read(s) — it "
+                             f"now holds run {newest_listed}, at least as new as the witness "
+                             f"{int(proven['id'])}; resolving from it")
+                break
+            witness = proven
         why_stale = main_listing_staleness(witness, listed)
         if rereads >= STALE_REREADS:
             notes.append(f"the {repo} main listing is still provably stale after {rereads} "
@@ -2936,11 +2950,14 @@ def self_test() -> int:
     # on this prefix. An INDEPENDENT literal on purpose, like KEYED_4433 below.
     STEWARD_4433_PREFIX = "GitHub served a STALE run listing (MeshWeaver#4433): page 1 of "
 
-    def _stale_main(stale_reads: int, witness: dict | None, probe_fails: bool = False) -> Fetch:
+    def _stale_main(stale_reads: int, witness: dict | None, probe_fails: bool = False,
+                    probe_fails_after: int | None = None) -> Fetch:
         """The `status=success` page is served STALE for the first `stale_reads` reads, fresh
-        after; the unfiltered page shows `witness` (or nothing extra) above the old run."""
+        after; the unfiltered page shows `witness` (or nothing extra) above the old run. The probe
+        fails always (`probe_fails`) or on every read after the first `probe_fails_after`."""
         core = _fetch_for(two, sealed_two)
         filtered_reads = [0]
+        probe_reads = [0]
 
         def fetch(path: str) -> dict:
             if f"/repos/{SATELLITE}/" not in path:
@@ -2950,7 +2967,9 @@ def self_test() -> int:
                     filtered_reads[0] += 1
                     fresh = filtered_reads[0] > stale_reads
                     return {"workflow_runs": [_NEW_MAIN, _OLD_MAIN] if fresh else [_OLD_MAIN]}
-                if probe_fails:
+                probe_reads[0] += 1
+                if probe_fails or (probe_fails_after is not None
+                                   and probe_reads[0] > probe_fails_after):
                     raise ResolutionError("GET unfiltered listing: HTTP 502")
                 return {"workflow_runs": ([witness] if witness else []) + [_OLD_MAIN]}
             jobs = re.search(r"/actions/runs/(\d+)/jobs", path)
@@ -3006,6 +3025,14 @@ def self_test() -> int:
                 _stale_main(99, {**_NEW_MAIN, "id": 35500000000}), 9081, [])
     _stale_case("control: an unreadable probe is NOTED, never refused on — it proves nothing",
                 _stale_main(99, _NEW_MAIN, probe_fails=True), 9081, [], "NOT checked")
+    # Copilot review on #5495: once PROVEN stale, a probe that later fails to read must not end the
+    # re-reads — "no witness" from an unread probe proves nothing, and the page is still the old one.
+    _stale_case("once proven stale, a LATER unreadable probe does not resolve from the stale page",
+                _stale_main(99, _NEW_MAIN, probe_fails_after=1), None, _backoff,
+                starts=STEWARD_4433_PREFIX)
+    _stale_case("…and the page still settles on the positive fresh read that contains the witness",
+                _stale_main(2, _NEW_MAIN, probe_fails_after=1), 9218, _backoff[:2],
+                "at least as new as the witness")
 
     def _refuses(_path: str) -> dict:
         raise AssertionError("a freeze must not consult main at all")
