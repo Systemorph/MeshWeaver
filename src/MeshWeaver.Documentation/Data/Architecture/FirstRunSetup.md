@@ -93,6 +93,18 @@ Neither is emitted when the key cannot be **decrypted**. A credential that authe
 while looking configured is worse than an absent one: every fetch 401s, the catalog looks empty, and
 the instance appears to have been granted nothing — while its id sits claimed.
 
+### A configured token is operator provisioning — no consent form
+
+Because a configured `PluginCatalog:RegistryToken` (or a named registry's own `Token`) makes
+auto-registration skip, **no credential is ever stored** in the Admin partition for such an
+installation. `InstanceConsentService.Target()` therefore classifies it as operator-provisioned
+(`Keyed`), exactly like a `BootstrapKey` installation: the consent form and the missing-privacy
+warning belong to the OPEN lane only. Before this (#5245), a token-provisioned installation — the
+wizard's own, and any operator one such as a client instance fed from its Key Vault — read
+*"Awaiting consent — this installation has not registered yet"* forever, while the registry had
+long since issued it a key. The rule is `InstanceConsentService.IsOperatorProvisioned`, pinned by
+`TokenProvisionedInstanceIsKeyedTest`.
+
 ## 🚨 Where the secrets live
 
 Three different homes, because the three secrets are needed at three different moments.
