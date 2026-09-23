@@ -1789,10 +1789,10 @@ internal static class NodeTypeCompilationHelpers
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
         var hubPath = hub.Address.Path;
         var ownStream = workspace.GetMeshNodeStream();
-        // Advanced ONLY on the commit path (same discipline as the release watcher's mark), so a
-        // duplicate emission arriving before the write lands re-enqueues an idempotent update
-        // instead of being mistaken for non-convergence.
-        var stampHighWater = new MonotonicHighWaterMark();
+        // Advanced ONLY when a write is CONFIRMED to have consumed the request (#1105) — see
+        // AdoptedSourceStampLedger. A duplicate emission arriving before that confirmation
+        // re-enqueues an idempotent update instead of being mistaken for non-convergence.
+        var stampLedger = new AdoptedSourceStampLedger();
 
         return ActivityControlPlaneExtensions.SubscribeHubWatcher(
             hub,
@@ -1835,7 +1835,7 @@ internal static class NodeTypeCompilationHelpers
                         hubPath, requestedAt);
                     return;
                 }
-                if (!stampHighWater.IsPast(requestedAt))
+                if (stampLedger.IsCommitted(requestedAt))
                 {
                     // We already committed a stamp for this very trigger and it is STILL standing.
                     // Loud, and deliberately not retried: a reconcile that cannot converge must
@@ -1855,28 +1855,42 @@ internal static class NodeTypeCompilationHelpers
                     return;
                 }
 
-                workspace.GetMeshNodeStream().Update(curr =>
-                {
-                    if (curr.Content is not NodeTypeDefinition def) return curr;
-                    // Consumed between the emission and this lambda (the sources watcher's
-                    // publication or a release dispatch got there first) — a legitimate no-op.
-                    if (def.RequestedSourceStampAt is null) return curr;
-                    if (def.CurrentSourceVersions is not { } liveSources) return curr;
-                    // #3129 — shutdown may have begun between the emission and this lambda; an
-                    // unchanged node is a NO-OP write, and the mark stays where it was.
-                    if (hub.IsLeaving()) return curr;
-                    stampHighWater.Advance(def.RequestedSourceStampAt.Value);
-                    return curr with { Content = ApplyAdoptedSourceStampAndReport(
-                        def, liveSources, hub, hubPath, logger) };
-                }).Subscribe(
-                    _ => logger?.LogInformation(
-                        "[AdoptedSourceStamp] {HubPath}: adopted build stamped with the owner's live "
-                        + "source snapshot ({Count} source(s)) — the next release request is "
-                        + "satisfied by it instead of recompiling",
-                        hubPath, observed.CurrentSourceVersions!.Count),
-                    ex => logger?.LogWarning(ex,
-                        "[AdoptedSourceStamp] {HubPath}: failed to stamp the adopted build's source "
-                        + "snapshot — the next release request will recompile it", hubPath));
+                workspace.GetMeshNodeStream().Update(curr => StampOnce(
+                        curr,
+                        (def, liveSources) => ApplyAdoptedSourceStampAndReport(
+                            def, liveSources, hub, hubPath, logger),
+                        hub.IsLeaving))
+                    .Subscribe(
+                        committed =>
+                        {
+                            // 🚨 #1105 — the mark moves HERE, on the write's own confirmation, and only
+                            // when the committed node no longer carries this request. It used to move
+                            // inside the lambda, BEFORE the stamp was applied: a write that then
+                            // faulted, or a judgement the stamp deferred (ApplyAdoptedSourceStamp
+                            // returns the definition untouched while the adoption cannot be judged),
+                            // left the request standing behind a mark that claimed a commit — and the
+                            // next emission of that same request was logged at Error as a write that
+                            // "did not converge", while the request was in fact still open.
+                            var consumed = stampLedger.RecordCommit(
+                                committed?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions),
+                                requestedAt);
+                            if (consumed)
+                                logger?.LogInformation(
+                                    "[AdoptedSourceStamp] {HubPath}: adopted build stamped with the owner's live "
+                                    + "source snapshot ({Count} source(s)) — the next release request is "
+                                    + "satisfied by it instead of recompiling",
+                                    hubPath, observed.CurrentSourceVersions!.Count);
+                            else
+                                logger?.LogDebug(
+                                    "[AdoptedSourceStamp] {HubPath}: request {RequestedAt} is still standing "
+                                    + "after this pass (the judgement was deferred, or the write was a no-op) "
+                                    + "— the next emission judges it again",
+                                    hubPath, requestedAt);
+                        },
+                        ex => logger?.LogWarning(ex,
+                            "[AdoptedSourceStamp] {HubPath}: failed to stamp the adopted build's source "
+                            + "snapshot — request {RequestedAt} stays standing and the next emission "
+                            + "judges it again", hubPath, requestedAt));
             },
             logger,
             "Adopted source-stamp watcher");
@@ -2633,6 +2647,74 @@ internal static class NodeTypeCompilationHelpers
                 },
             logger,
             "ReleaseRequestWatcher");
+    }
+
+    /// <summary>
+    /// One pass of <see cref="InstallAdoptedSourceStampWatcher"/>'s write, as a pure function of the
+    /// node it is handed: the stamp is applied through <paramref name="apply"/> when a request is
+    /// standing, the owner's snapshot is published and the hub is not leaving; otherwise the node is
+    /// returned unchanged (a no-op write). It deliberately touches no commit mark — whether the
+    /// request was consumed is decided from the node the write COMMITTED
+    /// (<see cref="AdoptedSourceStampLedger.RecordCommit"/>), never from the lambda having run (#1105).
+    /// </summary>
+    /// <param name="curr">The owner's current node, as the write sees it.</param>
+    /// <param name="apply">The stamp judgement — <see cref="ApplyAdoptedSourceStampAndReport"/> in production.</param>
+    /// <param name="isLeaving">Whether the hub is shutting down (#3129).</param>
+    /// <returns>The node to write.</returns>
+    internal static MeshNode StampOnce(
+        MeshNode curr,
+        Func<NodeTypeDefinition, IReadOnlyDictionary<string, long>, NodeTypeDefinition> apply,
+        Func<bool> isLeaving)
+    {
+        if (curr.Content is not NodeTypeDefinition def) return curr;
+        // Consumed between the emission and this lambda (the sources watcher's publication or a
+        // release dispatch got there first) — a legitimate no-op.
+        if (def.RequestedSourceStampAt is null) return curr;
+        if (def.CurrentSourceVersions is not { } liveSources) return curr;
+        // #3129 — shutdown may have begun between the emission and this lambda; an unchanged node
+        // is a NO-OP write.
+        if (isLeaving()) return curr;
+        return curr with { Content = apply(def, liveSources) };
+    }
+
+    /// <summary>
+    /// The adopted source-stamp watcher's record of which stamp requests a CONFIRMED write consumed
+    /// (#1105). One instance per watcher install, captured in its closure — never static.
+    ///
+    /// <para>🚨 <b>Why "committed" means confirmed, not attempted.</b> The watcher reads an emission
+    /// that still carries a request it has already committed as NON-CONVERGENCE and logs it at
+    /// Error. That reading is only true if "committed" means the write landed AND consumed the
+    /// request. Advancing the mark inside the write's lambda — as the watcher used to — made it mean
+    /// "a pass was attempted", and two ordinary outcomes then produced the Error with nothing wrong:
+    /// a write that faulted after its lambda ran, and a judgement the stamp itself deferred
+    /// (<see cref="ApplyAdoptedSourceStamp"/> returns the definition untouched, request standing,
+    /// while the adoption cannot be judged). Both leave the request open for the next emission,
+    /// which is exactly what must happen — and which the stale mark reported as a failure.</para>
+    /// </summary>
+    internal sealed class AdoptedSourceStampLedger
+    {
+        private readonly MonotonicHighWaterMark mark = new();
+
+        /// <summary>Whether a confirmed write has already consumed the request stamped at <paramref name="requestedAt"/>.</summary>
+        /// <param name="requestedAt">The request's <see cref="NodeTypeDefinition.RequestedSourceStampAt"/>.</param>
+        /// <returns>True when a confirmed write consumed that request.</returns>
+        public bool IsCommitted(DateTimeOffset requestedAt) => !mark.IsPast(requestedAt);
+
+        /// <summary>
+        /// Records the outcome of a confirmed write for the request stamped at
+        /// <paramref name="requestedAt"/>: the request counts as consumed only when the committed
+        /// definition no longer carries it.
+        /// </summary>
+        /// <param name="committed">The definition the write committed, or null when unreadable.</param>
+        /// <param name="requestedAt">The request the pass was run for.</param>
+        /// <returns>True when the request was consumed and the mark advanced.</returns>
+        public bool RecordCommit(NodeTypeDefinition? committed, DateTimeOffset requestedAt)
+        {
+            if (committed is null || committed.RequestedSourceStampAt == requestedAt)
+                return false;
+            mark.Advance(requestedAt);
+            return true;
+        }
     }
 
     /// <summary>
