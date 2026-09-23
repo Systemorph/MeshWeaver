@@ -172,9 +172,10 @@ shasum -a 256 src/MeshWeaver.Utils/obj/Release/net10.0/ref/MeshWeaver.Utils.dll
 ## Why the compile bookkeeping did not move off the node
 
 The stated root cause on #2895 is that compile bookkeeping lives on the main NodeType node, and the
-framework already ships phase 1 of the move: `NodeTypeCompileStateMirror` projects the operational
+framework shipped phase 1 of the move: `NodeTypeCompileStateMirror` projected the operational
 members onto a fixed-id satellite at `{type}/_Activity/compile-state`. Phase 2 — flipping readers to
-the satellite — is blocked by two structural facts, both surveyed while diagnosing this issue:
+the satellite — was blocked by two structural facts, both surveyed while diagnosing this issue
+(the phase-1 write, never read, is now [retired](../CompileStateSatelliteRetired)):
 
 - **31 pure predicates read those members with no hub in scope.** `HasUsableBuild` (13 production
   call sites), `NodeTypeBakeStatus.Classify`, `NodeTypeBuildState.HasLoadableBuild`,

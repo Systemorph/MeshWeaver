@@ -985,9 +985,9 @@ all three writers that can fulfil the request, so turning assert into check fixe
 > arriving through a different door. A bundle with no fingerprint is of **unknown** provenance, not
 > **proven stale**, and those deserve different answers. The requirement is VISIBILITY, not refusal.
 
-`BuildProvenance` is operational (stripped on export, preserved from the live node on import) and is
-mirrored onto the compile-state satellite, so a control plane can read it through
-`GetMeshNodeStream(path)`.
+`BuildProvenance` is operational (stripped on export, preserved from the live node on import), and a
+control plane reads it off the NodeType node through `GetMeshNodeStream(path)`. The compile-state
+satellite that used to mirror it is [retired](../CompileStateSatelliteRetired) and no longer updated.
 
 #### Whether the refused bytes keep serving is CONDITIONAL
 
