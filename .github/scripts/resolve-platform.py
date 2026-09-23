@@ -85,19 +85,27 @@ later with no code change. That is the same argument already accepted for a 502,
 gate testing its own input: the answer a re-read is allowed to change is GitHub's, never this
 script's verdict about it.
 
-🚨 THE CEILING READS A SECOND LISTING — the CALLING repository's own main runs — and it is NOT
-guarded that way, by design: there is no fact its page can be checked against (a repository's main
-may genuinely be quiet for days, so age proves nothing, and the ceiling IS the thing being
-established, so it cannot check itself). What it does instead is REPORT: when no ceiling can be
-established, `ceiling_refusal` prints what was read — how many rows, the newest one's id, date, age
-and URL, and why each was skipped — and orders its remedies by that evidence, leading with the
-one-click test that decides whether the listing or `main` is at fault. Three times a stale page
-produced that refusal (2026-09-14, 2026-09-17 twice over) and twice the reader went and looked at a
-`main` that was fine, because the old text closed on "Fix main" (MeshWeaver#4664). The refusal's
-strictness is unchanged: a stale listing still refuses rather than resolving. THIS listing does
-not re-read either — #4750's re-read applies only to the core CD page, where a ceiling supplies
-the crisp condition to re-read for; here the ceiling IS what is being established, so there is
-nothing to re-read toward and a repeat read could only be "ask until the answer is nicer".
+🚨 THE CEILING READS A SECOND LISTING — the CALLING repository's own main runs
+(`ci.yml/runs?branch=main&status=success`) — and GitHub serves that one stale too. Its AGE proves
+nothing (a repository's main may genuinely be quiet, or red, for days, and a red main MUST keep an
+old ceiling), and the ceiling cannot check itself. But there IS a fact it can be checked against:
+the same workflow's UNFILTERED `branch=main` listing, a different query. A run there that is
+COMPLETED, `success`, on main, of a vouching event and NEWER (higher run id) than every row the
+filtered page returned satisfies every filter of the filtered query, so a fresh page 1 must contain
+it — one that does not is PROVABLY stale. That witness licenses the same bounded re-read as #4750
+(STALE_REREADS, same backoff), and a page still stale after it is REFUSED with the #4433 sentence
+prefix, never resolved from. Without a witness nothing changes: the page is used as served and a
+note says what the probe saw (an unreadable probe is noted, never refused on — it proves nothing).
+Measured 2026-09-23 (MeshWeaver.Plugins PR #2307, run 35830062164): the filtered page's newest
+vouching run named set 9081 while main had passed on 9218; the unguarded reader resolved 9081
+SILENTLY and the build failed CS0246 on a core type newer than 9081.
+
+When no ceiling can be established at all, `ceiling_refusal` REPORTS what was read — how many rows,
+the newest one's id, date, age and URL, and why each was skipped — and orders its remedies by that
+evidence, leading with the one-click test that decides whether the listing or `main` is at fault.
+Three times a stale page produced that refusal (2026-09-14, 2026-09-17 twice over) and twice the
+reader went and looked at a `main` that was fine, because the old text closed on "Fix main"
+(MeshWeaver#4664).
 
 FRESHNESS — A RE-RUN MUST NOT TEST A STALE SET
 ----------------------------------------------
@@ -1038,9 +1046,91 @@ def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
     return main_passed_ceiling(fetch, repo, log=log)
 
 
+# ─────────── A STALE MAIN-RUNS LISTING IS PROVEN, RE-READ, THEN REFUSED (#4433's second listing) ───────────
+# The ceiling reads `ci.yml/runs?branch=main&status=success`, and GitHub serves THAT filtered listing
+# from a stale snapshot too. Measured 2026-09-23 on MeshWeaver.Plugins PR #2307, run 35830062164:
+# page 1's newest vouching run was 35587322366 (created 2026-09-21T10:10Z, set 9081) while `main` had
+# green, annotated runs 35822711093 (05:30Z) and 35821116466 (05:07Z) on set 9218 and ~15 more since
+# 09-21. The ceiling resolved 9081 SILENTLY — no refusal, because a stale page that still carries
+# SOME annotated run is indistinguishable from a quiet main by anything on the page itself — and the
+# build then failed CS0246 on a core type newer than 9081 that main had used for two days. The same
+# script, run by hand minutes later, printed 9218.
+#
+# 🚨 THE DISCRIMINATOR IS A FACT, NOT AN AGE. A red or quiet `main` legitimately keeps an OLD
+# ceiling, so "the newest row is old" proves nothing and is never used. What IS proof: the SAME
+# workflow's UNFILTERED `branch=main` listing — a different query — shows a run that is COMPLETED,
+# concluded `success`, on `main`, of a vouching event, and NEWER (a higher run id; ids are
+# allocated monotonically) than every row the `status=success` page returned. Such a run satisfies
+# every filter of the filtered query, so a fresh page 1 of it MUST contain it; one that does not is a
+# read inconsistency and nothing else. It is the ceiling-side analogue of `ceiling_shortfall`.
+#
+# What the witness canNOT do is prove FRESHNESS: if the unfiltered listing is stale too (or its
+# page 1 is all queued runs) it simply finds no witness and the filtered page is used as served —
+# the pre-guard behaviour, stated in a note. A probe that fails to READ is likewise not evidence of
+# staleness, so it is NOTED and never refused on; refusing there would be refusing without proof.
+def main_listing_witness(fetch: Fetch, repo: str,
+                         listed: list[dict]) -> tuple[dict | None, str]:
+    """A run PROVING the filtered main listing stale (or None), and one note saying what the probe saw."""
+    try:
+        data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
+                     f"?branch=main&per_page={MAIN_PAGE_SIZE}&page=1")
+    except ResolutionError as error:
+        return None, (f"staleness probe: the UNFILTERED {SATELLITE_CD_WORKFLOW} listing on {repo} "
+                      f"main could not be read ({error}) — the `status=success` page is used as "
+                      "served, NOT checked against it")
+    probe = list(data.get("workflow_runs") or [])
+    newest_listed = max((int(r["id"]) for r in listed if r.get("id") is not None), default=None)
+    witnesses = [r for r in probe
+                 if r.get("id") is not None
+                 and r.get("head_branch") == "main"
+                 and r.get("status") == "completed"
+                 and r.get("conclusion") == "success"
+                 and str(r.get("event") or "") in MAIN_EVENTS_THAT_VOUCH
+                 and (newest_listed is None or int(r["id"]) > newest_listed)]
+    if not witnesses:
+        return None, (f"staleness probe: the unfiltered listing's page 1 ({len(probe)} row(s)) holds "
+                      f"no completed-success vouching main run newer than the filtered page's "
+                      f"newest ({newest_listed if newest_listed is not None else 'none'}) — nothing "
+                      "proves the page stale")
+    witness = max(witnesses, key=lambda r: int(r["id"]))
+    return witness, ""
+
+
+def main_listing_staleness(witness: dict, listed: list[dict]) -> str:
+    """Why the filtered page cannot be the newest — the witness and the page's newest row, by id and date."""
+    newest = max((r for r in listed if r.get("id") is not None),
+                 key=lambda r: int(r["id"]), default=None)
+    page = (f"the filtered page's newest row, run {int(newest['id'])} (created "
+            f"{newest.get('created_at') or '?'})" if newest is not None
+            else "the filtered page, which came back EMPTY")
+    return (f"the UNFILTERED listing shows main run {int(witness['id'])} "
+            f"({witness.get('event')}, created {witness.get('created_at') or '?'}, "
+            f"{witness.get('html_url') or 'no url'}) COMPLETED `success`, newer than {page}; a run "
+            "that satisfies every filter of the query cannot be missing from a fresh page 1 of it")
+
+
+def main_listing_refusal(repo: str, why: str, rereads: int) -> str:
+    """The red text for a filtered main listing still provably stale after the bounded re-reads.
+
+    🚨 IT BEGINS WITH THE #4433 SENTENCE PREFIX, BYTE FOR BYTE (`GitHub served a STALE run listing
+    (MeshWeaver#4433): page 1 of `). MeshWeaver.Plugins' transient-retry steward keys its run-void
+    signature on exactly that prefix, so this refusal is recognised as the known transient it is and
+    the run is re-run in full, instead of 17 cascade reds being classified as unproven."""
+    seconds = sum(STALE_REREAD_BACKOFF_SECONDS * n for n in range(1, rereads + 1))
+    return (f"GitHub served a STALE run listing (MeshWeaver#4433): page 1 of {SATELLITE_CD_WORKFLOW} "
+            f"runs on {repo} main (`status=success`) cannot be the newest — {why}. Resolving the "
+            "ceiling from it would hold this run on a set `main` has long since passed beyond, "
+            "SILENTLY (measured 2026-09-23: MeshWeaver.Plugins PR #2307 took set 9081 while main had "
+            "passed on 9218, and its build failed CS0246 on a core type newer than 9081). "
+            f"The page was re-read {rereads} time(s) over ~{seconds:.0f}s and the witness run was "
+            "missing from it every time; each re-read is logged above. Re-run the WHOLE run "
+            "(MeshWeaver#4303); this red is the harmless answer and a silently old ceiling is not.")
+
+
 def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED,
                         log: Callable[[str], None] = print,
-                        now: Callable[[], float] = time.time) -> Ceiling:
+                        now: Callable[[], float] = time.time,
+                        sleep: Callable[[float], None] = time.sleep) -> Ceiling:
     """The highest core-CD run number this repo's main has PASSED on, one note per run examined.
 
     `Ceiling.number is None` means it could not be established from the newest `limit` successful
@@ -1067,58 +1157,97 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     runs: list[dict] = []
     total = None
     exhausted = False
-    for page in range(1, MAIN_PAGES_EXAMINED + 1):
-        # 🚨 THE LISTING IS READ INSIDE THE REFUSAL (Copilot review on MeshWeaver.SocialMedia#186).
-        # Every per-run read below already turns a `ResolutionError` into a SKIP with a named
-        # reason. This one did not — and it is the FIRST call the option makes, so a GitHub failure
-        # here left `main()` as an uncaught traceback: no `::error`, no step summary, and no sentence
-        # saying whether `main` had passed nothing or GitHub had simply not answered. Those are
-        # opposite remedies, and the option whose entire purpose is to fail with a NAMED red verdict
-        # failed with a stack trace instead.
-        #
-        # The page loop gives the two cases their own answers, and the distinction is the one this
-        # function was just taught to make: page 1 failing means NOTHING was read, which is a
-        # refusal naming the listing. A LATER page failing means the read stopped early with rows
-        # already in hand — which `exhausted` stays False for, so it falls through to the
-        # "not an exhaustion condition" note rather than being reported as main's state.
-        try:
-            data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
-                         f"?branch=main&status=success&per_page={MAIN_PAGE_SIZE}&page={page}")
-        except ResolutionError as error:
-            if page == 1:
-                notes.append(f"the run listing for {repo} main could not be read: {error}")
-                return Ceiling(None, notes, (
-                    f"❌ WHICH SET {repo}'s `main` HAS PASSED COULD NOT BE READ — the run LISTING "
-                    f"itself did not answer.\n"
-                    f"    GitHub said: {error}\n"
-                    f"    This is NOT evidence about main. Nothing was read, so nothing is known "
-                    f"about what main\n"
-                    f"    has passed — and taking the newest sealed set on a failed read is "
-                    f"precisely what this rule\n"
-                    f"    exists to prevent. The run is RED instead.\n"
-                    f"    REMEDY: re-run this run. A listing read that failed is transient far more "
-                    f"often than not;\n"
-                    f"    re-run the WHOLE run, not just the failed jobs (MeshWeaver#4303). If it "
-                    f"fails again with\n"
-                    f"    the same status, check https://www.githubstatus.com/ before looking at "
-                    f"this repository.\n"
-                    f"    TO PROCEED WITHOUT EITHER: set the repository VARIABLE MW_PLATFORM_REF "
-                    f"to one set (`X.Y.Z-ci.N`)."))
-            notes.append(f"page {page} of the {repo} main listing could not be read ({error}) — "
-                         f"the read stopped there with {len(runs)} vouching run(s) already in hand")
-            break
-        if total is None:
-            total = data.get("total_count")
-        got = list(data.get("workflow_runs") or [])
-        listed.extend(got)
-        runs.extend(run for run in got
-                    if str(run.get("event") or "push") in MAIN_EVENTS_THAT_VOUCH)
-        # Enough have SURVIVED the filter, or the listing is genuinely exhausted — a short page, or
-        # every row `total_count` promised already read.
-        if len(runs) >= limit or len(got) < MAIN_PAGE_SIZE or (
-                isinstance(total, int) and len(listed) >= total):
-            exhausted = True
-            break
+    # 🚨 A PROVABLY STALE PAGE IS RE-READ, THEN REFUSED — never resolved from (see
+    # `main_listing_witness`). Only a WITNESS run licenses a re-read: without one this is the single
+    # read it always was, so a red or quiet `main` keeps its old ceiling exactly as before.
+    rereads = 0
+    proven: dict | None = None
+    while True:
+        listed, runs, total, exhausted = [], [], None, False
+        for page in range(1, MAIN_PAGES_EXAMINED + 1):
+            # 🚨 THE LISTING IS READ INSIDE THE REFUSAL (Copilot review on MeshWeaver.SocialMedia#186).
+            # Every per-run read below already turns a `ResolutionError` into a SKIP with a named
+            # reason. This one did not — and it is the FIRST call the option makes, so a GitHub failure
+            # here left `main()` as an uncaught traceback: no `::error`, no step summary, and no sentence
+            # saying whether `main` had passed nothing or GitHub had simply not answered. Those are
+            # opposite remedies, and the option whose entire purpose is to fail with a NAMED red verdict
+            # failed with a stack trace instead.
+            #
+            # The page loop gives the two cases their own answers, and the distinction is the one this
+            # function was just taught to make: page 1 failing means NOTHING was read, which is a
+            # refusal naming the listing. A LATER page failing means the read stopped early with rows
+            # already in hand — which `exhausted` stays False for, so it falls through to the
+            # "not an exhaustion condition" note rather than being reported as main's state.
+            try:
+                data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
+                             f"?branch=main&status=success&per_page={MAIN_PAGE_SIZE}&page={page}")
+            except ResolutionError as error:
+                if page == 1:
+                    notes.append(f"the run listing for {repo} main could not be read: {error}")
+                    return Ceiling(None, notes, (
+                        f"❌ WHICH SET {repo}'s `main` HAS PASSED COULD NOT BE READ — the run LISTING "
+                        f"itself did not answer.\n"
+                        f"    GitHub said: {error}\n"
+                        f"    This is NOT evidence about main. Nothing was read, so nothing is known "
+                        f"about what main\n"
+                        f"    has passed — and taking the newest sealed set on a failed read is "
+                        f"precisely what this rule\n"
+                        f"    exists to prevent. The run is RED instead.\n"
+                        f"    REMEDY: re-run this run. A listing read that failed is transient far more "
+                        f"often than not;\n"
+                        f"    re-run the WHOLE run, not just the failed jobs (MeshWeaver#4303). If it "
+                        f"fails again with\n"
+                        f"    the same status, check https://www.githubstatus.com/ before looking at "
+                        f"this repository.\n"
+                        f"    TO PROCEED WITHOUT EITHER: set the repository VARIABLE MW_PLATFORM_REF "
+                        f"to one set (`X.Y.Z-ci.N`)."))
+                notes.append(f"page {page} of the {repo} main listing could not be read ({error}) — "
+                             f"the read stopped there with {len(runs)} vouching run(s) already in hand")
+                break
+            if total is None:
+                total = data.get("total_count")
+            got = list(data.get("workflow_runs") or [])
+            listed.extend(got)
+            runs.extend(run for run in got
+                        if str(run.get("event") or "push") in MAIN_EVENTS_THAT_VOUCH)
+            # Enough have SURVIVED the filter, or the listing is genuinely exhausted — a short page, or
+            # every row `total_count` promised already read.
+            if len(runs) >= limit or len(got) < MAIN_PAGE_SIZE or (
+                    isinstance(total, int) and len(listed) >= total):
+                exhausted = True
+                break
+        # 🚨 ONCE PROVEN, THE PROOF STANDS UNTIL A POSITIVE FRESH READ RETIRES IT (Copilot review on
+        # MeshWeaver#5495). Re-probing on every re-read would let an UNREADABLE probe — which proves
+        # nothing, and so answers "no witness" — end the re-reads and resolve from a page that is
+        # still the stale one. So the probe runs once; after that the page is settled only when it
+        # CONTAINS a run at least as new as the witness, which is the fresh read itself.
+        if proven is None:
+            witness, probe_note = main_listing_witness(fetch, repo, listed)
+            if witness is None:
+                notes.append(probe_note)
+                break
+            proven = witness
+        else:
+            newest_listed = max((int(r["id"]) for r in listed if r.get("id") is not None),
+                                default=None)
+            if newest_listed is not None and newest_listed >= int(proven["id"]):
+                notes.append(f"the `status=success` page SETTLED after {rereads} re-read(s) — it "
+                             f"now holds run {newest_listed}, at least as new as the witness "
+                             f"{int(proven['id'])}; resolving from it")
+                break
+            witness = proven
+        why_stale = main_listing_staleness(witness, listed)
+        if rereads >= STALE_REREADS:
+            notes.append(f"the {repo} main listing is still provably stale after {rereads} "
+                         f"re-read(s) — {why_stale}; refusing")
+            return Ceiling(None, notes, main_listing_refusal(repo, why_stale, rereads))
+        rereads += 1
+        wait = STALE_REREAD_BACKOFF_SECONDS * rereads
+        log(f"  the {repo} main listing is PROVABLY stale — {why_stale}. Re-reading it in "
+            f"{wait:.0f}s ({rereads} of {STALE_REREADS})")
+        notes.append(f"re-read {rereads} of {STALE_REREADS}: the `status=success` page was provably "
+                     f"stale — {why_stale}")
+        sleep(wait)
     runs = runs[:limit]
     # 🚨 THE BOUND IS NOT AN EXHAUSTION CONDITION, and saying otherwise would re-make the very bug
     # this function was just fixed for. If the page budget ran out while the listing still had rows,
@@ -2805,6 +2934,106 @@ def self_test() -> int:
         elif says and not any(says in line for line in spoken):
             failures.append(f"{name}: nothing said {says!r} — {spoken}")
 
+    # ── a STALE `status=success` main listing (#4433's second listing) is proven, re-read, refused ──
+    # Modelled on the measured incident (MeshWeaver.Plugins PR #2307, run 35830062164): the filtered
+    # page's newest vouching run named set 9081 while main had passed on 9218. Every case in the
+    # first group FAILED on the unguarded reader (it resolved 9081 silently); the second group are
+    # the controls that must NOT be read as staleness — above all a RED main, which legitimately keeps
+    # an old ceiling.
+    _OLD_MAIN = {"id": 35587322366, "event": "push", "head_branch": "main", "status": "completed",
+                 "conclusion": "success", "created_at": "2026-09-21T10:10:00Z"}
+    _NEW_MAIN = {"id": 35822711093, "event": "push", "head_branch": "main", "status": "completed",
+                 "conclusion": "success", "created_at": "2026-09-23T05:30:47Z",
+                 "html_url": f"https://github.com/{SATELLITE}/actions/runs/35822711093"}
+    _SETS = {35587322366: "3.0.0-ci.9081", 35822711093: "3.0.0-ci.9218"}
+    # The steward's run-void signature (MeshWeaver.Plugins scripts/retry-known-transients.py) keys
+    # on this prefix. An INDEPENDENT literal on purpose, like KEYED_4433 below.
+    STEWARD_4433_PREFIX = "GitHub served a STALE run listing (MeshWeaver#4433): page 1 of "
+
+    def _stale_main(stale_reads: int, witness: dict | None, probe_fails: bool = False,
+                    probe_fails_after: int | None = None) -> Fetch:
+        """The `status=success` page is served STALE for the first `stale_reads` reads, fresh
+        after; the unfiltered page shows `witness` (or nothing extra) above the old run. The probe
+        fails always (`probe_fails`) or on every read after the first `probe_fails_after`."""
+        core = _fetch_for(two, sealed_two)
+        filtered_reads = [0]
+        probe_reads = [0]
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                if "status=success" in path:
+                    filtered_reads[0] += 1
+                    fresh = filtered_reads[0] > stale_reads
+                    return {"workflow_runs": [_NEW_MAIN, _OLD_MAIN] if fresh else [_OLD_MAIN]}
+                probe_reads[0] += 1
+                if probe_fails or (probe_fails_after is not None
+                                   and probe_reads[0] > probe_fails_after):
+                    raise ResolutionError("GET unfiltered listing: HTTP 502")
+                return {"workflow_runs": ([witness] if witness else []) + [_OLD_MAIN]}
+            jobs = re.search(r"/actions/runs/(\d+)/jobs", path)
+            if jobs:
+                return {"total_count": 1,
+                        "jobs": [{"id": int(jobs.group(1)), "name": PLATFORM_REF_JOB}]}
+            notice = re.search(r"/check-runs/(\d+)/annotations", path)
+            if notice:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{_SETS[int(notice.group(1))]} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    def _stale_case(name: str, fetch: Fetch, expect: int | None, waits: list[float],
+                    says: str = "", starts: str = "") -> None:
+        nonlocal total
+        total += 1
+        slept: list[float] = []
+        result = main_passed_ceiling(fetch, SATELLITE, log=logs.append, sleep=slept.append)
+        spoken = result.notes + ([result.refusal] if result.refusal else [])
+        if result.number != expect:
+            failures.append(f"{name}: ceiling {result.number}, expected {expect} — "
+                            f"notes={result.notes}")
+        elif slept != waits:
+            failures.append(f"{name}: slept {slept}, expected {waits} — a re-read must happen "
+                            "exactly when staleness is PROVEN, and never otherwise")
+        elif says and not any(says in line for line in spoken):
+            failures.append(f"{name}: nothing said {says!r} — {spoken}")
+        elif starts and not result.refusal.startswith(starts):
+            failures.append(f"{name}: the refusal must begin {starts!r} — got "
+                            f"{result.refusal[:120]!r}")
+
+    _backoff = [STALE_REREAD_BACKOFF_SECONDS * n for n in range(1, STALE_REREADS + 1)]
+    _stale_case("a provably stale main listing is RE-READ and the fresh page decides (9218, not 9081)",
+                _stale_main(1, _NEW_MAIN), 9218, _backoff[:1], "SETTLED after 1 re-read")
+    _stale_case("…and one still stale after every re-read is REFUSED, never resolved from",
+                _stale_main(99, _NEW_MAIN), None, _backoff, "35822711093")
+    _stale_case("…and that refusal carries the steward's #4433 prefix byte for byte",
+                _stale_main(99, _NEW_MAIN), None, _backoff, starts=STEWARD_4433_PREFIX)
+    _stale_case("…and it names the stale page's newest row, so a reader sees the two ids side by side",
+                _stale_main(99, _NEW_MAIN), None, _backoff, "35587322366")
+    # Controls: nothing here PROVES the filtered page stale, so it is used as served, with no re-read.
+    _stale_case("control: a newer main run that FAILED (a red main) keeps the old ceiling — no re-read",
+                _stale_main(99, {**_NEW_MAIN, "conclusion": "failure"}), 9081, [],
+                "nothing proves the page stale")
+    _stale_case("control: a newer main run still IN PROGRESS proves nothing",
+                _stale_main(99, {**_NEW_MAIN, "status": "in_progress", "conclusion": None}), 9081, [])
+    _stale_case("control: a newer green PULL-REQUEST run is not in the vouching set",
+                _stale_main(99, {**_NEW_MAIN, "event": "pull_request"}), 9081, [])
+    _stale_case("control: a newer green run on ANOTHER branch proves nothing about main",
+                _stale_main(99, {**_NEW_MAIN, "head_branch": "feat/x"}), 9081, [])
+    _stale_case("control: a green run with an OLDER id (a re-run of an old run) proves nothing",
+                _stale_main(99, {**_NEW_MAIN, "id": 35500000000}), 9081, [])
+    _stale_case("control: an unreadable probe is NOTED, never refused on — it proves nothing",
+                _stale_main(99, _NEW_MAIN, probe_fails=True), 9081, [], "NOT checked")
+    # Copilot review on #5495: once PROVEN stale, a probe that later fails to read must not end the
+    # re-reads — "no witness" from an unread probe proves nothing, and the page is still the old one.
+    _stale_case("once proven stale, a LATER unreadable probe does not resolve from the stale page",
+                _stale_main(99, _NEW_MAIN, probe_fails_after=1), None, _backoff,
+                starts=STEWARD_4433_PREFIX)
+    _stale_case("…and the page still settles on the positive fresh read that contains the witness",
+                _stale_main(2, _NEW_MAIN, probe_fails_after=1), 9218, _backoff[:2],
+                "at least as new as the witness")
+
     def _refuses(_path: str) -> dict:
         raise AssertionError("a freeze must not consult main at all")
 
@@ -3805,7 +4034,7 @@ def self_test() -> int:
           "set main has passed) is refused rather than resolved from — after a bounded RE-READ, "
           "which it proves line by line, where the staleness is the PROVABLE kind (the ceiling) "
           "and never where it is an inference (the age) or a freeze, and whose refusal keeps the "
-          "#4433 sentence verbatim, and every dead end is RED "
+          "#4433 sentence verbatim, a `status=success` main listing that an UNFILTERED read PROVES stale (a newer completed-success vouching main run it lacks) is re-read and then refused under the same #4433 prefix — while a red main, an in-progress or pull-request run, or an unreadable probe proves nothing and keeps the page as served, and every dead end is RED "
           "naming why.")
     return 0
 
