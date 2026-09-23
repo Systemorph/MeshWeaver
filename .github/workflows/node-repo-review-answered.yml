@@ -1,0 +1,166 @@
+name: Node repo review answered (reusable)
+
+# ♻️ REUSABLE (workflow_call) — core's `Automatic review answered` gate, offered to every other
+# repository in the fleet as ONE copy (MeshWeaver#4776, step 1 of 3).
+#
+# 🚨 WHY. Core holds a pull request while the automatic review is missing or any thread it opened
+# has no human reply (review-answered.yml, required on ruleset 2128472). NO other repository does,
+# and measured 2026-09-19 over the last 20 merges of six repositories, 55 of 120 merged past
+# unanswered findings — N of N every time, never a partial. Of 13 such findings treated on
+# 2026-09-18, 11 were real. Doc/Architecture/ReviewFindingsAnswered carries the measurement.
+#
+# 🚨 WHY A LANE AND NOT A COPY. The predicate (check-review-answered.py) is ~900 lines with its own
+# self-test, a settle wait for the burst of review-comment events and a bounded wait for the review
+# itself — each derived from a measurement (#4649, #4575). Six hand-copies is how gen-manifests.py
+# reached five vintages (#1426). So the predicate is FETCHED here at `scripts-ref`, its identity
+# asserted, its self-test run on EVERY call, and it is never fallen back to a local copy.
+#
+# 🚦 THE ROLLOUT ORDER IS NOT OPTIONAL, and this lane is only its first step:
+#   1. this lane lands in core (observe-only by construction — it changes no protection);
+#   2. a repository adds the thin caller below — OBSERVE-ONLY, i.e. NOT a required context yet —
+#      and its row in .github/lane-caller-grants.yml lands in core FIRST (as `pending:`), because
+#      every satellite asserts its roster row against core's main;
+#   3. only after the context `review-answered / Automatic review answered` has been SEEN published
+#      on live pull requests in that repository does the maintainer add it to protection. Under
+#      CLASSIC protection (five satellites) an absent required context blocks every pull request
+#      forever ("Expected — Waiting for status to be reported", measured on Plugins#1453), so
+#      adding the context before the caller publishes bricks the repository, including the pull
+#      request that would add the caller. Step 3 is a branch-protection edit: the maintainer's act.
+#
+# Caller contract — a SEPARATE workflow file (never ci.yml: it needs review events, and ci.yml's
+# `pull_request` path filters / cancel rules must not apply to it):
+#
+#   # .github/workflows/review-answered.yml
+#   name: Review answered
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+#     pull_request_review:
+#       types: [submitted, dismissed]
+#     pull_request_review_comment:
+#       types: [created, deleted]
+#   permissions:
+#     contents: read
+#     pull-requests: read
+#     issues: read
+#   concurrency:
+#     group: review-answered-${{ github.event.pull_request.number }}-${{ github.event_name == 'pull_request_review_comment' && 'feedback' || 'gate' }}
+#     cancel-in-progress: false
+#   jobs:
+#     review-answered:
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-review-answered.yml@main
+#       permissions:
+#         contents: read
+#         pull-requests: read
+#         issues: read
+#
+# 🛡️ What the caller must NOT add (each is a skip-trapdoor — a skipped required context counts as
+# SATISFIED under both classic protection and rulesets):
+#   * no job-level `if:` — in particular NOT core's `github.actor != 'dependabot[bot]'`: only core has
+#     a merge-queue rule, so in a satellite that condition skips the gate outright;
+#   * no path or branch filter on the triggers;
+#   * no `merge_group:` trigger — measured 2026-09-06, only core has a merge-queue rule, so the event
+#     never fires elsewhere. (The lane still judges a `merge_group` event correctly if one arrives.)
+#
+# 🚨 THE CONCURRENCY BLOCK IS PART OF THE CONTRACT, and it lives in the caller because only a
+# WORKFLOW-level group replaces a pending run with ZERO jobs (a job-level group here would publish a
+# `cancelled` check-run, which the rollup reads as a failure). It is split by event class because
+# branch protection reads the `pull_request` and `pull_request_review` runs and NOT the
+# `pull_request_review_comment` ones (measured on #4649) — sharing one pending slot let the
+# comment-driven runs evict the read-eligible ones. review-answered.yml in core carries the full
+# measurement.
+#
+# 🔒 `@main` vs a pinned sha: the same trade as every other lane (CiContentBake.md → "The workflow
+# ref is PINNED"). A caller that pins the lane passes the same sha as `scripts-ref`.
+
+on:
+  workflow_call:
+    inputs:
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. Default `main`,
+          which is right for a caller that calls this lane at `@main`; a caller that pins the lane
+          to a sha passes the SAME sha here, so the lane and its predicate cannot disagree.
+          `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a reusable called
+          from another repository (measured 2026-08-30).
+        required: false
+        type: string
+        default: main
+      wait-for-review-minutes:
+        description: >-
+          How long the verdict re-reads while the ONLY thing missing is the review itself, before
+          answering RED. Core measured the reviewer at 3–12 minutes (#4299, #4575). Never waits for
+          anything else.
+        required: false
+        type: number
+        default: 15
+      settle-replies-seconds:
+        description: >-
+          How long answering must have stopped before an unanswered-thread verdict is taken — so
+          every evaluation on one head sha agrees (#4649). 60 s is ~5x the widest gap measured
+          inside one answering burst.
+        required: false
+        type: number
+        default: 60
+
+jobs:
+  answered:
+    name: Automatic review answered
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    # 20 = the 15-minute bounded wait for the review + headroom for the fetch and the reads.
+    timeout-minutes: 20
+    # Reads only, and only what the predicate needs: the pull request, its reviews and review
+    # comments (pull-requests), the label events that attribute a waiver (issues). The
+    # collaborator-permission read that verifies a waiver needs `metadata: read`, which every
+    # GITHUB_TOKEN carries. No checkout at all: the predicate is fetched from core and the caller's
+    # tree is never read, so no file in the pull request's tree is what judges it. (The CALLER file
+    # itself still comes from the pull request's merge ref on a `pull_request` event, as every
+    # workflow does — which is why the context is made REQUIRED in step 3, not trusted to exist.)
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      # The self-hosted scale set a private caller lands on does not promise a Python; every other
+      # lane that runs a central guard pins one the same way.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the platform's review-answered predicate at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the review-answered predicate has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+            || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
+            || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
+          echo "predicate: check-review-answered.py from Systemorph/MeshWeaver@${SCRIPTS_REF} ($(wc -c < "$RUNNER_TEMP/check-review-answered.py") bytes)"
+
+      - name: "Prove the predicate can say no (self-test)"
+        run: python3 "$RUNNER_TEMP/check-review-answered.py" --self-test
+
+      - name: Judge the pull request's automatic review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          WAIT_MINUTES: ${{ inputs.wait-for-review-minutes }}
+          SETTLE_SECONDS: ${{ inputs.settle-replies-seconds }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review "$WAIT_MINUTES" --settle-replies "$SETTLE_SECONDS"
+          elif [ -n "${PR:-}" ]; then
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --pr "$PR" --wait-for-review "$WAIT_MINUTES" --settle-replies "$SETTLE_SECONDS"
+          else
+            # A caller wired to an event that carries no pull request would otherwise pass
+            # `--pr ""` and fail on an argument error that names nothing useful. Fail RED, named.
+            echo "::error::event '${EVENT_NAME}' carries no pull request and no merge-queue ref — this lane judges pull requests only; wire the caller to pull_request / pull_request_review / pull_request_review_comment"
+            exit 1
+          fi

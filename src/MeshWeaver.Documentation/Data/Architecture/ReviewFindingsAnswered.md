@@ -360,6 +360,29 @@ in the repository forever (measured on Plugins#1453), so the lane lands observe-
 publishing its context on live pull requests in that repo, and only then is the context added.
 Proposed with the full measurement in #4776.
 
+### The fleet lane — step 1 of 3 is landed
+
+`.github/workflows/node-repo-review-answered.yml` is that lane. It fetches
+`check-review-answered.py` from this repository at its `scripts-ref` input, asserts the file's
+identity, runs the self-test on every call and never falls back to a local copy; it takes no
+checkout of the caller at all. The caller contract — a separate `review-answered.yml` with the three
+pull-request triggers, the event-class concurrency block, and **no** job-level `if:`, path filter or
+`merge_group:` trigger — is written in the lane's header, because every one of those is either a
+skip-trapdoor or the #4649 eviction.
+
+It is **not** dead code waiting for an adopter: core's own `review-answered.yml` calls it as a
+second job, `lane`, on every event, with `scripts-ref: ${{ github.sha }}` so both jobs judge with
+the same copy of the predicate. That job publishes `lane / Automatic review answered`, which is
+**not** required — the ruleset requires the first job, `Automatic review answered`, by name. The
+two must agree on every pull request; a disagreement is a defect in the lane.
+
+What is still owed, and is not an agent's to do:
+
+| step | the act | owner |
+|---|---|---|
+| 2 | each repository adds the thin caller, **observe-only**, after its row lands in `.github/lane-caller-grants.yml` as `pending:` (every satellite asserts its row against core's `main`, so the row goes first) | the rollout decision — which repositories, in what order — is the maintainer's |
+| 3 | once `review-answered / Automatic review answered` has been **seen** published on live pull requests in that repository, the context is added to its protection. Under classic protection an absent required context blocks every pull request forever, so this never goes first | a branch-protection edit — the maintainer |
+
 ### The same gap, measured wider — 240 merged pull requests
 
 The 120-PR sample above was extended on 2026-09-19 to the **30 most recently updated merged pull
