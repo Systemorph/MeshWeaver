@@ -546,9 +546,29 @@ jobs:
           gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/gen-manifests.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/gen-manifests.py" \
             || { echo "::error::could not fetch .github/scripts/gen-manifests.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/gen-manifests.py" | grep -q "manifest.lock" || { echo "::error::the fetched gen-manifests.py at ${SCRIPTS_REF} does not look like the manifest generator"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-package-enumeration.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-package-enumeration.py" \
+            || { echo "::error::could not fetch .github/scripts/check-package-enumeration.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-package-enumeration.py" | grep -q "check-package-enumeration" || { echo "::error::the fetched check-package-enumeration.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
       - name: "The manifest checker can fail — --resolve, the trunk baseline and the config contract (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/gen-manifests.py" --self-test
+
+      # 🚨 THE TWO PACKAGE ENUMERATORS RETURN THE SAME PACKAGES (MeshWeaver#4774). This repo's
+      # `validate-repos.py` walks one set of top-level directories for node JSON; the canonical
+      # fetched above gives another a manifest.lock. Each satellite's own `check-skip-sets.py`
+      # compared the two DECLARED skip lists — and the canonical also drops every dot-directory,
+      # a rule in no declaration, so equal declarations over different enumerations were green.
+      # This calls both enumerators — on the checkout and on a fixture holding every declared name
+      # plus a probe dot-directory — and compares what they RETURN. A caller whose validate-repos.py
+      # exposes no `package_dirs(root)` yet is NAMED (`NOT compared`), not failed: the flip to red
+      # is a change to the guard once every satellite has adopted, never a date. The guard's
+      # self-test runs against the canonical fetched above, so a guard that cannot fail never runs.
+      - name: "The package-enumeration guard can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-package-enumeration.py" --self-test --canonical "$RUNNER_TEMP/gen-manifests.py"
+      - name: "validate-repos.py and the canonical gen-manifests.py enumerate the same packages"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-package-enumeration.py" --root . --canonical "$RUNNER_TEMP/gen-manifests.py"
 
       # 🚨 AND THE VENDORED COPY THE RESOLVE LANE STILL RUNS IS COMPARED TO THAT CANONICAL
       # (MeshWeaver#4777). `node-repo-resolve-locks.yml` regenerates locks with the CALLER's

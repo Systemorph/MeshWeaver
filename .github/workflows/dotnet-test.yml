@@ -2373,6 +2373,12 @@ jobs:
     - name: "A satellite's no-op set stays comparable to ours — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-noop-scope-parity.py --self-test
+    # The satellite lane runs this guard against every caller's validate-repos.py; proving it here
+    # is what makes a core PR that breaks it (or the canonical enumeration it compares against)
+    # red on the core PR rather than on the next satellite run (#4774).
+    - name: "A satellite's two package enumerators stay comparable — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-package-enumeration.py --self-test --canonical .github/scripts/gen-manifests.py
 
     # 🚨 The fleet pins platform images BY DIGEST, and ACR retention deletes what is pinned
     # (MeshWeaver#3438: three satellite repos dead at `manifest unknown` at once, Education's own
