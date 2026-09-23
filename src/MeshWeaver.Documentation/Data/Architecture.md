@@ -118,6 +118,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Request via Stream Update](RequestViaStreamUpdate)
 - [Expressing a Write](ExpressingAWrite) — the four shapes a mutation can take (C# lambda, JSON Patch + text splice, full entity, other), which context may use which, and the lowering that keeps the fold owner-side
 - [Data Access Patterns](DataAccessPatterns)
+- [Data-Plane Messages Are Stream Plumbing](DataPlaneMessagesAreStreamPlumbing) — `GetDataRequest`/`DataChangeRequest` and their kin are the synchronization streams' wire format, not an API: read a node with `GetMeshNodeStream`, write it with `.Update`, create it with `IMeshService`; the inventory of every remaining caller, the per-kind recipe, the shrink-only ratchet, and the target of all five types `internal` to the data layer
 - [Node Identity and Path Keying](NodeIdentityAndPathKeying) — `(namespace, id)` is the key and `path` is derived, so splitting a path positionally leaves the path identical while re-keying the node into a second row
 - [Workspace References](WorkspaceReferences)
 - [Content Chunk Navigation](ContentChunkNavigation)
