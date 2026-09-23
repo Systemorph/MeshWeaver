@@ -14,7 +14,7 @@ Two components write that shape today:
 
 | Writer | Lives in | Reads | Runs |
 |---|---|---|---|
-| `PackageInstaller.EnsureDeclaredAccess` | this repository, `src/MeshWeaver.PluginCatalog/` | the package **manifest** (`preInstalled`, `price`, `publicSegments`) | once per install, and on the boot repair pass |
+| `PackageInstaller.EnsureDeclaredAccess` | this repository, `src/MeshWeaver.PluginCatalog/` | the package **manifest** (`price`, `publicSegments`) — and, when re-asserting from a stored manifest, `preInstalled` off the partition's **root node** whenever that root is a plugin root | once per install, and on the boot repair pass |
 | `PluginGate.SeedGating` | MeshWeaver.Plugins, `Store/Licensing/Source/` — **in-mesh source** | the **root node's** `PluginContent` | on every plugin-root activation, and on every subtree change |
 
 For a **pre-installed** partition the two agree: the installer publishes it fully public, and the
@@ -77,6 +77,35 @@ live component is writing on purpose.
 This does not settle *whether* a free plugin should be world-readable. It settles **where that
 question is answered** — in one place, so that the answer can be changed by changing one rule
 rather than by winning a race. If the gating model is wrong, it is wrong in one component.
+
+## One fact, one source: "pre-installed" is read off the ROOT
+
+The rule above only holds if both components agree on **which** partitions are pre-installed, and
+for three days they did not. The gating reconcile reads `preInstalled` off the root node's
+`PluginContent`; the installer read it off whatever manifest its caller held — and the boot repair
+pass holds the **install record's** stored copy, stamped at the last install. When a package stops
+being pre-installed, the root changes (a sync, an install) and a record stamped earlier does not.
+
+Measured on memex-cloud, 2026-09-21 → 2026-09-23, package `Hosting` (pre-installed → enterprise,
+MeshWeaver.Plugins#1959): `Plugins/Hosting` v110 carried `preInstalled: true` until the re-install at
+2026-09-23 17:52Z (v111, no flag), while the `Hosting` root carried no flag. `Hosting/_Policy`
+reached **version 238**, alternating between the gate's shape (`redirectOnDenied` only) and the
+installer's legacy heal (`publicRead: true` over the gate's own `redirectOnDenied` — the exact output
+of `PublicReadPolicy(partition, existing)`); the child denies the gate wrote were retired by the
+heal, and the gate reported, **truthfully**, `the gating shape is NOT STAYING for Hosting/<child>/_Access/…`
+(MeshWeaver#5297, #5578). The flips stopped with the re-install that refreshed the record: no
+`Hosting/_Policy` version after 17:46Z.
+
+So a caller holding a STORED manifest — the boot repair pass (the install record) and a held default
+install (the catalog listing) — calls `PackageInstaller.ReassertDeclaredAccess`, which reconciles
+the manifest with the partition's live root first (`LiveDeclaration`): a root whose content is a
+`PluginContent` (bare or namespaced `$type`) decides `preInstalled` (an absent flag is `false` — the
+serializer omits a default `bool`, which is how a gated root is stored); any other root, or none,
+leaves the manifest to decide. An INSTALL keeps calling `EnsureDeclaredAccess` on the manifest it
+carries: a delta re-asserts access before the root it is installing lands, so reading the store
+there would decide on the previous declaration. A "NOT STAYING" line from the gate is therefore a
+statement worth believing: before chasing a stale read, look for a second writer in the node's
+version history.
 
 ## The survey mistake, which generalises
 
