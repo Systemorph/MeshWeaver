@@ -1090,6 +1090,8 @@ public static class PluginBundleEndpoints
                         artifact = pushed.ReferenceFor(p.Source, p.PluginId, p.Version),
                     }).ToArray(),
                 }))))
+            // A stalled catalogue read is 503 + Retry-After, never an unhandled 500 (#5345).
+            .UnavailableOnAStalledRead(http, lateFaultLogger)
             .FirstAsync()
             .ObserveCompletion(
                 ex => lateFaultLogger?.LogWarning(ex,
@@ -1575,6 +1577,8 @@ public static class PluginBundleEndpoints
                         state.Anchor.Describe());
                 return Observable.Return(NoSuchBundle());
             })
+            // See Index: a stalled catalogue read is 503 + Retry-After (#5345).
+            .UnavailableOnAStalledRead(http, lateFaultLogger)
             .FirstAsync()
             .ObserveCompletion(
                 ex => lateFaultLogger?.LogWarning(ex,
