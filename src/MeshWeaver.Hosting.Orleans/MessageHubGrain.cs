@@ -402,17 +402,25 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // the sub-bits that were instantiated are recycled. The Monolith host answers the same
         // question in its router (MonolithRoutingService.RouteImpl); here it must be the grain,
         // because a silo's local route table is not the cluster's.
+        // 🚨 PIN THE ACTIVATION WHILE THE HUB IS BUILT (#5286). Deliveries arriving during the build
+        // are ANSWERED on acceptance (DeliverMessage), so no grain call remains in flight to keep an
+        // otherwise idle activation from being collected mid-build — and a collection completes
+        // HubReady, NACKing every accepted delivery as ShuttingDown. Using takes the hold when the
+        // chain is subscribed and releases it on every terminal (hub built, fault, empty source)
+        // and when OnDeactivateAsync disposes the chain.
         _startActivation = () =>
-            _activationSubscription = BuildActivationChain(
-                    sourceStream,
-                    addressPath,
-                    FirstNodeResolutionTimeout,
-                    node =>
-                    {
-                        logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
-                            streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
-                        return ResolveHubConfigurationObservable(node);
-                    })
+            _activationSubscription = Observable.Using(
+                    () => HoldActivation("hub build", LogLevel.Debug),
+                    _ => BuildActivationChain(
+                        sourceStream,
+                        addressPath,
+                        FirstNodeResolutionTimeout,
+                        node =>
+                        {
+                            logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                                streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
+                            return ResolveHubConfigurationObservable(node);
+                        }))
                 .Subscribe(
                     node => CompleteActivation(streamId, address, grainScheduler, node),
                     ex =>
@@ -983,7 +991,23 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// The grain timer periodically renews while counter > 0.
     /// Thread-safe: can be called from any thread (streaming loop, thread pool).
     /// </summary>
-    private IDisposable BeginLongRunningOperation()
+    private IDisposable BeginLongRunningOperation() =>
+        HoldActivation("long-running operation", LogLevel.Information);
+
+    /// <summary>
+    /// Pins this activation against idle collection until the returned scope is disposed: it counts
+    /// into <see cref="_activeOperations"/>, for which the keep-alive timer renews
+    /// <c>DelayDeactivation</c> every minute, bounded by <see cref="MaxLongRunningOperationDuration"/>
+    /// (#147). Shared by the hub's long-running operations and the hub BUILD (see
+    /// <see cref="OnActivateAsync"/>): the build used to be pinned implicitly by the grain calls
+    /// parked on it, and since those are answered on acceptance (#5286) nothing else keeps an
+    /// otherwise idle activation alive while it builds.
+    /// </summary>
+    /// <param name="purpose">What holds the activation, for the log line.</param>
+    /// <param name="level">Level of the start/end lines — one hold per activation build is not an
+    /// Information-level event; a long-running hub operation is.</param>
+    /// <returns>The hold; disposing it more than once releases it once.</returns>
+    private IDisposable HoldActivation(string purpose, LogLevel level)
     {
         // Stamp the start of the active-operation RUN on the 0→1 transition so the keep-alive timer can
         // bound it (see MaxLongRunningOperationDuration / #147).
@@ -992,16 +1016,19 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // DelayDeactivation is thread-safe in Orleans; guarded because a round can start
         // on a pool thread after the activation already died (teardown race).
         TryDelayDeactivation(TimeSpan.FromMinutes(10));
-        logger.LogInformation("Grain {GrainId}: long-running operation started (active={Count})",
-            this.GetPrimaryKeyString(), Volatile.Read(ref _activeOperations));
+        logger.Log(level, "Grain {GrainId}: {Purpose} started (active={Count})",
+            this.GetPrimaryKeyString(), purpose, Volatile.Read(ref _activeOperations));
 
+        var released = 0;
         return new LongRunningOperationScope(() =>
         {
+            if (Interlocked.Exchange(ref released, 1) != 0)
+                return;
             var remaining = Interlocked.Decrement(ref _activeOperations);
             if (remaining == 0)
                 Volatile.Write(ref _longRunningStartedTicks, 0);   // run ended — clear the bound clock
-            logger.LogInformation("Grain {GrainId}: long-running operation completed (active={Count})",
-                this.GetPrimaryKeyString(), remaining);
+            logger.Log(level, "Grain {GrainId}: {Purpose} completed (active={Count})",
+                this.GetPrimaryKeyString(), purpose, remaining);
         });
     }
 
@@ -1014,9 +1041,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <summary>
     /// Subscribes to <see cref="HubReady"/> (Synchronized ReplaySubject(1)) and posts
     /// the delivery when the hub emits. Post-activation, the ReplaySubject cache fires
-    /// the OnNext synchronously off the cached hub; pre-activation, the subscription
-    /// queues and fires when OnNext lands. Synchronize() serializes the OnNext
-    /// notifications across reentrant subscribers so the order is well-defined.
+    /// the OnNext synchronously off the cached hub and the hub's verdict is returned;
+    /// pre-activation, the subscription queues and fires when OnNext lands, and the call
+    /// is answered at once as ACCEPTED (<see cref="MessageDeliveryState.Submitted"/>) —
+    /// a failure reached later is NACKed to the sender by <see cref="NackParkedDelivery"/>,
+    /// never held in the Orleans call past its ResponseTimeout (#5286 / #5417).
+    /// Synchronize() serializes the OnNext notifications across reentrant subscribers so
+    /// the order is well-defined.
     /// </summary>
     public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
@@ -1050,7 +1081,35 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             });
         }
 
-        var tcs = new TaskCompletionSource<IMessageDelivery>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // 🚨 THE GRAIN CALL IS ANSWERED NOW, NEVER WHEN THE HUB IS BUILT — issues #5286 / #5417.
+        //
+        // This used to return a TaskCompletionSource completed from the HubReady arms below, which
+        // made the Orleans call's ACKNOWLEDGEMENT wait on the whole hub ACTIVATION: node resolution,
+        // NodeType binding, assembly load, a cold compile. Activation is deliberately allowed to run
+        // past 30 s (FirstNodeResolutionTimeout bounds only the first emission; enrichment is
+        // slow-but-bounded, and WaitForCompileSettled disarms its own clock while a compile is in
+        // flight) — and Orleans' ResponseTimeout is a 30 s caller-side give-up timer. So every
+        // delivery to a hub that took longer than that to build came back to RoutingGrain as a
+        // TimeoutException, which it (correctly, per ATimedOutDeliveryIsStillHeldByTheCallee)
+        // reports to the sender as the TERMINAL "Delivery to 'Store' failed: Response did not
+        // arrive on time in 00:00:30" — while the delivery itself was still parked here and was
+        // posted to the hub moments later. Production printed the shape exactly: a young
+        // activation (Total Enqueued=5), NumRunning=5, QueuedWorkItems=0, IdlenessTimeSpan=0 —
+        // five reentrant DeliverMessage calls, every one of them waiting on HubReady.
+        //
+        // The two outcomes are now split by WHEN the verdict exists:
+        //  - the hub is already built (the steady state, and any delivery that finds the Replay
+        //    buffer filled): the arms below run synchronously INSIDE the Subscribe, and the verdict
+        //    is returned in the acknowledgement exactly as before (#3045 — RoutingGrain reads
+        //    State / SenderWasNacked / GetFailureMessage off it);
+        //  - the hub is still being built: the delivery is ACCEPTED (Submitted) and parked in the
+        //    same ordered HubReady subscription it always was. If the build later fails, or the
+        //    hub refuses the delivery, the sender is NACKed from HERE, through the mesh — the same
+        //    shape the Monolith router already uses for an activation fault
+        //    (RoutingServiceBase: Mesh.Post(new DeliveryFailure(delivery){ ErrorType =
+        //    Unavailable }, o => o.ResponseFor(delivery))). Answer-once holds: the ack carries no
+        //    Failed state, so RoutingGrain never NACKs a second time.
+        var settlement = new DeliverySettlement();
         HubReady.Take(1).Subscribe(
             hub =>
             {
@@ -1061,8 +1120,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 // GetFailureMessage() — all of which survive — and never Message. The failure arms
                 // below strip for the same reason: a NACK's own transport must not be the thing it
                 // is reporting on.
-                try { tcs.TrySetResult(Acknowledge(hub.DeliverMessage(delivery))); }
-                catch (Exception ex) { tcs.TrySetException(ex); }
+                IMessageDelivery verdict;
+                try { verdict = Acknowledge(hub.DeliverMessage(delivery)); }
+                catch (Exception ex)
+                {
+                    // Classified by the SAME rule RoutingGrain applied when this throw used to fault
+                    // the grain call (a disposal race is ShuttingDown, anything else terminal), so
+                    // the sender's verdict does not depend on whether the hub was built in time.
+                    verdict = Acknowledge(delivery).Failed(
+                        $"Delivery to {this.GetPrimaryKeyString()} threw while posting to its hub: {ex.Message}",
+                        RoutingGrain.ClassifyDeliveryException(ex));
+                }
+                Settle(verdict);
             },
             // 🚨 CLASSIFY, at the one place that knows. Both arms used to take the UNCLASSIFIED
             // Failed(string) overload, so the DeliveryFailure that reached the caller carried
@@ -1080,13 +1149,131 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             // MonolithRoutingService already mints for it, so the two hosting models agree, and the
             // consumers with their own recovery machinery (SynchronizationStream's resubscribe
             // latch) ride it out instead of tearing down.
-            ex => tcs.TrySetResult(Acknowledge(delivery).Failed(
+            ex => Settle(Acknowledge(delivery).Failed(
                 $"Hub activation failed for {this.GetPrimaryKeyString()}: {ex.Message}",
                 ErrorType.Unavailable)),
-            () => tcs.TrySetResult(Acknowledge(delivery).Failed(
+            () => Settle(Acknowledge(delivery).Failed(
                 $"Hub disposed before delivery for {this.GetPrimaryKeyString()}.",
                 ErrorType.ShuttingDown)));
-        return tcs.Task;
+
+        return Task.FromResult(settlement.TryParkWithoutVerdict(out var synchronousVerdict)
+            ? Acknowledge(delivery).Submitted()
+            : synchronousVerdict);
+
+        // Runs once, on whichever thread HubReady answers on: inside the Subscribe above (the hub is
+        // built — the verdict rides the acknowledgement) or later, off the activation chain (the
+        // acknowledgement has already gone out, so a failure must reach the sender some other way).
+        void Settle(IMessageDelivery verdict)
+        {
+            // FIRST ARM WINS. Take(1) follows the OnNext it forwards with an OnCompleted, and that
+            // completion is not "the hub was disposed" — it is the end of a subscription that has
+            // already delivered. (The TaskCompletionSource this replaced absorbed it by construction:
+            // a second TrySetResult is a no-op.)
+            if (!settlement.TryClaim())
+                return;
+            if (settlement.TrySettleSynchronously(verdict))
+                return;
+            NackParkedDelivery(delivery, verdict);
+        }
+    }
+
+    /// <summary>
+    /// Decides — race-free — whether a delivery's verdict was reached while
+    /// <see cref="DeliverMessage"/> was still on the stack (so it can ride the acknowledgement) or
+    /// only after the acknowledgement went out (so the sender must be told separately).
+    /// <see cref="HubReady"/> answers from the activation chain's thread, not the grain turn, so the
+    /// two can interleave; one compare-and-swap on a three-state word decides which side won.
+    /// </summary>
+    private sealed class DeliverySettlement
+    {
+        private const int Open = 0, ParkedWithoutVerdict = 1, SettledSynchronously = 2;
+        private int state = Open;
+        private int claimed;
+        private IMessageDelivery? verdict;
+
+        /// <summary>
+        /// Claims the right to settle. Exactly one of the <see cref="HubReady"/> arms may settle a
+        /// delivery; every later arm (Take(1)'s trailing OnCompleted) is ignored.
+        /// </summary>
+        /// <returns><c>true</c> for the first caller only.</returns>
+        public bool TryClaim() => Interlocked.Exchange(ref claimed, 1) == 0;
+
+        /// <summary>
+        /// Records <paramref name="settled"/> as the acknowledgement's verdict, if the
+        /// acknowledgement has not gone out yet.
+        /// </summary>
+        /// <param name="settled">The verdict the hub (or the activation) reached.</param>
+        /// <returns><c>true</c> when the verdict will ride the acknowledgement; <c>false</c> when the
+        /// acknowledgement already went out as "accepted".</returns>
+        public bool TrySettleSynchronously(IMessageDelivery settled)
+        {
+            // Written BEFORE the swap: Interlocked is a full fence, so a caller that observes
+            // SettledSynchronously also observes the verdict.
+            verdict = settled;
+            return Interlocked.CompareExchange(ref state, SettledSynchronously, Open) == Open;
+        }
+
+        /// <summary>
+        /// Called once, after the <see cref="HubReady"/> subscription is made: parks the delivery
+        /// when no verdict has been reached, otherwise hands back the verdict that was.
+        /// </summary>
+        /// <param name="settled">The synchronous verdict, when this returns <c>false</c>.</param>
+        /// <returns><c>true</c> when the delivery is parked and its acknowledgement is "accepted".</returns>
+        public bool TryParkWithoutVerdict(out IMessageDelivery settled)
+        {
+            if (Interlocked.CompareExchange(ref state, ParkedWithoutVerdict, Open) == Open)
+            {
+                settled = null!;
+                return true;
+            }
+            settled = verdict!;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The sender of a PARKED delivery — one whose acknowledgement already went out as "accepted" —
+    /// learns a failure here, because nothing downstream of the acknowledgement can tell it any
+    /// more. Posted through the mesh hub exactly as the Monolith router answers the same fault
+    /// (<c>RoutingServiceBase</c>), so the NACK takes the ordinary route back to the sender and
+    /// matches its <c>Observe(...)</c> on RequestId. Carries the classification this grain reached
+    /// (<see cref="ErrorType.Unavailable"/> for an activation fault, <see cref="ErrorType.ShuttingDown"/>
+    /// for a disposal) — and for a hub-side refusal, the verdict the hub RECORDED with the same
+    /// text-rule fallback RoutingGrain applies, so the sender reads the same answer whichever path
+    /// delivered it.
+    /// </summary>
+    /// <param name="delivery">The parked delivery, as the sender sent it.</param>
+    /// <param name="verdict">The verdict reached after the acknowledgement went out.</param>
+    private void NackParkedDelivery(IMessageDelivery delivery, IMessageDelivery verdict)
+    {
+        // Failed only — the SAME rule RoutingGrain.DeliverToGrainRoute applies to the synchronous
+        // verdict, so the sender's answer does not depend on whether the hub was built in time.
+        // Ignored (the storm breaker / aggregate shedder refusing intake) deliberately mints no
+        // DeliveryFailure on either path: answering it feeds the loop it breaks (see
+        // IMessageDelivery.WasAcceptedForDelivery, #1174). SenderWasNacked: the failing site
+        // already answered (answer once).
+        if (verdict.State != MessageDeliveryState.Failed || verdict.SenderWasNacked)
+            return;
+        var failureMessage = verdict.GetFailureMessage()
+                             ?? $"Delivery to '{this.GetPrimaryKeyString()}' failed at its owning hub.";
+        var errorType = verdict.GetFailureErrorType(OrleansRoutingService.ClassifyRoutedFailure(failureMessage));
+        logger.LogWarning(
+            "Grain {GrainId}: a delivery accepted while the hub was still being built could not be served — "
+            + "NACKing sender {Sender} as {ErrorType}: {Failure} ({MessageType}, {DeliveryId})",
+            this.GetPrimaryKeyString(), delivery.Sender, errorType, failureMessage,
+            delivery.Message?.GetType().Name ?? "(null)", delivery.Id);
+        // The answer-once contract (AnswerPolicy): no NACK for a NACK, none for a message nobody
+        // waits on — and none once the mesh is tearing down, when the recipients are gone.
+        if (delivery.Sender is null || !delivery.MayAnswer()
+            || meshHub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            return;
+        // Routing infrastructure's OWN post: carry the requester's identity when it had one, run
+        // under System when it did not — never a null principal (AccessContextPropagation).
+        var access = meshHub.ServiceProvider.GetService<AccessService>();
+        using (delivery.AccessContext is null ? access?.ImpersonateAsSystem() : null)
+            meshHub.Post(
+                new DeliveryFailure(delivery) { ErrorType = errorType, Message = failureMessage },
+                o => o.ResponseFor(delivery));
     }
 
     /// <summary>
