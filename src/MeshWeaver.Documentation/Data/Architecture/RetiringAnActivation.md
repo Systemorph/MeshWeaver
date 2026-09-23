@@ -106,6 +106,50 @@ never the right call for a retirement.
 | `…TheClassificationIsStatedByTheFailer_NotDerivedFromTheRunLevel` + `…WithoutAStatedClassification_TheSameRefusalComesOutTerminal` | Why the stated form had to exist: the same refusal, unstated, comes out `ErrorType.Failed`. |
 | `TransientInitializationFaultRetiresTheActivationTest` | The end-to-end contract (#4067/#4068), which was failing 3 runs in 36 on this race. |
 
+## What is NOT a retirement — a teardown that lands during bring-up
+
+This page covers ONE kind of teardown: a hub that retires itself because its own initialization
+met a transient fault, and therefore has a gate-fault classification — the cause of the gate's
+death, stated as an `ErrorType` — for `FailGate` to record ahead of the drain. It is not the rule for every hub that
+goes down with work parked behind its gates, and reading it that way files the wrong issue
+(#5274, #5424, #5426 each asked for a `FailGate`/drain before an external teardown).
+
+Two teardowns routinely reach a hub whose `DataContextInit` / `MeshNodeInit` gates are still closed:
+
+| Teardown | Who posts it | Attribution in `[DISPOSE-DISCARD]` |
+|---|---|---|
+| **Overlay self-heal** | `NodeTypeEnrichmentHelpers.WithOverlaySelfHeal` — the watcher armed in the overlaid hub's `WithInitialization`. Its first emission is a REPLAY, so when the type's build landed between enrichment and activation it posts the self-`DisposeRequest` before the gates open. | *"requested by itself … Overlay self-heal: the instance is bound to an overlay of NodeType '…'"* |
+| **Orleans grain deactivation** | `MessageHubGrain` on a deactivation (e.g. `DirectoryFailure`, the directory owner's silo is shutting down), via `NoteDirectDisposalBy` + `Dispose()` | *"requested by Orleans deactivating grain …; why: …"* |
+
+Both have a cause, and both already print it: `DisposalAttribution()` puts the teardown's WHO and
+WHY into the `[DISPOSE-DISCARD]` line and into the NACK the sender reads (the table above). What
+neither has is a separate **initialization-gate fault** — the gates did not die of anything, the hub
+was taken down around them — so there is nothing for a `FailGate` to add to the attribution the
+generic drain already carries. And neither can "drain first": the parked
+deliveries are waiting for a bring-up that the teardown ends. That is the carve-out
+[Teardown Layers](/Doc/Architecture/TeardownLayers) states under *Handler turns*: a hub that never
+finished **starting** has its `InitializeHubRequest` cancelled, and whatever was parked behind its
+gates is answered `ShuttingDown` and reported. The answer is composed through
+`ShutdownNack.RetryForTheAuthoritativeAnswer`, so the transient classifiers re-probe
+([Riding Out a ShuttingDown Address](/Doc/Architecture/RidingOutAShuttingDownAddress)) and the retry
+activates a fresh hub — for the self-heal, one bound to the build that made the overlay obsolete.
+Serving the parked work first would not be better: a compile-in-progress overlay answers typed
+requests with a `CompilationInProgress` NACK anyway, and an error overlay with its fault card.
+
+**It does not loop.** The self-heal is version-gated at the type version the overlay captured, so the
+replay that fires it cannot fire the next activation's watcher; the only un-gated routes (the grace
+and the re-read ladder) start at 45 s, and `OverlayHealBudget` spaces repeats across hub lifetimes.
+`OverlaySelfHealWatcherTest` pins all three (`VersionGated_FiresExactlyOnce_…`,
+`UsableBuildAtUnchangedVersion_HealsAfterTheGrace`, `NonConvergingInstance_RecyclesAreSpaced_…`).
+A burst of discards at one instant on every replica after a NodeType publish is one recycle per
+replica of a hot hub, not a loop — a loop would show the same hub discarding again ≥ 45 s later.
+
+What is OPEN is the level: `MessageService` still logs a foreign sender's bring-up discard at
+**Error** with the sentence *"Accepted work must be drained before a hub goes down"*. The Error was
+justified by #4866's finding that the NACK was not recognised as retryable; that part is fixed, and
+whether the level should now follow the same fact-based rule as the self-sender case (#4178) is a
+maintainer decision, recorded on #5426.
+
 ## Reading a refusal in the field
 
 A retired activation's refusal is `ErrorType.ShuttingDown` and its message is built by
