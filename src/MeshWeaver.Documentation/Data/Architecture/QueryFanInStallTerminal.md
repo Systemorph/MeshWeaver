@@ -230,10 +230,67 @@ silent evaluator to yield **503, not 404**, and `PermissionSwallowRatchetGuard` 
   named, for a caller who holds Admin there. Its negative control is that with the terminal disarmed
   the stalled assertion does not fail on a value — it never arrives at all.
 
+- **`PluginBundleStalledReadTest`** (`test/Memex.Portal.Shared.Test`) — both plugin-bundle routes
+  answer a stalled catalogue read with **503 + `Retry-After`**; its control is the same host with the
+  provider answering, which serves 200.
+
 **Not established.** Nothing here was exercised against PostgreSQL or a multi-silo Orleans mesh; both
 tests run on an in-memory monolith, so what is measured is the fan-in, the fold and the classifiers,
 not a real partitioned provider's timing. The 15 s default is calibrated against the healthy worst
 case *recorded in the probe's own comment*, not against a fresh measurement of the deployed fleet.
+
+## The first fleet readings (memex-cloud, 2026-09-22)
+
+The terminal's first day on a PostgreSQL fleet filed four incidents: #5315, #5345, #5390 and #5393.
+They read as "the Postgres provider stalls", and the question each one asks is whether to fix the
+provider or the budget. Neither is the answer.
+
+**Every occurrence falls inside a ThreadPool-starvation episode on the same pod**, logged by other
+instruments:
+
+| incident | pod · window | starvation on the same pod |
+|---|---|---|
+| #5315 (9 activations at filing, 13:41:30–13:43:23Z; a 10th at 13:46:48Z was folded in as a recurrence) | `7cc85f47c-nm2qp` · 13:41:30–13:46:48Z | routing legs waiting for pool threads 13:36:07–13:49:40Z (#5306, #5313, #5316, #5317); TLS handshake to Postgres timing out on a new connector 13:42–13:47Z (#5314) |
+| #5345 (2 HTTP 500s) | `5c444645f8-8pdzb` · 14:43:42Z | 88 CompileWatcher stalls 14:43:02–14:43:35Z (#5344); routing starvation 14:41:08–19Z and 14:45:45–14:47:37Z (#5335, #5349) |
+| #5390 (108 activations) | `857546649-2c25b` · 18:49:44–56Z | `.NET Thread Pool execution stalled for 24.7s` at 18:47:10Z (#5388); routing legs starved 18:47:40–18:49:57Z (#5389, #5391) |
+| #5393 (4 activations) | `857546649-2c25b` · 18:53:19Z | the same episode as #5390, 3.5 minutes later |
+
+The finding the four share is **starvation of the process**, not one query shape. The three grain
+incidents (#5315, #5390, #5393) timed out on trivial single-schema reads: an `IN` list of ancestor
+paths (`path:"A/B/C"|"A/B"|"A"`). #5345 timed out on a different query, the catalogue listing
+`namespace:Plugins nodeType:Package`. In every case the provider did not starve. The **process**
+starved, and the provider was where the fan-in saw it. All four occurred before
+[NodeType compiles moved off the ThreadPool](../CompileOffTheThreadPool) (#5327, merged 20:27Z that
+day), and the CompileWatcher burst next to #5345 is that defect's signature.
+
+**The provider set in the message is set by the query shape, not by the fault.** #5315 names
+`StorageAdapterMeshQueryProvider` *and* `PostgreSqlPartitionedMeshQuery`, while #5390/#5393 name only
+the latter. `StorageAdapterMeshQueryProvider.DefersToNativeProvider` returns *false* for a path with a
+`_`-prefixed segment (`_Access`, `_Entitlements`, `_Activity`, `_Install`: every #5315 path) and
+*true* for a plain primary path (`Admin/Build/Radzen`, `Pricing/Guideline`). A deferring provider
+answers with an empty Initial at once, so only the leg that really reads Postgres is left to be named.
+
+**A faulted grain activation is the designed outcome.** The activation resolves its node by
+longest-prefix match over the ancestor list. A partial answer would bind the hub to the wrong ancestor
+or report a present node as absent. So the activation faults, `TryDeactivateOnIdle` discards it, and
+the next access resolves again from scratch. Access consumers read the same fault as `Unavailable`,
+fail-closed (see above).
+
+**An HTTP route needs one more step: it must map the fault.** The plugin-bundle routes let it escape
+as an unhandled exception, so ASP.NET answered a bare **500** and logged the stall as a defect of the
+endpoint (#5345). The routes now answer **503 + `Retry-After`** through
+`InstanceAuthResponses.UnavailableOnAStalledRead`. That is the instance-key 503 convention, and the
+fault classifier is `AreaErrorClassifier.IsStorageUnavailable`, the same one the GUI uses. Any other
+fault still escapes, so a real defect still surfaces.
+
+**Not established from these readings.** No per-pod CPU, GC or Npgsql pool metrics for the windows
+were read (the control instance's `Logs`/`Sample` were unavailable), so a GC pause and a
+connection-pool wait cannot be excluded as contributors. The portal's Npgsql pool is `MaxPoolSize = 50`
+while the query leaves run on the 256-slot `FileSystem` IoPool and bypass the per-adapter
+`pg-read:` cap, so connection waits under a burst are *possible*; nothing here shows they happened.
+Whether #5327 alone ends the starvation episodes is the post-roll question: read
+`MeshWeaver.Hosting.Orleans.MessageHubGrain` `QueryProviderStalledException` lines on `memex-cloud`
+over a window that includes a roll of an image carrying #5327.
 
 ## See also
 
