@@ -35,8 +35,23 @@ public static class GlobalAdminSeed
     /// </summary>
     public static MeshNode[] Build(IConfiguration configuration)
     {
-        var ids = configuration.GetSection(ConfigSection).Get<string[]>()
-                  ?? [];
+        // 🚨 Blank ids are REFUSED, not trimmed into a user (MeshWeaver#5217). A configured-but-empty
+        // entry — an env var rendered as "", a hole left between indices — used to become an
+        // `Admin/_Access/_Access` grant for the empty username: an Admin assignment on the Admin
+        // partition whose AccessObject matches nobody today and whatever identity ever resolves to
+        // "" tomorrow. A duplicate is dropped too, case-insensitively as mesh paths are, so two
+        // spellings of one id cannot mint two nodes at one path — and the LAST spelling is kept,
+        // because that is what AddMeshNodes' case-insensitive last-wins already made effective
+        // before this filter existed. The permission fold matches AccessObject ORDINALLY, so
+        // keeping the first spelling instead would silently move a platform admin to a
+        // different login (review on #5462).
+        var ids = (configuration.GetSection(ConfigSection).Get<string[]>() ?? [])
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Reverse()
+            .DistinctBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .Reverse()
+            .ToArray();
         if (ids.Length == 0)
             return [];
 
@@ -55,7 +70,7 @@ public static class GlobalAdminSeed
         var nodes = new MeshNode[ids.Length * 2];
         for (var i = 0; i < ids.Length; i++)
         {
-            var userId = ids[i].Trim();
+            var userId = ids[i];
 
             nodes[i * 2] = new MeshNode(userId + "_Access", "Admin/_Access")
             {

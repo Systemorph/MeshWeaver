@@ -1,0 +1,12 @@
+# FIXTURE for check-chart-invariants.sh — Auth:GlobalAdmins (MeshWeaver#5217).
+#
+# The documented way to seed a platform administrator reached no container until the portal
+# ConfigMap named it. Three indices, three shapes: a padded real id must render TRIMMED, a blank one
+# and a whitespace-only one must render NO key — an unconditional "" would ask GlobalAdminSeed for an
+# Admin grant to the empty username. The evidence check in the driver asserts all three, and that the
+# chart defaults render no Auth__GlobalAdmins key at all.
+config:
+  memex_portal:
+    Auth__GlobalAdmins__0: "  admin-id  "
+    Auth__GlobalAdmins__1: ""
+    Auth__GlobalAdmins__2: "   "

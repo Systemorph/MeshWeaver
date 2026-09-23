@@ -160,6 +160,9 @@ COMBOS=(
   # does arm the gate, so "the invariant passed" and "the invariant had no subject" stay different
   # sentences.
   "the NodeType bake gate armed (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.bake-gate-armed.yaml"
+  # Auth:GlobalAdmins (MeshWeaver#5217): a padded id, a blank one and a whitespace-only one. The
+  # evidence check below asserts only the first renders, trimmed.
+  "platform admins seeded by Auth:GlobalAdmins (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.global-admins.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -228,6 +231,20 @@ for combo in "a whitespace-only operator maintainer (fixture)" "self-host (neutr
 done
 if [ "$executor_evidence" -eq 3 ]; then
   ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set"
+fi
+
+# The Auth:GlobalAdmins evidence (MeshWeaver#5217). Read by NAME: the fixture renders exactly the
+# trimmed __0 and no __1/__2 (blank, whitespace), and the chart defaults render no such key at all —
+# a regression to an unconditional or untrimmed line would otherwise pass every invariant above.
+admins_render="$(render_of "platform admins seeded by Auth:GlobalAdmins (fixture)")"
+defaults_render="$(render_of "self-host (neutral chart defaults)")"
+if [ -f "$admins_render" ] && [ -f "$defaults_render" ] \
+   && grep -q '^  Auth__GlobalAdmins__0: "admin-id"$' "$admins_render" \
+   && ! grep -q '^  Auth__GlobalAdmins__[12]:' "$admins_render" \
+   && ! grep -q '^  Auth__GlobalAdmins__' "$defaults_render"; then
+  ok "Auth:GlobalAdmins reaches the ConfigMap trimmed, and only when set — a blank id renders no key"
+else
+  report "Auth:GlobalAdmins: the fixture must render exactly Auth__GlobalAdmins__0=\"admin-id\" (trimmed) and no __1/__2, and the chart defaults must render no Auth__GlobalAdmins key — a blank id reaching the pod would seed an Admin grant for the empty username"
 fi
 
 # The bake-gate evidence (MeshWeaver#4588). Invariant 10b — an armed PreWarm__GateReadiness must
