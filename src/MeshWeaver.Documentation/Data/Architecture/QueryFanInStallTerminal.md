@@ -292,6 +292,81 @@ Whether #5327 alone ends the starvation episodes is the post-roll question: read
 `MeshWeaver.Hosting.Orleans.MessageHubGrain` `QueryProviderStalledException` lines on `memex-cloud`
 over a window that includes a roll of an image carrying #5327.
 
+## What the Initial queues behind: one full re-read per change (2026-09-23)
+
+The terminal fired again on 2026-09-23, on images that carry #5327. Two issues recorded it:
+
+- #5315: 12 `[ACTIVATE]` faults, the latest at 13:26:31Z on `5f95fb94dc-t9222`.
+- #5344: 2,109 CompileWatcher faults, including 13:26–13:34Z on the `5f95fb94dc` pods and 14:45Z on
+  `777677694-hjkc8`.
+
+So moving compiles off the shared ThreadPool (#5327) did not remove the stall. What is left is where
+the Initial's 15 s goes. The clock starts at Subscribe (see *Where the terminal is armed*), so the
+budget covers the SQL and also every queue the read waits in before it runs.
+
+**Where a Postgres read actually waits.** An anchored query is served by the per-schema
+`PostgreSqlMeshQuery`. Its leaf runs on the `FileSystem` pool (256 slots). Inside that slot it calls
+`PostgreSqlStorageAdapter.QueryNodesAsync`, which takes a slot on `pg-read:Postgres` through
+`ReadPooled`. That pool is **one per process**, with a cap of 16, shared by every per-schema adapter.
+
+This corrects the sentence above that said the leaves "bypass the per-adapter `pg-read:` cap". They do
+not bypass it. They hold a `FileSystem` slot while they wait for a `pg-read` slot. The one reading of
+that pool's queue ([Controlled IO Pooling](../ControlledIoPooling), memex.systemorph.com, 828 minutes):
+
+- 31.9 M admissions, about 640 per second;
+- mean wait **342 ms**;
+- 48,122 waits over a second.
+
+In steady state the gate every Initial must pass is already saturated.
+
+**What fills it: the live pipelines queued one full read PER change notification.** Both per-schema
+providers re-ran a live query with `changeBuffer.Select(_ => RunQuery()).Concat()`:
+
+- `StorageAdapterMeshQueryProvider` (core). On partitioned Postgres it serves every path with a `_`
+  segment: `_Access`, `_Activity`, `_Install`, and so on.
+- `PostgreSqlMeshQuery` (Plugins). It serves every anchored query.
+
+So a burst of N writes under one live query's scope cost N back-to-back full reads. The queue had no
+bound, and it grows fastest exactly when the pool is contended. Under contention each read waits
+longer, more notifications pile up behind it, and every one of them is another full read.
+
+A pod start is the extreme case. Hundreds of Initials are issued together (grain activations, one
+sources watcher per NodeType space), each fault re-establishes a second later, and writes from every
+replica keep arriving through the merged change feed. Plugins#2328 measured the same shape on the
+fan-out provider: one home load ran the same union about 35 times in 11 s.
+
+**The fix removes the queue, not the bound.** Both providers now use
+`CoalesceWhileRunning` (`MeshWeaver.Reactive.CoalesceWhileRunningExtensions`; the Plugins fan-out
+provider has used an identical internal copy since #2328):
+
+- only one re-query runs at a time;
+- any number of triggers that arrive while it runs fold into **one** follow-up;
+- the follow-up starts after the last of them arrived, so it reads every write they announced.
+
+This is not a debounce. There is no timer, and an idle query re-runs at once, so the race behind the
+old 100 ms `Buffer` does not come back. The answer is the queue's last answer, without the reads in
+between.
+
+Both halves are pinned by a test that holds a re-query in flight, delivers a burst of 12, and counts
+the reads:
+
+| test | with the fix | per-change `Concat` (negative control) |
+|---|---|---|
+| `LiveRequeryCoalescingTest` (core, in-memory store) | 2 walks | 12 walks |
+| `LiveRequeryCoalescingPgTests` (Plugins, real Postgres) | 2 re-queries | more than 2 within 3 s |
+
+The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
+
+**Not established.**
+
+- The share of the ~640 reads per second that per-change re-queries account for. No per-query read
+  census exists, and the control instance's `Logs`/`Sample` were unavailable.
+- Whether coalescing alone keeps a pod start inside 15 s. The boot wave of Initials, and the watcher
+  re-establish storm, are other contributors this change does not touch.
+- The post-roll reading that decides both: on a roll of an image carrying both halves, count
+  `QueryProviderStalledException` lines within 15 minutes of pod start, at `[ACTIVATE]` and at
+  `Sources watcher faulted`, against the 2026-09-23 counts above.
+
 ## See also
 
 - [Access Control](../AccessControl) → "The fold can produce NO answer, and that is a third outcome",

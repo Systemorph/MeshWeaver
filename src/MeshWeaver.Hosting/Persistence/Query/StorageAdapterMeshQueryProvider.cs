@@ -1507,15 +1507,33 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         // delivery to every later subscriber, and IsolatedChangeFeed's
                         // disposed-observer branch can misattribute the throw (issue #889).
                         disposables.Add(changeBuffer);
-                        // 🚨 Strict unit-of-work + zero debounce: every change
-                        // triggers its own RunQuery, serialised via Concat so
-                        // the shared currentItems dictionary is never raced.
-                        // Buffer(DefaultDebounceInterval) was a 100 ms debouncer
-                        // that batched changes; that window was the race that
-                        // caused order-dependent permission-check flakes —
-                        // subscribers attaching during the debounce gap saw the
-                        // pre-write Replay(1) snapshot. Trade throughput (one
-                        // RunQuery per change vs batched) for correctness.
+                        // 🚨 Zero debounce, ONE re-query at a time, and COALESCED —
+                        // never a queue of one full read per notification
+                        // (MeshWeaver#5344 / #5315 / #1186).
+                        //
+                        // No debounce: Buffer(DefaultDebounceInterval) was a 100 ms
+                        // window, and that window was the race behind
+                        // order-dependent permission-check flakes — subscribers
+                        // attaching during the gap saw the pre-write Replay(1)
+                        // snapshot. An idle query here still re-runs at once.
+                        //
+                        // One at a time, because ProcessBatch diffs against the
+                        // shared currentItems.
+                        //
+                        // Coalesced, because the shape this replaced —
+                        // changeBuffer.Select(_ => RunQuery()).Concat() — queued
+                        // one full read per notification, unboundedly. A burst of
+                        // N writes under this query's scope cost N back-to-back
+                        // walks, and the queue grows fastest exactly when reads
+                        // are slowest. On partitioned Postgres this provider
+                        // serves every path with a `_` segment (_Access,
+                        // _Activity, _Install, …), so that backlog sat on the
+                        // same read pools an activation's path resolution waits
+                        // on — the Initial the fan-in's stall terminal then fires
+                        // on. Triggers arriving while a re-query is in flight fold
+                        // into ONE follow-up that starts after the last of them
+                        // arrived, so it reads every write they announced: the
+                        // queue's last answer, without the reads in between.
                         //
                         // 🚨🚨 THE NOTIFICATION IS A TRIGGER, NEVER A RESULT ROW (#1250).
                         // The notification's raw `Entity` is deliberately discarded: RunQuery is
@@ -1552,8 +1570,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         //    documents in MeshQuery.TryFilterDuplicateLiveChange.
                         disposables.Add(
                             changeBuffer
-                                .Select(_ => RunQuery())
-                                .Concat()
+                                .CoalesceWhileRunning(RunQuery)
                                 .Subscribe(
                                     newResults => ProcessBatch(newResults, currentItems, parsedQuery, observer),
                                     ex => observer.OnError(ex)));
@@ -1585,9 +1602,9 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             SnapshotIncomplete = completeness.AnyReadDropped,
                         });
 
-                        // Push backlog through the same Concat-serialized
-                        // pipeline rather than running a parallel RunQuery
-                        // that would race the first live batch.
+                        // Push backlog through the same serialised pipeline
+                        // rather than running a parallel RunQuery that would race
+                        // the first live batch — a backlog of N costs one read.
                         if (backlog.Length > 0)
                         {
                             Scheduler.Default.Schedule(() =>
