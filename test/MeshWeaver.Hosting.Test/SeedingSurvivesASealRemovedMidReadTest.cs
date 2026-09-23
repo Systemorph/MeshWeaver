@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using MeshWeaver.Hosting;
 using Xunit;
 
@@ -72,7 +73,7 @@ public class SeedingSurvivesASealRemovedMidReadTest : IDisposable
         var zulu = SealedSource("zulu", "Zulu.zip");
 
         var seeded = ShippedPrebuiltBundles.CompletePublishedBundlesOf(
-            IdentityDirectory, logger: null, RemovingAtOpen(alpha, wholeDirectory));
+            IdentityDirectory, logger: null, CancellationToken.None, RemovingAtOpen(alpha, wholeDirectory));
 
         seeded.Should().Equal([Path.Combine(zulu, "Zulu.zip")],
             "a publication whose seal vanished mid-read is skipped, and every other sealed source "
@@ -87,7 +88,7 @@ public class SeedingSurvivesASealRemovedMidReadTest : IDisposable
         var alpha = SealedSource("alpha", "Alpha.zip");
         var zulu = SealedSource("zulu", "Zulu.zip");
 
-        ShippedPrebuiltBundles.CompletePublishedBundlesOf(IdentityDirectory, logger: null)
+        ShippedPrebuiltBundles.CompletePublishedBundlesOf(IdentityDirectory, logger: null, CancellationToken.None)
             .Should().Equal([Path.Combine(alpha, "Alpha.zip"), Path.Combine(zulu, "Zulu.zip")]);
     }
 
@@ -100,7 +101,7 @@ public class SeedingSurvivesASealRemovedMidReadTest : IDisposable
         SealedSource("alpha", "Alpha.zip");
 
         var thrown = Assert.Throws<IOException>(() => ShippedPrebuiltBundles.CompletePublishedBundlesOf(
-            IdentityDirectory, logger: null, _ => throw new IOException("the share is unreachable")));
+            IdentityDirectory, logger: null, CancellationToken.None, _ => throw new IOException("the share is unreachable")));
 
         thrown.Message.Should().Be("the share is unreachable");
     }

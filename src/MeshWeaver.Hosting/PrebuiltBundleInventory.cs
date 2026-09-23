@@ -78,7 +78,7 @@ public sealed record PrebuiltBundleInventory(
 
     /// <summary>
     /// 🚨 Whether a shelf is CONFIGURED here and could be read at all — the cheap half of
-    /// <see cref="Read"/>, and its first step, so a caller that only needs to know whether to
+    /// <see cref="Read(string, string, string, ILogger, CancellationToken)"/>, and its first step, so a caller that only needs to know whether to
     /// bother cannot answer it differently (review on #4605).
     ///
     /// <para><b>Three answers, and the third is the one that was missing.</b>
@@ -148,6 +148,28 @@ public sealed record PrebuiltBundleInventory(
     /// <returns>The inventory; never null.</returns>
     public static PrebuiltBundleInventory Read(
         string? imageDirectory, string? publishedRoot, string? identity, ILogger? logger = null)
+        => Read(imageDirectory, publishedRoot, identity, logger, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Read(string, string, string, ILogger)"/>, observing
+    /// <paramref name="cancellationToken"/> between archives. The overload every pooled caller uses:
+    /// the read walks a network share one archive at a time as an <c>IIoPool.InvokeBlocking</c>
+    /// leaf, <c>IoPool.Drain</c> joins that leaf before the silo releases the mesh, and a walk that
+    /// cannot see the drain's cancel holds the teardown join to its full budget (MeshWeaver#2480).
+    /// A cancellation is NOT folded into <see cref="SealedReadOutcome.Unreadable"/> — the pool ended
+    /// the read, nothing was found unreadable — so it propagates as an
+    /// <see cref="OperationCanceledException"/>.
+    /// </summary>
+    /// <param name="imageDirectory">The image's shipped <c>prebuilt/</c> directory, or null.</param>
+    /// <param name="publishedRoot">The published bundle root, or null when this deployment consumes
+    /// no CI bakes.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="cancellationToken">The pool leaf's token.</param>
+    /// <returns>The inventory; never null.</returns>
+    public static PrebuiltBundleInventory Read(
+        string? imageDirectory, string? publishedRoot, string? identity, ILogger? logger,
+        CancellationToken cancellationToken)
     {
         // 🚨 ONE definition of "is there a shelf, and can it be read at all", shared with the cheap
         // pre-check (review on #4605) so the two can never disagree — in particular about a
@@ -167,6 +189,7 @@ public sealed record PrebuiltBundleInventory(
         {
             foreach (var archive in archives)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 BundleReader.Manifest? manifest;
                 try
                 {
@@ -220,7 +243,7 @@ public sealed record PrebuiltBundleInventory(
                     .EnumerateFiles(imageDirectory!, "*.zip", SearchOption.TopDirectoryOnly)
                     .OrderBy(f => f, StringComparer.Ordinal));
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger?.LogWarning(ex,
                     "PrebuiltBundleInventory: the image's prebuilt directory {Directory} could not be "
@@ -237,13 +260,14 @@ public sealed record PrebuiltBundleInventory(
                 if (Directory.Exists(identityDirectory))
                     // The seal's own bundle list, per source, under the generation `_current` names —
                     // the SAME enumeration the seeding pass adopts from.
-                    Fold(ShippedPrebuiltBundles.CompletePublishedBundlesOf(identityDirectory, logger));
+                    Fold(ShippedPrebuiltBundles.CompletePublishedBundlesOf(
+                        identityDirectory, logger, cancellationToken));
                 else if (File.Exists(identityDirectory))
                     // Something is at exactly that path and it is not a directory — a half-finished
                     // layout migration looks like this from here, and it is not an empty shelf.
                     unreadable = true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger?.LogWarning(ex,
                     "PrebuiltBundleInventory: the publications under {Directory} could not be read — "

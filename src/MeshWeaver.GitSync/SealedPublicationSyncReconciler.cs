@@ -333,8 +333,8 @@ internal sealed class SealedPublicationSyncReconciler(
             if (hub.ServiceProvider.GetService<IoPoolRegistry>() is not { } pools)
                 return Observable.Return(PrebuiltBundleInventory.NotConfigured);
             return pools.Get(IoPoolNames.FileSystem)
-                .InvokeBlocking(_ => PrebuiltBundleInventory.Read(
-                    imageDirectory, publishedRoot, identity, logger));
+                .InvokeBlocking(ct => PrebuiltBundleInventory.Read(
+                    imageDirectory, publishedRoot, identity, logger, ct));
         })
         .Catch((Exception exception) =>
         {
