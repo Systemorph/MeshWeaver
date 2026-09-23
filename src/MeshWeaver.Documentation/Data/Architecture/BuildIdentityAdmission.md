@@ -194,7 +194,9 @@ whose required responses are opposite, so every site now reports through ONE mes
 The predicate is `PrebuiltAssemblySeeder.RequirePrebuilt`, the same one the compile watcher's
 adopt-only gate reads, so the log cannot disagree with the behaviour about whether a compile will
 happen. The full-level line is written **once per (site, NodeType, record framework identity)**;
-repeats go to `Debug`. A new record identity — the next roll — is a new fact and is reported again;
+repeats go to `Debug`. A new record identity — the next roll — is a new fact and is reported again,
+and so is a reloaded `Modules:RequirePrebuilt` (the key carries the healability mode, so the same
+refusal resurfaces at its new level);
 a climbing assembly version under the same identity is not. The ledger is an instance on a
 mesh-scoped singleton (registered in `AddGraph`), never static state.
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -42,11 +43,15 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
     };
 
     private static NodeTypeAdoptionRefusalLog Ledger(bool requirePrebuilt)
+        => Ledger(requirePrebuilt, out _);
+
+    private static NodeTypeAdoptionRefusalLog Ledger(bool requirePrebuilt, out IConfigurationRoot configuration)
     {
-        var configuration = new ConfigurationBuilder()
+        configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(requirePrebuilt
-                ? new Dictionary<string, string?> { [PrebuiltAssemblySeeder.RequirePrebuiltConfigKey] = "true" }
-                : new Dictionary<string, string?>())
+                ? ImmutableDictionary<string, string?>.Empty
+                    .Add(PrebuiltAssemblySeeder.RequirePrebuiltConfigKey, "true")
+                : ImmutableDictionary<string, string?>.Empty)
             .Build();
         var services = new ServiceCollection()
             .AddSingleton<IConfiguration>(configuration)
@@ -137,6 +142,21 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
     }
 
     [Fact]
+    public void AReloadedRequirePrebuilt_ReclassifiesTheSameRefusal_AtItsNewLevel()
+    {
+        var logger = new RecordingLogger();
+        var ledger = Ledger(requirePrebuilt: false, out var configuration);
+
+        ledger.Report(logger, "SchemaProbe", "Acme/Widget", ForeignRecord(481), "c").Should().BeTrue();
+        configuration[PrebuiltAssemblySeeder.RequirePrebuiltConfigKey] = "true";
+        ledger.Report(logger, "SchemaProbe", "Acme/Widget", ForeignRecord(481), "c").Should().BeTrue(
+            "the same refusal now has nothing on this process to heal it — a different fact with a "
+            + "different required response, so it must surface at Error rather than be suppressed");
+
+        logger.Records.Select(r => r.Level).Should().Equal(LogLevel.Warning, LogLevel.Error);
+    }
+
+    [Fact]
     public void TwoMeshes_DoNotShareWhatWasAlreadyReported()
     {
         var first = new RecordingLogger();
@@ -164,12 +184,12 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
         var files = Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories)
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
             .Select(f => (Path: Path.GetRelativePath(src, f), Text: File.ReadAllText(f)))
-            .ToList();
+            .ToImmutableList();
 
         var offenders = files
             .Where(f => direct.IsMatch(f.Text))
             .Select(f => f.Path)
-            .ToList();
+            .ToImmutableList();
         offenders.Should().BeEmpty(
             "a refusal is logged through NodeTypeAdoptionRefusalLog.Report, which picks the level by "
             + "healability and reports once per (site, type, record identity); a direct "
@@ -194,7 +214,7 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
 
     private sealed class RecordingLogger : ILogger
     {
-        private readonly List<(LogLevel Level, string Message)> records = [];
+        private ImmutableList<(LogLevel Level, string Message)> records = ImmutableList<(LogLevel Level, string Message)>.Empty;
 
         public IReadOnlyList<(LogLevel Level, string Message)> Records => records;
 
@@ -204,7 +224,7 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
-            => records.Add((logLevel, formatter(state, exception)));
+            => records = records.Add((logLevel, formatter(state, exception)));
 
         private sealed class NullScope : IDisposable
         {

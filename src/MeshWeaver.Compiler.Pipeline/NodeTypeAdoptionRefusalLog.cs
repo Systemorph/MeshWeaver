@@ -26,7 +26,8 @@ namespace MeshWeaver.Graph.Configuration;
 ///     <see cref="PrebuiltAssemblySeeder.RequirePrebuilt(IServiceProvider?)"/> — the same one the
 ///     compile watcher's adopt-only gate reads, so the log and the behaviour cannot disagree about
 ///     whether a compile will happen.</item>
-///   <item><b>Once per (site, NodeType, record framework identity), never once per probe.</b> The
+///   <item><b>Once per (site, NodeType, record framework identity, healability mode), never once
+///     per probe.</b> A reloaded <c>Modules:RequirePrebuilt</c> changes the level, so it re-reports. The
 ///     500th identical line carries nothing the first did not. A NEW record identity (the next
 ///     roll, or a different generation re-stamping) is a new fact and is reported again; a record
 ///     whose assembly version climbs under the SAME identity (the #5066 series: v481 → v1338, all
@@ -46,7 +47,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public sealed class NodeTypeAdoptionRefusalLog(IServiceProvider services)
 {
-    private readonly ConcurrentDictionary<(string Site, string NodeTypePath, string RecordIdentity), byte> reported = new();
+    private readonly ConcurrentDictionary<(string Site, string NodeTypePath, string RecordIdentity, bool CanCompileLocally), byte> reported = new();
 
     /// <summary>
     /// Whether a refusal on this mesh is healed here by a local compile — the inverse of
@@ -71,7 +72,10 @@ public sealed class NodeTypeAdoptionRefusalLog(IServiceProvider services)
     public bool Report(
         ILogger? logger, string site, string nodeTypePath, NodeTypeDefinition definition, string consequence)
     {
-        var key = (site, nodeTypePath, definition.CompiledFrameworkVersion ?? string.Empty);
+        // The healability mode is part of the key: a reloaded Modules:RequirePrebuilt changes
+        // what the refusal MEANS (and its level), so it is a new fact and is reported again.
+        var canCompileLocally = CanCompileLocally;
+        var key = (site, nodeTypePath, definition.CompiledFrameworkVersion ?? string.Empty, canCompileLocally);
         if (!reported.TryAdd(key, 0))
         {
             logger?.LogDebug(
@@ -82,7 +86,6 @@ public sealed class NodeTypeAdoptionRefusalLog(IServiceProvider services)
             return false;
         }
 
-        var canCompileLocally = CanCompileLocally;
         logger?.Log(
             NodeTypeBuildIdentity.RefusalLogLevel(canCompileLocally),
             "[AdoptionRefused] {Site}: {Summary} {Consequence} {Recovery} Reported once per NodeType "
