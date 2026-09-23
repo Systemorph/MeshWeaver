@@ -402,17 +402,25 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // the sub-bits that were instantiated are recycled. The Monolith host answers the same
         // question in its router (MonolithRoutingService.RouteImpl); here it must be the grain,
         // because a silo's local route table is not the cluster's.
+        // 🚨 PIN THE ACTIVATION WHILE THE HUB IS BUILT (#5286). Deliveries arriving during the build
+        // are ANSWERED on acceptance (DeliverMessage), so no grain call remains in flight to keep an
+        // otherwise idle activation from being collected mid-build — and a collection completes
+        // HubReady, NACKing every accepted delivery as ShuttingDown. Using takes the hold when the
+        // chain is subscribed and releases it on every terminal (hub built, fault, empty source)
+        // and when OnDeactivateAsync disposes the chain.
         _startActivation = () =>
-            _activationSubscription = BuildActivationChain(
-                    sourceStream,
-                    addressPath,
-                    FirstNodeResolutionTimeout,
-                    node =>
-                    {
-                        logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
-                            streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
-                        return ResolveHubConfigurationObservable(node);
-                    })
+            _activationSubscription = Observable.Using(
+                    () => HoldActivation("hub build", LogLevel.Debug),
+                    _ => BuildActivationChain(
+                        sourceStream,
+                        addressPath,
+                        FirstNodeResolutionTimeout,
+                        node =>
+                        {
+                            logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                                streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
+                            return ResolveHubConfigurationObservable(node);
+                        }))
                 .Subscribe(
                     node => CompleteActivation(streamId, address, grainScheduler, node),
                     ex =>
@@ -983,7 +991,23 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// The grain timer periodically renews while counter > 0.
     /// Thread-safe: can be called from any thread (streaming loop, thread pool).
     /// </summary>
-    private IDisposable BeginLongRunningOperation()
+    private IDisposable BeginLongRunningOperation() =>
+        HoldActivation("long-running operation", LogLevel.Information);
+
+    /// <summary>
+    /// Pins this activation against idle collection until the returned scope is disposed: it counts
+    /// into <see cref="_activeOperations"/>, for which the keep-alive timer renews
+    /// <c>DelayDeactivation</c> every minute, bounded by <see cref="MaxLongRunningOperationDuration"/>
+    /// (#147). Shared by the hub's long-running operations and the hub BUILD (see
+    /// <see cref="OnActivateAsync"/>): the build used to be pinned implicitly by the grain calls
+    /// parked on it, and since those are answered on acceptance (#5286) nothing else keeps an
+    /// otherwise idle activation alive while it builds.
+    /// </summary>
+    /// <param name="purpose">What holds the activation, for the log line.</param>
+    /// <param name="level">Level of the start/end lines — one hold per activation build is not an
+    /// Information-level event; a long-running hub operation is.</param>
+    /// <returns>The hold; disposing it more than once releases it once.</returns>
+    private IDisposable HoldActivation(string purpose, LogLevel level)
     {
         // Stamp the start of the active-operation RUN on the 0→1 transition so the keep-alive timer can
         // bound it (see MaxLongRunningOperationDuration / #147).
@@ -992,16 +1016,19 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // DelayDeactivation is thread-safe in Orleans; guarded because a round can start
         // on a pool thread after the activation already died (teardown race).
         TryDelayDeactivation(TimeSpan.FromMinutes(10));
-        logger.LogInformation("Grain {GrainId}: long-running operation started (active={Count})",
-            this.GetPrimaryKeyString(), Volatile.Read(ref _activeOperations));
+        logger.Log(level, "Grain {GrainId}: {Purpose} started (active={Count})",
+            this.GetPrimaryKeyString(), purpose, Volatile.Read(ref _activeOperations));
 
+        var released = 0;
         return new LongRunningOperationScope(() =>
         {
+            if (Interlocked.Exchange(ref released, 1) != 0)
+                return;
             var remaining = Interlocked.Decrement(ref _activeOperations);
             if (remaining == 0)
                 Volatile.Write(ref _longRunningStartedTicks, 0);   // run ended — clear the bound clock
-            logger.LogInformation("Grain {GrainId}: long-running operation completed (active={Count})",
-                this.GetPrimaryKeyString(), remaining);
+            logger.Log(level, "Grain {GrainId}: {Purpose} completed (active={Count})",
+                this.GetPrimaryKeyString(), purpose, remaining);
         });
     }
 
@@ -1219,8 +1246,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <param name="verdict">The verdict reached after the acknowledgement went out.</param>
     private void NackParkedDelivery(IMessageDelivery delivery, IMessageDelivery verdict)
     {
-        // Anything but Failed was delivered — posted to the hub, which now owns the answer.
-        // SenderWasNacked: the failing site already answered (answer once).
+        // Failed only — the SAME rule RoutingGrain.DeliverToGrainRoute applies to the synchronous
+        // verdict, so the sender's answer does not depend on whether the hub was built in time.
+        // Ignored (the storm breaker / aggregate shedder refusing intake) deliberately mints no
+        // DeliveryFailure on either path: answering it feeds the loop it breaks (see
+        // IMessageDelivery.WasAcceptedForDelivery, #1174). SenderWasNacked: the failing site
+        // already answered (answer once).
         if (verdict.State != MessageDeliveryState.Failed || verdict.SenderWasNacked)
             return;
         var failureMessage = verdict.GetFailureMessage()

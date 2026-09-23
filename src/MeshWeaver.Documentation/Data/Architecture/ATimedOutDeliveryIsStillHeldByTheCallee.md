@@ -135,6 +135,20 @@ never carries `Failed`, so `RoutingGrain` never sends a second NACK. `HubReady` 
 activation chain's thread rather than the grain turn, so which side reached the verdict first is
 decided by a compare-and-swap (`DeliverySettlement`), not by timing.
 
+**The build pins the activation.** The parked grain calls used to be the only thing keeping a
+building activation from idle collection. Once they are answered on acceptance, collection
+mid-build would complete `HubReady` and NACK every accepted delivery as `ShuttingDown`. The
+activation chain therefore takes a `HoldActivation("hub build")` for as long as it is subscribed.
+This is the same counter the long-running-operation keep-alive renews, bounded by the #147 cap, and
+`Observable.Using` releases it on every terminal and on deactivation.
+
+**`Ignored` is treated the same on both paths.** A late `Ignored` verdict (the storm breaker or the
+aggregate shedder refusing intake) is not NACKed, which is exactly what the synchronous path
+does: `RoutingGrain`'s result arm acts on `Failed` only. Those refusals deliberately mint no
+`DeliveryFailure`, because answering them feeds the loop they break (`WasAcceptedForDelivery`,
+#1174). Whether an intake refusal should answer its sender is one question for both paths. It is
+not decided by which path happened to carry the delivery.
+
 **Not changed:** `ResponseTimeout`. Raising it would only move the point at which a slow build turns
 into a false failure. A hub that never finishes building still ends in an activation fault, which
 NACKs the sender. That was always true, and it no longer depends on a timer that belongs to the
@@ -177,5 +191,5 @@ log site, and the first one that was a *classification* error rather than a cost
 | `OrleansRoutingService.IsResendableDeliveryFailure` | the gate, client side (`RouteMessage`) |
 | `RoutingGrain.IsResendableDeliveryFailure` | the gate, router side (both forward delivery legs) |
 | `MessageHubGrain.DeliverMessage` / `NackParkedDelivery` | accept-and-park while the hub is built; the late NACK |
-| `ASlowActivationDoesNotTimeOutItsDeliveriesTest` | a hub build held for 3× the cluster's `ResponseTimeout`: the parked request is not failed during the hold and is answered after it |
+| `ASlowActivationDoesNotTimeOutItsDeliveriesTest` | a hub build held for 3× the cluster's `ResponseTimeout` and 5× its `CollectionAge`: the parked request is neither timed out nor collected during the hold, and is answered after it |
 | `TimedOutDeliveryIsNotResentTest` | 6 facts: the delivery is sent exactly once, a rejection still spends its whole budget, both aggregate orderings agree, and all three rungs of the ladder |

@@ -40,6 +40,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// not their absolute size) and the node's hub-configuration resolution is HELD by a
 /// test-controlled gate for several response timeouts. A request is issued while the hold is in
 /// place: it must not fail during the hold, and it must be ANSWERED once the hold is released.</para>
+///
+/// <para><b>The second half of the same contract.</b> Answering on acceptance leaves no grain call
+/// in flight, and a call in flight is what kept the activation from idle collection while it was
+/// building. The cluster's <c>CollectionAge</c> is therefore also shortened well below the hold:
+/// an activation that is not pinned for its build is collected mid-hold, which completes
+/// <c>HubReady</c> and NACKs the accepted delivery as <c>ShuttingDown</c> — the same failed
+/// assertion, for a different reason.</para>
 /// </summary>
 public class ASlowActivationDoesNotTimeOutItsDeliveriesTest(ITestOutputHelper output)
     : OrleansMeshTestBase(output)
@@ -98,7 +105,12 @@ public class ASlowActivationDoesNotTimeOutItsDeliveriesTest(ITestOutputHelper ou
                 "the request reaches the grain and starts its hub build, which parks on the hold — "
                 + "the precondition for everything below", ct);
 
-            await outcome.Where(n => n.Kind == NotificationKind.OnError).Should().NotEmit(HoldFor,
+            // Projected to the failure TEXT so a red run names which of the two defects it caught:
+            // "Response did not arrive on time" (the ack waited on the build) or "Hub disposed
+            // before delivery" (the building activation was collected, nothing pinned it).
+            await outcome.Where(n => n.Kind == NotificationKind.OnError)
+                .Select(n => $"{n.Exception!.GetType().Name}: {n.Exception.Message}")
+                .Should().NotEmit(HoldFor,
                 $"the activation is merely SLOW (held {HoldFor.TotalSeconds:0}s against a "
                 + $"{HeldActivationSiloConfigurator.ResponseTimeout.TotalSeconds:0}s ResponseTimeout); "
                 + "the delivery is parked in the grain and will be posted the moment the hub exists, "
@@ -182,11 +194,24 @@ public class HeldActivationSiloConfigurator : SharedSiloConfigurator, ISiloConfi
     /// <summary>The cluster's Orleans ResponseTimeout — production's is 30 s.</summary>
     public static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// How long an activation may sit idle before Orleans collects it — production's is 15 min.
+    /// Shortened well below the hold, so an activation that is NOT pinned while it builds is
+    /// collected mid-build (which completes HubReady and NACKs every accepted delivery as
+    /// ShuttingDown). Before #5286 the parked grain calls pinned it; now the build must.
+    /// </summary>
+    public static readonly TimeSpan CollectionAge = TimeSpan.FromSeconds(3);
+
     /// <inheritdoc />
     void ISiloConfigurator.Configure(ISiloBuilder siloBuilder)
     {
         Configure(siloBuilder);
         siloBuilder.Configure<SiloMessagingOptions>(o => o.ResponseTimeout = ResponseTimeout);
+        siloBuilder.Configure<GrainCollectionOptions>(o =>
+        {
+            o.CollectionQuantum = TimeSpan.FromSeconds(1);
+            o.CollectionAge = CollectionAge;
+        });
     }
 
     /// <inheritdoc />
