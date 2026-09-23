@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.Json.Nodes;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -62,12 +63,12 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
 
         // Activate the type's own hub — the mirror installed on per-node hub activation and wrote
         // its first observed state unconditionally, so this alone used to produce the satellite.
-        await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await(ct);
+        await ReadNode(TypePath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
         // A state CHANGE on the node — the second thing the mirror used to follow.
         using (accessService.ImpersonateAsSystem())
         {
-            var current = await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await(ct);
+            var current = await ReadNode(TypePath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
             Assert.NotNull(current);
             var content = current.ContentAs<NodeTypeDefinition>(options)!;
             await meshService.UpdateNode(current with
@@ -87,7 +88,7 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
             .Select(n => n?.ContentAs<NodeTypeDefinition>(options))
             .Where(d => d is { LastCompiledVersion: 2026, LatestAssemblyPath: "Widget/v2026.dll" })
             .FirstAsync()
-            .Timeout(60.Seconds())
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         Assert.NotNull(landed);
 
@@ -106,7 +107,7 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
             .SelectMany(_ => SatelliteListing(meshService, ControlTypePath))
             .Where(paths => paths.Contains(controlStatePath))
             .FirstAsync()
-            .Timeout(30.Seconds())
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         Assert.Contains(controlStatePath, controlListed);
 
