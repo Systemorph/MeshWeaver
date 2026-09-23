@@ -242,6 +242,45 @@ public class AReleaseCreateSurvivesItsNodeTypeHubTest(ITestOutputHelper output) 
     }
 
     /// <summary>
+    /// The survivor is itself retire-and-replaceable (#5136), so it must be RESOLVED at each use,
+    /// never held (review on #5459): once the mesh's node-operation hub has been disposed,
+    /// <see cref="NodeTypeBuildState.ReleaseIssuingHub"/> must answer its live successor, and a
+    /// release issued through it must land. The settle calls it afresh for every detached leg;
+    /// this case pins the property those calls rely on.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheSurvivor_IsResolvedAfresh_AfterTheNodeOperationHubIsRetired()
+    {
+        var typePath = $"{TestPartition}/ReleaseSurvivorRetired{Guid.NewGuid().ToString("N")[..8]}";
+        var typeNode = await SeedTypeAsync(typePath);
+        var result = Built(typePath);
+
+        var retired = NodeTypeBuildState.ReleaseIssuingHub(Mesh);
+        retired.Address.Type.Should().NotBe(AddressExtensions.MeshType,
+            "the survivor is the off-router node-operation hub, never the router");
+        var down = retired.DisposalCompleted.Take(1);
+        retired.Dispose();
+        await down.Should().Within(TestTimeouts.Convergence)
+            .Emit("the node-operation hub must actually finish disposing",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var successor = NodeTypeBuildState.ReleaseIssuingHub(Mesh);
+        successor.Should().NotBeSameAs(retired,
+            "a reference to the retired instance would resolve out of a closed scope — the lookup "
+            + "must mint (or return) its successor");
+        ((int)successor.RunLevel).Should().BeLessThanOrEqualTo((int)MessageHubRunLevel.Started,
+            "the successor must be serving, not winding down");
+
+        var outcome = await NodeTypeBuildState
+            .TryCreateReleaseNode(StandInForTheNodeTypeHub("after-retire"), typePath, result, typeNode,
+                activityPath: null, logger: null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the create always answers", cancellationToken: TestContext.Current.CancellationToken);
+        outcome.Failure.Should().BeNull("the create is issued through the live successor");
+        outcome.Succeeded.Should().BeTrue();
+    }
+
+    /// <summary>
     /// The other half of the window: the post-condition's re-cut runs on the FIRST attempt's failure,
     /// i.e. typically after the NodeType hub has already gone. It must re-cut through the survivor,
     /// not resolve anything out of the dead hub's closed scope (before #5358 <c>Restore</c> read its

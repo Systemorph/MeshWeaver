@@ -4202,7 +4202,15 @@ internal static class NodeTypeCompilationHelpers
         // lands). The mesh's node-operation hub is hosted by the mesh hub and outlives every
         // per-node hub; see NodeTypeBuildState.ReleaseIssuingHub and
         // Doc/Architecture/DisposedScopeAndDyingHubs.
-        var settleHub = NodeTypeBuildState.ReleaseIssuingHub(hub);
+        //
+        // 🚨 RESOLVED PER USE, never held (review on #5459). The node-operation hub is itself
+        // retire-and-replaceable (#5136): a recycle or wedge can take THIS instance down and the
+        // next lookup mints a successor, which a reference captured at compile start would never
+        // see — the settle can run seconds later, and holding the instance would recreate the very
+        // dead-scope failure this moves away from. ReleaseIssuingHub is a registry lookup, so each
+        // leg below asks it again at the moment it runs, exactly as MeshService revalidates its
+        // cached issuing hub (UsableIssuingHub).
+        IMessageHub SettleHub() => NodeTypeBuildState.ReleaseIssuingHub(hub);
 
         // 🅿️ Record this real Roslyn kick-off in the park registry. A parked (broken) type
         // holds at its small attempt count instead of climbing on every access — the
@@ -4638,7 +4646,7 @@ internal static class NodeTypeCompilationHelpers
                     // interpolation to every viewer forever.
                     if (settle.Diagnosis is { } diagnosis)
                         activityMessages.Add(diagnosis);
-                    NodeTypeCompilationActivity.Complete(settleHub, resolvedActivityPath,
+                    NodeTypeCompilationActivity.Complete(SettleHub(), resolvedActivityPath,
                         ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
                         activityMessages.ToImmutable(), logger!);
 
@@ -4655,7 +4663,7 @@ internal static class NodeTypeCompilationHelpers
                     // Built inside a FACTORY so a refused stamp never even mints the
                     // RequireSubscribeObservable: constructing one and dropping it would log a
                     // never-subscribed warning about a write we deliberately did not make.
-                    var admission = settleHub.ServiceProvider.GetService<MeshPublicationGate>();
+                    var admission = SettleHub().ServiceProvider.GetService<MeshPublicationGate>();
                     // 🚨 …and the PROCESS-LOCAL half, published BEFORE the (possibly withheld)
                     // stamp. The bake gate's regression retraction (#1214) asks "has this
                     // condemned type since built on THIS image?" and used to read the shared
@@ -4665,7 +4673,7 @@ internal static class NodeTypeCompilationHelpers
                     // trading one outage class for another. Recorded whether or not the stamp is
                     // published, because the compile is what it attests to.
                     if (ok)
-                        settleHub.ServiceProvider.GetService<LocalNodeTypeBuilds>()
+                        SettleHub().ServiceProvider.GetService<LocalNodeTypeBuilds>()
                             ?.RecordUsableBuild(hubPath);
                     // #3583 requirement 3 — set inside the stamp lambda when a delivery hold is
                     // lifted by THIS compile, emitted after the write lands.
@@ -4684,7 +4692,7 @@ internal static class NodeTypeCompilationHelpers
                     MeshNodeStreamHandle StampTarget() =>
                         hub is { IsDisposing: false, RunLevel: <= MessageHubRunLevel.Started }
                             ? workspace.GetMeshNodeStream()
-                            : settleHub.GetMeshNodeStream(hubPath);
+                            : SettleHub().GetMeshNodeStream(hubPath);
                     IObservable<Unit> StampCompileState() =>
                     StampTarget().Update(curr =>
                     {
@@ -4697,7 +4705,7 @@ internal static class NodeTypeCompilationHelpers
                         // instance hub falls back to the default config. ContentAs recovers the
                         // JsonElement into NodeTypeDefinition (logging loud on a genuine degrade)
                         // so the terminal status — and the typed write-back below — always lands.
-                        var def = curr.ContentAs<NodeTypeDefinition>(settleHub.JsonSerializerOptions, logger);
+                        var def = curr.ContentAs<NodeTypeDefinition>(SettleHub().JsonSerializerOptions, logger);
                         if (def is null)
                             return curr;
 
@@ -4710,7 +4718,7 @@ internal static class NodeTypeCompilationHelpers
                                 hubPath, outcome.Result!.AssemblyLocation);
                             var succeeded = ApplyCompileSuccess(
                                 def, outcome.Result, curr.Version, resolvedActivityPath, newReleasePath,
-                                settleHub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
+                                SettleHub().ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
                                 // #5057 — a build that ends with no release is STAMPED as such,
                                 // not only logged at the moment of the settle.
                                 settle.UnreleasedBuildPath, settle.UnreleasedBuildReason);
@@ -4724,7 +4732,7 @@ internal static class NodeTypeCompilationHelpers
                         logger?.LogWarning(outcome.Error,
                             "Compile failure for {HubPath}: {Error}", hubPath,
                             SummarizeCompileError(outcome.Result, outcome.Error));
-                        var modulesHashNow = settleHub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash;
+                        var modulesHashNow = SettleHub().ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash;
                         var failed = ApplyCompileFailure(
                             def, outcome.Result, outcome.Error, resolvedActivityPath,
                             modulesHashNow, hubPath, importRefusals);
@@ -4779,12 +4787,12 @@ internal static class NodeTypeCompilationHelpers
                     .Do(saved =>
                     {
                         if (lifted is { } evt && liftedDef is { } after)
-                            BuildDeliveryHold.Notify(settleHub, hubPath, after, evt, logger);
+                            BuildDeliveryHold.Notify(SettleHub(), hubPath, after, evt, logger);
                         // Publish the post-compile MeshNode update onto the
                         // mesh change feed for cross-silo cache invalidation.
                         try
                         {
-                            settleHub.ServiceProvider.GetService<IMeshChangeFeed>()
+                            SettleHub().ServiceProvider.GetService<IMeshChangeFeed>()
                                 ?.Publish(MeshChangeEvent.Updated(saved));
                         }
                         catch (Exception publishEx)
