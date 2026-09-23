@@ -80,16 +80,34 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
         """;
 
     /// <summary>The registry this installation registers at and the id it claims, from
-    /// configuration — null when no registry or no instance id is configured.</summary>
-    public (PluginRegistryReference Registry, string InstanceId, bool Keyed)? Target()
+    /// configuration — null when no registry or no instance id is configured. <c>Keyed</c> is
+    /// <see cref="IsOperatorProvisioned"/>: the consent step belongs to the OPEN lane only.</summary>
+    public (PluginRegistryReference Registry, string InstanceId, bool Keyed)? Target() =>
+        Target(hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions());
+
+    /// <summary><see cref="Target()"/> over explicit options — the whole decision, pure, so the
+    /// test pins the production wiring and not a copy of it.</summary>
+    internal static (PluginRegistryReference Registry, string InstanceId, bool Keyed)? Target(PluginCatalogOptions options)
     {
-        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
         var registry = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries).FirstOrDefault();
         var instanceId = options.InstanceId?.Trim() ?? "";
         if (registry is null || instanceId.Length == 0)
             return null;
-        return (registry, instanceId, !string.IsNullOrWhiteSpace(options.BootstrapKey));
+        return (registry, instanceId, IsOperatorProvisioned(options.BootstrapKey, registry));
     }
+
+    /// <summary>
+    /// Whether an OPERATOR provisioned this installation's registration, so no consent step
+    /// applies: a registration key (<c>PluginCatalog:BootstrapKey</c>) OR a registry token
+    /// already configured for <paramref name="registry"/> (its own <c>Token</c>, or the legacy
+    /// <c>PluginCatalog:RegistryToken</c> that <see cref="RegistryTokenResolver.WithLegacyTokens"/>
+    /// attributed to it). The token half is the one #5245 found missing: auto-registration SKIPS a
+    /// token-configured installation ("the explicit token wins"), so no credential is ever stored
+    /// and a consent form there could never lead anywhere — the page read "Awaiting consent — not
+    /// registered" for an installation the registry had already issued a key to. Pure.
+    /// </summary>
+    internal static bool IsOperatorProvisioned(string? bootstrapKey, PluginRegistryReference registry) =>
+        !string.IsNullOrWhiteSpace(bootstrapKey) || !string.IsNullOrWhiteSpace(registry.Token);
 
     /// <summary>Both texts, as shown — the privacy statement (null when none has been PUBLISHED on
     /// this installation: there is nothing to accept, and the app says so in the viewer's language)
