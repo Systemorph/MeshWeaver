@@ -3255,9 +3255,10 @@ public class MessageService : IMessageService
         // That is a production hang, not a test artefact: DisposeRequest is deliberately
         // exempt from the init gate (see the gate bypass in ScheduleNotify's deferral path)
         // while an ordinary request is NOT — so any recycle that lands during activation
-        // (WithOverlaySelfHeal's self-recycle, RecycleLayoutArea, the MCP recycle tool, a
-        // node delete) jumps the queue and annihilates the very request that triggered the
-        // activation. The caller — a page load, a GetMeshNode read — then spins for its full
+        // (RecycleLayoutArea, the MCP recycle tool, a node delete) jumps the queue and
+        // annihilates the very request that triggered the activation. (A hub recycling ITSELF
+        // no longer does: HubSelfRecycleExtensions.RecycleSelfAfterAcceptedWork queues that
+        // decision behind the gates, #5356.) The caller — a page load, a GetMeshNode read — then spins for its full
         // budget with no error to show. Proven by ThreadAgentIntegrationTest: the instance
         // hub was created, handed the routed GetDataRequest, and self-disposed 13 ms later;
         // the reader sat idle for its whole 60 s and the target probe reported NO LOCAL HUB.
