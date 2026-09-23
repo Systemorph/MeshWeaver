@@ -144,11 +144,21 @@ and the re-read ladder) start at 45 s, and `OverlayHealBudget` spaces repeats ac
 A burst of discards at one instant on every replica after a NodeType publish is one recycle per
 replica of a hot hub, not a loop — a loop would show the same hub discarding again ≥ 45 s later.
 
-What is OPEN is the level: `MessageService` still logs a foreign sender's bring-up discard at
-**Error** with the sentence *"Accepted work must be drained before a hub goes down"*. The Error was
-justified by #4866's finding that the NACK was not recognised as retryable; that part is fixed, and
-whether the level should now follow the same fact-based rule as the self-sender case (#4178) is a
-maintainer decision, recorded on #5426.
+**The level follows who is stranded.** Every `[DISPOSE-DISCARD]` is a bring-up discard by
+construction: deliveries are parked only behind *initialization* gates, and those close for nothing
+but a bring-up. The line is therefore at Error only where a waiter can be left holding a final
+answer:
+
+| Parked delivery | Level | Why |
+|---|---|---|
+| sent by this hub itself | Debug | nobody outside waits; `NackThroughParent` declines it (#4178) |
+| a request marked `[ReaskedOnShutdown]` (`SubscribeRequest`) | Debug | every producer rides the transient NACK out and asks the next activation (#4888, #5424, #5589) |
+| anything else, from another sender | **Error** | the waiter may take the NACK as final. That is the report worth an issue |
+
+The first cleanup of this table, the self-heal's own recycle, no longer discards anything: it queues
+behind the gates (`HubSelfRecycleExtensions.RecycleSelfAfterAcceptedWork`, #5356). `[ReaskedOnShutdown]`
+makes a claim about EVERY producer of the type, so a new producer must ride the refusal out too.
+Pinned by `DeferredDeliveryNackedOnDisposeTest`, whose unmarked-request case is the control.
 
 ## Reading a refusal in the field
 
