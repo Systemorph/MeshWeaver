@@ -176,3 +176,26 @@ jobs:
           else
             python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15 --settle-replies 60
           fi
+
+  # ♻️ THE SAME VERDICT THROUGH THE FLEET LANE (MeshWeaver#4776). node-repo-review-answered.yml is
+  # the ONE copy every other repository will call; this job calls it from core on every event above,
+  # so the lane is exercised on live pull requests from the day it lands instead of sitting unused
+  # until a satellite adopts it — a lane nobody calls is dead code that reads as a feature.
+  #
+  # 🚨 NOT A REQUIRED CONTEXT, and it must not become one: it publishes as
+  # `lane / Automatic review answered`, and the ruleset requires `Automatic review answered` — the
+  # job above — by name. The two must AGREE; a disagreement is a defect in the lane, never a reason
+  # to believe one over the other.
+  #
+  # `scripts-ref: github.sha` makes the lane fetch the predicate from the SAME tree the job above
+  # checks out (the pull request's merge commit, or the queue entry's head — both are refs in this
+  # repository, fork pull requests included), so a pull request that changes the predicate is judged
+  # by one copy in both jobs.
+  lane:
+    uses: ./.github/workflows/node-repo-review-answered.yml
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    with:
+      scripts-ref: ${{ github.sha }}
