@@ -11,6 +11,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -158,5 +159,56 @@ public class LiveRequeryCoalescingTest
                 + "one full walk per change is the backlog the fan-in's stall terminal fires on",
                 ct);
         adapter.Walks.Should().Be(2);
+    }
+
+    /// <summary>
+    /// A run that COMPLETES ON ANOTHER THREAD before its <c>Subscribe</c> has returned, with a
+    /// follow-up already pending (review of #5615). The completion sees the run still being started
+    /// and hands the follow-up back to the starting loop instead of starting it itself — so the
+    /// follow-up is installed AFTER the first run's subscription, never overwritten (and disposed) by
+    /// it. The follow-up must therefore run and its emission reach the output.
+    /// </summary>
+    [Fact]
+    public async Task ARunCompletingOnAnotherThread_BeforeItsSubscribeReturns_StillRunsTheFollowUp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var triggers = new Subject<Unit>();
+        var runs = 0;
+        var secondEmitted = new AsyncSubject<int>();
+
+        var output = triggers.CoalesceWhileRunning(() => Observable.Create<int>(observer =>
+        {
+            var run = Interlocked.Increment(ref runs);
+            if (run == 1)
+            {
+                // A second trigger arrives while run 1 is in flight → one pending follow-up.
+                triggers.OnNext(Unit.Default);
+                // Run 1 completes on ANOTHER thread, strictly before this Subscribe returns.
+                var completer = new Thread(() =>
+                {
+                    observer.OnNext(1);
+                    observer.OnCompleted();
+                }) { IsBackground = true };
+                completer.Start();
+                completer.Join(TimeSpan.FromSeconds(30));
+                return System.Reactive.Disposables.Disposable.Empty;
+            }
+            // The follow-up: emits and stays open, like a live read that answered.
+            observer.OnNext(run);
+            return System.Reactive.Disposables.Disposable.Empty;
+        }));
+
+        using var subscription = output.Subscribe(value =>
+        {
+            if (value != 2) return;
+            secondEmitted.OnNext(value);
+            secondEmitted.OnCompleted();
+        });
+        triggers.OnNext(Unit.Default);
+
+        await secondEmitted.Should().Within(TestTimeouts.Convergence)
+            .Emit("the pending follow-up was lost when run 1 completed before its Subscribe returned",
+                cancellationToken: ct);
+        Volatile.Read(ref runs).Should().Be(2);
     }
 }

@@ -55,6 +55,10 @@ public static class CoalesceWhileRunningExtensions
                 // nesting a Start per pending trigger.
                 while (true)
                 {
+                    // A disposal that raced a completion callback (or this loop) has already marked
+                    // the output stopped: never start a run for an output nobody observes.
+                    lock (gate)
+                        if (stopped) return;
                     var completedSynchronously = false;
                     var inStart = true;
                     IDisposable subscription;
@@ -154,12 +158,16 @@ public static class CoalesceWhileRunningExtensions
                     observer.OnCompleted();
                 });
 
+            // 🚨 STOP FIRST, then dispose upstream. The other order left a window in which a trigger
+            // or a run's completion, racing the disposal on another thread, passed its `stopped`
+            // check and started a run after the output had been disposed (review of #5615).
+            // CompositeDisposable disposes in insertion order.
             return new CompositeDisposable(
-                triggerSubscription,
-                current,
                 Disposable.Create(() =>
                 {
                     lock (gate) stopped = true;
-                }));
+                }),
+                triggerSubscription,
+                current);
         });
 }
