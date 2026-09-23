@@ -229,6 +229,17 @@ other is refused as unsealed, as it is today: the lane fails RED on either half.
 * **`/api/plugins/bundles/prebuilt/…` for the GitHub OIDC build principal.** A `pull_request`
   run has no instance key, and the registry edge validates only instance keys. Those gates keep
   the HTTP surface until the edge can validate a build principal.
+* **`POST /api/plugins/bundles/{plugin}`**: the module publish, which lands on
+  `ModuleLandingService.ShelveModule`. The endpoint **spools the upload to a temporary file** that
+  deletes itself when the request ends. It then reads the manifest, the assemblies, the static
+  assets and the natives from that file, and never holds the archive in the managed heap
+  (#5501). The endpoint used to copy the body into a growing `MemoryStream` and then call
+  `ToArray()` on it. A bundle of N bytes then needed up to about 3N of contiguous large-object
+  heap, so large publishes died with `OutOfMemoryException` in `MemoryStream.ToArray` (and before
+  that in `MemoryStream.set_Capacity`). `BundleReader` also allocates each entry once, at the
+  length the archive declares, instead of growing a buffer and copying it out.
+  `BundleReaderTest.AModuleReadFromDiskAllocatesEachEntryOnce` pins that per-entry bound; the old
+  reader allocated about 5x the entry.
 * **`POST /api/instances/register`** and **`POST /api/instances/token`** — registration and the
   key exchange; the edge depends on the second.
 

@@ -456,7 +456,17 @@ public static class BundleReader
     public static IReadOnlyList<ModuleAsset> ReadModuleAssets(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+        return ReadModuleAssets(buffer);
+    }
+
+    /// <summary>
+    /// <see cref="ReadModuleAssets(byte[])"/> over a SEEKABLE stream — a spooled upload on disk (#5501), so
+    /// the archive's compressed bytes never have to sit in the managed heap to be read.
+    /// </summary>
+    /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
+    public static IReadOnlyList<ModuleAsset> ReadModuleAssets(Stream bundle)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
         if (manifestEntry is null)
@@ -493,7 +503,17 @@ public static class BundleReader
     public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssets(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+        return ReadModuleNativeAssets(buffer);
+    }
+
+    /// <summary>
+    /// <see cref="ReadModuleNativeAssets(byte[])"/> over a SEEKABLE stream — a spooled upload on disk (#5501), so
+    /// the archive's compressed bytes never have to sit in the managed heap to be read.
+    /// </summary>
+    /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
+    public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssets(Stream bundle)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
         if (manifestEntry is null)
@@ -534,7 +554,17 @@ public static class BundleReader
     public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+        return ReadModule(buffer);
+    }
+
+    /// <summary>
+    /// <see cref="ReadModule(byte[])"/> over a SEEKABLE stream — a spooled upload on disk (#5501), so
+    /// the archive's compressed bytes never have to sit in the managed heap to be read.
+    /// </summary>
+    /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
+    public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(Stream bundle)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
         if (manifestEntry is null)
@@ -560,11 +590,23 @@ public static class BundleReader
         return (manifest, files);
     }
 
+    /// <summary>
+    /// One entry's bytes, allocated ONCE at the size the archive declares (#5501).
+    ///
+    /// <para>🚨 The previous form copied into a growing <see cref="MemoryStream"/> and then called
+    /// <see cref="MemoryStream.ToArray"/>: every doubling left its predecessor for the GC, and the
+    /// final copy held the whole entry a second time — roughly THREE times an entry's size live at
+    /// the peak, on the large-object heap for any real assembly. The publish endpoint's OOM
+    /// (<c>MemoryStream.ToArray</c> under <c>MapPublish</c>) is that dance on the body; this is the
+    /// same dance per entry. The declared length is authoritative for a Deflate or Stored entry, and
+    /// a stream that ends short of it is a corrupt archive, which <see cref="Stream.ReadExactly(Span{byte})"/>
+    /// reports instead of returning a silently truncated assembly.</para>
+    /// </summary>
     private static byte[] ReadAll(ZipArchiveEntry entry)
     {
         using var source = entry.Open();
-        using var target = new MemoryStream();
-        source.CopyTo(target);
-        return target.ToArray();
+        var bytes = GC.AllocateUninitializedArray<byte>(checked((int)entry.Length));
+        source.ReadExactly(bytes);
+        return bytes;
     }
 }

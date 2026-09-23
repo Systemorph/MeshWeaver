@@ -550,6 +550,43 @@ public static class PluginBundleEndpoints
     private static ILogger? Log(HttpContext http) =>
         http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginBundleEndpoints));
 
+    /// <summary>
+    /// Copies an upload into a temporary file that deletes itself on close, and returns it
+    /// positioned at its start — the publish endpoint's one buffer, and one that is not the managed
+    /// heap (#5501). Internal so a test can pin that the spool is a FILE and holds the body
+    /// byte-exact, including a chunked body that carries no <c>Content-Length</c>.
+    /// </summary>
+    /// <param name="body">The request body.</param>
+    /// <param name="ct">The request's cancellation.</param>
+    /// <returns>The spooled upload, readable and seekable; the caller disposes it.</returns>
+    internal static async Task<FileStream> SpoolUploadAsync(Stream body, CancellationToken ct)
+    {
+        var spool = new FileStream(
+            Path.Combine(Path.GetTempPath(), "mw-publish-" + Guid.NewGuid().ToString("N") + ".bundle"),
+            FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, bufferSize: 81920,
+            FileOptions.DeleteOnClose | FileOptions.Asynchronous | FileOptions.SequentialScan);
+        try
+        {
+            await body.CopyToAsync(spool, ct);
+            await spool.FlushAsync(ct);
+            spool.Position = 0;
+            return spool;
+        }
+        catch
+        {
+            // Not a swallow: the fault propagates unchanged. The spool is closed (and, by
+            // DeleteOnClose, removed) because nothing else will ever hold a reference to it.
+            await spool.DisposeAsync();
+            throw;
+        }
+    }
+
+    private static Stream Rewound(Stream stream)
+    {
+        stream.Position = 0;
+        return stream;
+    }
+
     private static void MapPublish(IEndpointRouteBuilder endpoints)
     {
         var config = endpoints.ServiceProvider.GetService<IConfiguration>();
@@ -576,10 +613,16 @@ public static class PluginBundleEndpoints
                         new { error = "this instance cannot land modules (no ModuleLandingService)" },
                         statusCode: StatusCodes.Status503ServiceUnavailable);
 
-                using var buffer = new MemoryStream();
-                await http.Request.Body.CopyToAsync(buffer, ct);
-                var bytes = buffer.ToArray();
-                if (bytes.Length == 0)
+                // 🚨 SPOOL THE UPLOAD TO DISK, NEVER TO THE HEAP (#5501). The body used to be copied
+                // into a growing MemoryStream and then ToArray()'d: every capacity doubling left its
+                // predecessor for the GC and the final copy held the whole bundle once more, so a
+                // bundle of N bytes needed up to ~3N of contiguous large-object heap — and the
+                // endpoint died with OutOfMemoryException in MemoryStream.ToArray (2026-09-23) and
+                // in MemoryStream.set_Capacity before it (2026-09-05). The archive only has to be
+                // SEEKABLE for ZipArchive to read it in place, and a file is; the three readers
+                // below each open it from the start, and DeleteOnClose removes it with the request.
+                await using var bundle = await SpoolUploadAsync(http.Request.Body, ct);
+                if (bundle.Length == 0)
                     return Results.Json(new { error = "the request carried no bundle" },
                         statusCode: StatusCodes.Status400BadRequest);
 
@@ -589,16 +632,16 @@ public static class PluginBundleEndpoints
                 IReadOnlyList<BundleReader.ModuleAsset> natives;
                 try
                 {
-                    (manifest, files) = BundleReader.ReadModule(bytes);
+                    (manifest, files) = BundleReader.ReadModule(Rewound(bundle));
                     // Inside the SAME guard: a bundle whose assemblies read cleanly can still carry
                     // a corrupt asset entry, and reading that outside here would throw out of the
                     // handler as a 500 — telling the publisher "the server broke" for what is
                     // simply an unreadable upload, the case this catch already classifies.
-                    assets = BundleReader.ReadModuleAssets(bytes);
+                    assets = BundleReader.ReadModuleAssets(Rewound(bundle));
                     // Same guard, same reason (#4126): a declared native at a layout the loader
                     // never probes makes ReadModuleNativeAssets throw, and that is an unreadable
                     // UPLOAD — a 400 naming it, never a 500 telling the publisher the server broke.
-                    natives = BundleReader.ReadModuleNativeAssets(bytes);
+                    natives = BundleReader.ReadModuleNativeAssets(Rewound(bundle));
                 }
                 catch (Exception exception)
                 {

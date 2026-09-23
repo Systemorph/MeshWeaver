@@ -296,6 +296,50 @@ public class BundleReaderTest
         Assert.Equal("SOCIAL", Encoding.UTF8.GetString(only.Bytes));
     }
 
+    /// <summary>
+    /// #5501 — a module read from a bundle ON DISK allocates each entry ONCE. The reader used to
+    /// copy every entry into a growing <see cref="MemoryStream"/> and then <c>ToArray()</c> it —
+    /// about three times the entry's size at the peak, on the large-object heap — the same dance that
+    /// took the publish endpoint down with <c>OutOfMemoryException</c> in <c>MemoryStream.ToArray</c>.
+    /// Synchronous and single-threaded on purpose, so the per-thread allocation counter measures
+    /// exactly this read.
+    /// </summary>
+    [Fact]
+    public void AModuleReadFromDiskAllocatesEachEntryOnce()
+    {
+        // Incompressible, so the archive's size tracks the entry's and Deflate hides nothing.
+        var payload = new byte[8 * 1024 * 1024];
+        new Random(5501).NextBytes(payload);
+        var bundle = WriteModuleBundle(
+            new { assemblyName = "MeshWeaver.Big", assemblies = new[] { "MeshWeaver.Big.dll" } },
+            ("MeshWeaver.Big.dll", payload));
+
+        var path = Path.Combine(Path.GetTempPath(), $"mw-5501-{Guid.NewGuid():N}.bundle");
+        File.WriteAllBytes(path, bundle);
+        try
+        {
+            using var file = File.OpenRead(path);
+            // Warm-up read: JIT, the manifest's JSON metadata and ZipArchive's statics are one-time
+            // costs, not what this measures.
+            BundleReader.ReadModule(file);
+            file.Position = 0;
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var (_, files) = BundleReader.ReadModule(file);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(payload, Assert.Single(files).Bytes);
+            Assert.True(allocated < payload.Length * 3L / 2,
+                $"reading one {payload.Length:N0}-byte entry allocated {allocated:N0} bytes — more "
+                + "than 1.5x the entry, so the reader still grows a buffer and copies it out (#5501) "
+                + "instead of allocating the declared length once");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public void AMixedBundleServesBothLanes()
     {
