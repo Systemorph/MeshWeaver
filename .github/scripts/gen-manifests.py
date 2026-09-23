@@ -61,8 +61,9 @@ WHAT STAYS IN THE CALLER — `scripts/gen-manifests.config.json`, its allow-file
 
   skip                REQUIRED. The top-level directories that are NOT node packages. Per-repo by
                       construction — a name that is a scratch directory in one repo is a shipping
-                      package in another — and it must equal `validate-repos.py`'s SKIP, which is
-                      what each repo's `check-skip-sets.py` asserts.
+                      package in another — and `validate-repos.py`'s `package_dirs(root)` must
+                      return what `plugin_dirs` returns, which the lane's
+                      `check-package-enumeration.py` asserts on the checkout and on a fixture.
   hashModuleSources   Optional, default FALSE. When true, a MIXED package's `src/` project (and the
                       in-tree siblings riding its bundle) is hashed into its moduleVersion — the
                       #878 fix — which needs the caller to ship a `scripts/project-closure.py`
@@ -180,7 +181,8 @@ def config(root: Path) -> dict:
             raise SystemExit(
                 f"✗ gen-manifests: {path} not found. This is the PLATFORM's canonical script and it "
                 f"does not guess which top-level directories are packages — see the header for the "
-                f"file's shape. It must list the same directories as validate-repos.py's SKIP.")
+                f"file's shape. validate-repos.py's package_dirs(root) must return the same packages "
+                f"this file's plugin_dirs does — the lane's check-package-enumeration.py asserts it.")
         except (OSError, json.JSONDecodeError) as ex:
             raise SystemExit(f"✗ gen-manifests: {path} is unreadable: {ex}")
         if not isinstance(raw, dict):
@@ -205,10 +207,10 @@ def config(root: Path) -> dict:
 
 
 def skip_set(root: Path) -> set[str]:
-    """Directories that are NOT node packages — declared per repo, and kept equal to
-    validate-repos.py's SKIP by the caller's check-skip-sets.py. A directory in one and not the
-    other either gets validated as nodes it does not contain, or has a manifest.lock demanded for a
-    package it is not.
+    """Directories that are NOT node packages — declared per repo; the lane's
+    check-package-enumeration.py holds validate-repos.py's enumeration to this one's. A directory
+    in one and not the other either gets validated as nodes it does not contain, or has a
+    manifest.lock demanded for a package it is not.
 
     🚨 The DECLARATION is not the whole rule — see `plugin_dirs`, which also drops every
     dot-directory. A caller's guard that compares this set against its own enumerator's SKIP is

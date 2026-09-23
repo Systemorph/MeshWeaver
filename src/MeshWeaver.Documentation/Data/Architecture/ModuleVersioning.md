@@ -290,7 +290,7 @@ witness at all, so it also had no `--resolve` and no self-test.
 
 | key | |
 |---|---|
-| `skip` | **required** — the top-level directories that are NOT packages. Per-repo by construction (a scratch directory in one repo is a shipping package in another), and it must equal `validate-repos.py`'s `SKIP`, which each repo's `check-skip-sets.py` asserts. There is no default: a guessed skip list either demands a `manifest.lock` for `scripts/` or silently stops versioning a real module. |
+| `skip` | **required** — the top-level directories that are NOT packages. Per-repo by construction (a scratch directory in one repo is a shipping package in another), and `validate-repos.py`'s `package_dirs(root)` must return the same packages `plugin_dirs` does, which the lane's `check-package-enumeration.py` asserts on the checkout and on a fixture (see below). There is no default: a guessed skip list either demands a `manifest.lock` for `scripts/` or silently stops versioning a real module. |
 | `hashModuleSources` | optional, default **false** — the #878 fix (hash a mixed package's `src/` project, and the siblings riding its bundle, into its `moduleVersion`). It needs the caller's `scripts/project-closure.py` to expose `graph_of` / `module_owned` / `riding_siblings`, and asking for it without one is an **error**, never a quiet fall-back to the smaller hash. Default false because turning it on **moves every mixed package's version** — a release event, not a script upgrade. |
 
 Both settings are *declared*, never inferred from whether a file happens to exist: a capability that
@@ -324,14 +324,38 @@ output against that and needs no copy of either rule; the count goes to stderr s
 still be told from a broken one. The canonical's `--self-test` pins both directions over a fixture
 tree holding a `.example-check/`, a declared skip and two real packages.
 
-**What is still owed, and the ordering matters.** Each satellite's own `check-skip-sets.py` has to
-start comparing against `--list-packages` (and its `validate-repos.py` enumerator gain the dot rule).
-🚨 Tighten the guard **last**: doing it first reds five satellites' required `validate` context at
-once for a condition none of them can fix without their own PR — the fleet-wide-red shape a dated
-guard already produced here. Canonical first, repos adopt, guard tightens when it can only pass.
+**The guard is the platform's, and it calls both enumerators.** `node-repo-validate.yml` fetches
+`.github/scripts/check-package-enumeration.py` beside the canonical and runs it on every caller. The
+contract is one function: the caller's `scripts/validate-repos.py` exposes
+`package_dirs(root) -> list[Path]` — its skip set **and** the dot-directory rule, a pure function of
+the top-level names — and its own `main()` enumerates through it. The guard then compares what the two
+enumerators *return*, twice:
 
-Adoption is one commit per repo — add the config, drop the vendored copy, point `validate-repos.py`
-and `check-skip-sets.py` at the platform copy, and pass `centralized-gen-manifests: true` to the lane.
+- **on the checkout**, name for name; and
+- **on a fixture** holding every name either side declares, every top-level directory the checkout
+  has, a probe dot-directory and a probe package — so a disagreement that needs a directory the tree
+  does not happen to contain today (the dot rule, a skip name one side forgot) is red now rather than
+  the day a tool writes one.
+
+That second half is what the per-repo `check-skip-sets.py` could never do, and it found a live
+instance on the first run: MeshWeaver.Plugins skipped `dist` in both of its SKIP sets and **not** in
+the `gen-manifests.config.json` the canonical actually reads — equal declarations, a divergent
+verdict. A repo that adopts deletes its `check-skip-sets.py`; the platform guard supersedes it.
+
+🚨 **The ordering.** A caller whose `validate-repos.py` has no `package_dirs` yet is NAMED
+(`::warning::package enumeration NOT compared`) and not failed — reddening it first would red every
+satellite's required `validate` context for a condition none of them can fix without their own PR,
+the fleet-wide-red shape a dated guard already produced here. Everything else is red: a missing or
+unloadable `validate-repos.py`, a `package_dirs` that raises or returns anything but a list, a
+`main()` that does not enumerate *through* `package_dirs` (checked statically — a helper added beside
+an untouched `root.iterdir()` walk would otherwise pass while the gate still disagreed), a missing
+config, any disagreement.
+The flip of the absent case to red is a change to the guard once every caller has adopted, never a
+date. Canonical first, repos adopt, guard tightens when it can only pass.
+
+Adoption is one commit per repo — add the config, drop the vendored copy, give `validate-repos.py`
+its `package_dirs(root)`, retire `check-skip-sets.py`, and pass `centralized-gen-manifests: true` to
+the lane.
 Before merging one, prove it moves nothing:
 
 ```bash
