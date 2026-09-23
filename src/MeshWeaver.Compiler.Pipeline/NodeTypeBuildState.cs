@@ -170,7 +170,26 @@ public static class NodeTypeBuildState
     {
         try
         {
-            var meshService = hub.ServiceProvider.GetService<IMeshService>();
+            // 🚨 ISSUED FROM A SURVIVOR, never from the NodeType's own hub (#5358). The create's
+            // reply is addressed to whichever hub ISSUED it, and the hub the compile settled on is
+            // exactly the one a successful compile is most likely to be recycled out from under —
+            // a recycle, a rebind, a cascade, a deactivation. Issued from that hub, a create still
+            // in flight when its Quiescing budget ran out was answered
+            // HubDisposedBeforeResponseException although the create itself went on to land, and
+            // the post-condition's re-cut, issued from the same dying hub, failed the same way a
+            // second later: a build no release names. The mesh's node-operation hub
+            // (portal/nodeops-{meshId}) is hosted by the mesh hub, so no per-node teardown reaches
+            // it; it is the documented seam for a node LIFECYCLE write (MeshExtensions
+            // .NodeOperationIssuingHub), and the create it issues is the self-addressed exchange
+            // every mesh-singleton's node CRUD already is (Doc/Architecture/SelfAddressedRequests)
+            // — no routing leg and no reply leg that a teardown elsewhere can cut. NOT the
+            // read-issuing hub: that one exists for bounded READS and registers no handlers, and a
+            // write's reply belongs behind the writes queued ahead of it. Every service below comes
+            // from the survivor too, because this method is also called AFTER the NodeType hub has
+            // died (ReleasePostCondition.Restore runs on the first attempt's failure) and a
+            // resolve out of its closed scope throws.
+            var issuing = ReleaseIssuingHub(hub);
+            var meshService = issuing.ServiceProvider.GetService<IMeshService>();
             if (meshService is null)
                 return Observable.Return(ReleaseCreateOutcome.Failed(
                     "no IMeshService is registered on this hub, so no Release node could be created"));
@@ -181,7 +200,7 @@ public static class NodeTypeBuildState
             // Pending was observed). Reading from the live workspace stream
             // here would race the watcher's already-applied
             // Status=Compiling write.
-            var notes = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.ReleaseNotes;
+            var notes = pendingNode.ContentAs<NodeTypeDefinition>(issuing.JsonSerializerOptions)?.ReleaseNotes;
 
             // Auto-stamp version: {yyyyMMddHHmmss}-{8charContentHash}. Sortable
             // chronologically + unique per content. Hash from the cross-silo
@@ -233,7 +252,7 @@ public static class NodeTypeBuildState
             if (result.CompiledSources is { Count: > 0 } compiledSources)
             {
                 var testQueries = CodeQueryResolver.ExpandAll(
-                        pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.Tests,
+                        pendingNode.ContentAs<NodeTypeDefinition>(issuing.JsonSerializerOptions)?.Tests,
                         CodeQueryResolver.DefaultTests, nodeTypePath)
                     .ToList();
                 testVersions = compiledSources
@@ -310,8 +329,8 @@ public static class NodeTypeBuildState
             // Observable.Using acquires the scope AT SUBSCRIBE so both the CreateNode call and
             // its subscription run inside it — CreateNode captures the caller's identity for
             // the stored MeshNode.CreatedBy.
-            var requestedBy = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseBy;
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            var requestedBy = pendingNode.ContentAs<NodeTypeDefinition>(issuing.JsonSerializerOptions)?.RequestedReleaseBy;
+            var accessService = issuing.ServiceProvider.GetService<AccessService>();
 
             // OBSERVED create: report the path only once the create response lands.
             // Bounded — a hung owner must never block the compile's terminal write; on
@@ -339,6 +358,20 @@ public static class NodeTypeBuildState
                 $"the Release node could not be composed at all: {ex.GetType().Name}: {ex.Message}"));
         }
     }
+
+    /// <summary>
+    /// The hub a release create is ISSUED on — the mesh's node-operation hub, a SURVIVOR of the
+    /// NodeType hub the compile settled on (#5358). See the note in
+    /// <see cref="TryCreateReleaseNode"/>: a create issued from the NodeType's own hub has its reply
+    /// addressed to a hub its own compile's success may be recycling, and the pending callback is
+    /// cancelled with <c>HubDisposedBeforeResponseException</c> while the create goes on to land.
+    /// Falls back to the mesh hub only while the mesh itself is tearing down, when nothing is being
+    /// released anyway. Pure resolution — it reads nothing through <paramref name="hub"/> but its
+    /// parent chain, so it is safe on a hub that has already finished disposing.
+    /// </summary>
+    /// <param name="hub">Any hub of the mesh — in production the NodeType's own hub.</param>
+    internal static IMessageHub ReleaseIssuingHub(IMessageHub hub) =>
+        hub.GetMeshHub().NodeOperationIssuingHub();
 
     /// <summary>
     /// The 8-character content hash half of a release id — <c>SHA256(Collection/ContentPath)</c>,

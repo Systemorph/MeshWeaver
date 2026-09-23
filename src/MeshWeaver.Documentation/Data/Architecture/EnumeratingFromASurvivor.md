@@ -156,6 +156,51 @@ gone, a watcher armed on the way out — the resolve belongs to a survivor. `Hos
 own commentary names this the `ObjectDisposedException` straggler class, "whose one escape onto a
 scheduler thread is the anonymous *Catastrophic failure* that reds an otherwise green shard".
 
+## The same shape on the WRITE side: a release create issued from the hub its compile recycles
+
+A request/response has a second dependency on the hub it is issued from, and it is not the DI
+scope: **the reply is addressed to the issuer.** If the issuer tears down with the request
+outstanding, its Quiescing phase waits out its budget and then cancels every pending callback with
+`HubDisposedBeforeResponseException` — while the target goes on doing the work. The caller is told
+"failed" about a write that lands.
+
+That is issue #5358. After a successful compile, the NodeType hub's settle cut the release with
+`IMeshService.CreateNode` resolved from **the NodeType's own hub**; `IMeshService` is scoped per hub,
+so its issuing hub was that hub, and a compile's success is exactly what gets a NodeType hub recycled.
+On memex-cloud `Marketing/Event` compiled (644 → 648), the settle's own create and the
+post-condition's re-cut both failed one second apart with *"Hub Marketing/Event was disposed before
+the response arrived (request type CreateNodeRequest, target portal/nodeops-…)"*, and the node was
+left advertising a build no release names.
+
+The survivor for a write is the mesh's **node-operation hub** (`portal/nodeops-{meshId}`, via
+`NodeTypeBuildState.ReleaseIssuingHub` = `hub.GetMeshHub().NodeOperationIssuingHub()`):
+
+- it is hosted by the mesh hub, so no per-node teardown reaches it;
+- it is the documented seam for a node **lifecycle write**; the create it issues is the
+  self-addressed exchange every mesh-singleton's node CRUD already is
+  ([A Request a Hub Sends to Itself](../SelfAddressedRequests)), so there is no routing leg and no
+  reply leg for a teardown elsewhere to cut;
+- the **read-issuing** hub is NOT the right survivor here: it registers no handlers and exists for
+  bounded reads. A write's reply belongs behind the writes queued ahead of it.
+
+What moved with the create, because the settle is a detached subscription that outlives the hub:
+
+| step | before | now |
+|---|---|---|
+| release create (`TryCreateReleaseNode`) | `IMeshService` + `AccessService` from the NodeType hub | from the survivor |
+| re-cut (`ReleasePostCondition.Restore`) | read `AccessService` through the NodeType hub. That hub is typically already down here, since Restore runs on the first attempt's failure | from the survivor |
+| activity terminal write, delivery-hold notice, the stamp's gate / fingerprint / change feed | resolved lazily out of the NodeType hub's scope | from the survivor |
+| compile-state stamp | own-node write, always | own-node write **while the hub still serves**; once it is winding down, written to the node BY PATH from the survivor, so routing delivers it to the owner's next activation instead of into a workspace that can commit nothing |
+
+`AReleaseCreateSurvivesItsNodeTypeHubTest` parks a real create at the owner with a creation
+validator, disposes the issuing stand-in (and proves its scope is closed), then lets the create
+through: `Landed` with the fix, `HubDisposedBeforeResponseException` without it. Its second case
+runs the re-cut against an already-dead hub.
+
+**What this does not change:** what disposed the NodeType hub in the first place. Nothing in the
+incident's two log lines names the poster of that `DisposeRequest`, and the fix does not depend on
+knowing it. A settle that no longer dies with its hub is correct whoever recycled it.
+
 ## See also
 
 - [Hub Disposal Model](../HubDisposalModel) — what a `DisposeRequest` tears down, and the cascade

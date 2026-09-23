@@ -199,7 +199,13 @@ internal static class ReleasePostCondition
         NodeTypeBuildState.ReleaseCreateOutcome firstAttempt,
         ILogger? logger)
     {
-        var before = pendingNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+        // 🚨 NOTHING is read through `hub` (#5358). Restore runs on the settle's FIRST attempt's
+        // outcome, and the commonest reason that attempt failed is that `hub` — the NodeType hub the
+        // compile settled on — was disposed with the create in flight; by now its DI scope may be
+        // closed, and a resolve out of it throws. The survivor that issues the re-cut is the one
+        // every read here comes from.
+        var survivor = NodeTypeBuildState.ReleaseIssuingHub(hub);
+        var before = pendingNode.ContentAs<NodeTypeDefinition>(survivor.JsonSerializerOptions);
         if (Violation(before, result, firstAttempt.ReleasePath) is not { } violation)
             return Observable.Return(new Settle(firstAttempt.ReleasePath, null));
 
@@ -217,7 +223,7 @@ internal static class ReleasePostCondition
         // the very attribution that was refused. RunAsSystem (not Observable.Using over
         // ImpersonateAsSystem) — the sealed impersonation boundary is what keeps the scope off the
         // subscriber and off the terminating thread.
-        var access = hub.ServiceProvider.GetService<AccessService>();
+        var access = survivor.ServiceProvider.GetService<AccessService>();
         var systemPending = pendingNode with { Content = before! with { RequestedReleaseBy = null } };
 
         // 🚨 The SAME id as the settle's own attempt (#5057) — see the summary. Only an attempt
