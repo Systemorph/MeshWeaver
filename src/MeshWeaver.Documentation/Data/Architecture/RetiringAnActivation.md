@@ -109,7 +109,8 @@ never the right call for a retirement.
 ## What is NOT a retirement — a teardown that lands during bring-up
 
 This page covers ONE kind of teardown: a hub that retires itself because its own initialization
-met a transient fault, and therefore HAS a cause to state. It is not the rule for every hub that
+met a transient fault, and therefore has a gate-fault classification — the cause of the gate's
+death, stated as an `ErrorType` — for `FailGate` to record ahead of the drain. It is not the rule for every hub that
 goes down with work parked behind its gates, and reading it that way files the wrong issue
 (#5274, #5424, #5426 each asked for a `FailGate`/drain before an external teardown).
 
@@ -120,8 +121,11 @@ Two teardowns routinely reach a hub whose `DataContextInit` / `MeshNodeInit` gat
 | **Overlay self-heal** | `NodeTypeEnrichmentHelpers.WithOverlaySelfHeal` — the watcher armed in the overlaid hub's `WithInitialization`. Its first emission is a REPLAY, so when the type's build landed between enrichment and activation it posts the self-`DisposeRequest` before the gates open. | *"requested by itself … Overlay self-heal: the instance is bound to an overlay of NodeType '…'"* |
 | **Orleans grain deactivation** | `MessageHubGrain` on a deactivation (e.g. `DirectoryFailure`, the directory owner's silo is shutting down), via `NoteDirectDisposalBy` + `Dispose()` | *"requested by Orleans deactivating grain …; why: …"* |
 
-Neither has a more specific cause than the teardown itself, so there is nothing for a `FailGate` to
-say that the generic drain does not already say — and neither can "drain first": the parked
+Both have a cause, and both already print it: `DisposalAttribution()` puts the teardown's WHO and
+WHY into the `[DISPOSE-DISCARD]` line and into the NACK the sender reads (the table above). What
+neither has is a separate **initialization-gate fault** — the gates did not die of anything, the hub
+was taken down around them — so there is nothing for a `FailGate` to add to the attribution the
+generic drain already carries. And neither can "drain first": the parked
 deliveries are waiting for a bring-up that the teardown ends. That is the carve-out
 [Teardown Layers](/Doc/Architecture/TeardownLayers) states under *Handler turns*: a hub that never
 finished **starting** has its `InitializeHubRequest` cancelled, and whatever was parked behind its
