@@ -69,6 +69,85 @@ public static class PublicSite
            && !string.Equals(request.Host.Value, host, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The host that owns SIGN-IN, e.g. <c>memex.meshweaver.cloud</c>. Unset ⇒ this deployment has
+    /// one sign-in host and nothing is redirected.
+    /// </summary>
+    public const string AuthHostKey = "Portal:AuthHost";
+
+    /// <summary>
+    /// The ONE path a sign-in starts on — <c>Login.razor</c> navigates to
+    /// <c>/auth/login?provider=X</c>. The callback paths (<c>/signin-*</c>) are deliberately NOT
+    /// here: see <see cref="UseAuthHostRedirect"/>.
+    /// </summary>
+    public const string SignInInitiationPath = "/auth/login";
+
+    /// <summary>The configured sign-in host, trimmed, or null when sign-in is not host-bound.</summary>
+    public static string? AuthHost(IConfiguration configuration)
+    {
+        var value = configuration[AuthHostKey];
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim().TrimEnd('/');
+    }
+
+    /// <summary>
+    /// True when a sign-in is STARTING on a host that does not own sign-in. Pure, so the rule is
+    /// pinned without a server.
+    /// </summary>
+    public static bool StartsSignInOnWrongHost(IConfiguration configuration, HttpRequest request)
+        => AuthHost(configuration) is { } authHost
+           && request.Path.StartsWithSegments(SignInInitiationPath, StringComparison.OrdinalIgnoreCase)
+           && !string.Equals(request.Host.Value, authHost, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 🚨 A SIGN-IN STARTS ON THE HOST THE IDENTITY PROVIDERS WERE TOLD ABOUT — nowhere else.
+    ///
+    /// <para>An OAuth challenge builds <c>redirect_uri</c> from the host the request arrived on.
+    /// A portal serving brand hosts therefore asked each provider to redirect to a host that was
+    /// never registered with it, and every provider refused — measured 2026-09-23 on
+    /// <c>www.meshweaver.cloud</c>, where all three sent their own host:
+    /// <c>redirect_uri=https://www.meshweaver.cloud/signin-microsoft</c> (and <c>-google</c>,
+    /// <c>-linkedin</c>), while the registered value is the app host. LinkedIn answered "The
+    /// redirect_uri does not match the registered value" and Google "Access blocked: This app's
+    /// request is invalid".</para>
+    ///
+    /// <para><b>Why a redirect and not a registration.</b> Registering every brand host with every
+    /// provider is N hosts × M providers, and each new brand host silently breaks sign-in again
+    /// until someone remembers. Sending the VISITOR to the sign-in host first keeps
+    /// <c>redirect_uri</c> constant forever, so one registration per provider is enough — and it is
+    /// what this file already says the split means: the app host "carries sign-in, the APIs, MCP,
+    /// gRPC and the plugin registry".</para>
+    ///
+    /// <para>🚨 <b>Only the INITIATION path moves, never a <c>/signin-*</c> callback.</b> A callback
+    /// carries the correlation and nonce cookies that the challenge set, and those are scoped to the
+    /// host that issued it — redirecting a callback across hosts would drop them and fail the
+    /// handshake. After this, challenges only ever start on the auth host, so their callbacks land
+    /// there too, with their cookies.</para>
+    ///
+    /// <para>🚨 <b>302, not 301.</b> The sign-in host is configuration and may move; a permanent
+    /// redirect is cached by browsers past any deploy that changes it.</para>
+    ///
+    /// <para>Unset <c>Portal:AuthHost</c> ⇒ this does nothing, so a single-host deployment
+    /// (<c>memex.systemorph.com</c> has no public host at all) is untouched. Register BEFORE the
+    /// endpoints that serve <see cref="SignInInitiationPath"/>.</para>
+    /// </summary>
+    public static IApplicationBuilder UseAuthHostRedirect(this IApplicationBuilder app)
+        => app.Use((http, next) =>
+        {
+            var configuration = http.RequestServices.GetRequiredService<IConfiguration>();
+            if (!StartsSignInOnWrongHost(configuration, http.Request))
+                return next(http);
+
+            var authHost = AuthHost(configuration)!;
+            var logger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(PublicSite));
+            logger?.LogInformation(
+                "[AUTH-HOST] sign-in started on {Host}, which does not own sign-in — sending the visitor to {AuthHost} "
+                + "so redirect_uri names the host the identity providers were told about",
+                http.Request.Host.Value, authHost);
+            http.Response.Redirect(
+                $"https://{authHost}{http.Request.Path}{http.Request.QueryString}", permanent: false);
+            return Task.CompletedTask;
+        });
+
+    /// <summary>
     /// The node path a request path stands for: the landing node for <c>/</c> when one is
     /// configured, otherwise the path itself with its slashes trimmed. Empty for <c>/</c> with no
     /// landing configured.
