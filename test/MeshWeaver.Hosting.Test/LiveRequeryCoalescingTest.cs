@@ -77,7 +77,7 @@ public class LiveRequeryCoalescingTest
                 if (Interlocked.Increment(ref walks) != 1) return;
                 walkParked.OnNext(Unit.Default);
                 walkParked.OnCompleted();
-                if (!SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TimeSpan.FromSeconds(30)))
+                if (!SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence))
                     Volatile.Write(ref parkTimedOut, 1);
             });
 
@@ -140,7 +140,7 @@ public class LiveRequeryCoalescingTest
         {
             adapter.Release();
         }
-        first.Join(TimeSpan.FromSeconds(30)).Should().BeTrue("the parked re-query never finished");
+        first.Join(TestTimeouts.Convergence).Should().BeTrue("the parked re-query never finished");
         adapter.ParkTimedOut.Should().BeFalse(
             "the park must be RELEASED, not time out — otherwise the window was never held and the count below proves nothing");
 
@@ -190,7 +190,7 @@ public class LiveRequeryCoalescingTest
                     observer.OnCompleted();
                 }) { IsBackground = true };
                 completer.Start();
-                completer.Join(TimeSpan.FromSeconds(30));
+                completer.Join(TestTimeouts.Convergence);
                 return System.Reactive.Disposables.Disposable.Empty;
             }
             // The follow-up: emits and stays open, like a live read that answered.
