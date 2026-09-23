@@ -1,4 +1,3 @@
-using System.Linq;
 using MeshWeaver.PluginCatalog;
 using Xunit;
 
@@ -10,14 +9,20 @@ namespace Memex.Portal.Shared.Test;
 /// "Awaiting consent — not registered" forever — auto-registration skips a token-configured
 /// installation ("the explicit token wins"), so no credential is ever stored for the page to find.
 /// The consent step belongs to the open lane only; an operator-configured token is operator
-/// provisioning just as a registration key is.
+/// provisioning just as a registration key is. Every case goes through the production
+/// <c>InstanceConsentService.Target(options)</c> — registry selection, legacy-token attribution and
+/// the keyed rule together — never a copy of its wiring.
 /// </summary>
 public class TokenProvisionedInstanceIsKeyedTest
 {
     private const string RegistryUrl = "https://memex.meshweaver.cloud";
 
-    private static PluginRegistryReference Target(PluginCatalogOptions options) =>
-        RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries).First();
+    private static bool Keyed(PluginCatalogOptions options)
+    {
+        var target = InstanceConsentService.Target(options);
+        Assert.NotNull(target);
+        return target.Value.Keyed;
+    }
 
     [Fact]
     public void ALegacyRegistryToken_IsOperatorProvisioning()
@@ -30,8 +35,7 @@ public class TokenProvisionedInstanceIsKeyedTest
             RegistryToken = "mwi_operator-issued",
             InstanceId = "partnerre-memex",
         };
-        Assert.True(InstanceConsentService.IsOperatorProvisioned(options.BootstrapKey, Target(options)),
-            "a configured registry token is operator provisioning — no consent step applies");
+        Assert.True(Keyed(options), "a configured registry token is operator provisioning — no consent step applies");
     }
 
     [Fact]
@@ -39,7 +43,7 @@ public class TokenProvisionedInstanceIsKeyedTest
     {
         var options = new PluginCatalogOptions { InstanceId = "partnerre-memex" };
         options.Registries.Add(new PluginRegistryReference { Url = RegistryUrl, Token = "mwi_operator-issued" });
-        Assert.True(InstanceConsentService.IsOperatorProvisioned(options.BootstrapKey, Target(options)));
+        Assert.True(Keyed(options));
     }
 
     [Fact]
@@ -49,7 +53,7 @@ public class TokenProvisionedInstanceIsKeyedTest
         {
             RegistryUrl = RegistryUrl, InstanceId = "acme", BootstrapKey = "mwb_bootstrap",
         };
-        Assert.True(InstanceConsentService.IsOperatorProvisioned(options.BootstrapKey, Target(options)));
+        Assert.True(Keyed(options));
     }
 
     [Fact]
@@ -57,7 +61,7 @@ public class TokenProvisionedInstanceIsKeyedTest
     {
         // The control that keeps the consent form where it belongs: an instance id alone.
         var options = new PluginCatalogOptions { RegistryUrl = RegistryUrl, InstanceId = "acme" };
-        Assert.False(InstanceConsentService.IsOperatorProvisioned(options.BootstrapKey, Target(options)),
+        Assert.False(Keyed(options),
             "an installation with neither a key nor a token registers through the consent-gated open lane");
     }
 }

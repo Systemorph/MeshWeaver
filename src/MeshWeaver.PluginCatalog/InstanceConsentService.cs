@@ -82,9 +82,13 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
     /// <summary>The registry this installation registers at and the id it claims, from
     /// configuration — null when no registry or no instance id is configured. <c>Keyed</c> is
     /// <see cref="IsOperatorProvisioned"/>: the consent step belongs to the OPEN lane only.</summary>
-    public (PluginRegistryReference Registry, string InstanceId, bool Keyed)? Target()
+    public (PluginRegistryReference Registry, string InstanceId, bool Keyed)? Target() =>
+        Target(hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions());
+
+    /// <summary><see cref="Target()"/> over explicit options — the whole decision, pure, so the
+    /// test pins the production wiring and not a copy of it.</summary>
+    internal static (PluginRegistryReference Registry, string InstanceId, bool Keyed)? Target(PluginCatalogOptions options)
     {
-        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
         var registry = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries).FirstOrDefault();
         var instanceId = options.InstanceId?.Trim() ?? "";
         if (registry is null || instanceId.Length == 0)

@@ -101,7 +101,7 @@ installation. `InstanceConsentService.Target()` therefore classifies it as opera
 (`Keyed`), exactly like a `BootstrapKey` installation: the consent form and the missing-privacy
 warning belong to the OPEN lane only. Before this (#5245), a token-provisioned installation — the
 wizard's own, and any operator one such as a client instance fed from its Key Vault — read
-*"Awaiting consent — this installation has not registered yet"* for ever, while the registry had
+*"Awaiting consent — this installation has not registered yet"* forever, while the registry had
 long since issued it a key. The rule is `InstanceConsentService.IsOperatorProvisioned`, pinned by
 `TokenProvisionedInstanceIsKeyedTest`.
 
