@@ -130,14 +130,11 @@ public static class PublicSite
     /// endpoints that serve <see cref="SignInInitiationPath"/>.</para>
     /// </summary>
     public static IApplicationBuilder UseAuthHostRedirect(this IApplicationBuilder app)
-        => app.Use(async (http, next) =>
+        => app.Use((http, next) =>
         {
             var configuration = http.RequestServices.GetRequiredService<IConfiguration>();
             if (!StartsSignInOnWrongHost(configuration, http.Request))
-            {
-                await next(http);
-                return;
-            }
+                return next(http);
 
             var authHost = AuthHost(configuration)!;
             var logger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(PublicSite));
@@ -147,6 +144,7 @@ public static class PublicSite
                 http.Request.Host.Value, authHost);
             http.Response.Redirect(
                 $"https://{authHost}{http.Request.Path}{http.Request.QueryString}", permanent: false);
+            return Task.CompletedTask;
         });
 
     /// <summary>
