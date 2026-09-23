@@ -146,6 +146,12 @@ public static class NodeTypeBuildIdentity
     /// <summary>
     /// The recovery verb, stated wherever the refusal is. A refusal that does not say what happens
     /// next reads as "the type is dead", and here it is emphatically not.
+    ///
+    /// <para>🚨 It states BOTH populations' recoveries in one sentence, so it must not decide a log
+    /// LEVEL: a log line goes through <see cref="NodeTypeAdoptionRefusalLog"/>, which states the
+    /// ONE recovery that applies on this mesh (<see cref="RecoveryVerbFor"/>) at the level that
+    /// matches it (#5066). This text remains for surfaces that carry no level (the pinned-release
+    /// refusal reason).</para>
     /// </summary>
     public const string RecoveryVerb =
         "Nothing further is required: this is the state the compile watcher already heals. The "
@@ -153,6 +159,45 @@ public static class NodeTypeBuildIdentity
         + "as it does after any ordinary platform roll. On a `Modules:RequirePrebuilt` mesh no "
         + "local compile is possible — rebake and republish the package for THIS framework "
         + "identity.";
+
+    /// <summary>
+    /// The recovery for a refusal on a mesh that CAN compile locally — the expected state after a
+    /// platform roll, healed by the type's own hub (#5066).
+    /// </summary>
+    public const string RecoveryVerbHealedHere =
+        "Nothing further is required: this is the state the compile watcher already heals. The "
+        + "type's own hub rebuilds it against the live framework and restamps the record, exactly "
+        + "as it does after any ordinary platform roll. If it persists, read bake-report's LIVE "
+        + "RECORD CENSUS and the instance's converged/generations — a roll that never converges "
+        + "re-stamps the record from the other generation.";
+
+    /// <summary>
+    /// The recovery for a refusal on a <c>Modules:RequirePrebuilt</c> mesh, where nothing on this
+    /// process heals it (#5066).
+    /// </summary>
+    public const string RecoveryVerbRequirePrebuilt =
+        "This mesh sets `Modules:RequirePrebuilt`, so no local compile is possible and NOTHING on "
+        + "this process heals it: rebake and republish the package for THIS framework identity.";
+
+    /// <summary>The recovery sentence for a refusal on a mesh that can (or cannot) compile
+    /// locally.</summary>
+    public static string RecoveryVerbFor(bool canCompileLocally)
+        => canCompileLocally ? RecoveryVerbHealedHere : RecoveryVerbRequirePrebuilt;
+
+    /// <summary>
+    /// 🚨 <b>The level a refusal is logged at — decided by whether it heals here</b> (#5066).
+    ///
+    /// <para>Where a local compile is possible the refusal is the expected transition of every
+    /// platform roll and the compile watcher heals it: <see cref="Microsoft.Extensions.Logging.LogLevel.Warning"/>.
+    /// Logged at <c>Error</c>, one unconverged roll turned it into 507 incident-grade lines an hour
+    /// on one pod. On a <c>Modules:RequirePrebuilt</c> mesh nothing on this process heals it — only
+    /// a rebake does — so it is actionable: <see cref="Microsoft.Extensions.Logging.LogLevel.Error"/>.
+    /// This is a cost/value classification, not a verbosity dial.</para>
+    /// </summary>
+    public static Microsoft.Extensions.Logging.LogLevel RefusalLogLevel(bool canCompileLocally)
+        => canCompileLocally
+            ? Microsoft.Extensions.Logging.LogLevel.Warning
+            : Microsoft.Extensions.Logging.LogLevel.Error;
 
     /// <summary>
     /// 🚨 <b>The status this PROCESS may honestly report for this record</b> — criterion 2 of

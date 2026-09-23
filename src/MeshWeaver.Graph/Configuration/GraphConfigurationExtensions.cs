@@ -443,6 +443,14 @@ public static class GraphConfigurationExtensions
                 services.AddSingleton<MeshWeaver.Kernel.Hub.ICellSurfaceAssemblyProvider,
                     CellSurfaceAssemblyProvider>();
 
+                // Mesh-scoped report ledger for adopt-time identity refusals (#5066): every
+                // guarded load path — the cell surface above, the schema probes, the data-model
+                // area, the contract handler — logs through it, at a level decided by whether a
+                // local compile heals the refusal, once per (site, type, record identity).
+                // Registered at MESH level (not on the mesh hub) because the cell surface is
+                // resolved from the kernel's hub. Instance map only — no static state.
+                services.AddSingleton<NodeTypeAdoptionRefusalLog>();
+
                 return services;
             });
 

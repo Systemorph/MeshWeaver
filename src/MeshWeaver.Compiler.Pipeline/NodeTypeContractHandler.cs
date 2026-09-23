@@ -208,10 +208,11 @@ internal static class NodeTypeContractHandler
                     // eight-character substring inside one store implementation's glob.
                     if (NodeTypeBuildIdentity.Refuses(def))
                     {
-                        logger?.LogError(
-                            "{Summary} Compiling it here instead. {Recovery}",
-                            NodeTypeBuildIdentity.RefusalSummary(node.Path, def),
-                            NodeTypeBuildIdentity.RecoveryVerb);
+                        // Level by healability, once per (type, record identity) — #5066. This
+                        // site IS the heal where a local compile is possible.
+                        hub.ServiceProvider.GetRequiredService<NodeTypeAdoptionRefusalLog>().Report(
+                            logger, "ContractHandler", node.Path, def,
+                            "Compiling it here instead.");
                         return compilationService.CompileAndGetConfigurations(node)
                             .Select(result => new ResolvedResponse(
                                 BuildResponse(hubPath, node, result), true));

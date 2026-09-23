@@ -1561,12 +1561,12 @@ public static class MeshDataSourceExtensions
                 // lands today on any store whose key carries the framework tag.
                 if (NodeTypeBuildIdentity.Refuses(def))
                 {
-                    hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger(typeof(MeshDataSourceExtensions))
-                        .LogError(
-                        "{Summary} No schema is answered from those bytes. {Recovery}",
-                        NodeTypeBuildIdentity.RefusalSummary(node!.Path, def),
-                        NodeTypeBuildIdentity.RecoveryVerb);
+                    // Level by healability, once per (type, record identity) — #5066.
+                    hub.ServiceProvider.GetRequiredService<NodeTypeAdoptionRefusalLog>().Report(
+                        hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(MeshDataSourceExtensions)),
+                        "DataSourceSchema", node!.Path, def,
+                        "No schema is answered from those bytes.");
                     return Observable.Empty<GetDataResponse>();
                 }
 

@@ -201,12 +201,12 @@ internal static class NodeTypeDataModelAreas
         // area degrades exactly as it does when the bytes are cold, never worse.
         if (def != null && NodeTypeBuildIdentity.Refuses(def))
         {
-            hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(NodeTypeDataModelAreas))
-                .LogError(
-                "{Summary} The data-model area falls back to this node's own configuration. {Recovery}",
-                NodeTypeBuildIdentity.RefusalSummary(node.Path, def),
-                NodeTypeBuildIdentity.RecoveryVerb);
+            // Level by healability, once per (type, record identity) — #5066.
+            hub.ServiceProvider.GetRequiredService<NodeTypeAdoptionRefusalLog>().Report(
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(NodeTypeDataModelAreas)),
+                "DataModelArea", node.Path, def,
+                "The data-model area falls back to this node's own configuration.");
             return Observable.Return(node.HubConfiguration);
         }
 
