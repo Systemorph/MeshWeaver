@@ -272,7 +272,9 @@ public record NodeTypeCompileState
 /// Phase-1 dual-write of issue #748: mirrors a NodeType's operational compile state from its own
 /// MeshNode onto the fixed-id satellite at <c>{type}/_Activity/compile-state</c> — an Activity
 /// node whose <see cref="ActivityLog.ReturnValue"/> carries the <see cref="NodeTypeCompileState"/>
-/// (the import-manifest pattern). Installed on the per-NodeType hub beside the compile watchers.
+/// (the import-manifest pattern). Was installed on the per-NodeType hub beside the compile
+/// watchers; 🚨 no longer installed anywhere (#5389) — see <see cref="Install"/>. The value shape
+/// (<see cref="StateNode"/>, <see cref="Parse"/>) stays for any satellite already on disk.
 ///
 /// <para>Write discipline: the mirror seeds itself with the ALREADY-PERSISTED satellite state so a
 /// mere hub re-activation writes nothing; it writes only when the projected state actually changes
@@ -340,7 +342,17 @@ public static class NodeTypeCompileStateMirror
     /// Installs the mirror on the per-NodeType hub: every REAL change of the node's operational
     /// members lands on the satellite; activations, authored edits and duplicate emissions write
     /// nothing. Returns the subscription for <c>RegisterForDisposal</c>.
+    ///
+    /// <para>🚨 <b>Retired — nothing installs it (#5389).</b> The satellite never gained a reader
+    /// (phase 2 of issue #748 did not happen), while the write cost one node-operation round trip
+    /// per NodeType activation and one extra grain activation per NodeType whenever the state
+    /// moved — measured as the dominant destination of boot-time placement timeouts and stalled
+    /// activations on memex-cloud. Kept as an obsolete member rather than deleted, because a caller
+    /// in in-mesh source is invisible to every CI build and a deletion would break it at runtime
+    /// compile; the obsolete warning tells it instead. See
+    /// <c>Doc/Architecture/CompileStateSatelliteRetired</c>.</para>
     /// </summary>
+    [Obsolete("Retired (#5389): the compile-state satellite has no reader and its per-type write was a boot-time burst source. Read compile state off the NodeType node itself. See Doc/Architecture/CompileStateSatelliteRetired.")]
     public static IDisposable Install(IMessageHub hub, IWorkspace workspace)
     {
         var mesh = hub.ServiceProvider.GetService<IMeshService>();

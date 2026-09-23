@@ -155,8 +155,8 @@ cleared in **every** path that clears `CompilationError`/`CompilationDiagnostics
 the delivery hold's serving state, prebuilt adoption, the hydrate short-circuit — so a type can never
 go `Ok` while retaining a finding for a later settle to pick up.
 
-The member is registered as operational (`NodeTypeOperationalContent.MemberNames`) and mirrored on
-the compile-state satellite (`NodeTypeCompileState`), like every other runtime compile field: it is a
+The member is registered as operational (`NodeTypeOperationalContent.MemberNames`) and carried by
+`NodeTypeCompileState` (whose satellite write is [retired](../CompileStateSatelliteRetired)), like every other runtime compile field: it is a
 measurement taken against *this* mesh's import bookkeeping, so an authored copy would accuse an
 import that never ran here, and an export/re-import would otherwise lose the finding.
 

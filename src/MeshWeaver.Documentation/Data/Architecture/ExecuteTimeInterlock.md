@@ -136,9 +136,9 @@ the refusal announces itself four ways, all carrying the same sentence:
   "retry" when a verdict was in fact reached).
 - **In the log** — `LogCritical` at the arming site, `LogError` at the cell-surface join, both
   naming the type and *both* fingerprints, so the verdict can be checked against the bundle by hand.
-- **On the record** — `BuildProvenance` is on the NodeType's node and mirrored onto the
-  compile-state satellite at `{type}/_Activity/compile-state`, readable through
-  `GetMeshNodeStream(path)`.
+- **On the record** — `BuildProvenance` is on the NodeType's node, readable through
+  `GetMeshNodeStream(path)`. (It was also mirrored onto `{type}/_Activity/compile-state`;
+  that satellite is [retired](../CompileStateSatelliteRetired) and no longer updated — read the node.)
 
 ### The recovery verb
 

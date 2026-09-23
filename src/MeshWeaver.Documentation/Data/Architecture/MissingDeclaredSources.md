@@ -104,8 +104,8 @@ answer can under-report a missing entry and can never accuse one that was fine.
   with three symbols and no direction. The Roslyn text is kept underneath: it is still the evidence,
   it just is not the explanation.
 - **`NodeTypeDefinition.FailedSourceQueries`** carries the structured finding, as authored, so a
-  reader (or an agent) gets the answer as data rather than by parsing an error string, and the
-  compile-state satellite mirrors it. It is operational state: stripped on export, preserved from
+  reader (or an agent) gets the answer as data rather than by parsing an error string (read it off
+  the NodeType node; the compile-state satellite that mirrored it is [retired](../CompileStateSatelliteRetired)). It is operational state: stripped on export, preserved from
   the live node on every upsert, cleared by a success.
 
 ### 2. The doomed compile is not taken again

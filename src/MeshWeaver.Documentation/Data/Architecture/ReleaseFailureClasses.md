@@ -319,8 +319,8 @@ Two things a re-cut has to be able to do, and a fresh id can do neither:
   attempt was minting — the one place to look) and `UnreleasedBuildReason` onto the
   `NodeTypeDefinition`, beside the previous build's `LatestReleasePath` it has always kept. The batch
   bake stamps the same pair from its own attempt. Both clear the moment any release lands, and both
-  are mesh-owned — masked by the sync seams and mirrored on the compile-state satellite like every
-  other release pointer. Before this the node **read healthy from every field** — `compilationStatus:
+  are mesh-owned — masked by the sync seams like every other release pointer (the compile-state
+  satellite that also mirrored them is [retired](../CompileStateSatelliteRetired); read the NodeType node). Before this the node **read healthy from every field** — `compilationStatus:
   Ok`, sources current, an assembly built, a release path present — and the only trace was an
   `Error` line at the moment of the settle.
 
