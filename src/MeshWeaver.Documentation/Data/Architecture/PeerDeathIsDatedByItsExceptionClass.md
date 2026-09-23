@@ -192,14 +192,16 @@ ReplicaSet, so a roll had begun about 45 s before the first line. Generations co
 | ≤ 14:41:00 | Directory lookups into 9.90's partition start hanging | inferred: the first placement timeouts expire at 14:41:30 against a 30 s budget |
 | 14:41:30 | First `TimeoutException: Grain placement operation timed out` on xg22d (`messagehub/Doc/Architecture/PolicyNotProse`). Its innermost frame is `PlacementService.cs:602`, which is the `_grainLocator.Lookup(...)` await: the **directory lookup**, not local placement | measured (#5334) |
 | 14:41:30 | First `ConnectionFailedException: Unable to connect to S10.244.9.90:11111:149090968, will retry after …` on 8pdzb, raised from `LocalGrainDirectory.LookupAsync` | measured (#5333, #5336) |
-| 14:41:41 | First `SocketConnectionException … Error: HostUnreachable`: the IP itself stopped answering | measured (#5338, #5342) |
+| 14:41:41 | First `SocketConnectionException … Error: HostUnreachable`: from these callers, the endpoint could no longer be reached at all. That is a caller-side reachability loss, not by itself proof the pod is gone | measured (#5338, #5342) |
 | 14:41:52 | Last placement timeout (8pdzb, `messagehub/mkleiner/_Install/LinkedIn`). This is within 30 s of the first refusal, so the lookup behind it was issued before the refusals began | measured (#5340) |
 | 14:42:06 | Last connect failure | measured (#5338, #5342, #5343) |
 
-This is the same two-mechanism shape as the 09-17 case: first the peer is mute, then it is gone.
-Here, though, the peer ended as `HostUnreachable` at an address that never came back. In the 09-17
-case the peer restarted in place under a new generation. So this pod's network went away. That
-points to the pod being deleted rather than restarted.
+This is the same two-mechanism shape as the 09-17 case: first the peer is mute, then it cannot be
+reached. Here, though, the survivors never reached that address again before they stopped asking,
+and no new generation appeared at it. In the 09-17 case the peer restarted in place under a new
+generation. `HostUnreachable` is only the callers' view. A deleted pod produces it, but so do a
+broken route or a network policy (see the caveat at the top of this page). So it is consistent with
+the pod being deleted rather than restarted, and it does not prove that.
 
 ### One event, seven tickets, three log sites
 
