@@ -186,8 +186,8 @@ internal static class NodeTypeRebindWatcher
                     // storage write's post-commit Do (StorageAdapterChangeFeedExtensions). A throw
                     // here would propagate INTO that write and fail an unrelated caller's save, so
                     // this recycle can never be allowed to escape. It is cheap and non-blocking:
-                    // Post enqueues onto the target's action block, and DisposeRequest is
-                    // [SystemMessage]/[CanBeIgnored], so it needs no AccessContext on a thread that
+                    // Post enqueues onto the target's action block, and RecycleSelfAfterAcceptedWork
+                    // posts as the hub itself, so it needs no AccessContext on a thread that
                     // carries none.
                     try
                     {
@@ -205,14 +205,14 @@ internal static class NodeTypeRebindWatcher
                         // recycle": one word covering this watcher, the stale-build convergence and
                         // the overlay self-heal. Naming it here is what turns the next occurrence
                         // into a read instead of an ordering argument.
-                        instanceHub.Post(
-                            new DisposeRequest
-                            {
-                                Reason = $"NodeType rebind: node '{path}' is now typed "
-                                         + $"'{change.NodeType ?? "(none)"}' but its hub activated on "
-                                         + $"'{boundNodeType ?? "(none)"}'",
-                            },
-                            o => o.WithTarget(instanceHub.Address));
+                        // Queued behind the hub's own initialization gates (#5356): a retype
+                        // seen while the hub is still activating must not discard the requests
+                        // that activation already parked.
+                        instanceHub.RecycleSelfAfterAcceptedWork(
+                            $"NodeType rebind: node '{path}' is now typed "
+                            + $"'{change.NodeType ?? "(none)"}' but its hub activated on "
+                            + $"'{boundNodeType ?? "(none)"}'",
+                            logger);
                     }
                     catch (Exception ex)
                     {

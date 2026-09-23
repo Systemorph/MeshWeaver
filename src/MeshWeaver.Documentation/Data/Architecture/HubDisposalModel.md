@@ -634,6 +634,43 @@ end to end: a click after its owner deactivated still runs).
 > latch and made that path look fine; `RecycleLayoutArea` is driven by the page shell, which
 > navigates on its own. The self-heal posted the dispose alone.
 
+### A hub that recycles ITSELF queues the decision behind its own initialization
+
+`DisposeRequest` passes every initialization gate, and it has to: an **external** teardown (an
+operator recycle, a node delete, an owner's cascade) must reach a hub in any state, including one
+whose gates never open. The three **self**-recyclers, though, are armed inside
+`WithInitialization`: the overlay self-heal, `NodeTypeRebindWatcher` and the stale-build
+convergence branch. They can decide to recycle before the gates open. The overlay self-heal does
+it routinely: with no type node in hand it fires on the first usable replay of the NodeType
+stream. A `DisposeRequest` posted at that moment overtakes every request the activation has
+already parked behind `[DataContextInit, MeshNodeInit]`, and the disposal answers each one
+`ShuttingDown` with a `[DISPOSE-DISCARD]` Error. Measured on memex-cloud (#5356):
+`Deployments/build` discarded a cache client's two `SubscribeRequest`s and its
+`UnsubscribeRequest` in one millisecond. The hub was going down for a reason it had decided
+itself, with work it had accepted still in its own queue.
+
+**The rule: a self-recycle goes through `hub.RecycleSelfAfterAcceptedWork(reason, logger)`,
+never a direct self-post.** The helper posts the decision as an ordinary execution turn, as the
+hub itself (the watchers' callbacks run on a publisher's thread with no `AccessContext`). The
+turn is not a lifecycle message, so the gates defer it in arrival order with everything else.
+When the last gate opens the backlog is restored in that order, the turn runs, and only then is
+the `DisposeRequest` posted, behind every restored request. The ordinary quiesce drains the
+rest, and the recycle's goodbye (above) re-converges the subscribers on the fresh activation.
+Nothing waits on a timer: the gates settle through their own time-boxes (opened, or failed so the
+backlog is answered), so the turn either runs or is answered. If some other teardown gets there
+first, the parked turn is discarded as the hub's own delivery (Debug, not Error), and a turn
+that finds the hub already disposing posts nothing. This does not replace
+`hub.RecycleNode(path)`: that is how a surviving hub recycles *another* address.
+
+> Deterministic repro and control: `OverlaySelfHealRecycleDrainsParkedWorkTest`
+> (Compiler.Pipeline.Test) fires the self-heal's real recycle action,
+> `NodeTypeEnrichmentHelpers.OverlaySelfHealRecycle`, at a hub whose gate the test holds closed,
+> with a request parked before it and, in a second case, after it. With the action posting its
+> `DisposeRequest` directly (the pre-fix body) both cases fail on a `ShuttingDown`
+> `DeliveryFailureException`. With the helper, both requests are served, the hub still reaches
+> `DisposalCompleted`, and no event 7301 Error is logged. A third case is the positive control: on
+> an initialized hub the self-heal still recycles.
+
 ---
 
 ## A recycle of the main bit takes its dependency network with it — and instantiates nothing

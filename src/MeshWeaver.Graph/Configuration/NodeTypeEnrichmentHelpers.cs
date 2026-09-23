@@ -2272,18 +2272,7 @@ internal static class NodeTypeEnrichmentHelpers
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub.Address.ToString(),
                             instanceHub.JsonSerializerOptions,
-                            // 🚨 Named, not anonymous (#3510): a self-posted DisposeRequest reads
-                            // as "a rebind or self-heal recycle" — three posters, one sentence —
-                            // and telling them apart cost that issue six occurrences.
-                            recycle: () => instanceHub.Post(
-                                new DisposeRequest
-                                {
-                                    Reason = "Overlay self-heal: the instance is bound to an "
-                                             + $"overlay of NodeType '{nodeType}' that its own "
-                                             + "watcher found stale, so the hub is recycled to "
-                                             + "re-bind against the current build",
-                                },
-                                o => o.WithTarget(instanceHub.Address)),
+                            recycle: OverlaySelfHealRecycle(instanceHub, nodeType, logger),
                             reportStuck: () => ReportStuckOverlayToAdmins(instanceHub, nodeType, logger),
                             nodeType, typeVersionAtOverlay, logger,
                             guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
@@ -2301,6 +2290,33 @@ internal static class NodeTypeEnrichmentHelpers
                 });
         return overlaid with { HubConfiguration = withWatcher };
     }
+
+    /// <summary>
+    /// The overlay self-heal's recycle action — what <see cref="ArmOverlaySelfHeal"/> calls when
+    /// the NodeType reaches a usable build.
+    ///
+    /// <para>🚨 <b>It recycles AFTER the work the instance has already accepted</b> (#5356). The
+    /// watcher is armed in <c>WithInitialization</c> and, with no type node in hand
+    /// (<c>typeVersionAtOverlay</c> null), fires on the FIRST usable replay of the type stream,
+    /// often before the instance's <c>[DataContextInit, MeshNodeInit]</c> gates open. A
+    /// <see cref="DisposeRequest"/> posted then bypasses those gates and the disposal discards every
+    /// request parked behind them. Measured on memex-cloud 2026-09-22: <c>Deployments/build</c>
+    /// discarded a cache client's two <c>SubscribeRequest</c>s and its <c>UnsubscribeRequest</c>.
+    /// <see cref="HubSelfRecycleExtensions.RecycleSelfAfterAcceptedWork"/> queues the decision
+    /// behind the gates instead, so the parked work runs first and the recycle still happens.</para>
+    ///
+    /// <para>🚨 Named, not anonymous (#3510): a self-posted DisposeRequest reads as "a rebind or
+    /// self-heal recycle" (three posters, one sentence), and telling them apart cost that issue six
+    /// occurrences.</para>
+    /// </summary>
+    internal static Action OverlaySelfHealRecycle(
+        IMessageHub instanceHub, string nodeType, ILogger? logger)
+        => () => instanceHub.RecycleSelfAfterAcceptedWork(
+            "Overlay self-heal: the instance is bound to an "
+            + $"overlay of NodeType '{nodeType}' that its own "
+            + "watcher found stale, so the hub is recycled to "
+            + "re-bind against the current build",
+            logger);
 
     /// <summary>
     /// Self-healing wrap for a HEALTHY per-instance binding whose assembly has since been
@@ -2539,14 +2555,13 @@ internal static class NodeTypeEnrichmentHelpers
                             AutoRecycleConfigKey);
                         // 🚨 Named (#3510) — see the rebind watcher: the three self-posting
                         // recyclers were indistinguishable in the victim's own log.
-                        instanceHub.Post(
-                            new DisposeRequest
-                            {
-                                Reason = $"Stale-build convergence ({AutoRecycleConfigKey}=true): "
-                                         + $"NodeType '{nodeType}' published build '{published}', "
-                                         + $"superseding the bound '{boundAssemblyPath}'",
-                            },
-                            o => o.WithTarget(instanceHub.Address));
+                        // Queued behind the instance's own initialization gates, like the
+                        // overlay self-heal (#5356): the work it already accepted runs first.
+                        instanceHub.RecycleSelfAfterAcceptedWork(
+                            $"Stale-build convergence ({AutoRecycleConfigKey}=true): "
+                            + $"NodeType '{nodeType}' published build '{published}', "
+                            + $"superseding the bound '{boundAssemblyPath}'",
+                            logger);
                         return;
                     }
 
