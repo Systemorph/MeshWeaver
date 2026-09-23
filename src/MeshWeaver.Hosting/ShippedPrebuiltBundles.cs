@@ -261,6 +261,22 @@ public static class ShippedPrebuiltBundles
     /// <summary>Budget for the one NodeType enumeration query (mirrors the sweep's own).</summary>
     private static readonly TimeSpan EnumerationBudget = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The <c>*.zip</c> bundles directly under <paramref name="directory"/>, in ordinal order,
+    /// observing <paramref name="cancellationToken"/> per entry — the image-mount twin of
+    /// <see cref="CompletePublishedBundlesOf"/>, run on the same pooled blocking leg (#5223).
+    /// </summary>
+    internal static List<string> ZipsIn(string directory, CancellationToken cancellationToken)
+        => Directory
+            .EnumerateFiles(directory, "*.zip", SearchOption.TopDirectoryOnly)
+            .Select(file =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return file;
+            })
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+
     /// <summary>Per-assembly seed budget. The node demonstrably exists (it came out of the
     /// enumeration), so the seed's stream read is a replay plus one owned write — a seed that
     /// cannot settle inside this is a wedged owner hub, and holding the whole boot on it would
@@ -281,10 +297,7 @@ public static class ShippedPrebuiltBundles
         {
             var dir = string.IsNullOrWhiteSpace(directory) ? DefaultDirectory : directory;
             return SeedBundles(mesh, dir,
-                () => Directory
-                    .EnumerateFiles(dir, "*.zip", SearchOption.TopDirectoryOnly)
-                    .OrderBy(f => f, StringComparer.Ordinal)
-                    .ToList(),
+                cancellationToken => ZipsIn(dir, cancellationToken),
                 logger)
                 .Select(tally => tally.Covered);
         });
@@ -358,8 +371,11 @@ public static class ShippedPrebuiltBundles
                 new SealedPublicationReading(
                     identity, publishedRoot, [.. exactSealed], DateTimeOffset.UtcNow));
             return SeedBundles(mesh, dir,
-                    () => CompletePublishedBundlesOf(dir, logger, publicationDirectories: publicationDirectories)
-                        .Concat(FallbackPublishedBundlesOf(publishedRoot, identity, exactSealed, context, logger))
+                    cancellationToken => CompletePublishedBundlesOf(
+                            dir, logger, publicationDirectories: publicationDirectories,
+                            cancellationToken: cancellationToken)
+                        .Concat(FallbackPublishedBundlesOf(
+                            publishedRoot, identity, exactSealed, context, logger, cancellationToken))
                         .ToList(),
                     logger, context: context)
                 // 🚨 The publication and the SOURCES are one unit: hand what was sealed and what
@@ -393,7 +409,7 @@ public static class ShippedPrebuiltBundles
     /// </summary>
     private static IEnumerable<string> FallbackPublishedBundlesOf(
         string publishedRoot, string liveIdentity, IReadOnlyList<SealedSource> exactSealed,
-        AdoptionContext context, ILogger? logger)
+        AdoptionContext context, ILogger? logger, CancellationToken cancellationToken)
     {
         if (context.Strictness == VersionStrictness.Exact)
             return [];
@@ -413,12 +429,15 @@ public static class ShippedPrebuiltBundles
         var bundles = new List<string>();
         foreach (var (identity, version) in candidates)
         {
+            // Every admitted identity is another walk of the share — the widest loop in this leaf,
+            // so the pool's cancellation is observed at each step of it (#5223).
+            cancellationToken.ThrowIfCancellationRequested();
             var identityDir = Path.Combine(publishedRoot, identity);
             if (!Directory.Exists(identityDir))
                 continue;
             // ONE enumeration + sentinel read per identity directory; the per-source filter below
             // is a string comparison over that list, never a second walk of the share.
-            var complete = CompletePublishedBundlesOf(identityDir, logger);
+            var complete = CompletePublishedBundlesOf(identityDir, logger, cancellationToken: cancellationToken);
             foreach (var sealedSource in SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
             {
                 if (!sealedSource.IsSealed || !taken.Add(sealedSource.Source))
@@ -499,15 +518,30 @@ public static class ShippedPrebuiltBundles
     /// pointer are two publications whenever it moves between them, so a caller that also read the
     /// seal index passes what it read there instead of letting this walk resolve again. Absent —
     /// every other caller — each source is resolved here exactly as before.</param>
+    /// <param name="cancellationToken">🚨 The pool leaf's token (#5223). This walk runs on the
+    /// seeding pool's blocking leg over a network share, one directory, seal and file probe at a
+    /// time; a leaf that never looks at its token holds the silo's I/O drain for the whole teardown
+    /// budget. It is observed between sources — the unit of work here — and a cancelled walk ends
+    /// with <see cref="OperationCanceledException"/>, never with a partial list read as complete.</param>
     internal static List<string> CompletePublishedBundlesOf(
         string identityDirectory, ILogger? logger, Func<string, string[]>? readLines = null,
-        IReadOnlyDictionary<string, string>? publicationDirectories = null)
+        IReadOnlyDictionary<string, string>? publicationDirectories = null,
+        CancellationToken cancellationToken = default)
     {
         var bundles = new List<string>();
+        // The token is observed WHILE the share yields entries, not only after: OrderBy buffers the
+        // whole listing before the loop starts, so a check inside the loop alone would wait out a
+        // slow directory enumeration (review on #5456).
         foreach (var source in Directory
                      .EnumerateDirectories(identityDirectory)
+                     .Select(directory =>
+                     {
+                         cancellationToken.ThrowIfCancellationRequested();
+                         return directory;
+                     })
                      .OrderBy(d => d, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // 🚨 #3461: the publication may live in a GENERATION subdirectory this source's
             // pointer names, and every path below is composed under the resolved directory — not
             // under `source`. Resolving and then composing against the source directory would
@@ -663,10 +697,7 @@ public static class ShippedPrebuiltBundles
             var seeds = new List<IObservable<SeedTally>>
             {
                 SeedBundles(mesh, imageDir,
-                    () => Directory
-                        .EnumerateFiles(imageDir, "*.zip", SearchOption.TopDirectoryOnly)
-                        .OrderBy(f => f, StringComparer.Ordinal)
-                        .ToList(),
+                    cancellationToken => ZipsIn(imageDir, cancellationToken),
                     logger, paths, WitnessCovered, WitnessMatched),
             };
             var sources = new List<string> { imageDir };
@@ -675,8 +706,9 @@ public static class ShippedPrebuiltBundles
                 var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
                 sources.Add(identityDir);
                 seeds.Add(SeedBundles(mesh, identityDir,
-                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths,
-                    WitnessCovered, WitnessMatched));
+                    cancellationToken => CompletePublishedBundlesOf(
+                        identityDir, logger, cancellationToken: cancellationToken),
+                    logger, paths, WitnessCovered, WitnessMatched));
             }
             return seeds.Concat()
                 .Aggregate(default(SeedTally), (total, one) => total + one)
@@ -877,7 +909,7 @@ public static class ShippedPrebuiltBundles
     /// <paramref name="onMatched"/> witnesses every type path a bundle entry NAMED, before anything
     /// can decline it — the half that lets a shortfall say whether the bytes were even here.</summary>
     private static IObservable<SeedTally> SeedBundles(
-        IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger,
+        IMessageHub mesh, string dir, Func<CancellationToken, List<string>> enumerateBundles, ILogger? logger,
         ImmutableHashSet<string>? typePathFilter = null, Action<string>? onCovered = null,
         Action<string>? onMatched = null, AdoptionContext? context = null)
         => Observable.Defer(() =>
@@ -962,7 +994,11 @@ public static class ShippedPrebuiltBundles
             // so the IoPool work and every stamp write are still issued as System.
             return accessService.RunAsSystem(
                     () => pool
-                        .InvokeBlocking(_ => enumerateBundles())
+                        // 🚨 The pool's token goes INTO the walk (#5223). It was discarded here
+                        // (`_ => enumerateBundles()`), so on silo teardown this leaf — named in the
+                        // drain report as `<SeedBundles>b__8` — ignored the cooperative cancel and
+                        // held the I/O drain for its whole 30 s budget.
+                        .InvokeBlocking(enumerateBundles)
                         .SelectMany(bundles =>
                         {
                             if (bundles.Count == 0)
@@ -1038,6 +1074,19 @@ public static class ShippedPrebuiltBundles
                 // WHY an image that ships bundles still compiled.
                 .Catch<SeedTally, Exception>(ex =>
                 {
+                    // A walk the POOL cancelled is the host letting go of its I/O, not a failed
+                    // seeding — the same answer the IsLeaving gate above gives, reached one step
+                    // later. It is counted as Leaving, never as Faulted, so a teardown does not
+                    // report a seeding fault (#5223).
+                    if (ex is OperationCanceledException)
+                    {
+                        logger?.LogInformation(
+                            "ShippedPrebuiltBundles: the bundle walk under {Directory} was cancelled by "
+                            + "its I/O pool (the host is releasing its pooled work) — nothing adopted "
+                            + "on this pass; the next generation seeds its own bundles", dir);
+                        return Observable.Return(default(SeedTally)
+                            with { SourcesConsulted = 1, Leaving = 1 });
+                    }
                     logger?.LogWarning(ex,
                         "ShippedPrebuiltBundles: seeding failed — the sweep will compile instead "
                         + "(the shipped bundles under {Directory} were not adopted)", dir);

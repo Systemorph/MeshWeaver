@@ -110,6 +110,21 @@ aborted the instant the mesh decided to go down. It now:
 `IoPoolRegistry.DrainAll(out residual, out cancelledAfterGrace)` carries both lists; the teardown
 report exposes them as `CancelledIoLeaves` / `CancelledIoByPool` and logs each at **Error**.
 
+🚨 **Step 3 only works on a leaf that TAKES the token.** `InvokeBlocking(Func<CancellationToken, T>)`
+hands every leaf the pool's token, and a lambda written `_ => work()` throws it away at the door —
+the cancel then reaches nothing, and the leaf holds the drain for the whole budget. The measured
+case (MeshWeaver#5223) was the prebuilt-bundle walk, reported as
+`prebuilt:files=1 [ShippedPrebuiltBundles+<>c__DisplayClass24_0.<SeedBundles>b__8]` three times in
+two hours on `memex-cloud`: `SeedBundles` submitted `_ => enumerateBundles()` around a walk of a
+network share — every admitted identity directory, every source's seal, every listed bundle — that
+took no token anywhere. The fix passes the enumeration itself as the leaf
+(`InvokeBlocking(enumerateBundles)`, typed `Func<CancellationToken, List<string>>`), so dropping the
+token again means changing a signature every caller compiles against, and the walk checks it at each
+unit of work (per identity, per source, per file). A walk the pool cancelled is reported as the host
+letting go (`Leaving`, Information), never as a seeding fault. Pinned by
+`SeedingWalkObservesItsPoolTokenTest`. When a drain report names a `<…>b__N` leaf, the first thing to
+read is whether that lambda's parameter is `_`.
+
 ### Handler turns: accepted work drains ahead of the shutdown
 
 `MessageHub.Dispose()` no longer calls `CancelExecution()` on entry. The `ShutdownRequest` that
