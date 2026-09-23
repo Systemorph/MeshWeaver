@@ -1369,10 +1369,37 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // rare) case where GetHostedHub would hand back a PRE-EXISTING sub-hub at our address
         // while the Host is already winding down: an existing-hub lookup is a pure read and is
         // deliberately not refused by the freeze.
-        var syncHub = Host.RunLevel > MessageHubRunLevel.Started
-            ? null
-            : Host.GetHostedHub(
+        var created = Host.RunLevel > MessageHubRunLevel.Started
+            ? default
+            : Host.TryGetHostedHub(
                 SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub, HostedHubCreation.Always);
+        var syncHub = created.Hub;
+        // 🚨 A null hub is NOT always the freeze (#5592). The creation can also have RUN and
+        // FAULTED while this host was fully alive (a configuration that threw, a container that
+        // could not build, an OutOfMemoryException under heap exhaustion). HostedHubsCollection
+        // reports that outcome as ConstructionFaulted and carries the real exception. Refusing
+        // with HubDisposingException then told everyone "this host is shutting down — retry",
+        // which is false: the host's own initialization logged "BuildupAction faulted
+        // (HubDisposingException: Hub X is shutting down …)" for a hub whose IsShuttingDown was
+        // still false, and the incident was read as an expected teardown race. Name the fault
+        // that happened instead. Every other null (the freeze, a disposed container, the RunLevel
+        // gate above) is the shutdown refusal it always was.
+        if (syncHub is null && created.Outcome == HostedHubOutcome.ConstructionFaulted)
+        {
+            logger.LogDebug(created.Error,
+                "[SYNC_STREAM] Cannot host stream for {Reference} on {Host}: constructing its sync hub faulted; refusing to create the stream",
+                Reference, Host.Address);
+            isDisposed = true;
+            Store.OnCompleted();
+            // The ROOT cause in the sentence: a DI container wraps a factory's throw in its own
+            // resolution exception, whose message names only the component it was activating.
+            var root = created.Error?.GetBaseException();
+            throw new InvalidOperationException(
+                $"Hub {Host.Address} could not construct the sync hub for \"{Reference}\": "
+                + $"{root?.GetType().Name}: {root?.Message}. The host is NOT shutting down; "
+                + "this is the construction fault, not a teardown race.",
+                created.Error);
+        }
         if (syncHub is null)
         {
             logger.LogDebug(

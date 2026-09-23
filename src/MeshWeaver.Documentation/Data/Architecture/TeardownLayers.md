@@ -121,7 +121,10 @@ hub's own bring-up, not work anyone handed it — intake is gated behind it, so 
 can depend on its result — and a bring-up still running when the owner tears down produces
 nothing the owner will keep. That turn is cancelled on entry, so a hung initialization releases
 the block at once instead of holding its whole ancestry pending for a stall budget; whatever was
-parked behind its gates is answered `ShuttingDown` and reported (`[DISPOSE-DISCARD]`).
+parked behind its gates is answered `ShuttingDown` and reported (`[DISPOSE-DISCARD]`). The report
+is an Error only when a waiter may take that answer as final. A self-addressed delivery or a
+`[ReaskedOnShutdown]` request (`SubscribeRequest`) is re-asked or owed to nobody, and reports at
+Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *What is NOT a retirement*.
 
 ---
 
