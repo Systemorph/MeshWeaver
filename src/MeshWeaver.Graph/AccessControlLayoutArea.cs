@@ -157,14 +157,19 @@ public static class AccessControlLayoutArea
                                 }
                             };
 
-                            // CREATE flow (not update) — DataChangeRequest is the framework
-                            // primitive for create-or-update; UpdateMeshNode requires the
-                            // node to already exist on the owning hub. The owning hub's
-                            // data layer (registered by AddData) processes the create
-                            // natively. See Doc/Architecture/AsynchronousCalls.md.
-                            saveCtx.Hub.Post(
-                                new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
-                                o => o.WithTarget(saveCtx.Hub.Address));
+                            // CREATE-OR-UPDATE through the sanctioned lifecycle verb. The node
+                            // id is derived from the subject, so re-adding a subject replaces
+                            // its assignment — the create-or-update semantics this dialog has
+                            // always had. It used to post a DataChangeRequest carrying the new
+                            // node to the CURRENT node's hub; CreateOrUpdateNode routes to the
+                            // assignment's own owner, which serialises both branches, and
+                            // carries the caller's identity (Doc/Architecture/
+                            // DataPlaneMessagesAreStreamPlumbing).
+                            saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+                                .CreateOrUpdateNode(newNode)
+                                .Subscribe(
+                                    _ => { },
+                                    ex => ShowValidationError(saveCtx, $"{saveCtx.Host.Localize("error.saveFailed")}: {ex.Message}"));
                         });
                 })));
 

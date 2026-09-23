@@ -1606,11 +1606,20 @@ public static class MeshDataSourceExtensions
                                         c.AddData().WithNodeTypePath(matching.NodeType ?? hubPath))
                                         .AsTransientNodeProbe());
 
-                                var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
-                                return subHub.Observe(schemaDelivery)
-                                    .Select(d => d.Message)
-                                    .OfType<GetDataResponse>()
+                                // The probe's OWN schema stream, never a GetDataRequest posted
+                                // to itself: the workspace already reduces a SchemaReference, and
+                                // its first emission is also the init gate (it waits for the
+                                // probe's DataContext). One-shot is right — the probe dies here.
+                                var schemaStream = subHub.GetWorkspace().GetNullableStream(new SchemaReference());
+                                if (schemaStream is null)
+                                {
+                                    subHub.Dispose();
+                                    return Observable.Empty<GetDataResponse>();
+                                }
+
+                                return schemaStream
                                     .Take(1)
+                                    .Select(change => new GetDataResponse(change.Value, subHub.Version))
                                     .Finally(subHub.Dispose);
                             });
                     });

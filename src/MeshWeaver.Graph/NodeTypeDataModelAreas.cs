@@ -243,9 +243,9 @@ internal static class NodeTypeDataModelAreas
 
     /// <summary>
     /// Applies the instance configuration to a short-lived hosted probe hub and
-    /// snapshots the type registry / content type / JSON schema. The initial
-    /// <see cref="GetDataRequest"/> round-trip doubles as the init gate: by the time
-    /// the response arrives, the probe's DataContext is fully built and safe to read.
+    /// snapshots the type registry / content type / JSON schema. The probe's own
+    /// <see cref="SchemaReference"/> stream doubles as the init gate: it first emits once
+    /// the probe's DataContext is fully built and safe to read.
     /// The probe is disposed after the snapshot; the snapshotted
     /// <see cref="ITypeDefinition"/>s stay valid (the assembly load context is owned
     /// by the compilation cache, not the probe).
@@ -272,13 +272,23 @@ internal static class NodeTypeDataModelAreas
         if (probe == null)
             return Observable.Return<NodeTypeInstanceModel?>(null);
 
-        var delivery = probe.Post(new GetDataRequest(new SchemaReference()))!;
-        return probe.Observe(delivery)
-            .Select(d => d.Message)
-            .OfType<GetDataResponse>()
+        // The probe's OWN schema stream is the init gate: the workspace reduces a SchemaReference
+        // only once its DataContext has initialized, which is exactly the moment SnapshotModel may
+        // read it. This used to be a GetDataRequest the probe posted to ITSELF — a request/response
+        // round-trip standing in for a stream the workspace already serves (see
+        // Doc/Architecture/DataPlaneMessagesAreStreamPlumbing). A one-shot read is correct here:
+        // the probe is disposed right after the snapshot, so nothing is left bound to the stream.
+        var schemaStream = probe.GetWorkspace().GetNullableStream(new SchemaReference());
+        if (schemaStream is null)
+        {
+            probe.Dispose();
+            return Observable.Return<NodeTypeInstanceModel?>(null);
+        }
+
+        return schemaStream
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .Select(response => SnapshotModel(probe, response.Data as SchemaInfo))
+            .Select(change => SnapshotModel(probe, change.Value as SchemaInfo))
             .Finally(probe.Dispose);
     }
 

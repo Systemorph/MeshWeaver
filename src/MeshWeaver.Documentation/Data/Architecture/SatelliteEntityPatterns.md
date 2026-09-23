@@ -343,35 +343,27 @@ var response = await AwaitResponseAsync(request, o => o.WithTarget(address), ct:
 var updatedContent = await markersAppeared;
 ```
 
-**Comments are different**: they do not change the document text, so don't wait on the doc stream. Verify the `Comment` satellite node instead — assert it carries the anchor (`HighlightedText`, `Start`/`Length`, `Version`) via `GetDataRequest` below.
+**Comments are different**: they do not change the document text, so don't wait on the doc stream. Verify the `Comment` satellite node instead — assert it carries the anchor (`HighlightedText`, `Start`/`Length`, `Version`) by reading its node stream, below.
 
-### Verification via `GetDataRequest`
+### Verification via the node stream
 
-For verifying the content of an individual node (mirrors the pattern in `OrleansChatTest`):
+Reading ONE node's content is a node-stream read — never a `GetDataRequest` with an
+`EntityReference` over `MeshNode` (see [Data-plane messages are stream plumbing](../DataPlaneMessagesAreStreamPlumbing)).
+Wait on the CONDITION the test asserts, so a stream that has not yet caught up with the write is
+waited out instead of read stale:
 
 ```csharp
-private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct)
-    where T : class
-{
-    var nodeId = path[(path.LastIndexOf('/') + 1)..];
-    // Test-only bridge. `client.AwaitResponse(...)` no longer exists — the framework
-    // has no Task-returning request/response API; `hub.Observe(...)` is the surface,
-    // and MonolithMeshTestBase.AwaitResponseAsync is the sanctioned await at the
-    // assertion edge.
-    var response = await AwaitResponseAsync(
-        new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-        o => o.WithTarget(new Address(path)), hub: client, ct: ct);
-
-    var node = response.Message.Data as MeshNode;
-    if (node == null && response.Message.Data is JsonElement je)
-        node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
-
-    return node?.Content is T typed ? typed
-        : node?.Content is JsonElement contentJe
-            ? contentJe.Deserialize<T>(hub.JsonSerializerOptions)
-            : null;
-}
+var comment = await Mesh.GetWorkspace()
+    .GetMeshNodeStream(commentPath)
+    .Select(node => node?.ContentAs<Comment>(Mesh.JsonSerializerOptions))
+    .Where(c => c is { HighlightedText: not null })
+    .Should().Within(10.Seconds())
+    .Emit("the Comment satellite carries its anchor", cancellationToken: ct);
 ```
+
+`ContentAs<T>` — never a cast — because the content may arrive as untyped JSON on a hub that did
+not register the type. The read runs as the caller: the stream cache gates it on the viewer's
+Read permission, exactly as the portal's own reads are gated.
 
 ### Complete test flow (Comment example)
 
@@ -381,7 +373,7 @@ private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, Ca
 3.  Ping target grain to activate it
 4.  Send CreateCommentRequest (or create the Comment node directly via meshService.CreateNode)
 5.  Assert CreateCommentResponse.Success == true
-6.  GetDataRequest on comment path → verify Comment content AND its anchor
+6.  GetMeshNodeStream(comment path) → verify Comment content AND its anchor
     (HighlightedText, Start/Length, Version)
 7.  Assert the document text was NOT mutated (no `<!--comment:{markerId}` injected)
 8.  (Optional) Subscribe to comment layout area to verify the highlight renders

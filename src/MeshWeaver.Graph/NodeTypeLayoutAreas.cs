@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Reactive;
 using System.Reactive.Threading.Tasks;
 using Humanizer;
@@ -1795,7 +1796,12 @@ public static class NodeTypeLayoutAreas
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
 
-        // Save button - sync click action; subscribes to combined form snapshot then posts.
+        // Save button - sync click action: snapshot the form, then write THROUGH the node stream.
+        // The form values are applied to the node's CURRENT state inside Update — the owning hub
+        // serialises the write and merges it as a patch, so fields this form does not edit (a
+        // compile status landing meanwhile, a concurrent rename) are not clobbered by a stale copy
+        // of the whole node. This used to read the node once and post it back wholesale as a
+        // DataChangeRequest — see Doc/Architecture/DataPlaneMessagesAreStreamPlumbing.
         buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.save"))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
@@ -1809,86 +1815,73 @@ public static class NodeTypeLayoutAreas
                     host.Stream.GetDataStream<string>(childrenQueryDataId).Take(1),
                     host.Stream.GetDataStream<string>(dependenciesDataId).Take(1),
                     host.Stream.GetDataStream<string>(configurationDataId).Take(1),
-                    host.Workspace.GetMeshNodeStream().Take(1),
-                    (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration, currentNode) =>
-                    {
-                        if (!int.TryParse(orderStr, out var order)) order = 0;
-                        List<string>? dependencies = null;
-                        if (!string.IsNullOrWhiteSpace(dependenciesStr))
-                        {
-                            dependencies = dependenciesStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-                            if (dependencies.Count == 0) dependencies = null;
-                        }
-                        var updatedDefinition = (content ?? new NodeTypeDefinition()) with
-                        {
-                            Description = string.IsNullOrWhiteSpace(description) ? null : description,
-                            ChildrenQuery = string.IsNullOrWhiteSpace(childrenQuery) ? null : childrenQuery,
-                            Dependencies = dependencies,
-                            Configuration = string.IsNullOrWhiteSpace(configuration) ? null : configuration
-                        };
-                        if (currentNode == null) return null;
-                        return currentNode with
-                        {
-                            Name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
-                            Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
-                            Order = order,
-                            Content = updatedDefinition
-                        };
-                    })
+                    (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration) =>
+                        new HubConfigForm(displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration))
                     .Take(1)
-                    .Subscribe(updatedNode =>
-                    {
-                        if (updatedNode == null)
+                    .SelectMany(form => host.Workspace.GetMeshNodeStream()
+                        .Update(currentNode => ApplyHubConfigForm(currentNode, form, host.Hub.JsonSerializerOptions)))
+                    .Take(1)
+                    .Subscribe(
+                        _ =>
+                        {
+                            var configNavHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
+                            actx.Host.UpdateArea(actx.Area, new RedirectControl(configNavHref));
+                        },
+                        ex =>
                         {
                             var errorDialog = Controls.Dialog(
-                                Controls.Markdown(host.Localize("ui.mdNodeToUpdateMissing")),
+                                Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
                                 "Save Failed"
                             ).WithSize("M");
                             actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                            return;
-                        }
-                        var delivery = actx.Host.Hub.Post(
-                            new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedNode),
-                            o => o.WithTarget(hubAddress))!;
-                        actx.Host.Hub.Observe(delivery).Subscribe(
-                            callbackResponse =>
-                            {
-                                if (callbackResponse.Message is not DataChangeResponse responseMsg)
-                                {
-                                    var errorDialog = Controls.Dialog(
-                                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
-                                        "Save Failed"
-                                    ).WithSize("M");
-                                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                                    return;
-                                }
-                                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
-                                {
-                                    var errorDialog = Controls.Dialog(
-                                        Controls.Markdown($"**Error saving:**\n\n{responseMsg.Log}"),
-                                        "Save Failed"
-                                    ).WithSize("M");
-                                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                                    return;
-                                }
-                                var configNavHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-                                actx.Host.UpdateArea(actx.Area, new RedirectControl(configNavHref));
-                            },
-                            ex =>
-                            {
-                                var errorDialog = Controls.Dialog(
-                                    Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
-                                    "Save Failed"
-                                ).WithSize("M");
-                                actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                            });
-                    });
+                        });
                 return Task.CompletedTask;
             }));
 
         stack = stack.WithView(buttonRow);
 
         return stack;
+    }
+
+    /// <summary>The Hub Configuration edit form's values, as snapshotted when Save is clicked.</summary>
+    internal sealed record HubConfigForm(
+        string? DisplayName,
+        string? Description,
+        string? IconName,
+        string? Order,
+        string? ChildrenQuery,
+        string? Dependencies,
+        string? Configuration);
+
+    /// <summary>
+    /// Applies the Hub Configuration edit form to the node's CURRENT state — the update lambda the
+    /// Save button hands to <c>GetMeshNodeStream().Update</c>. Only the fields the form edits are
+    /// replaced; everything else on the node and its <see cref="NodeTypeDefinition"/> is carried
+    /// through from <paramref name="currentNode"/>, never from a copy taken when the form rendered.
+    /// </summary>
+    internal static MeshNode ApplyHubConfigForm(MeshNode currentNode, HubConfigForm form, JsonSerializerOptions options)
+    {
+        if (!int.TryParse(form.Order, out var order)) order = 0;
+        List<string>? dependencies = null;
+        if (!string.IsNullOrWhiteSpace(form.Dependencies))
+        {
+            dependencies = form.Dependencies.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            if (dependencies.Count == 0) dependencies = null;
+        }
+        var updatedDefinition = (currentNode.ContentAs<NodeTypeDefinition>(options) ?? new NodeTypeDefinition()) with
+        {
+            Description = string.IsNullOrWhiteSpace(form.Description) ? null : form.Description,
+            ChildrenQuery = string.IsNullOrWhiteSpace(form.ChildrenQuery) ? null : form.ChildrenQuery,
+            Dependencies = dependencies,
+            Configuration = string.IsNullOrWhiteSpace(form.Configuration) ? null : form.Configuration
+        };
+        return currentNode with
+        {
+            Name = string.IsNullOrWhiteSpace(form.DisplayName) ? null : form.DisplayName,
+            Icon = string.IsNullOrWhiteSpace(form.IconName) ? null : form.IconName,
+            Order = order,
+            Content = updatedDefinition
+        };
     }
 
     private static UiControl BuildInfoRow(string label, string value)

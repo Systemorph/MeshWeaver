@@ -1,0 +1,44 @@
+# DataPlaneMessageSites.allow — the data-plane message ratchet.
+#
+# Each line is `<Type>\t<file>\t<count>`: a production file OUTSIDE the data layer
+# (src/MeshWeaver.Data, src/MeshWeaver.Data.Contract) that still references one of the five
+# data-plane messages — GetDataRequest, GetDataResponse, DataChangeRequest,
+# PatchDataChangeRequest, DataChangedEvent. Counts are code references (comments and strings
+# masked). The guard is DataPlaneMessageRatchetGuard; the manual is
+# Doc/Architecture/DataPlaneMessagesAreStreamPlumbing.
+#
+# TARGET: every line gone. Then the five types become `internal` to the data layer.
+#
+# TO REMOVE A LINE — by kind of reference:
+#   node read   (GetDataRequest over MeshNodeReference / EntityReference(MeshNode))
+#               → workspace.GetMeshNodeStream(path)  (+ .ContentAs<T>(options))
+#   node write  (DataChangeRequest carrying a MeshNode that exists)
+#               → workspace.GetMeshNodeStream(path).Update(current => …)
+#   create/replace (DataChangeRequest carrying a node that may not exist)
+#               → IMeshService.CreateOrUpdateNode / CreateNode
+#   local reference read (SchemaReference, DataModelReference, … on a hub you HOLD)
+#               → hub.GetWorkspace().GetNullableStream(reference)
+#   anything else → see the doc page; its per-kind table says what the stream surface is and
+#               which kinds still need one.
+# Never add a line. Lower the line (or delete it) AND the type's TotalBudget in the guard.
+
+DataChangeRequest	src/MeshWeaver.Graph/VersionLayoutArea.cs	1
+DataChangeRequest	src/MeshWeaver.Layout/Client/LayoutClientExtensions.cs	1
+DataChangeRequest	src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	2
+GetDataRequest	src/MeshWeaver.ContentCollections/ContentCollectionsExtensions.cs	2
+GetDataRequest	src/MeshWeaver.ContentCollections/ContentFileResolver.cs	1
+GetDataRequest	src/MeshWeaver.ContentCollections/ContentStaging.cs	1
+GetDataRequest	src/MeshWeaver.ContentCollections/HubStreamProviderFactory.cs	1
+GetDataRequest	src/MeshWeaver.Graph/Configuration/GraphConfigurationExtensions.cs	2
+GetDataRequest	src/MeshWeaver.Graph/MeshDataSource.cs	3
+GetDataRequest	src/MeshWeaver.Layout/LayoutExtensions.cs	3
+GetDataRequest	src/MeshWeaver.Mesh.Contract/MeshNodeStreamExtensions.cs	1
+GetDataRequest	src/MeshWeaver.Mesh.Operations/MeshOperations.cs	4
+GetDataResponse	src/MeshWeaver.ContentCollections/ContentCollectionsExtensions.cs	1
+GetDataResponse	src/MeshWeaver.ContentCollections/ContentFileResolver.cs	2
+GetDataResponse	src/MeshWeaver.ContentCollections/HubStreamProviderFactory.cs	1
+GetDataResponse	src/MeshWeaver.Graph/Configuration/GraphConfigurationExtensions.cs	2
+GetDataResponse	src/MeshWeaver.Graph/MeshDataSource.cs	9
+GetDataResponse	src/MeshWeaver.Layout/LayoutExtensions.cs	2
+GetDataResponse	src/MeshWeaver.Mesh.Contract/MeshNodeStreamExtensions.cs	2
+GetDataResponse	src/MeshWeaver.Mesh.Operations/MeshOperations.cs	7
