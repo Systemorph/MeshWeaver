@@ -239,9 +239,10 @@ public sealed record PrebuiltBundleInventory(
         {
             try
             {
-                Fold(Directory
-                    .EnumerateFiles(imageDirectory!, "*.zip", SearchOption.TopDirectoryOnly)
-                    .OrderBy(f => f, StringComparer.Ordinal));
+                // The same listing the seeding pass adopts from, checking the token per entry while
+                // it enumerates — never Enumerate…OrderBy, whose sort drains the whole directory
+                // before the first check (review on #5452).
+                Fold(ShippedPrebuiltBundles.ImageBundlesOf(imageDirectory!, cancellationToken));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

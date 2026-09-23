@@ -293,15 +293,26 @@ public static class ShippedPrebuiltBundles
     /// <param name="directory">The directory to list.</param>
     /// <param name="cancellationToken">The pool leaf's token; cancelled when the pool drains.</param>
     internal static List<string> ImageBundlesOf(string directory, CancellationToken cancellationToken)
+        => OrdinalListing(
+            Directory.EnumerateFiles(directory, "*.zip", SearchOption.TopDirectoryOnly), cancellationToken);
+
+    /// <summary>
+    /// Materializes a directory enumeration with a token check per ENTRY, then sorts it ordinally.
+    /// Never <c>Enumerate….OrderBy(…)</c>: a sort must drain the whole enumeration before its first
+    /// element reaches a check, so on a large or slow share the listing itself was invisible to the
+    /// drain (review on #5452).
+    /// </summary>
+    private static List<string> OrdinalListing(IEnumerable<string> entries, CancellationToken cancellationToken)
     {
-        var bundles = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(directory, "*.zip", SearchOption.TopDirectoryOnly))
+        cancellationToken.ThrowIfCancellationRequested();
+        var listed = new List<string>();
+        foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            bundles.Add(file);
+            listed.Add(entry);
         }
-        bundles.Sort(StringComparer.Ordinal);
-        return bundles;
+        listed.Sort(StringComparer.Ordinal);
+        return listed;
     }
 
     /// <summary>
@@ -382,6 +393,11 @@ public static class ShippedPrebuiltBundles
                 // sources onto the sealed commit. See IPublicationSyncReconciler.
                 .SelectMany(tally =>
                 {
+                    // 🚨 A pass the pool ended for teardown (#2480) reconciles NOTHING: its declined
+                    // set is whatever the walk reached before the cancel, and dispatching imports from
+                    // a process that is draining is starting work nobody will join (review on #5452).
+                    if (tally.Leaving > 0)
+                        return Observable.Return(tally.Covered);
                     var reconciler = mesh.ServiceProvider.GetService<IPublicationSyncReconciler>();
                     if (reconciler is null)
                         return Observable.Return(tally.Covered);
@@ -532,9 +548,7 @@ public static class ShippedPrebuiltBundles
         IReadOnlyDictionary<string, string>? publicationDirectories = null)
     {
         var bundles = new List<string>();
-        foreach (var source in Directory
-                     .EnumerateDirectories(identityDirectory)
-                     .OrderBy(d => d, StringComparer.Ordinal))
+        foreach (var source in OrdinalListing(Directory.EnumerateDirectories(identityDirectory), cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             // 🚨 #3461: the publication may live in a GENERATION subdirectory this source's
