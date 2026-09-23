@@ -142,7 +142,8 @@ public sealed class OgCardRenderer : IDisposable
     /// <summary>
     /// The card for a page that is no public node — the home page, a route the resolver does not
     /// know, a node the anonymous gate withholds. It says only what is already public: the
-    /// instance's name and host. Nothing about the node the request named reaches it.
+    /// instance's name and host, under the MeshWeaver mark. Nothing about the node the request
+    /// named reaches it.
     /// </summary>
     /// <param name="host">The host the page was served from, printed as the description.</param>
     public byte[] RenderSite(string? host) =>
@@ -151,7 +152,25 @@ public sealed class OgCardRenderer : IDisposable
             Title = siteName,
             Description = string.IsNullOrWhiteSpace(host) ? null : host.Trim(),
             AccentSeed = siteName,
+            IconSvg = MeshWeaverMarkTile,
         });
+
+    /// <summary>
+    /// The picture the instance card carries: the MeshWeaver mark — three nodes joined through a
+    /// centre — in cyan on its navy tile, self-plated so it rasterises the same on every card.
+    /// Before 2026-09-22 the instance card wore the default badge, the site name's initial on an
+    /// accent tile, which is what an unbranded page gets; a share of the home page should show
+    /// the brand, not an "M". Same drawing as the portal's <c>MeshWeaverLogo</c> and
+    /// <c>wwwroot/favicon.svg</c>; the single source is Systemorph/Memex
+    /// <c>Memex.Website/site/icon.svg</c>.
+    /// </summary>
+    internal const string MeshWeaverMarkTile =
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>" +
+        "<rect width='64' height='64' rx='14' fill='#0a0e1a'/>" +
+        "<g transform='translate(9 9) scale(0.72)' fill='none' stroke='#00d4ff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'>" +
+        "<path d='M12 48 L32 14 L52 48 Z'/><path d='M32 38 L12 48 M32 38 L52 48 M32 38 L32 14'/></g>" +
+        "<g transform='translate(9 9) scale(0.72)' fill='#00d4ff'><circle cx='12' cy='48' r='7'/><circle cx='52' cy='48' r='7'/>" +
+        "<circle cx='32' cy='14' r='7'/><circle cx='32' cy='38' r='6'/></g></svg>";
 
     private void Draw(SKCanvas canvas, OgCardContent card, SKColor accent)
     {
