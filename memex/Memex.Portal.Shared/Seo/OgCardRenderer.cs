@@ -92,11 +92,27 @@ public sealed class OgCardRenderer : IDisposable
     private readonly SKTypeface typeface;
     private readonly string siteName;
 
+    /// <summary>The colour the mark is drawn in — the brand cyan, or the instance's own.</summary>
+    private readonly string markColor;
+
+    /// <summary>The brand's cyan, the mark's colour on the public instance.</summary>
+    internal const string BrandCyan = "#00d4ff";
+
     /// <summary>Creates the renderer, decoding the embedded font once.</summary>
     /// <param name="siteName">The instance name printed in the card's footer.</param>
-    public OgCardRenderer(string siteName)
+    public OgCardRenderer(string siteName) : this(siteName, null) { }
+
+    /// <param name="siteName">The instance name printed in the card's footer.</param>
+    /// <param name="markColor">The instance's own colour for the mark (<c>Portal:InstanceColor</c>,
+    /// a <c>#rrggbb</c>); null or malformed keeps the brand cyan. The public instance wears the
+    /// brand; a company or client portal wears its colour, so two portals' cards tell apart in a
+    /// feed (maintainer, 2026-09-23).</param>
+    public OgCardRenderer(string siteName, string? markColor)
     {
         this.siteName = string.IsNullOrWhiteSpace(siteName) ? "Memex" : siteName.Trim();
+        this.markColor = markColor is { Length: 7 } hex && hex[0] == '#' && hex.Skip(1).All(Uri.IsHexDigit)
+            ? hex.ToLowerInvariant()
+            : BrandCyan;
         using var stream = typeof(OgCardRenderer).GetTypeInfo().Assembly
             .GetManifestResourceStream("Memex.Portal.Shared.Seo.OpenSans-Regular.ttf")
             ?? throw new InvalidOperationException(
@@ -152,7 +168,7 @@ public sealed class OgCardRenderer : IDisposable
             Title = siteName,
             Description = string.IsNullOrWhiteSpace(host) ? null : host.Trim(),
             AccentSeed = siteName,
-            IconSvg = MeshWeaverMarkTile,
+            IconSvg = MarkTile(markColor),
         });
 
     /// <summary>
@@ -164,6 +180,23 @@ public sealed class OgCardRenderer : IDisposable
     /// <c>wwwroot/favicon.svg</c>; the single source is Systemorph/Memex
     /// <c>Memex.Website/site/icon.svg</c>.
     /// </summary>
+    /// <summary>Edge of the footer mark, in card pixels — the height of the footer's type.</summary>
+    private const float FooterMarkSize = 30f;
+
+    /// <summary>The bare mark in the given colour, no plate — the footer's.</summary>
+    internal static string MarkGlyph(string color) => MeshWeaverMarkGlyph.Replace(BrandCyan, color, StringComparison.Ordinal);
+
+    /// <summary>The plated tile with the mark in the given colour — the instance card's.</summary>
+    internal static string MarkTile(string color) => MeshWeaverMarkTile.Replace(BrandCyan, color, StringComparison.Ordinal);
+
+    /// <summary>The bare mark in cyan, no plate — the footer's, beside the instance name.</summary>
+    internal const string MeshWeaverMarkGlyph =
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>" +
+        "<g fill='none' stroke='#00d4ff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'>" +
+        "<path d='M12 48 L32 14 L52 48 Z'/><path d='M32 38 L12 48 M32 38 L52 48 M32 38 L32 14'/></g>" +
+        "<g fill='#00d4ff'><circle cx='12' cy='48' r='7'/><circle cx='52' cy='48' r='7'/>" +
+        "<circle cx='32' cy='14' r='7'/><circle cx='32' cy='38' r='6'/></g></svg>";
+
     internal const string MeshWeaverMarkTile =
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>" +
         "<rect width='64' height='64' rx='14' fill='#0a0e1a'/>" +
@@ -425,13 +458,29 @@ public sealed class OgCardRenderer : IDisposable
         var baseline = Height - Margin + 10f;
         using var ink = new SKPaint { IsAntialias = true, Color = Faint };
         using var footFont = new SKFont(typeface, 24);
-        canvas.DrawText(siteName, Margin, baseline, SKTextAlign.Left, footFont, ink);
+        // The mark before the instance name, so every card — whatever the node's own icon on the
+        // right — is recognisably ours in a feed (maintainer, 2026-09-23: "improve also og cards
+        // with this logo"). Drawn through the same rasterizer as the icon square; if that ever
+        // refuses the svg the name simply starts at the margin, as it did before.
+        float textLeft = Margin;
+        using (var mark = IconRasterizer.RenderImage(MarkGlyph(markColor), (int)(FooterMarkSize * 2)))
+        {
+            if (mark is not null)
+            {
+                var top = baseline - (FooterMarkSize * 0.78f);
+                using var paint = new SKPaint { IsAntialias = true };
+                canvas.DrawImage(mark, new SKRect(Margin, top, Margin + FooterMarkSize, top + FooterMarkSize),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
+                textLeft = Margin + FooterMarkSize + 12f;
+            }
+        }
+        canvas.DrawText(siteName, textLeft, baseline, SKTextAlign.Left, footFont, ink);
 
         var path = OneLine(card.Path);
         if (path.Length == 0)
             return;
         var crumbs = path.Replace("/", "  ›  ");
-        var room = Width - (Margin * 2) - footFont.MeasureText(siteName) - 60;
+        var room = Width - (Margin * 2) - FooterMarkSize - 12f - footFont.MeasureText(siteName) - 60;
         using var pathFont = new SKFont(typeface, 22);
         var shown = Wrap(crumbs, pathFont, room, 1);
         if (shown.Count > 0)
