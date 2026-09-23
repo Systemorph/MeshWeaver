@@ -250,14 +250,16 @@ instruments:
 
 | incident | pod · window | starvation on the same pod |
 |---|---|---|
-| #5315 (10 activations) | `7cc85f47c-nm2qp` · 13:41:30–13:46:48Z | routing legs waiting for pool threads 13:36:07–13:49:40Z (#5306, #5313, #5316, #5317); TLS handshake to Postgres timing out on a new connector 13:42–13:47Z (#5314) |
+| #5315 (9 activations at filing, 13:41:30–13:43:23Z; a 10th at 13:46:48Z was folded in as a recurrence) | `7cc85f47c-nm2qp` · 13:41:30–13:46:48Z | routing legs waiting for pool threads 13:36:07–13:49:40Z (#5306, #5313, #5316, #5317); TLS handshake to Postgres timing out on a new connector 13:42–13:47Z (#5314) |
 | #5345 (2 HTTP 500s) | `5c444645f8-8pdzb` · 14:43:42Z | 88 CompileWatcher stalls 14:43:02–14:43:35Z (#5344); routing starvation 14:41:08–19Z and 14:45:45–14:47:37Z (#5335, #5349) |
 | #5390 (108 activations) | `857546649-2c25b` · 18:49:44–56Z | `.NET Thread Pool execution stalled for 24.7s` at 18:47:10Z (#5388); routing legs starved 18:47:40–18:49:57Z (#5389, #5391) |
 | #5393 (4 activations) | `857546649-2c25b` · 18:53:19Z | the same episode as #5390, 3.5 minutes later |
 
-The single-schema reads that timed out are trivial: an `IN` list of three ancestor paths
-(`path:"A/B/C"|"A/B"|"A"`). The provider did not starve. The **process** starved, and the provider was
-where the fan-in saw it. All four occurred before
+The finding the four share is **starvation of the process**, not one query shape. The three grain
+incidents (#5315, #5390, #5393) timed out on trivial single-schema reads: an `IN` list of ancestor
+paths (`path:"A/B/C"|"A/B"|"A"`). #5345 timed out on a different query, the catalogue listing
+`namespace:Plugins nodeType:Package`. In every case the provider did not starve. The **process**
+starved, and the provider was where the fan-in saw it. All four occurred before
 [NodeType compiles moved off the ThreadPool](../CompileOffTheThreadPool) (#5327, merged 20:27Z that
 day), and the CompileWatcher burst next to #5345 is that defect's signature.
 

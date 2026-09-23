@@ -148,6 +148,47 @@ public class PluginBundleStalledReadTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
+    /// THE OTHER SIDE of the classification: an ordinary DEFECT on the same read is NOT dressed up as
+    /// "come back later". It still escapes the route, so a real endpoint defect stays visible, and
+    /// only an availability fault becomes 503. Without this arm a catch widened to every exception
+    /// would pass the stall case above while hiding real defects behind a retry.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnOrdinaryFault_OnTheCatalogueRead_IsNotConvertedTo503()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var key = await RegisterInstance();
+        var app = await StartBundleHost(ct);
+        await using var _ = app;
+
+        provider.Faulting = true;
+        HttpStatusCode? status = null;
+        Exception? escaped = null;
+        try
+        {
+            using var response = await Get(app, key, "/index.json");
+            status = response.StatusCode;
+        }
+        catch (Exception ex)
+        {
+            // TestServer rethrows an unhandled pipeline exception to the client by default — that
+            // IS the escape this case asserts.
+            escaped = ex;
+        }
+
+        (escaped is not null || status == HttpStatusCode.InternalServerError).Should().BeTrue(
+            $"a defect must still escape as one (status {status?.ToString() ?? "none"}, "
+            + $"exception {escaped?.GetType().Name ?? "none"})");
+        status.Should().NotBe(HttpStatusCode.ServiceUnavailable,
+            "only an availability fault may be answered 'retry later'");
+        if (escaped is not null)
+            escaped.ToString().Should().Contain(DefectMessage,
+                "the exception that escaped must be the catalogue read's own defect, not something else");
+    }
+
+    private const string DefectMessage = "catalogue read defect (test)";
+
+    /// <summary>
     /// Claims every query (so it is in every fan-in) and answers each with an empty Initial — except
     /// the installed-package catalogue query while <see cref="Stalling"/> is set, which it subscribes
     /// and never answers: no Initial, no completion, no error. That is the production shape the
@@ -166,6 +207,16 @@ public class PluginBundleStalledReadTest(ITestOutputHelper output) : MonolithMes
             set => Interlocked.Exchange(ref stalling, value ? 1 : 0);
         }
 
+        private int faulting;
+
+        /// <summary>When set, the catalogue read FAULTS with an ordinary defect
+        /// (<see cref="InvalidOperationException"/>) instead of stalling.</summary>
+        public bool Faulting
+        {
+            get => Volatile.Read(ref faulting) == 1;
+            set => Interlocked.Exchange(ref faulting, value ? 1 : 0);
+        }
+
         /// <summary>How many catalogue reads were left unanswered.</summary>
         public int StalledReads => Volatile.Read(ref stalledReads);
 
@@ -177,6 +228,9 @@ public class PluginBundleStalledReadTest(ITestOutputHelper output) : MonolithMes
             {
                 var catalogue = request.EffectiveQueries.Any(q =>
                     q.Contains($"nodeType:{PackageInstaller.PackageNodeType}", StringComparison.Ordinal));
+                if (catalogue && Faulting)
+                    return Observable.Throw<QueryResultChange<T>>(
+                        new InvalidOperationException(DefectMessage));
                 if (!catalogue || !Stalling)
                     return Observable.Return(new QueryResultChange<T>
                     {
