@@ -88,7 +88,14 @@ public static class MeshApiEndpoints
         // null userId when the request resolved to no real user. Replaces "mint a token and
         // read the home partition out of its nodePath" as the SSR's way of learning whose
         // dashboard to render: a read, answered from the identity the request already carries.
-        reads.MapPost("/whoami", HandleWhoAmI);
+        //
+        // With a `path` in the body it ALSO answers what the caller may do there (MeshWeaver#5189):
+        // access is per node, so the question is asked at an address and answered by the same
+        // evaluator the gates use. No body (the SSR's call) is the identity-only answer, unchanged.
+        reads.MapPost("/whoami", (HttpContext http, IMessageHub rootHub, WhoAmIBody? body, CancellationToken ct) =>
+            AsksForAccess(body, out var path)
+                ? RunString(http, rootHub, ct, ops => ops.WhoAmI(path))
+                : Task.FromResult(HandleWhoAmI(http)));
 
         group.MapPost("/search", (HttpContext http, IMessageHub rootHub, SearchBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Search(body.Query, body.BasePath)));
@@ -222,8 +229,25 @@ public static class MeshApiEndpoints
             : new WhoAmIResponse(null, null, null));
     }
 
-    /// <summary>Response shape of <c>POST /api/mesh/whoami</c>.</summary>
+    /// <summary>Response shape of <c>POST /api/mesh/whoami</c> without a <c>path</c>.</summary>
     public record WhoAmIResponse(string? UserId, string? Name, string? Email);
+
+    /// <summary>Optional body of <c>POST /api/mesh/whoami</c>. With a <see cref="Path"/> the answer
+    /// adds the caller's effective permissions at that node and whether they are a platform admin
+    /// (<c>MeshOperations.WhoAmI</c>); without one it is the identity-only
+    /// <see cref="WhoAmIResponse"/>.</summary>
+    public record WhoAmIBody(string? Path = null);
+
+    /// <summary>
+    /// Which answer a <c>/whoami</c> body asks for: the access answer at <paramref name="path"/> when
+    /// it names a node, the identity-only answer when there is no body, no <c>path</c>, or a blank
+    /// one — the last two being what every existing caller (<c>{}</c>) sends.
+    /// </summary>
+    internal static bool AsksForAccess(WhoAmIBody? body, out string path)
+    {
+        path = body?.Path?.Trim() ?? "";
+        return path.Length > 0;
+    }
 
     /// <summary>Default budget for <c>/render-area</c>; clamped so a caller can neither hang the
     /// request forever nor force a sub-second flake.</summary>
