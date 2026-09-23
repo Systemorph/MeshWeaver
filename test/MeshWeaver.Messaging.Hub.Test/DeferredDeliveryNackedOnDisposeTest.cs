@@ -178,6 +178,70 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "it as sender-is-self — an Error here alleges stranded work that has no waiter (#4178)");
     }
 
+    /// <summary>A request whose protocol re-asks on a ShuttingDown answer, the shape of
+    /// <c>SubscribeRequest</c>.</summary>
+    [ReaskedOnShutdown]
+    private record ReaskedRequest : IRequest<GatedResponse>;
+
+    private static readonly Address ReaskedAddress = new("reasked", "1");
+
+    /// <summary>
+    /// #4888 / #5424 / #5589: a cache client's <c>SubscribeRequest</c> parked behind
+    /// <c>[DataContextInit,MeshNodeInit]</c> of a hub that an Orleans deactivation took down
+    /// before its bring-up finished. Every producer of that request re-asks the next activation
+    /// on the transient answer, so nobody outside is stranded and event 7301 is teardown-normal.
+    ///
+    /// <para>The NACK itself is unchanged: the sender is still ANSWERED, transiently, with the
+    /// gate named, which is what its re-ask runs on. <see
+    /// cref="DeferredRequest_IsNacked_WhenHubIsDisposedBeforeItsGateOpens"/> is the control: the
+    /// same teardown over an UNMARKED request still reports at Error.</para>
+    /// </summary>
+    [Fact]
+    public async Task AReaskedRequestDiscardedByABringUpTeardown_IsTeardownNormal_NotAnError()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            ReaskedAddress,
+            c => c.WithTypes(typeof(ReaskedRequest), typeof(GatedResponse))
+                .WithInitializationGate("reasked-gate-never-opens", _ => false)
+                .WithHandler<ReaskedRequest>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new ReaskedRequest(), o => o.WithTarget(ReaskedAddress))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        // The production initiator: a DIRECT dispose with a stated cause, which is what
+        // MessageHubGrain does on an Orleans deactivation.
+        ((MessageHub)gated!).NoteDirectDisposalBy(
+            "Orleans deactivating grain reasked/1", "DirectoryFailure — the directory owner's silo is stopping");
+        gated.Dispose();
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+        failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,
+            "the sender must still be ANSWERED, transiently. Its re-ask runs on this answer");
+        ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, ReaskedAddress).Should().BeTrue(
+            "and the answer must read as the owner's own transient refusal, or the re-ask never fires");
+
+        log.At(LogLevel.Debug).Should().Contain(
+            m => m.Contains("reasked-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains("Orleans deactivating grain reasked/1", StringComparison.Ordinal),
+            "the discard is still REPORTED, with its gate and its teardown attribution. A change "
+            + "that stopped reporting would be a silenced fault, not a classification");
+        log.At(LogLevel.Error).Should().NotContain(
+            m => m.Contains("reasked-gate-never-opens", StringComparison.Ordinal),
+            "the request's protocol re-asks the next activation on this answer, so the Error's "
+            + "claim of stranded work has no victim");
+    }
+
     private static readonly Address AttributedAddress = new("attributed", "1");
 
     private static readonly Address UnattributedAddress = new("unattributed", "1");

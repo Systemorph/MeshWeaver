@@ -3301,7 +3301,8 @@ public class MessageService : IMessageService
         // The rule is the FACT, not the probe: whenever the sender IS this hub, nobody outside is
         // waiting, so the discard is teardown-internal and belongs at Debug — with the same facts,
         // and a sentence that no longer claims an answer was sent. A delivery from ANY OTHER sender
-        // still strands a real waiter on a transient NACK and stays an Error, unchanged. This is
+        // can strand a real waiter on a transient NACK and stays an Error, unless its protocol
+        // re-asks on that NACK ([ReaskedOnShutdown], the branch below the self case). This is
         // the same discipline as the queued-turn site below (#3647): an Error that names work as
         // lost, where no reader is left to act on it, sends the next investigator hunting a
         // producer that did nothing wrong.
@@ -3337,6 +3338,32 @@ public class MessageService : IMessageService
                     + "read once and disposed by design); not a discard of anybody else's work.",
                     Address, delivery.Message.GetType().Name, delivery.Id,
                     gatesAtDeferral, hub.RunLevel, disposal);
+            // 🚨 …AND FOR A REQUEST WHOSE PROTOCOL RE-ASKS, nobody outside is stranded either
+            // (#4888, #5424, #5589). A delivery can only be parked here behind an INITIALIZATION
+            // gate, and those gates close for one thing only, a bring-up the teardown has just
+            // ended. So every line at this site is the TeardownLayers carve-out ("a hub that never
+            // finished starting has its parked work answered ShuttingDown"). It is not a hub that
+            // went down over work it could have drained. What the Error below is FOR is the
+            // stranded waiter: a sender that takes the transient NACK as its final answer. A
+            // [ReaskedOnShutdown] request has no such sender, by the contract of the marker. Every
+            // SubscribeRequest producer (JsonSynchronizationStream.CreateExternalClient, its
+            // Resubscribe, the fresh-snapshot re-ask) rides a ShuttingDown refusal out and asks
+            // the address's NEXT activation, and since #4866 this NACK is composed so that it
+            // recognises the refusal as one. MEASURED: the three open incidents at this site
+            // (#4888, #5424, #5589) are all SubscribeRequests from cache/… senders, discarded
+            // by an Orleans deactivation (DirectoryFailure: the directory owner's silo stopping)
+            // while the gates were still closed. The line is teardown-normal, so it goes to Debug
+            // with the same facts, exactly like the self-addressed case above.
+            else if (delivery.Message.GetType().HasAttribute<ReaskedOnShutdownAttribute>())
+                logger.LogDebug(DisposalDiscardedDeferredDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
+                    + "still deferred; initialization gates closed at deferral: [{Gates}]. RunLevel={RunLevel}; "
+                    + "teardown {Disposal}. The teardown ended this hub's bring-up, and the sender is answered "
+                    + "with a transient ShuttingDown NACK. {MessageType} is re-asked on that answer by every "
+                    + "producer ([ReaskedOnShutdown]), so the next activation serves it. Teardown-normal; "
+                    + "nothing is lost.",
+                    Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
+                    gatesAtDeferral, hub.RunLevel, disposal, delivery.Message.GetType().Name);
             else
                 logger.LogError(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "

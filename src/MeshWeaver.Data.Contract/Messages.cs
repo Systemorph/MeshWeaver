@@ -244,7 +244,14 @@ public record PatchDataChangeRequest(
 /// </summary>
 /// <param name="StreamId">The identifier to use for the subscription stream.</param>
 /// <param name="Reference">The workspace reference describing the data to subscribe to.</param>
+/// <remarks>
+/// <see cref="ReaskedOnShutdownAttribute"/>: every producer mints this through
+/// <c>JsonSynchronizationStream.MintSubscribeRequest</c> and observes the reply. On a transient
+/// <c>ShuttingDown</c> refusal it asks the address's next activation
+/// (<c>Doc/Architecture/RidingOutAShuttingDownAddress</c>). A new producer must keep that true.
+/// </remarks>
 [RequiresPermission(Permission.Read)]
+[ReaskedOnShutdown]
 public record SubscribeRequest(string StreamId, WorkspaceReference Reference)
     : IRequest<SubscribeAck>, IDiagnosticKeyed
 {

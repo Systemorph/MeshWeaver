@@ -460,6 +460,19 @@ hosted sub-hub.
 the intake and deferred-queue NACKs give — so `SynchronizationStream`'s keep-alive and
 change-feed resubscribe latch **stay armed** and the subscriber rehydrates after the recycle.
 
+🚨 **The refusal is for a host that is going away, and ONLY for that (#5592).** A null sub-hub also
+comes back when its construction RAN and FAULTED on a live host: a configuration that threw, a
+container that could not build, an `OutOfMemoryException` under heap exhaustion.
+`HostedHubsCollection` reports that as `HostedHubOutcome.ConstructionFaulted` with the real
+exception. The constructor used to refuse that case with `HubDisposingException` as well, so the
+host's own init failure read *"BuildupAction faulted (HubDisposingException: Hub X is shutting
+down …)"* on a hub whose `IsShuttingDown` was false. The report was then triaged as an expected
+teardown race. The constructor now reads the outcome through `TryGetHostedHub` and throws an
+`InvalidOperationException` that names the root fault and carries it as the inner exception. It
+is deliberately NOT an `ObjectDisposedException`, so no teardown classifier can read it as
+"retry". Pinned by `SyncHubConstructionFaultIsNotAShutdownTest` (Data.Test); its second case is
+the control, showing the creation freeze still refuses with `HubDisposingException`.
+
 > The predecessor built a "dead stream" here instead: `isDisposed`, completed store, and
 > `Hub = null!`, with a comment requiring every consumer to go through `TryGetActiveHub`. No
 > consumer did — `grep -rn TryGetActiveHub src` matched only the stream itself, against ~96
