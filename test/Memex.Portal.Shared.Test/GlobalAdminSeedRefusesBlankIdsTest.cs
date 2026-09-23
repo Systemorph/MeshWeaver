@@ -56,6 +56,9 @@ public class GlobalAdminSeedRefusesBlankIdsTest
 
         Assert.Equal(2, nodes.Length);
         Assert.Equal(nodes.Length, nodes.Select(n => n.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        // The LAST spelling wins — what AddMeshNodes' case-insensitive last-wins made effective
+        // before the filter existed, and the permission fold matches AccessObject ordinally.
+        Assert.All(nodes, n => Assert.Equal("Alice", Assert.IsType<AccessAssignment>(n.Content).AccessObject));
     }
 
     /// <summary>Control: the shape a real id gets is unchanged — Admin on Admin, Admin on Provider.</summary>

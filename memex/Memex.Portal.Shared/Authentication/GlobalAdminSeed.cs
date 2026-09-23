@@ -40,11 +40,17 @@ public static class GlobalAdminSeed
         // `Admin/_Access/_Access` grant for the empty username: an Admin assignment on the Admin
         // partition whose AccessObject matches nobody today and whatever identity ever resolves to
         // "" tomorrow. A duplicate is dropped too, case-insensitively as mesh paths are, so two
-        // spellings of one id cannot mint two nodes at one path.
+        // spellings of one id cannot mint two nodes at one path — and the LAST spelling is kept,
+        // because that is what AddMeshNodes' case-insensitive last-wins already made effective
+        // before this filter existed. The permission fold matches AccessObject ORDINALLY, so
+        // keeping the first spelling instead would silently move a platform admin to a
+        // different login (review on #5462).
         var ids = (configuration.GetSection(ConfigSection).Get<string[]>() ?? [])
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => id.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Reverse()
+            .DistinctBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .Reverse()
             .ToArray();
         if (ids.Length == 0)
             return [];

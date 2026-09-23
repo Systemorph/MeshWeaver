@@ -931,18 +931,18 @@ data:
          writes the Admin/_Access grant hub.IsGlobalAdmin() reads). Before MeshWeaver#5217 no line
          here rendered it, so a record declaring it reached no container and the seed saw an empty
          section while helm reported success. Three indices; a deployment needing more adds a
-         guarded line, never an unguarded one. 🚨 Each line is TRUTHY-guarded, not hasKey-guarded:
-         a declared-but-blank id must render NOTHING, because an unconditional "" on every
+         guarded line, never an unguarded one. 🚨 Each line renders the TRIMMED value and only when it
+         is non-empty (not hasKey-guarded): a declared-but-blank or whitespace id must render NOTHING, because an unconditional "" on every
          instance would ask the seed for an Admin grant to an empty username fleet-wide
          (GlobalAdminSeed also refuses blanks, so this is the first of two locks, not the only one). */}}
-  {{- if .Values.config.memex_portal.Auth__GlobalAdmins__0 }}
-  Auth__GlobalAdmins__0: "{{ .Values.config.memex_portal.Auth__GlobalAdmins__0 }}"
+  {{- if (.Values.config.memex_portal.Auth__GlobalAdmins__0 | default "" | trim) }}
+  Auth__GlobalAdmins__0: "{{ .Values.config.memex_portal.Auth__GlobalAdmins__0 | trim }}"
   {{- end }}
-  {{- if .Values.config.memex_portal.Auth__GlobalAdmins__1 }}
-  Auth__GlobalAdmins__1: "{{ .Values.config.memex_portal.Auth__GlobalAdmins__1 }}"
+  {{- if (.Values.config.memex_portal.Auth__GlobalAdmins__1 | default "" | trim) }}
+  Auth__GlobalAdmins__1: "{{ .Values.config.memex_portal.Auth__GlobalAdmins__1 | trim }}"
   {{- end }}
-  {{- if .Values.config.memex_portal.Auth__GlobalAdmins__2 }}
-  Auth__GlobalAdmins__2: "{{ .Values.config.memex_portal.Auth__GlobalAdmins__2 }}"
+  {{- if (.Values.config.memex_portal.Auth__GlobalAdmins__2 | default "" | trim) }}
+  Auth__GlobalAdmins__2: "{{ .Values.config.memex_portal.Auth__GlobalAdmins__2 | trim }}"
   {{- end }}
   {{- if .Values.config.memex_portal.Authentication__Microsoft__ClientId }}
   Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId }}"
