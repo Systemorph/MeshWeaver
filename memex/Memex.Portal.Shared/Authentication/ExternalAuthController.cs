@@ -3,6 +3,7 @@ using MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PortalAuthOptions = MeshWeaver.Hosting.AspNetCore.Portal.Authentication.AuthenticationOptions;
 
@@ -13,10 +14,12 @@ namespace Memex.Portal.Shared.Authentication;
 public class ExternalAuthController : ControllerBase
 {
     private readonly PortalAuthOptions _authOptions;
+    private readonly ILogger<ExternalAuthController> _logger;
 
-    public ExternalAuthController(IOptions<PortalAuthOptions> authOptions)
+    public ExternalAuthController(IOptions<PortalAuthOptions> authOptions, ILogger<ExternalAuthController> logger)
     {
         _authOptions = authOptions.Value;
+        _logger = logger;
     }
 
     /// <summary>
@@ -51,7 +54,22 @@ public class ExternalAuthController : ControllerBase
         // and signed in via the cookie scheme. Read the authenticated user from cookies.
         var result = await HttpContext.AuthenticateAsync();
         if (!result.Succeeded || result.Principal == null)
+        {
+            // 🚨 Named, never silent. This is the SECOND producer of `/login?error=auth_failed` (the
+            // first is the OIDC handler's remote-failure hook, which logs on its own): the provider
+            // answered, the handler signed the cookie in at /signin-{provider}, and this very next
+            // request cannot read it back — a cookie the browser did not return, a Data Protection
+            // key ring this replica does not share, a sign-in that never happened on this host. A
+            // person reporting "auth_failed" used to leave no trace here at all: a 12-hour log
+            // query over one such report returned zero lines.
+            _logger.LogWarning(
+                "{Provider} sign-in reached /auth/callback on {Host} without an authenticated "
+                + "principal — {Failure}; cookies on the request: {CookieCount}; None: {None}",
+                provider, Request.Host.Value,
+                result.Failure?.Message ?? (result.None ? "no authentication ticket at all" : "ticket rejected"),
+                Request.Cookies.Count, result.None);
             return Redirect("/login?error=auth_failed");
+        }
 
         var externalClaims = result.Principal.Claims.ToList();
         var (objectId, name, email) = NormalizeClaims(provider, externalClaims);
