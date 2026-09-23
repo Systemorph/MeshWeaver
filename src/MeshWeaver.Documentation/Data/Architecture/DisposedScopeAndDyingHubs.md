@@ -67,6 +67,27 @@ goes straight to `host.DisposeAsync()` — no `StopAsync`, no `StoppedAsync` —
 is disposed with the silo still stopping. So an R1-shaped fault on a pod that never finished
 booting is a *different* condition, and the ordering fix is not the answer to it.
 
+### 🚨 A one-shot signal must outlive the container (#5557)
+
+The aborted-startup path has a second casualty that is not an Autofac frame at all:
+`ObjectDisposedException` at `AsyncSubject.ThrowDisposed` ← `AsyncSubject.Subscribe` ←
+`SubscribeSafe`, reported by the default install as *"First-startup plugin provisioning failed; no
+retry is attempted."* The install hops to the thread pool before it subscribes to the bake barrier
+(`PreWarmCompletion.Settled`). On an aborted startup no `StopAsync` runs, the container disposes its
+singletons in reverse creation order, and the barrier — first resolved from the installer's own
+`StartAsync`, so created after it — is disposed first. A queued subscribe that lands before the
+installer's own disposal meets a disposed subject, and the installer reports the teardown as its
+own failure on a process that is already exiting.
+
+The rule that closes it: **a one-shot replay signal is never disposed.** An `AsyncSubject` owns no
+resource; disposing it only converts every later reader into an error. So `PreWarmCompletion` is not
+disposable, and `InstanceAutoRegistrationService.Completed` and
+`RegistryUpdateReconciler.BootReconciled` are left readable when their owners stop — their owners
+dispose their own *subscriptions*, never the signal other services sequence on. A late reader then
+sees exactly what an early one sees: the value, or a wait that its own owner's teardown ends. The
+module-GC and volume-reading services already followed this rule; pinned by
+`AOneShotSignalOutlivesTeardownTest`.
+
 ### 🚨 The one site that CANNOT be hoisted, and the stack overflow that proves it
 
 The obvious hardening is to hoist the delivery path's own resolve, and the mesh router looks like
