@@ -1185,6 +1185,7 @@
   "instanceRegistration.intro": "This installation registers itself at a plugin registry to obtain its identity, a short-lived token and the package catalogue its plan covers. It does so only after a platform admin has read and accepted the privacy statement and the platform terms below.",
   "instanceRegistration.notConfigured": "No registry is configured for this installation (PluginCatalog:RegistryUrl / InstanceId). Nothing to register.",
   "instanceRegistration.keyed": "This installation registers with a registration key its operator provisioned; no consent step applies here.",
+  "instanceRegistration.provisioned": "Provisioned by the operator — this installation presents the registry token configured for it; its plan is set at the registry.",
   "instanceRegistration.awaitingConsent": "Awaiting consent — this installation has not registered yet.",
   "instanceRegistration.registered": "Registered",
   "instanceRegistration.plan": "Plan",
