@@ -10,6 +10,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Authentication;
@@ -126,6 +127,22 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                 + "already been answered", context.Request.Path)))!;
         var outcome = decision.Outcome;
 
+        // 🚨 The wait above is deliberately deaf to RequestAborted — so the request it hands on
+        // may already be DEAD by the time the decision arrives, and nothing downstream knows (#4859).
+        // Every endpoint behind this middleware that bridges through ObserveCompletion(…, ct) is
+        // cancelled the instant its connection is aborted; this wait is not, so it resumes AFTER an
+        // abort and must look before it goes on. Handing a dead request
+        // to `next` runs the endpoint for nobody, and when the abort was Kestrel's shutdown giving up
+        // on the connection, the endpoint's response write rents from the transport's memory pool
+        // after the transport has disposed it: `ObjectDisposedException: 'MemoryPool'` at
+        // `Http1OutputProducer.GetFakeMemory`, five of them in 31 ms on memex-cloud, each attributed
+        // to THIS frame because it is the frame that resumed them.
+        if (context.RequestAborted.IsCancellationRequested)
+        {
+            ReportAbortedBeforeDecision(context, outcome);
+            return;
+        }
+
         if (outcome == OnboardingOutcome.Unavailable)
         {
             // 🚨 UNAVAILABLE ≠ "you have no account" (issue #637). The lookup that decides
@@ -164,6 +181,39 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         }
 
         await next(context);
+    }
+
+    /// <summary>
+    /// Says what happened to a request whose connection was aborted before its identity decision
+    /// arrived — and keeps the one diagnostic that matters from disappearing with the crash it
+    /// replaces.
+    ///
+    /// <para>🚨 <b>Not answering a dead request is not the whole story, and this line is why.</b>
+    /// A client that simply left is routine (Debug). But an abort while the host is STOPPING is how
+    /// Kestrel ends a shutdown drain that ran out of budget: it aborts every connection still in
+    /// flight and then disposes its transport. In #4859 the trace of that which reached the incident
+    /// pipeline was the <c>ObjectDisposedException</c> burst this method prevents, so silencing the
+    /// crash without saying this at Warning would hide a drain that was cut short — which is the
+    /// question #4859 leaves open.</para>
+    /// </summary>
+    private void ReportAbortedBeforeDecision(HttpContext context, OnboardingOutcome outcome)
+    {
+        var stopping = context.RequestServices?.GetService<IHostApplicationLifetime>()
+            ?.ApplicationStopping.IsCancellationRequested == true;
+        if (stopping)
+            logger.LogWarning(
+                "Onboarding: the connection for {Method} {Path} was ABORTED while the host is "
+                + "stopping, before its identity decision ({Outcome}) arrived — not handing it to the "
+                + "endpoint, whose response would be written into a transport Kestrel has already "
+                + "torn down (#4859). An abort during shutdown means either the client left or "
+                + "Kestrel's drain gave up on in-flight requests; a burst of these lines at one "
+                + "instant is the second, and says the shutdown budget ran out before HTTP drained.",
+                context.Request.Method, context.Request.Path, outcome);
+        else
+            logger.LogDebug(
+                "Onboarding: the client aborted {Method} {Path} before its identity decision "
+                + "({Outcome}) arrived — nothing to answer",
+                context.Request.Method, context.Request.Path, outcome);
     }
 
     private enum OnboardingOutcome { PassThrough, Redirect, RedirectHome, Unavailable }

@@ -95,6 +95,32 @@ matches the email. On success it chains `InvitationService.MarkAccepted`. The pa
 for invited users and an **"Invitation Required"** message for everyone else (messaging only — the
 real gate is at `CreateUser`).
 
+### A request that died while its identity was being resolved
+
+`OnboardingMiddleware` runs in front of every page and API route and decides — from the signed-in
+user's `User` node and roles — whether to pass the request on, redirect it to `/onboarding`, or
+answer `503` because identity could not be resolved. That wait is **deliberately deaf to
+`HttpContext.RequestAborted`**: abandoning it half-way would leave the request with no outcome, and
+the lookup carries its own bound. The consequence is that the request the middleware resumes may
+already be dead.
+
+It therefore checks `RequestAborted` **after** the decision arrives and, when the connection is gone,
+hands nothing to the endpoint. Before that check (#4859) a burst of five requests on memex-cloud was
+passed to a JSON endpoint after Kestrel's shutdown had aborted their connections and disposed its
+transport; every response write rented from the dead pool and died on
+`ObjectDisposedException: 'MemoryPool'` at `Http1OutputProducer.GetFakeMemory`, attributed to this
+middleware because it was the frame that resumed them. (In Kestrel, `GetFakeMemory` is the path a
+write takes once its connection has already ended, and the pool it rents from belongs to the
+transport — so that stack is a write arriving after shutdown tore the HTTP transport down, whichever
+way the connection itself ended.)
+
+🚨 **Not answering a dead request must not erase what the crash was evidence of.** An abort while the
+host is stopping is how Kestrel ends a shutdown drain that ran out of budget, so that case is logged at
+**Warning** (`the connection … was ABORTED while the host is stopping`); a burst of those lines at one
+instant says the host's shutdown budget ran out before HTTP drained, which is a question about the
+teardown ahead of Kestrel, not about this middleware. A client that simply left a running portal is
+logged at Debug. Pinned by `OnboardingMiddlewareAbortedRequestTest`.
+
 ---
 
 ## The admin Invitations tab
