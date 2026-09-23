@@ -100,21 +100,39 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
                     new NodeTypeCompileState { LastCompiledVersion = 7 },
                     options))
                 .Should().Emit(cancellationToken: ct);
-        var control = await ReadNode(controlStatePath).FirstAsync().Timeout(30.Seconds()).Await(ct);
-        Assert.NotNull(control);
+        // Read through the SAME instrument the negative below uses — a scope:children listing of the
+        // `_Activity` parent — so "absent" there is a reading of an instrument shown to see one.
+        var controlListed = await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
+            .SelectMany(_ => SatelliteListing(meshService, ControlTypePath))
+            .Where(paths => paths.Contains(controlStatePath))
+            .FirstAsync()
+            .Timeout(30.Seconds())
+            .Await(ct);
+        Assert.Contains(controlStatePath, controlListed);
 
-        // THE ASSERTION: no satellite for the activated, changed type. A negative with no positive
-        // signal to wait for, so it is read over a bounded window — the mirror used to write within
-        // milliseconds of the activation above, well inside it.
+        // THE ASSERTION: no satellite for the activated, changed type. Existence is read off a
+        // scope:children listing, never a point read of a node expected NOT to exist (that opens the
+        // missing-node breaker on the path). A negative with no positive signal to wait for, so it is
+        // read over a bounded window — the mirror used to write within milliseconds of the
+        // activation above, well inside it.
         var statePath = NodeTypeCompileStateMirror.StatePath(TypePath);
         var satellite = await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
             .Take(20)
-            .SelectMany(_ => ReadNode(statePath))
-            .Where(n => n is not null)
+            .SelectMany(_ => SatelliteListing(meshService, TypePath))
+            .Where(paths => paths.Contains(statePath))
             .FirstOrDefaultAsync()
             .Await(ct);
         Assert.True(satellite is null,
             $"a NodeType activation must not write {statePath} (#5389) — nothing reads it, and the "
             + "write cost a node-operation round trip and a grain activation per NodeType");
     }
+
+    /// <summary>The paths listed directly under <c>{typePath}/_Activity</c> — one Initial snapshot of
+    /// a scope:children query, the sanctioned existence read for a node that may not exist.</summary>
+    private static IObservable<IReadOnlyList<string>> SatelliteListing(IMeshService meshService, string typePath) =>
+        meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}/_Activity scope:children"))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Take(1)
+            .Select(c => (IReadOnlyList<string>)c.Items.Select(n => n.Path).ToArray());
 }
