@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Api;
 using MeshWeaver.Plugin.Packaging;
@@ -203,7 +204,66 @@ public class PluginBundlePublishNativesTest : IDisposable
         return null;
     }
 
-    private async Task<HttpResponseMessage> Publish(byte[] bundle)
+    /// <summary>
+    /// #5501 — the endpoint spools the upload instead of buffering it, so a CHUNKED upload (no
+    /// <c>Content-Length</c>, the shape a streaming publisher sends) must land exactly as a sized one
+    /// does: natives and all, byte-exact.
+    /// </summary>
+    [Fact]
+    public async Task AChunkedPublish_WithNoContentLength_LandsTheSameBundle()
+    {
+        var response = await Publish(BuildBundle(withNatives: true), chunked: true);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(LandedFile(Module + ".dll") is not null, "the entry assembly did not land");
+        Assert.Equal(NativeBytes, File.ReadAllBytes(LandedFile(NativePath)!));
+    }
+
+    /// <summary>
+    /// #5501 — the spool is a FILE that holds the body byte-exact, is readable from its start, and is
+    /// gone once the request disposes it. A MemoryStream here would be the defect back: the whole
+    /// bundle contiguous on the large-object heap, grown by doubling and then copied out.
+    /// </summary>
+    [Fact]
+    public async Task TheUploadSpool_IsAFileThatHoldsTheBodyAndDeletesItself()
+    {
+        var body = BuildBundle(withNatives: true);
+        string spoolPath;
+        await using (var spool = await PluginBundleEndpoints.SpoolUploadAsync(
+                         new NonSeekableStream(body), CancellationToken.None))
+        {
+            spoolPath = spool.Name;
+            Assert.True(File.Exists(spoolPath), "the upload was not spooled to a file");
+            Assert.Equal(0, spool.Position);
+            Assert.Equal(body.Length, spool.Length);
+            using var copy = new MemoryStream();
+            await spool.CopyToAsync(copy);
+            Assert.Equal(body, copy.ToArray());
+        }
+        Assert.False(File.Exists(spoolPath), "the spool outlived the request that owned it");
+    }
+
+    /// <summary>A body that cannot seek or report a length — what Kestrel hands a chunked upload.</summary>
+    private sealed class NonSeekableStream(byte[] bytes) : Stream
+    {
+        private readonly MemoryStream inner = new(bytes, writable: false);
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private async Task<HttpResponseMessage> Publish(byte[] bundle, bool chunked = false)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -220,7 +280,9 @@ public class PluginBundlePublishNativesTest : IDisposable
         var request = new HttpRequestMessage(
             HttpMethod.Post, $"{PluginBundleEndpoints.RoutePrefix}/{Plugin}")
         {
-            Content = new ByteArrayContent(bundle),
+            Content = chunked
+                ? new StreamContent(new NonSeekableStream(bundle))
+                : new ByteArrayContent(bundle),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token);
 
