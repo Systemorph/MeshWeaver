@@ -317,12 +317,21 @@ public class OAuthConnectController(
             return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_request" }));
         }
 
+        // 🚨 Resolved HERE, while the request's scope is provably alive (MeshWeaver.Feedback#13).
+        // The chain below outlives the request whenever the client aborts: `.ObserveCompletion(…, ct)`
+        // cancels the WAIT, not the source, so the exchange keeps running after the response is gone.
+        // Read lazily inside it, these properties resolved from a disposed request scope — the
+        // "faulted after the response had already been sent" warning measured on memex. Both are
+        // root singletons, so the captured instances stay valid for the whole chain.
+        var codeStore = CodeStore;
+        var tokens = TokenService;
+
         // Exchange the code against the mesh-backed store (replica-safe: the code may
         // have been minted by any pod, and the single-use consume is atomic across
         // replicas — first delete wins), then mint the mw_ API token. One reactive
         // chain, single bridge to Task at .ObserveCompletion(…, ct) — never Rx's .ToTask(), which
         // resumes the awaiter INLINE on the signalling thread (forbidden since 2026-08-30).
-        return CodeStore.ExchangeCode(
+        return codeStore.ExchangeCode(
                 request.code,
                 request.client_id,
                 request.redirect_uri,
@@ -342,6 +351,20 @@ public class OAuthConnectController(
 
                 var entry = exchange.Entry;
 
+                // 🚨 A client that has already given up receives nothing we mint — so mint nothing.
+                // The token would be a year-long credential no client holds, removed only by a
+                // later supersede for the same client_id, which for a client whose id changes per
+                // registration never comes (MeshWeaver.Feedback#13 / #12). The code is consumed
+                // either way: it is single-use, and the client re-runs the whole flow.
+                if (ct.IsCancellationRequested)
+                {
+                    logger.LogInformation(
+                        "OAuth /token for client {ClientId}: the client abandoned the exchange before a "
+                        + "token was minted — no token issued, nothing to revoke",
+                        request.client_id);
+                    return Observable.Return<IActionResult>(BadRequest(new { error = "invalid_request" }));
+                }
+
                 // Create an mw_ API token via the existing token service. Lifetime
                 // is long-lived because OAuth clients (MCP, CLI tools) typically
                 // can't run interactive re-auth flows — a token that expires in 30
@@ -350,7 +373,7 @@ public class OAuthConnectController(
                 // 1 year. Bump if needed via TokenLifetime below.
                 var label = $"OAuth: {request.client_id}";
 
-                return TokenService.CreateToken(
+                return tokens.CreateToken(
                         userId: entry.UserId,
                         userName: entry.UserName,
                         userEmail: entry.UserEmail,
@@ -366,11 +389,27 @@ public class OAuthConnectController(
                     // Ordered mint-THEN-supersede, never the reverse: if the mint fails the client
                     // must keep the credential it already has, so revoking first could strand it
                     // with none at all.
-                    .SelectMany(creation => SupersedePreviousTokens(
-                            entry.UserId, label, creation.Node.Path, MintedAt(creation))
-                        .Select(_ => creation))
-                    .Select(creation =>
+                    //
+                    // 🚨 And the abandonment check sits BETWEEN the two: a client that gave up while
+                    // the mint was in flight never receives the new token, so it is REVOKED and the
+                    // supersede is SKIPPED — superseding first would delete the credential the client
+                    // still holds and leave it with none (MeshWeaver.Feedback#13).
+                    //
+                    // The check is not one snapshot: SupersedePreviousTokens re-reads it after its
+                    // listing and before EACH delete, and answers false when it stopped because the
+                    // client left — the new token is then revoked just the same.
+                    .SelectMany(creation => (ct.IsCancellationRequested
+                            ? Observable.Return(false)
+                            : SupersedePreviousTokens(
+                                tokens, entry.UserId, label, creation.Node.Path, MintedAt(creation), ct))
+                        .SelectMany(completed => completed
+                            ? Observable.Return((Creation: creation, Abandoned: (IActionResult?)null))
+                            : RevokeUndeliveredToken(tokens, creation, request.client_id)))
+                    .Select(step =>
                     {
+                        if (step.Abandoned is { } refused)
+                            return refused;
+                        var creation = step.Creation;
                         logger.LogInformation("Issued OAuth access token for user {Email}, client {ClientId}", entry.UserEmail, request.client_id);
                         return (IActionResult)Ok(new
                         {
@@ -407,10 +446,10 @@ public class OAuthConnectController(
     /// <para>Never fails the exchange. The client has a valid token by this point; housekeeping
     /// that could not complete is a Warning and the next authorization tries again.</para>
     /// </summary>
-    private IObservable<System.Reactive.Unit> SupersedePreviousTokens(
-        string userId, string label, string keepPath, DateTimeOffset mintedAt)
+    private IObservable<bool> SupersedePreviousTokens(
+        ApiTokenService tokens, string userId, string label, string keepPath, DateTimeOffset mintedAt,
+        CancellationToken abandoned)
     {
-        var tokens = TokenService;
         return tokens.GetTokensForUser(userId)
             .Take(1)
             .SelectMany(all =>
@@ -434,7 +473,12 @@ public class OAuthConnectController(
                     .Select(t => t.NodePath)
                     .ToArray();
                 if (superseded.Length == 0)
-                    return Observable.Return(System.Reactive.Unit.Default);
+                    return Observable.Return(true);
+                // Re-checked AFTER the listing (it is a live read, and the client may have left while
+                // it ran) and again before each delete below: an abandoned exchange must not retire
+                // the credential the client still holds (MeshWeaver.Feedback#13).
+                if (abandoned.IsCancellationRequested)
+                    return Observable.Return(false);
 
                 // 🚨 Name the rows — twice, and the two lines say different things. The 401 a
                 // superseded holder gets is logged by the validator under the token's HASH
@@ -461,15 +505,17 @@ public class OAuthConnectController(
                 // sweep uses, so a client that re-authorized many times drains gently. Each
                 // delete's own bool is what it REMOVED (true) or found already absent (false);
                 // a fault is caught per path and counts as not removed.
-                return Observable.Concat(superseded.Select(path => tokens.DeleteToken(path)
-                        .Select(removed => (Path: path, Removed: removed))
-                        .Catch<(string Path, bool Removed), Exception>(ex =>
+                return Observable.Concat(superseded.Select(path => Observable.Defer(() => abandoned.IsCancellationRequested
+                        ? Observable.Return((Path: path, Removed: false, Skipped: true))
+                        : tokens.DeleteToken(path)
+                        .Select(removed => (Path: path, Removed: removed, Skipped: false))
+                        .Catch<(string Path, bool Removed, bool Skipped), Exception>(ex =>
                         {
                             logger.LogWarning(ex,
                                 "OAuth: could not supersede previous token {Path} — it stays live until "
                                 + "the next authorization or its expiry", path);
-                            return Observable.Return((Path: path, Removed: false));
-                        })))
+                            return Observable.Return((Path: path, Removed: false, Skipped: false));
+                        }))))
                     .ToList()
                     .Do(outcomes =>
                     {
@@ -480,15 +526,38 @@ public class OAuthConnectController(
                             removed.Length, outcomes.Count, userId, label,
                             removed.Length == 0 ? "(none)" : string.Join(", ", removed), keepPath);
                     })
-                    .Select(_ => System.Reactive.Unit.Default);
+                    .Select(outcomes => !outcomes.Any(o => o.Skipped));
             })
-            .Catch<System.Reactive.Unit, Exception>(ex =>
+            .Catch<bool, Exception>(ex =>
             {
                 logger.LogWarning(ex,
                     "OAuth: could not list previous tokens for user {UserId} to supersede them", userId);
-                return Observable.Return(System.Reactive.Unit.Default);
+                return Observable.Return(!abandoned.IsCancellationRequested);
             });
     }
+
+    /// <summary>
+    /// Removes a token this exchange minted for a client that abandoned the exchange before the
+    /// response could carry it (MeshWeaver.Feedback#13). Nobody holds it, so leaving it would be a
+    /// year-long live credential with no holder. A refusal is logged with the path — the token then
+    /// stays live and the line is what lets an operator remove it — and never faults the exchange,
+    /// whose caller is already gone.
+    /// </summary>
+    private IObservable<(TokenCreationResult Creation, IActionResult? Abandoned)> RevokeUndeliveredToken(
+        ApiTokenService tokens, TokenCreationResult creation, string clientId)
+        => tokens.DeleteToken(creation.Node.Path)
+            .Do(
+                removed => logger.LogInformation(
+                    "OAuth /token for client {ClientId}: the client abandoned the exchange while the token "
+                    + "was being minted — {Outcome} the undelivered token {Path}; the client's previous "
+                    + "credential was NOT superseded",
+                    clientId, removed ? "revoked" : "found already absent", creation.Node.Path),
+                ex => logger.LogWarning(ex,
+                    "OAuth /token for client {ClientId}: could not revoke the undelivered token {Path} — "
+                    + "it stays live, held by no client, until revoked or expired",
+                    clientId, creation.Node.Path))
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .Select(_ => (creation, (IActionResult?)BadRequest(new { error = "invalid_request" })));
 
     /// <summary>
     /// The creation stamp of the token this exchange just minted — the ordering key
