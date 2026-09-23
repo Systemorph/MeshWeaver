@@ -114,6 +114,10 @@ public static class AccessControlLayoutArea
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {
+                    // 🚨 Captured on the click's delivery turn: the upsert below runs in the form
+                    // stream's callback, where the AsyncLocal AccessContext may already be gone.
+                    var access = saveCtx.Hub.ServiceProvider.GetService<AccessService>();
+                    var caller = access?.Context ?? access?.CircuitContext;
                     // Subscribe to the form data stream (synchronous emission via Take(1) —
                     // one-shot read for a click action, per DataBinding doc rule).
                     saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
@@ -165,8 +169,8 @@ public static class AccessControlLayoutArea
                             // assignment's own owner, which serialises both branches, and
                             // carries the caller's identity (Doc/Architecture/
                             // DataPlaneMessagesAreStreamPlumbing).
-                            saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>()
-                                .CreateOrUpdateNode(newNode)
+                            var meshService = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                            access.RunAs(caller, () => meshService.CreateOrUpdateNode(newNode))
                                 .Subscribe(
                                     _ => { },
                                     ex => ShowValidationError(saveCtx, $"{saveCtx.Host.Localize("error.saveFailed")}: {ex.Message}"));

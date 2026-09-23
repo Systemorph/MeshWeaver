@@ -418,8 +418,8 @@ public static class UserActivityLayoutAreas
     /// <param name="options">Serializer options used to read the content as a <see cref="User"/>.</param>
     /// <returns>A COLD observable: the write happens on Subscribe.</returns>
     internal static IObservable<MeshNode> ClearUserBody(IWorkspace workspace, string userPath, JsonSerializerOptions options)
-        => workspace.GetMeshNodeStream(userPath).Update(node =>
-            node.ContentAs<User>(options) is { Body: { Length: > 0 } } user
+        => workspace.GetMeshNodeStream(userPath).Update<User>((node, user) =>
+            user is { Body: { Length: > 0 } }
                 ? node with { Content = user with { Body = null } }
                 : node);
 

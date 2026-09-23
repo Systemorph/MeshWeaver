@@ -59,15 +59,17 @@ public class DataPlaneMessageRatchetGuard(ITestOutputHelper output)
     {
         ["GetDataRequest"] = 18,
         ["GetDataResponse"] = 26,
-        ["DataChangeRequest"] = 4,
+        ["DataChangeRequest"] = 11,
         ["PatchDataChangeRequest"] = 0,
         ["DataChangedEvent"] = 0,
     }.ToImmutableDictionary(StringComparer.Ordinal);
 
-    /// <summary>Production roots. <c>test/</c> is out of scope here: a test of the data layer
-    /// legitimately speaks its messages, and the flip to <c>internal</c> gives the data layer's
-    /// own test projects <c>InternalsVisibleTo</c>.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex", "tools"];
+    /// <summary>Production roots — and <c>samples/</c>, whose <c>Data/</c> trees are IN-MESH C# that
+    /// compiles at runtime (a NodeType's <c>Source/*.cs</c>) and is invisible to <c>dotnet build</c>.
+    /// <c>test/</c> is out of scope here: a test of the data layer legitimately speaks its messages,
+    /// and the flip to <c>internal</c> gives the data layer's own test projects
+    /// <c>InternalsVisibleTo</c>.</summary>
+    private static readonly string[] ScannedRoots = ["src", "memex", "tools", "samples"];
 
     /// <summary>The data layer — where the messages are defined, registered and served. The end
     /// state keeps them here and only here.</summary>

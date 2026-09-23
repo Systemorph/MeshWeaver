@@ -1607,17 +1607,13 @@ public static class MeshDataSourceExtensions
                                         .AsTransientNodeProbe());
 
                                 // The probe's OWN schema stream, never a GetDataRequest posted
-                                // to itself: the workspace already reduces a SchemaReference, and
-                                // its first emission is also the init gate (it waits for the
-                                // probe's DataContext). One-shot is right — the probe dies here.
-                                var schemaStream = subHub.GetWorkspace().GetNullableStream(new SchemaReference());
-                                if (schemaStream is null)
-                                {
-                                    subHub.Dispose();
-                                    return Observable.Empty<GetDataResponse>();
-                                }
-
-                                return schemaStream
+                                // to itself — read once the probe has STARTED (the init gate the
+                                // self-posted request used to provide; the stream alone can reduce
+                                // off the empty store before the data sources initialize). One-shot
+                                // is right: the probe dies here.
+                                return NodeTypeDataModelAreas.ProbeStarted(subHub)
+                                    .SelectMany(_ => subHub.GetWorkspace().GetNullableStream(new SchemaReference())
+                                        ?? Observable.Empty<ChangeItem<object>>())
                                     .Take(1)
                                     .Select(change => new GetDataResponse(change.Value, subHub.Version))
                                     .Finally(subHub.Dispose);

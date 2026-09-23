@@ -1807,6 +1807,11 @@ public static class NodeTypeLayoutAreas
             .WithIconStart(FluentIcons.Save())
             .WithClickAction(actx =>
             {
+                // 🚨 The identity is captured HERE, on the click's delivery turn. The write below
+                // runs after the form streams emit — possibly on another thread, where the
+                // AsyncLocal AccessContext is gone — so it is issued under this captured caller.
+                var access = host.Hub.ServiceProvider.GetService<AccessService>();
+                var caller = access?.Context ?? access?.CircuitContext;
                 Observable.CombineLatest(
                     host.Stream.GetDataStream<string>(displayNameDataId).Take(1),
                     host.Stream.GetDataStream<string>(descriptionDataId).Take(1),
@@ -1818,8 +1823,9 @@ public static class NodeTypeLayoutAreas
                     (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration) =>
                         new HubConfigForm(displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration))
                     .Take(1)
-                    .SelectMany(form => host.Workspace.GetMeshNodeStream()
-                        .Update(currentNode => ApplyHubConfigForm(currentNode, form, host.Hub.JsonSerializerOptions)))
+                    .SelectMany(form => access.RunAs(caller, () => host.Workspace.GetMeshNodeStream()
+                        .Update<NodeTypeDefinition>((currentNode, currentDefinition) =>
+                            ApplyHubConfigForm(currentNode, currentDefinition, form))))
                     .Take(1)
                     .Subscribe(
                         _ =>
@@ -1855,11 +1861,16 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Applies the Hub Configuration edit form to the node's CURRENT state — the update lambda the
-    /// Save button hands to <c>GetMeshNodeStream().Update</c>. Only the fields the form edits are
+    /// Save button hands to the typed <c>GetMeshNodeStream().Update&lt;NodeTypeDefinition&gt;</c>. Only the fields the form edits are
     /// replaced; everything else on the node and its <see cref="NodeTypeDefinition"/> is carried
     /// through from <paramref name="currentNode"/>, never from a copy taken when the form rendered.
     /// </summary>
-    internal static MeshNode ApplyHubConfigForm(MeshNode currentNode, HubConfigForm form, JsonSerializerOptions options)
+    /// <param name="currentNode">The node as the owner holds it now.</param>
+    /// <param name="currentDefinition">Its content, read by the TYPED write: <c>null</c> only when the
+    /// node has no content yet — content that is present but unreadable fails the write before this
+    /// runs, so a default definition can never overwrite a real one.</param>
+    /// <param name="form">The snapshotted form values.</param>
+    internal static MeshNode ApplyHubConfigForm(MeshNode currentNode, NodeTypeDefinition? currentDefinition, HubConfigForm form)
     {
         if (!int.TryParse(form.Order, out var order)) order = 0;
         List<string>? dependencies = null;
@@ -1868,7 +1879,7 @@ public static class NodeTypeLayoutAreas
             dependencies = form.Dependencies.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
             if (dependencies.Count == 0) dependencies = null;
         }
-        var updatedDefinition = (currentNode.ContentAs<NodeTypeDefinition>(options) ?? new NodeTypeDefinition()) with
+        var updatedDefinition = (currentDefinition ?? new NodeTypeDefinition()) with
         {
             Description = string.IsNullOrWhiteSpace(form.Description) ? null : form.Description,
             ChildrenQuery = string.IsNullOrWhiteSpace(form.ChildrenQuery) ? null : form.ChildrenQuery,

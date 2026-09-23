@@ -101,7 +101,8 @@ public class NodeWritesGoThroughTheStreamTest(ITestOutputHelper output) : Monoli
             Dependencies: "Acme/Base, Acme/Other",
             Configuration: "config => config");
 
-        var saved = NodeTypeLayoutAreas.ApplyHubConfigForm(current, form, Mesh.JsonSerializerOptions);
+        var saved = NodeTypeLayoutAreas.ApplyHubConfigForm(
+            current, current.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions), form);
         var definition = saved.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
 
         saved.Name.Should().Be("Widget 2");

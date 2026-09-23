@@ -1,7 +1,8 @@
 # DataPlaneMessageSites.allow — the data-plane message ratchet.
 #
 # Each line is `<Type>\t<file>\t<count>`: a production file OUTSIDE the data layer
-# (src/MeshWeaver.Data, src/MeshWeaver.Data.Contract) that still references one of the five
+# (src/MeshWeaver.Data, src/MeshWeaver.Data.Contract) — src/, memex/, tools/ and samples/ (whose
+# Data/ trees are in-mesh C# compiled at runtime) — that still references one of the five
 # data-plane messages — GetDataRequest, GetDataResponse, DataChangeRequest,
 # PatchDataChangeRequest, DataChangedEvent. Counts are code references (comments and strings
 # masked). The guard is DataPlaneMessageRatchetGuard; the manual is
@@ -25,6 +26,8 @@
 DataChangeRequest	src/MeshWeaver.Graph/VersionLayoutArea.cs	1
 DataChangeRequest	src/MeshWeaver.Layout/Client/LayoutClientExtensions.cs	1
 DataChangeRequest	src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	2
+DataChangeRequest	samples/Graph/Data/ACME/Project/Todo/Source/TodoLayoutAreas.cs	1
+DataChangeRequest	samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs	6
 GetDataRequest	src/MeshWeaver.ContentCollections/ContentCollectionsExtensions.cs	2
 GetDataRequest	src/MeshWeaver.ContentCollections/ContentFileResolver.cs	1
 GetDataRequest	src/MeshWeaver.ContentCollections/ContentStaging.cs	1
