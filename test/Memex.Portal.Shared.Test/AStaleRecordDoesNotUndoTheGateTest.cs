@@ -66,7 +66,7 @@ public class AStaleRecordDoesNotUndoTheGateTest(ITestOutputHelper output)
                 cancellationToken: TestContext.Current.CancellationToken);
 
     private Task Establish(PackageManifest manifest, string partition) =>
-        Access.RunAsSystem(() => PackageInstaller.EnsureDeclaredAccess(
+        Access.RunAsSystem(() => PackageInstaller.ReassertDeclaredAccess(
                 Mesh, manifest, partition, Logger))
             .Should().Within(120.Seconds())
             .Emit("the declared-access step must complete",
@@ -173,5 +173,35 @@ public class AStaleRecordDoesNotUndoTheGateTest(ITestOutputHelper output)
                     Content = new JsonObject { ["$type"] = "PluginContent", ["preInstalled"] = true },
                 }, options)
             .Should().BeTrue();
+        PackageInstaller.PreInstalledOnRoot(
+                new MeshNode("X") { Content = new JsonObject { ["$type"] = "Store.Plugin.PluginContent" } },
+                options)
+            .Should().BeFalse(
+                "a hub that had not registered the dynamic type writes a NAMESPACED discriminator, which "
+                + "the framework reads as the same short name — missing it would fall back to the stale "
+                + "manifest and re-arm the fight");
+    }
+
+    /// <summary>
+    /// The install path keeps its manifest: an install (or a delta) re-asserts access BEFORE the root
+    /// it carries lands, so reading the store there would decide on the PREVIOUS declaration. Only the
+    /// re-assert from a stored manifest consults the root.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TheInstallPath_StillDecidesOnTheManifestItCarries()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        const string partition = "PromotedPkg";
+        await Arrange(partition, rootPreInstalled: false);
+
+        await Access.RunAsSystem(() => PackageInstaller.EnsureDeclaredAccess(
+                Mesh, StaleRecord(partition), partition, Logger))
+            .Should().Within(120.Seconds())
+            .Emit("the declared-access step must complete",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        (await PolicyPublicRead(partition)).Should().BeTrue(
+            "an install carrying preInstalled:true (a gated package being PROMOTED) publishes the "
+            + "partition even though the root it is about to overwrite still says gated");
     }
 }

@@ -14,7 +14,7 @@ Two components write that shape today:
 
 | Writer | Lives in | Reads | Runs |
 |---|---|---|---|
-| `PackageInstaller.EnsureDeclaredAccess` | this repository, `src/MeshWeaver.PluginCatalog/` | the package **manifest** (`price`, `publicSegments`) — and `preInstalled` off the partition's **root node** whenever that root is a plugin root | once per install, and on the boot repair pass |
+| `PackageInstaller.EnsureDeclaredAccess` | this repository, `src/MeshWeaver.PluginCatalog/` | the package **manifest** (`price`, `publicSegments`) — and, when re-asserting from a stored manifest, `preInstalled` off the partition's **root node** whenever that root is a plugin root | once per install, and on the boot repair pass |
 | `PluginGate.SeedGating` | MeshWeaver.Plugins, `Store/Licensing/Source/` — **in-mesh source** | the **root node's** `PluginContent` | on every plugin-root activation, and on every subtree change |
 
 For a **pre-installed** partition the two agree: the installer publishes it fully public, and the
@@ -96,10 +96,14 @@ heal, and the gate reported, **truthfully**, `the gating shape is NOT STAYING fo
 (MeshWeaver#5297, #5578). The flips stopped with the re-install that refreshed the record: no
 `Hosting/_Policy` version after 17:46Z.
 
-So `EnsureDeclaredAccess` now reconciles the manifest with the partition's live root first
-(`LiveDeclaration`): a root whose content is a `PluginContent` decides `preInstalled` (an absent flag
-is `false` — the serializer omits a default `bool`, which is how a gated root is stored); any other
-root, or none, leaves the manifest to decide. A "NOT STAYING" line from the gate is therefore a
+So a caller holding a STORED manifest — the boot repair pass (the install record) and a held default
+install (the catalog listing) — calls `PackageInstaller.ReassertDeclaredAccess`, which reconciles
+the manifest with the partition's live root first (`LiveDeclaration`): a root whose content is a
+`PluginContent` (bare or namespaced `$type`) decides `preInstalled` (an absent flag is `false` — the
+serializer omits a default `bool`, which is how a gated root is stored); any other root, or none,
+leaves the manifest to decide. An INSTALL keeps calling `EnsureDeclaredAccess` on the manifest it
+carries: a delta re-asserts access before the root it is installing lands, so reading the store
+there would decide on the previous declaration. A "NOT STAYING" line from the gate is therefore a
 statement worth believing: before chasing a stale read, look for a second writer in the node's
 version history.
 

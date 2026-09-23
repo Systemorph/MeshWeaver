@@ -1038,16 +1038,36 @@ public static class PackageInstaller
     {
         if (string.IsNullOrWhiteSpace(partition))
             return Observable.Return(Unit.Default);
-
-        // 🚨 PRE-INSTALLED IS READ OFF THE PARTITION'S LIVE ROOT, not off the manifest a caller
-        // happens to hold (MeshWeaver#5297 / #5578). See LiveDeclaration.
-        return LiveDeclaration(hub, manifest, partition!, logger)
-            .SelectMany(live => EnsureDeclaredAccessAsDeclared(
-                hub, live, partition!, logger, installedPaths));
+        return EnsureDeclaredAccessAsDeclared(hub, manifest, partition!, logger, installedPaths);
     }
 
     /// <summary>
-    /// The manifest <see cref="EnsureDeclaredAccess"/> decides on: <paramref name="manifest"/>, with
+    /// <see cref="EnsureDeclaredAccess"/> for a caller that holds a STORED manifest rather than the
+    /// one it is installing — the boot repair pass (the install record) and a held default install
+    /// (the catalog listing, while the partition's own writer keeps its content). Such a manifest can
+    /// be older than the partition, so <see cref="PackageManifest.PreInstalled"/> is first reconciled
+    /// with the partition's live root (<see cref="LiveDeclaration"/>, MeshWeaver#5297 / #5578).
+    ///
+    /// <para>An INSTALL keeps calling <see cref="EnsureDeclaredAccess"/>: its manifest is the root it
+    /// is about to write, and a delta re-asserts access BEFORE that root lands (#1758), so reading the
+    /// store there would decide on the previous declaration instead.</para>
+    /// </summary>
+    /// <param name="hub">The hub running the re-assert.</param>
+    /// <param name="storedManifest">The stored manifest (install record or catalog listing).</param>
+    /// <param name="partition">The installed partition (null/blank no-ops).</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>A cold observable emitting once the declared access is in place.</returns>
+    public static IObservable<Unit> ReassertDeclaredAccess(
+        IMessageHub hub, PackageManifest storedManifest, string? partition, ILogger? logger)
+    {
+        if (string.IsNullOrWhiteSpace(partition))
+            return Observable.Return(Unit.Default);
+        return LiveDeclaration(hub, storedManifest, partition!, logger)
+            .SelectMany(live => EnsureDeclaredAccessAsDeclared(hub, live, partition!, logger, null));
+    }
+
+    /// <summary>
+    /// The manifest <see cref="ReassertDeclaredAccess"/> decides on: <paramref name="manifest"/>, with
     /// <see cref="PackageManifest.PreInstalled"/> replaced by what the partition's ROOT node says
     /// whenever that root is a plugin root carrying the declaration (<see cref="PreInstalledOnRoot"/>).
     ///
@@ -1127,9 +1147,14 @@ public static class PackageInstaller
         if (element.ValueKind != JsonValueKind.Object
             || !element.TryGetProperty("$type", out var type)
             || type.ValueKind != JsonValueKind.String
-            || !string.Equals(type.GetString(), pluginContent, StringComparison.Ordinal))
+            || !string.Equals(ShortName(type.GetString()), pluginContent, StringComparison.Ordinal))
             return null;
         return ReadPreInstalled(element);
+
+        // A hub that had not registered the dynamic type writes a NAMESPACED discriminator; the
+        // framework treats it as the same short name (ContentDiscriminator.ShortNameOf) — so here.
+        static string? ShortName(string? discriminator) =>
+            discriminator is null ? null : discriminator[(discriminator.LastIndexOf('.') + 1)..];
 
         static bool ReadPreInstalled(JsonElement plugin)
         {
