@@ -529,8 +529,16 @@ public static class ShippedPrebuiltBundles
         CancellationToken cancellationToken = default)
     {
         var bundles = new List<string>();
+        // The token is observed WHILE the share yields entries, not only after: OrderBy buffers the
+        // whole listing before the loop starts, so a check inside the loop alone would wait out a
+        // slow directory enumeration (review on #5456).
         foreach (var source in Directory
                      .EnumerateDirectories(identityDirectory)
+                     .Select(directory =>
+                     {
+                         cancellationToken.ThrowIfCancellationRequested();
+                         return directory;
+                     })
                      .OrderBy(d => d, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
