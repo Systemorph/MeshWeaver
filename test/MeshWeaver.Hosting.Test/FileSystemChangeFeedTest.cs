@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -50,14 +51,14 @@ public class FileSystemChangeFeedTest : IDisposable
         var seen = new List<DataChangeNotification>();
         using var sub = adapter.Changes.Subscribe(seen.Add);
 
-        await adapter.Write(Node("probe/threads/alpha"), Options).FirstAsync();
+        await adapter.Write(Node("probe/threads/alpha"), Options).FirstAsync().Await();
 
         seen.Should().ContainSingle(
             "a committed Write must notify the in-process feed — a silent write leaves every " +
             "live synced query on this adapter frozen at its Initial snapshot");
         seen[0].Path.Should().Be("probe/threads/alpha");
 
-        await adapter.Delete("probe/threads/alpha").FirstAsync();
+        await adapter.Delete("probe/threads/alpha").FirstAsync().Await();
 
         seen.Should().HaveCount(2, "a committed Delete must notify too");
         seen[1].Path.Should().Be("probe/threads/alpha");
@@ -72,12 +73,12 @@ public class FileSystemChangeFeedTest : IDisposable
         var seen = new List<DataChangeNotification>();
         using var sub = adapter.Changes.Subscribe(seen.Add);
 
-        await adapter.Write(Node("probe/threads/beta"), Options).FirstAsync();
+        await adapter.Write(Node("probe/threads/beta"), Options).FirstAsync().Await();
 
         seen.Should().ContainSingle();
         seen[0].Path.Should().Be("probe/threads/beta");
 
-        await adapter.Delete("probe/threads/beta").FirstAsync();
+        await adapter.Delete("probe/threads/beta").FirstAsync().Await();
 
         seen.Should().HaveCount(2);
         seen[1].Path.Should().Be("probe/threads/beta");

@@ -296,9 +296,33 @@ re-grep the corrected file** — the occurrence you already know about is not th
 **A wrong sentence in guidance is how a shape propagates faster than a sweep removes it**, and
 `MeshTestContext`'s doc comment is that sentence arriving at a site as an assurance.
 
-The inventory it produced is `test/DirectObservableAwaitSites.allow` — seeded at **228 sites in 67
-files** (223 in `test/`, 5 in one `memex/` ASP.NET controller) and shrink-only. It now holds **223 in
-66**: `memex/`'s five left it, and the way they left is the part worth copying.
+The inventory it produced was `test/DirectObservableAwaitSites.allow` — seeded at **228 sites in 67
+files** (223 in `test/`, 5 in one `memex/` ASP.NET controller) and shrink-only. **It is gone**:
+`memex/`'s five left it first, then `test/`'s 223 were swept (#4756), and both left the same way —
+the ROOT moved into the zero set and the ratchet was deleted rather than left at zero.
+
+### The `test/` sweep: one suffix per site, and why the suffix is enough
+
+Every `test/` site became `await <the same expression>.Await()` — the bridge in
+`MeshWeaver.Messaging.ObservableAwait`. That is a **scheduling-only** change and nothing else, which
+is what made a mechanical sweep of 207 sites in 50 files safe to review as one diff: `Await` is a
+faithful `ToTask` (the LAST value, `InvalidOperationException` on an empty sequence), exactly what
+Rx's own awaiter yields, so no assertion's input changed — only which thread runs the rest of the
+test. No site gained or lost a bound: 182 carry their own `.Timeout(...)`, and the 25 that do not
+(storage-adapter and assembly/version-store calls in `MeshWeaver.Hosting.Test`) are exactly as
+bounded as before — by xUnit's method timeout — since `Await` only changes the scheduling. The
+conversion was done by a port of the guard's own matcher (statement-aware, tail-keyed), which
+rewrote only expressions whose top level carries no operator a suffix could bind to instead; none of
+the 207 needed a hand edit. The remaining 16 lines of the allow file (one per
+`MeshWeaver.Portal.E2E.Test` file) were already **stale** on `main` — the guard found 0 there and
+only printed `STALE (please tidy)`, which is the reason a ratchet's stale lines are a reading, not a
+count.
+
+A suite is not exempt for being a suite: the thread a test resumes on runs the rest of the test,
+its mesh teardown and — under xUnit — the runner starting the next class (#2301, #2377). The
+reactive-assertion helpers (`await x.Should().Within(...).Emit(...)`) remain the preferred shape for
+NEW tests; the sweep deliberately did not rewrite the waits into assertions, because that changes
+what each test asserts and belongs to the test's owner, not to a scheduling fix.
 
 ### 🚨 A production root leaves a ratchet by MOVING, not by having its line deleted
 
@@ -366,8 +390,7 @@ disagreeing IS the instrument gap**, not a mistake in either file.
 | `.ToTask(` | production | **ZERO**, no allow file. Rx's own bridge is never the safe form, so it is never registrable. |
 | `.ToTask(` | `test/` | Seeded inventory, may only **shrink**. `memex/` left this row when its sweep reached zero (#2764) and is now a production root — checked there by all three detectors, not just the marker that emptied it. |
 | `.Wait()` / `.GetAwaiter().GetResult()` | production | Seeded inventory, may only **shrink** (see below). |
-| `await <an observable>` (no bridge in source at all) | `src/`, `tools/`, `samples/`, `clients/`, `memex/` | **ZERO**, no allow file. The first four reached zero on 2026-09-18 when `MeshTestContext.First`, the last one, was fixed; `memex/` joined them when its five DevLogin sign-in sites were converted — it MOVED root sets rather than having its allow line deleted, for the reason above. |
-| `await <an observable>` | `test/` | Seeded inventory, 228 → **223**, may only **shrink** — `DirectObservableAwaitSites.allow`. Guidance asked for these; see above. |
+| `await <an observable>` (no bridge in source at all) | `src/`, `tools/`, `samples/`, `clients/`, `memex/`, `test/` | **ZERO**, no allow file. The first four reached zero on 2026-09-18 when `MeshTestContext.First`, the last one, was fixed; `memex/` joined them when its five DevLogin sign-in sites were converted, and `test/` when its 223 were swept (#4756) — each MOVED root sets rather than having its allow line deleted, for the reason above. The one file allowed to exhibit the shape is `InlineResumptionMechanismTest`, which measures it and is verified by `TheExemptedPinningTestStillPinsTheShape`. |
 
 **`SanctionedBridges` is a register, not an allow file.** An allow file lists sites you tolerate and
 grows by appending a line. Every entry here is machine-checked to still **exist**, to still **contain

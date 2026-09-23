@@ -100,7 +100,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
@@ -109,13 +109,13 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var granted = await Mesh.GetWorkspace().GetMeshNodeStream(assignmentPath)
             .Where(n => n?.Content is AccessAssignment a
                         && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
         Assert.NotNull(granted);
 
         // The Space was pinned to the invitee's dashboard.
         await Mesh.GetWorkspace().GetMeshNodeStream(InviteeId)
             .Where(n => n?.Content is User u && u.PinnedPaths.Contains(Space))
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
     }
 
     [Fact(Timeout = 60000)]
@@ -170,7 +170,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
@@ -180,7 +180,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n?.Content is GroupMembership gm
                         && gm.Member == InviteeId
                         && gm.Groups.Any(e => e.Group == groupPath))
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
         Assert.NotNull(membership);
     }
 
@@ -242,7 +242,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
@@ -251,7 +251,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n?.Content is GroupMembership gm
                         && gm.Member == InviteeId
                         && gm.Groups.Any(e => e.Group == groupPath))
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
         Assert.NotNull(membership);
     }
 
@@ -312,7 +312,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
@@ -321,7 +321,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n?.Content is GroupMembership gm
                         && gm.Member == InviteeId
                         && gm.Groups.Any(e => e.Group == groupPath))
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
         Assert.NotNull(membership);
     }
 
@@ -385,14 +385,14 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
         var membershipPath = $"{groupPath}/{InviteeId}_Membership";
         await Mesh.GetWorkspace().GetMeshNodeStream(membershipPath)
             .Where(n => n?.Content is GroupMembership gm && gm.Member == InviteeId)
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
 
         // Observation window for a MUST-NOT-HAPPEN assertion: the duplicate fires this pins arrive within
         // ~50ms of the first, so the window can only ever hide the defect, never invent it. (Before the
@@ -463,7 +463,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 .FirstOrDefault(s => s is not null && s.Id == legacyId))
             .Where(s => s is not null)
             .Select(s => s!)
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
         Assert.Equal(EventTriggerType.NodeChange, migrated.TriggerType);
         Assert.Equal(EventContinuationType.GrantSpaceAccess, migrated.ContinuationType);
         Assert.Equal(Space, migrated.TargetPath);
@@ -482,7 +482,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(legacyId))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"migrated subscription ended {final.Status}: {final.LastError}");
     }
@@ -516,13 +516,13 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"timer subscription ended {final.Status}: {final.LastError}");
 
         await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{InviteeId}_Access")
             .Where(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
     }
 
     [Fact(Timeout = 60000)]
@@ -569,12 +569,12 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"node-status subscription ended {final.Status}: {final.LastError}");
 
         await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{InviteeId}_Access")
             .Where(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(10.Seconds());
+            .FirstAsync().Timeout(10.Seconds()).Await();
     }
 }

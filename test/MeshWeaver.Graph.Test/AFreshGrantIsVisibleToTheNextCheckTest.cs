@@ -58,7 +58,7 @@ public class AFreshGrantIsVisibleToTheNextCheckTest(ITestOutputHelper output) : 
 
         // Opens $security-access:{SpaceId} and settles its snapshot — the newcomer has nothing.
         var before = await Mesh.GetEffectivePermissions(SpaceId, Newcomer)
-            .Take(1).Timeout(TestTimeouts.CrossSilo).FirstAsync();
+            .Take(1).Timeout(TestTimeouts.CrossSilo).FirstAsync().Await();
         Output.WriteLine($"before grant: {before}");
         before.HasFlag(Permission.Create).Should().BeFalse(
             "the newcomer holds no grant yet — if this were already Create the probe below would "
@@ -83,7 +83,7 @@ public class AFreshGrantIsVisibleToTheNextCheckTest(ITestOutputHelper output) : 
 
         // THE PROPERTY: the very next check must see it. The grant's durable write has returned.
         var after = await Mesh.GetEffectivePermissions(SpaceId, Newcomer)
-            .Take(1).Timeout(TestTimeouts.CrossSilo).FirstAsync();
+            .Take(1).Timeout(TestTimeouts.CrossSilo).FirstAsync().Await();
         Output.WriteLine($"after grant (first emission): {after}");
         after.HasFlag(Permission.Create).Should().BeTrue(
             "the grant is DURABLY written and its create returned before this read started — a "

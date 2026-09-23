@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -113,7 +114,7 @@ public class FileSystemVersionStoreAtomicityTest : IDisposable
         });
 
         for (var v = 1; v <= Versions; v++)
-            await store.WriteVersion(Snapshot(v), JsonOptions).FirstAsync();
+            await store.WriteVersion(Snapshot(v), JsonOptions).FirstAsync().Await();
 
         Volatile.Write(ref writesDone, true);
         await probe.WaitAsync(TestContext.Current.CancellationToken);
@@ -127,11 +128,11 @@ public class FileSystemVersionStoreAtomicityTest : IDisposable
 
         // …and the history the writes leave behind must round-trip through the store's own API.
         // Deterministic, so a probe that happened to sample nothing still cannot make this vacuous.
-        var history = await store.GetVersions("test/node").ToList().FirstAsync();
+        var history = await store.GetVersions("test/node").ToList().FirstAsync().Await();
         Assert.Equal(Versions, history.Count);
         foreach (var v in history)
         {
-            var snapshot = await store.GetVersion("test/node", v.Version, JsonOptions).FirstAsync();
+            var snapshot = await store.GetVersion("test/node", v.Version, JsonOptions).FirstAsync().Await();
             Assert.NotNull(snapshot);
             Assert.Equal($"V{v.Version}", snapshot!.Name);
         }

@@ -56,7 +56,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
             .GetQuery($"notif|{recipient}", $"path:{recipient}/_Notification scope:children nodeType:Notification")
             .Where(nodes => (nodes ?? []).Any(n =>
                 n.ContentAs<Notification>(Json) is { NotificationType: NotificationType.AccessGranted, IsRead: false }))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
     }
 
     [Fact(Timeout = 60000)]
@@ -66,15 +66,15 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateUser(recipient, "off@acme.com", TestContext.Current.CancellationToken);
 
         // Turn the AccessGranted bell OFF (leave Approvals on as the positive control).
-        var settingsPath = await NotificationSettingsNodeType.EnsureExists(Mesh, recipient).FirstAsync().Timeout(30.Seconds());
+        var settingsPath = await NotificationSettingsNodeType.EnsureExists(Mesh, recipient).FirstAsync().Timeout(30.Seconds()).Await();
         await Mesh.GetWorkspace().GetMeshNodeStream(settingsPath)
             .Update(n => n with { Content = NotificationSettingsNodeType.Parse(n, Json) with { AccessGrantedInApp = false } })
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         // Wait for the flip to land so the dispatch reads the updated preference.
         await Mesh.GetWorkspace().GetMeshNodeStream(settingsPath)
             .Select(n => NotificationSettingsNodeType.Parse(n, Json))
             .Where(s => !s.AccessGrantedInApp)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // Dispatch a suppressed AccessGranted, then a still-enabled Approvals as the ordered control.
         await NotificationService.Dispatch(Mesh, recipient, recipient,
@@ -87,7 +87,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
             .GetQuery($"notif|{recipient}", $"path:{recipient}/_Notification scope:children nodeType:Notification")
             .Where(ns => (ns ?? []).Any(n =>
                 n.ContentAs<Notification>(Json)?.NotificationType == NotificationType.ApprovalRequired))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // ...but the suppressed AccessGranted bell was never created.
         Assert.DoesNotContain(nodes, n =>
@@ -100,18 +100,18 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
         const string recipient = "prefs_user";
         await CreateUser(recipient, "prefs@acme.com", TestContext.Current.CancellationToken);
 
-        var path = await NotificationSettingsNodeType.EnsureExists(Mesh, recipient).FirstAsync().Timeout(30.Seconds());
+        var path = await NotificationSettingsNodeType.EnsureExists(Mesh, recipient).FirstAsync().Timeout(30.Seconds()).Await();
 
         // Flip a default-true bell field to false via a per-field merge-patch update.
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Update(n => n with { Content = NotificationSettingsNodeType.Parse(n, Json) with { ApprovalsInApp = false } })
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // If the WhenWritingDefault trap were unguarded the false would be dropped and this times out.
         var settings = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Select(n => NotificationSettingsNodeType.Parse(n, Json))
             .Where(s => !s.ApprovalsInApp)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         Assert.False(settings.ApprovalsInApp);
         Assert.True(settings.AccessGrantedInApp);   // untouched field keeps its default

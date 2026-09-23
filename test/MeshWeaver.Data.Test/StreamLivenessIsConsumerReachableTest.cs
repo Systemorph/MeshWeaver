@@ -70,7 +70,7 @@ public class StreamLivenessIsConsumerReachableTest(ITestOutputHelper output) : H
                          && ci.Value.Collections.GetValueOrDefault(collectionName)
                              ?.Instances.ContainsKey("live") == true)
             .FirstAsync()
-            .Timeout(10.Seconds());
+            .Timeout(10.Seconds()).Await();
 
         stream.IsUsable().Should().BeTrue("a stream that is serving data is alive");
         stream.TryGetHub().Should().BeSameAs(stream.Hub,
@@ -92,7 +92,7 @@ public class StreamLivenessIsConsumerReachableTest(ITestOutputHelper output) : H
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
 
-        await stream.FirstAsync(ci => ci.Value is not null).Timeout(10.Seconds());
+        await stream.FirstAsync(ci => ci.Value is not null).Timeout(10.Seconds()).Await();
         stream.IsUsable().Should().BeTrue("precondition: the stream is alive before we kill it");
 
         stream.Dispose();

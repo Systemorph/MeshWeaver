@@ -113,7 +113,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         // Wait until the account is queryable by email (the invite looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}"))
             .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == userId))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
     }
 
     [Fact(Timeout = 60000)]
@@ -130,7 +130,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         var result = await Mesh.InviteAllToGroup(GroupPath,
                 $"{existingEmail}\n{newEmail}\nnot-an-email\nCarol <{newEmail}>",
                 invitedBy: "admin", role: Role.Editor.Id)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         Assert.Equal(1, result.AddedCount);
         Assert.Equal(1, result.InvitedCount);
@@ -147,19 +147,19 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
             .Where(n => n?.Content is GroupMembership gm
                         && gm.Member == existingId
                         && gm.Groups.Any(e => e.Group == GroupPath))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
         await Mesh.GetWorkspace().GetMeshNodeStream($"{GroupPath}/_Access/{existingId}_Access")
             .Where(n => n?.Content is AccessAssignment a
                         && a.AccessObject == existingId
                         && a.Roles.Any(r => r.Role == Role.Editor.Id && !r.Denied))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
 
         // The unknown email got an Invitation addressing the group (SpacePath drives the invite email)…
         await Mesh.GetWorkspace().GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(newEmail)}")
             .Where(n => n?.Content is Invitation inv
                         && inv.Email == newEmail
                         && inv.SpacePath == GroupPath)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // …and a deferred subscription carrying the SELECTED role, so sign-up lands the identical grant.
         await Mesh.GetWorkspace().GetQuery("bulk-inv-subs",
@@ -170,7 +170,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
                 && s.MatchValue == newEmail
                 && s.TargetPath == GroupPath
                 && s.Role == Role.Editor.Id))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
     }
 
     [Fact(Timeout = 60000)]
@@ -190,7 +190,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         await runner.StartAsync(default);
 
         var result = await Mesh.InviteAllToGroup(GroupPath, email, invitedBy: "admin", role: Role.Editor.Id)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.Equal(1, result.InvitedCount);
 
         // The invitee signs up — their User node is created (as onboarding does).
@@ -202,7 +202,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subId))
             .Select(n => n?.Content as EventSubscription)
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
-            .FirstAsync().Timeout(40.Seconds());
+            .FirstAsync().Timeout(40.Seconds()).Await();
         Assert.True(final!.Status == EventSubscriptionStatus.Fired,
             $"subscription ended {final.Status}: {final.LastError}");
 
@@ -211,11 +211,11 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
             .Where(n => n?.Content is GroupMembership gm
                         && gm.Member == userId
                         && gm.Groups.Any(e => e.Group == GroupPath))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
         await Mesh.GetWorkspace().GetMeshNodeStream($"{GroupPath}/_Access/{userId}_Access")
             .Where(n => n?.Content is AccessAssignment a
                         && a.AccessObject == userId
                         && a.Roles.Any(r => r.Role == Role.Editor.Id && !r.Denied))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
     }
 }

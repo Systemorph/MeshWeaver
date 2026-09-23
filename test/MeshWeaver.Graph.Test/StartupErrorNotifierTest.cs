@@ -81,7 +81,7 @@ public class StartupErrorNotifierTest(ITestOutputHelper output) : MonolithMeshTe
                 $"path:{StartupErrorNotifier.AdminPartition}/_Notification scope:children nodeType:Notification")
             .Where(ns => (ns ?? []).Any(n =>
                 n.ContentAs<Notification>(Json)?.Message.Contains(marker) == true))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         var startupNotifications = nodes
             .Select(n => n.ContentAs<Notification>(Json))
@@ -109,7 +109,7 @@ public class StartupErrorNotifierTest(ITestOutputHelper output) : MonolithMeshTe
         var nodes = await Mesh.GetWorkspace()
             .GetQuery("notif|Admin|clean",
                 $"path:{StartupErrorNotifier.AdminPartition}/_Notification scope:children nodeType:Notification")
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.DoesNotContain(nodes ?? [], n =>
             n.ContentAs<Notification>(Json)?.Title.StartsWith("Startup completed with 0") == true);
     }

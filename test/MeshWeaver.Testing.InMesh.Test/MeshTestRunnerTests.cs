@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System.Threading;
 using System;
 using System.Linq;
@@ -38,7 +39,7 @@ public class MeshTestRunnerTests
     [Fact]
     public async Task Runs_every_case_shape_and_renders_the_gate_contract()
     {
-        var results = await MeshTestRunner.Run(null, [typeof(Sample)], TestTimeouts.Quick).ToList();
+        var results = await MeshTestRunner.Run(null, [typeof(Sample)], TestTimeouts.Quick).ToList().Await();
         var byName = results.ToDictionary(r => r.Name);
         Assert.Equal(9, results.Count);
         Assert.True(byName["Passes"].Passed);
@@ -87,7 +88,7 @@ public class MeshTestRunnerTests
     public async Task A_case_that_ignores_its_token_does_not_take_the_next_case_down_with_it()
     {
         using var pool = new IoPool(new IoPoolOptions().MaxConcurrencyFor(IoPoolNames.Tests));
-        var results = await MeshTestRunner.Run(null, [typeof(Leaky)], TestTimeouts.Quick, pool).ToList();
+        var results = await MeshTestRunner.Run(null, [typeof(Leaky)], TestTimeouts.Quick, pool).ToList().Await();
         var byName = results.ToDictionary(r => r.Name);
 
         Assert.Contains("IGNORED its cancellation token", byName["AIgnoresItsToken"].Detail);
@@ -105,7 +106,7 @@ public class MeshTestRunnerTests
     public async Task A_pool_filled_by_leaked_cases_is_named_not_timed_out()
     {
         using var pool = new IoPool(1);
-        var results = await MeshTestRunner.Run(null, [typeof(Leaky)], TestTimeouts.Quick, pool).ToList();
+        var results = await MeshTestRunner.Run(null, [typeof(Leaky)], TestTimeouts.Quick, pool).ToList().Await();
         var blocked = results.Single(r => r.Name == "ZRunsAfterTheLeak");
 
         Assert.StartsWith("❌", blocked.Result);

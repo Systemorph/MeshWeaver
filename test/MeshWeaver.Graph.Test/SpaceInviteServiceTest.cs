@@ -49,19 +49,19 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
         // Wait until the account is queryable by email (the service looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}"))
             .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == userId))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         var outcome = await NewService().Invite(Space, email, "Editor", pin: true, invitedBy: "admin")
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.Equal(SpaceInviteOutcome.Granted, outcome);
 
         // The AccessAssignment landed with Editor, and the Space was pinned.
         await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{userId}_Access")
             .Where(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
         await Mesh.GetWorkspace().GetMeshNodeStream(userId)
             .Where(n => n?.Content is User u && u.PinnedPaths.Contains(Space))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await();
     }
 
     [Fact(Timeout = 60000)]

@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -127,7 +128,7 @@ public class FileSystemAssemblyStoreAtomicityTest : IDisposable
         });
 
         for (var v = 1; v <= Versions; v++)
-            await store.Put(NodeTypePath, v, Payload(v), pdbBytes: null).FirstAsync();
+            await store.Put(NodeTypePath, v, Payload(v), pdbBytes: null).FirstAsync().Await();
 
         Volatile.Write(ref writesDone, true);
         await probe.WaitAsync(TestContext.Current.CancellationToken);
@@ -143,7 +144,7 @@ public class FileSystemAssemblyStoreAtomicityTest : IDisposable
         // Deterministic, so a probe that happened to sample nothing still cannot make this vacuous.
         for (var v = 1; v <= Versions; v++)
         {
-            var path = await store.TryGetAssemblyPath(NodeTypePath, v).FirstAsync();
+            var path = await store.TryGetAssemblyPath(NodeTypePath, v).FirstAsync().Await();
             Assert.NotNull(path);
             var bytes = await File.ReadAllBytesAsync(path!, TestContext.Current.CancellationToken);
             Assert.Equal(PayloadBytes, bytes.Length);

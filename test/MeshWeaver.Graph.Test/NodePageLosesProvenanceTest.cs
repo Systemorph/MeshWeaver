@@ -84,7 +84,7 @@ public abstract class NodePageProvenanceExperimentBase(ITestOutputHelper output)
         var root = await Control(MeshNodeLayoutAreas.OverviewArea)
             .Where(c => c is IContainerControl)
             .FirstAsync()
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
         return (IContainerControl)root!;
     }
 
@@ -94,7 +94,7 @@ public abstract class NodePageProvenanceExperimentBase(ITestOutputHelper output)
         var control = await Control((string)area.Area)
             .Where(c => c is IContainerControl)
             .FirstAsync()
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence).Await();
         return (IContainerControl)control!;
     }
 

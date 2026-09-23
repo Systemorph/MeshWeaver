@@ -102,7 +102,7 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
             JsonSerializer.SerializeToElement(new { Value = 1 }),
             (_, _) => null);
 
-        var log = await stream.SubmitModel(model).FirstAsync().Timeout(10.Seconds());
+        var log = await stream.SubmitModel(model).FirstAsync().Timeout(10.Seconds()).Await();
 
         log.Category.Should().Be(ActivityCategory.DataUpdate);
         log.Messages.Should().ContainSingle()
@@ -128,7 +128,7 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
 
         var emissions = await stream.GetControlStream(TestArea)
             .ToList()
-            .Timeout(10.Seconds());
+            .Timeout(10.Seconds()).Await();
 
         emissions.Should().BeEmpty(
             "a stream that can never emit again must hand back a sequence that says so by "
@@ -271,7 +271,7 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
         var emissions = await stream
             .DataBind<string>(new JsonPointerReference(LayoutAreaReference.GetControlPointer(TestArea)))
             .ToList()
-            .Timeout(10.Seconds());
+            .Timeout(10.Seconds()).Await();
 
         emissions.Should().BeEmpty();
     }
@@ -299,7 +299,7 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
         var bound = await stream
             .DataBind<string>(new JsonPointerReference($"{LayoutAreaReference.GetControlPointer(TestArea)}/data"))
             .FirstAsync()
-            .Timeout(10.Seconds());
+            .Timeout(10.Seconds()).Await();
         bound.Should().Be("rendered", "the data binding still delivers the live value");
     }
 }

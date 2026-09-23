@@ -108,7 +108,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
         IObservable<MeshNode> write;
         using (Access.SwitchAccessContext(Author))
             write = MeshService.CreateNode(node);
-        await write.FirstAsync().Timeout(60.Seconds());
+        await write.FirstAsync().Timeout(60.Seconds()).Await();
     }
 
     /// <summary>The partition's immediate children, read through the query index. Bounded retry on
@@ -237,7 +237,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
                 Root = Space(partition),
                 Nodes = [Page(partition, "Kept"), Page(partition, "Retired")],
             })
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
 
         var afterRetirement = new RepoSource(partition)
         {
@@ -247,7 +247,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
 
         var converging = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
         Output.WriteLine(
             $"converging = {converging.Outcome}, preserved {converging.Preserved}, "
             + $"pruned [{string.Join(", ", converging.PrunedPaths)}]");
@@ -257,7 +257,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
 
         var again = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await();
         Output.WriteLine($"again = {again.Outcome}");
 
         again.Outcome.Should().Be("Skipped",

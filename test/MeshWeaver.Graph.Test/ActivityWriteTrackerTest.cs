@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using System;
 using System.Linq;
 using System.Reactive.Linq;
@@ -24,7 +25,7 @@ public class ActivityWriteTrackerTest
     {
         var tracker = new ActivityWriteTracker();
 
-        var completed = await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync();
+        var completed = await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync().Await();
 
         completed.Should().Be(System.Reactive.Unit.Default);
         tracker.Count.Should().Be(0);
@@ -67,7 +68,7 @@ public class ActivityWriteTrackerTest
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await tracker.Drain()
             .Timeout(ActivityWriteTracker.DrainTimeout + TimeSpan.FromSeconds(5))
-            .FirstAsync();
+            .FirstAsync().Await();
         sw.Stop();
 
         sw.Elapsed.Should().BeGreaterThan(TimeSpan.FromSeconds(1),
@@ -125,7 +126,7 @@ public class ActivityWriteTrackerTest
         tracker.Count.Should().Be(1, "B is still in flight — the repeat release must not remove it");
 
         b.Dispose();
-        await tracker.Drain().Timeout(TimeSpan.FromSeconds(3)).FirstAsync();
+        await tracker.Drain().Timeout(TimeSpan.FromSeconds(3)).FirstAsync().Await();
     }
 
     /// <summary>
@@ -175,7 +176,7 @@ public class ActivityWriteTrackerTest
         })));
 
         tracker.Count.Should().Be(0, "every write released — a torn subject would leave a residue");
-        await tracker.Drain().Timeout(TimeSpan.FromSeconds(3)).FirstAsync();
+        await tracker.Drain().Timeout(TimeSpan.FromSeconds(3)).FirstAsync().Await();
     }
 
     /// <summary>
@@ -215,7 +216,7 @@ public class ActivityWriteTrackerTest
         var tracker = new ActivityWriteTracker();
 
         // Drain: completes at once on an idle tracker — correct for shutdown, wrong as a write signal.
-        await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync();
+        await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync().Await();
 
         var settled = tracker.WhenSettled("alice/_UserActivity/NeverStarted").FirstAsync().Await();
         var raced = await Task.WhenAny(settled, Task.Delay(300));
@@ -378,7 +379,7 @@ public class ActivityWriteTrackerTest
         var tracker = new ActivityWriteTracker();
 
         // Drain: completes at once on an idle tracker — correct for shutdown, wrong as a write signal.
-        await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync();
+        await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync().Await();
 
         var settled = tracker.WhenSettled(path, writes: 5).FirstAsync().Await();
 
