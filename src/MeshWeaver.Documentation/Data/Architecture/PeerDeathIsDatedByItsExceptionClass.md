@@ -178,6 +178,86 @@ when any node in its `sourceVersions` set moves, and that set is wide (the `Esse
 release of 14:54:47 lists about fifty source nodes, many of them under `Store/**`), so a single
 busy source fans out across every NodeType that names it.
 
+## A second case, 2026-09-22 — one departure on memex-cloud, filed as seven issues
+
+The departed silo is `S10.244.9.90:11111:149090968`. Its generation dates its start to
+**14:09:28Z**. The two survivors that logged about it were `…-5c444645f8-8pdzb`
+(`S10.244.5.129:11111:149091044`, started 14:10:44Z) and `…-89868db67-xg22d`
+(`S10.244.2.195:11111:149092846`, started **14:40:46Z**). The second one belongs to a new
+ReplicaSet, so a roll had begun about 45 s before the first line. Generations count seconds from
+2022-01-01T00:00:00Z.
+
+| UTC (2026-09-22) | Event | Basis |
+|---|---|---|
+| ≤ 14:41:00 | Directory lookups into 9.90's partition start hanging | inferred: the first placement timeouts expire at 14:41:30 against a 30 s budget |
+| 14:41:30 | First `TimeoutException: Grain placement operation timed out` on xg22d (`messagehub/Doc/Architecture/PolicyNotProse`). Its innermost frame is `PlacementService.cs:602`, which is the `_grainLocator.Lookup(...)` await: the **directory lookup**, not local placement | measured (#5334) |
+| 14:41:30 | First `ConnectionFailedException: Unable to connect to S10.244.9.90:11111:149090968, will retry after …` on 8pdzb, raised from `LocalGrainDirectory.LookupAsync` | measured (#5333, #5336) |
+| 14:41:41 | First `SocketConnectionException … Error: HostUnreachable`: the IP itself stopped answering | measured (#5338, #5342) |
+| 14:41:52 | Last placement timeout (8pdzb, `messagehub/mkleiner/_Install/LinkedIn`). This is within 30 s of the first refusal, so the lookup behind it was issued before the refusals began | measured (#5340) |
+| 14:42:06 | Last connect failure | measured (#5338, #5342, #5343) |
+
+This is the same two-mechanism shape as the 09-17 case: first the peer is mute, then it is gone.
+Here, though, the peer ended as `HostUnreachable` at an address that never came back. In the 09-17
+case the peer restarted in place under a new generation. So this pod's network went away. That
+points to the pod being deleted rather than restarted.
+
+### One event, seven tickets, three log sites
+
+| log site | what it is | issues |
+|---|---|---|
+| `Polly[3]`, `Source: 'Orleans.Placement/(null)/Retry'` | Orleans' own placement retry giving up | #5333, #5342, #5343 |
+| `Orleans.Messaging[100071]` "Failed to address message", `ConnectionFailed` / `HostUnreachable` | the rejected message, one line per message | #5336, #5338 |
+| `Orleans.Messaging[100071]` "Failed to address message", placement `TimeoutException` | the same rejection when the lookup hung instead of being refused | #5334, #5340 |
+
+Every sample names the same destination silo, or falls inside its window on the same two pods. None
+has a MeshWeaver frame.
+
+### 🚨 `fail: Polly[3] … Handled: 'True', Attempt: '3'` means the retries RAN OUT
+
+Orleans places a grain through the `Orleans.Placement` resilience pipeline
+(`OrleansRuntimeResiliencePolicies`). The pipeline puts a `PlacementTimeout` (30 s) around a retry
+that runs `PlacementMaxRetries` (3) more times on `OrleansException` or `TimeoutException`, with a
+100 ms exponential base delay. Polly's telemetry logs a handled attempt at **Warning**, but it logs
+the handled **final** attempt at **Error** (`TelemetryUtil.ReportFinalExecutionAttempt`). So
+`fail:` together with `Attempt: '3'` is the fourth and last try. Placement gave up and the message
+was rejected. The next line on the same pod is the `Orleans.Messaging[100071]` rejection of that
+message. `Handled: True` means only that the exception is one the retry strategy handles. It does
+**not** mean the retry absorbed it. Three of the 09-22 issues read it as absorbed.
+
+### What MeshWeaver does with the rejected delivery
+
+The messages are `IMessageHubGrain.DeliverMessage` calls that `RoutingGrain` makes. Two things
+happen, depending on the exception:
+
+- **`OrleansMessageRejectionException` (connection failed) is RE-SENT.**
+  `RoutingGrain.DeliverToGrainObservable` retries it with a fresh `GetGrain` up to 6 times. The
+  delay starts at 250 ms, doubles each time and is capped at 3 s, so the whole budget is about 10 s.
+  Once that runs out, `IsDepartedSiloRejection` classifies the failure as `ShuttingDown`. Consumers
+  that resubscribe (`SynchronizationStream`, `MeshNodeStreamCache`) ride it out instead of tearing
+  down.
+- **A placement `TimeoutException` is NOT re-sent.** `IsResendableDeliveryFailure` is false,
+  because `IsResponseTimeout` matches every `TimeoutException` in the chain.
+  `ClassifyDeliveryException` has no arm for it, so the sender gets a terminal `Failed`. The
+  rationale documented on `IsResponseTimeout` is that "the callee already holds the request". That
+  is **not true** for a placement timeout: the message was never addressed, so re-sending it cannot
+  duplicate it. The decision not to re-send therefore rests only on #1172's second argument, that
+  every attempt costs the full 30 s. Whether a placement timeout should be re-sent, or classified
+  as transient, is an open design question. It is not settled here.
+
+### What is NOT established
+
+It is **not** known whether 9.90 left gracefully (the roll) or crashed. A graceful stop writes
+`ShuttingDown` to the membership table before the process exits (`MembershipAgent`), and the
+survivors then stop addressing the silo. Here the survivors kept addressing it for ≥ 36 s after the
+refusals began. That fits a row that stayed `Active` until the survivors' probes voted it out.
+`Memex.Portal.Distributed` deliberately widens that vote to `ProbeTimeout` 15 s ×
+`NumMissedProbesLimit` 5, about 75 s. It would equally fit a graceful stop whose table write did
+not complete. The same deployment logged Postgres TLS-handshake cancellations at 14:42 and 14:44
+(#5314), and the membership table lives in Postgres. The read that settles it is a `Logs` action
+filtered to the pod that owned `10.244.9.90` (a `5c444645f8` pod, started 14:09:28Z), with the
+query `Graceful shutdown aborted|Application is shutting down|NT_SIGINFO|Dump successfully written`,
+plus that container's exit reason.
+
 ## How to use this
 
 1. When a silo "drops", find the two exception classes and the second between them before reading any
