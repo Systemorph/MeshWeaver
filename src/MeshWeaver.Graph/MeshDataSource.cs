@@ -34,7 +34,7 @@ public static class MeshDataSourceExtensions
     /// can be read, and is disposed in the same breath. Such a hub gets the data context (which is
     /// what carries the type information) but NOT the per-node control plane —
     /// the own-node subscription, the persistence sampler, the compile / release-request / sources
-    /// watchers, and the compile-state mirror.
+    /// watchers.
     ///
     /// <para><b>Why this exists.</b> Those watchers are long-lived, self-healing machinery for a
     /// node that lives for months. Installing them on a hub that lives for microseconds is a pure
@@ -1238,16 +1238,23 @@ public static class MeshDataSourceExtensions
                 hub.RegisterForDisposal(stampSub);
             }
 
-            // Compile-state mirror (issue #748, phase 1): every real change of a NodeType
-            // node's operational compile members is dual-written onto the fixed-id
-            // satellite at {type}/_Activity/compile-state, so the state gains a home OFF
-            // the repo-authored node. Installed like the compile watchers — on every
-            // per-node hub, filtering per emission — and independent of the compilation
-            // service: the mirror reflects whatever state the node carries, wherever it
-            // was written. Readers still consume the node; phase 2 flips them to the
-            // satellite, phase 3 stops the node writes.
-            var mirrorSub = NodeTypeCompileStateMirror.Install(hub, workspace);
-            hub.RegisterForDisposal(mirrorSub);
+            // 🚨 NO compile-state mirror here any more (#5389). The phase-1 dual-write of issue
+            // #748 copied every NodeType's operational compile members onto the fixed-id
+            // satellite {type}/_Activity/compile-state — and phase 2, flipping readers to that
+            // satellite, never happened: nothing in the platform or in any node repo reads it
+            // (every compile gate and view reads the NodeType node itself). What the write DID
+            // do is route one CreateOrUpdateNodeRequest per NodeType through the node-operation
+            // hub on every activation and, whenever the state moved (a compile; a framework roll
+            // re-stamps every type), ACTIVATED one extra grain per NodeType for a record nobody
+            // opens. Measured on
+            // memex-cloud: the satellites are the destinations of the boot-time placement
+            // timeouts (#5334 — every sample `messagehub/*/_Activity/compile-state`), of the
+            // activation faults behind a stalled path resolution (#5531 — six of seven retained samples
+            // the same satellite), and the oldest leg of 8 of 51 routing back-pressure crossings
+            // after the #5327/#5375 roll; Plugins' gate measured the same writes as the
+            // per-package nodeops tax (#4141, closed into #2543 without an answer to "do these
+            // need to be N round-trips at all"). They do not — they need to be ZERO.
+            // Doc/Architecture/CompileStateSatelliteRetired carries the measurement.
         }
         catch (Exception ex)
         {
