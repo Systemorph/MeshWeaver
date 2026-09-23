@@ -1090,10 +1090,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // re-place locally), so the ride-out ends on a live owner instead of on this one again.
         // No timer, no retry here.
         //
-        // Not while a long-running operation holds this activation: that operation (an activity,
-        // a round) may still take a one-way instruction such as a cancel, which is better applied
-        // than refused, and cutting it short is the keep-alive policy's call, not this gate's.
-        if (Volatile.Read(ref _activeOperations) == 0 && meshHub.IsLeaving())
+        // Unconditional — including while a hub build or a long-running operation holds this
+        // activation. Whatever such an activation would do with the delivery, its answer takes the
+        // same refused router, so accepting it is the silent wait this gate exists to remove; the
+        // refusal at least tells the sender. (The migration itself waits for the activation to go
+        // idle, so the held work is not cut short by the hand-off.)
+        if (meshHub.IsLeaving())
             return Task.FromResult(RefuseBecauseTheHostIsLeaving(delivery));
 
         EnsureActivationStarted();
@@ -1336,23 +1338,36 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// spent on them. <c>MigrateOnIdle</c> hands the placement director a hint naming another silo, and
     /// the directory is re-pointed as part of the move, so forwarded deliveries follow it.</para>
     ///
-    /// <para>No other active silo (the last one leaving): nothing is moved, and the refusals stand —
-    /// there is nowhere for the address to go.</para>
+    /// <para>No other active silo (the last one leaving, or a survivor still joining): nothing is
+    /// moved and nothing is latched, so a later refusal asks again once a survivor is Active.</para>
+    ///
+    /// <para>🚨 <b>Known limit:</b> membership cannot tell a lingering peer from a healthy one — a
+    /// leaving silo stays <c>Active</c> — so when two silos stop at once the target can be the other
+    /// leaving one. There the migrated activation refuses and hands off again, each hop a distinct
+    /// activation on the subscriber's bounded re-arm budget. That is bounded and loud (the give-up
+    /// logs a Warning), never a silent wait; a cluster-wide drain signal would remove it.</para>
     /// </summary>
     private void HandOffTheAddress()
     {
-        if (_deactivated || Interlocked.Exchange(ref _handOffRequested, 1) != 0)
+        if (_deactivated || Volatile.Read(ref _handOffRequested) != 0)
             return;
         var target = AnotherActiveSilo();
         if (target is null)
         {
-            logger.LogInformation(
-                "Grain {GrainId}: its host is stopping and no other silo is active — keeping this "
-                + "activation; there is nowhere to hand the address to",
+            // Not latched: a survivor may still be joining, and the next refusal asks again.
+            logger.LogDebug(
+                "Grain {GrainId}: its host is stopping and no other silo is active yet — keeping this "
+                + "activation until one is",
                 this.GetPrimaryKeyString());
             return;
         }
-        RequestContext.Set(global::Orleans.Runtime.Placement.IPlacementDirector.PlacementHintKey, target);
+        if (Interlocked.Exchange(ref _handOffRequested, 1) != 0)
+            return;
+        // Save and restore the ambient hint rather than removing it: a caller in this execution flow
+        // may have set one of its own (OrleansRoutingService does the same around Attach).
+        var hintKey = global::Orleans.Runtime.Placement.IPlacementDirector.PlacementHintKey;
+        var previous = RequestContext.Get(hintKey);
+        RequestContext.Set(hintKey, target);
         try
         {
             MigrateOnIdle();
@@ -1370,7 +1385,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
         finally
         {
-            RequestContext.Remove(global::Orleans.Runtime.Placement.IPlacementDirector.PlacementHintKey);
+            if (previous is null)
+                RequestContext.Remove(hintKey);
+            else
+                RequestContext.Set(hintKey, previous);
         }
     }
 

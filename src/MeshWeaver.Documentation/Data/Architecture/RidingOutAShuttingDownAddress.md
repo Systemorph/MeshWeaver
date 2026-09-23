@@ -329,9 +329,16 @@ directory entry together with the activation. The sender rides the refusal out t
 this page describes. The activation tag makes repeat refusals from the same grain count as **one**
 teardown on the time axis, not as a recycle loop. No timer, no retry and no widened bound.
 
-It stands aside while a **long-running operation** holds the activation (an activity, a round). That
-operation may still take a one-way instruction such as a cancel, which is better applied than refused.
-Cutting it short is the keep-alive policy's decision, not this gate's.
+The refusal is **unconditional**, including while a hub build or a long-running operation holds the
+activation. Whatever such an activation would do with a delivery, its answer takes the same refused
+router, so accepting it would bring back the silent wait. The migration waits for the activation to go
+idle, so held work is not cut short by the hand-off.
+
+**Known limit:** membership cannot tell a lingering peer from a healthy one, because a leaving silo
+stays `Active`. When two silos stop at once, the hand-off target can be the other leaving silo. The
+migrated activation there refuses and hands off again, and each hop is a distinct activation on the
+subscriber's bounded re-arm budget. That is bounded and loud (the give-up logs a Warning), never a
+silent wait. A cluster-wide drain signal would remove it.
 
 What this does **not** cover: a subscriber that was already **warm** when the silo began stopping still
 gets no goodbye from the leaving host, because its `StreamEndedEvent` rides the refused router like any
