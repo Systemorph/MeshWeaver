@@ -806,6 +806,7 @@
   "ui.recycleFailed": "The hub at '{0}' has not answered again yet after the recycle was requested: {1}",
   "ui.mdFillFieldsGeneratePlan": "*Fill in the fields and click **Generate plan**.*",
   "ui.accessDeniedPlain": "Access denied.",
+  "ui.fieldWriteRefused": "Not saved: you can read this page, but you may not change it.",
   "ui.accessDeniedAdminsOnly": "Access denied — platform admins only.",
   "ui.autoSaved": "Changes are saved automatically",
   "ui.connectRepoFirst": "Connect a GitHub repository in the **GitHub Sync** tab first.",
