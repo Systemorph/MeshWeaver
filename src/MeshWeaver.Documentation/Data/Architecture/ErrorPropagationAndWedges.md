@@ -123,9 +123,20 @@ rendered as the area's content until a reload — a view that died on a hub that
 
 Both timeouts say "the hub did not answer in time", the same statement as `No response received in
 hub`, which was always retried. They now are too, through the same bounded
-`RetryAreaWithBackoff` (five attempts over ~8 s, then the "Area unavailable" frame at
-`Warning`). Re-subscribing a VIEW sends a new request, so #1172's "never re-send a timed-out
-delivery" — a grain-layer rule about the SAME delivery — does not apply. Terminal verdicts (routing
+`RetryAreaWithBackoff`: five retries whose backoff sums to ~8 s, then the "Area unavailable" frame
+at `Warning`. 🚨 The user-visible bound is NOT 8 s: each attempt that fails this way has already
+waited out the 30 s transport timeout before the retry sees it, so an owner that never answers keeps
+the view on its previous render for up to six attempts × 30 s + backoff ≈ 3 minutes before the
+frame appears. A timeout that clears on the next attempt costs one 30 s wait.
+
+Re-subscribing a VIEW sends a new request with a new stream id, so #1172's "never re-send a
+timed-out delivery" — a grain-layer rule about the SAME delivery — does not apply. The timed-out
+subscribe may still be accepted late; that is not a new leak the retry creates. The faulted remote
+stream is discarded from the workspace cache (`DiscardFaultedRemoteStream`), and its disposal posts
+`UnsubscribeRequest` for the OLD stream id to the owner, exactly as it did before when the user
+reloaded by hand; frames for that id reach a disposed `sync/` hub, never the new view, so nothing is
+rendered twice. The retry changes WHO resubscribes (the view, at most five times, instead of the
+user), not whether a late-accepted subscribe can exist. Terminal verdicts (routing
 `NotFound`, `Unavailable`, an initialisation failure, a real exception) are untouched and still
 surface on the first attempt; `DeliveryTimeoutIsTransientTest` pins both halves on the production
 messages verbatim.
