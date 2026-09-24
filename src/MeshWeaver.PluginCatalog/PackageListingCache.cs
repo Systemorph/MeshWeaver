@@ -85,6 +85,10 @@ public sealed class PackageListingCache : IDisposable
     // with the number of listings served.
     private readonly CompositeDisposable connections = new();
 
+    // One lane for every connection this registry owns, so its disposal delivers their release
+    // terminals in order rather than concurrently (see ReleaseLane).
+    private readonly ReleaseLane releaseLane = new();
+
     private readonly Func<long> ticks;
     private readonly ILogger? logger;
 
@@ -175,7 +179,7 @@ public sealed class PackageListingCache : IDisposable
             // like it worked. The connect fires on the first real subscriber; the cache's own
             // Do-decoration deliberately does not count as one.
             return produce().Take(1).Replay(1)
-                .AutoConnectOwnedBy(connections, nameof(PackageListingCache));
+                .AutoConnectOwnedBy(connections, releaseLane, nameof(PackageListingCache));
         });
     }
 
