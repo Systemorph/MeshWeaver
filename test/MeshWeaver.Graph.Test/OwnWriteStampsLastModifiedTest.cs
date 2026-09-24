@@ -64,6 +64,12 @@ public class OwnWriteStampsLastModifiedTest(ITestOutputHelper output) : Monolith
     private static IObservable<Unit> Advance(IMessageHub hub, IWorkspace workspace, MeshNode node)
     {
         var content = node.ContentAs<OwnWriteProbeContent>(hub.JsonSerializerOptions);
+        if (content is { RequestedAction: "Overwrite" })
+            // The own-hub FULL replacement — the node as the watcher saw it, trigger consumed.
+            // It carries the snapshot's own LastModified, which is exactly what must not survive.
+            return workspace.GetMeshNodeStream()
+                .Overwrite(node with { Content = content with { State = "Overwritten", RequestedAction = "" } })
+                .Select(_ => Unit.Default);
         if (content is null || content.RequestedAction != "Go")
             return Observable.Empty<Unit>();
         return workspace.GetMeshNodeStream()
@@ -78,7 +84,16 @@ public class OwnWriteStampsLastModifiedTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact(Timeout = 120000)]
-    public async Task AnOwnHubWrite_AdvancesLastModified()
+    public Task AnOwnHubWrite_AdvancesLastModified() => AssertOwnWriteStamps("Go", "Done");
+
+    /// <summary>
+    /// The own-hub <c>Overwrite</c> branch — a full replacement carrying the snapshot's own
+    /// <c>LastModified</c> — stamps through the same <c>ApplyAuditStamp</c>.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public Task AnOwnHubOverwrite_AdvancesLastModified() => AssertOwnWriteStamps("Overwrite", "Overwritten");
+
+    private async Task AssertOwnWriteStamps(string action, string expectedState)
     {
         var ct = TestContext.Current.CancellationToken;
         var id = "OwnWrite" + Guid.NewGuid().ToString("N")[..8];
@@ -97,13 +112,13 @@ public class OwnWriteStampsLastModifiedTest(ITestOutputHelper output) : Monolith
             .Update(live =>
             {
                 var c = live.ContentAs<OwnWriteProbeContent>(Mesh.JsonSerializerOptions);
-                return c is null ? live : live with { Content = c with { RequestedAction = "Go" } };
+                return c is null ? live : live with { Content = c with { RequestedAction = action } };
             })
             .Should().Within(60.Seconds()).Emit("the cross-hub trigger lands", cancellationToken: ct);
 
         // The own hub's answer — the state only the node's own hub writes.
         var done = await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n?.ContentAs<OwnWriteProbeContent>(Mesh.JsonSerializerOptions) is { State: "Done" })
+            .Where(n => n?.ContentAs<OwnWriteProbeContent>(Mesh.JsonSerializerOptions) is { State: var st } && st == expectedState)
             .Take(1)
             .Should().Within(60.Seconds()).Emit("the node's own hub consumes the trigger", cancellationToken: ct);
 
