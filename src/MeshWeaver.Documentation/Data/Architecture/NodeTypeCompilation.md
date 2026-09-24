@@ -1860,7 +1860,7 @@ with the canary verdict and turned into a compile failure on the node, so it nev
 🚨 **Record-keeping correction:** the recurrence comment of 2026-09-21 cites run `35661935491`; that run
 carries no `Hosting.Monolith.Test` job. The occurrence is job `106544668720` in run `35661949332`.
 
-#### 2026-09-24 — two occurrences on `main`, one onset position, and the capture that reads the code
+#### 2026-09-23/24 — three occurrences on `main`, one onset position, and the capture that reads the code
 
 The first readings from `main` ([#5212](https://github.com/Systemorph/MeshWeaver/issues/5212)), and
 the first outside `Hosting.Monolith.Test`: MeshWeaver.Plugins `Plugin Catalog CI`, job
@@ -1869,6 +1869,7 @@ the first outside `Hosting.Monolith.Test`: MeshWeaver.Plugins `Plugin Catalog CI
 
 | run / job (attempt 1) | platform set (core) | `canary=` | `dissect=` | `flat=` | `compiler=` | first poisoned compile |
 |---|---|---|---|---|---|---|
+| [`35906530904`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35906530904) / `107342449379` | `3.0.0-ci.9263` (`9a61fed96`) | `BELOW-ROSLYN` ×43 | `READS-HEALTHY` ×43 | `SAME-FRAME@…` ×43 | `PRIVATE-COPY-EMITS` ×43 | `Widget/Thing`, 2026-09-23 19:34:34Z |
 | [`35974400848`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35974400848) / `107555406130` | `3.0.0-ci.9287` (`bf5ac8552`) | `BELOW-ROSLYN` ×43 | `READS-HEALTHY` ×43 | `EMITS` ×43 | `PRIVATE-COPY-EMITS` ×43 | `Widget/Thing`, 08:45:39Z |
 | [`35985209459`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35985209459) / `107589527570` | `3.0.0-ci.9296` (`8d3fd9f5d`) | ×41 | ×41 | `EMITS` ×41 | ×41 | `Widget/Thing`, 10:27:55Z |
 
@@ -1877,18 +1878,19 @@ occurrence: `FullMetadataWriter.CreateIndicesForNonTypeMembers` → `getConsolid
 **twice** → `NamedTypeSymbol.ITypeDefinitionMember.get_ContainingTypeDefinition`. Two recursion
 frames means the writer walked `Inner` → `MwEmitCanary` and the guard admitted the TOP-LEVEL type.
 
-**The denominator.** 33 executions of that job since 2026-09-23T00:00Z (all attempts, every event),
-**2 carry the canary** — ≈6 % per execution of this one leg, against ≈2 % per execution measured for
+**The denominator.** 87 executions of that job from 2026-09-23T00:00Z to 2026-09-24T14:00Z (all
+attempts, every event; 84 of them ran `PluginCatalog.Test`), **3 carry the canary** — ≈3.5 % per
+execution of this one leg, against ≈2 % per execution measured for
 `Hosting.Monolith.Test` on 2026-09-22. The two newest `main` runs at the time of writing
 (`36002604963`, `35997990577`) are red for unrelated reasons and carry no canary.
 
-**One onset position, twice.** The test order is deterministic, and in BOTH occurrences the first
+**One onset position, three times.** The test order is deterministic, and in ALL THREE occurrences the first
 poisoned emit is the same test start of the leg (the 155th in its trace) — `RetiredNodePruneTest.SharedSourceChange_…` compiling
 `Widget/Thing` — after `CommercialPackageAuthorizationTest`'s three 15 s waits. Earlier emits in the
 same host succeeded (`PluginDependencyOrderTest.ADependentsSource_CompilesAgainstTheTypeItsDependencyShips`
-asserts `CompilationStatus.Ok` and passed ~2 min before onset), so this is the ACQUIRED shape again.
-What the position does and does not say: the same workload, in the same order, poisons one process
-in ~16 and not the other fifteen. So the outcome is not determined by the workload's content or
+asserts `CompilationStatus.Ok` and passed ~2 min before onset), so this is the ACQUIRED shape again (checked on the 10:27 host).
+What the position does and does not say: the same workload, in the same order, poisons roughly one
+process in 29 and not the rest. So the outcome is not determined by the workload's content or
 order ALONE — some condition is decided **per process** — while the fixed position may well be the
 deterministic trigger that exposes it once a process carries that condition.
 
@@ -1897,7 +1899,7 @@ emits in ONE process per architecture — one draw of whatever is decided per pr
 POPULATION instead (osx-arm64, runtime 10.0.11, the pipeline's own options — `ConcurrentBuild` off,
 `DocumentationMode.Diagnose`, portable PDB + XML doc — six shapes including `EmitCanarySource` and
 `FlatCanarySource`, semantic-model traffic before each emit, collectible load/unload every 7th emit, 4
-threads): **≥600 processes × 1,500 emits, 0 occurrences**. At the leg's ≈6 % that would have been ≈36;
+threads): **≥600 processes × 1,500 emits, 0 occurrences**. At the leg's ≈3.5 % that would have been ≈21;
 so the emit loop plus its own binding traffic does not reach the state, and the missing ingredient is
 in what the mesh host does besides emitting.
 
@@ -1906,7 +1908,7 @@ one.** Everything measured fits one mechanism and nothing measured contradicts i
 
 - the fault is per-process at a fixed workload (above) — dynamic-PGO class profiles are collected by
   racy, randomly-sampled probes, so the *shape* of the tier-1 code differs from process to process;
-- it is ACQUIRED after successful emits (both occurrences here) and it DEEPENS (`flat=EMITS` →
+- it is ACQUIRED after successful emits (checked on the 10:27 host) and it DEEPENS (`flat=EMITS` →
   `SAME-FRAME` inside one process on 2026-09-21), which is what successive methods reaching tier 1
   produce;
 - a fresh private copy of the compiler emits the same source in the same process — that copy runs
