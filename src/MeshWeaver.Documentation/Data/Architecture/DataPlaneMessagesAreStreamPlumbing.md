@@ -47,6 +47,26 @@ DataChangeRequest was POSTED with the mesh hub as sender`. Through
 stream write also applies the change to the node's **current** state, so a field the caller did not
 touch is never overwritten from a stale copy.
 
+## One read, one answer
+
+A `GetDataRequest` is a **point read**: the owner answers it ONCE and stops listening. The requester
+correlates its reply through an `AsyncSubject` that takes exactly one response and is then removed, so
+there has never been a consumer for a second one — a caller that wants the value to keep arriving
+subscribes (`GetMeshNodeStream`, `GetRemoteStream`) instead.
+
+The owner used to disagree. `DataExtensions.HandleGetDataRequest` subscribed the reference's live
+workspace stream and posted a `GetDataResponse` for **every** emission, for as long as the owner lived.
+Each later response reached the requester with no subject and was dropped (`No subject found for
+response message GetDataResponse … treating as processed`, at Debug — invisible in production). The
+cost therefore grew as *(reads ever served) × (changes since)*: on memex, 2026-09-24 03:36:44Z, the
+long-lived `Hosting/Build` NodeType hub posted **2001 `GetDataResponse`s in one second** to the one
+reads hub (`portal/reads-{meshId}`) that issues every point read on that pod, and the storm breaker
+dropped the key ([#5636](https://github.com/Systemorph/MeshWeaver/issues/5636)). That is the key this
+mechanism produces — one sender, one reads hub, one type, no payload identity — for a node read many
+times and then changed in a burst; how many reads had accumulated at that moment was not measured. The handler now takes the first
+answer (`.Take(1)`), which also terminates the subscription and releases its disposal registration.
+`OneReadOneAnswerTest` pins it: one read, five changes, zero dead responses — five on the old handler.
+
 ## The target
 
 1. **Every caller outside the data layer is converted.** The data layer is
