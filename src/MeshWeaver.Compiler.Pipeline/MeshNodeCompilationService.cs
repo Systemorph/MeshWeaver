@@ -1698,6 +1698,15 @@ internal class MeshNodeCompilationService(
                 var assembly = context.LoadNodeAssembly();
                 if (assembly == null)
                 {
+                    // The WHY, read ONCE and used twice: on the log line below and on the verdict
+                    // the record carries. It used to reach only the record, so the log — the one
+                    // surface the incident watcher folds — named a list of "common causes" and
+                    // never the actual one: 166 sightings on memex-cloud (2026-09-23/24, incident
+                    // e114ad743fe17da3, MeshWeaver#1126) over a dozen NodeTypes, every one
+                    // uninformative, and the types then read `Ok` again seconds later, so the
+                    // record's copy of the cause was overwritten before anyone could read it.
+                    var detail = context.LastLoadFailure
+                        ?? "the build is not usable (corrupt cached .dll or a missing dependency)";
                     // Promoted from Warning → Error: this is the root cause that
                     // cascades into every downstream "SubscribeRequest timed out"
                     // for hubs of this NodeType. Log noise from the cascade was
@@ -1706,10 +1715,9 @@ internal class MeshNodeCompilationService(
                     logger.LogError(
                         "Failed to load assembly for {NodePath} — the per-node hub for this " +
                         "NodeType (and every instance of it) cannot activate. Subscribe / GetData " +
-                        "calls to its grains will time out. Common causes: corrupt cached .dll " +
-                        "(delete .mesh-cache to force recompile), source compilation error " +
-                        "(check the Code node's diagnostics), or missing dependency.",
-                        node.Path);
+                        "calls to its grains will time out. Cause: {LoadFailure} " +
+                        "(assembly {AssemblyLocation}).",
+                        node.Path, detail, assemblyLocation);
                     // The build is NOT usable → record NO assembly. Downstream `ok` is
                     // `Error is null && !IsNullOrEmpty(AssemblyLocation)`, so a null location
                     // makes ok=false → CompilationStatus=Error, NO release, the emergency
@@ -1719,9 +1727,7 @@ internal class MeshNodeCompilationService(
                     // per-node hub could not actually activate against it → Subscribe parked.
                     // The WHY rides with the verdict: a 4 KiB file on a share with 3 MiB free is a
                     // full volume, not "a missing dependency", and the record is where the
-                    // operator reads it (memex, 2026-09-08).
-                    var detail = context.LastLoadFailure
-                        ?? "the build is not usable (corrupt cached .dll or a missing dependency)";
+                    // operator reads it (memex, 2026-09-08) — and, since #1126, the log line above.
                     return new NodeCompilationResult(null, [],
                         AppendError(log,
                             $"Failed to load assembly at {assemblyLocation} — {detail}",

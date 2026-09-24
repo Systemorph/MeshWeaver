@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -46,6 +49,14 @@ namespace MeshWeaver.Graph.Test;
 public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string TypeName = "UnloadableBuildProbe";
+
+    private readonly RecordingLoggerProvider recorder = new();
+
+    /// <summary>Captures the mesh's Warning+ log lines, so the LOG half of the loader's verdict
+    /// is asserted beside the record half (#1126).</summary>
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<ILoggerProvider>(recorder));
 
     private static MeshConfiguration EmptyMeshConfiguration() => new(Array.Empty<MeshNode>());
 
@@ -160,6 +171,21 @@ public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output
         // carries the loader's own verdict.
         nack!.Reason.Should().Contain("Failed to load",
             "the diagnosis must name the LOAD failure, the one fact the old branch dropped");
+
+        // #1126 — the LOG line names the cause too. It used to list "common causes" and never the
+        // actual one, which reached only the record; on memex-cloud 166 sightings over a dozen
+        // types were uninformative, and each type read Ok again seconds later, overwriting the
+        // record's copy before anyone read it. The log is the surface the incident watcher folds.
+        var loadLines = recorder.Records
+            .Where(r => r.Level == LogLevel.Error
+                        && r.Category.EndsWith("MeshNodeCompilationService", StringComparison.Ordinal)
+                        && r.Message.Contains($"Failed to load assembly for {typePath}", StringComparison.Ordinal))
+            .ToList();
+        loadLines.Should().NotBeEmpty("the loader's failure is reported at Error on the compilation "
+            + "service's own category");
+        loadLines.Should().OnlyContain(r => r.Message.Contains("BadImageFormatException", StringComparison.Ordinal),
+            "the log line must carry the loader's own reason (here: the bytes are not a PE image), "
+            + "not a list of possible causes");
     }
 
     /// <summary>
@@ -281,6 +307,30 @@ public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output
         verdict.HubConfiguration.Should().BeNull(
             "a build that loads is bound as-is — only bytes that do not load are refused, so a type "
             + "that declares no configuration keeps binding the default chain");
+    }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<(LogLevel Level, string Category, string Message)> records = new();
+
+        public IReadOnlyList<(LogLevel Level, string Category, string Message)> Records => records.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new Recorder(categoryName, records);
+        public void Dispose() { }
+
+        private sealed class Recorder(
+            string category, ConcurrentQueue<(LogLevel, string, string)> sink) : ILogger
+        {
+            public IDisposable BeginScope<TState>(TState state) where TState : notnull => Disposable.Empty;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (IsEnabled(logLevel))
+                    sink.Enqueue((logLevel, category, formatter(state, exception)));
+            }
+        }
     }
 
     private Task<MeshNode> CreateAsSystem(MeshNode node)
