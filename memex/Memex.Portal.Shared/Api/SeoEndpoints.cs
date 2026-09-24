@@ -633,7 +633,7 @@ public static class SeoEndpoints
                     .Select(node => AnonymousGate.AllowAnonymous(hub, node.Path)
                         .Take(1)
                         .Select(allowed => allowed ? node : null))
-                    .Merge(GateConcurrency)
+                    .MergeBounded(GateConcurrency)
                     .Where(node => node is not null)
                     .ToList()
                     .Select(admitted => (IReadOnlyList<(MeshNode, string)>)

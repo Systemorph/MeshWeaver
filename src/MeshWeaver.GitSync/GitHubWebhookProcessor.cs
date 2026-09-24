@@ -162,7 +162,7 @@ public sealed class GitHubWebhookProcessor
                 eventType, issue.Number, spaces.Count);
             return spaces
                 .Select(space => UpsertFromWebhook(space, issue, newComment))
-                .Merge(4)
+                .MergeBounded(4)
                 .ToList()
                 .Select(list => list.Count);
         });
@@ -1436,7 +1436,7 @@ public sealed class GitHubWebhookProcessor
                 .Select(g => identities
                     .Resolve(g.First().Url!, g.First().Node.CreatedBy)
                     .Select(canonical => (Group: g, Canonical: canonical)))
-                .Merge(4)
+                .MergeBounded(4)
                 .ToList()
                 .Select(resolved =>
                 {

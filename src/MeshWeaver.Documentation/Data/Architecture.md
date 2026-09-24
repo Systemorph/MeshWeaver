@@ -105,6 +105,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
 - [Removing Hand-Woven Concurrency Gates](RemovingHandWovenGates)
 - [Removing Observable-to-Task Bridges](RemovingObservableToTaskBridges)
+- [A Bounded Fan-Out Must Not Recurse](BoundedFanOutStackSafety) — Rx's `Merge(n)` subscribes the next queued inner inside the previous one's `OnCompleted`, so synchronously-completing inners (a request from a hub at `ShutDown`, a `.Catch(→ Return)`) grow the stack per queued item until the process dies of an uncatchable `StackOverflowException`; `MergeBounded(n)` dequeues through the trampoline
 - [JSON Serialization](Serialization)
 
 ### Reading & writing nodes
