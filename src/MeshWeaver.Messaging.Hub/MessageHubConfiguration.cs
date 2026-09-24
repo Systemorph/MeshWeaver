@@ -282,6 +282,12 @@ public record MessageHubConfiguration
         {
             services.AddSingleton<AccessService>();
         }
+        // ONE release lane per mesh, like AccessService: registered on the root, inherited by every
+        // hosted hub, so every hub-owned connection releases in order (see ReleaseLane).
+        if (ParentServiceProvider?.GetService<ReleaseLane>() == null)
+        {
+            services.AddSingleton<ReleaseLane>();
+        }
         Services.Invoke(services);
         return services;
     }

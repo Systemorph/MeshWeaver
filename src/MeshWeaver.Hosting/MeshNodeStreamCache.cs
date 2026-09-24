@@ -631,6 +631,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         degradations = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
         podHubAddressTypes = meshHub.ServiceProvider.GetService<MeshConfiguration>()?.StreamRoutedAddressTypes
             ?? MeshConfiguration.DefaultStreamRoutedAddressTypes;
+        _releaseLane = meshHub.ServiceProvider.GetRequiredService<ReleaseLane>();
         var opts = options ?? new MeshNodeStreamCacheOptions();
         readStreamIdleExpiration = opts.ReadStreamIdleExpiration;
         readStreamSweepInterval = opts.ReadStreamSweepInterval;
@@ -2891,6 +2892,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // ratcheted by RootedRxConnectionRatchetGuard.
     private readonly System.Reactive.Disposables.CompositeDisposable _queryConnections = new();
 
+    // The MESH's release lane: every query connection's release terminal is delivered on it, one at
+    // a time. Disposing _queryConnections releases every query in one sweep, and the permission fold
+    // composes several of them under nested CombineLatest/Zip — terminals delivered concurrently
+    // deadlocked it (see ReleaseLane).
+    private readonly ReleaseLane _releaseLane;
+
     /// <summary>Test probe: synced-query upstream connections this cache currently holds — one
     /// per registered query CHAIN, since each chain's connection is owned by its own
     /// <see cref="QueryChain.Connection"/> registered here (so an eviction can release one chain
@@ -3082,7 +3089,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // rebuilt query never accumulates dead handles), disposes it on the spot when it
                 // arrives after the cache's Dispose() — the late-connect race resolved by
                 // construction — and refuses a subscriber that arrives after the release.
-                .AutoConnectOwnedBy(connectionOwner, $"{nameof(MeshNodeStreamCache)} query '{id}'");
+                .AutoConnectOwnedBy(connectionOwner, _releaseLane, $"{nameof(MeshNodeStreamCache)} query '{id}'");
                 // ReplaySubject (backing Replay(1)) already serialises
                 // OnNext/Subscribe internally — no .Synchronize() needed.
                 // Adding it would route every emission through an additional
