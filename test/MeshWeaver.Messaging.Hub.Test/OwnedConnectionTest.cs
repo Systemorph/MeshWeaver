@@ -38,8 +38,8 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    [Fact]
-    public void AConnectStillQueuedWhenTheOwnerIsReleased_NeverRuns()
+    [Fact(Timeout = 60_000)]
+    public async Task AConnectStillQueuedWhenTheOwnerIsReleased_NeverRuns()
     {
         var scheduler = new TestScheduler();
         var owner = new CompositeDisposable();
@@ -57,8 +57,8 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             .Replay(1)
             .AutoConnectOwnedBy(owner, "test-owner");
 
-        var received = new List<Notification<int>>();
-        using var subscription = shared.Materialize().Subscribe(received.Add);
+        var received = shared.Materialize().Replay();
+        using var subscription = received.Connect();
 
         factoryRuns.Should().Be(0, "precondition: SubscribeOn queued the connect; the pool has not run it");
         owner.Count.Should().Be(1,
@@ -72,7 +72,68 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
         factoryRuns.Should().Be(0,
             "the queued connect must be CANCELLED by the owner's release, never run against a disposed "
             + "owner — this is the GetQueryRaw → GetWorkspace disposed-scope straggler");
-        received.Should().BeEmpty("a cancelled connect feeds nothing to the subscriber that queued it");
+
+        // The subscriber that queued the connect is told why nothing will come (#5135): the release
+        // terminal is delivered off the disposing thread, so wait for it rather than read at once.
+        var terminal = await received.Should().Within(TestTimeouts.Convergence).Emit(
+            "the subscriber that was attached when the owner released must receive a terminal, never silence",
+            TestContext.Current.CancellationToken);
+        terminal.Kind.Should().Be(NotificationKind.OnError,
+            "a cancelled connect feeds no VALUE — only the release terminal naming the owner");
+        terminal.Exception.Should().BeOfType<ObjectDisposedException>()
+            .Which.ObjectName.Should().Be("test-owner");
+    }
+
+    /// <summary>
+    /// 🚨 #5135: a subscriber ATTACHED while the one-shot is in flight is terminated by the owner's
+    /// release. Disposing the connection unsubscribes the replay subject from its upstream and emits
+    /// nothing to that subject's observers, so before the fix this subscriber waited forever — the
+    /// MCP upload parked on <c>ContentService.GetCollection</c> when the owning hub tore down.
+    /// <para><b>Negative control</b> (run by hand): without the <c>TakeUntil(released)</c> in
+    /// <c>AutoConnectOwnedBy</c> the <c>Emit</c> below fails on its timeout.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ASubscriberAttachedWhileInFlight_IsTerminatedByTheRelease()
+    {
+        var upstream = new Subject<int>();
+        var owner = new CompositeDisposable();
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+
+        var waiting = shared.Materialize().Replay(1);
+        using var connection = waiting.Connect();
+        upstream.HasObservers.Should().BeTrue("CONTROL ARM: the in-flight one-shot is connected");
+
+        owner.Dispose();
+
+        var terminal = await waiting.Should().Within(TestTimeouts.Convergence).Emit(
+            "the subscriber attached before the release must receive a terminal, never silence",
+            TestContext.Current.CancellationToken);
+        terminal.Kind.Should().Be(NotificationKind.OnError);
+        terminal.Exception.Should().BeOfType<ObjectDisposedException>()
+            .Which.ObjectName.Should().Be("test-owner");
+        upstream.HasObservers.Should().BeFalse("the release still unsubscribes the upstream");
+    }
+
+    [Fact]
+    public void ASettledPromise_KeepsReplaying_AfterItsHandleLeavesALiveOwner()
+    {
+        // The release signal must fire on OWNER disposal only: a terminated chain removes its handle
+        // from an owner that is still alive, and that removal must not fault later subscribers.
+        var upstream = new Subject<int>();
+        var owner = new CompositeDisposable();
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+        using (shared.Subscribe(_ => { }))
+        {
+            upstream.OnNext(5);
+            upstream.OnCompleted();
+        }
+
+        var late = new List<Notification<int>>();
+        shared.Materialize().Subscribe(late.Add);
+        late.Should().HaveCount(2);
+        late[0].Value.Should().Be(5);
+        late[1].Kind.Should().Be(NotificationKind.OnCompleted,
+            "dropping a settled chain's handle is not a release — the promise replays normally");
     }
 
     [Fact]

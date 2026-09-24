@@ -365,7 +365,20 @@ What the helper guarantees, and what a bare `AutoConnect(1)` cannot:
 | The owner's `Dispose()` | cannot reach the upstream | unsubscribes it (`hub.RegisterForDisposal` → ShutDown phase, strictly before any scope closes) |
 | A connect still **queued** on the pool | runs later, against whatever is left | is **cancelled** before the pool dequeues it — the registration lands in a disposed `CompositeDisposable`, whose `Add` disposes on the spot |
 | A subscriber arriving **after** the release | gets the replay buffer, then silence forever ("burst then dead silence") | is **refused** with `ObjectDisposedException(ownerName)` — terminates, attributable |
+| A subscriber **already attached** when the release happens, the one-shot still in flight | silence forever — releasing a connection unsubscribes the replay subject from its upstream and emits nothing to its observers | **terminates** with the same `ObjectDisposedException(ownerName)`, delivered on the ThreadPool (never on the disposing hub's turn) — see below |
 | A chain that **terminates** (a settled promise) | — | drops its handle, so the owner tracks *live* connections only and a faulted-then-rebuilt promise never accumulates dead handles |
+
+**The attached subscriber was the half that stayed silent (#5135).** Refusing late subscribers
+covered only callers that arrive after the release. A caller that asked while the one-shot was
+still running — an MCP `upload` waiting on `ContentService.GetCollection` while the collection's
+initial scan ran, when the hub it rode tore down — received no value, no error and no completion,
+ever: disposing the connection detaches the replay subject from its upstream and tells its
+observers nothing, and nothing UPSTREAM of the `Replay` (the eviction `Catch` in
+`ContentService` included) can see an unsubscription. `AutoConnectOwnedBy` now hands out
+`shared.TakeUntil(released)`, and the owned handle fires `released` only when the OWNER is
+disposed — a chain that merely terminated removes its handle from a live owner and keeps replaying
+its settled value. Pinned by `OwnedConnectionTest.ASubscriberAttachedWhileInFlight_IsTerminatedByTheRelease`
+and, at the content-collection site, `InFlightCollectionReleasedWithItsHubTest`.
 
 **Choosing the owner.** A hub-scoped service registers with its hub; a DI singleton owns a
 `CompositeDisposable` field it disposes in its own `Dispose()` (the container disposes
