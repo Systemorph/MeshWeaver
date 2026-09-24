@@ -192,7 +192,9 @@ public class SubscribeErrorArmRatchetGuard
             Assert.False(found.ContainsKey("ArmedMultiline.cs"), "…including when the arms wrap");
             Assert.False(found.ContainsKey("Observer.cs"),
                 "Subscribe(IObserver) carries its own OnError — not a bare subscription");
-            Assert.False(found.ContainsKey("NoArgs.cs"), "Subscribe() has no onNext to rethrow from");
+            Assert.True(found.ContainsKey("NoArgs.cs"),
+                "🚨 Subscribe() with NO arguments binds Rx's default onError too — a fault is rethrown on the "
+                + "delivering thread exactly as for a one-armed lambda (MeshWeaver#5650)");
             Assert.False(found.ContainsKey("NestedLambdaArgument.cs"),
                 "🚨 the lambda is an argument to the OBSERVER FACTORY, not the onNext — a top-level "
                 + "'=>' test is what separates these two, and getting it wrong cries wolf");
@@ -207,8 +209,8 @@ public class SubscribeErrorArmRatchetGuard
     }
 
     /// <summary>
-    /// Counts <c>.Subscribe(</c> calls whose argument list is exactly ONE argument that is itself a
-    /// lambda. Balances <c>()</c>, <c>[]</c> and <c>{}</c> so a comma or an arrow nested inside the
+    /// Counts <c>.Subscribe(</c> calls whose argument list is EMPTY or exactly ONE argument that is
+    /// itself a lambda — both bind Rx's default <c>onError</c>, which rethrows. Balances <c>()</c>, <c>[]</c> and <c>{}</c> so a comma or an arrow nested inside the
     /// lambda body is not mistaken for a second argument or for the argument's own arrow.
     /// </summary>
     private static int CountIn(string file)
@@ -241,7 +243,9 @@ public class SubscribeErrorArmRatchetGuard
                 if (!char.IsWhiteSpace(c)) any = true;
             }
 
-            if (any && topLevelCommas == 0 && topLevelArrow) count++;
+            // A bare lambda — or NO argument at all: Subscribe() uses Rx's default onError as well,
+            // which rethrows a fault on the delivering thread (MeshWeaver#5650).
+            if (!any || (topLevelCommas == 0 && topLevelArrow)) count++;
         }
 
         return count;
