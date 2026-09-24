@@ -2355,9 +2355,9 @@ never possible. Now:
   from the hub's container (a disposing hub may resolve nothing), and answers `false` with the class
   `NodeTypeReleaseFailure.HostLeaving` — the caller is still answered, and the shared record is not
   touched;
-- `ReleaseAffectedNodeTypes` says it **once** for the whole wave — one Warning naming every type, and
-  a Warning on the sync's progress sink — instead of one refusal per type, and emits the empty list,
-  because nothing was requested;
+- `ReleaseAffectedNodeTypes` routes both its log line and its progress line through the CLASSIFIED
+  refusal, so a declined leg is a Warning on the sync's activity rather than an Error that flips it.
+  Each leg asks at its own subscribe, so a drain that begins mid-wave is judged per leg;
 - a write that raced past the gate and came back as the router's shutdown refusal is classified
   `HostLeaving` while the leaving probe still answers yes (both halves required: the text alone is
   also what a staying host reports about a peer, and the probe alone would claim any fault that lands

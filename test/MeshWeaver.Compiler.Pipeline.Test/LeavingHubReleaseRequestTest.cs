@@ -57,7 +57,7 @@ public class LeavingHubReleaseRequestTest(ITestOutputHelper output) : MonolithMe
         await MeshService.CreateNode(typeNode)
             .Should().Within(20.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
-            .Match(n => n?.Content is NodeTypeDefinition,
+            .Match(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is not null,
                 cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -69,8 +69,8 @@ public class LeavingHubReleaseRequestTest(ITestOutputHelper output) : MonolithMe
         hub.ObserveNodeTypeRelease(typePath,
             force: false, releaseNotes: null, onError: null, onRefused: refusals.Enqueue);
 
-    private static bool Triggered(MeshNode? n) =>
-        n?.Content is NodeTypeDefinition { RequestedReleaseAt: not null };
+    private bool Triggered(MeshNode? n) =>
+        n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { RequestedReleaseAt: not null };
 
     [Fact]
     public async Task ALeavingHub_DoesNotIssueTheRelease_AndSaysWhy_WhileALiveHubStampsIt()

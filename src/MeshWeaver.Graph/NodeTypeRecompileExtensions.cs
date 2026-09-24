@@ -376,26 +376,6 @@ public static class NodeTypeRecompileExtensions
                     // the scope around the loop covers every request). Requested for EVERY affected
                     // type, adopted included — the watcher's satisfied-path consumes the trigger for
                     // current builds, and this stays the one place that guarantees a request lands.
-                    //
-                    // 🚨 #5629 — …except from a host that is LEAVING, where no request can land at
-                    // all: the router refuses every outbound route. Said ONCE for the wave, naming
-                    // every type, instead of one refusal per type (the per-leg gate in
-                    // ObserveNodeTypeRelease covers every other caller). A Warning, not silence:
-                    // these types really were not released, and the sync's activity must say so.
-                    if (hub.IsLeaving())
-                    {
-                        var types = string.Join(", ", ordered);
-                        logger?.LogWarning(
-                            "[Recompile] {Count} NodeType release(s) not issued — THIS HOST IS LEAVING, so no trigger write can reach an owner: {Types}. They keep the assemblies they had until a release is requested from a pod that stays.",
-                            ordered.Count, types);
-                        progress?.Invoke(
-                            $"Recompile of {ordered.Count} NodeType(s) not requested — this host is shutting down: {types}. "
-                            + "They keep their current assemblies until compiled from a serving pod.",
-                            LogLevel.Warning);
-                        // Nothing was requested, so nothing is reported as requested — this
-                        // method emits the release-REQUESTED paths.
-                        return (IReadOnlyList<string>)[];
-                    }
                     using (accessService?.ImpersonateAsSystem())
                         foreach (var path in ordered)
                             // Every argument stated: the classified overload carries no defaults, so
@@ -404,14 +384,23 @@ public static class NodeTypeRecompileExtensions
                             hub.RequestNodeTypeRelease(path,
                                 force: false,
                                 releaseNotes: null,
-                                onError: msg => progress?.Invoke(
-                                    $"Recompile of {path} could not be requested: {msg} — its assembly is STALE until compiled manually.",
-                                    LogLevel.Error),
+                                onError: null,
                                 // 🚨 #1549 — the LOG line takes the CLASSIFIED sink, so the failure
-                                // class lands in the message TEMPLATE. The progress line above keeps
-                                // the sentence a human reads; this one keeps the words a fingerprint
-                                // reads. See LogReleaseRefusal.
-                                onRefused: refusal => LogReleaseRefusal(logger, refusal));
+                                // class lands in the message TEMPLATE; the progress line keeps the
+                                // sentence a human reads. Both come off the classified refusal so
+                                // the progress LEVEL follows the class too (#5629): a leg declined
+                                // because THIS host is leaving is a Warning on the sync's activity,
+                                // not an Error that flips it. Every leg asks IsLeaving at its own
+                                // subscribe, so a drain that starts mid-wave is judged per leg.
+                                onRefused: refusal =>
+                                {
+                                    progress?.Invoke(
+                                        $"Recompile of {path} could not be requested: {refusal.Reason} — its assembly is STALE until compiled manually.",
+                                        refusal.Failure == NodeTypeReleaseFailure.HostLeaving
+                                            ? LogLevel.Warning
+                                            : LogLevel.Error);
+                                    LogReleaseRefusal(logger, refusal);
+                                });
                     return ordered;
                 });
             })
