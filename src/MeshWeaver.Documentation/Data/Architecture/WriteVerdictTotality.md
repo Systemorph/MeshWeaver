@@ -67,7 +67,7 @@ subscriber: a bare `OnCompleted`. (A stream that did carry one replays value-the
 | Path | What happens |
 |---|---|
 | `Workspace.AcquireRemoteStreamUnchecked` resolves a stream that was **already dead** | It deliberately returns it with an empty lease — "let the caller's subscribe collect the terminal". The terminal is a bare completion. |
-| The last **lease** on an evicted mirror is released mid-write | `ReclaimIfUnheld` disposes the stream there and then. |
+| The last **lease** on an evicted mirror is released mid-write | `ReclaimIfUnheld` disposes the stream there and then. A lease taken while the reclaim was deciding used to be granted on the doomed stream; since #5087 the claim and the lease are one compare-exchange and the late lease is refused ([Evicted Stream Retention §10](../EvictedStreamRetention)). |
 | The write path's own `Where(change => change.Value is not null)` drops every emission | Filtering introduces a completion the unfiltered source could not produce. |
 
 The first two are load-dependent, and they are why this appeared under **concurrency**: N writers to
