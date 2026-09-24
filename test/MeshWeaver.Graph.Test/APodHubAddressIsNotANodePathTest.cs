@@ -6,6 +6,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -133,9 +134,39 @@ public class APodHubAddressIsNotANodePathTest(ITestOutputHelper output) : Monoli
         MeshConfiguration.IsPodHubAddress($"{TestPartition}/portal", types).Should().BeFalse();
         MeshConfiguration.IsPodHubAddress("Portal/Home", types).Should().BeFalse(
             "address types are ordinal — a partition named 'Portal' is a node path");
-        MeshConfiguration.IsPodHubAddress("portal", types).Should().BeFalse(
-            "a bare segment is not an address");
+        MeshConfiguration.IsPodHubAddress("portal", types).Should().BeTrue(
+            "RoutingGrain classifies by Address.Type alone, so a bare type is stream-routed too");
         MeshConfiguration.IsPodHubAddress(null, types).Should().BeFalse();
         MeshConfiguration.IsPodHubAddress("", types).Should().BeFalse();
+        MeshConfiguration.IsPodHubAddress("/", types).Should().BeFalse();
+
+        // A module-declared type is honoured only through the CONFIGURED set, never the defaults.
+        var withImport = new System.Collections.Generic.HashSet<string>(types, StringComparer.Ordinal) { "import" };
+        MeshConfiguration.IsPodHubAddress("import/abc", types).Should().BeFalse();
+        MeshConfiguration.IsPodHubAddress("import/abc", withImport).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 The MODULE-DECLARED path, end to end: Graph declares <c>import</c> stream-routed
+    /// (<c>StaticRepoImporter.ImportAddressType</c>), and the cache must read the mesh's CONFIGURED
+    /// set, not the defaults — so a read of an <c>import/…</c> address completes empty as well.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task GetMeshNodeStream_OfAModuleDeclaredPodHubAddress_CompletesEmpty()
+    {
+        var configured = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        configured.StreamRoutedAddressTypes.Should().Contain(StaticRepoImporter.ImportAddressType,
+            "precondition: this mesh declares the module type — otherwise the read below says nothing");
+        var importAddress = $"{StaticRepoImporter.ImportAddressType}/{Mesh.Address.Id}";
+        configured.IsPodHubAddress(importAddress).Should().BeTrue();
+
+        var emitted = await Mesh.GetMeshNodeStream(importAddress)
+            .Select(n => n?.Path ?? "(null)")
+            .ToList()
+            .Should().Within(TimeSpan.FromSeconds(20))
+            .Emit("a read of a module-declared pod-hub address must complete, not be routed",
+                TestContext.Current.CancellationToken);
+
+        emitted.Should().BeEmpty();
     }
 }

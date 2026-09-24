@@ -105,17 +105,19 @@ public class MeshConfiguration(
     /// </summary>
     /// <param name="path">The mesh path a reader was handed.</param>
     /// <param name="streamRoutedAddressTypes">The address types that route to a pod-process hub.</param>
-    /// <returns><c>true</c> when the path's first segment is one of those types.</returns>
+    /// <returns><c>true</c> when the path's first segment is one of those types (a bare type counts:
+    /// the router classifies by <c>Address.Type</c> alone).</returns>
     public static bool IsPodHubAddress(string? path, IReadOnlySet<string> streamRoutedAddressTypes)
     {
         if (string.IsNullOrEmpty(path))
             return false;
         var trimmed = path.TrimStart('/');
         var slash = trimmed.IndexOf('/');
-        // A bare type ("portal") with no id is not an address either way; only "{type}/{id}…" is.
-        if (slash <= 0)
-            return false;
-        return streamRoutedAddressTypes.Contains(trimmed[..slash]);
+        // The FIRST SEGMENT alone decides, exactly as RoutingGrain classifies a destination by
+        // Address.Type alone — so a bare "portal" or "cache" (an Address with an empty Id) is
+        // stream-routed there and must be recognised here too, or it would reach the same hub.
+        var first = slash < 0 ? trimmed : trimmed[..slash];
+        return first.Length > 0 && streamRoutedAddressTypes.Contains(first);
     }
 
     /// <summary>
