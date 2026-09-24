@@ -123,7 +123,13 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // arrival order — each Execute fully completes (the session's chain advanced) before
         // the next subscribes — so cross-submission state sharing is deterministic without any
         // lock.
-        submissionPump = submissions.Select(RunSubmission).Concat().Subscribe();
+        // RunSubmission settles every fault into a completion, so the pump is not expected to
+        // fault — but if it ever does, the fault is owned here: a no-argument Subscribe() hands
+        // it to Rx's default onError, which rethrows on the delivering thread (MeshWeaver#5650).
+        submissionPump = submissions.Select(RunSubmission).Concat().Subscribe(
+            _ => { },
+            ex => Logger.LogError(ex,
+                "Kernel submission pump terminated with a fault; no further submission will run on this session"));
         return config
             .WithInitialization(hub =>
                 // Executor hub disposal (idle disconnect / session close) eagerly unloads the

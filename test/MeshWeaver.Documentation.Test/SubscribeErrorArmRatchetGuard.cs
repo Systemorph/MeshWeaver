@@ -165,6 +165,14 @@ public class SubscribeErrorArmRatchetGuard
             W("NestedLambdaArgument.cs",
                 "class I { void M() { o.Subscribe(MakeObserver(x => x)); } }");
             W("Prose.cs", "// never write .Subscribe(x => f(x)) without an error arm\nclass J { }");
+            // 🚨 The #5650 shape: a Razor component's @code block. The two subscriptions that killed
+            // memex-cloud sat in .razor files, and the sweep that missed them read .cs only — so the
+            // file selection is part of what this test proves, not just the arity parse.
+            W("Bell.razor",
+                "<FluentButton Title=\"@title\" />\n@code {\n  void M() { sub = Feed.ForViewer(Hub)\n"
+                + "    .Subscribe(items =>\n    {\n      count = items.Count;\n    }); }\n}\n");
+            W("BellFixed.razor",
+                "@code {\n  void M() { sub = Feed.ForViewer(Hub).Subscribe(items => count = items.Count, ex => Log(ex)); }\n}\n");
             Directory.CreateDirectory(Path.Combine(s, "obj"));
             W(Path.Combine("obj", "Ignored.cs"), "class K { void M() { o.Subscribe(x => Handle(x)); } }");
 
@@ -184,19 +192,25 @@ public class SubscribeErrorArmRatchetGuard
             Assert.False(found.ContainsKey("ArmedMultiline.cs"), "…including when the arms wrap");
             Assert.False(found.ContainsKey("Observer.cs"),
                 "Subscribe(IObserver) carries its own OnError — not a bare subscription");
-            Assert.False(found.ContainsKey("NoArgs.cs"), "Subscribe() has no onNext to rethrow from");
+            Assert.True(found.ContainsKey("NoArgs.cs"),
+                "🚨 Subscribe() with NO arguments binds Rx's default onError too — a fault is rethrown on the "
+                + "delivering thread exactly as for a one-armed lambda (MeshWeaver#5650)");
             Assert.False(found.ContainsKey("NestedLambdaArgument.cs"),
                 "🚨 the lambda is an argument to the OBSERVER FACTORY, not the onNext — a top-level "
                 + "'=>' test is what separates these two, and getting it wrong cries wolf");
             Assert.False(found.ContainsKey("Prose.cs"), "a comment describing the rule is not a violation");
+            Assert.True(found.ContainsKey("Bell.razor"),
+                "🚨 a bare subscribe in a .razor @code block must be found — a scan that reads only .cs "
+                + "reports the tree clean while the killer sits in a component (MeshWeaver#5650)");
+            Assert.False(found.ContainsKey("BellFixed.razor"), "the armed Razor shape is the fix, not a finding");
             Assert.False(found.ContainsKey("Ignored.cs"), "obj/ must not be scanned");
         }
         finally { dir.Delete(recursive: true); }
     }
 
     /// <summary>
-    /// Counts <c>.Subscribe(</c> calls whose argument list is exactly ONE argument that is itself a
-    /// lambda. Balances <c>()</c>, <c>[]</c> and <c>{}</c> so a comma or an arrow nested inside the
+    /// Counts <c>.Subscribe(</c> calls whose argument list is EMPTY or exactly ONE argument that is
+    /// itself a lambda — both bind Rx's default <c>onError</c>, which rethrows. Balances <c>()</c>, <c>[]</c> and <c>{}</c> so a comma or an arrow nested inside the
     /// lambda body is not mistaken for a second argument or for the argument's own arrow.
     /// </summary>
     private static int CountIn(string file)
@@ -229,7 +243,9 @@ public class SubscribeErrorArmRatchetGuard
                 if (!char.IsWhiteSpace(c)) any = true;
             }
 
-            if (any && topLevelCommas == 0 && topLevelArrow) count++;
+            // A bare lambda — or NO argument at all: Subscribe() uses Rx's default onError as well,
+            // which rethrows a fault on the delivering thread (MeshWeaver#5650).
+            if (!any || (topLevelCommas == 0 && topLevelArrow)) count++;
         }
 
         return count;
