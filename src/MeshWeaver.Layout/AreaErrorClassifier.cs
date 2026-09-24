@@ -28,7 +28,27 @@ public static class AreaErrorClassifier
         {
             if (e is TimeoutException) return true;
             if (e is OperationCanceledException) return true;
+            // The router's own TYPED transient verdict (RoutingGrain.ClassifyDeliveryException):
+            // a silo leaving, a directory mid-handoff, an activation mid-DeactivateOnIdle. Its text
+            // is Orleans' ("Forwarding failed … invalid activation. Rejecting now."), which none of
+            // the wording below matched — so the one verdict the producer had already classified was
+            // re-read here as permanent.
+            if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }) return true;
             var msg = e.Message ?? string.Empty;
+            // 🚨 The two TRANSPORT timeouts, flattened to text by the routed NACK (issues #5599,
+            // #5605, #5624). Across the grain boundary the TimeoutException OBJECT does not survive —
+            // the router posts "Delivery to 'Store' failed: Response did not arrive on time in
+            // 00:00:30 …" (Orleans' ResponseTimeout) or "… Grain placement operation timed out for
+            // grain messagehub/Store." as a DeliveryFailure{Failed} — so the typed check above never
+            // sees them. Both say "the hub did not answer IN TIME", never "the hub cannot serve this":
+            // the same statement as "No response received in hub" below, which is already retried.
+            // Unmatched, they fell through NamedAreaView to its generic arm: logged at Error (one
+            // incident per occurrence), NOT retried, and the raw Orleans banner rendered as the
+            // area's permanent content until a reload. Re-subscribing a VIEW is a new request, so
+            // #1172's "never re-send a timed-out delivery" (a grain-layer rule about the SAME
+            // delivery) does not apply here, and the retry stays bounded by RetryAreaWithBackoff.
+            if (msg.Contains("Response did not arrive on time", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("Grain placement operation timed out", StringComparison.OrdinalIgnoreCase)) return true;
             // Framework undeliverable / timeout banners reach the GUI wrapped in a
             // DeliveryFailureException, so the typed checks above don't always catch them.
             if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
