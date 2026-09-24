@@ -69,7 +69,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     private const int AwaitedReadTotalBudget = 2;
 
     /// <summary>The seeded inventory's size for <see cref="NoNewTaskShapedSeamInTheMeshContract"/>.</summary>
-    private const int SeamTotalBudget = 8;
+    private const int SeamTotalBudget = 5;
 
     private const string AwaitedReadAllowFile = "AwaitedMeshReadSites.allow";
     private const string SeamAllowFile = "TaskShapedMeshSeams.allow";
