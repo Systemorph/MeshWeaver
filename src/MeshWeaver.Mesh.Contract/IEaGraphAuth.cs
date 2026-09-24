@@ -1,7 +1,3 @@
-using System.Diagnostics;
-using System.Reactive.Linq;
-using MeshWeaver.Messaging;
-
 namespace MeshWeaver.Mesh;
 
 /// <summary>
@@ -81,67 +77,4 @@ public interface IEaGraphAuth
     /// </summary>
     /// <param name="userObjectId">The directory object id of the user to check.</param>
     IObservable<EaGraphAccess> GetConnection(string userObjectId);
-
-    // ── Retiring Task surface ────────────────────────────────────────────────────────────────────
-    //
-    // 🚨 These three exist ONLY so MeshWeaver.Plugins (ExecutiveAssistantPlugin, GraphEmailSender)
-    // keeps compiling across the two merges this change takes, and they are HUB-UNSAFE by
-    // construction: awaiting one from an agent round or any hub-reachable code is exactly #3433.
-    // Nothing in this repository calls them. They are default-implemented as forwarders over the
-    // reactive surface so an implementer only has to write the reactive half, and they are counted
-    // as debt by HubReachableAsyncGuard's contract-seam arm — the ratchet is what removes them once
-    // MeshWeaver.Plugins is off them. Do NOT add a caller, and do NOT add a fourth.
-    //
-    // They are deliberately NOT [Obsolete]: MeshWeaver.Plugins builds -warnaserror against a core
-    // CHECKOUT at a pinned ref, so the attribute would red that repo's main the moment this merges,
-    // before its own half could land. The guard carries the deprecation instead, where it cannot
-    // break a dependent that has not migrated yet.
-
-    /// <summary>
-    /// Deprecated forwarder — <see cref="ExchangeAndStore"/>. Retained only for the cross-repo
-    /// migration; see the note above.
-    /// </summary>
-    /// <param name="code">The authorization code.</param>
-    /// <param name="redirectUri">The callback URI the code was issued against.</param>
-    /// <param name="userObjectId">The directory object id of the consenting user.</param>
-    /// <param name="ct">Cancels the WAIT, not the exchange.</param>
-    Task<bool> ExchangeAndStoreAsync(
-        string code, string redirectUri, string userObjectId, CancellationToken ct)
-        => ExchangeAndStore(code, redirectUri, userObjectId)
-            .ObserveCompletion(LateFault(nameof(ExchangeAndStoreAsync)), ct);
-
-    /// <summary>
-    /// Deprecated forwarder — <see cref="GetAccessToken"/>. Collapses the three-state answer back
-    /// to a nullable string, which is the information loss #3433 is about; migrate the caller.
-    /// </summary>
-    /// <param name="userObjectId">The directory object id of the acting user.</param>
-    /// <param name="ct">Cancels the WAIT, not the read.</param>
-    Task<string?> GetAccessTokenAsync(string userObjectId, CancellationToken ct)
-        => GetAccessToken(userObjectId)
-            .Select(a => a.AccessToken)
-            .ObserveCompletion(LateFault(nameof(GetAccessTokenAsync)), ct);
-
-    /// <summary>
-    /// Deprecated forwarder — <see cref="GetConnection"/>. Collapses
-    /// <see cref="EaConnection.Undetermined"/> into <c>false</c>, i.e. into "never connected";
-    /// migrate the caller.
-    /// </summary>
-    /// <param name="userObjectId">The directory object id of the user to check.</param>
-    /// <param name="ct">Cancels the WAIT, not the read.</param>
-    Task<bool> IsConnectedAsync(string userObjectId, CancellationToken ct)
-        => GetConnection(userObjectId)
-            .Select(a => a.IsConnected)
-            .ObserveCompletion(LateFault(nameof(IsConnectedAsync)), ct);
-
-    /// <summary>
-    /// The late-fault reporter every forwarder above hands to <c>ObserveCompletion</c>. Never an
-    /// empty lambda: a fault arriving after the bridge's Task settled has no other sink, and
-    /// discarding it is half of what that bridge exists to prevent. <c>Trace</c> rather than a
-    /// logger because this seam is SDK-free and holds no <c>ILogger</c> — the same choice
-    /// <see cref="MeshWeaver.Mesh.Threading.IIoPool.InvokeObservable{T}"/> makes.
-    /// </summary>
-    private static Action<Exception> LateFault(string member) =>
-        ex => Trace.TraceError(
-            "IEaGraphAuth.{0}: the credential operation faulted AFTER the wait settled — reported, "
-            + "not orphaned: {1}: {2}", member, ex.GetType().Name, ex.Message);
 }
