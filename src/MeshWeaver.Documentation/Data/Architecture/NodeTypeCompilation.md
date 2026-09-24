@@ -2345,6 +2345,34 @@ watcher's fold and the release watcher's fold — a leaving owner judges nothing
 request standing for the owner activation on a pod that stays. The answer everywhere is the
 caller's ordinary "not adopted / nothing to do" signal, so nothing is ever parked on it.
 
+**The release leg follows the same rule (issue #5629).** A GitSync recompile wave in flight on a
+draining memex pod (2026-09-24 00:49:10Z) issued fifteen release trigger writes in 3 ms, each refused
+by the pod's own router — `Host is shutting down, cannot route to Manufacturing/…` — and each filed
+at Error as `a TRANSIENT HUB OR ROUTING MISS`. Nothing leaving can route a write, so the attempt was
+never possible. Now:
+
+- `ObserveNodeTypeRelease` asks `hub.IsLeaving()` at **subscribe** time, before it resolves anything
+  from the hub's container (a disposing hub may resolve nothing), and answers `false` with the class
+  `NodeTypeReleaseFailure.HostLeaving` — the caller is still answered, and the shared record is not
+  touched;
+- `ReleaseAffectedNodeTypes` routes both its log line and its progress line through the CLASSIFIED
+  refusal, so a declined leg is a Warning on the sync's activity rather than an Error that flips it.
+  Each leg asks at its own subscribe, so a drain that begins mid-wave is judged per leg;
+- a write that raced past the gate and came back as the router's shutdown refusal is classified
+  `HostLeaving` while the leaving probe still answers yes (both halves required: the text alone is
+  also what a staying host reports about a peer, and the probe alone would claim any fault that lands
+  during a drain).
+
+`HostLeaving` logs at **Warning** — the one release-failure class whose level was decided with it. It
+is not silence, because the release genuinely did not happen: the types keep the assemblies they had,
+and **no path in `src/` re-requests them on another pod** (a source read, not a measurement) — the sources watcher marks them `IsDirty`, which
+offers the Compile affordance but does not compile. A wave cut off by a drain therefore stays stale
+until the next sync that touches those sources or a manual Compile. Pinned by
+`LeavingHubReleaseRequestTest` (`MeshWeaver.Compiler.Pipeline.Test`; negative control: without the
+gate the leaving leg does not even answer — it faults on the disposed container) and
+`ReleaseFailureClassIsInTheTemplateTest.TheRoutersShutdownRefusal_IsHostLeavingOnlyOnAHostThatIsLeaving`
+(`MeshWeaver.Graph.Test`; without the rule the production exception classifies `TransientHubFailure`).
+
 **Decline before you write.** The seeder also now refuses to *start* the stamp-then-refuse
 sequence when the refusal is already decidable from the owner's snapshot in hand: a bundle whose
 `SourceFingerprint` disagrees with a **published** live `CurrentSourceFingerprint` is declined

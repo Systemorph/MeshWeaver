@@ -121,7 +121,26 @@ public enum NodeTypeReleaseFailure
     /// fault, nor a completion (<see cref="NodeTypeReleaseExtensions.ReleaseRequestBound"/>). A
     /// non-terminating leg, which is a different defect from every bounded failure above.
     /// </summary>
-    NoAnswerWithinBound
+    NoAnswerWithinBound,
+
+    /// <summary>
+    /// 🚨 THIS host is LEAVING (<c>hub.IsLeaving()</c>: the hub is shutting down, or the process
+    /// has begun stopping), so the trigger write was never possible from here — the router
+    /// refuses every outbound route with <c>"Host/Mesh is shutting down, cannot route to …"</c>
+    /// (issue #5629). Decided two ways, both from evidence in hand: the release leg declines
+    /// BEFORE it writes when the hub is already leaving, and a write that raced past that check
+    /// and came back with the router's shutdown refusal is classified here while the leaving
+    /// probe still answers yes.
+    ///
+    /// <para>Distinct from <see cref="HostTearingDown"/> (a disposed dependency UNDER an in-flight
+    /// write) and from <see cref="TransientHubFailure"/> (a miss a retry from this host can
+    /// recover): nothing on this host can land the write, and the release is NOT requested — the
+    /// type keeps the assembly it already had until a release is requested from a pod that
+    /// stays. Logged at Warning, not Error: a pod that is leaving is not a defect, and it is the
+    /// one class whose level was decided with it (Doc/Architecture/NodeTypeCompilation → "A
+    /// LEAVING pod never touches shared NodeType state").</para>
+    /// </summary>
+    HostLeaving
 }
 
 /// <summary>
@@ -171,12 +190,26 @@ internal static class NodeTypeReleaseFailureClassifier
     /// <see cref="ObjectDisposedException"/> lands in <see cref="NodeTypeReleaseFailure.Unclassified"/>
     /// — loud, and on nobody else's ticket. Callers that hold a hub pass
     /// <c>hub.IsServiceScopeDisposed</c>.</param>
+    /// <param name="hostLeaving">🚨 Probe — is the CALLING host leaving (<c>hub.IsLeaving</c>)? It
+    /// turns the router's shutdown refusal into <see cref="NodeTypeReleaseFailure.HostLeaving"/>
+    /// only while it answers yes; a null probe leaves that refusal to the rules below, exactly as
+    /// before (issue #5629).</param>
     internal static NodeTypeReleaseFailure ClassifyTriggerWriteFault(
         Exception? ex,
-        Func<bool>? scopeDisposed = null)
+        Func<bool>? scopeDisposed = null,
+        Func<bool>? hostLeaving = null)
     {
         if (ex is null)
             return NodeTypeReleaseFailure.Unclassified;
+
+        // 0. 🚨 #5629 — the ROUTER's own shutdown refusal on a host that IS leaving. It outranks
+        //    even the typed code, because the owner never saw this write: the refusal was minted
+        //    locally ("Host/Mesh is shutting down, cannot route to …") and arrives wrapped as
+        //    MeshNodeErrorCode.Unknown, which says nothing. Both halves are required — the text
+        //    alone is also what a DIFFERENT, still-serving host would report about ITS peer, and
+        //    the probe alone would claim every unrelated fault that happens to land during a drain.
+        if (hostLeaving?.Invoke() == true && IsRouterShutdownRefusal(ex))
+            return NodeTypeReleaseFailure.HostLeaving;
 
         // 1. The owner's OWN classification, typed, from the wire. It outranks every text rule for
         //    the reason MeshNodeErrorCode exists: the producer classified once, where the condition
@@ -242,5 +275,20 @@ internal static class NodeTypeReleaseFailureClassifier
             return NodeTypeReleaseFailure.TransientHubFailure;
 
         return NodeTypeReleaseFailure.Unclassified;
+    }
+
+    /// <summary>
+    /// The routing layer's refusal to route anything out of a stopping process — minted by
+    /// <c>OrleansRoutingService</c> (<c>"Host is shutting down, cannot route to …"</c>) and
+    /// <c>MonolithRoutingService</c> (<c>"Mesh is shutting down, cannot route to …"</c>). Neither
+    /// carries an owner banner (<see cref="MeshWeaver.Messaging.ShutdownNack.IsAnsweredByOwner"/>):
+    /// the subject is the host, never the address.
+    /// </summary>
+    private static bool IsRouterShutdownRefusal(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e.Message.Contains(" is shutting down, cannot route to ", StringComparison.Ordinal))
+                return true;
+        return false;
     }
 }
