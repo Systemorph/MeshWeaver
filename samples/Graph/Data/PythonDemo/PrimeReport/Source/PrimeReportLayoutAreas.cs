@@ -161,6 +161,14 @@ public static class PrimeReportLayoutAreas
         process.BeginErrorReadLine();
         process.WaitForExit();
 
+        // 🚨 Cancellation must terminate the sequence, not render. The registration above only
+        // KILLS the child; without this the kill's non-zero exit would fall through to the error
+        // branch below and the area would publish "Python exited with code 137" as though the
+        // script had failed. ReadToEndAsync(ct) used to throw here for free — the event-based
+        // drain has no token, so the check is explicit and belongs AFTER WaitForExit, once the
+        // readers have flushed and the process is genuinely done.
+        ct.ThrowIfCancellationRequested();
+
         return process.ExitCode == 0
             ? stdout.ToString()
             : $"> **Python exited with code {process.ExitCode}.**\n>\n> {stderr.ToString().ReplaceLineEndings("\n> ")}";
