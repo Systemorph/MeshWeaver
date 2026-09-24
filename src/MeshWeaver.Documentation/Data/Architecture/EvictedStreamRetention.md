@@ -51,15 +51,15 @@ ReclaimIfUnheld(removed.Value);
 and `ReclaimIfUnheld` opens with:
 
 ```csharp
-// src/MeshWeaver.Data/Workspace.cs — ReclaimIfUnheld
-if (!_remoteStreamLeases.TryGetValue(stream, out var leases) || leases != 0)
+// src/MeshWeaver.Data/Workspace.cs — ReclaimIfUnheld (the claim, since #5087 — see §10)
+if (!_remoteStreamLeases.TryUpdate(stream, ReclaimingSentinel, 0))
     return;
 ```
 
-Read the first clause carefully. A stream **nobody ever leased** has no entry in
-`_remoteStreamLeases` at all, so `TryGetValue` returns `false` and the method returns having disposed
-nothing. `leases != 0` — "a holder is still declared" — and "no holder was ever declared" take the
-same branch, and only the first of those is a reason to keep the stream.
+Read that condition carefully. A stream **nobody ever leased** has no entry in
+`_remoteStreamLeases` at all, so the compare-exchange from `0` fails and the method returns having
+disposed nothing. "A holder is still declared" (count above zero) and "no holder was ever declared"
+(no entry) take the same branch, and only the first of those is a reason to keep the stream.
 
 The stream is now in `_evictedRemoteStreams`, an instance `ConcurrentDictionary` on the **singleton**
 workspace, holding its client `sync/` hub and (through the owner's mirror) its owner-side twin. The
@@ -255,6 +255,53 @@ type-checks**; and `AcquireRemoteStreamUnchecked` is `internal` to `MeshWeaver.D
 is smaller but lands on the same hot path.
 
 Neither belongs in a change whose purpose was to establish the cause.
+
+## 10. A lease and a reclaim are ONE decision (#5087)
+
+The lease registry only works if "no holder remains" cannot become false between the moment the
+reclaim decides it and the moment the stream is disposed. It could. `ReclaimIfUnheld` used to READ
+the count, then remove the entry and dispose:
+
+```csharp
+if (!_remoteStreamLeases.TryGetValue(stream, out var leases) || leases != 0) return;
+if (!_evictedRemoteStreams.TryRemove(stream, out _)) return;
+_remoteStreamLeases.TryRemove(stream, out _);   // drops whatever count is there NOW
+stream.Dispose();
+```
+
+A writer that resolved the mirror **before** its eviction could take its lease inside that window.
+Its count went 0 → 1 after the reclaim had read 0; its post-lease `IsUsable` re-check passed,
+because nothing was disposed yet; then the reclaim removed the writer's entry and disposed the mirror
+under it. The writer's base read completed EMPTY — `RequireBaseState`'s *"Update aborted: this hub's
+mirror ended without ever carrying the node's state"*, the terminal #5087 was filed for
+(`LogIncidentControlPlane`'s `Comment` write on `Admin/_LogIncident/…`).
+
+**The fix is a sentinel, not a lock.** The reclaim CLAIMS the stream with a compare-exchange of its
+lease count from `0` to `ReclaimingSentinel` (`-1`), and a lease is taken only by a compare-exchange
+from a non-negative count. Both decisions are over the SAME dictionary slot, so exactly one wins:
+
+| lands first | outcome |
+|---|---|
+| the lease | the claim's compare-exchange from `0` fails; the stream stays until that holder releases |
+| the claim | the lease sees the sentinel and is **refused**; `AcquireRemoteStreamUnchecked` resolves again and, the reclaimed stream being out of the cache, builds a fresh mirror |
+
+The sentinel is removed only AFTER `Dispose`, so a lease attempted later finds a dead stream, fails
+its re-check and resolves a fresh one; the zero entry that attempt would otherwise leave is removed
+conditionally on `0`, so no other holder's count is touched. A reclaim whose claim succeeds but whose
+`_evictedRemoteStreams.TryRemove` loses to another owner (`DetachRemoteStreams`, `Dispose`) hands the
+slot back (`-1` → `0`).
+
+`test/MeshWeaver.Data.Test/ReclaimLeaseAtomicityTest.cs` drives the window deterministically through
+the `ReclaimDecided` seam (run at the instant the reclaim has decided "unheld"): writer B leases there.
+On the pre-fix code B's lease was **granted** and the mirror was **disposed** under it
+(`leaseBGranted=True mirrorUsable=False`); now the lease is refused and a fresh acquire returns a
+new, live mirror. Its control arm shows the refusal is not overbroad: a lease taken before the last
+release keeps the evicted mirror alive until that lease, too, is released.
+
+What this does NOT cover: the other two producers of the same message (a `ReplaySubject` that never
+carried a value, and the write path's `Where(Value is not null)` filter — see
+[Write Verdict Totality](../WriteVerdictTotality)) produce byte-identical text, so a recurrence of the
+line alone does not say which producer fired.
 
 ## Related
 
