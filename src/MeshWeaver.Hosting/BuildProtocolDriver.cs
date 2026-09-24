@@ -87,6 +87,8 @@ public static class BuildProtocolDriver
     /// <param name="store">The shared assembly store, for the follower's post-GO probe.</param>
     /// <param name="bake">The actual sweep to run when this process wins the claim.</param>
     /// <param name="logger">Diagnostics.</param>
+    /// <param name="progress">Names, for the readiness message, what this process is waiting on
+    /// (#5544) — the claim election, or another replica's build.</param>
     /// <returns>The sweep's outcomes (winner), or the post-GO probe's outcomes (follower).</returns>
     public static IObservable<PreWarmOutcome> Run(
         IMessageHub mesh,
@@ -94,12 +96,16 @@ public static class BuildProtocolDriver
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IAssemblyStore store,
         Func<IObservable<PreWarmOutcome>> bake,
-        ILogger? logger)
+        ILogger? logger,
+        Action<string>? progress = null)
     {
         // Unique per process RUN: two boots of the same pod must not look like one claimant, or
         // the second boot would inherit (and heartbeat) a claim whose bake died with the first.
         var holder = $"{Environment.MachineName}/{Guid.NewGuid():N}";
         var fingerprint = report.FrameworkVersion;
+        progress?.Invoke(
+            $"asking for the build claim for framework {fingerprint} — the claim decides whether "
+            + "this process bakes or follows another replica's build");
 
         // A DEDICATED bake process outranks every serving pod in the claim election (#1424): when
         // a bake Job is running, the pods lose deterministically, follow its GO, and never pay the
@@ -137,7 +143,7 @@ public static class BuildProtocolDriver
                     .Catch((TimeoutException _) => Observable.Return(false))
                     .SelectMany(granted => granted
                         ? BakeAsMaster(mesh, holder, fingerprint, definitions, bake, logger)
-                        : FollowGo(mesh, holder, fingerprint, definitions, store, bake, logger))),
+                        : FollowGo(mesh, holder, fingerprint, definitions, store, bake, logger, progress))),
             mesh, fingerprint, definitions, store, logger);
     }
 
@@ -635,8 +641,14 @@ public static class BuildProtocolDriver
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IAssemblyStore store,
         Func<IObservable<PreWarmOutcome>> bake,
-        ILogger? logger)
+        ILogger? logger,
+        Action<string>? progress = null)
     {
+        // 🚨 #5544 — this wait is deliberately UNBOUNDED (see above), so it is the one wait whose
+        // readiness message must say what ends it: another replica's GO, or the claim falling free.
+        progress?.Invoke(
+            $"following another replica's build of framework {fingerprint} — waiting for its GO "
+            + "(or for its claim to fall free, which hands the bake to this process)");
         logger?.LogInformation(
             "BuildProtocol: claim held elsewhere — {Holder} follows the build for framework "
             + "{Fingerprint} (durable witness + this cluster's GO + its own claim candidacy)",

@@ -287,6 +287,27 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     }
 
     /// <summary>
+    /// 🚨 <b>Name what the running sweep is waiting on RIGHT NOW</b> — #5544. The phase label used
+    /// to be set once, before the bundle seeding, and held for the whole sweep: memex's 9260 pod
+    /// answered "NodeType bake in progress — enumerating dynamic NodeTypes" for eleven hours and
+    /// five restarts while it was in fact 30 types deep into an activation sweep whose every type
+    /// waited out a five-minute budget. A readiness message that names the wrong phase sends the
+    /// reader to the wrong code; this one says which step, which type and which bound.
+    ///
+    /// <para>Only while <see cref="BakePhase.Running"/>: a terminal verdict is never overwritten by
+    /// progress that arrives after it (a late emission from a sweep that has already settled).</para>
+    /// </summary>
+    /// <param name="message">What the sweep is doing and waiting on, in one sentence.</param>
+    public void MarkProgress(string message)
+    {
+        lock (verdict)
+        {
+            if (Phase is BakePhase.Running)
+                detail = message;
+        }
+    }
+
+    /// <summary>
     /// Record one type's outcome. Only a type that was HEALTHY before this image can put the gate
     /// into <see cref="BakePhase.Regressed"/> — a type already sitting at Error before the deploy is
     /// broken in production right now, and blocking every future rollout on it would let one

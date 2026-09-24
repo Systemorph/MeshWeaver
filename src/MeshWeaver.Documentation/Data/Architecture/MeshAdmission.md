@@ -54,7 +54,20 @@ that carry a process's own build identity are few and enumerable:
 |---|---|---|
 | NodeType compile stamp, batch path | `NodeTypeBatchBake.WriteStamp` | `CompiledFrameworkVersion`, `CompiledModulesHash`, `CompiledDependencies`, assembly coordinates |
 | NodeType compile stamp, activation path | `NodeTypeCompilationHelpers` (post-compile write-back) | the same field-set — the two paths share it literally |
+| NodeType **prebuilt adoption** stamp | `PrebuiltAssemblySeeder` (the bundle seeding every boot runs, and on-demand adoption) | `CompiledFrameworkVersion` + assembly coordinates — the same poison, reached without a compile |
 | module-set adoption | `ModuleSetStore.RecordAdoption` | "a replica is serving set N" |
+
+🚨 **The adoption row was missing until #5544, and the gap was measured.** memex's 9260 pod
+(2026-09-23/24) never became Ready across five restarts, and each boot's bundle seeding logged
+`Prebuilt assembly ADOPTED … (framework s9e58a…)` 168 times before its sweep began. The two serving
+9218 replicas' LIVE RECORD CENSUS then read *"21 NodeType record(s) were RE-KEYED to a framework
+this replica does not run AFTER it booted"* — the #3472 outage shape, produced by a process the gate
+was holding for every OTHER stamp. It is the inverse of #5353's bind-path yield: that one stops a
+LEAVING process re-keying backwards, this one stops a process that has not JOINED re-keying forwards.
+A held adoption is still an adoption **for this process**: the bytes are on the store under this
+framework's key and the definition goes into `NodeTypeAdoptionRegistry`, so the sweep classifies the
+type as baked exactly as before — only the shared record waits for the verdict. The seeder learns
+which verdict applied from `MeshPublicationGate.Offer`, never from a second read of `Admission`.
 
 **Assembly BYTES are deliberately not gated.** The assembly store is keyed
 `(nodeTypePath, version)` with the producing framework identity baked into the key, and
@@ -110,6 +123,28 @@ So the retraction now has two witnesses, and takes whichever answers first:
   was the proxy.
 - **the record**, unchanged — a type baked by a *peer* on the same image is a real recovery the
   local signal cannot see, and dropping it would narrow the retraction rather than widen it.
+
+🚨 **The activation sweep's per-type wait needed the same second witness, and did not get it until
+#5544.** `DynamicTypePreWarmer.WarmOne` activates a type and waits for its record to show a usable
+build — and on a gated pod that record cannot move until the bake passes, which cannot happen until
+this wait answers. A deadlock by construction: memex's 9260 pod fell back to the activation path
+when its batched source discovery failed, and every one of its 107 pending types logged
+`→ TimedOut — 300.0 s`. 107 × 5 minutes outlasts the three-hour startup probe, so the pod was killed
+and restarted into the same sweep five times. `WarmOne` now merges `LocalNodeTypeBuilds` exactly as
+the recovery watch does. What it still cannot hear locally is a compile that ran on ANOTHER silo
+(the type's grain placed on a serving replica) or a local FAILURE (only successes are published
+locally) — those still time out as *unevaluated*, never as a verdict.
+
+### The readiness message names the step it is waiting on
+
+The gate's detail used to be set once — `enumerating dynamic NodeTypes` — before the bundle seeding,
+and held for the whole sweep, so the pod above reported "enumerating" for eleven hours while it was
+30 types deep in an activation sweep. `NodeTypeBakeGateState.MarkProgress` now rewrites it at every
+step while the phase is `Running`: waiting for the static import, adopting bundles, the enumeration
+count, the build-claim election, **following another replica's build (the one unbounded wait — it
+ends only on a GO or on the claim falling free)**, the batched discovery, and per type
+`building k of n … waiting on <type>, for up to <budget>`. A terminal verdict is never overwritten
+by a late progress line.
 
 ## One predicate, two consumers
 
