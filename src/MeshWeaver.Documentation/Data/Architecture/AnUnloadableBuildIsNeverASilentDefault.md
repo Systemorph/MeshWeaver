@@ -89,6 +89,28 @@ reads usable, and asserts the verdict on `ApplyStreamResult` with the budget alr
 before (no configuration at all), green after (the diagnosis overlay). Its control stores loadable
 bytes and asserts they are still bound.
 
+## The log line names the cause, not a list of possible causes
+
+The loader's reason (`CompilationCacheService.LastLoadFailure`: the file was absent, older than the
+framework and deleted, or a bad image with its length and the volume's free space) used to reach
+only the **record** — the verdict appended to the compile's log. The `Error` line
+`MeshNodeCompilationService` writes said *"Common causes: corrupt cached .dll …, source compilation
+error …, or missing dependency"* and never which one applied.
+
+That mattered because the record is the wrong place to look for this failure. Measured on
+memex.meshweaver.cloud, 2026-09-23 05:31Z → 2026-09-24 01:49Z (incident `e114ad743fe17da3`,
+routed to [#1126](https://github.com/Systemorph/MeshWeaver/issues/1126)): **166** sightings over a
+dozen NodeTypes (`Edu/Page`, `Edu/Module`, `Publish/Slide`, `DoublePendulum/Pendulum`,
+`AgenticOffice/*`, `SocialMedia/*` …), and the types read `compilationStatus: Ok` again seconds
+later — `DoublePendulum/Pendulum` failed to load at 00:32:31.010Z and recorded a successful compile
+at 00:32:32.445Z, so the record's copy of the reason had been overwritten before anyone could read
+it. The log is the surface the incident watcher folds, so it now carries the reason itself:
+`… cannot activate. … Cause: {LoadFailure} (assembly {AssemblyLocation}).`
+
+🚨 **What this does not establish:** *why* those loads failed. That is the next sighting's to say,
+which is the point of the change. The regression test asserts the line on a real
+`BadImageFormatException` and was red before the change.
+
 ## Two hypotheses the measurements refuted
 
 Both were written into #4471 before the log lines above were found, and both would have produced a
