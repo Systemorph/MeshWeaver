@@ -1894,6 +1894,123 @@ with the canary verdict and turned into a compile failure on the node, so it nev
 🚨 **Record-keeping correction:** the recurrence comment of 2026-09-21 cites run `35661935491`; that run
 carries no `Hosting.Monolith.Test` job. The occurrence is job `106544668720` in run `35661949332`.
 
+#### 2026-09-23/24 — three occurrences on `main`, one onset position, and the capture that reads the code
+
+The first readings from `main` ([#5212](https://github.com/Systemorph/MeshWeaver/issues/5212)), and
+the first outside `Hosting.Monolith.Test`: MeshWeaver.Plugins `Plugin Catalog CI`, job
+`portal-hosts (network-133 · leg 4/8)`, suite `MeshWeaver.PluginCatalog.Test`, runtime **10.0.12**
+`linux-x64`, Roslyn 5.9.0.
+
+| run / job (attempt 1) | platform set (core) | `canary=` | `dissect=` | `flat=` | `compiler=` | first poisoned compile |
+|---|---|---|---|---|---|---|
+| [`35906530904`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35906530904) / `107342449379` | `3.0.0-ci.9263` (`9a61fed96`) | `BELOW-ROSLYN` ×43 | `READS-HEALTHY` ×43 | `SAME-FRAME@…` ×43 | `PRIVATE-COPY-EMITS` ×43 | `Widget/Thing`, 2026-09-23 19:34:34Z |
+| [`35974400848`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35974400848) / `107555406130` | `3.0.0-ci.9287` (`bf5ac8552`) | `BELOW-ROSLYN` ×43 | `READS-HEALTHY` ×43 | `EMITS` ×43 | `PRIVATE-COPY-EMITS` ×43 | `Widget/Thing`, 08:45:39Z |
+| [`35985209459`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35985209459) / `107589527570` | `3.0.0-ci.9296` (`8d3fd9f5d`) | ×41 | ×41 | `EMITS` ×41 | ×41 | `Widget/Thing`, 10:27:55Z |
+
+Each attempt 2 passed on the same head and platform set as its own attempt 1. The stack is byte-identical to every earlier
+occurrence: `FullMetadataWriter.CreateIndicesForNonTypeMembers` → `getConsolidatedTypeParameters`
+**twice** → `NamedTypeSymbol.ITypeDefinitionMember.get_ContainingTypeDefinition`. Two recursion
+frames means the writer walked `Inner` → `MwEmitCanary` and the guard admitted the TOP-LEVEL type.
+
+**The denominator.** 87 executions of that job from 2026-09-23T00:00Z to 2026-09-24T14:00Z (all
+attempts, every event; 84 of them ran `PluginCatalog.Test`), **3 carry the canary** — ≈3.5 % per
+execution of this one leg, against ≈2 % per execution measured for
+`Hosting.Monolith.Test` on 2026-09-22. The two newest `main` runs at the time of writing
+(`36002604963`, `35997990577`) are red for unrelated reasons and carry no canary.
+
+**The whole workflow over the same window.** Every non-success job of every `Plugin Catalog CI`
+attempt from 2026-09-23T06:46Z to 2026-09-24T14:00Z (1,060 job logs read) carries **six** occurrences:
+the three above, and three in `portal-hosts (network-133 · leg 1/8)` — `Hosting.Monolith.Test`, the
+suite of every earlier occurrence — runs `35828369047` (`main`), `35846873901` and `35858189010` (pull
+requests), first poisoned compiles `TestData/UploadLegWedgeType`, `TestData/SatisfiedType`,
+`TestData/SatisfiedType`. Four of the six are on `main`.
+
+**One onset position, three times.** The test order is deterministic, and in ALL THREE occurrences the first
+poisoned emit is the same test start of the leg (the 155th in its trace) — `RetiredNodePruneTest.SharedSourceChange_…` compiling
+`Widget/Thing` — after `CommercialPackageAuthorizationTest`'s three 15 s waits. Earlier emits in the
+same host succeeded (`PluginDependencyOrderTest.ADependentsSource_CompilesAgainstTheTypeItsDependencyShips`
+asserts `CompilationStatus.Ok` and passed ~2 min before onset), so this is the ACQUIRED shape again (checked on the 10:27 host).
+What the position does and does not say: the same workload, in the same order, poisons roughly one
+process in 29 and not the rest. So the outcome is not determined by the workload's content or
+order ALONE — some condition is decided **per process** — while the fixed position may well be the
+deterministic trigger that exposes it once a process carries that condition.
+
+**A per-process emit harness does not reach it either.** The 2026-09-10 local negative ran 800,000
+emits in ONE process per architecture — one draw of whatever is decided per process. Re-run as a
+POPULATION instead (osx-arm64, runtime 10.0.11, the pipeline's own options — `ConcurrentBuild` off,
+`DocumentationMode.Diagnose`, portable PDB + XML doc — six shapes including `EmitCanarySource` and
+`FlatCanarySource`, semantic-model traffic before each emit, collectible load/unload every 7th emit, 4
+threads): **≥600 processes × 1,500 emits, 0 occurrences**. At the leg's ≈3.5 % that would have been ≈21;
+so the emit loop plus its own binding traffic does not reach the state, and the missing ingredient is
+in what the mesh host does besides emitting.
+
+**Why the evidence now points at the tier-1 code of the guard's call path — a hypothesis, stated as
+one.** Everything measured fits one mechanism and nothing measured contradicts it:
+
+- the fault is per-process at a fixed workload (above) — dynamic-PGO class profiles are collected by
+  racy, randomly-sampled probes, so the *shape* of the tier-1 code differs from process to process;
+- it is ACQUIRED after successful emits (checked on the 10:27 host) and it DEEPENS (`flat=EMITS` →
+  `SAME-FRAME` inside one process on 2026-09-21), which is what successive methods reaching tier 1
+  produce;
+- a fresh private copy of the compiler emits the same source in the same process — that copy runs
+  cold tier-0 code;
+- `dissect=` reads correctly when the getter is called directly — a different call site, a different
+  compiled copy of the same logic.
+
+Locally, the tier-1 listing of `NamedTypeSymbolAdapter.AsNestedTypeDefinitionImpl` — which the JIT
+names `NamedTypeSymbol:AsNestedTypeDefinitionImpl`, because in a Release Roslyn the adapter is a
+partial of `NamedTypeSymbol` rather than a separate type — inlines
+`SourceMemberContainerTypeSymbol.ContainingType` (`_containingSymbol as NamedTypeSymbol`) behind a
+guarded-devirtualisation check AND a profile-guided cast expansion that hard-codes the likely
+container class's `MethodTable` — exactly the read the guard makes, specialised by exactly the data
+that varies per process. That is **not** evidence that this code is wrong on CI (the local listing is
+correct), and it does not exclude a runtime fault that corrupts one compiled body. It is the reason
+the next occurrence must carry the code.
+
+🚨 **The capture — what the next occurrence carries.** MeshWeaver.Plugins'
+`scripts/portal-hosts-run-suites.sh` sets, for every suite it runs:
+
+```text
+DOTNET_JitStdOutFile=<suite>/bin/Release/net*/test-logs/jit-890-listing.log
+DOTNET_JitDisasm=AsNestedTypeDefinitionImpl *getConsolidatedTypeParameters*
+  Microsoft.Cci.FullMetadataWriter:CreateIndicesForNonTypeMembers
+  Microsoft.CodeAnalysis.CSharp.Symbols.NamedTypeSymbol:*ContainingTypeDefinition
+  Microsoft.CodeAnalysis.CSharp.Symbols.SourceMemberContainerTypeSymbol:get_ContainingType
+  Microsoft.CodeAnalysis.CSharp.Symbol:get_ContainingType
+```
+
+`JitDisasm` works on release runtimes and prints every tier the JIT produces for those six methods
+(Tier0, Instrumented Tier0, Tier1) with its PGO kind and its inlinees — ≈240 KB for 20,000 emits
+locally. It is written on EVERY run — a green run pays the JIT's listing work and the local write for
+those six methods' few compilations (≈18 listings per host), which is small but not zero — and it sits
+in `test-logs/`, which the collect step uploads **only when a suite failed**, so artifact storage is
+spent only on a red run, and the `teardown-stragglers-*` artifact of the next occurrence holds the
+exact native code that answered the guard. 🚨 Class-qualified patterns need the **namespace**:
+`NamedTypeSymbol:*ContainingTypeDefinition` matches nothing, measured. The listings the private copy
+compiles after the fault are Tier0 and come AFTER the shared copy's; read the last `(Tier1)` listing
+of each method before the first `PROCESS CANNOT EMIT`.
+
+How to read it: in the failing host's last Tier1 `AsNestedTypeDefinitionImpl` (or the caller it was
+inlined into), follow the `ContainingType` null test. Correct code leaves the guard on the null
+branch for a container whose `MethodTable` is a namespace symbol; a listing in which that branch is
+unreachable, or which returns the container itself, is the defect in one screen and a
+`dotnet/runtime` report with its own repro. A listing that is correct excludes the codegen hypothesis
+for that occurrence and sends the search to the runtime state under it.
+
+**One more reading, and why it is not yet a lead.** In the 10:27 occurrence, 51 s before onset, a
+compile of `BulkPack/Thing` whose test was already tearing its mesh down reported `Could not load type
+'Thing' … because the format is invalid`. That text is also the documented shape of a load into a
+collectible context that is being unloaded (the pin section below), the 08:45 occurrence has no such
+line (its fault budget was suppressing records in the same window), and a single instance is a
+single instance. Recorded so the next occurrence is checked for it, not concluded from.
+
+**Not established.** Whether production replicas ever reach this state: a `Logs` read of
+`PROCESS CANNOT EMIT` over the last 3 h on `memex` returned 0 with no positive control, and the
+3-day and 12-hour reads on `memex` and `memex-cloud` were refused by Loki (timeout, then `429`). The
+per-process rate above is a test-host rate and says nothing about a portal either way. Nor is the
+harness null a statement about `linux-x64`: it ran on arm64, and a codegen hypothesis is
+architecture-specific.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present
