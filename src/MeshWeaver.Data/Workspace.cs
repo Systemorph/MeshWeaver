@@ -576,28 +576,34 @@ public class Workspace : IWorkspace
 
     /// <summary>
     /// TEST SEAM (null in production): runs in <see cref="ReclaimIfUnheld"/> once the reclaim has
-    /// DECIDED the stream is unheld and BEFORE it is disposed — the window a concurrent lease used
-    /// to land in (#5087). <c>ReclaimLeaseAtomicityTest</c> takes a lease here. Instance state;
-    /// never static.
+    /// CLAIMED the stream (decided it is unheld) and BEFORE it takes the parking entry and disposes
+    /// it — the window a concurrent lease, or a detach-and-re-park, used to land in (#5087).
+    /// <c>ReclaimLeaseAtomicityTest</c> drives both there. Instance state; never static.
     /// </summary>
-    internal Action<ISynchronizationStream>? ReclaimDecided { get; set; }
+    internal Action<ISynchronizationStream>? ReclaimClaimed { get; set; }
 
     /// <summary>
-    /// The lease-count value a reclaim writes, by compare-exchange from <c>0</c>, when it claims a
-    /// stream for disposal. 🚨 Systemorph/MeshWeaver#5087: the reclaim used to READ the count, then
-    /// remove the entry and dispose — so a writer that resolved the stream before its eviction could
-    /// take a lease in between, pass its <c>IsUsable</c> re-check (nothing was disposed yet), and
-    /// then have the stream disposed under it; its base read completed EMPTY ("this hub's mirror
-    /// ended without ever carrying the node's state"). With the sentinel the two are ONE atomic
-    /// decision over the same dictionary slot: either the lease lands first (the claim's
-    /// compare-exchange from <c>0</c> fails and the stream stays) or the claim lands first (the
-    /// lease sees the sentinel and is refused, and the writer resolves a fresh stream).
+    /// Mints the CLAIM TOKEN a reclaim writes into a stream's lease count: a fresh negative value
+    /// per claim. 🚨 Systemorph/MeshWeaver#5087: the reclaim used to READ the count, then remove the
+    /// entry and dispose — so a writer that resolved the stream before its eviction could take a
+    /// lease in between, pass its <c>IsUsable</c> re-check (nothing was disposed yet), and then have
+    /// the stream disposed under it; its base read completed EMPTY ("this hub's mirror ended without
+    /// ever carrying the node's state"). Now the reclaim compare-exchanges the count from <c>0</c> to
+    /// its token, a lease is taken only by compare-exchange from a non-negative count, and so the two
+    /// are ONE decision over the same dictionary slot: the lease lands first (the claim fails and the
+    /// stream stays) or the claim lands first (the lease is refused and the writer resolves a fresh
+    /// stream). The token is UNIQUE per claim, not a shared <c>-1</c>, because ownership can be
+    /// handed out and back inside the claim — <see cref="DetachRemoteStreams"/> drops the lease entry
+    /// (the claim with it) and <see cref="ParkRemoteStreams"/> re-parks the stream as a NEW
+    /// ownership. A reclaim that still finds its OWN token after taking the parking entry knows no
+    /// handover happened; any other value means its claim was superseded. Instance state; never
+    /// static.
     /// </summary>
-    private const int ReclaimingSentinel = -1;
+    private int _reclaimClaims;
 
     /// <summary>Declares a holder of <paramref name="stream"/>; disposing the returned handle
     /// releases it (idempotent). Returns <c>null</c> when a reclaim has already claimed the
-    /// stream — see <see cref="ReclaimingSentinel"/>.</summary>
+    /// stream — see <see cref="_reclaimClaims"/>.</summary>
     private IDisposable? TryLeaseRemoteStream(ISynchronizationStream stream)
     {
         while (true)
@@ -639,8 +645,10 @@ public class Workspace : IWorkspace
     /// Disposes <paramref name="stream"/> iff it is BOTH evicted (parked — no caller can adopt
     /// it) AND has no remaining declared holder. Called from the two edges that can make that
     /// true: the eviction itself, and the release of the last lease. The "no holder" half is a
-    /// compare-exchange of the lease count from <c>0</c> to <see cref="ReclaimingSentinel"/>, so no
-    /// lease can be granted between the decision and the disposal (#5087).
+    /// compare-exchange of the lease count from <c>0</c> to a per-claim token (see
+    /// <see cref="_reclaimClaims"/>), so no lease can be granted between the decision and the
+    /// disposal, and a claim superseded by a detach-and-re-park never disposes the re-parked stream
+    /// (#5087).
     /// </summary>
     private void ReclaimIfUnheld(ISynchronizationStream stream)
     {
@@ -649,18 +657,28 @@ public class Workspace : IWorkspace
         if (!_evictedRemoteStreams.ContainsKey(stream))
             return;
         // The atomic claim. Fails when a holder remains (count > 0), when another reclaim already
-        // claimed it (sentinel), or when nobody ever leased it (no entry — an undeclared holder
-        // may still read it; see the _remoteStreamLeases note).
-        if (!_remoteStreamLeases.TryUpdate(stream, ReclaimingSentinel, 0))
+        // claimed it (a negative token), or when nobody ever leased it (no entry — an undeclared
+        // holder may still read it; see the _remoteStreamLeases note).
+        var claim = -Interlocked.Increment(ref _reclaimClaims);
+        if (!_remoteStreamLeases.TryUpdate(stream, claim, 0))
             return;
+        ReclaimClaimed?.Invoke(stream);
         if (!_evictedRemoteStreams.TryRemove(stream, out _))
         {
             // Another edge (DetachRemoteStreams, Dispose) took ownership after the claim; give the
-            // slot back so the bookkeeping does not keep refusing a stream we no longer reclaim.
-            _remoteStreamLeases.TryUpdate(stream, 0, ReclaimingSentinel);
+            // slot back (only if it is still ours) so the bookkeeping does not keep refusing a
+            // stream we no longer reclaim.
+            _remoteStreamLeases.TryUpdate(stream, 0, claim);
             return;
         }
-        ReclaimDecided?.Invoke(stream);
+        if (!_remoteStreamLeases.TryGetValue(stream, out var held) || held != claim)
+        {
+            // The parking entry we just took is NOT the one we claimed: ownership was handed out
+            // (DetachRemoteStreams dropped our token) and back (ParkRemoteStreams) inside the claim.
+            // That re-park is a new ownership — restore it and leave the stream alone.
+            _evictedRemoteStreams[stream] = 0;
+            return;
+        }
         try
         {
             stream.Dispose();
@@ -676,10 +694,10 @@ public class Workspace : IWorkspace
         }
         finally
         {
-            // Drop the sentinel only once the stream is disposed: from here a late lease attempt
-            // finds a dead stream, fails its IsUsable re-check and resolves a fresh one.
+            // Drop the claim only once the stream is disposed: from here a late lease attempt finds
+            // a dead stream, fails its IsUsable re-check and resolves a fresh one.
             ((ICollection<KeyValuePair<ISynchronizationStream, int>>)_remoteStreamLeases)
-                .Remove(new KeyValuePair<ISynchronizationStream, int>(stream, ReclaimingSentinel));
+                .Remove(new KeyValuePair<ISynchronizationStream, int>(stream, claim));
         }
     }
 

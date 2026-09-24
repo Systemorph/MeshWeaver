@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -26,7 +27,7 @@ namespace MeshWeaver.Data.Test;
 /// carrying the node's state"</i>, the terminal #5087 was filed for.</para>
 ///
 /// <para>The window is a few instructions wide, so it is driven deterministically: the
-/// <c>ReclaimDecided</c> seam runs at the point the reclaim has decided "unheld", and the second
+/// <c>ReclaimClaimed</c> seam runs at the point the reclaim has decided "unheld", and the second
 /// writer's lease is taken right there, on the same thread. The invariant is the one the writer
 /// relies on: <b>a lease that is GRANTED is a lease on a mirror that stays live until the lease is
 /// released.</b> A lease that loses the race is REFUSED, so <c>AcquireRemoteStreamUnchecked</c>
@@ -107,7 +108,7 @@ public class ReclaimLeaseAtomicityTest(ITestOutputHelper output) : HubTestBase(o
 
         IDisposable? leaseB = null;
         var decided = 0;
-        ws.ReclaimDecided = stream =>
+        ws.ReclaimClaimed = stream =>
         {
             if (!ReferenceEquals(stream, mirror) || Interlocked.Exchange(ref decided, 1) != 0)
                 return;
@@ -120,7 +121,7 @@ public class ReclaimLeaseAtomicityTest(ITestOutputHelper output) : HubTestBase(o
         }
         finally
         {
-            ws.ReclaimDecided = null;
+            ws.ReclaimClaimed = null;
         }
 
         Volatile.Read(ref decided).Should().Be(1,
@@ -178,6 +179,54 @@ public class ReclaimLeaseAtomicityTest(ITestOutputHelper output) : HubTestBase(o
         leaseB!.Dispose();
         StreamLiveness.IsUsable(mirror).Should().BeFalse(
             "the last holder left an evicted mirror, so it is reclaimed at once");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE HANDOVER.</b> Between the reclaim's claim and its taking the parking entry, the
+    /// mesh-node cache's idle release DETACHES the stream (taking ownership and dropping the lease
+    /// bookkeeping) and, having lost its own race to a re-attached consumer, PARKS it again. The
+    /// re-parked stream is owned afresh; the reclaim whose claim was superseded must not take that
+    /// new parking entry and dispose a stream a consumer has just re-attached to.
+    /// </summary>
+    [HubFact]
+    public async Task ADetachAndRePark_InsideTheClaim_SupersedesTheReclaim()
+    {
+        var (workspace, changeFeed) = await StartAndSettleAsync();
+        var ws = (Workspace)workspace;
+        var baselineSubscribes = Volatile.Read(ref _subscribeCount);
+        var reference = new CollectionReference(nameof(BusinessUnit));
+
+        var (mirror, leaseA) = ws.AcquireRemoteStreamUnchecked<InstanceCollection, CollectionReference>(
+            CreateHostAddress(), reference);
+        await AwaitSubscribesAsync(baselineSubscribes + 1, "writer A's mirror must reach the owner");
+        PublishOwnerChange(changeFeed);
+
+        var reparked = 0;
+        ws.ReclaimClaimed = stream =>
+        {
+            if (!ReferenceEquals(stream, mirror) || Interlocked.Exchange(ref reparked, 1) != 0)
+                return;
+            // The idle release: detach (ownership moves out, lease bookkeeping dropped) ...
+            var detached = ws.DetachRemoteStreams(CreateHostAddress(), reference);
+            detached.Any(s => ReferenceEquals(s, mirror)).Should().BeTrue("the parked mirror is what the idle release detaches");
+            // ... then loses its zero-subscriber re-check and hands the stream back.
+            ws.ParkRemoteStreams(detached);
+        };
+        try
+        {
+            leaseA.Dispose();
+        }
+        finally
+        {
+            ws.ReclaimClaimed = null;
+        }
+
+        Volatile.Read(ref reparked).Should().Be(1,
+            "A's release must reach the claim, or this test drove no handover at all");
+        StreamLiveness.IsUsable(mirror).Should().BeTrue(
+            "the stream was detached and RE-PARKED after the reclaim's claim — that is a new "
+            + "ownership, and a superseded claim must not dispose it under the consumer that "
+            + "re-attached");
     }
 
     /// <summary>Activates both hubs and waits for the owner's initial snapshot.</summary>

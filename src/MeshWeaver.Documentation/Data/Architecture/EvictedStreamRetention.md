@@ -52,7 +52,8 @@ and `ReclaimIfUnheld` opens with:
 
 ```csharp
 // src/MeshWeaver.Data/Workspace.cs — ReclaimIfUnheld (the claim, since #5087 — see §10)
-if (!_remoteStreamLeases.TryUpdate(stream, ReclaimingSentinel, 0))
+var claim = -Interlocked.Increment(ref _reclaimClaims);   // a fresh negative token
+if (!_remoteStreamLeases.TryUpdate(stream, claim, 0))
     return;
 ```
 
@@ -276,27 +277,42 @@ under it. The writer's base read completed EMPTY — `RequireBaseState`'s *"Upda
 mirror ended without ever carrying the node's state"*, the terminal #5087 was filed for
 (`LogIncidentControlPlane`'s `Comment` write on `Admin/_LogIncident/…`).
 
-**The fix is a sentinel, not a lock.** The reclaim CLAIMS the stream with a compare-exchange of its
-lease count from `0` to `ReclaimingSentinel` (`-1`), and a lease is taken only by a compare-exchange
-from a non-negative count. Both decisions are over the SAME dictionary slot, so exactly one wins:
+**The fix is a claim token, not a lock.** The reclaim CLAIMS the stream with a compare-exchange of
+its lease count from `0` to a fresh negative token (`-Interlocked.Increment(ref _reclaimClaims)`),
+and a lease is taken only by a compare-exchange from a non-negative count. Both decisions are over
+the SAME dictionary slot, so exactly one wins:
 
 | lands first | outcome |
 |---|---|
 | the lease | the claim's compare-exchange from `0` fails; the stream stays until that holder releases |
-| the claim | the lease sees the sentinel and is **refused**; `AcquireRemoteStreamUnchecked` resolves again and, the reclaimed stream being out of the cache, builds a fresh mirror |
+| the claim | the lease sees a negative count and is **refused**; `AcquireRemoteStreamUnchecked` resolves again and, the reclaimed stream being out of the cache, builds a fresh mirror |
 
-The sentinel is removed only AFTER `Dispose`, so a lease attempted later finds a dead stream, fails
-its re-check and resolves a fresh one; the zero entry that attempt would otherwise leave is removed
-conditionally on `0`, so no other holder's count is touched. A reclaim whose claim succeeds but whose
-`_evictedRemoteStreams.TryRemove` loses to another owner (`DetachRemoteStreams`, `Dispose`) hands the
-slot back (`-1` → `0`).
+**Why a token per claim and not a shared `-1`.** Ownership can be handed out and back INSIDE a claim:
+the mesh-node cache's idle release calls `DetachRemoteStreams` (which takes the parking entry and
+drops the lease entry — the claim with it) and, when it loses its own zero-subscriber race, hands the
+stream back with `ParkRemoteStreams`. That re-park is a NEW ownership. With a shared sentinel the
+reclaim could not tell it from its own claim, would take the new parking entry and dispose a stream a
+consumer had just re-attached to. So after taking the parking entry the reclaim re-reads the slot:
+its own token means no handover happened and it disposes; anything else means its claim was
+superseded, and it puts the parking entry back and leaves the stream alone. After that re-read the
+stream is out of `_evictedRemoteStreams`, so no detach can reach it before the dispose.
 
-`test/MeshWeaver.Data.Test/ReclaimLeaseAtomicityTest.cs` drives the window deterministically through
-the `ReclaimDecided` seam (run at the instant the reclaim has decided "unheld"): writer B leases there.
-On the pre-fix code B's lease was **granted** and the mirror was **disposed** under it
-(`leaseBGranted=True mirrorUsable=False`); now the lease is refused and a fresh acquire returns a
-new, live mirror. Its control arm shows the refusal is not overbroad: a lease taken before the last
-release keeps the evicted mirror alive until that lease, too, is released.
+The token is removed only AFTER `Dispose`, so a lease attempted later finds a dead stream, fails its
+re-check and resolves a fresh one; the zero entry that attempt would otherwise leave is removed
+conditionally on `0`, so no other holder's count is touched. A claim that loses
+`_evictedRemoteStreams.TryRemove` to another owner hands the slot back (token → `0`, only if still
+its own).
+
+`test/MeshWeaver.Data.Test/ReclaimLeaseAtomicityTest.cs` drives both windows deterministically
+through the `ReclaimClaimed` seam, which runs at the instant the claim has landed:
+
+- **the race** — writer B leases there. On the pre-fix code B's lease was **granted** and the mirror
+  was **disposed** under it (`leaseBGranted=True mirrorUsable=False`); now the lease is refused and a
+  fresh acquire returns a new, live mirror;
+- **the handover** — the idle release detaches and re-parks there. With a shared sentinel the
+  re-parked mirror was disposed; with the token it survives;
+- **the control** — a lease taken before the last release keeps the evicted mirror alive until that
+  lease, too, is released, so the refusal is not overbroad.
 
 What this does NOT cover: the other two producers of the same message (a `ReplaySubject` that never
 carried a value, and the write path's `Where(Value is not null)` filter — see
