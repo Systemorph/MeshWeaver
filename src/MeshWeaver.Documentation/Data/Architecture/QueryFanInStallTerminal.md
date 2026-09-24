@@ -217,6 +217,42 @@ silent evaluator to yield **503, not 404**, and `PermissionSwallowRatchetGuard` 
 5. `LogIncidentControlPlane`'s unbounded incident watch now retries once a minute against a
    permanently stalled provider and escalates at five — new, bounded, visible noise.
 
+## The terminal reached a subscriber with no error arm — and killed the process (2026-09-23, #5650)
+
+The "compatible already" sweep above said Plugins had **no `Subscribe(onNext)` without an `onError`
+arm on a mesh-query chain**. That was wrong: it did not reach the `.razor` components. Two memex-cloud
+replicas died of it — `…-wl8mv` at 17:57:09Z and `…-n7g6b` at 18:10:36Z — with `createdump` reporting
+`Unwind: exception type MeshWeaver.Mesh.QueryProviderStalledException`. The runtime's stderr trace
+(a `Logs` action filtered to `stream="stderr"`) is the same on both:
+
+```
+Unhandled exception. MeshWeaver.Mesh.QueryProviderStalledException: Query provider(s) [...] did not
+  emit an Initial within the query fan-in's 15s bound for query
+  'namespace:Admin/_Notification nodeType:Notification sort:CreatedAt-desc' (user '…')
+   at System.Reactive.Stubs.<>c.<.cctor>b__2_1(Exception ex)          ← Rx's default onError: rethrow
+   at System.Reactive.AnonymousSafeObserver`1.OnError(Exception error)
+   at System.Reactive.Linq.ObservableImpl.Switch`1._.InnerObserver.OnError(...)
+   at System.Reactive.Linq.ObservableImpl.CombineLatest`2._.SourceObserver.OnError(...)
+   at MeshWeaver.Hosting.Persistence.Query.MeshQuery.<>c__DisplayClass26_4`1.<MergeProviderObservables>b__11(...)  MeshQuery.cs:886
+   at MeshWeaver.Hosting.Persistence.Query.MeshQuery.InitialStallProbe...   ← the stall timer
+   at System.Threading.TimerQueueTimer...
+```
+
+The query is the PLATFORM bell (`NotificationService.BellQuery(PlatformAddressee)`), and the chain is
+`NotificationFeed.ForViewer` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) —
+`IsGlobalAdmin → Select(CombineLatest(one Query per bell leg)) → Switch` — subscribed by
+`NotificationCenter.razor` and `NotificationCenterPanel.razor` with a single `onNext` argument. The
+terminal did exactly what it is for: it faulted the one query that had no snapshot. Nothing owned the
+fault, so Rx's default `onError` rethrew it on the stall timer's pool thread, where it was unhandled.
+
+The terminal is correct and stays; the defect is the owner that was never wired. The bell is the
+owner, so the bell takes the fault: it logs it and renders the bell as unavailable (a warning glyph
+whose tooltip and accessible name are the localized `error.checkUnavailable`), and the panel says the
+same. The fix is in MeshWeaver.Plugins, with a deterministic test that stalls a query provider and
+asserts the bell's feed delivers the `QueryProviderStalledException` to its error arm. Core's
+`SubscribeErrorArmRatchetGuard` scans `src/` and `memex/` `.cs` files only — so it could not have
+seen a `.razor` subscription in any repository.
+
 ## What is pinned, and what is not
 
 - **`QueryFanInStallIsTerminalTest`** (`test/MeshWeaver.Hosting.Test`) — a stalled provider faults and

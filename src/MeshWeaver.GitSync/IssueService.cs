@@ -80,7 +80,7 @@ public sealed class IssueService
                 logger?.LogInformation("Syncing {Count} issue(s) into {Space}.", issues.Count, spacePath);
                 return issues
                     .Select(issue => UpsertIssueNode(spacePath, issue))
-                    .Merge(4)
+                    .MergeBounded(4)
                     .ToList()
                     .Select(list => list.Count);
             }));
