@@ -389,7 +389,8 @@ status Unhealthy" lines on 2026-09-22/23, "completed after" anywhere from **37 m
 cancelled wherever the connector happened to be (`SslStream.ForceAuthenticationAsync`,
 `NpgsqlWriteBuffer.Flush`). No Npgsql or server timeout produces that spread; the clock that ran out
 was the reader's, and the verdict had no reader left
-([#5314](https://github.com/Systemorph/MeshWeaver/issues/5314)).
+([#5314](https://github.com/Systemorph/MeshWeaver/issues/5314); fixed in
+[MeshWeaver.Plugins#2344](https://github.com/Systemorph/MeshWeaver.Plugins/pull/2344)).
 
 `Memex.Portal.Distributed` therefore turns Aspire's check off (`DisableHealthChecks`) and registers
 its own `PostgreSqlHealthCheck` under the same name: one `SELECT 1` through the portal's pooled
