@@ -70,6 +70,55 @@ public class MeshConfiguration(
         new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache", "mesh" };
 
     /// <summary>
+    /// True when <paramref name="path"/> names a POD-PROCESS hub — its first segment is one of
+    /// <see cref="StreamRoutedAddressTypes"/> (<c>portal/{id}</c>, <c>cache/{meshId}</c>,
+    /// <c>mesh/{id}</c>, <c>client/{id}</c>, and any module-declared type such as <c>import</c>) —
+    /// rather than a mesh node path.
+    ///
+    /// <para>🚨 <b>No mesh node can ever exist at such a path, and the answer is the ROUTER's own
+    /// rule, not a second one.</b> <c>RoutingGrain.RouteMessage</c> sends every address of these
+    /// types to the pod that hosts the hub and never to a node grain, so a node read addressed to
+    /// one reaches an infrastructure hub that owns no node: <c>portal/nodeops-{meshId}</c> and
+    /// <c>cache/{meshId}</c> carry a workspace (<c>AddData()</c>) but no <c>MeshNodeReference</c>
+    /// reducer, and refused the subscribe with a <c>DataSourceConfigurationException</c> logged at
+    /// Error on the target pod. Measured on memex (Systemorph/MeshWeaver#5120): an MCP / API
+    /// <c>get</c> of <c>cache/Hj7OStRhsEG9wL7lLfx7Cg</c> — another pod's cache address, copied out
+    /// of a log line — went <c>MeshOperations.FetchNode</c> → <c>GetMeshNodeStream</c> →
+    /// the cache's upstream <c>SubscribeRequest</c>, and was reported <c>UNAVAILABLE</c> ("the read
+    /// reached no verdict") although the verdict was never in doubt.</para>
+    ///
+    /// <para>The stream seam every cross-hub node read goes through, <c>MeshNodeStreamCache.GetStreamRaw</c>,
+    /// therefore answers such a path with an EMPTY stream without routing it — exactly as it already
+    /// does for a transient probe's synthetic address (<c>TransientProbeAddresses</c>). The one-shot
+    /// <c>GetMeshNodeOutcome</c> needs no guard: its <c>GetDataRequest</c> to such a hub is answered
+    /// with no data, which that read already classifies as <c>Absent</c> (measured in
+    /// <c>APodHubAddressIsNotANodePathTest</c>).</para>
+    /// </summary>
+    /// <param name="path">The mesh path a reader was handed.</param>
+    /// <returns><c>true</c> for a pod-hub address, <c>false</c> for every node path.</returns>
+    public bool IsPodHubAddress(string? path) => IsPodHubAddress(path, StreamRoutedAddressTypes);
+
+    /// <summary>
+    /// <see cref="IsPodHubAddress(string?)"/> against an explicit set of stream-routed address
+    /// types — for a caller holding no <see cref="MeshConfiguration"/> (it then passes
+    /// <see cref="DefaultStreamRoutedAddressTypes"/>).
+    /// </summary>
+    /// <param name="path">The mesh path a reader was handed.</param>
+    /// <param name="streamRoutedAddressTypes">The address types that route to a pod-process hub.</param>
+    /// <returns><c>true</c> when the path's first segment is one of those types.</returns>
+    public static bool IsPodHubAddress(string? path, IReadOnlySet<string> streamRoutedAddressTypes)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+        var trimmed = path.TrimStart('/');
+        var slash = trimmed.IndexOf('/');
+        // A bare type ("portal") with no id is not an address either way; only "{type}/{id}…" is.
+        if (slash <= 0)
+            return false;
+        return streamRoutedAddressTypes.Contains(trimmed[..slash]);
+    }
+
+    /// <summary>
     /// Address-type prefixes whose hubs are hosted in an Orleans CLIENT process — a process that
     /// cannot host a grain, so the cluster can never reach those hubs by a directed
     /// <c>IPodHubGrain.Deliver</c> call and the Orleans memory stream is not a fallback but the
