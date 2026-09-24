@@ -1872,7 +1872,7 @@ the first outside `Hosting.Monolith.Test`: MeshWeaver.Plugins `Plugin Catalog CI
 | [`35974400848`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35974400848) / `107555406130` | `3.0.0-ci.9287` (`bf5ac8552`) | `BELOW-ROSLYN` ×43 | `READS-HEALTHY` ×43 | `EMITS` ×43 | `PRIVATE-COPY-EMITS` ×43 | `Widget/Thing`, 08:45:39Z |
 | [`35985209459`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/35985209459) / `107589527570` | `3.0.0-ci.9296` (`8d3fd9f5d`) | ×41 | ×41 | `EMITS` ×41 | ×41 | `Widget/Thing`, 10:27:55Z |
 
-Both attempt 2s passed on the same head and set. The stack is byte-identical to every earlier
+Each attempt 2 passed on the same head and platform set as its own attempt 1. The stack is byte-identical to every earlier
 occurrence: `FullMetadataWriter.CreateIndicesForNonTypeMembers` → `getConsolidatedTypeParameters`
 **twice** → `NamedTypeSymbol.ITypeDefinitionMember.get_ContainingTypeDefinition`. Two recursion
 frames means the writer walked `Inner` → `MwEmitCanary` and the guard admitted the TOP-LEVEL type.
@@ -1888,8 +1888,9 @@ poisoned emit is the same test start of the leg (the 155th in its trace) — `Re
 same host succeeded (`PluginDependencyOrderTest.ADependentsSource_CompilesAgainstTheTypeItsDependencyShips`
 asserts `CompilationStatus.Ok` and passed ~2 min before onset), so this is the ACQUIRED shape again.
 What the position does and does not say: the same workload, in the same order, poisons one process
-in ~16 and not the other fifteen. Whatever decides it is not in the workload's content or order — it
-is decided **per process**.
+in ~16 and not the other fifteen. So the outcome is not determined by the workload's content or
+order ALONE — some condition is decided **per process** — while the fixed position may well be the
+deterministic trigger that exposes it once a process carries that condition.
 
 **A per-process emit harness does not reach it either.** The 2026-09-10 local negative ran 800,000
 emits in ONE process per architecture — one draw of whatever is decided per process. Re-run as a
@@ -1913,7 +1914,9 @@ one.** Everything measured fits one mechanism and nothing measured contradicts i
 - `dissect=` reads correctly when the getter is called directly — a different call site, a different
   compiled copy of the same logic.
 
-Locally, the tier-1 listing of `NamedTypeSymbol.AsNestedTypeDefinitionImpl` inlines
+Locally, the tier-1 listing of `NamedTypeSymbolAdapter.AsNestedTypeDefinitionImpl` — which the JIT
+names `NamedTypeSymbol:AsNestedTypeDefinitionImpl`, because in a Release Roslyn the adapter is a
+partial of `NamedTypeSymbol` rather than a separate type — inlines
 `SourceMemberContainerTypeSymbol.ContainingType` (`_containingSymbol as NamedTypeSymbol`) behind a
 guarded-devirtualisation check AND a profile-guided cast expansion that hard-codes the likely
 container class's `MethodTable` — exactly the read the guard makes, specialised by exactly the data
@@ -1935,8 +1938,10 @@ DOTNET_JitDisasm=AsNestedTypeDefinitionImpl *getConsolidatedTypeParameters*
 
 `JitDisasm` works on release runtimes and prints every tier the JIT produces for those six methods
 (Tier0, Instrumented Tier0, Tier1) with its PGO kind and its inlinees — ≈240 KB for 20,000 emits
-locally. The file sits in `test-logs/`, which the collect step uploads **only when a suite failed**,
-so a green run pays nothing and the `teardown-stragglers-*` artifact of the next occurrence holds the
+locally. It is written on EVERY run — a green run pays the JIT's listing work and the local write for
+those six methods' few compilations (≈18 listings per host), which is small but not zero — and it sits
+in `test-logs/`, which the collect step uploads **only when a suite failed**, so artifact storage is
+spent only on a red run, and the `teardown-stragglers-*` artifact of the next occurrence holds the
 exact native code that answered the guard. 🚨 Class-qualified patterns need the **namespace**:
 `NamedTypeSymbol:*ContainingTypeDefinition` matches nothing, measured. The listings the private copy
 compiles after the fault are Tier0 and come AFTER the shared copy's; read the last `(Tier1)` listing
