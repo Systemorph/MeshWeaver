@@ -347,7 +347,7 @@ its per-call work:
 | shape | checks |
 |---|---|
 | **reads a registry or a counter** — cost independent of the mesh | `content-types`, `bake-report`, `source-discovery`, `publication-seal`, `bundle_adoption`, `entitlement_anchor`, `nodetype_bake`, `process_progress`, `pending_module_activation` (memoised by [#3664](https://github.com/Systemorph/MeshWeaver/issues/3664)) |
-| **one bounded call per probe** — live IO, but a constant | `db_version` (one round trip), `storage_capacity` and `data_volume_free_space` (one `statfs` per *configured path*, 11–14 ms measured) |
+| **one bounded call per probe** — live IO, but a constant | `db_version` (one round trip), `PostgreSql` (one `SELECT 1` on the pooled data source — see below), `storage_capacity` and `data_volume_free_space` (one `statfs` per *configured path*, 11–14 ms measured) |
 | **per declared entry, per probe** | `required_modules` — and it is the only one. Since [#4655](https://github.com/Systemorph/MeshWeaver/issues/4655) it is in the first row: it reads a reading a background owner takes |
 
 So the defect was singular on this endpoint, and it is now fixed at the root rather than tuned. Two
@@ -371,6 +371,35 @@ whole operations rather than per-item fan-out — and the migration's own doc al
 this page states, in its own words: *"a migration that needs longer is not a migration to make room
 for, it is one to rewrite as bulk work (one set-based statement per partition, never a request per
 row)."*
+
+## A caller that gives up is not a failed check
+
+The token a health check receives is the **caller's**: `MapHealthChecks` passes
+`HttpContext.RequestAborted`. So when `/health` is slow enough that its reader stops waiting — a
+`startupProbe` past its `timeoutSeconds`, the fleet watch past its 8 s — every check still in flight
+sees its token cancelled. `DefaultHealthCheckService` treats that correctly: a cancellation of the
+caller's token propagates (only a per-registration timeout becomes an entry), and Kestrel logs the
+aborted request at Debug.
+
+A check that catches **every** exception defeats that. Aspire's `AddNpgsqlDataSource` registers
+`HealthChecks.NpgSql.NpgSqlHealthCheck` as `PostgreSql`, and its body is one `catch (Exception)` —
+the caller's cancellation included — returned as `Unhealthy`, which the service logs at `fail:`
+with the cancellation's stack. On memex-cloud that produced nine "Health check PostgreSql with
+status Unhealthy" lines on 2026-09-22/23, "completed after" anywhere from **37 ms to 12.4 s**, each
+cancelled wherever the connector happened to be (`SslStream.ForceAuthenticationAsync`,
+`NpgsqlWriteBuffer.Flush`). No Npgsql or server timeout produces that spread; the clock that ran out
+was the reader's, and the verdict had no reader left
+([#5314](https://github.com/Systemorph/MeshWeaver/issues/5314)).
+
+`Memex.Portal.Distributed` therefore turns Aspire's check off (`DisableHealthChecks`) and registers
+its own `PostgreSqlHealthCheck` under the same name: one `SELECT 1` through the portal's pooled
+`NpgsqlDataSource`, a failure while the caller waits still `Unhealthy` and still logged, and a
+cancelled caller reported as a cancellation. The rule for any check written here: **decide an
+abandoned probe from the token, never from the exception's type**, and never fold it into the
+failure status.
+
+What this does not change: the reason the callers gave up. A slow `/health` is this page's subject,
+and its cost is on the timing line above.
 
 ## Known: two policies that are configured and applied to nothing
 
