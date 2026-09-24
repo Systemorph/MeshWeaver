@@ -524,6 +524,11 @@ public class MeshOperations
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            // 🚨 A stream that COMPLETES EMPTY is an answer too — the cache answers a path that can
+            // never hold a node (a transient probe's address, a pod-hub address — #5120) with an
+            // empty stream. Without this, Take(1) completed with no value, the SelectMany below
+            // never ran, and `get` returned NOTHING at all instead of "Not found".
+            .DefaultIfEmpty(null)
             .SelectMany(node =>
             {
                 var compileError = node.ContentAs<Graph.Configuration.NodeTypeDefinition>(hub.JsonSerializerOptions)?.CompilationError;

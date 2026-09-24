@@ -221,6 +221,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // What this cache could not TYPE, kept for /health (2026-09-08) — see ContentDegradationRegistry.
     private readonly ContentDegradationRegistry? degradations;
 
+    /// <summary>
+    /// The address types that route to a POD-PROCESS hub (<c>portal</c>, <c>cache</c>, <c>mesh</c>,
+    /// <c>client</c>, module-declared ones) — the router's own set, so <see cref="GetStreamRaw"/>
+    /// can answer a read of such an address without routing it (#5120; see
+    /// <see cref="MeshConfiguration.IsPodHubAddress(string?)"/>).
+    /// </summary>
+    private readonly IReadOnlySet<string> podHubAddressTypes;
+
     // 🚨 Lazy<Entry> wraps the factory because ConcurrentDictionary.GetOrAdd
     // is NOT threadsafe for compound operations: under contention the factory
     // delegate runs more than once, the losing values are discarded, but any
@@ -621,6 +629,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         this.logger = logger;
         contentTypeRegistry = meshHub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>();
         degradations = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
+        podHubAddressTypes = meshHub.ServiceProvider.GetService<MeshConfiguration>()?.StreamRoutedAddressTypes
+            ?? MeshConfiguration.DefaultStreamRoutedAddressTypes;
         var opts = options ?? new MeshNodeStreamCacheOptions();
         readStreamIdleExpiration = opts.ReadStreamIdleExpiration;
         readStreamSweepInterval = opts.ReadStreamSweepInterval;
@@ -1938,6 +1948,29 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 "MeshNodeStreamCache.GetStream('{Path}') reads a transient node probe's own "
                 + "address — a probe has no mesh node, so this is answered with an empty stream "
                 + "rather than gated and routed.",
+                path);
+            return Observable.Empty<MeshNode>();
+        }
+
+        // 🚪 A POD-HUB ADDRESS IS NOT A NODE PATH — Systemorph/MeshWeaver#5120. `portal/nodeops-…`,
+        // `cache/{meshId}`, `mesh/{id}` and the other stream-routed address types route to a hub
+        // hosted in some pod's process, never to a node, and none of those hubs owns a node: they
+        // carry a workspace but no MeshNodeReference reducer, so the upstream SubscribeRequest
+        // below reached them and was refused with a DataSourceConfigurationException logged at
+        // Error ON THE TARGET POD, while the reader got a fault it could only report as "no
+        // verdict". The producer measured in production was an MCP / API `get` of another pod's
+        // cache address copied out of a log line — user input, which the mesh must answer
+        // truthfully rather than route. Empty is that answer (the node does not exist and cannot),
+        // the same one this method gives a transient probe's address just above, and it is
+        // decided by the ROUTER's own set of pod-hub types, so the two cannot disagree. Logged at
+        // Information with the path, so an INTERNAL caller that ever confuses a hub address with a
+        // node path stays findable by name instead of being absorbed silently.
+        if (MeshConfiguration.IsPodHubAddress(path, podHubAddressTypes))
+        {
+            logger.LogInformation(
+                "MeshNodeStreamCache.GetStream('{Path}') was handed a pod-hub ADDRESS, not a mesh "
+                + "node path — no node can exist there, so it is answered with an empty stream "
+                + "rather than routed to a hub that owns no node (#5120).",
                 path);
             return Observable.Empty<MeshNode>();
         }
