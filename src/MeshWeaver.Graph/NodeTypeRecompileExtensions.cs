@@ -72,6 +72,14 @@ public static class NodeTypeRecompileExtensions
     /// same change would make a level change look like a side effect of naming the class. Naming
     /// them is what makes that question answerable at all: until now there was one line to argue
     /// about, and it covered everything.</para>
+    ///
+    /// <para>🚨 <b>The one exception, decided with its class:</b>
+    /// <see cref="NodeTypeReleaseFailure.HostLeaving"/> logs at <b>Warning</b> (#5629). It was born
+    /// after the rule above and its level was the question it was created to answer: a pod that is
+    /// leaving is not a defect, and on every roll that drains a pod mid-sweep it used to file one
+    /// fail-level line per affected NodeType (15 in 3 ms on 2026-09-24) for writes its own router
+    /// had already refused. It stays a Warning, not silence, because the release genuinely did not
+    /// happen — the type keeps the assembly it had.</para>
     /// </summary>
     /// <param name="logger">The channel's logger; a null logger writes nothing, as everywhere else
     /// in this file.</param>
@@ -154,6 +162,11 @@ public static class NodeTypeRecompileExtensions
             case NodeTypeReleaseFailure.NoAnswerWithinBound:
                 logger.LogError(
                     "[Recompile] Release request for {Path} failed — the RELEASE LEG NEVER ANSWERED within its ordered bound: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.HostLeaving:
+                logger.LogWarning(
+                    "[Recompile] Release request for {Path} not issued — THIS HOST IS LEAVING, so nothing it sends can reach the owner: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.Unclassified:
@@ -371,14 +384,23 @@ public static class NodeTypeRecompileExtensions
                             hub.RequestNodeTypeRelease(path,
                                 force: false,
                                 releaseNotes: null,
-                                onError: msg => progress?.Invoke(
-                                    $"Recompile of {path} could not be requested: {msg} — its assembly is STALE until compiled manually.",
-                                    LogLevel.Error),
+                                onError: null,
                                 // 🚨 #1549 — the LOG line takes the CLASSIFIED sink, so the failure
-                                // class lands in the message TEMPLATE. The progress line above keeps
-                                // the sentence a human reads; this one keeps the words a fingerprint
-                                // reads. See LogReleaseRefusal.
-                                onRefused: refusal => LogReleaseRefusal(logger, refusal));
+                                // class lands in the message TEMPLATE; the progress line keeps the
+                                // sentence a human reads. Both come off the classified refusal so
+                                // the progress LEVEL follows the class too (#5629): a leg declined
+                                // because THIS host is leaving is a Warning on the sync's activity,
+                                // not an Error that flips it. Every leg asks IsLeaving at its own
+                                // subscribe, so a drain that starts mid-wave is judged per leg.
+                                onRefused: refusal =>
+                                {
+                                    progress?.Invoke(
+                                        $"Recompile of {path} could not be requested: {refusal.Reason} — its assembly is STALE until compiled manually.",
+                                        refusal.Failure == NodeTypeReleaseFailure.HostLeaving
+                                            ? LogLevel.Warning
+                                            : LogLevel.Error);
+                                    LogReleaseRefusal(logger, refusal);
+                                });
                     return ordered;
                 });
             })
