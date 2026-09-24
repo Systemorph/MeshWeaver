@@ -806,6 +806,7 @@
   "ui.recycleFailed": "Der Hub unter '{0}' hat nach dem angeforderten Neustart noch nicht wieder geantwortet: {1}",
   "ui.mdFillFieldsGeneratePlan": "*Felder ausfüllen und auf **Plan erzeugen** klicken.*",
   "ui.accessDeniedPlain": "Zugriff verweigert.",
+  "ui.fieldWriteRefused": "Nicht gespeichert: Sie dürfen diese Seite lesen, aber nicht ändern.",
   "ui.accessDeniedAdminsOnly": "Zugriff verweigert — nur für Plattform-Administratoren.",
   "ui.autoSaved": "Änderungen werden automatisch gespeichert",
   "ui.connectRepoFirst": "Zuerst im Tab **GitHub Sync** ein GitHub-Repository verbinden.",
