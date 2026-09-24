@@ -926,8 +926,9 @@ public static class PrebuiltAssemblySeeder
 
             return store
                 .PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
-                .SelectMany(location => workspace.GetMeshNodeStream(nodeTypePath)
-                    .Update(current =>
+                .SelectMany(location =>
+                {
+                    MeshNode Apply(MeshNode? current)
                     {
                         var def = current?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
                         if (current is null || def is null)
@@ -1026,9 +1027,49 @@ public static class PrebuiltAssemblySeeder
                         };
                         stampedDefinition = adopted;
                         return current with { Content = adopted };
-                    }))
-                .Select(_ =>
+                    }
+
+                    IObservable<System.Reactive.Unit> StampWrite() => workspace
+                        .GetMeshNodeStream(nodeTypePath)
+                        .Update(Apply)
+                        .Select(_ => System.Reactive.Unit.Default);
+
+                    // 🚨 #5544 — THE ADOPTION STAMP IS A PUBLICATION, and it goes through the join
+                    // point like the two compile stamps always did (#3478). It carries the same
+                    // CompiledFrameworkVersion + assembly coordinates into the same shared record,
+                    // so a replica that has not passed its own readiness validation re-keyed every
+                    // record its bundles covered while the serving replicas — on another framework
+                    // — lost their usable build: 168 adoptions per boot of the 9260 pod on memex,
+                    // across five restarts, none of them ever Ready. Held while this process is
+                    // provisional, released when its bake passes, discarded when it fails.
+                    var admissionGate = hub.ServiceProvider.GetService<MeshPublicationGate>();
+                    return (admissionGate is null
+                            ? StampWrite().LastOrDefaultAsync().Select(_ => MeshAdmission.Unarmed)
+                            : admissionGate.Offer($"prebuilt adoption stamp for {nodeTypePath}", StampWrite))
+                        .Select(admission =>
+                        {
+                            // A HELD stamp is still an adoption THIS process may build its sweep on:
+                            // the bytes are on the store under this framework's key, and the record
+                            // it would write is exactly what the ledger below needs. Computed off the
+                            // owner's snapshot this pass already decided on — the same lambda, never
+                            // written — so the local ledger and the eventual release cannot describe
+                            // two different stamps.
+                            if (admission is MeshAdmission.Provisional)
+                                Apply(node);
+                            return admission;
+                        });
+                })
+                .Select(admission =>
                 {
+                    if (admission is MeshAdmission.Refused)
+                    {
+                        logger?.LogInformation(
+                            "Prebuilt assembly for {NodeTypePath} NOT stamped: this process failed "
+                            + "its own readiness validation and publishes nothing into the shared "
+                            + "record (#3478/#5544) — the record is left as the serving replicas wrote it",
+                            nodeTypePath);
+                        return SeedOutcome.NotSeeded;
+                    }
                     if (!stamped)
                         return SeedOutcome.NotSeeded;
                     // 🚨 #3703 — the ledger entry, written on the same branch as the ADOPTED line
@@ -1040,11 +1081,20 @@ public static class PrebuiltAssemblySeeder
                     if (stampedDefinition is { } written)
                         hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>()
                             ?.RecordAdopted(nodeTypePath, version, written);
-                    logger?.LogInformation(
-                        "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
-                        + "(framework {Framework}, module version {Module}) — no compile needed",
-                        nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion,
-                        ModuleVersionCompatibility.Display(moduleVersion));
+                    if (admission is MeshAdmission.Provisional)
+                        logger?.LogInformation(
+                            "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
+                            + "(framework {Framework}, module version {Module}) — no compile needed; "
+                            + "the shared record's stamp is HELD until this process passes its "
+                            + "readiness validation (#5544), so the serving replicas keep their own build",
+                            nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion,
+                            ModuleVersionCompatibility.Display(moduleVersion));
+                    else
+                        logger?.LogInformation(
+                            "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
+                            + "(framework {Framework}, module version {Module}) — no compile needed",
+                            nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion,
+                            ModuleVersionCompatibility.Display(moduleVersion));
                     return onStamped;
                 });
         }
