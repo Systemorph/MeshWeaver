@@ -111,6 +111,12 @@ There are **two identities on the read path, and they must never be mixed**:
 
 **3. Writes are validated in the owning hub, not here.** The cache never gates writes. A `.Update(...)` ships a merge patch to the owner, whose `RlsNodeValidator` / `[RequiresPermission(Update)]` pipeline checks the **writer's** `Update` permission on its own single-threaded action block. Read-gating at the cache seam + write-validation at the owner are the two halves of access control on a node stream.
 
+### A pod-hub ADDRESS is answered empty, never routed (#5120)
+
+Two kinds of path can never hold a node, and the cache answers both with an **empty stream** before it gates, caches, routes or opens a breaker: a transient probe's synthetic address ([Transient Node Probes](../TransientNodeProbes)), and a **pod-hub address** — a path whose first segment is one of the mesh's stream-routed address types (`portal/…`, `cache/…`, `mesh/…`, `client/…`, plus module-declared ones such as `import`), decided by `MeshConfiguration.IsPodHubAddress`. That set is the ROUTER's own: `RoutingGrain` sends every such address to the pod that hosts the hub and never to a node grain, so the two cannot disagree about what is a node.
+
+**Why it has to be answered here.** `portal/nodeops-{meshId}` and `cache/{meshId}` carry a workspace but no `MeshNodeReference` reducer, so an upstream `SubscribeRequest` addressed to one reaches `JsonSynchronizationStream.CreateSynchronizationStream` and is refused with a `DataSourceConfigurationException` logged at **Error on the target pod**, while the reader receives a fault. Measured on memex: pod `…-4dpcn` logged `FetchNode UNAVAILABLE for cache/Hj7OStRhsEG9wL7lLfx7Cg` in the same millisecond that pod `…-xs87x` logged the refusal for stream `hm9LIY8mQ0O2lrx70klPIw` — an MCP / API `get` of another pod's cache address, copied out of a log line, which `get` then reported as *"UNKNOWN whether this node exists … retry"*. A pod-hub address is user input with a definite answer; `get` now says `Not found`. The guard logs at Information with the path, so an INTERNAL caller that ever confuses a hub address with a node path stays findable by name rather than being absorbed. Pinned by `APodHubAddressIsNotANodePathTest` (Graph.Test), whose `get` and stream facts fail on the unguarded build with the production shape.
+
 ## Writes — a serial queue per path
 
 `handle.Update(fn)` is **cold**: nothing happens until `Subscribe`. On subscribe, the write enters the path's **serial update queue**:
