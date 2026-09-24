@@ -785,7 +785,7 @@ public static class StaticRepoImporter
 
                 var work = prunes.Concat(markers).ToList();
                 var prunedCount = orphans.Count;
-                return (work.Count == 0 ? Observable.Return(0) : work.ToObservable().Merge(BatchSize).Sum())
+                return (work.Count == 0 ? Observable.Return(0) : work.ToObservable().MergeBounded(BatchSize).Sum())
                     .Select(_ =>
                     {
                         logger?.LogInformation(
@@ -1072,7 +1072,7 @@ public static class StaticRepoImporter
                                         ? Observable.Return(0)
                                         : Upsert(hub, Materialize(g)))
                                     .Catch<int, Exception>(_ => Observable.Return(0)))
-                                .ToObservable().Merge(BatchSize).Sum())
+                                .ToObservable().MergeBounded(BatchSize).Sum())
                         .Select(_ => new StaticRepoImportResult(source.Partition, fingerprint, "Skipped"))
                         .Catch<StaticRepoImportResult, Exception>(ex =>
                         {
@@ -1856,13 +1856,13 @@ public static class StaticRepoImporter
                             bulk.Chunk(BulkCreateBatchSize)
                                 .Select(chunk => WriteBulk(hub, source.Partition, chunk, logger, tally))
                                 .ToObservable()
-                                .Merge(BatchSize),
+                                .MergeBounded(BatchSize),
                             singles.Select(x => WriteOne(
                                     hub, source.Partition, x.Node, logger, tally, x.Bypass, x.Log))
                                 .ToObservable()
                                 // The barrier is BETWEEN stages (Observable.Concat above); inside one it is
                                 // the same BatchSize fan-out the import always used.
-                                .Merge(BatchSize));
+                                .MergeBounded(BatchSize));
                     }))
                     // WrittenPaths ride along with the counts: only a node that really landed can
                     // leave a NodeType's assembly stale, so the recompile derivation downstream
@@ -2015,7 +2015,7 @@ public static class StaticRepoImporter
                                         return Observable.Return<string?>(null);
                                     }))
                                 .ToObservable()
-                                .Merge(BatchSize)
+                                .MergeBounded(BatchSize)
                                 .Where(p => p is not null)
                                 .Select(p => p!)
                                 .ToList()
@@ -2545,7 +2545,7 @@ public static class StaticRepoImporter
                     return Observable.Return(ContentSyncCount.Refusal(import.NodePath, ReasonOf(ex.Message)));
                 }))
             .ToObservable()
-            .Merge(BatchSize)
+            .MergeBounded(BatchSize)
             .Aggregate(ContentSyncCount.None, (total, one) => total.Add(one));
     }
 
@@ -2620,7 +2620,7 @@ public static class StaticRepoImporter
                     return Observable.Return(ContentSyncCount.Refusal(sync.NodePath, ReasonOf(ex.Message)));
                 }))
             .ToObservable()
-            .Merge(BatchSize)
+            .MergeBounded(BatchSize)
             .Aggregate(ContentSyncCount.None, (total, one) => total.Add(one))
             // Persist the current source-owned content set LAST (after the mirror) so the next import's
             // prune preserves user uploads. Best-effort: a failed write only makes the next import prune
@@ -2680,7 +2680,7 @@ public static class StaticRepoImporter
         return atRisk
             .Select(type => persistence.Exists(type).Take(1).Select(exists => (Type: type, Exists: exists)))
             .ToObservable()
-            .Merge(BatchSize)
+            .MergeBounded(BatchSize)
             .ToList()
             .Select(results => results
                 .Where(r => !r.Exists)
@@ -3217,7 +3217,7 @@ public static class StaticRepoImporter
                     return Observable.Return(0);
                 }))
             .ToObservable()
-            .Merge(BatchSize)
+            .MergeBounded(BatchSize)
             .Sum();
 
         return writes;
@@ -3751,7 +3751,7 @@ public static class StaticRepoImporter
             return WriteOne(hub, partition, chunk[0], logger, tally);
 
         IObservable<ImportItem> PerNode(IEnumerable<MeshNode> nodes) =>
-            nodes.Select(n => WriteOne(hub, partition, n, logger, tally)).ToObservable().Merge(BatchSize);
+            nodes.Select(n => WriteOne(hub, partition, n, logger, tally)).ToObservable().MergeBounded(BatchSize);
 
         return Observable.Defer(() =>
             {

@@ -307,7 +307,7 @@ public static class NodeCopyHelper
                 return levels[level]
                     .Select(CopyOne)
                     .ToObservable()
-                    .Merge(batchSize)
+                    .MergeBounded(batchSize)
                     .ToList()
                     .SelectMany(written =>
                     {
