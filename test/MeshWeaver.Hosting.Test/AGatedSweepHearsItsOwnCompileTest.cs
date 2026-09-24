@@ -99,7 +99,7 @@ public class AGatedSweepHearsItsOwnCompileTest(ITestOutputHelper output) : Monol
         bake.MarkRunning("enumerating dynamic NodeTypes");
         bake.Admission.Should().Be(MeshAdmission.Provisional, "precondition — the bake gates and is measuring");
 
-        var outcome = await Warm(typePath).Should().Within(Budget + TimeSpan.FromSeconds(30))
+        var outcome = await Warm(typePath).Should().Within(Budget + TestTimeouts.Convergence)
             .Emit("WarmOne always reaches exactly one outcome", TestContext.Current.CancellationToken);
         Output.WriteLine("outcome: {0} — {1} — {2}", outcome.Status, outcome.Detail ?? "(no detail)", outcome.Duration);
 
@@ -127,7 +127,7 @@ public class AGatedSweepHearsItsOwnCompileTest(ITestOutputHelper output) : Monol
         var typePath = await CreateNeverBuiltType();
         bake.MarkRunning("enumerating dynamic NodeTypes");
 
-        var outcome = await Warm(typePath).Should().Within(Budget + TimeSpan.FromSeconds(30))
+        var outcome = await Warm(typePath).Should().Within(Budget + TestTimeouts.Convergence)
             .Emit("WarmOne always reaches exactly one outcome", TestContext.Current.CancellationToken);
         Output.WriteLine("outcome: {0} — {1} — {2}", outcome.Status, outcome.Detail ?? "(no detail)", outcome.Duration);
 
