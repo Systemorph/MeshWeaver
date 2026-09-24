@@ -86,7 +86,7 @@ public class RoutingBackpressureShapeTest
                 });
         }
 
-        var (channels, destinations, deepest) = dispatcher.QueueSnapshot();
+        var (channels, destinations, deepest, _) = dispatcher.QueueSnapshot();
         return (Volatile.Read(ref inFlight), channels, destinations, deepest, subjects,
             () => Volatile.Read(ref completed));
     }
