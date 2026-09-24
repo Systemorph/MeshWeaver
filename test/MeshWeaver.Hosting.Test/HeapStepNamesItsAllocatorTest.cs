@@ -82,33 +82,55 @@ public class HeapStepNamesItsAllocatorTest
     [Fact]
     public void ConcurrentRecordAndDrain_LoseNoSample()
     {
+        const int writers = 4, perWriter = 50_000;
+        // 🚨 Each marker sample weighs 1 GiB, and the test runs its OWN noise: 2×TopTypes heavier
+        // types recorded concurrently, because the live sampler also receives the real ~100 KB
+        // allocation samples of every test in this host and Drain reports only the heaviest
+        // TopTypes types. With 1-byte marker samples a window holding a few of them ranked below
+        // the noise and fell out of Top — 199,960 of 200,000 on the CI queue — a loss in the TEST's
+        // arithmetic, not in the sampler. Making the noise explicit makes that condition present on
+        // every run rather than on a busy CI host; at 1 GiB per sample the marker heads every
+        // window it appears in, so what remains measured is the record/drain race alone.
+        const long weight = 1L << 30;
+        RecordAgainstDrainUnderNoise(writers, perWriter, weight)
+            .Should().Be(writers * perWriter * weight, "every recorded sample lands in exactly one drained window");
+    }
+
+    /// <summary>
+    /// Records <paramref name="perWriter"/> marker samples from each of <paramref name="writers"/>
+    /// threads while a noise thread records heavier types and the calling thread drains in a loop;
+    /// returns the marker bytes the drains reported.
+    /// </summary>
+    internal static long RecordAgainstDrainUnderNoise(int writers, int perWriter, long weight)
+    {
         using var sampler = new AllocationByTypeSampler();
         const string type = "ConcurrentRecordAndDrainMarker";
-        const int writers = 4, perWriter = 50_000;
-        // 🚨 Each marker sample weighs 1 GiB. This sampler is LIVE: it also receives the real
-        // ~100 KB allocation samples of every test running in this host, and Drain reports only
-        // the heaviest TopTypes types. With 1-byte samples, a window holding a few marker samples
-        // ranked below real types and fell out of Top — 199,960 of 200,000 on CI, a loss in the
-        // TEST's arithmetic, not in the sampler. At 1 GiB per sample the marker heads every window
-        // it appears in.
-        const long weight = 1L << 30;
+        var noiseTypes = Enumerable.Range(0, 2 * AllocationByTypeSampler.TopTypes)
+            .Select(i => $"Noise{i}").ToArray();
         var drainedBytes = 0L;
         var done = 0;
+        var noise = new System.Threading.Thread(() =>
+        {
+            while (System.Threading.Volatile.Read(ref done) < writers)
+                foreach (var n in noiseTypes)
+                    sampler.Record(n, 100 * 1024);
+        });
         var threads = Enumerable.Range(0, writers).Select(_ => new System.Threading.Thread(() =>
         {
             for (var i = 0; i < perWriter; i++)
                 sampler.Record(type, weight);
             System.Threading.Interlocked.Increment(ref done);
         })).ToArray();
+        noise.Start();
         foreach (var t in threads)
             t.Start();
         while (System.Threading.Volatile.Read(ref done) < writers)
             drainedBytes += sampler.Drain().Top.Where(t => t.TypeName == type).Sum(t => t.Bytes);
         foreach (var t in threads)
             t.Join();
+        noise.Join();
         drainedBytes += sampler.Drain().Top.Where(t => t.TypeName == type).Sum(t => t.Bytes);
-
-        drainedBytes.Should().Be(writers * perWriter * weight, "every recorded sample lands in exactly one drained window");
+        return drainedBytes;
     }
 
     /// <summary>
