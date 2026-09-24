@@ -216,7 +216,7 @@ public sealed class GitHubSyncService
         var allPaths = nodes.Select(n => n.Path).ToArray();
         return nodes
             .Select(n => SerializeOne(n, partition, allPaths, progress))
-            .Merge(8)
+            .MergeBounded(8)
             .Where(f => f is not null).Select(f => f!)
             .ToList()
             .Select(list => AppendReadme(list, nodes, partition));
@@ -913,7 +913,7 @@ public sealed class GitHubSyncService
         return classified
             .Where(c => c.Asset is null)
             .Select(c => ParseFile(c.File, spaceId, readmePolicy.IsDeclaredNode))
-            .Merge(8)
+            .MergeBounded(8)
             .ToList()
             .Select(list =>
             {

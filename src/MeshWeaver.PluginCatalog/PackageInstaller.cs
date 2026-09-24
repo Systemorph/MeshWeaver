@@ -260,7 +260,7 @@ public static class PackageInstaller
             .SelectMany(accessWrites => content
                 .Select(n => UpsertIfChanged(hub, persistence, n, options)
                     .Select(wrote => (n.Path, Wrote: wrote)))
-                .ToObservable().Merge(batchSize).ToList()
+                .ToObservable().MergeBounded(batchSize).ToList()
                 .Select(contentWrites => (IReadOnlyList<(string Path, bool Wrote)>)
                     accessWrites.Concat(contentWrites).ToArray()))
             .SelectMany(writes =>
@@ -2718,7 +2718,7 @@ public static class PackageInstaller
                     // SIGKILL. Merge's own maxConcurrent is the bound (never a SemaphoreSlim, which
                     // parks a hub thread); it costs nothing in latency here because the waits
                     // overlap, and the whole phase is still capped by GatingDetectorBudget.
-                    .Merge(GatingWaitConcurrency)
+                    .MergeBounded(GatingWaitConcurrency)
                     .DefaultIfEmpty(Unit.Default)
                     .LastAsync());
             });
@@ -3102,7 +3102,7 @@ public static class PackageInstaller
             .SelectMany(typeWrite => sourceNodes
                 .Select(n => UpsertIfChanged(hub, persistence, n, options)
                     .Select(wrote => (n.Path, Wrote: wrote)))
-                .ToObservable().Merge(batchSize).ToList()
+                .ToObservable().MergeBounded(batchSize).ToList()
                 .Select(srcWrites => (IReadOnlyList<(string Path, bool Wrote)>)
                     new[] { typeWrite }.Concat(srcWrites).ToArray()))
             .SelectMany(writes =>

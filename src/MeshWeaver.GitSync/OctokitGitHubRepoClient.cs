@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Octokit;
 using Octokit.Reactive;
@@ -220,7 +221,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                         .Select(blob => ToRepoFile(
                             prefix.Length == 0 ? e.Path : e.Path[prefix.Length..],
                             blob)))
-                    .Merge(8)
+                    .MergeBounded(8)
                     .ToList()
                     .Select(list => new RepoSnapshot(head.CommitSha!, (IReadOnlyList<RepoFile>)list)
                         { ListingIsComplete = head.ListingIsComplete });
@@ -836,7 +837,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             .Select(f => Http.InvokeObservable(ct => client.Git.Blob.Create(owner, repo,
                     new NewBlob { Content = f.Content, Encoding = EncodingType.Utf8 }))
                 .Select(blob => (Path: prefix + f.Path, blob.Sha)))
-            .Merge(8)
+            .MergeBounded(8)
             .ToList()
             .Select(list => (IReadOnlyList<(string, string)>)list);
     }

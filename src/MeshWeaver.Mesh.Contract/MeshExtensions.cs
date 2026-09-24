@@ -4940,7 +4940,7 @@ public static class MeshExtensions
         // per-leaf hubs validate in parallel; the failure with the lowest
         // emission order wins via FirstOrDefault. Bounded: see
         // PreValidateFanOutConcurrency for why an unbounded fan-out is a storm.
-        return Observable.Merge(perPath, PreValidateFanOutConcurrency)
+        return perPath.MergeBounded(PreValidateFanOutConcurrency)
             .Where(r => r.HasValue)
             .Take(1)
             .DefaultIfEmpty(null)

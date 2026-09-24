@@ -3394,7 +3394,7 @@ public class MeshOperations
                             return (Node: n, Allowed: outcome.IsGranted);
                         }))
                     .ToObservable()
-                    .Merge(NodeCopyHelper.DefaultBatchSize)
+                    .MergeBounded(NodeCopyHelper.DefaultBatchSize)
                     .Where(x => x.Allowed)
                     .Select(x => x.Node)
                     .ToList())
@@ -3415,7 +3415,7 @@ public class MeshOperations
                     .Select(n => GetNodeCollectionConfigs(n.Path)
                         .Select(configs => (NodePath: n.Path, Configs: configs)))
                     .ToObservable()
-                    .Merge(NodeCopyHelper.DefaultBatchSize)
+                    .MergeBounded(NodeCopyHelper.DefaultBatchSize)
                     .ToList()
                     .SelectMany(nodeConfigs =>
                     {
