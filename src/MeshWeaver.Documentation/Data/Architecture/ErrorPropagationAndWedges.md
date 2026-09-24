@@ -109,6 +109,31 @@ answered flag first, then read the CARRIED verdict, and fall back to the shared 
 `MeshNodeStreamCache.IsTransientOwnerFailure` use) rather than to a terminal default.** A verdict
 that cannot be read is not evidence of a permanent failure.
 
+#### A transport timeout on a view is a bounded retry, not an error (#5599, #5605, #5624)
+
+The same rule applies on the GUI side, and one class of routed NACK missed it. Orleans'
+`ResponseTimeout` and its grain-placement timeout reach a layout area only as TEXT — the router
+posts `Delivery to 'Store' failed: Response did not arrive on time in 00:00:30 …` or
+`… Grain placement operation timed out for grain messagehub/Store.` as a `DeliveryFailure{Failed}`,
+because the `TimeoutException` object does not survive the grain boundary. `AreaErrorClassifier`
+matched neither sentence, and it also ignored the router's own typed `ErrorType.ShuttingDown`
+verdict when its text was Orleans' `Forwarding failed … Rejecting now.` So `NamedAreaView` took its
+generic arm: an `Error` line (one incident per occurrence), **no retry**, and the raw Orleans banner
+rendered as the area's content until a reload — a view that died on a hub that was merely slow.
+
+Both timeouts say "the hub did not answer in time", the same statement as `No response received in
+hub`, which was always retried. They now are too, through the same bounded
+`RetryAreaWithBackoff` (five attempts over ~8 s, then the "Area unavailable" frame at
+`Warning`). Re-subscribing a VIEW sends a new request, so #1172's "never re-send a timed-out
+delivery" — a grain-layer rule about the SAME delivery — does not apply. Terminal verdicts (routing
+`NotFound`, `Unavailable`, an initialisation failure, a real exception) are untouched and still
+surface on the first attempt; `DeliveryTimeoutIsTransientTest` pins both halves on the production
+messages verbatim.
+
+Upstream, the commonest source of the response timeout — a grain whose acknowledgement waited on its
+hub's whole activation — was removed by #5458; the view-side classification is still needed for the
+timeouts that remain (a silo under load, a placement that outlives its window).
+
 #### Who refused? The BANNER, not the classification (#3017)
 
 A caller that gets `ErrorType.ShuttingDown` still has a second question to answer: **did the OWNER
