@@ -374,7 +374,7 @@ internal static class NodeTypeBatchBake
                 // reads from it is withheld from the batch and named, with this fault, below.
                 .Catch<QueryAnswer, Exception>(ex => Observable.Return(new QueryAnswer(null, ex)))
                 .Select(answer => (Query: q, Answer: answer)))
-            .Merge(PerQueryConcurrency)
+            .MergeBounded(PerQueryConcurrency)
             .ToList()
             .Select(answers => answers.ToImmutableDictionary(
                 a => a.Query, a => a.Answer, StringComparer.Ordinal));
