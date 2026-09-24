@@ -85,12 +85,19 @@ public class HeapStepNamesItsAllocatorTest
         using var sampler = new AllocationByTypeSampler();
         const string type = "ConcurrentRecordAndDrainMarker";
         const int writers = 4, perWriter = 50_000;
+        // 🚨 Each marker sample weighs 1 GiB. This sampler is LIVE: it also receives the real
+        // ~100 KB allocation samples of every test running in this host, and Drain reports only
+        // the heaviest TopTypes types. With 1-byte samples, a window holding a few marker samples
+        // ranked below real types and fell out of Top — 199,960 of 200,000 on CI, a loss in the
+        // TEST's arithmetic, not in the sampler. At 1 GiB per sample the marker heads every window
+        // it appears in.
+        const long weight = 1L << 30;
         var drainedBytes = 0L;
         var done = 0;
         var threads = Enumerable.Range(0, writers).Select(_ => new System.Threading.Thread(() =>
         {
             for (var i = 0; i < perWriter; i++)
-                sampler.Record(type, 1);
+                sampler.Record(type, weight);
             System.Threading.Interlocked.Increment(ref done);
         })).ToArray();
         foreach (var t in threads)
@@ -101,7 +108,7 @@ public class HeapStepNamesItsAllocatorTest
             t.Join();
         drainedBytes += sampler.Drain().Top.Where(t => t.TypeName == type).Sum(t => t.Bytes);
 
-        drainedBytes.Should().Be((long)writers * perWriter, "every recorded sample lands in exactly one drained window");
+        drainedBytes.Should().Be(writers * perWriter * weight, "every recorded sample lands in exactly one drained window");
     }
 
     /// <summary>
