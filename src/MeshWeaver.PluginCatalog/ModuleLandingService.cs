@@ -85,7 +85,8 @@ namespace MeshWeaver.PluginCatalog;
 /// <see cref="IObservable{T}"/>s whose file IO runs on this service's own cap-1
 /// <see cref="IoPool"/> — the one sanctioned bounded-IO primitive — so concurrent landings
 /// serialize without a hand-rolled gate, and nothing blocks a hub scheduler. Mesh-scoped
-/// singleton: the pool dies with the mesh.</para>
+/// singleton: the pool dies with the mesh. READS of the activation record are the exception and
+/// run on <see cref="ReadPool"/> instead — see <see cref="GetActivation"/> (#4963).</para>
 ///
 /// <para><b>Cross-REPLICA safety is structural, not a gate (#2090).</b> The pool bounds one
 /// process; <c>/data</c> is shared by every portal replica. So the activation record is one file
@@ -416,8 +417,10 @@ public sealed class ModuleLandingService : IDisposable
     }
 
     // Cap 1 deliberately: landing writes files and the cap IS the in-process serialization — no
-    // lock, no semaphore outside the sealed IoPool primitive. Landing is rare and short; 1 costs
-    // nothing. 🚨 It is NOT what makes the activation record safe: this pool bounds ONE process,
+    // lock, no semaphore outside the sealed IoPool primitive. 🚨 It serialises WRITES only: a
+    // landing on the registry's shelf is not short (one SMB round trip per file), so a read queued
+    // here waited out every landing in flight — reads run on ReadPool (#4963). 🚨 It is NOT what
+    // makes the activation record safe: this pool bounds ONE process,
     // and /data is shared by every replica. Cross-process safety comes from the record's SHAPE —
     // one file per module (ModuleActivationSidecar), and one immutable record per landing within
     // it (#4026), so concurrent writers never decide through a path they both write.
@@ -721,13 +724,37 @@ public sealed class ModuleLandingService : IDisposable
     }
 
     /// <summary>
-    /// Reads the current activation list on this service's IO pool — the runtime counterpart of the
-    /// boot-time <see cref="ModuleActivationSidecar.Read"/>, serialized behind the same cap-1 pool
-    /// as the writes so a read never observes a landing halfway through its read-modify-write.
+    /// Reads the current activation list — the runtime counterpart of the boot-time
+    /// <see cref="ModuleActivationSidecar.Read"/> — on <see cref="ReadPool"/>, NOT on the cap-1
+    /// landing lane.
+    ///
+    /// <para>🚨 <b>A read never queues behind a landing (MeshWeaver#4963, #4804).</b> This used to
+    /// run on the same cap-1 pool as <see cref="LandModule"/> / <see cref="ShelveModule"/>, "so a
+    /// read never observes a landing halfway through its read-modify-write". There has been no
+    /// read-modify-write to observe since #2090/#4026: a landing writes its bytes into a fresh
+    /// generation directory, then an immutable record of its own
+    /// (<see cref="ModuleActivationSidecar.WriteLanding"/>, published by a no-replace rename), and
+    /// the list is DERIVED from the records present — which is exactly why a reader on ANOTHER
+    /// replica, whose landings this pool never serialised, is safe. A reader on another thread of
+    /// this process is the same reader. Keeping it on the landing lane bought nothing and cost the
+    /// registry's hottest path: every <c>/api/plugins/bundles/index.json</c> reads the list twice
+    /// and every bundle download once, so every consumer's poll waited out every publish landing
+    /// in flight (a shelf landing is one SMB round trip per file — DefaultViews alone declares 254
+    /// static assets) and every other request's read, one at a time, process-wide, with no byte
+    /// written to the caller meanwhile.</para>
     /// </summary>
     public IObservable<ModuleActivationList> GetActivation()
-        => pool.InvokeBlocking(_ => ModuleActivationSidecar.ReadFor(baseDirectory,
+        => ReadPool.InvokeBlocking(_ => ModuleActivationSidecar.ReadFor(baseDirectory,
             msg => logger?.LogError("{Message}", msg), platform));
+
+    /// <summary>
+    /// The pool <see cref="GetActivation"/> reads the volume on — the mesh's file-system pool in
+    /// production (<c>PluginCatalogConfigurationExtensions</c>), so a read of a network volume
+    /// stays inside the mesh's own IO budget and off every caller's thread. Deliberately a
+    /// DIFFERENT lane from the cap-1 pool landings serialise on (see <see cref="GetActivation"/>).
+    /// <see cref="IoPool.Unbounded"/> is the fallback for a host (or test) that names none.
+    /// </summary>
+    public IIoPool ReadPool { get; init; } = IoPool.Unbounded;
 
     /// <summary>
     /// Proposes the module set the deployment's activation record now describes — the coordination
