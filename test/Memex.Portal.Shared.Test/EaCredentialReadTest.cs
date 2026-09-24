@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Net.Http;
@@ -350,10 +351,13 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// cannot consume a <c>Task&lt;T&gt;</c> any other way — so the three reactive entry points are
     /// pinned here by reflection rather than trusted to review.
     ///
-    /// <para>The three retiring <c>…Async</c> forwarders are deliberately NOT asserted absent: they
-    /// exist for the duration of the MeshWeaver.Plugins migration and are counted as debt by
-    /// <c>HubReachableAsyncGuard</c>'s contract-seam arm, which is what removes them. What this
-    /// asserts is that the REACTIVE surface exists and is the primary one.</para>
+    /// <para>The three retiring <c>…Async</c> forwarders are now asserted ABSENT. They existed for
+    /// the duration of the MeshWeaver.Plugins migration, that migration landed
+    /// (MeshWeaver.Plugins#1416), and the deleting half removed them. Absence is asserted here
+    /// rather than left to the ratchet because the two say different things: the ratchet counts
+    /// debt and would be satisfied by a re-added member that someone also allow-listed, while this
+    /// says the SHAPE may not come back. Re-adding a Task-returning member to this seam is how
+    /// #3433 recurs.</para>
     /// </summary>
     // ── A refused grant is a finding, an outage is not (MeshWeaver.Plugins#1615) ─────────────────
 
@@ -491,5 +495,30 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
                 $"{name} is consumed from an agent round on a hub, where a Task can only be "
                 + "consumed by awaiting and awaiting parks the turn (#3433)");
         }
+
+        // The retiring forwarders are GONE, and may not come back. MeshWeaver.Plugins#1416 was the
+        // migrating half; this repository's deleting half followed it, which is the ordering the
+        // cross-repo pair gate enforces.
+        foreach (var name in new[] { "GetAccessTokenAsync", "IsConnectedAsync", "ExchangeAndStoreAsync" })
+            typeof(IEaGraphAuth).GetMethod(name).Should().BeNull(
+                $"{name} was a Task-shaped forwarder over the reactive surface, deleted once "
+                + "MeshWeaver.Plugins stopped calling it. A Task on this seam does not merely "
+                + "permit an await at a hub-side call site, it FORCES one — which is #3433 itself");
+
+        // …and no member may reintroduce the SHAPE under another name. Not "everything returns a
+        // stream": IsConfigured, ConnectPath and BuildConsentUrl are synchronous and pure, and a
+        // pure member is not a hub hazard. The hazard is specifically a Task, because a Task has
+        // exactly one consumption idiom and so FORCES the await at a hub-side call site.
+        typeof(IEaGraphAuth).GetMethods()
+            .Where(m => m.DeclaringType == typeof(IEaGraphAuth))
+            .Select(m => m.ReturnType)
+            .Should().OnlyContain(
+                t => t != typeof(Task)
+                     && t != typeof(ValueTask)
+                     && !(t.IsGenericType
+                          && (t.GetGenericTypeDefinition() == typeof(Task<>)
+                              || t.GetGenericTypeDefinition() == typeof(ValueTask<>))),
+                "a Task-shaped member on this seam is #3433 under a new name — the await it forces "
+                + "parks the very hub turn the agent round is running on");
     }
 }
