@@ -262,8 +262,12 @@ public sealed class DynamicTypePreWarmerHostedService(
                             + "framework after this replica booted is no longer being watched for "
                             + "(#4632)");
                     });
+        // 🚨 #5544 — the FIRST label only. It used to be the only one, held for the whole sweep, so a
+        // pod 30 types into an activation sweep read "enumerating dynamic NodeTypes" for hours; every
+        // later step now names itself through MarkProgress (see `progress` below).
         if (sweepEnabled)
             gate?.MarkRunning("enumerating dynamic NodeTypes");
+        Action<string>? progress = gate is null ? null : gate.MarkProgress;
         if (gate is { GatesReadiness: true })
             logger.LogInformation(
                 "DynamicTypePreWarmer: mesh admission is {Admission} — until this pod's bake "
@@ -410,7 +414,11 @@ public sealed class DynamicTypePreWarmerHostedService(
             ?[ShippedPrebuiltBundles.DirectoryConfigKey];
         var publishedBundleRoot = services.GetService<IConfiguration>()
             ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
+        if (importSettled is { IsSettled: false })
+            progress?.Invoke("waiting for the static repo import to settle before enumerating");
         var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
+            .Do(_ => progress?.Invoke(
+                "adopting the prebuilt bundles shipped for this framework before enumerating"))
             .SelectMany(_ => ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
             .SelectMany(_ => ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
 
@@ -459,7 +467,7 @@ public sealed class DynamicTypePreWarmerHostedService(
 
         _warmSubscription = seeded
             .SelectMany(_ => DynamicTypePreWarmer
-                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol))
+                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol, progress))
             .Subscribe(
                 outcome =>
                 {

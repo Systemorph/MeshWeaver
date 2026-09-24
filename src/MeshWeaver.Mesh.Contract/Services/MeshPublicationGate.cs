@@ -99,6 +99,9 @@ public interface IMeshAdmissionAuthority
 /// (<c>NodeTypeCompilationHelpers</c>). This is the one that produced #3472: it carries
 /// <c>CompiledFrameworkVersion</c>, <c>CompiledModulesHash</c>, <c>CompiledDependencies</c> and the
 /// assembly coordinates, and every other replica follows it.</item>
+/// <item>the PREBUILT-adoption stamp (<c>PrebuiltAssemblySeeder</c>) — the same field-set reached
+/// without a compile; it bypassed this gate until #5544, and an unready replica re-keyed 168 records
+/// per boot through it.</item>
 /// <item>the module-set ADOPTION record (<c>ModuleSetStore.RecordAdoption</c>) — the durable claim
 /// "a replica is serving set N", which a process that will never serve must not make.</item>
 /// </list>
@@ -253,6 +256,38 @@ public sealed class MeshPublicationGate : IDisposable
     /// subscribed.
     /// </param>
     public IObservable<Unit> Publish(string subject, Func<IObservable<Unit>> publication)
+        => Route(subject, publication,
+            (write, _) => write,
+            _ => Observable.Return(Unit.Default));
+
+    /// <summary>
+    /// <see cref="Publish"/>, telling the caller WHICH verdict its publication was decided under —
+    /// emitted once, after the write completed (<see cref="MeshAdmission.Unarmed"/> /
+    /// <see cref="MeshAdmission.Admitted"/>), or at once when it was HELD
+    /// (<see cref="MeshAdmission.Provisional"/>) or REFUSED (<see cref="MeshAdmission.Refused"/>).
+    ///
+    /// <para>🚨 #5544 — a caller whose OWN bookkeeping depends on whether the write happened needs
+    /// this, and reading <see cref="Admission"/> again after <see cref="Publish"/> completes is a
+    /// second read that can disagree with the one the decision was taken on. The prebuilt
+    /// adoption is that caller: a held adoption stamp is still an adoption THIS process may build
+    /// its sweep on (the bytes are on the store, the definition is recorded locally), while a
+    /// refused one is not — and the only honest witness for which it was is the verdict the gate
+    /// itself applied.</para>
+    /// </summary>
+    /// <param name="subject">What is being published — named in every log line.</param>
+    /// <param name="publication">Builds the cold write; see <see cref="Publish"/>.</param>
+    public IObservable<MeshAdmission> Offer(string subject, Func<IObservable<Unit>> publication)
+        => Route(subject, publication,
+            (write, admission) => write.LastOrDefaultAsync().Select(_ => admission),
+            Observable.Return);
+
+    /// <summary>The one decision both <see cref="Publish"/> and <see cref="Offer"/> take — only
+    /// what they hand back differs, so the two can never disagree about what was written.</summary>
+    private IObservable<T> Route<T>(
+        string subject,
+        Func<IObservable<Unit>> publication,
+        Func<IObservable<Unit>, MeshAdmission, IObservable<T>> ran,
+        Func<MeshAdmission, IObservable<T>> notRun)
     {
         ArgumentNullException.ThrowIfNull(publication);
         return Observable.Defer(() =>
@@ -266,13 +301,13 @@ public sealed class MeshPublicationGate : IDisposable
                     // whose owner forgot to call Reconsider still drains on the next publication.
                     Reconsider();
                     Interlocked.Increment(ref passedCount);
-                    return publication();
+                    return ran(publication(), admission);
 
                 case MeshAdmission.Provisional:
                     lock (verdict)
                     {
                         if (disposed)
-                            return Observable.Return(Unit.Default);
+                            return notRun(MeshAdmission.Refused);
                         held = held.Enqueue(new HeldPublication(subject, publication));
                         heldCount++;
                     }
@@ -281,7 +316,7 @@ public sealed class MeshPublicationGate : IDisposable
                         + "admitted to the mesh yet ({Reason}). It is published when the "
                         + "validation passes, and discarded if it does not.",
                         subject, AdmissionReason);
-                    return Observable.Return(Unit.Default);
+                    return notRun(MeshAdmission.Provisional);
 
                 default:
                     Interlocked.Increment(ref refusedCount);
@@ -293,7 +328,7 @@ public sealed class MeshPublicationGate : IDisposable
                         subject, AdmissionReason);
                     // Held work is now known to be worthless — drop it on the same edge.
                     Reconsider();
-                    return Observable.Return(Unit.Default);
+                    return notRun(MeshAdmission.Refused);
             }
         });
     }
