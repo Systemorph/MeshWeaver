@@ -265,6 +265,41 @@ public static class NodeTypeReleaseExtensions
             return Observable.Return(false);
         }
 
+        // 🚨 #5629 — a LEAVING host does not start a release (the #3129 rule, applied to the
+        // release leg). Its router refuses every outbound route ("Host is shutting down, cannot
+        // route to …"), so the trigger write can never land from here; attempting it only turns a
+        // pod drain into one fail-level line per affected NodeType. Asked at SUBSCRIBE time,
+        // because that is when the write would be issued — and BEFORE anything is resolved from
+        // the hub's container, which on a hub already disposing may resolve nothing at all. The
+        // caller is still ANSWERED — false, with a reason and a class — because the release
+        // genuinely did not happen and the type keeps the assembly it had until a pod that stays
+        // requests one.
+        return Observable.Defer(() =>
+        {
+            if (!hub.IsLeaving())
+                return ObserveNodeTypeReleaseOnAStayingHost(
+                    hub, nodeTypePath, force, releaseNotes, onError, onRefused);
+            var leaving =
+                $"This host is leaving (shutting down or stopping), so the release of '{nodeTypePath}' "
+                + "was not requested from it — nothing leaving can route the trigger write. The NodeType "
+                + "keeps the assembly it already had until a release is requested from a pod that stays.";
+            onError?.Invoke(leaving);
+            onRefused?.Invoke(new NodeTypeReleaseRefusal(
+                nodeTypePath, NodeTypeReleaseFailure.HostLeaving, leaving));
+            return Observable.Return(false);
+        });
+    }
+
+    /// <summary>The release leg proper — permission check, trigger write, total bound — for a hub
+    /// that is not leaving (see the gate in the public overload).</summary>
+    private static IObservable<bool> ObserveNodeTypeReleaseOnAStayingHost(
+        IMessageHub hub,
+        string nodeTypePath,
+        bool force,
+        string? releaseNotes,
+        Action<string>? onError,
+        Action<NodeTypeReleaseRefusal>? onRefused)
+    {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.NodeTypeReleaseExtensions");
 
@@ -352,7 +387,11 @@ public static class NodeTypeReleaseExtensions
                                 // exists to stop. The probe is the same one AreaErrorClassifier and
                                 // ScopeTeardown already document for a caller that holds the hub.
                                 NodeTypeReleaseFailureClassifier.ClassifyTriggerWriteFault(
-                                    ex, hub.IsServiceScopeDisposed),
+                                    ex, hub.IsServiceScopeDisposed,
+                                    // #5629 — a write that raced past the gate above and came
+                                    // back as the router's shutdown refusal: judged NOW, while
+                                    // the exception is in hand.
+                                    hub.IsLeaving),
                                 reason));
                             return Observable.Return(false);
                         });

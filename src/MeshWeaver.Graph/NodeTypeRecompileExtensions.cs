@@ -72,6 +72,14 @@ public static class NodeTypeRecompileExtensions
     /// same change would make a level change look like a side effect of naming the class. Naming
     /// them is what makes that question answerable at all: until now there was one line to argue
     /// about, and it covered everything.</para>
+    ///
+    /// <para>🚨 <b>The one exception, decided with its class:</b>
+    /// <see cref="NodeTypeReleaseFailure.HostLeaving"/> logs at <b>Warning</b> (#5629). It was born
+    /// after the rule above and its level was the question it was created to answer: a pod that is
+    /// leaving is not a defect, and on every roll that drains a pod mid-sweep it used to file one
+    /// fail-level line per affected NodeType (15 in 3 ms on 2026-09-24) for writes its own router
+    /// had already refused. It stays a Warning, not silence, because the release genuinely did not
+    /// happen — the type keeps the assembly it had.</para>
     /// </summary>
     /// <param name="logger">The channel's logger; a null logger writes nothing, as everywhere else
     /// in this file.</param>
@@ -154,6 +162,11 @@ public static class NodeTypeRecompileExtensions
             case NodeTypeReleaseFailure.NoAnswerWithinBound:
                 logger.LogError(
                     "[Recompile] Release request for {Path} failed — the RELEASE LEG NEVER ANSWERED within its ordered bound: {Message}",
+                    path, message);
+                break;
+            case NodeTypeReleaseFailure.HostLeaving:
+                logger.LogWarning(
+                    "[Recompile] Release request for {Path} not issued — THIS HOST IS LEAVING, so nothing it sends can reach the owner: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.Unclassified:
@@ -363,6 +376,26 @@ public static class NodeTypeRecompileExtensions
                     // the scope around the loop covers every request). Requested for EVERY affected
                     // type, adopted included — the watcher's satisfied-path consumes the trigger for
                     // current builds, and this stays the one place that guarantees a request lands.
+                    //
+                    // 🚨 #5629 — …except from a host that is LEAVING, where no request can land at
+                    // all: the router refuses every outbound route. Said ONCE for the wave, naming
+                    // every type, instead of one refusal per type (the per-leg gate in
+                    // ObserveNodeTypeRelease covers every other caller). A Warning, not silence:
+                    // these types really were not released, and the sync's activity must say so.
+                    if (hub.IsLeaving())
+                    {
+                        var types = string.Join(", ", ordered);
+                        logger?.LogWarning(
+                            "[Recompile] {Count} NodeType release(s) not issued — THIS HOST IS LEAVING, so no trigger write can reach an owner: {Types}. They keep the assemblies they had until a release is requested from a pod that stays.",
+                            ordered.Count, types);
+                        progress?.Invoke(
+                            $"Recompile of {ordered.Count} NodeType(s) not requested — this host is shutting down: {types}. "
+                            + "They keep their current assemblies until compiled from a serving pod.",
+                            LogLevel.Warning);
+                        // Nothing was requested, so nothing is reported as requested — this
+                        // method emits the release-REQUESTED paths.
+                        return (IReadOnlyList<string>)[];
+                    }
                     using (accessService?.ImpersonateAsSystem())
                         foreach (var path in ordered)
                             // Every argument stated: the classified overload carries no defaults, so
