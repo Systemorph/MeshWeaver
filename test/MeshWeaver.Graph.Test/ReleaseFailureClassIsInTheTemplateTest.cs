@@ -137,9 +137,12 @@ public class ReleaseFailureClassIsInTheTemplateTest
                 $"{failure}'s template must keep both as structured parameters");
             captured.Path.Should().Be(Path);
             captured.Message.Should().Be("the reason sentence");
-            captured.Level.Should().Be(LogLevel.Error,
-                "no level moves in this change — whether some of these classes deserve a lower one "
-                + "is a separate question, per class, with its own cost argument");
+            // #5629 — HostLeaving is the one class whose level was decided WITH it: a pod that is
+            // leaving is not a defect. Every other class keeps Error until its own argument is made.
+            captured.Level.Should().Be(
+                failure == NodeTypeReleaseFailure.HostLeaving ? LogLevel.Warning : LogLevel.Error,
+                "no level moves as a side effect — whether a class deserves a lower one is a "
+                + "separate question, per class, with its own cost argument");
         }
     }
 
@@ -240,6 +243,49 @@ public class ReleaseFailureClassIsInTheTemplateTest
             .Should().Be(NodeTypeReleaseFailure.Unclassified,
                 "no probe means the question was not answered, and an unanswered question must not "
                 + "become a yes — the typed-only answer stands");
+    }
+
+    /// <summary>
+    /// 🚨 #5629 — the router's own shutdown refusal, raced past the leaving gate. The production
+    /// line (memex, 2026-09-24 00:49:10Z) read <c>MeshNode Unknown at 'Manufacturing/WorkOrder':
+    /// Host is shutting down, cannot route to Manufacturing/WorkOrder</c> and was filed as a
+    /// TRANSIENT routing miss at Error, fifteen times in 3 ms. On a host that is LEAVING it is
+    /// <see cref="NodeTypeReleaseFailure.HostLeaving"/>, logged at Warning.
+    ///
+    /// <para>Negative control, on each side: the SAME exception with the probe answering no — a
+    /// host that stays reporting its router's refusal — keeps its old class, and so does an
+    /// unrelated timeout on a host that IS leaving. Neither half alone decides the class.</para>
+    /// </summary>
+    [Fact]
+    public void TheRoutersShutdownRefusal_IsHostLeavingOnlyOnAHostThatIsLeaving()
+    {
+        var refusal = new MeshNodeStreamException(new MeshNodeError(
+            MeshNodeErrorCode.Unknown, "Manufacturing/WorkOrder",
+            "Host is shutting down, cannot route to Manufacturing/WorkOrder"));
+
+        NodeTypeReleaseFailureClassifier
+            .ClassifyTriggerWriteFault(refusal, scopeDisposed: () => false, hostLeaving: () => true)
+            .Should().Be(NodeTypeReleaseFailure.HostLeaving);
+
+        var onAStayingHost = NodeTypeReleaseFailureClassifier
+            .ClassifyTriggerWriteFault(refusal, scopeDisposed: () => false, hostLeaving: () => false);
+        onAStayingHost.Should().NotBe(NodeTypeReleaseFailure.HostLeaving,
+            "the text alone is not the class — a host that stays is not leaving");
+        onAStayingHost.Should().Be(NodeTypeReleaseFailureClassifier
+                .ClassifyTriggerWriteFault(refusal, scopeDisposed: () => false),
+            "with the probe answering no, the classifier answers exactly as it did before #5629");
+
+        NodeTypeReleaseFailureClassifier
+            .ClassifyTriggerWriteFault(new TimeoutException("The operation has timed out."),
+                scopeDisposed: () => false, hostLeaving: () => true)
+            .Should().Be(NodeTypeReleaseFailure.TransientHubFailure,
+                "the probe alone is not the class either — an unrelated fault during a drain keeps "
+                + "its own name");
+
+        var logged = Log(NodeTypeReleaseFailure.HostLeaving, "reason");
+        logged.Level.Should().Be(LogLevel.Warning,
+            "a leaving pod is not a defect; fifteen fail-level lines per drained pod were the bug");
+        logged.Template.Should().Contain("THIS HOST IS LEAVING");
     }
 
     /// <summary>
