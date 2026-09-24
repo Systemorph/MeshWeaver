@@ -142,9 +142,15 @@ How to read it:
 - **The line is conditional, and the `[LIVENESS]` line is not.** An absent `[LIVENESS]` line is a
   reading on its own. An absent `[HEAPSTEP]` line only means the heap did not step in that tick, and
   `heap=` already says so.
-- **An empty type list is stated, never implied.** If the sampler could not start, a step still
-  prints, and the line ends *"NO allocation was sampled in this window, so this line cannot name the
-  allocator"*. It never prints an empty list that would read as "nothing was allocated".
+- **An empty type list is stated, never implied, and the two reasons for one are told apart.** If
+  the sampler could not start, a step still prints and says *"the allocation sampler is NOT running in
+  this process"*. If it is running and sampled nothing in that tick, the line says *"the sampler is
+  running but sampled NO allocation in this window"*. It never prints an empty list that would read as
+  "nothing was allocated".
+- **A sample is never lost to a drain.** The window is one immutable map, and both sides replace it
+  by compare-and-swap: a record folds its sample in with `ImmutableInterlocked.AddOrUpdate`, and a
+  drain takes the map with `Interlocked.Exchange`. A record that races a drain therefore retries
+  against the fresh map instead of adding to one nobody reads again.
 - **Find it** with the same `Logs` action as the heartbeat: `query: "HEAPSTEP\\] tick="`, per pod.
 
 `HeapStepNamesItsAllocatorTest` pins the rule with pure tests. It also has a live test: it allocates

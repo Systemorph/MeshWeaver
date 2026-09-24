@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics.Tracing;
 
@@ -57,15 +56,18 @@ public sealed class AllocationByTypeSampler : EventListener
     /// <summary>How many types a window reports. The step is one or two types, never forty.</summary>
     public const int TopTypes = 8;
 
-    // Swapped whole by Drain. A sample racing the swap lands in either window, never nowhere that
-    // matters: at ~100 KB per sample one misplaced sample is noise against a multi-GiB step.
-    private ConcurrentDictionary<string, long> window = new(StringComparer.Ordinal);
+    // One immutable map, replaced by compare-and-swap on BOTH sides: Record folds a sample in with
+    // ImmutableInterlocked.AddOrUpdate, Drain takes the map with Interlocked.Exchange. A sample
+    // racing the drain therefore either lands in the map Drain took, or fails its CAS and is
+    // retried against the fresh one — it is never added to a map nobody will read again.
+    private ImmutableDictionary<string, long> window = ImmutableDictionary.Create<string, long>(StringComparer.Ordinal);
 
     /// <inheritdoc />
     protected override void OnEventSourceCreated(EventSource eventSource)
     {
-        // Runs from the base constructor for sources that already exist, so it must not touch state
-        // the derived constructor would set; `window` is a field initializer, which C# runs first.
+        // Runs from the base constructor for sources that already exist. That is safe here: the only
+        // state an event touches is `window`, and C# runs instance field initializers BEFORE the
+        // base constructor call, so it is assigned before this can be reached.
         if (eventSource.Name == RuntimeProviderName)
             EnableEvents(eventSource, EventLevel.Verbose, GcKeyword);
     }
@@ -105,7 +107,7 @@ public sealed class AllocationByTypeSampler : EventListener
     /// <param name="typeName">The allocated type.</param>
     /// <param name="bytes">The sampled bytes.</param>
     internal void Record(string typeName, long bytes) =>
-        Volatile.Read(ref window).AddOrUpdate(typeName, bytes, (_, sum) => sum + bytes);
+        ImmutableInterlocked.AddOrUpdate(ref window, typeName, bytes, (_, sum) => sum + bytes);
 
     /// <summary>
     /// The window since the previous drain, heaviest types first, and a fresh window started.
@@ -113,7 +115,7 @@ public sealed class AllocationByTypeSampler : EventListener
     /// <returns>What was sampled since the last call.</returns>
     public AllocationWindow Drain()
     {
-        var drained = Interlocked.Exchange(ref window, new ConcurrentDictionary<string, long>(StringComparer.Ordinal));
+        var drained = Interlocked.Exchange(ref window, window.Clear());
         if (drained.IsEmpty)
             return AllocationWindow.Empty;
 

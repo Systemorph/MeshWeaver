@@ -64,11 +64,44 @@ public class HeapStepNamesItsAllocatorTest
     /// allocator, rather than printing an empty list that reads as "nothing was allocated".
     /// </summary>
     [Fact]
-    public void AStepWithoutSamples_SaysItCannotNameTheAllocator()
+    public void AStepWithoutSamples_SaysItCannotNameTheAllocator_AndWhy()
     {
         ProcessLiveness.DescribeHeapStep(
+                Sample(40, 400, Gib), Sample(41, 410, 3 * Gib), null)
+            .Should().Contain("the allocation sampler is NOT running in this process");
+        ProcessLiveness.DescribeHeapStep(
                 Sample(40, 400, Gib), Sample(41, 410, 3 * Gib), AllocationWindow.Empty)
-            .Should().Contain("NO allocation was sampled in this window");
+            .Should().Contain("the sampler is running but sampled NO allocation in this window");
+    }
+
+    /// <summary>
+    /// A sample recorded while a drain takes the window is never lost: every byte recorded ends up
+    /// in exactly one drained window (Copilot review on #5665 — a mutable map swapped by reference
+    /// could take an add after the drain had read it).
+    /// </summary>
+    [Fact]
+    public void ConcurrentRecordAndDrain_LoseNoSample()
+    {
+        using var sampler = new AllocationByTypeSampler();
+        const string type = "ConcurrentRecordAndDrainMarker";
+        const int writers = 4, perWriter = 50_000;
+        var drainedBytes = 0L;
+        var done = 0;
+        var threads = Enumerable.Range(0, writers).Select(_ => new System.Threading.Thread(() =>
+        {
+            for (var i = 0; i < perWriter; i++)
+                sampler.Record(type, 1);
+            System.Threading.Interlocked.Increment(ref done);
+        })).ToArray();
+        foreach (var t in threads)
+            t.Start();
+        while (System.Threading.Volatile.Read(ref done) < writers)
+            drainedBytes += sampler.Drain().Top.Where(t => t.TypeName == type).Sum(t => t.Bytes);
+        foreach (var t in threads)
+            t.Join();
+        drainedBytes += sampler.Drain().Top.Where(t => t.TypeName == type).Sum(t => t.Bytes);
+
+        drainedBytes.Should().Be((long)writers * perWriter, "every recorded sample lands in exactly one drained window");
     }
 
     /// <summary>

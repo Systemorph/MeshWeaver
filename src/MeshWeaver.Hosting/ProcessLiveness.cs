@@ -224,10 +224,12 @@ public static class ProcessLiveness
     /// </summary>
     /// <param name="previous">The previous tick's sample, or null on the first tick (which never reports).</param>
     /// <param name="current">This tick's sample.</param>
-    /// <param name="allocations">What was sampled as allocated since the previous tick.</param>
+    /// <param name="allocations">What was sampled as allocated since the previous tick, or
+    /// <c>null</c> when this process has no running sampler — two different sentences, because "the
+    /// sampler ran and saw nothing" and "there is no sampler" are different readings.</param>
     /// <returns>The line, or null when the heap did not step.</returns>
     public static string? DescribeHeapStep(
-        ProcessLivenessSample? previous, ProcessLivenessSample current, AllocationWindow allocations)
+        ProcessLivenessSample? previous, ProcessLivenessSample current, AllocationWindow? allocations)
     {
         if (previous is null)
             return null;
@@ -239,10 +241,15 @@ public static class ProcessLiveness
             .Append(CultureInfo.InvariantCulture,
                 $"[HEAPSTEP] tick={current.TickSeq} heap={Gib(previous.HeapBytes)}→{Gib(current.HeapBytes)} (+{Gib(growth)}) in {Seconds(current.Elapsed - previous.Elapsed)}");
 
+        if (allocations is null)
+            return line.Append(
+                    " — the allocation sampler is NOT running in this process, so this line cannot name "
+                    + "the allocator.")
+                .ToString();
         if (allocations.TotalBytes <= 0)
             return line.Append(
-                    " — NO allocation was sampled in this window, so this line cannot name the allocator "
-                    + "(the sampler is not running in this process).")
+                    " — the sampler is running but sampled NO allocation in this window, so this line "
+                    + "cannot name the allocator.")
                 .ToString();
 
         line.Append(CultureInfo.InvariantCulture,

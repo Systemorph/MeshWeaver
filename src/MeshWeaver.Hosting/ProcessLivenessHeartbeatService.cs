@@ -107,7 +107,7 @@ internal sealed class ProcessLivenessHeartbeatService(
                 var sample = ProcessLiveness.Probe(++tick, clock.Elapsed);
                 var reading = ProcessLiveness.Read(previous, sample, period);
                 var step = ProcessLiveness.DescribeHeapStep(
-                    previous, sample, sampler?.Drain() ?? AllocationWindow.Empty);
+                    previous, sample, sampler?.Drain());
                 previous = sample;
                 logger.LogInformation("{Reading}", reading.Describe());
                 if (step is not null)
