@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Http;
+using Microsoft.Extensions.Http.Resilience;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Persistence;
@@ -42,7 +44,57 @@ public static class ServiceDefaults
 
         builder.Services.AddServiceDiscovery();
 
-        builder.Services.ConfigureHttpClientDefaults(http =>
+        // 🚨 Resilience for every outbound HttpClient — split out so a test builds exactly what
+        // production builds (EveryClientNamesItsOwnResiliencePipelineTest).
+        builder.Services.AddHttpClientResilienceDefaults();
+
+        // Turn on service discovery by default. Registered AFTER the resilience defaults so the
+        // handler order is the one it always was: resilience outermost, discovery inside it.
+        builder.Services.ConfigureHttpClientDefaults(http => http.AddServiceDiscovery());
+
+        builder.Services.AddRequestTimeouts();
+        builder.Services.AddOutputCache();
+
+        return builder;
+    }
+
+    /// <summary>
+    /// The resilience every outbound <see cref="HttpClient"/> of the portal gets: the standard
+    /// handler on the shared defaults (with the #4613 name-does-not-resolve carve-out), ONE
+    /// pipeline instance per client NAME, and the two plugin-registry clients re-registered with
+    /// their own budgets.
+    ///
+    /// <para>🚨 <b>What <c>Source: '-standard//…'</c> actually is (#4528).</b> The builder that
+    /// <c>ConfigureHttpClientDefaults</c> hands out has NO name, and
+    /// <c>AddStandardResilienceHandler</c> names its pipeline <c>{builder.Name}-standard</c> — so
+    /// the defaults pipeline is called <c>-standard</c> for EVERY client that does not re-register
+    /// itself, named or not. It was read as "some caller resolves an unnamed client"; measured on
+    /// memex-cloud it was the NAMED <c>self-update-handover</c> client (every stack under those
+    /// timeouts ends in <c>SelfUpdateHandover.Post</c>). And because the pipeline registry keys a
+    /// pipeline by (name, instance) and the instance was always empty, it was ONE pipeline — one
+    /// circuit breaker — shared by every such client and every host they call.</para>
+    ///
+    /// <para>The instance is now the client's own name: an outermost handler stamps
+    /// <see cref="HttpMessageHandlerBuilder.Name"/> onto the request and <see cref="ClientNameOf"/>
+    /// selects the pipeline instance from it. Every Polly line then reads
+    /// <c>-standard/self-update-handover/Standard-AttemptTimeout</c>, and each client trips its own
+    /// breaker. Keyed by client NAME, never by request authority: names are fixed in code, so the
+    /// registry holds a bounded set, whereas the defaults also serve arbitrary URLs taken from user
+    /// data (web fetches, Open Graph previews) and a per-host key would grow without bound.</para>
+    /// </summary>
+    /// <param name="services">The host's service collection.</param>
+    /// <returns><paramref name="services"/>, for chaining.</returns>
+    public static IServiceCollection AddHttpClientResilienceDefaults(this IServiceCollection services)
+    {
+        // The stamp goes on EVERY client, re-registered ones included (removing a client's
+        // resilience handlers leaves it in place, harmlessly). Insert(0) makes it the outermost
+        // handler whatever order the builder actions run in, so the name is on the request before
+        // any pipeline is selected.
+        services.ConfigureAll<HttpClientFactoryOptions>(options =>
+            options.HttpMessageHandlerBuilderActions.Add(handlers =>
+                handlers.AdditionalHandlers.Insert(0, new HttpClientNameStamp(handlers.Name))));
+
+        services.ConfigureHttpClientDefaults(http =>
         {
             // Turn on resilience by default
             http.AddStandardResilienceHandler(options =>
@@ -58,11 +110,12 @@ public static class ServiceDefaults
                 // folds Error lines into a LogIncident and opens a ticket, so a URL in somebody's
                 // data manufactured a platform defect report.
                 //
-                // Excluded from the BREAKER for the same reason and one more: the default pipeline
-                // is shared by every client that does not name its own, so counting a dead hostname
-                // as a failure lets one bad URL push the breaker toward open for calls that have
-                // nothing to do with it. A name that does not resolve says nothing about the health
-                // of any endpoint.
+                // Excluded from the BREAKER for the same reason and one more: one client's pipeline
+                // (one per client name since #4528, one for ALL of them before it) serves every host
+                // that client calls — the web fetcher calls whatever URL an agent was given — so
+                // counting a dead hostname as a failure lets one bad URL push the breaker toward
+                // open for calls that have nothing to do with it. A name that does not resolve says
+                // nothing about the health of any endpoint.
                 //
                 // 🚨 Narrowest possible set: HostNotFound only. `TryAgain` (EAI_AGAIN) is a DNS
                 // server that did not answer — genuinely transient, and it must keep being retried.
@@ -75,15 +128,16 @@ public static class ServiceDefaults
                 options.CircuitBreaker.ShouldHandle = args => NameDoesNotResolve(args.Outcome.Exception)
                     ? ValueTask.FromResult(false)
                     : breaks(args);
-            });
-            // Turn on service discovery by default
-            http.AddServiceDiscovery();
+            })
+            // 🚨 ONE PIPELINE INSTANCE PER CLIENT NAME (#4528) — see ClientNameOf.
+            .SelectPipelineBy(static _ => ClientNameOf);
         });
 
-        // Attributable resilience for the plugin-registry client (#1133/#1137). Every client
-        // otherwise shares the ONE unnamed defaults pipeline above, whose Polly events log
-        // Source: '-standard//…' with an empty operation key — the boot-time registry timeouts
-        // could not be attributed to any call path. Re-registering the named client the
+        // Attributable resilience for the plugin-registry client (#1133/#1137). Every other client
+        // rides the defaults pipeline above (Source: '-standard/{client}/…' since #4528; before it,
+        // '-standard//…' with an empty instance, which is why the boot-time registry timeouts
+        // could not be attributed to any call path). The registry clients need more than a name,
+        // though: a budget of their own. Re-registering the named client the
         // PluginCatalog consumer resolves (InstanceRegistrationClient.HttpClientName — the
         // literal is duplicated here because ServiceDefaults deliberately does not reference
         // MeshWeaver.PluginCatalog) swaps the shared default pipeline for its own standard one,
@@ -133,7 +187,7 @@ public static class ServiceDefaults
 
         // Page-facing: registration + the catalog listing. Generous enough to cover the measured
         // 12–19s TTFB with headroom, bounded tightly enough that a user is never left waiting.
-        builder.Services.AddHttpClient("plugin-registry")
+        services.AddHttpClient("plugin-registry")
             .RemoveAllResilienceHandlers()
             .AddStandardResilienceHandler(options =>
             {
@@ -143,7 +197,7 @@ public static class ServiceDefaults
             });
 
         // Transfer-facing: bundle downloads only. Nothing renders behind this, so it may wait.
-        builder.Services.AddHttpClient("plugin-registry-bundles")
+        services.AddHttpClient("plugin-registry-bundles")
             .RemoveAllResilienceHandlers()
             .AddStandardResilienceHandler(options =>
             {
@@ -153,10 +207,53 @@ public static class ServiceDefaults
             });
 #pragma warning restore EXTEXP0001
 
-        builder.Services.AddRequestTimeouts();
-        builder.Services.AddOutputCache();
+        return services;
+    }
 
-        return builder;
+    /// <summary>The request option the outermost handler writes the sending client's name into.</summary>
+    internal static readonly HttpRequestOptionsKey<string> ClientNameKey = new("MeshWeaver.HttpClientName");
+
+    /// <summary>The pipeline instance of a request sent by the factory's default, UNNAMED client.
+    /// Spelled out so the log line says so rather than leaving the slot empty — an empty slot is
+    /// exactly what hid the caller.</summary>
+    internal const string UnnamedClient = "(unnamed)";
+
+    /// <summary>
+    /// The pipeline instance a request belongs to: the name of the client that sent it, as the
+    /// outermost handler stamped it; <see cref="UnnamedClient"/> for the default client or for a
+    /// request that did not come through a stamped chain. Pure.
+    /// </summary>
+    /// <param name="request">The outgoing request.</param>
+    /// <returns>The pipeline instance name.</returns>
+    internal static string ClientNameOf(HttpRequestMessage request) =>
+        request.Options.TryGetValue(ClientNameKey, out var name) && !string.IsNullOrEmpty(name)
+            ? name
+            : UnnamedClient;
+
+    /// <summary>
+    /// Writes the owning client's name onto every request it sends, so the resilience pipeline
+    /// inside it is selected per client (<see cref="ClientNameOf"/>). The HTTP stack's own Task
+    /// boundary — nothing is awaited here.
+    /// </summary>
+    private sealed class HttpClientNameStamp(string? clientName) : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Stamp(request);
+            return base.SendAsync(request, cancellationToken);
+        }
+
+        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Stamp(request);
+            return base.Send(request, cancellationToken);
+        }
+
+        private void Stamp(HttpRequestMessage request)
+        {
+            if (!string.IsNullOrEmpty(clientName))
+                request.Options.Set(ClientNameKey, clientName);
+        }
     }
 
     /// <summary>
