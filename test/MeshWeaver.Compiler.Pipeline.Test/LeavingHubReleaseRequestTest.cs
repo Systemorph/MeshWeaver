@@ -55,8 +55,8 @@ public class LeavingHubReleaseRequestTest(ITestOutputHelper output) : MonolithMe
             Content = new NodeTypeDefinition(),
         };
         await MeshService.CreateNode(typeNode)
-            .Should().Within(20.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        await Mesh.GetMeshNodeStream(typePath).Should().Within(TestTimeouts.Convergence)
             .Match(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is not null,
                 cancellationToken: TestContext.Current.CancellationToken);
     }
@@ -85,7 +85,7 @@ public class LeavingHubReleaseRequestTest(ITestOutputHelper output) : MonolithMe
 
         var leavingRefusals = new ConcurrentQueue<NodeTypeReleaseRefusal>();
         var released = await Release(leaving, typePath, leavingRefusals)
-            .Should().Within(20.Seconds())
+            .Should().Within(TestTimeouts.Convergence)
             .Emit("a leaving hub still ANSWERS the caller — a release wave must never park on it");
         released.Should().BeFalse("nothing is released from a host that is leaving");
         leavingRefusals.Should().ContainSingle().Which.Failure.Should().Be(
@@ -105,11 +105,11 @@ public class LeavingHubReleaseRequestTest(ITestOutputHelper output) : MonolithMe
         live.IsLeaving().Should().BeFalse();
         var liveRefusals = new ConcurrentQueue<NodeTypeReleaseRefusal>();
         var releasedLive = await Release(live, typePath, liveRefusals)
-            .Should().Within(30.Seconds()).Emit("a live hub's release request completes");
+            .Should().Within(TestTimeouts.Convergence).Emit("a live hub's release request completes");
         releasedLive.Should().BeTrue(
             "on a live hub the same request IS issued — without this arm the leaving arm would "
             + "prove nothing. Refusals: " + string.Join("; ", liveRefusals));
-        await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
+        await Mesh.GetMeshNodeStream(typePath).Should().Within(TestTimeouts.Convergence)
             .Match(Triggered, "the live hub's trigger lands on the shared record");
     }
 }
