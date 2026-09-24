@@ -16,7 +16,7 @@ Latest dispatch target … — the address that happened to cross the threshold,
 ```
 
 This line is the single most-ticketed log site in the platform. It is **a gauge, not a bound**:
-nothing throttles, queues or refuses at 64. `RoutingGrain.SaturationThreshold` gates a log call and
+nothing throttles, queues or refuses at 64. `RoutingSaturationReport.SaturationThreshold` gates a log call and
 nothing else, which is why every report in production prints *exactly* 64 — the report latches on the
 single increment that crosses the line, so 64 is the only value it can print. That artefact has twice
 been read as evidence of a hard cap.

@@ -42,7 +42,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class RoutingSaturationNamesItsOwnVerdictTest
 {
-    /// <summary>Mirrors <c>RoutingGrain.SaturationThreshold</c> — the value every production report printed.</summary>
+    /// <summary>Mirrors <c>RoutingSaturationReport.SaturationThreshold</c> — the value every production report printed.</summary>
     private const int Legs = 64;
 
     // 🚨 WHY THE [Fact(Timeout = …)] BELOW IS A LITERAL, AND WHY IT IS NOT 30 s. Every wait inside

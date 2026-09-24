@@ -223,6 +223,10 @@ internal sealed class RoutingSaturationReport
         if (Volatile.Read(ref escalatedEpisode) == episode) return;
         var oldest = oldestLeg();
         if (SaturationLevel(oldest?.Age) != LogLevel.Critical) return;
+        // Revalidate against OnTerminated, which runs on pool completion threads: if the episode drained
+        // (or a new one began) while the scan ran, this review belongs to nothing and must not log. What
+        // survives the window is a leg that WAS past its bounds when read — a true statement either way.
+        if (Volatile.Read(ref saturationReported) != 1 || Volatile.Read(ref saturationEpisode) != episode) return;
         if (Interlocked.Exchange(ref escalatedEpisode, episode) == episode) return;
 
         var since = Volatile.Read(ref saturationSinceTicks);
