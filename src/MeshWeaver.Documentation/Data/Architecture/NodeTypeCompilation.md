@@ -1884,6 +1884,13 @@ execution of this one leg, against ≈2 % per execution measured for
 `Hosting.Monolith.Test` on 2026-09-22. The two newest `main` runs at the time of writing
 (`36002604963`, `35997990577`) are red for unrelated reasons and carry no canary.
 
+**The whole workflow over the same window.** Every non-success job of every `Plugin Catalog CI`
+attempt from 2026-09-23T06:46Z to 2026-09-24T14:00Z (1,060 job logs read) carries **six** occurrences:
+the three above, and three in `portal-hosts (network-133 · leg 1/8)` — `Hosting.Monolith.Test`, the
+suite of every earlier occurrence — runs `35828369047` (`main`), `35846873901` and `35858189010` (pull
+requests), first poisoned compiles `TestData/UploadLegWedgeType`, `TestData/SatisfiedType`,
+`TestData/SatisfiedType`. Four of the six are on `main`.
+
 **One onset position, three times.** The test order is deterministic, and in ALL THREE occurrences the first
 poisoned emit is the same test start of the leg (the 155th in its trace) — `RetiredNodePruneTest.SharedSourceChange_…` compiling
 `Widget/Thing` — after `CommercialPackageAuthorizationTest`'s three 15 s waits. Earlier emits in the
