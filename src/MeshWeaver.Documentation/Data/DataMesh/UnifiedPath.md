@@ -128,6 +128,14 @@ Folder names with spaces need no quoting or URL-encoding: `@Node/content/content
 Writing goes through `upload` with the mirror shape `{nodePath}/{collection}/{filePath}` (nested paths allowed, collection must have `IsEditable = true`):
 `upload @Node/content/Export/result.txt <base64>`.
 
+**Size ceiling.** One ceiling holds for every upload transport: a file of at most **200 MiB**
+(decoded bytes), `UploadLimits.MaxUploadBytes` in `MeshWeaver.Mesh.Operations`. Each route declares
+its request-body limit from it for its own encoding — REST `POST /api/mesh/upload` the file plus its
+multipart envelope, the MCP `/mcp` endpoint the file's base64 length plus the JSON-RPC envelope — so
+a request inside the ceiling is never cut at Kestrel's 30 MB default, and a larger file is refused
+by name (`Error: the file is N bytes; the upload ceiling is …`). Both transports buffer the whole
+file in memory, and base64 adds a third; prefer the REST route for large files.
+
 ### Binary formats: what gets extracted, what does not
 
 `get` runs binary documents through registered `IContentTransformer`s before returning text:

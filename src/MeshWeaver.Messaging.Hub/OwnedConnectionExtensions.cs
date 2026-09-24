@@ -1,3 +1,5 @@
+using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -8,8 +10,9 @@ namespace MeshWeaver.Messaging;
 /// The ONE spelling for connecting a multicast chain (<c>Replay(…)</c>, <c>Publish()</c>,
 /// <c>PublishLast()</c>) whose upstream must die with a specific owner: the connection handle is
 /// REGISTERED with the owner the instant <c>Connect()</c> runs, the owner's disposal releases it,
-/// and a subscriber arriving after that release is refused with <see cref="ObjectDisposedException"/>
-/// instead of being parked on a replay that nothing will ever feed.
+/// and every subscriber — one still attached when the release happens as much as one arriving after
+/// it — terminates with <see cref="ObjectDisposedException"/> instead of being parked on a replay
+/// that nothing will ever feed (#5135: the attached half was silent before).
 ///
 /// <para><b>The defect this replaces.</b> A bare <c>.AutoConnect(1)</c> keeps the handle its
 /// <c>Connect()</c> returns to itself; a bare <c>.Connect()</c> whose result is dropped keeps it
@@ -69,15 +72,36 @@ public static class OwnedConnectionExtensions
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerName);
 
-        var shared = source.AutoConnect(minObservers, connection => Register(source, owner, connection));
+        // 🚨 The release is a TERMINAL for every subscriber already attached, not only a refusal for
+        // the ones that arrive after it (#5135). Disposing the connection unsubscribes the multicast
+        // subject from its upstream and emits NOTHING to that subject's observers: a subscriber that
+        // joined while the one-shot was still in flight — an MCP upload waiting on
+        // ContentService.GetCollection when the owning hub tears down — was left with no OnNext, no
+        // OnError and no OnCompleted, forever, and nothing upstream of the Replay (ContentService's
+        // eviction Catch included) could ever see it. The release signal fires only when the OWNER is
+        // disposed — never when a terminated chain merely drops its handle, which must keep replaying
+        // its settled value to late subscribers.
+        var released = new Subject<Unit>();
+        var shared = source.AutoConnect(minObservers,
+            connection => Register(source, owner, connection, () => Release(released, ownerName)));
 
         // 🚨 Refuse, never park. After the release the replay subject still hands a late subscriber
         // whatever it buffered and then goes silent — the "burst then dead silence" wedge. A
         // refusal names the owner and terminates.
         return Observable.Defer(() => owner.IsDisposed
             ? Observable.Throw<T>(Disposed(ownerName))
-            : shared);
+            : shared.TakeUntil(released));
     }
+
+    /// <summary>
+    /// Terminates every subscriber still attached to a released connection with the same
+    /// <see cref="ObjectDisposedException"/> a late subscriber is refused with. Delivered on the
+    /// ThreadPool, never on the disposing thread: the owner's release runs inside a hub's ShutDown
+    /// phase, and a subscriber's error continuation must not run on that turn (the IoPool refusal
+    /// makes the same trade, #4530).
+    /// </summary>
+    private static void Release(Subject<Unit> released, string ownerName)
+        => TaskPoolScheduler.Default.Schedule(() => released.OnError(Disposed(ownerName)));
 
     /// <summary>
     /// <c>AutoConnect(minObservers)</c> whose connection is owned by <paramref name="hub"/>: released
@@ -144,9 +168,23 @@ public static class OwnedConnectionExtensions
     /// has already terminated (a settled replay) removes it in the same call rather than leaving a
     /// dead handle behind.
     /// </summary>
-    private static IDisposable Register<T>(IConnectableObservable<T> source, CompositeDisposable owner, IDisposable connection)
+    private static IDisposable Register<T>(
+        IConnectableObservable<T> source,
+        CompositeDisposable owner,
+        IDisposable connection,
+        Action? onOwnerReleased = null)
     {
-        var handle = new CompositeDisposable(2) { connection };
+        var handle = new CompositeDisposable(3);
+        // First, so attached subscribers are told before the upstream is torn down. Only an OWNER
+        // disposal fires it: CompositeDisposable marks itself disposed before it disposes its items,
+        // while a terminated chain removes its handle from an owner that is still alive.
+        if (onOwnerReleased is not null)
+            handle.Add(Disposable.Create(() =>
+            {
+                if (owner.IsDisposed)
+                    onOwnerReleased();
+            }));
+        handle.Add(connection);
         owner.Add(handle);
         // `Remove` disposes what it removes, so a terminated chain's connection is released with
         // its bookkeeping in one step; on an owner disposed meanwhile it is a no-op (already done).
