@@ -108,6 +108,56 @@ lower its threshold.
 often. Measure liveness from inside the process, where "I am still executing" is a thing that can be
 said.
 
+## A heap step names its allocator: the `[HEAPSTEP]` line
+
+The heartbeat's `heap=` field (`GC.GetTotalMemory(false)`) is what showed MeshWeaver#5555's shape.
+memex-cloud replicas took **multi-GiB live-heap steps**: +2 to +10 GiB inside one 100 s sample, on
+several replicas within seconds of each other (01:00:02Z and 01:00:11Z; 03:31:48Z and 03:31:56Z on
+2026-09-24). The heap stayed up through gen-2 collections, and one replica died of
+`OutOfMemoryException`. The field says **how much** was added. It cannot say **what** was added,
+and no reading could be taken at the moment of a step:
+
+- a `--type Heap` dump of a replica this size freezes it for about 106 s, which is past the
+  liveness budget, so it restarts the container ([The Portal Heap Is Hubs](../PortalHeapIsHubs));
+- the steps are unpredictable, so nobody is at the pod with a tool when one lands.
+
+So the heartbeat now carries the reading itself. `AllocationByTypeSampler` is an in-process
+`EventListener` on the runtime's `GC` keyword. The runtime already raises one `GCAllocationTick`
+event per ~100 KB allocated, and each event names the allocated type. The sampler sums those events
+per type between two ticks. When a tick's heap has grown by `ProcessLiveness.HeapStepThresholdBytes`
+(512 MiB) or more since the previous tick, a `Warning` follows the `[LIVENESS]` line:
+
+```
+[HEAPSTEP] tick=41 heap=2.00GiB→8.00GiB (+6.00GiB) in 10.00s; sampled allocation in the window
+6.00GiB, heaviest types: System.Byte[]=5.00GiB (83%) System.String=1.00GiB (17%). Allocated, not
+retained: the leading type is the candidate for what the step holds.
+```
+
+How to read it:
+
+- **It names what was allocated, not what is retained.** A step is memory that was allocated AND is
+  still reachable. A type that dominates a window in which the heap grew by gigabytes is the leading
+  candidate. A dump of a *quiet* replica confirms what roots it.
+- **It is a sample.** Types of a few hundred KB are noise. A type of several GiB is not.
+- **The line is conditional, and the `[LIVENESS]` line is not.** An absent `[LIVENESS]` line is a
+  reading on its own. An absent `[HEAPSTEP]` line only means the heap did not step in that tick, and
+  `heap=` already says so.
+- **An empty type list is stated, never implied, and the two reasons for one are told apart.** If
+  the sampler could not start, a step still prints and says *"the allocation sampler is NOT running in
+  this process"*. If it is running and sampled nothing in that tick, the line says *"the sampler is
+  running but sampled NO allocation in this window"*. It never prints an empty list that would read as
+  "nothing was allocated".
+- **A sample is never lost to a drain.** The window is one immutable map, and both sides replace it
+  by compare-and-swap: a record folds its sample in with `ImmutableInterlocked.AddOrUpdate`, and a
+  drain takes the map with `Interlocked.Exchange`. A record that races a drain therefore retries
+  against the fresh map instead of adding to one nobody reads again.
+- **Find it** with the same `Logs` action as the heartbeat: `query: "HEAPSTEP\\] tick="`, per pod.
+
+`HeapStepNamesItsAllocatorTest` pins the rule with pure tests. It also has a live test: it allocates
+~160 MiB of a marker type and requires the sampler to attribute at least 64 MiB of it to that type.
+That live test is the positive control. A sampler that received nothing would make every real line
+say "cannot name".
+
 ## Where this sits
 
 [Error Propagation & Wedges](../ErrorPropagationAndWedges) — what must always happen once you know it is
