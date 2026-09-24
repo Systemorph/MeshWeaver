@@ -3261,9 +3261,10 @@ public static class DataExtensions
         // answer (#3432). Before, it was held for the hub's whole life: +1 permanent registrant per
         // GetDataRequest ever served, each holding the delivery and its closures. After a claimed
         // terminal its disposal can do nothing — the subscription is over and TryClaimSilentTerminal
-        // fails — so detaching it then changes no behaviour. A read that is still LIVE (a workspace
-        // stream keeps shipping) or that ended UNCLAIMED (an empty completion on a healthy hub, whose
-        // caller is owed the disposal NACK) stays registered, exactly as before.
+        // fails — so detaching it then changes no behaviour. Since #5636 every answered read IS
+        // terminated (one read, one answer), so only a read still WAITING for its first value, or one
+        // that ended UNCLAIMED (an empty completion on a healthy hub, whose caller is owed the
+        // disposal NACK), stays registered.
         var detach = new SingleAssignmentDisposable();
 
         var subscription = RunReadValidators(hub, request.Message.Reference)
@@ -3313,6 +3314,17 @@ public static class DataExtensions
                 HubDisposingException.IsHubDisposal(ex) || HubDisposingException.IsDisposedContainer(ex)
                     ? Observable.Throw<GetDataResponse>(ex)
                     : Observable.Return(new GetDataResponse(null, 0) { Error = DescribeReadFault(ex) }))
+            // 🚨 ONE READ, ONE ANSWER (#5636). The reference's workspace stream is LIVE, and this used
+            // to post a GetDataResponse for every emission for the rest of the OWNER's life — while
+            // the requester correlates its reply through an AsyncSubject that takes exactly one and is
+            // then removed, so every later response arrives with no subject and is dropped. The owner
+            // therefore paid (reads ever served × changes) posts for nobody — on memex the long-lived
+            // Hosting/Build hub shipped 2001 GetDataResponses in one second to the reads hub that
+            // issues every point read on its pod, and the storm breaker cut the key.
+            // A caller that wants a LIVE value subscribes (GetMeshNodeStream / GetRemoteStream); a
+            // GetDataRequest is a point read. Taking the first answer also terminates the
+            // subscription, which releases the registration below (#3432) instead of holding it.
+            .Take(1)
             // Runs after the observer's terminal arm below has decided the answer (or on dispose).
             .Finally(() =>
             {
@@ -3322,8 +3334,7 @@ public static class DataExtensions
             .Subscribe(
                 response =>
                 {
-                    // Claim on the FIRST emission; later emissions of this live stream leave the
-                    // state at 1 and keep shipping, exactly as before.
+                    // Claim on the ONE emission the Take(1) above lets through.
                     Interlocked.CompareExchange(ref state, 1, 0);
                     hub.Post(response, o => o.ResponseFor(request));
                 },
@@ -3628,9 +3639,9 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Observable for typed <see cref="WorkspaceReference{T}"/> — subscribes to the
-    /// workspace stream and ships every emission as a <see cref="GetDataResponse"/>.
-    /// No <c>Take(1)</c>: updates flow continuously to the consumer.
+    /// Observable for typed <see cref="WorkspaceReference{T}"/> — the workspace stream, each
+    /// emission mapped to a <see cref="GetDataResponse"/>. The stream is live; the ONE-answer bound
+    /// is applied once, in <c>HandleGetDataRequest</c>, for every reference type (#5636).
     /// </summary>
     private static IObservable<GetDataResponse> GetDataResponseObservable<TReference>(
         IMessageHub hub,
@@ -4002,7 +4013,7 @@ public static class DataExtensions
 
     /// <summary>
     /// Reactive observable for a workspace stream — subscribes and ships every
-    /// emission as a <see cref="GetDataResponse"/>. No <c>Take(1)</c>: updates flow continuously.
+    /// emission as a <see cref="GetDataResponse"/>. The one-answer bound is applied in <c>HandleGetDataRequest</c> (#5636).
     /// </summary>
     private static IObservable<GetDataResponse> GetDataFromWorkspaceCore<TReference>(
         IMessageHub hub,
