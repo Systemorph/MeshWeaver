@@ -84,6 +84,10 @@ internal sealed class ProcessLivenessHeartbeatService(
         // Monotonic on purpose. Wall time steps (NTP, a VM resume) and would forge an overrun.
         var clock = Stopwatch.StartNew();
         var slice = period < StopCheckSlice ? period : StopCheckSlice;
+        // The allocation sampler that lets a heap step name its allocator (MeshWeaver#5555). Owned by
+        // this thread for the life of the host; a sampler that cannot start leaves the heartbeat
+        // exactly as it was, and the [HEAPSTEP] line then SAYS it could not name anything.
+        var sampler = StartSampler();
         ProcessLivenessSample? previous = null;
         var tick = 0L;
         var due = period;
@@ -102,8 +106,12 @@ internal sealed class ProcessLivenessHeartbeatService(
             {
                 var sample = ProcessLiveness.Probe(++tick, clock.Elapsed);
                 var reading = ProcessLiveness.Read(previous, sample, period);
+                var step = ProcessLiveness.DescribeHeapStep(
+                    previous, sample, sampler?.Drain() ?? AllocationWindow.Empty);
                 previous = sample;
                 logger.LogInformation("{Reading}", reading.Describe());
+                if (step is not null)
+                    logger.LogWarning("{HeapStep}", step);
             }
             catch (Exception exception)
             {
@@ -112,6 +120,23 @@ internal sealed class ProcessLivenessHeartbeatService(
                     + "died here would go silent, and its silence reads as a suspended process.",
                     tick);
             }
+        }
+
+        sampler?.Dispose();
+    }
+
+    private AllocationByTypeSampler? StartSampler()
+    {
+        try
+        {
+            return new AllocationByTypeSampler();
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception,
+                "[LIVENESS] the allocation sampler could not be started; a heap step in this process "
+                + "will be reported without the types that were allocated in it.");
+            return null;
         }
     }
 }
