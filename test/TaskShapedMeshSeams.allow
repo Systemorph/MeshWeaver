@@ -19,18 +19,9 @@
 # or lower an entry.
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# IEaGraphAuth — the three RETIRING forwarders, and the reason they are still here.
-#
-# The seam's primary surface is now reactive (GetConnection / GetAccessToken / ExchangeAndStore).
-# The three …Async members are default-implemented forwarders over it, kept for exactly one merge
-# window: MeshWeaver.Plugins builds -warnaserror against a core CHECKOUT at a pinned ref, so a
-# core PR that DELETED them could not land before the Plugins PR that stops calling them, and that
-# Plugins PR cannot compile before the reactive surface exists in core. The forwarders break the
-# cycle. They carry no [Obsolete] for the same reason — the attribute would red MeshWeaver.Plugins'
-# main the moment core merged, before its own half could land. THIS LINE is the deprecation:
-# it goes to 0 in the core PR that follows the Plugins migration, and nothing in this repository
-# calls them in the meantime.
-src/MeshWeaver.Mesh.Contract/IEaGraphAuth.cs	3
+# IEaGraphAuth is GONE from this list (#3433 closed). The three ...Async forwarders were deleted
+# once MeshWeaver.Plugins stopped calling them and the shipping portal never had; the seam is
+# reactive end to end. Do not re-add a Task-shaped member to it.
 #
 # ICrossSchemaQueryProvider — pre-existing, NOT investigated as part of #3433. It is listed
 # because the rule is about the SHAPE, and seeding an inventory is how a ratchet distinguishes

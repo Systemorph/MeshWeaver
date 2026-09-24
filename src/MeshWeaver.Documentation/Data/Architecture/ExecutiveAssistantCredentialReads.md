@@ -216,23 +216,31 @@ matcher that silently stops seeing the shape fails there rather than reporting a
 lists of markers are load-bearing: a new mesh entry point, or a new identity for the contract
 assembly, must be taught to the guard in the same change that introduces it.
 
-## Retiring the old surface across two repositories
+## Retiring the old surface across two repositories — DONE
 
-`IEaGraphAuth` still carries `ExchangeAndStoreAsync`, `GetAccessTokenAsync` and `IsConnectedAsync` as
-default-implemented forwarders over the reactive members. They are hub-unsafe by construction and
-nothing in this repository calls them. They exist for one merge window, because the dependency runs
-the wrong way for a clean delete:
+`IEaGraphAuth` is reactive end to end. The three default-implemented forwarders
+(`ExchangeAndStoreAsync`, `GetAccessTokenAsync`, `IsConnectedAsync`) are **deleted**, and
+`TaskShapedMeshSeams.allow` no longer lists the file; `SeamTotalBudget` went 8 → 5 with them.
+
+The sequence is worth keeping, because the dependency ran the wrong way for a clean delete and the
+same shape will recur:
 
 - `MeshWeaver.Plugins` compiles `-warnaserror` against a **checkout** of core at a pinned ref, so a
   core PR that deleted the members could not land before the Plugins PR that stops calling them;
-- and that Plugins PR cannot compile before the reactive surface exists in core.
+- and that Plugins PR could not compile before the reactive surface existed in core.
 
-The forwarders break the cycle: core adds the reactive surface and removes nothing, Plugins migrates,
-then core deletes the forwarders as a genuine deleting-half paired with that Plugins PR. They carry
-no `[Obsolete]` for the same reason — the attribute would red the dependent's `main` the moment core
-merged. The deprecation lives in `TaskShapedMeshSeams.allow` instead, where a ratchet that may only
-shrink is what actually removes them, and where it cannot break a repository that has not migrated
-yet.
+So the forwarders broke the cycle in three merges: core added the reactive surface and removed
+nothing; Plugins migrated off the Task members; core then deleted them as a genuine deleting-half.
+They carried no `[Obsolete]` on purpose — the attribute would have reddened the dependent's `main`
+the moment core merged, before its own half could land. The deprecation lived in
+`TaskShapedMeshSeams.allow` instead, where a ratchet that may only shrink is what actually removes
+a seam, and where it cannot break a repository that has not migrated yet.
+
+🚨 One copy was NOT migrated by this, because it is not built from this repository: the `Memex`
+repo's `Memex.Portal.Shared/Authentication/` holds a pre-#3433 `IEaGraphAuth` of its own, with the
+three `Task` members and an `ExecutiveAssistantPlugin` that awaits a credential read. That tree
+ships to nobody today (the portal image is built from core's `memex/`), but it is earmarked to
+become a build source, and it must be migrated before it is.
 
 ## See also
 
