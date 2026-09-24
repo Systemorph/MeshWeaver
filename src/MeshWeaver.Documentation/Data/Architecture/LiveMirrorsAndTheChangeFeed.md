@@ -57,6 +57,18 @@ Measured on the monolith harness — one activity node, one live reader, six pro
 Those step-5 announcements are the `Dropping StreamEndedEvent … the target stream is gone` lines
 that [#2776](https://github.com/Systemorph/MeshWeaver/issues/2776) was filed on.
 
+> 🚨 **Step 5 no longer happens (#5532).** An end the SUBSCRIBER asked for has nobody to tell: the
+> subscriber's `sync/` hub disposed itself before its `UnsubscribeRequest` left. The owner's
+> `sync/` hub now records that an `UnsubscribeRequest` ended it
+> (`SynchronizationStream.SubscriberEnded`), and the healthy-owner announcement skips such an end.
+> It still fires for the ends it was built for — an idle release or an explicit owner-side disposal
+> (`Workspace.EvictClientSubscriptions`). One wasted message per release was invisible here; a
+> subscriber that releases thousands of mirrors at once (a cache hub going down) put thousands of
+> them on ONE router turn loop inside a second, and memex-cloud tripped its aggregate watermark 454
+> times in 36 s shedding exactly this traffic. A stream id is also reused across a re-subscribe, so a
+> late echo could land on the NEXT incarnation and read as an owner-side end. Test:
+> `SubscriberReleaseIsNotAnnouncedBackTest`, with the owner-side end as its control.
+
 ## The two arithmetic traps
 
 #2776 was filed as *"the activity node's owner ends its streams ~5 s in"*, and two hypotheses — a

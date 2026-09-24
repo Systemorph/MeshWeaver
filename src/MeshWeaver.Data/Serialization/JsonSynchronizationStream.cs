@@ -1721,6 +1721,23 @@ public static class JsonSynchronizationStream
                     hub.Address, hub.RunLevel, request.StreamId, request.Subscriber);
                 return;
             }
+            // 🚨 AND ONLY FOR AN END THE SUBSCRIBER DID NOT ASK FOR (#5532). An end caused by the
+            // subscriber's own UnsubscribeRequest has nobody to tell: its sync hub disposed itself
+            // before the request left, so the announcement crossed the subscriber's mesh hub only
+            // to be dropped there. One per release is invisible; a subscriber releasing thousands
+            // of mirrors at once put thousands of them on ONE router turn loop inside a second
+            // and tripped its aggregate watermark. And because a stream id is reused across a
+            // re-subscribe, a late echo could land on the NEXT incarnation and read as an
+            // owner-side end. The announcement stays for the ends it was built for: an idle
+            // release or an explicit disposal on a healthy owner.
+            if (reduced is SynchronizationStream<TReduced> { SubscriberEnded: true })
+            {
+                logger.LogTrace(
+                    "Stream {StreamId} on {Owner} ended at the request of its subscriber "
+                    + "{Subscriber}; nothing to announce", request.StreamId, hub.Address,
+                    request.Subscriber);
+                return;
+            }
             try
             {
                 hub.Post(new StreamEndedEvent(request.StreamId),

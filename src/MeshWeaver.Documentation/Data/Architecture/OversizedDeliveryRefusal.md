@@ -402,6 +402,39 @@ the payload cross every boundary a second time, and a log render nobody read ser
 per post. Those were self-inflicted and are gone. **The irreducible ~3× transcode remains**, and the
 producer axis is untouched.
 
+## A same-silo call does not copy the envelope at all (#4824)
+
+"The argument copy, inbound/outbound" in the table above was never a transport. A grain call between
+two activations on ONE silo does not serialise; Orleans **deep-copies** its arguments and its result
+so caller and callee cannot share mutable state, using whatever copier the serializer resolves for
+the runtime type. `ConfigureMeshWeaver` registered `JsonCodec` as the copier for **every** type
+(`AddJsonSerializer(_ => true, _ => true, …)` — the second predicate is `isCopyable`), so every local
+`RouteMessage` / `DeliverMessage` / `Deliver` serialised its delivery to JSON and parsed it back:
+`ObjectPolymorphicConverter.Write`'s `SerializeToUtf8Bytes` + `JsonDocument.Parse`, then the read
+side, per hop. #4824's two `RoutingGrain` OOMs followed two OOMs inside exactly that write on the
+same pod.
+
+That copy isolates nothing. `MessageDelivery<T>` is a record whose members are all `init`-only, with
+an `ImmutableDictionary` of properties and an `ImmutableList` routing path, and every change is a
+`with`. The payload that reaches a grain call is `RawJson`, because `OrleansRoutingService` is only
+ever reached through `delivery.Package(…)`. And a non-Orleans mesh already hands the same instances
+from hub to hub. So `MessageDeliveryCopier` (`MeshWeaver.Connection.Orleans`) now claims exactly
+the packaged shape, `MessageDelivery<RawJson>`, and returns the input; `JsonCodec`'s `isCopyable`
+excludes that type, so the two never compete for one. A delivery still carrying a typed CLR message
+may carry a mutable payload, so it keeps the isolating copy. Cross-silo calls still SERIALISE through
+`JsonCodec`; that is a different path and is unchanged. `LocalGrainCallSharesTheEnvelopeTest`
+asserts it through the silo's own `DeepCopier`, and asserts that an un-packaged delivery and a
+mutable non-envelope value are still copied.
+
+This settles the question #4824 left open, *"must `$type` come first, and can the converter's
+nested session go?"*, for the path that actually failed: on a local hop the converter is no longer
+called. On the wire it still is, and the question stays open there: this converter's OWN reader
+tolerates either order (it buffers the object and `JsonElementNormalizer` moves `$type` to the front
+before `JsonSerializer.Deserialize`, "required for parameterized constructor types"), but a value read
+through a typed polymorphic member goes through System.Text.Json's metadata reader, which wants the
+discriminator first unless `AllowOutOfOrderMetadataProperties` is set. Which of those reads the wire
+actually exercises was not established, so the nested buffer on the write side stays.
+
 The remaining work is at the producer, and it is a different axis from everything on this page: *do
 not build the payload whole.* Bulk producers — imports above all — must stream or batch rather than
 serialise a tree into one delivery. A bound refuses a delivery *after* something has already

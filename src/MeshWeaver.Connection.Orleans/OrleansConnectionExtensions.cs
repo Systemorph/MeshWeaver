@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.Hosting;
 using Orleans.Serialization;
+using Orleans.Serialization.Cloning;
 using Orleans.Serialization.Configuration;
 
 namespace MeshWeaver.Connection.Orleans;
@@ -61,9 +62,12 @@ public static class OrleansConnectionExtensions
         {
             services.AddSerializer(serializerBuilder =>
             {
+                // 🚨 The delivery envelope is COPIED by reference, never by a JSON round trip —
+                // issue #4824. See MessageDeliveryCopier for why that is sound and what it saves.
+                serializerBuilder.Services.AddSingleton<IGeneralizedCopier, MessageDeliveryCopier>();
                 serializerBuilder.AddJsonSerializer(
                     _ => true,
-                    _ => true,
+                    type => !MessageDeliveryCopier.Covers(type),
                     ob =>
                         ob.PostConfigure<IMessageHub>(
                             (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
