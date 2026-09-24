@@ -287,6 +287,35 @@ public class LocalizationTest
             .Should().Be("Couldn't send your message: {0}");
     }
 
+    /// <summary>
+    /// The area-availability frames NamedAreaView renders when a view gives up (MeshWeaver.Plugins)
+    /// were once hard-coded English for every viewer. Pins that each one is a real translation in
+    /// German — not the English fallback — and that the technical identifiers (area path, budget,
+    /// retry count) pass through as positional arguments in BOTH languages, so a translator dropping
+    /// a placeholder shows up here instead of as a frame that silently loses the path.
+    /// </summary>
+    [Theory]
+    [InlineData("error.areaUnavailableRecycled", 2)]
+    [InlineData("error.areaUnavailableNotAddressable", 2)]
+    [InlineData("error.areaNotFoundDetail", 2)]
+    [InlineData("error.areaUnavailable", 0)]
+    [InlineData("error.viewInitFailed", 0)]
+    [InlineData("error.loadingArea", 0)]
+    public void AreaAvailabilityFrames_AreTranslatedAndCarryTheirArguments(string key, int argCount)
+    {
+        var args = Enumerable.Range(0, argCount).Select(i => (object?)$"ARG{i}").ToArray();
+        var en = LocalizationCatalog.Get(key, "en", args);
+        var de = LocalizationCatalog.Get(key, "de", args);
+
+        en.Should().NotBe(key, "the key must exist in the English catalog");
+        de.Should().NotBe(en, "German must be a translation, not the English fallback");
+        foreach (var arg in args)
+        {
+            en.Should().Contain((string)arg!);
+            de.Should().Contain((string)arg!);
+        }
+    }
+
     [Theory]
     [InlineData(1, "en", "1 message")]
     [InlineData(3, "en", "3 messages")]

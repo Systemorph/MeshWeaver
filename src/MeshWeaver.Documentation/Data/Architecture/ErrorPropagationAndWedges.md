@@ -124,7 +124,7 @@ rendered as the area's content until a reload — a view that died on a hub that
 Both timeouts say "the hub did not answer in time", the same statement as `No response received in
 hub`, which was always retried. They now are too, through the same bounded
 `RetryAreaWithBackoff`: five retries whose backoff sums to ~8 s, then the "Area unavailable" frame
-at `Warning`. 🚨 The user-visible bound is NOT 8 s: each attempt that fails this way has already
+at `Warning` (rendered in the viewer's language from the `error.areaUnavailable*` catalog keys). 🚨 The user-visible bound is NOT 8 s: each attempt that fails this way has already
 waited out the 30 s transport timeout before the retry sees it, so an owner that never answers keeps
 the view on its previous render for up to six attempts × 30 s + backoff ≈ 3 minutes before the
 frame appears. A timeout that clears on the next attempt costs one 30 s wait.
