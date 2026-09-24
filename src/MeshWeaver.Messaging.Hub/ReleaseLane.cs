@@ -1,4 +1,5 @@
 using System.Reactive.Concurrency;
+using System.Runtime.ExceptionServices;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 
@@ -52,7 +53,28 @@ public sealed class ReleaseLane
         // the subscription but a queued release, so the lane is collected with its owner.
         subject
             .ObserveOn(TaskPoolScheduler.Default)
-            .Subscribe(release => release());
+            .Subscribe(Run);
+    }
+
+    /// <summary>
+    /// Runs one release. A release is a subscriber's error continuation, and one that THROWS must not
+    /// take the lane down with it: escaping the <c>ObserveOn</c> drain would end the lane's only
+    /// observer and strand every release queued behind it — the teardown hang again, one level up.
+    /// So the exception is re-raised on a ThreadPool work item of its own — exactly where it was
+    /// raised when each release was its own work item, so it is as loud as it always was (an
+    /// unhandled ThreadPool exception) — and the lane drains on.
+    /// </summary>
+    private static void Run(Action release)
+    {
+        try
+        {
+            release();
+        }
+        catch (Exception ex)
+        {
+            var captured = ExceptionDispatchInfo.Capture(ex);
+            ThreadPool.UnsafeQueueUserWorkItem(static c => c.Throw(), captured, preferLocal: false);
+        }
     }
 
     /// <summary>Queues <paramref name="release"/> behind every release posted before it.</summary>

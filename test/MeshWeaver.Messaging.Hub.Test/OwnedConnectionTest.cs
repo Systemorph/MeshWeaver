@@ -158,6 +158,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
         // for the Zip gate, and B is holding the Zip gate when it goes for the CombineLatest gate.
         var aHoldsCombineLatestGate = 0;
         var bHoldsZipGate = 0;
+        var bMetAWhileItHeldItsGate = -1; // -1 = A's hook never ran, 0 = B never came, 1 = they met
         var meetBudget = TimeSpan.FromSeconds(2);
 
         // B's error reaches the CombineLatest through a Subject it subscribed to directly, so no sink
@@ -199,7 +200,11 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
                 if (n.Kind != NotificationKind.OnError)
                     return;
                 Volatile.Write(ref aHoldsCombineLatestGate, 1);
-                SpinWait.SpinUntil(() => Volatile.Read(ref bHoldsZipGate) == 1, meetBudget);
+                // An OBSERVATION window, not a synchronisation: on a shared lane B cannot start while
+                // A runs, so this runs out and records that B never overlapped A's hold — asserted
+                // below. With one work item per release B arrives inside it and the two deadlock.
+                var met = SpinWait.SpinUntil(() => Volatile.Read(ref bHoldsZipGate) == 1, meetBudget);
+                Volatile.Write(ref bMetAWhileItHeldItsGate, met ? 1 : 0);
             })
             .Replay(1);
         using var subscription = received.Connect();
@@ -219,6 +224,9 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             + "delivered at once leave it parked on the Zip gate the other release holds, while that one "
             + "is parked on the CombineLatest gate",
             TestContext.Current.CancellationToken);
+        Volatile.Read(ref bMetAWhileItHeldItsGate).Should().Be(0,
+            "the releases of one sweep are delivered ONE AT A TIME: B's release must not have entered "
+            + "the consumer while A's held the CombineLatest gate (and A's hook must have run at all)");
     }
 
     [Fact]
