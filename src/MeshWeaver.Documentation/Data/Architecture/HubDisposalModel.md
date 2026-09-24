@@ -352,7 +352,7 @@ that object's `Dispose()` releases it. The one spelling is
 var stream = Observable.Defer(() => BuildAgainst(hub.GetWorkspace()))
     .SubscribeOn(TaskPoolScheduler.Default)
     .Replay(1)
-    .AutoConnectOwnedBy(hub, nameof(MyService));          // or (compositeDisposableField, name)
+    .AutoConnectOwnedBy(hub, nameof(MyService));          // or (compositeDisposableField, releaseLane, name)
 
 // An eager feed that must keep filling with no subscribers (a directory index, a counter):
 applied.ConnectOwnedBy(hub);                              // or ConnectOwnedBy(compositeDisposableField)
@@ -365,7 +365,7 @@ What the helper guarantees, and what a bare `AutoConnect(1)` cannot:
 | The owner's `Dispose()` | cannot reach the upstream | unsubscribes it (`hub.RegisterForDisposal` → ShutDown phase, strictly before any scope closes) |
 | A connect still **queued** on the pool | runs later, against whatever is left | is **cancelled** before the pool dequeues it — the registration lands in a disposed `CompositeDisposable`, whose `Add` disposes on the spot |
 | A subscriber arriving **after** the release | gets the replay buffer, then silence forever ("burst then dead silence") | is **refused** with `ObjectDisposedException(ownerName)` — terminates, attributable |
-| A subscriber **already attached** when the release happens, the one-shot still in flight | silence forever — releasing a connection unsubscribes the replay subject from its upstream and emits nothing to its observers | **terminates** with the same `ObjectDisposedException(ownerName)`, delivered on the ThreadPool (never on the disposing hub's turn) — see below |
+| A subscriber **already attached** when the release happens, the one-shot still in flight | silence forever — releasing a connection unsubscribes the replay subject from its upstream and emits nothing to its observers | **terminates** with the same `ObjectDisposedException(ownerName)`, delivered on the ThreadPool (never on the disposing hub's turn), ONE AT A TIME on the owner's release lane — see below |
 | A chain that **terminates** (a settled promise) | — | drops its handle, so the owner tracks *live* connections only and a faulted-then-rebuilt promise never accumulates dead handles |
 
 **The attached subscriber was the half that stayed silent (#5135).** Refusing late subscribers
@@ -379,6 +379,33 @@ observers nothing, and nothing UPSTREAM of the `Replay` (the eviction `Catch` in
 disposed — a chain that merely terminated removes its handle from a live owner and keeps replaying
 its settled value. Pinned by `OwnedConnectionTest.ASubscriberAttachedWhileInFlight_IsTerminatedByTheRelease`
 and, at the content-collection site, `InFlightCollectionReleasedWithItsHubTest`.
+
+**Those terminals are delivered one at a time, never concurrently.** An owner registry is released
+in ONE synchronous sweep — `MeshNodeStreamCache` disposes every query connection it holds, a hub's
+ShutDown disposes every registration — and the first shape of the #5135 fix scheduled each
+connection's terminal as its own ThreadPool work item, so a sweep of N connections delivered N
+terminals at once. A consumer that composes several of those connections then received them on N
+threads, and Rx combinators take their gate on a terminal and dispose their other sources while
+holding it: the permission fold nests a `Zip` under a `CombineLatest`, one release held the
+`CombineLatest` gate and waited for the `Zip` gate, another held the `Zip` gate and waited for the
+`CombineLatest` gate, and neither ever let go. The service provider's disposal then parked behind
+them (`UiContributionCatalog.Dispose` completing its subject into that same `CombineLatest`), so a
+test whose body had passed and whose mesh had disposed cleanly timed out in teardown —
+MeshWeaver.Plugins `LayoutAreaIdentityTest.AuthorizedUser_CanSubscribe_ToLayoutArea` and
+`GitHubSyncSettingsTabTest.GitHubSyncTab_ShownOnSpace` on set 3.0.0-ci.9296, reproduced locally
+about once in twelve full `MeshWeaver.Security.Test` runs under the MTP runner, with a stack capture
+of exactly those threads. So a release now goes through a **`ReleaseLane`**: releases posted to one
+lane run on the ThreadPool, serially, in the order they were posted, and a second terminal reaches a
+consumer the first has already torn down. Every hub resolves the mesh's lane (registered on the
+root hub, like `AccessService`), so all hub-owned connections of a mesh share it;
+`MeshNodeStreamCache` uses that same mesh lane; a registry outside a hub
+(`PackageListingCache`, `GitHubRepoIdentityResolver`) holds one lane for everything it owns. The
+rule for choosing: **two connections a consumer may compose must release on the same lane.** The
+`CompositeDisposable` overload without a lane is `[Obsolete]` — it mints a lane per connection,
+which is exactly the concurrent shape. Pinned by
+`OwnedConnectionTest.ReleasingTwoConnectionsAConsumerComposes_NeverDeliversTheirTerminalsConcurrently`,
+which forces the two releases to meet inside their first gates (red with one work item per
+release; green on a shared lane).
 
 **Choosing the owner.** A hub-scoped service registers with its hub; a DI singleton owns a
 `CompositeDisposable` field it disposes in its own `Dispose()` (the container disposes

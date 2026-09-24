@@ -55,7 +55,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             })
             .SubscribeOn(scheduler)
             .Replay(1)
-            .AutoConnectOwnedBy(owner, "test-owner");
+            .AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
 
         var received = shared.Materialize().Replay();
         using var subscription = received.Connect();
@@ -97,7 +97,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var upstream = new Subject<int>();
         var owner = new CompositeDisposable();
-        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
 
         var waiting = shared.Materialize().Replay(1);
         using var connection = waiting.Connect();
@@ -114,6 +114,121 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
         upstream.HasObservers.Should().BeFalse("the release still unsubscribes the upstream");
     }
 
+    /// <summary>
+    /// 🚨 ONE sweep releasing TWO connections a consumer composes must not deliver their terminals
+    /// concurrently. Measured in MeshWeaver.Plugins CI (set 3.0.0-ci.9296,
+    /// <c>LayoutAreaIdentityTest.AuthorizedUser_CanSubscribe_ToLayoutArea</c>): the test body passed,
+    /// the mesh disposed cleanly, and the service provider's disposal then hung for good — a stack
+    /// capture showed ThreadPool threads, each delivering one query connection's release, parked on
+    /// each other's Rx gates inside the permission fold (a <c>Zip</c> nested under a
+    /// <c>CombineLatest</c>), and the disposing thread parked behind them.
+    ///
+    /// <para>The consumer here is that shape at its smallest: <c>a.CombineLatest(b.Zip(…))</c>. An
+    /// error from <c>a</c> enters the CombineLatest gate and, still holding it, disposes its sources —
+    /// the Zip's disposal takes the Zip gate. An error from <c>b</c> enters the Zip gate and, still
+    /// holding it, forwards into the CombineLatest — which takes the CombineLatest gate. The hooks
+    /// below FORCE that interleaving (A holds its gate until B is blocked on it), so if the two
+    /// releases ever run at the same time the lock-order inversion is certain rather than a race; if
+    /// they run one after the other, the first tears the consumer down and the second finds nothing
+    /// left.</para>
+    ///
+    /// <para><b>Negative control</b> (run by hand): <c>Release</c> scheduling its own
+    /// <c>TaskPoolScheduler</c> work item per connection (the #5135 shape) — the consumer still
+    /// receives its terminal, and its teardown never finishes: the <c>sourcesReleased</c> wait fails on
+    /// its timeout.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ReleasingTwoConnectionsAConsumerComposes_NeverDeliversTheirTerminalsConcurrently()
+    {
+        var lane = new ReleaseLane();
+        var registry = new CompositeDisposable();
+        var ownerA = new CompositeDisposable();
+        var ownerB = new CompositeDisposable();
+        registry.Add(ownerA);
+        registry.Add(ownerB);
+
+        var upstreamA = new Subject<int>();
+        var upstreamB = new Subject<int>();
+        var a = upstreamA.Replay(1).AutoConnectOwnedBy(ownerA, lane, "owner-a");
+        var b = upstreamB.Replay(1).AutoConnectOwnedBy(ownerB, lane, "owner-b");
+
+        // The two releases MEET, bounded: each waits, holding its first gate, until the other holds
+        // its own. Volatile ints and a bounded SpinUntil, never a gate primitive. Once they have met
+        // the deadlock no longer depends on timing — A is holding the CombineLatest gate when it goes
+        // for the Zip gate, and B is holding the Zip gate when it goes for the CombineLatest gate.
+        var aHoldsCombineLatestGate = 0;
+        var bHoldsZipGate = 0;
+        var bMetAWhileItHeldItsGate = -1; // -1 = A's hook never ran, 0 = B never came, 1 = they met
+        var meetBudget = TimeSpan.FromSeconds(2);
+
+        // B's error reaches the CombineLatest through a Subject it subscribed to directly, so no sink
+        // A's disposal could silence stands between them — as in the fold, where B's error had already
+        // passed every intermediate sink when it reached the outer gate.
+        var bridge = new Subject<int>();
+        var zipped = b.Zip(Observable.Never<int>(), (x, _) => x);
+        // The first source carries `a` AND the Zip subscription, so disposing it — which the
+        // CombineLatest does under its gate on A's error — disposes the Zip, taking the Zip gate.
+        // Finally runs once disposing the source has RETURNED — i.e. once the Zip's disposal got its
+        // gate. That, not the error notification (which the consumer receives before the disposal
+        // starts), is what a deadlock withholds: in the CI hang the terminal was delivered and the
+        // teardown behind it never finished.
+        var sourcesReleased = new AsyncSubject<Unit>();
+        var first = Observable.Create<int>(observer => new CompositeDisposable(
+                a.Subscribe(observer),
+                zipped.Subscribe(
+                    _ => { },
+                    ex =>
+                    {
+                        // Inside Zip's error forwarding: the Zip gate is held.
+                        Volatile.Write(ref bHoldsZipGate, 1);
+                        SpinWait.SpinUntil(() => Volatile.Read(ref aHoldsCombineLatestGate) == 1, meetBudget);
+                        bridge.OnError(ex); // enters the CombineLatest gate
+                    })))
+            .Finally(() =>
+            {
+                sourcesReleased.OnNext(Unit.Default);
+                sourcesReleased.OnCompleted();
+            });
+
+        var received = first
+            .CombineLatest(bridge, (x, _) => x)
+            .Materialize()
+            // Inside CombineLatest's error forwarding — the CombineLatest gate is held — and BEFORE
+            // it disposes its sources (the Zip among them).
+            .Do(n =>
+            {
+                if (n.Kind != NotificationKind.OnError)
+                    return;
+                Volatile.Write(ref aHoldsCombineLatestGate, 1);
+                // An OBSERVATION window, not a synchronisation: on a shared lane B cannot start while
+                // A runs, so this runs out and records that B never overlapped A's hold — asserted
+                // below. With one work item per release B arrives inside it and the two deadlock.
+                var met = SpinWait.SpinUntil(() => Volatile.Read(ref bHoldsZipGate) == 1, meetBudget);
+                Volatile.Write(ref bMetAWhileItHeldItsGate, met ? 1 : 0);
+            })
+            .Replay(1);
+        using var subscription = received.Connect();
+        (upstreamA.HasObservers && upstreamB.HasObservers).Should().BeTrue(
+            "CONTROL ARM: the consumer is connected to both owned connections");
+
+        registry.Dispose(); // ONE sweep releases both owners
+
+        var terminal = await received.Should().Within(TestTimeouts.Convergence).Emit(
+            "the consumer composing both released connections must receive a terminal",
+            TestContext.Current.CancellationToken);
+        terminal.Kind.Should().Be(NotificationKind.OnError);
+        terminal.Exception.Should().BeOfType<ObjectDisposedException>();
+
+        await sourcesReleased.Should().Within(TestTimeouts.Convergence).Emit(
+            "the release that terminated the consumer must also finish tearing it down — two releases "
+            + "delivered at once leave it parked on the Zip gate the other release holds, while that one "
+            + "is parked on the CombineLatest gate",
+            TestContext.Current.CancellationToken);
+        Volatile.Read(ref bMetAWhileItHeldItsGate).Should().Be(0,
+            "the releases of one sweep are delivered ONE AT A TIME: B's release must not have entered "
+            + "the consumer while A's held the CombineLatest gate (and A's hook must have run at all)");
+    }
+
     [Fact]
     public void ASettledPromise_KeepsReplaying_AfterItsHandleLeavesALiveOwner()
     {
@@ -121,7 +236,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
         // from an owner that is still alive, and that removal must not fault later subscribers.
         var upstream = new Subject<int>();
         var owner = new CompositeDisposable();
-        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
         using (shared.Subscribe(_ => { }))
         {
             upstream.OnNext(5);
@@ -141,7 +256,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var upstream = new Subject<int>();
         var owner = new CompositeDisposable();
-        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
 
         using var subscription = shared.Subscribe(_ => { });
         upstream.HasObservers.Should().BeTrue("CONTROL ARM: the first subscriber connected the upstream");
@@ -158,7 +273,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var upstream = new Subject<int>();
         var owner = new CompositeDisposable();
-        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
 
         using (shared.Subscribe(_ => { }))
             upstream.OnNext(7);
@@ -185,7 +300,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var upstream = new Subject<int>();
         var owner = new CompositeDisposable();
-        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
 
         using var subscription = shared.Subscribe(_ => { });
         owner.Count.Should().Be(1, "CONTROL ARM: registered while live");
@@ -209,7 +324,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var upstream = new Subject<int>();
         var owner = new CompositeDisposable();
-        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, "test-owner");
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
 
         using var subscription = shared.Subscribe(_ => { }, _ => { });
         owner.Count.Should().Be(1, "CONTROL ARM: registered while live");

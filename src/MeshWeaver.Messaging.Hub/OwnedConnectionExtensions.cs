@@ -1,8 +1,8 @@
 using System.Reactive;
-using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
@@ -64,14 +64,41 @@ public static class OwnedConnectionExtensions
     /// <param name="ownerName">Names the owner in the refusal, e.g. <c>nameof(ContentService)</c>.</param>
     /// <param name="minObservers">Subscribers required before the connect fires (Rx's <c>AutoConnect</c> argument).</param>
     /// <returns>The shared observable — the one to hand out and cache.</returns>
+    [Obsolete("Pass the ReleaseLane every connection a consumer may compose releases on — the mesh's "
+        + "(hub.ServiceProvider.GetRequiredService<ReleaseLane>()) or the registry's own. A lane per call "
+        + "delivers a sweep's terminals concurrently, which deadlocks a consumer composing them (see ReleaseLane).")]
     public static IObservable<T> AutoConnectOwnedBy<T>(
         this IConnectableObservable<T> source,
         CompositeDisposable owner,
         string ownerName,
         int minObservers = 1)
+        => source.AutoConnectOwnedBy(owner, new ReleaseLane(), ownerName, minObservers);
+
+    /// <summary>
+    /// <c>AutoConnect(minObservers)</c> whose connection is owned by <paramref name="owner"/>: the
+    /// handle is added to it on connect, released by its disposal, and dropped when the upstream
+    /// terminates. Every subscriber still attached when the owner is disposed is terminated with
+    /// <see cref="ObjectDisposedException"/> on <paramref name="lane"/>, and a subscription made after
+    /// the owner is disposed is refused with the same exception, naming <paramref name="ownerName"/>.
+    /// </summary>
+    /// <typeparam name="T">Element type.</typeparam>
+    /// <param name="source">The connectable chain — <c>….Replay(1)</c>, <c>….Publish()</c>.</param>
+    /// <param name="owner">The registry the owner disposes with itself.</param>
+    /// <param name="lane">The ordered lane the release terminals are delivered on — shared by every
+    /// connection a consumer may compose (see <see cref="ReleaseLane"/>).</param>
+    /// <param name="ownerName">Names the owner in the refusal, e.g. <c>nameof(ContentService)</c>.</param>
+    /// <param name="minObservers">Subscribers required before the connect fires (Rx's <c>AutoConnect</c> argument).</param>
+    /// <returns>The shared observable — the one to hand out and cache.</returns>
+    public static IObservable<T> AutoConnectOwnedBy<T>(
+        this IConnectableObservable<T> source,
+        CompositeDisposable owner,
+        ReleaseLane lane,
+        string ownerName,
+        int minObservers = 1)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(lane);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerName);
 
         // 🚨 The release is a TERMINAL for every subscriber already attached, not only a refusal for
@@ -85,7 +112,7 @@ public static class OwnedConnectionExtensions
         // its settled value to late subscribers.
         var released = new Subject<Unit>();
         var shared = source.AutoConnect(minObservers,
-            connection => Register(source, owner, connection, () => Release(released, ownerName)));
+            connection => Register(source, owner, connection, () => Release(lane, released, ownerName)));
 
         // 🚨 Refuse, never park. After the release the replay subject still hands a late subscriber
         // whatever it buffered and then goes silent — the "burst then dead silence" wedge. A
@@ -100,10 +127,12 @@ public static class OwnedConnectionExtensions
     /// <see cref="ObjectDisposedException"/> a late subscriber is refused with. Delivered on the
     /// ThreadPool, never on the disposing thread: the owner's release runs inside a hub's ShutDown
     /// phase, and a subscriber's error continuation must not run on that turn (the IoPool refusal
-    /// makes the same trade, #4530).
+    /// makes the same trade, #4530). 🚨 And delivered on the LANE, never as a work item of its own:
+    /// one owner sweep releases many connections, and their terminals delivered concurrently
+    /// deadlock a consumer that composes them (see <see cref="ReleaseLane"/>).
     /// </summary>
-    private static void Release(Subject<Unit> released, string ownerName)
-        => TaskPoolScheduler.Default.Schedule(() => released.OnError(Disposed(ownerName)));
+    private static void Release(ReleaseLane lane, Subject<Unit> released, string ownerName)
+        => lane.Post(() => released.OnError(Disposed(ownerName)));
 
     /// <summary>
     /// <c>AutoConnect(minObservers)</c> whose connection is owned by <paramref name="hub"/>: released
@@ -126,7 +155,10 @@ public static class OwnedConnectionExtensions
         ArgumentNullException.ThrowIfNull(hub);
         var owner = new CompositeDisposable();
         hub.RegisterForDisposal(owner);
-        return source.AutoConnectOwnedBy(owner, ownerName, minObservers);
+        // The MESH's lane: every hub resolves the one its root registered, so all hub-owned
+        // connections in a mesh release in order (see ReleaseLane).
+        return source.AutoConnectOwnedBy(
+            owner, hub.ServiceProvider.GetRequiredService<ReleaseLane>(), ownerName, minObservers);
     }
 
     /// <summary>

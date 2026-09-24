@@ -69,6 +69,10 @@ public sealed class GitHubRepoIdentityResolver(
     // against a disposed container, and a Resolve() after that is refused rather than parked.
     private readonly CompositeDisposable lookups = new();
 
+    // One lane for every connection this registry owns, so its disposal delivers their release
+    // terminals in order rather than concurrently (see ReleaseLane).
+    private readonly ReleaseLane releaseLane = new();
+
     /// <summary>
     /// How many GitHub lookups this resolver has actually performed. Diagnostics only — a test uses
     /// it to prove the cache serves repeat callers without a second call, and that an EXPIRED entry
@@ -135,7 +139,7 @@ public sealed class GitHubRepoIdentityResolver(
             })
             .Select(id => new Resolution(clock.GetUtcNow(), id))
             .Replay(1)
-            .AutoConnectOwnedBy(lookups, nameof(GitHubRepoIdentityResolver));
+            .AutoConnectOwnedBy(lookups, releaseLane, nameof(GitHubRepoIdentityResolver));
 
     /// <summary>Releases every lookup still in flight; a <see cref="Resolve"/> after this is refused.</summary>
     public void Dispose() => lookups.Dispose();
