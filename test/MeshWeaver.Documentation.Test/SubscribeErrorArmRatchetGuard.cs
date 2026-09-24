@@ -165,6 +165,14 @@ public class SubscribeErrorArmRatchetGuard
             W("NestedLambdaArgument.cs",
                 "class I { void M() { o.Subscribe(MakeObserver(x => x)); } }");
             W("Prose.cs", "// never write .Subscribe(x => f(x)) without an error arm\nclass J { }");
+            // 🚨 The #5650 shape: a Razor component's @code block. The two subscriptions that killed
+            // memex-cloud sat in .razor files, and the sweep that missed them read .cs only — so the
+            // file selection is part of what this test proves, not just the arity parse.
+            W("Bell.razor",
+                "<FluentButton Title=\"@title\" />\n@code {\n  void M() { sub = Feed.ForViewer(Hub)\n"
+                + "    .Subscribe(items =>\n    {\n      count = items.Count;\n    }); }\n}\n");
+            W("BellFixed.razor",
+                "@code {\n  void M() { sub = Feed.ForViewer(Hub).Subscribe(items => count = items.Count, ex => Log(ex)); }\n}\n");
             Directory.CreateDirectory(Path.Combine(s, "obj"));
             W(Path.Combine("obj", "Ignored.cs"), "class K { void M() { o.Subscribe(x => Handle(x)); } }");
 
@@ -189,6 +197,10 @@ public class SubscribeErrorArmRatchetGuard
                 "🚨 the lambda is an argument to the OBSERVER FACTORY, not the onNext — a top-level "
                 + "'=>' test is what separates these two, and getting it wrong cries wolf");
             Assert.False(found.ContainsKey("Prose.cs"), "a comment describing the rule is not a violation");
+            Assert.True(found.ContainsKey("Bell.razor"),
+                "🚨 a bare subscribe in a .razor @code block must be found — a scan that reads only .cs "
+                + "reports the tree clean while the killer sits in a component (MeshWeaver#5650)");
+            Assert.False(found.ContainsKey("BellFixed.razor"), "the armed Razor shape is the fix, not a finding");
             Assert.False(found.ContainsKey("Ignored.cs"), "obj/ must not be scanned");
         }
         finally { dir.Delete(recursive: true); }

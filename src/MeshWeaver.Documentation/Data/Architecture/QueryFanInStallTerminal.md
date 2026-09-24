@@ -249,9 +249,18 @@ The terminal is correct and stays; the defect is the owner that was never wired.
 owner, so the bell takes the fault: it logs it and renders the bell as unavailable (a warning glyph
 whose tooltip and accessible name are the localized `error.checkUnavailable`), and the panel says the
 same. The fix is in MeshWeaver.Plugins, with a deterministic test that stalls a query provider and
-asserts the bell's feed delivers the `QueryProviderStalledException` to its error arm. Core's
-`SubscribeErrorArmRatchetGuard` scans `src/` and `memex/` `.cs` files only — so it could not have
-seen a `.razor` subscription in any repository.
+asserts the bell's feed delivers the `QueryProviderStalledException` to its error arm.
+
+**Why no guard saw it.** Core's `SubscribeErrorArmRatchetGuard` does select `.razor` files (its file
+selection is `SourceScan`'s `.cs`/`.razor`/`.csx`, and its self-test now plants a bare subscription
+in a `.razor` `@code` block and fails if the scan misses it) — but core holds no `.razor` files, and
+it cannot see another repository. MeshWeaver.Plugins, which holds every Blazor component in the
+fleet, had **no copy of the guard at all**. The follow-up sweep (MeshWeaver.Plugins, `Memex.Hosts.Test`
+`SubscribeErrorArmRatchetGuard`) gives Plugins its own ratchet over `src/` and every module's in-mesh
+`Source/`, `.razor` included, and converted the one-armed subscriptions it found; the platform
+checkout that CI nests inside the Plugins workspace is deliberately outside its roots. Like the core
+copy it counts only a visible lambda — a `Subscribe(MethodGroup)` is textually identical to
+`Subscribe(observer)` and is not counted, so the sweep read those by hand.
 
 ## What is pinned, and what is not
 
