@@ -21,10 +21,11 @@
 # inside IoPool, and HubDisposalJoin's `joined.Wait(budget)` is a documented, bounded
 # Task.Wait(TimeSpan). The empty-paren spelling is the UNBOUNDED park, which is the defect.
 
-# Two Python-process reads bridged to blocking waits in an in-mesh sample layout area.
-# In-mesh source compiles at RUNTIME in the portal, so no compiler here ever sees this file —
-# which is exactly why it needs a scanner rather than a review.
-samples/Graph/Data/PythonDemo/PrimeReport/Source/PrimeReportLayoutAreas.cs	2
+# The in-mesh sample layout area is GONE from this list. It drained the child's two pipes with
+# ReadToEndAsync + GetAwaiter().GetResult(); it now drains them with OutputDataReceived /
+# ErrorDataReceived while the pool thread sits in WaitForExit(), which is concurrent, cannot fill
+# a pipe, and bridges nothing. The reads were already inside IIoPool.InvokeBlocking, so this was
+# never a hub park — it was async-over-sync at a boundary that does not need async at all.
 
 # Rx's blocking IObservable.Wait() over an @@-include resolution whose chain completes on
 # subscribe (a dictionary lookup). Safe as written, but the shape is one refactor away from a

@@ -6,6 +6,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Reactive.Linq;
+using System.Text;
 using System.Threading;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -133,6 +134,22 @@ public static class PrimeReportLayoutAreas
         psi.Environment["PYTHONIOENCODING"] = "utf-8";
 
         using var process = new Process { StartInfo = psi };
+
+        // Both pipes drain CONCURRENTLY, and without a Task bridge. The event-based reads are
+        // pumped by the runtime while this thread sits in WaitForExit(), so neither pipe can fill
+        // and block the child — the deadlock the previous ReadToEndAsync pair was guarding
+        // against — and there is no observable-or-Task-to-blocking hop to bridge back.
+        //
+        // 🚨 The handlers must be attached BEFORE Start() and the Begin*ReadLine() calls made
+        // after it; that ordering is the whole contract. WaitForExit() with no argument is also
+        // deliberate: the parameterless overload is the one that waits for the asynchronous
+        // readers to flush, so the builders below are complete when it returns. WaitForExit(ms)
+        // does NOT make that guarantee, and swapping it in would silently truncate output.
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+
         process.Start();
         // Cancellation kills the process tree so a pool slot is never leaked on unsubscribe.
         using var reg = ct.Register(() =>
@@ -140,16 +157,21 @@ public static class PrimeReportLayoutAreas
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
             catch { /* already gone */ }
         });
-        // Drain both streams concurrently BEFORE WaitForExit so a full buffer can't deadlock.
-        var outTask = process.StandardOutput.ReadToEndAsync(ct);
-        var errTask = process.StandardError.ReadToEndAsync(ct);
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
         process.WaitForExit();
-        var stdout = outTask.GetAwaiter().GetResult();
-        var stderr = errTask.GetAwaiter().GetResult();
+
+        // 🚨 Cancellation must terminate the sequence, not render. The registration above only
+        // KILLS the child; without this the kill's non-zero exit would fall through to the error
+        // branch below and the area would publish "Python exited with code 137" as though the
+        // script had failed. ReadToEndAsync(ct) used to throw here for free — the event-based
+        // drain has no token, so the check is explicit and belongs AFTER WaitForExit, once the
+        // readers have flushed and the process is genuinely done.
+        ct.ThrowIfCancellationRequested();
 
         return process.ExitCode == 0
-            ? stdout
-            : $"> **Python exited with code {process.ExitCode}.**\n>\n> {stderr.ReplaceLineEndings("\n> ")}";
+            ? stdout.ToString()
+            : $"> **Python exited with code {process.ExitCode}.**\n>\n> {stderr.ToString().ReplaceLineEndings("\n> ")}";
     }
 
     private static string? FindPython()
