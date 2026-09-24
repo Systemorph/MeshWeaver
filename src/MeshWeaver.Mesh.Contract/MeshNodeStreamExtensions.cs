@@ -1496,7 +1496,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // subscribed to, so the patch is observed in order. Own writes and
             // cache-less writes fall back to the direct paths.
             (IsOwn
-                ? UpdateOwn(wrappedUpdate)
+                ? UpdateOwn(wrappedUpdate, auditContext: capturedForLambda)
                 : _cache is not null && _path is not null
                     ? _cache.Update(_path, wrappedUpdate, _jsonOptions)
                     : _bypassCache
@@ -1558,7 +1558,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             (IsOwn
                 // Own write already replaces the whole instance in the local collection — a
                 // constant transform IS a full overwrite. No sync-merge involved on the own path.
-                ? UpdateOwn(_ => node)
+                // Stamped like every other write (ApplyAuditStamp) — the cross-hub overwrite
+                // through the sync stream stamps too, so the two cannot disagree.
+                ? UpdateOwn(_ => node, auditContext: CaptureAuditContext())
                 : _cache is not null && _path is not null
                     ? _cache.Overwrite(_path, node, _jsonOptions)
                     : _bypassCache
@@ -1625,7 +1627,23 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             _workspace.Hub.ServiceProvider);
     }
 
-    private IObservable<MeshNode> UpdateOwn(Func<MeshNode, MeshNode> update, bool adoptPersisted = false)
+    /// <summary>
+    /// The caller's AUTHENTICATED context, captured synchronously on the caller's thread — the
+    /// same precedence (<c>Context ?? CircuitContext</c>) every write path uses for attribution.
+    /// </summary>
+    private AccessContext? CaptureAuditContext()
+    {
+        var accessService = _workspace.Hub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context ?? accessService?.CircuitContext;
+    }
+
+    /// <param name="update">The value transform.</param>
+    /// <param name="adoptPersisted">True for <see cref="AdoptPersisted"/>: an observation of
+    /// durable state — neither minted nor stamped.</param>
+    /// <param name="auditContext">The caller's authenticated context, captured on the caller's
+    /// thread; it attributes the write through <see cref="ApplyAuditStamp"/>.</param>
+    private IObservable<MeshNode> UpdateOwn(
+        Func<MeshNode, MeshNode> update, bool adoptPersisted = false, AccessContext? auditContext = null)
         => Observable.Create<MeshNode>(observer =>
         {
             var refStream = _workspace.GetStream(new MeshNodeReference())
@@ -1789,6 +1807,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     }
                     else
                     {
+                        // 🚨 THE AUDIT STAMP applies to an OWN write exactly as to a cross-hub one
+                        // (Plugins#2229, defect D). Without it an own-stream write — a thread hub's
+                        // claim, rollback and commit, a NodeType's compile bookkeeping — minted a
+                        // version and left LastModified where the last CROSS-HUB write put it, so
+                        // every reader of "when did this node last change" (ThreadSupervisor's
+                        // quiet gauge, sort:LastModified-desc, the node page's Updated line) saw a
+                        // busy node as idle. Stamped after the no-op gate, so an unchanged node is
+                        // still not touched; never for an adoption, which is not a change.
+                        updated = ApplyAuditStamp(current, updated, auditContext, out _);
                         updated = updated with
                         {
                             Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))

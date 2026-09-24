@@ -91,6 +91,8 @@ The gate comes first at **every** place a write can land; the bump is what happe
 
 **`LastModified` is stamped only on a real change.** The audit stamp is applied *after* the diff, never before — otherwise the stamp is the only thing in the patch and every save looks like an edit.
 
+**…and on EVERY write path that mints a version, own and cross-hub alike.** `MeshNodeStreamHandle.ApplyAuditStamp` is the one decider, and `UpdateOwn` calls it after its no-op gate exactly as `UpdateRemote` and the sync-stream write-through do. The own path used to skip it: an own-hub write — a thread hub claiming, rolling back and re-claiming a round, a NodeType recording its compile state — bumped `Version` and left `LastModified` where the last *cross-hub* write had put it. Version order and timestamp order then disagreed, and every reader of "when did this node last change" saw a busy node as quiet: ThreadSupervisor reported *"no change to the node since T"* for a hub writing at hub speed (Systemorph/MeshWeaver.Plugins#2229, defect D), and `sort:LastModified-desc` and the node page's *Updated* line carried the same stale instant. `AdoptPersisted` stays unstamped — adopting a durable row is an observation, not a change. `LastModifiedBy` moves only when the write carries an authenticated identity; an own write with none (a watcher reacting to an emission) keeps the previous author rather than inventing one. Pinned by `OwnWriteStampsLastModifiedTest`.
+
 ## 🚨 Never Author `Version` in a Source File — Use SemVer
 
 `Version` is the OWNER's persistence clock. It is `[Editable(false)]`, it means "revision N of this
