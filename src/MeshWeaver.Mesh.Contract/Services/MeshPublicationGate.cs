@@ -316,6 +316,13 @@ public sealed class MeshPublicationGate : IDisposable
                         + "admitted to the mesh yet ({Reason}). It is published when the "
                         + "validation passes, and discarded if it does not.",
                         subject, AdmissionReason);
+                    // 🚨 The verdict may have turned between the read above and the enqueue, and a
+                    // Reconsider that ran in that window drained a queue this publication was not in
+                    // yet — leaving it held with nothing left to release it. Re-read AFTER the
+                    // enqueue: any turn from here on is either seen now or drains a queue that
+                    // already holds it, so no window is left (review on #5643).
+                    if (Admission is not MeshAdmission.Provisional)
+                        Reconsider();
                     return notRun(MeshAdmission.Provisional);
 
                 default:
