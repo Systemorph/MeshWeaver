@@ -84,18 +84,17 @@ public class OwnWriteStampsLastModifiedTest(ITestOutputHelper output) : Monolith
     }
 
     [Fact(Timeout = 120000)]
-    public Task AnOwnHubWrite_AdvancesLastModified() => AssertOwnWriteStamps("Go", "Done");
+    public Task AnOwnHubWrite_AdvancesLastModified() => AssertOwnWriteStamps("Go", "Done", TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The own-hub <c>Overwrite</c> branch — a full replacement carrying the snapshot's own
     /// <c>LastModified</c> — stamps through the same <c>ApplyAuditStamp</c>.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public Task AnOwnHubOverwrite_AdvancesLastModified() => AssertOwnWriteStamps("Overwrite", "Overwritten");
+    public Task AnOwnHubOverwrite_AdvancesLastModified() => AssertOwnWriteStamps("Overwrite", "Overwritten", TestContext.Current.CancellationToken);
 
-    private async Task AssertOwnWriteStamps(string action, string expectedState)
+    private async Task AssertOwnWriteStamps(string action, string expectedState, System.Threading.CancellationToken ct)
     {
-        var ct = TestContext.Current.CancellationToken;
         var id = "OwnWrite" + Guid.NewGuid().ToString("N")[..8];
         var path = $"{TestPartition}/{id}";
 
