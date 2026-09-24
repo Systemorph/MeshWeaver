@@ -137,57 +137,37 @@ internal class RoutingGrain(
     private bool IsServiceScopeDisposed() => meshHub.IsServiceScopeDisposed();
 
     /// <summary>
-    /// Routes dispatched but not yet terminated. This is the back-pressure signal that used to be
-    /// INVISIBLE: before #1028 the only evidence a route had stopped making progress was Orleans'
-    /// own <c>NonReentrancyQueueSize</c> growing into the hundreds inside a "Response did not
-    /// arrive on time" warning — nothing reported it as a routing fault, so the symptom surfaced
-    /// 37 h later as "the deployment is stale". Reported at the DISPATCH site (event-driven, no
-    /// timer, no watchdog).
-    ///
-    /// <para>🚨 The slot is claimed at DISPATCH — and for the stream branch that means at ENQUEUE,
-    /// before the leg is subscribed at all (see <see cref="OrderedRouteDispatcher"/>). So this
-    /// number mixes legs that are executing, legs merely queued behind another leg, and legs still
-    /// waiting for a ThreadPool thread. It is a back-pressure gauge; it is NOT evidence that any
-    /// individual leg is stuck. <see cref="ReportSaturation"/> carries the full reasoning.</para>
+    /// Routes dispatched but not yet terminated — the back-pressure gauge (#1028). The slot is claimed
+    /// at DISPATCH (for the stream branch, at ENQUEUE), so this mixes executing legs, legs queued
+    /// behind another leg and legs waiting for a ThreadPool thread. It is a gauge; it is NOT evidence
+    /// that any leg is stuck. <see cref="RoutingSaturationReport"/> reports it and carries the reasoning.
     /// </summary>
     private int inFlightRoutes;
-    private int saturationReported;
 
     /// <summary>
-    /// Identity of THIS activation, and the episode counter within it — the pair that makes a single
-    /// saturation line self-sufficient (issue #1789).
-    ///
-    /// <para>🚨 <b>Why a log line needs an identity.</b> <see cref="ReportSaturation"/> latches: the
-    /// only writer of <c>0</c> to <see cref="saturationReported"/> is <see cref="ReportDrained"/>, so
-    /// two crossing lines from ONE activation are impossible without a clear between them. On
-    /// 2026-08-17 a pod emitted two crossings ten minutes apart with NO clear line, and answering
-    /// "was this one episode or two?" required knowing whether the grain had been recycled — which
-    /// nothing logged, because <c>RoutingGrain</c> has no lifecycle overrides. The question was
-    /// unanswerable from the evidence, and it was the question that mattered.</para>
-    ///
-    /// <para>With both stamped on every line it is answerable from the Critical channel alone:
-    /// <b>different activation ⇒ the grain was recycled</b>; <b>same activation, higher episode ⇒
-    /// the previous episode really did drain</b>; and the same activation+episode never appears
-    /// twice, by the latch.</para>
+    /// The back-pressure report for THIS activation — crossing, drain, and the one Critical a leg past
+    /// its own bounds earns. Instance field: its latch and episode counter are this activation's
+    /// (issue #1789 — a different activation id on a line means the grain was recycled).
     /// </summary>
-    private readonly string activationId = Guid.NewGuid().ToString("N")[..8];
-    private int saturationEpisode;
-
-    /// <summary>
-    /// UTC ticks at which the current saturation episode began, so <see cref="ReportDrained"/> can
-    /// say how long it lasted. Written under the same latch that gates the report, read only by the
-    /// clearing report — a plain <see cref="Volatile"/> pair is sufficient and costs the hot dispatch
-    /// path nothing (it is touched only on the two edges, never per route).
-    /// </summary>
-    private long saturationSinceTicks;
-
-    /// <summary>
-    /// In-flight route count at which routing is declared to be falling behind and reported at
-    /// the level <see cref="SaturationLevel"/> gives it (once, until it recovers — the LATCH is
-    /// unconditional, only the LEVEL depends on the shape). Well above any healthy burst —
-    /// routes terminate in milliseconds — and well below the 541-deep queue prod reached.
-    /// </summary>
-    internal const int SaturationThreshold = 64;
+    private RoutingSaturationReport SaturationReport
+    {
+        get
+        {
+            // Built on first use because it reads other instance fields (a field initializer cannot).
+            // Published with a CAS, never a plain ??=: terminations run on pool threads, and two
+            // instances would split the latch — a crossing on one and its drain on the other.
+            var existing = Volatile.Read(ref saturationReport);
+            if (existing is not null) return existing;
+            Interlocked.CompareExchange(ref saturationReport, new RoutingSaturationReport(
+                Guid.NewGuid().ToString("N")[..8],
+                logger,
+                orderedDispatcher.QueueSnapshot,
+                quiescence is null ? null : quiescence.OldestInFlight,
+                () => (routingPool.CurrentInFlight, routingPool.CurrentlyWaiting)), null);
+            return saturationReport!;
+        }
+    }
+    private RoutingSaturationReport? saturationReport;
 
     /// <summary>
     /// Terminal bound on ONE memory-stream post. The post's only await is a single Orleans grain
@@ -287,17 +267,14 @@ internal class RoutingGrain(
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
                 () =>
                 {
-                    ReportDrained(Interlocked.Decrement(ref inFlightRoutes));
+                    SaturationReport.OnTerminated(Interlocked.Decrement(ref inFlightRoutes));
                     slot?.Dispose();
                 });
-            // 🚨 REPORTED AFTER THE ENQUEUE, AND THAT ORDER DECIDES THE LEVEL.
-            // ReportSaturation classifies the crossing from orderedDispatcher.QueueSnapshot(), and
-            // the snapshot can only see legs that are ALREADY queued. Reporting before the Enqueue
-            // above therefore samples a depth that excludes the very leg that is crossing: when the
-            // crossing leg is the first extra frame on a channel that already has one executing,
-            // the sample reads 0 — head-of-line blocking, classified as load, and the Critical
-            // suppressed at exactly the boundary it exists to catch.
-            ReportSaturation(inFlight, addressPath);
+            // 🚨 REPORTED AFTER THE ENQUEUE. The report prints the crossing's shape from
+            // orderedDispatcher.QueueSnapshot(), and the snapshot can only see legs that are ALREADY
+            // queued: reporting before the Enqueue above would sample a depth (and a deepest
+            // channel) that excludes the very leg that is crossing.
+            SaturationReport.OnDispatched(inFlight, addressPath);
         }
         else
             Dispatch(BuildGrainRoute(delivery, address, addressPath, streamProvider, grainFactory),
@@ -324,188 +301,18 @@ internal class RoutingGrain(
     /// </summary>
     private void Dispatch(IObservable<Unit> route, string addressPath, string deliveryId)
     {
-        ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+        SaturationReport.OnDispatched(Interlocked.Increment(ref inFlightRoutes), addressPath);
         var slot = quiescence?.Track($"dispatch → {addressPath} (delivery {deliveryId})");
         routingPool.SubscribeThroughPool(route)
             .Finally(() =>
             {
-                ReportDrained(Interlocked.Decrement(ref inFlightRoutes));
+                SaturationReport.OnTerminated(Interlocked.Decrement(ref inFlightRoutes));
                 slot?.Dispose();
             })
             .Subscribe(
                 _ => { },
                 ex => logger.LogError(ex,
                     "[ROUTE] Route dispatch faulted for {Address} ({DeliveryId})", addressPath, deliveryId));
-    }
-
-    /// <summary>
-    /// Reports the FIRST crossing of <see cref="SaturationThreshold"/>, then latches until
-    /// <see cref="ReportDrained"/> clears it at half the threshold.
-    ///
-    /// <para>🚨 <b>This is a gauge, not a bound — and issues #1172/#1284 are what happens when a
-    /// diagnostic asserts more than it measures.</b> Nothing throttles, queues or refuses at 64:
-    /// <see cref="Dispatch"/> hands every route to the pool unconditionally and
-    /// <see cref="RouteMessage"/> still returns <c>Forwarded</c> immediately. The previous wording
-    /// ("…and not terminating", "a delivery leg is not completing") stated a conclusion this
-    /// counter cannot observe, and the number itself was read as Orleans'
-    /// <c>NonReentrancyQueueSize</c> limit. It is neither: 64 is
-    /// <see cref="SaturationThreshold"/>, a MeshWeaver constant, and the reason every report in
-    /// prod said EXACTLY 64 is the latch below — the report fires on the single increment that
-    /// crosses the line, so 64 is the only value it can print. That artefact was then read as
-    /// evidence of a hard cap.</para>
-    ///
-    /// <para><b>What the count actually measures.</b> A slot is claimed at DISPATCH and released
-    /// when the leg terminates — and the leg's own bounds (<see cref="ResolveTimeout"/>,
-    /// <see cref="StreamPostTimeout"/>) are operators INSIDE the cold observable, so they do not
-    /// start until <c>IIoPool.SubscribeThroughPool</c> actually gets a ThreadPool thread and passes
-    /// the gate. The window from claim to subscribe is therefore bounded by nothing but ThreadPool
-    /// availability, which makes this counter partly an instrument for <b>CPU/ThreadPool
-    /// starvation</b> — the same quantity Orleans' <c>LocalSiloHealthMonitor</c> reports as a
-    /// "thread pool delay" (#1284). A silo that has lost the CPU raises BOTH without any leg being
-    /// stuck.</para>
-    ///
-    /// <para><b>So report the discriminators, never a cause.</b> <c>Deepest</c> counts legs QUEUED
-    /// BEHIND the one executing leg of an ordered CHANNEL, so <c>Deepest &gt;= 1</c> already means a
-    /// leg is waiting on a leg — head-of-line blocking within one channel. <c>Deepest = 0</c>
-    /// with many channels, or a backlog that clears in milliseconds, is load.
-    /// <see cref="ReportDrained"/> prints how long the episode lasted, which separates a throughput
-    /// burst from a real stall without anyone having to profile a pod.</para>
-    ///
-    /// <para>🚨 <b>A channel is (destination, stream), not a destination — issue #5009, and it
-    /// changes what a non-zero <c>Deepest</c> MEANS.</b> Until that issue the channel was the
-    /// destination address, so a deep queue could be — and on memex-cloud was — 62 unrelated
-    /// streams waiting behind each other at one multiplexer hub, which is not head-of-line blocking
-    /// on anything, merely a channel key too coarse to let them overlap. Now a non-zero
-    /// <c>Deepest</c> means frames of the SAME stream are stacking up, which really is one
-    /// destination not keeping up with one producer. Both counts are printed because their RATIO is
-    /// the remaining discriminator: many channels over FEW destinations is a busy multiplexer
-    /// draining in parallel (load); few channels with a deep queue is a stream that is not
-    /// draining.</para>
-    /// </summary>
-    private void ReportSaturation(int inFlight, string addressPath)
-    {
-        if (inFlight < SaturationThreshold) return;
-        if (Interlocked.Exchange(ref saturationReported, 1) == 1) return;
-        var startedUtc = DateTime.UtcNow;
-        Volatile.Write(ref saturationSinceTicks, startedUtc.Ticks);
-        var episode = Interlocked.Increment(ref saturationEpisode);
-        var (channels, destinations, deepest) = orderedDispatcher.QueueSnapshot();
-        logger.Log(SaturationLevel(deepest),
-            "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
-            + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
-            + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
-            + "deepest per-channel queue {Deepest}, routing pool subscribing {PoolInFlight}, "
-            + "waiting for a pool slot {PoolWaiting}; oldest leg in flight {OldestLeg}. "
-            + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
-            + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
-            + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
-            + "A CHANNEL is (destination, stream), so a deepest queue of 1 or more means legs of the SAME stream are "
-            + "blocked behind one another (head-of-line within one channel); 0 means nothing is waiting on anything, "
-            + "so read it as load. Many channels over FEW destinations is a multiplexer hub draining in parallel, "
-            + "which is load too — before issue #5009 those legs shared one channel and read as head-of-line. "
-            + "🚨 THE TWO POOL GAUGES ANSWER DIFFERENT QUESTIONS AND ONLY ONE SEES THE WAIT NAMED ABOVE — issue #5018. "
-            + "'subscribing' counts legs inside their SUBSCRIBE PROLOGUE only, so a leg still waiting for a ThreadPool "
-            + "thread and a leg already past its subscribe BOTH read 0 there; 'waiting for a pool slot' is the gauge "
-            + "that sees the pre-subscribe wait. High while subscribing is below the pool's cap is a THREAD shortage; "
-            + "both near zero means the legs are past their subscribe and the wait is downstream I/O. "
-            + "🚨 READ THE OLDEST LEG FIRST: it is the only load-vs-leak discriminator available from a SINGLE line — "
-            + "every leg young is load the silo is absorbing, one leg minutes old is a slot that never came back and "
-            + "the label names it — whereas the episode stamp below needs a SECOND line to say anything. "
-            + "🚨 Deepest is sampled AT THE CROSSING, so like the in-flight count it is partly an artefact of the "
-            + "threshold: with N channels sharing the backlog it is ~InFlight/N whatever is wrong. "
-            + "READ THE EPISODE STAMP, not the depth: a later line with a HIGHER episode on this activation means "
-            + "this episode drained; a line with a DIFFERENT activation id means the grain was recycled; and if "
-            + "neither a clear nor a higher episode ever follows, the in-flight count never fell below half the "
-            + "threshold — which means a leg never terminated and its slot leaked, not that the silo was busy.",
-            activationId, episode, startedUtc, inFlight, SaturationThreshold,
-            channels, destinations, deepest, routingPool.CurrentInFlight, routingPool.CurrentlyWaiting,
-            DescribeOldestLeg(), addressPath);
-    }
-
-    /// <summary>
-    /// The oldest in-flight routing leg, as ONE phrase the report prints — its age and the label that
-    /// identifies it, or a sentence saying why there is none.
-    ///
-    /// <para>🚨 <b>Why a composed phrase and not a number plus a string.</b> The two "no reading"
-    /// cases are not zero and must never render as a number: a sentinel age of <c>-1</c> or <c>0</c> is
-    /// exactly the shape that gets read as "the oldest leg is brand new", which is the *opposite* of
-    /// what it would mean. "nothing in flight" and "not tracked on this host" (the quiescence gauge is
-    /// resolved with <c>GetService</c>, so a host that registered none has none) are therefore printed
-    /// as words. Everything else on this line is a number precisely because a number is a fair summary
-    /// of it; this one is not.</para>
-    ///
-    /// <para>Called once per saturation EPISODE, from the latched branch of
-    /// <see cref="ReportSaturation"/> — never per route. The scan behind it is O(in-flight legs), the
-    /// same cost argument <c>OrderedRouteDispatcher.QueueSnapshot</c> already makes on this turn, and
-    /// the count it walks is ~the reporting threshold at the moment the report fires.</para>
-    /// </summary>
-    private string DescribeOldestLeg()
-    {
-        if (quiescence is null)
-            return "not tracked on this host";
-        var oldest = quiescence.OldestInFlight();
-        return oldest is null
-            ? "none in flight"
-            : $"{(long)oldest.Value.Age.TotalMilliseconds} ms — {oldest.Value.Label}";
-    }
-
-    /// <summary>
-    /// The level this crossing deserves, decided by the SHAPE the snapshot reports — the one
-    /// discriminator this counter can actually observe.
-    ///
-    /// <para>🚨 <b>A gauge crossing is not an incident.</b> Nothing throttles, queues or refuses at
-    /// <see cref="SaturationThreshold"/>: <see cref="Dispatch"/> hands every route to the pool
-    /// unconditionally and <see cref="RouteMessage"/> still returns <c>Forwarded</c>. The line's own
-    /// text has always said so — <i>"0 means nothing is waiting on anything, so read it as load"</i> —
-    /// while the level said the opposite, and the red-log ticketing path files an incident per
-    /// <see cref="LogLevel.Critical"/> fingerprint. So every ordinary busy moment opened a ticket.</para>
-    ///
-    /// <para><b>Measured 2026-09-21</b> across the crossings carried in the open incidents from this
-    /// site: <b>17 with <c>deepest = 0</c></b> (nothing blocked — breadth, or a CPU-starved silo) against
-    /// <b>4 with a genuine head-of-line queue</b>. Roughly four in five Criticals reported that nothing
-    /// was stuck. Combined with the per-activation identity split they became 46 open issues from ONE
-    /// log statement, 42 of them duplicates.</para>
-    ///
-    /// <para><b>The rule:</b> <c>deepest >= 1</c> means a leg is waiting on a LEG — head-of-line
-    /// blocking on one channel, which is actionable and stays <see cref="LogLevel.Critical"/>.
-    /// <c>deepest == 0</c> means nothing waits on anything, which is load, and is reported at
-    /// <see cref="LogLevel.Warning"/>: still logged, with every field it had before, and still paired
-    /// with <see cref="ReportDrained"/>'s duration — but it no longer files a ticket.</para>
-    ///
-    /// <para>🚨 This is a permanent level decision with a cost/value argument, NOT a debugging tweak:
-    /// <c>Critical</c> is what the ticketing path acts on, so it has to mean "act now". Nothing is
-    /// hidden — the load crossings keep their line, and the head-of-line shape, which is the one worth
-    /// waking someone for, is unchanged.</para>
-    /// </summary>
-    /// <param name="deepest">Legs queued behind the executing leg of the deepest channel.</param>
-    /// <returns><see cref="LogLevel.Critical"/> for head-of-line, <see cref="LogLevel.Warning"/> for load.</returns>
-    internal static LogLevel SaturationLevel(int deepest) =>
-        deepest >= 1 ? LogLevel.Critical : LogLevel.Warning;
-
-    private void ReportDrained(int inFlight)
-    {
-        if (inFlight > SaturationThreshold / 2) return;
-        if (Interlocked.Exchange(ref saturationReported, 0) == 0) return;
-        var since = Volatile.Read(ref saturationSinceTicks);
-        // The episode's DURATION is the slow-vs-stuck discriminator: milliseconds is a burst the
-        // silo absorbed, minutes is a leg that really was not completing. Without it, five reports
-        // in eighteen seconds (prod, 2026-08-10) read as one permanent wedge when they were in fact
-        // five separate crossings — each one drained below half the threshold in between.
-        //
-        // 🚨 WARNING, not Information — a permanent level change with a cost/value argument, not a
-        // debugging tweak (AGENTS.md). This line is one HALF of a signal whose other half is
-        // Critical; at Information the two halves ride independently-filterable channels and the
-        // pair cannot be reconstructed. On 2026-08-17 that is exactly what happened: the crossing
-        // lines survived, the clear did not, and "did this episode ever end?" — the whole question —
-        // became unanswerable. It is deliberately NOT raised to Critical: the red-log ticketing path
-        // files an incident per Critical fingerprint, so a Critical "cleared" line would file a
-        // ticket for a RECOVERY and invert the signal. Warning ships reliably and tickets nothing.
-        // The episode stamp below is what actually makes the pair reconstructible; the level only
-        // makes sure both halves arrive.
-        var lasted = since == 0 ? TimeSpan.Zero : DateTime.UtcNow - new DateTime(since, DateTimeKind.Utc);
-        logger.LogWarning(
-            "[ROUTE] Routing back-pressure [{ActivationId}#{Episode}] cleared after {ElapsedMs} ms — {InFlight} route(s) in flight",
-            activationId, Volatile.Read(ref saturationEpisode), (long)lasted.TotalMilliseconds, inFlight);
     }
 
     /// <summary>
