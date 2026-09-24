@@ -185,7 +185,11 @@ public static class MeshApiEndpoints
         // Binary upload — multipart so `curl -F file=@logo.png -F path=@Foo/content/logo.png` works.
         // DisableAntiforgery: bearer-auth form posts can't carry an antiforgery token; the request
         // is already authenticated by ApiTokenAuthenticationHandler, which is the protection here.
-        group.MapPost("/upload", HandleUpload).DisableAntiforgery();
+        // The body limit is DECLARED on the route (#5135): FormOptions below only raises the multipart
+        // FORM limit, and Kestrel still cut the whole request at its own 30 MB default, so the 200 MB
+        // this route promised was never reachable. Same ceiling as the MCP `upload` tool, one constant.
+        group.MapPost("/upload", HandleUpload).DisableAntiforgery()
+            .WithMetadata(new UploadBodyLimit());
 
         return endpoints;
     }
@@ -375,6 +379,17 @@ public static class MeshApiEndpoints
     }
 
     /// <summary>
+    /// The request-body limit <c>POST /api/mesh/upload</c> declares: a
+    /// <see cref="UploadLimits.MaxUploadBytes"/> file plus its multipart envelope. Declared as
+    /// endpoint metadata so Kestrel applies it to this route instead of its 30 MB default.
+    /// </summary>
+    internal sealed class UploadBodyLimit : Microsoft.AspNetCore.Http.Metadata.IRequestSizeLimitMetadata
+    {
+        /// <inheritdoc />
+        public long? MaxRequestBodySize => UploadLimits.MultipartRequestBodyLimit;
+    }
+
+    /// <summary>
     /// Registers the bits the REST module needs that aren't already in DI from the
     /// MCP wiring: lift the multipart upload size cap (default 30 MB is too small
     /// for typical document uploads) and ensure <see cref="McpConfiguration"/> is
@@ -387,7 +402,7 @@ public static class MeshApiEndpoints
             // 200 MB — generous but bounded. Matches the working assumption that
             // document / image / spreadsheet uploads are the common case; binaries
             // larger than this should go through a different ingest path.
-            o.MultipartBodyLengthLimit = 200L * 1024 * 1024;
+            o.MultipartBodyLengthLimit = UploadLimits.MultipartRequestBodyLimit;
             o.ValueLengthLimit = int.MaxValue;
             o.MultipartHeadersLengthLimit = int.MaxValue;
         });

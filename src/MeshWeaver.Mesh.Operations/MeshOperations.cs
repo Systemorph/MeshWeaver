@@ -2582,6 +2582,11 @@ public class MeshOperations
             return Observable.Return("Error: path is required.");
         if (bytes is null || bytes.Length == 0)
             return Observable.Return("Error: content is required.");
+        // The one ceiling every transport derives its body limit from (#5135). A transport that
+        // admits more than this — the in-process sidecar has no Kestrel limit at all — still meets
+        // the same refusal, by name, instead of a size-dependent failure deeper in the save.
+        if (bytes.Length > UploadLimits.MaxUploadBytes)
+            return Observable.Return(UploadLimits.TooLarge(bytes.Length));
 
         var resolvedPath = ResolvePath(path).TrimStart('/');
         if (string.IsNullOrWhiteSpace(resolvedPath))

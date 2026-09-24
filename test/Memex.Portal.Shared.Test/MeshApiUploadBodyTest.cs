@@ -3,8 +3,15 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Threading.Tasks;
+using System;
+using System.Linq;
 using Memex.Portal.Shared.Api;
+using MeshWeaver.AI;
+using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Primitives;
 using Xunit;
@@ -98,6 +105,35 @@ public class MeshApiUploadBodyTest
         failure.Should().BeNull();
         path.Should().Be("@Foo/content/logo.png");
         bytes.Should().Equal(Encoding.UTF8.GetBytes(body));
+    }
+
+    /// <summary>
+    /// 🚨 #5135: the route DECLARES its body limit, derived from the one upload ceiling. Without the
+    /// metadata Kestrel cuts the whole request at its 30 MB default, and the 200 MB the multipart
+    /// form limit promised was unreachable. Negative control (run by hand): removing
+    /// <c>.WithMetadata(new UploadBodyLimit())</c> from <c>MapMeshApi</c> fails the NotBeNull.
+    /// </summary>
+    [Fact]
+    public void The_upload_route_declares_the_shared_upload_ceiling()
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        // Minimal-API parameter inference only asks whether IMessageHub IS a service; no route runs.
+        builder.Services.AddSingleton<IMessageHub>(_ => throw new InvalidOperationException("not resolved"));
+        builder.Services.AddAuthorization();
+        var app = builder.Build();
+        app.MapMeshApi();
+
+        var upload = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(e => e.RoutePattern.RawText == MeshApiEndpoints.RoutePrefix + "/upload");
+
+        var limit = upload.Metadata.GetMetadata<IRequestSizeLimitMetadata>();
+        limit.Should().NotBeNull("with no request-size metadata the route inherits Kestrel's 30 MB default");
+        limit!.MaxRequestBodySize.Should().Be(UploadLimits.MultipartRequestBodyLimit);
+        limit.MaxRequestBodySize!.Value.Should().BeGreaterThan(UploadLimits.MaxUploadBytes,
+            "the multipart envelope sits around the file, so a limit equal to the file ceiling would "
+            + "refuse a legal maximum-size upload");
     }
 
     private static int? StatusOf(IResult? result) =>
