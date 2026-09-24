@@ -179,7 +179,15 @@ public static class PluginCatalogConfigurationExtensions
                 // fails with a denied-path error the publisher sees as HTTP 409. See ModuleRoot.
                 .AddSingleton(sp => new ModuleLandingService(
                     sp.GetService<ILogger<ModuleLandingService>>(),
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>())))
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
+                {
+                    // 🚨 MeshWeaver#4963 — reads of the activation record run HERE, never on the
+                    // service's cap-1 landing lane, so a bundle-index request no longer waits out
+                    // every publish landing in flight. See ModuleLandingService.GetActivation.
+                    ReadPool = sp.GetService<Mesh.Threading.IoPoolRegistry>()
+                        ?.Get(Mesh.Threading.IoPoolNames.FileSystem)
+                        ?? Mesh.Threading.IoPool.Unbounded,
+                })
                 // The restart-as-activation READER (#1979): which landed modules are not loaded in
                 // THIS process. Registered beside the writer and rooted at the same resolved
                 // module root — a reader looking at a different directory than the writer is how

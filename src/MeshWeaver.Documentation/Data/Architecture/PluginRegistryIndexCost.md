@@ -32,7 +32,7 @@ It runs two sequential stages of live mesh reads:
 | stage | work | ceiling | what a stall looks like |
 |---|---|---|---|
 | **auth filter** | `InstanceRegistryAuthenticator.Resolve` — **three mandatory legs** (a children listing plus two per-node mirrors), then an **optional fourth**: the plan ladder (below) | **10 s per leg** (`ReadBudget`, `src/MeshWeaver.PluginCatalog/InstanceRegistryAuthenticator.cs:54`), and a **separate** 10 s for the ladder | a real **503 + `Retry-After`** (`InstanceAuthResponses.cs:41`), at ~10,000 ms |
-| **index assembly**, only after auth succeeds | `Servable()` `:1192` → `InstalledPackages` `:2149` and `HeldPartitions` `:1325`, both `IMeshService.Query<MeshNode>` awaiting `QueryChangeType.Initial`, plus per-package entitlement `Decide(...)` | **none** | **nothing at all** — no status line, no headers — until the *caller's* budget tears the connection down |
+| **index assembly**, only after auth succeeds | `Servable()` `:1192` → `InstalledPackages` `:2149` and `HeldPartitions` `:1325`, both `IMeshService.Query<MeshNode>` awaiting `QueryChangeType.Initial`, plus per-package entitlement `Decide(...)` — and two reads of the module-activation record (see *Since this page was written*) | **none** when this page was written; a query stall is now 503 + `Retry-After` (#5454) | **nothing at all** — no status line, no headers — until the *caller's* budget tears the connection down |
 
 `grep -c '\.Timeout(' PluginBundleEndpoints.cs` returns **`0`**. Not one bound in 2,194 lines.
 
@@ -105,6 +105,55 @@ Forbidden, and one of them has already been tried:
 - **Raising a retry count.** The server answers a genuine 503 after its own budget. Three more
   attempts meet the same ceiling.
 - A watchdog re-polling a frozen catalog, or a `catch` that continues, would each bury it further.
+
+## Since this page was written: two things that changed the table above
+
+**The assembly stage's queries are bounded now (#5454).** A query-fan-in provider that never
+delivers its `Initial` ends the read with `QueryProviderStalledException` (policy
+`query-fanin-stall-terminal`), and both bundle routes map that — through
+`InstanceAuthResponses.UnavailableOnAStalledRead` — to **503 + `Retry-After`** instead of an
+unhandled 500. So a stall in `InstalledPackages` / `HeldPartitions` no longer holds a connection
+for the caller's whole budget. The consumer honours the header: the `plugin-registry` and
+`plugin-registry-bundles` clients use `AddStandardResilienceHandler`, whose
+`HttpRetryStrategyOptions.ShouldRetryAfterHeader` defaults to `true` and is overridden nowhere, so
+a retry waits what the registry asked for rather than a blind backoff.
+
+**A third per-request cost, which no stage of the table names: the activation read queued behind
+every landing (#4963).** Index assembly reads the module-activation record TWICE per request
+(`WithPublishedModules` and `ServableModules`), and every bundle download reads it once, through
+`ModuleLandingService.GetActivation()`. That read ran on the service's **cap-1 landing pool** — the
+same lane `ShelveModule` lands a published module on. So on the registry:
+
+- every index request and every bundle download waited, **with nothing written to its caller**,
+  for every publish landing in flight — and a shelf landing is not short: it is one SMB round trip
+  per file on the shared `/data` volume (DefaultViews alone declares 254 static assets);
+- and for every OTHER request's read, one at a time, **process-wide** — a single-server queue whose
+  service time is itself a walk of every module's record directory over SMB, so it grows with the
+  number of modules and with how many consumers poll at once.
+
+That is exactly the shape this page could not explain from the mesh reads alone: a cost that
+"grows with the number of published packages", and a stall that writes zero bytes while
+`/api/version` and the unauthenticated 401 answer in ~0.1 s. The serialisation was justified as
+"so a read never observes a landing halfway through its read-modify-write" — but there has been no
+read-modify-write since #2090/#4026: a landing writes its bytes into a fresh generation directory
+and then an immutable record of its own, and the list is DERIVED from the records present, which is
+why a reader on another replica (whose landings this pool never serialised) was always safe. A
+reader on another thread of the same process is the same reader.
+
+**Fixed:** `GetActivation()` reads on `ModuleLandingService.ReadPool` — the mesh's file-system
+`IIoPool` in production — and the cap-1 lane serialises landings only.
+`ActivationReadIsNotQueuedBehindALandingTest` parks a landing inside its recording window (the
+#4026 seam) and requires the read to answer within a third of the park's bound: with the read back
+on the landing lane it fails (`Total: 1, Failed: 1`, "the observable emitted nothing at all"); with
+the fix it passes, and the read shows the parked module as not yet recorded — no torn read.
+
+What this does **not** establish: that this queue was the stall behind the 2026-09-20
+08:02–08:08Z occurrence. That window does coincide with three satellite `publish-bake` runs hitting
+the registry (MeshWeaver.Crm 08:01:54–08:05:25Z, MeshWeaver.Manufacturing 08:01:38–08:05:14Z,
+MeshWeaver.Reinsurance 08:04:06–08:11:00Z), each of which reads the index — concurrent readers on
+one lane — but none of them POSTed a module to the shelf, and the registry's own log for the window
+was not read. The mesh-read costs above and the entitlement evaluation are untouched, and nobody has
+profiled the stages against each other.
 
 ## The second defect: exhaustion leaves no readable mark
 
