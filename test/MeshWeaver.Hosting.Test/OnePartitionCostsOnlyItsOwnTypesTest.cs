@@ -93,11 +93,9 @@ public class OnePartitionCostsOnlyItsOwnTypesTest(ITestOutputHelper output) : Mo
         provider.Arm(BrokenType);
 
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        var definitions = new Dictionary<string, NodeTypeDefinition?>
-        {
-            [GoodType] = new() { Configuration = "config => config" },
-            [BrokenType] = new() { Configuration = "config => config" },
-        };
+        var definitions = ImmutableDictionary<string, NodeTypeDefinition?>.Empty
+            .Add(GoodType, new NodeTypeDefinition { Configuration = "config => config" })
+            .Add(BrokenType, new NodeTypeDefinition { Configuration = "config => config" });
         var sets = await NodeTypeBatchBake
             .ResolveSources(MeshService, access, definitions, [GoodType, BrokenType], null)
             .Should().Within(TestTimeouts.Convergence)
@@ -125,19 +123,17 @@ public class OnePartitionCostsOnlyItsOwnTypesTest(ITestOutputHelper output) : Mo
         const string qB = "namespace:Q/B/Source scope:subtree nodeType:Code";
         const string qC = "namespace:P/C/Source scope:subtree nodeType:Code";
         var node = new MeshNode("Main", "P/A/Source") { NodeType = "Code" };
-        var answers = new Dictionary<string, NodeTypeBatchBake.QueryAnswer>
-        {
-            [qA] = new(ImmutableDictionary<string, MeshNode>.Empty.Add(node.Path, node), null),
-            [qB] = new(null, new InvalidOperationException("42703: column n.created_by does not exist")),
-            [qC] = new(ImmutableDictionary<string, MeshNode>.Empty, null),
-        };
-        var perType = new List<NodeTypeBatchBake.PendingType>
-        {
+        var answers = ImmutableDictionary<string, NodeTypeBatchBake.QueryAnswer>.Empty
+            .Add(qA, new(ImmutableDictionary<string, MeshNode>.Empty.Add(node.Path, node), null))
+            .Add(qB, new(null, new InvalidOperationException("42703: column n.created_by does not exist")))
+            .Add(qC, new(ImmutableDictionary<string, MeshNode>.Empty, null));
+        ImmutableList<NodeTypeBatchBake.PendingType> perType =
+        [
             new("P/A", [qA], [], DeclaresSources: false, KnownSourceCount: 1),
             new("Q/B", [qB], [], DeclaresSources: false, KnownSourceCount: 1),
             // Empty, and the record says it HAS two files: unestablished, withheld.
             new("P/C", [qC], [], DeclaresSources: false, KnownSourceCount: 2),
-        };
+        ];
 
         var sets = NodeTypeBatchBake.AssemblePerQuery(perType, answers, null);
 
@@ -187,9 +183,20 @@ public class OnePartitionCostsOnlyItsOwnTypesTest(ITestOutputHelper output) : Mo
                         || q.Contains("namespace:*", StringComparison.OrdinalIgnoreCase));
                     if (meshWide)
                         Interlocked.Increment(ref refused);
-                    if (meshWide || queries.Any(q => q.Contains(brokenType, StringComparison.OrdinalIgnoreCase)))
+                    if (meshWide)
                         return Observable.Throw<QueryResultChange<T>>(new InvalidOperationException(
                             "42703: column n.created_by does not exist (one partition cannot answer)"));
+                    // The broken type's OWN read answers the way a partitioned provider answers a
+                    // read it could not complete: an Initial over the rows that survived, marked
+                    // incomplete — the shape that must NOT be folded as a source set.
+                    if (queries.Any(q => q.Contains(brokenType, StringComparison.OrdinalIgnoreCase)))
+                        return Observable.Return(new QueryResultChange<T>
+                        {
+                            ChangeType = QueryChangeType.Initial,
+                            Items = Array.Empty<T>(),
+                            Timestamp = DateTimeOffset.UtcNow,
+                            SnapshotIncomplete = true,
+                        });
                 }
                 return Observable.Return(new QueryResultChange<T>
                 {

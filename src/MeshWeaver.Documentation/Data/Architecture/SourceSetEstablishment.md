@@ -71,6 +71,17 @@ concurrency of four, and each type is handed the union of its own queries' answe
 answer is established; a type left out is ABSENT from the map, and the sweep warms exactly that type
 by activation. It is never handed an empty set, which would be #1216's fabricated verdict.
 
+Two properties keep the fallback honest:
+
+- **A floor is not an answer.** Every discovery query (global and per-type) refuses a snapshot whose
+  frame names `SilentProviders`. That field is set when a provider never answered, or answered over
+  reads it could not complete (`SnapshotIncomplete`, which is how a partitioned provider reports a
+  partition it dropped). Folding such a frame would hand the compiler a PARTIAL set.
+- **One budget, not one per query.** The whole per-type pass shares ONE deadline of
+  `DiscoveryBudget`, the same budget the global pass has. Any query still unanswered at that
+  deadline fails as itself, so stalled queries cannot add up to several budgets before the sweep
+  starts.
+
 The fault itself was read off the same boot (pod `…-6f9d6848f8-gf5df`): the line logged 13 µs
 after the abandonment at 07:34:15.089Z is `Npgsql.PostgresException (0x80004005): 42703: column
 n.created_by does not exist` — the `namespace:*/Source` fetch reads the `code` satellite table of

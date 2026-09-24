@@ -348,9 +348,27 @@ internal static class NodeTypeBatchBake
             return Observable.Return(AssemblePerQuery(
                 perType, ImmutableDictionary<string, QueryAnswer>.Empty, logger));
 
-        return queries
+        // ONE deadline for the whole per-type pass, shared by every query — the same budget the
+        // global pass has, never one per query: a set of stalled queries must not add up to
+        // ceil(queries / concurrency) budgets before the sweep starts. A query still unanswered at
+        // the deadline (running or not yet started) fails as ITSELF, so its types alone are withheld.
+        return Observable.Defer(() =>
+        {
+            var deadline = DateTimeOffset.UtcNow + DiscoveryBudget;
+            return PerQueryAnswers(meshService, queries, deadline, logger, discovery);
+        })
+            .Select(answers => AssemblePerQuery(perType, answers, logger));
+    }
+
+    private static IObservable<ImmutableDictionary<string, QueryAnswer>> PerQueryAnswers(
+        IMeshService meshService,
+        IReadOnlyList<string> queries,
+        DateTimeOffset deadline,
+        ILogger? logger,
+        SourceDiscoveryRegistry? discovery)
+        => queries
             .Select(q => RunQuery(meshService, q, logger, discovery)
-                .Timeout(DiscoveryBudget)
+                .Timeout(deadline)
                 .Select(nodes => new QueryAnswer(nodes, null))
                 // Not a swallow: the fault becomes THIS query's recorded answer, and every type that
                 // reads from it is withheld from the batch and named, with this fault, below.
@@ -358,11 +376,8 @@ internal static class NodeTypeBatchBake
                 .Select(answer => (Query: q, Answer: answer)))
             .Merge(PerQueryConcurrency)
             .ToList()
-            .Select(answers => AssemblePerQuery(
-                perType,
-                answers.ToImmutableDictionary(a => a.Query, a => a.Answer, StringComparer.Ordinal),
-                logger));
-    }
+            .Select(answers => answers.ToImmutableDictionary(
+                a => a.Query, a => a.Answer, StringComparer.Ordinal));
 
     /// <summary>One discovery query's outcome: its settled node map, or the fault that stopped it.</summary>
     /// <param name="Nodes">The settled path→node map, or <c>null</c> when the query failed.</param>
@@ -415,12 +430,12 @@ internal static class NodeTypeBatchBake
 
             builder[pending.TypePath] = matched.Values
                 .OrderBy(n => n.Path, StringComparer.Ordinal)
-                .ToList();
+                .ToImmutableList();
         }
 
         logger?.LogInformation(
             "BatchBake: per-type source discovery established {Resolved} of {Total} pending type(s) "
-            + "from {Queries} anchored quer(ies)",
+            + "from {Queries} anchored queries",
             builder.Count, perType.Count, answers.Count);
         if (!withheld.IsEmpty)
             logger?.LogWarning(
@@ -549,6 +564,7 @@ internal static class NodeTypeBatchBake
             // concurrent discoveries of the same query text must not fold their chunk timings
             // together, and nothing here is static (#3704).
             var chunks = new ChunkTiming();
+            var silent = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
             return Observable
                 // 🚨 .AsSystem() — batch-bake source discovery is framework infrastructure, not a
                 // user-scoped read, and this Defer's subscription does not carry the caller's ambient
@@ -562,13 +578,30 @@ internal static class NodeTypeBatchBake
                     Limit = SourceDiscoveryLimit,
                 }.AsSystem()))
                 .Do(chunks.Observe)
+                // 🚨 A FLOOR IS NOT A SOURCE SET. A frame naming SilentProviders was answered over
+                // reads that did not complete — a provider that never answered, or one that caught a
+                // partition's read fault, dropped those rows and emitted what survived
+                // (SnapshotIncomplete, folded into SilentProviders by the fan-in). Folded as an
+                // answer it hands the compiler a PARTIAL set, which compiles wrong in the most
+                // convincing way (#1218). Recorded per subscription, then refused below.
+                .Do(change =>
+                {
+                    if (change.SilentProviders is { Count: > 0 } s)
+                        silent = silent.Union(s);
+                })
                 .Scan(
                     ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
                     NodeCompileShaping.ApplyQueryChange)
                 .Throttle(QueryQuietWindow)
                 .Take(1)
                 .Do(nodes => chunks.Report(logger, bounded, nodes.Count, QueryQuietWindow, discovery))
-                .SelectMany(nodes => nodes.Count < SourceDiscoveryLimit
+                .SelectMany(nodes => !silent.IsEmpty
+                    ? Observable.Throw<ImmutableDictionary<string, MeshNode>>(
+                        new SourceDiscoveryFailedException(
+                            $"source discovery query '{bounded}' settled at {nodes.Count} node(s) over a "
+                            + $"snapshot provider(s) [{string.Join(", ", silent.Order(StringComparer.Ordinal))}] "
+                            + "did not complete, so it is a FLOOR, not a source set"))
+                    : nodes.Count < SourceDiscoveryLimit
                     ? Observable.Return(nodes)
                     : Observable.Throw<ImmutableDictionary<string, MeshNode>>(
                         new SourceDiscoveryFailedException(
