@@ -334,6 +334,34 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     private Exception? terminalFault;
 
     /// <summary>
+    /// 🚨 Set when this server-side stream ends because its SUBSCRIBER is gone — it asked for the
+    /// end itself (an <see cref="UnsubscribeRequest"/> reached this stream's sync hub), or the
+    /// router proved its address unserved (<c>Workspace.EvictClientSubscriptions</c>).
+    ///
+    /// <para>Read by the owner's end-of-stream announcement (<c>StreamEndedEvent</c>, #2191), which
+    /// exists to tell a subscriber about an end it did NOT ask for. Telling it about the end it
+    /// DID ask for reaches nobody — its <c>sync/</c> hub disposed itself before the
+    /// <see cref="UnsubscribeRequest"/> left — so every such announcement was a message routed
+    /// through the subscriber's mesh hub only to be dropped there. A cache hub releasing N mirrors
+    /// at once turned that into N inbound <c>StreamEndedEvent</c>s on ONE router turn loop, which
+    /// is the flood of #5532. Worse, the subscriber reuses a stream id across a re-subscribe, so a
+    /// late echo could land on the NEXT incarnation and read as an owner-side end.</para>
+    ///
+    /// <para>An <c>int</c> behind <see cref="Volatile"/> rather than a <c>volatile bool</c>, the
+    /// same longhand as <see cref="terminalFault"/>: the write happens on the sync hub's turn and
+    /// the read on the disposal callback, which can run on another thread.</para>
+    /// </summary>
+    private int subscriberEnded;
+
+    /// <summary>Whether this stream ends because its subscriber is gone — see
+    /// <see cref="subscriberEnded"/>.</summary>
+    internal bool SubscriberEnded => Volatile.Read(ref subscriberEnded) != 0;
+
+    /// <summary>Records that this stream's subscriber is gone, BEFORE the stream's hub is disposed
+    /// — see <see cref="subscriberEnded"/>.</summary>
+    internal void MarkSubscriberEnded() => Volatile.Write(ref subscriberEnded, 1);
+
+    /// <summary>
     /// The ONE way this stream's store takes a terminal error — it RECORDS the terminal and then
     /// publishes it. Every <c>Store.OnError</c> in this type goes through here so the liveness
     /// answer can never drift from the store's actual state.
@@ -1575,6 +1603,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
             {
+                // The subscriber asked for this end, so the owner must not announce it back
+                // (#5532) — recorded BEFORE the dispose, whose registrations read it.
+                MarkSubscriberEnded();
                 hub.Dispose();
                 return delivery.Processed();
             }).WithHandler<UpdateStreamRequest>((hub, request) =>
