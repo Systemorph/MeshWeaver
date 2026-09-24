@@ -10,9 +10,11 @@ namespace MeshWeaver.Messaging;
 /// The ONE spelling for connecting a multicast chain (<c>Replay(…)</c>, <c>Publish()</c>,
 /// <c>PublishLast()</c>) whose upstream must die with a specific owner: the connection handle is
 /// REGISTERED with the owner the instant <c>Connect()</c> runs, the owner's disposal releases it,
-/// and every subscriber — one still attached when the release happens as much as one arriving after
-/// it — terminates with <see cref="ObjectDisposedException"/> instead of being parked on a replay
-/// that nothing will ever feed (#5135: the attached half was silent before).
+/// and — for the shared observable <c>AutoConnectOwnedBy</c> hands out — every subscriber, one still
+/// attached when the release happens as much as one arriving after it, terminates with
+/// <see cref="ObjectDisposedException"/> instead of being parked on a replay that nothing will ever
+/// feed (#5135: the attached half was silent before). <c>ConnectOwnedBy</c> releases the upstream
+/// only: its readers subscribe to the connectable itself, which this type never wraps.
 ///
 /// <para><b>The defect this replaces.</b> A bare <c>.AutoConnect(1)</c> keeps the handle its
 /// <c>Connect()</c> returns to itself; a bare <c>.Connect()</c> whose result is dropped keeps it

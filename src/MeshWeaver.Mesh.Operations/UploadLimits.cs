@@ -10,8 +10,10 @@ namespace MeshWeaver.AI;
 /// multipart FORM limit to 200 MB, so the whole request was still cut at Kestrel's 30 MB; the MCP
 /// route declared nothing, so a <c>tools/call</c> carrying a ~22 MB file (base64 inflates by 4/3)
 /// was refused as a transport 413 that the client shows as a protocol error, never as a tool
-/// error. Each route now declares a body limit computed from <see cref="MaxUploadBytes"/> for its
-/// own encoding, and <see cref="MeshOperations.Upload"/> refuses a larger payload by name.</para>
+/// error. The REST route declares its body limit from <see cref="MaxUploadBytes"/>
+/// (<see cref="MultipartRequestBodyLimit"/>); <see cref="Base64JsonRequestBodyLimit"/> is the same
+/// ceiling for the MCP endpoint, which MeshWeaver.Plugins maps and declares in its companion change;
+/// and <see cref="MeshOperations.Upload"/> refuses a larger payload by name on every transport.</para>
 ///
 /// <para>Both transports buffer the whole file in memory before the save, and the MCP route holds
 /// the base64 text as well — which is why the ceiling is bounded, and why a file above it belongs
@@ -43,7 +45,13 @@ public static class UploadLimits
     /// </summary>
     /// <param name="bytes">The decoded size of the refused payload.</param>
     /// <returns>The refusal sentence.</returns>
+    /// <remarks>
+    /// A tool/API sentinel like every other <c>"Error: …"</c> result of <see cref="MeshOperations"/>:
+    /// read by a model or a script, never rendered as UI, so it is not localized — and its numbers
+    /// are formatted invariantly, never off the process culture.
+    /// </remarks>
     public static string TooLarge(long bytes)
-        => $"Error: the file is {bytes:N0} bytes; the upload ceiling is {MaxUploadBytes:N0} bytes "
-           + $"({MaxUploadBytes / (1024 * 1024)} MiB). Larger files need a streaming ingest path, not this tool.";
+        => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"Error: the file is {bytes} bytes; the upload ceiling is {MaxUploadBytes} bytes "
+            + $"({MaxUploadBytes / (1024 * 1024)} MiB). Larger files need a streaming ingest path, not this tool.");
 }
