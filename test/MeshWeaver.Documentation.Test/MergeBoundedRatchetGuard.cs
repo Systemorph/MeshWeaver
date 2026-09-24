@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -26,10 +27,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class MergeBoundedRatchetGuard
 {
-    private static readonly string[] ScannedRoots = ["src", "memex"];
-
-    /// <summary>The one sanctioned bare <c>Merge(maxConcurrent)</c>: inside the helper, over trampolined inners.</summary>
-    private const string SanctionedSite = "src/MeshWeaver.Messaging.Hub/BoundedMergeExtensions.cs";
+    private static readonly ImmutableArray<string> ScannedRoots = ["src", "memex"];
 
     private const string BoundName = @"(?:\d+|[A-Za-z_][\w.]*(?i:batch|concurren|parallel|fanout|fan_out)[\w]*)";
 
@@ -45,7 +43,7 @@ public class MergeBoundedRatchetGuard
         var root = SourceScan.FindRepoRoot();
         var offenders = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => (Path: SourceScan.Relative(root, f), Count: CountIn(f)))
-            .Where(x => x.Count > 0 && x.Path.Replace('\\', '/') != SanctionedSite)
+            .Where(x => x.Count > 0)
             .ToList();
 
         Assert.True(offenders.Count == 0,

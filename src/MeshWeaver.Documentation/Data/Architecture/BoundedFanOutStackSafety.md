@@ -54,15 +54,25 @@ which one it was.
 
 ## The fix: `MergeBounded`
 
-`MeshWeaver.Messaging.BoundedMergeExtensions.MergeBounded(n)` is `Merge(n)` with each inner
-subscribed through `Scheduler.CurrentThread` — the trampoline. If a trampoline is already running
-on the thread (an inner completing synchronously inside another inner's subscription is exactly that
-case), the next subscription is queued on it and runs after the current frame unwinds; otherwise the
-trampoline starts and runs it immediately. The next inner is therefore always subscribed from the
-trampoline's loop, never from inside the previous inner's `OnCompleted`, so the depth no longer
-depends on the queue. The bound, the start order and every value, error and completion are
-unchanged, nothing hops to another thread, and the subscription also leaves `Merge`'s internal gate,
-which is where the inline dequeue used to run it.
+`MeshWeaver.Messaging.BoundedMergeExtensions.MergeBounded(n)` is `Merge(n)` with the recursion
+replaced by a **drain loop** — the work-in-progress loop Rx's own `Concat` uses. Starting the next
+inner is one loop per subscription, entered by whichever signal made a slot or an inner available
+(an outer `OnNext`, an inner's completion, the outer's completion). A signal that arrives while that
+loop is already running — an inner completing synchronously inside the subscription the loop is
+making is exactly that case — only records that there is more to do and returns; the running loop
+takes it on its next iteration. The next inner is therefore always subscribed from the loop's frame,
+never from inside the previous inner's `OnCompleted`, so the depth no longer depends on the queue.
+
+Everything else is `Merge`'s: at most `n` inners are subscribed at once, inners start in arrival
+order, an inner that fits the bound is subscribed **inline** on the signal that delivered it (no
+scheduler, no thread hop — so an outer that emits an inner and then faults in the same turn still has
+that inner's synchronous values delivered before the fault), values are forwarded serialised, the
+first error terminates everything, and the sequence completes when the outer and every inner have.
+
+A first version subscribed each inner through `Scheduler.CurrentThread` instead. Review caught what
+that costs: inside a running trampoline every inner subscription is DEFERRED, so an outer that emits
+an inner and faults in the same turn drops that inner's values, and a long-running outer on the
+trampoline starves the inners. `AnInnerEmittedBeforeAnOuterFault_DeliversItsValuesFirst` pins it.
 
 ```csharp
 // ❌ recurses once per queued inner when inners complete synchronously
@@ -72,8 +82,8 @@ nodes.Select(n => Lookup(n)).ToObservable().Merge(NodeCopyHelper.DefaultBatchSiz
 nodes.Select(n => Lookup(n)).MergeBounded(NodeCopyHelper.DefaultBatchSize)
 ```
 
-Rx's other fan-in operators are not affected: both `Concat` overloads already drain through a
-trampoline, and an unbounded `Merge()` / `SelectMany` keeps no queue.
+Rx's other fan-in operators are not affected: both `Concat` overloads already drain through a loop
+or a trampoline, and an unbounded `Merge()` / `SelectMany` keeps no queue.
 
 ## Enforcement
 

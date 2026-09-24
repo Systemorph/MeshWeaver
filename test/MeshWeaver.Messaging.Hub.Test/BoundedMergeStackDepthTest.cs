@@ -74,12 +74,14 @@ public class BoundedMergeStackDepthTest
         var probe = new Probe();
         var release = new Subject<int>();
 
+        // Counted from the leg's subscription to its terminal signal — the decrement runs BEFORE the
+        // merge sees the terminal, so the count is what the merge itself holds open.
         IObservable<int> Tracked(IObservable<int> leg) => Observable.Defer(() =>
         {
             probe.Active++;
             probe.MaxActive = Math.Max(probe.MaxActive, probe.Active);
-            return leg;
-        }).Finally(() => probe.Active--);
+            return leg.Do(_ => { }, _ => probe.Active--, () => probe.Active--);
+        });
 
         IObservable<int> Pending(int i) => Tracked(release.Take(1).Select(_ => i));
 
@@ -162,6 +164,55 @@ public class BoundedMergeStackDepthTest
         Assert.Null(error);
         Assert.True(completed);
         Assert.Equal(Enumerable.Range(0, LongQueue), values.OrderBy(v => v));
+    }
+
+    /// <summary>
+    /// An inner that fits the bound is subscribed INLINE on the signal that delivered it — even inside
+    /// a running trampoline — so an outer that emits an inner and then faults in the same turn still
+    /// has that inner's synchronous values delivered BEFORE the fault, exactly as <c>Merge(n)</c> does.
+    /// A helper that deferred subscriptions onto the trampoline would drop them (review on #5651).
+    /// </summary>
+    [Fact]
+    public void AnInnerEmittedBeforeAnOuterFault_DeliversItsValuesFirst()
+    {
+        var events = ImmutableList<string>.Empty;
+        Scheduler.CurrentThread.Schedule(() =>
+            Observable.Create<IObservable<int>>(outer =>
+                {
+                    outer.OnNext(Observable.Return(1));
+                    outer.OnError(new InvalidOperationException("outer faulted"));
+                    return System.Reactive.Disposables.Disposable.Empty;
+                })
+                .MergeBounded(Bound)
+                .Subscribe(
+                    v => events = events.Add($"value {v}"),
+                    ex => events = events.Add($"error {ex.Message}"),
+                    () => events = events.Add("completed")));
+
+        Assert.Equal(new[] { "value 1", "error outer faulted" }, events);
+    }
+
+    /// <summary>The first error — here an inner's — terminates the merged sequence and stops the queue.</summary>
+    [Fact]
+    public void AnInnerFault_TerminatesTheSequence_AndNoLaterInnerStarts()
+    {
+        var started = 0;
+        Exception? error = null;
+        var completed = false;
+        Enumerable.Range(0, LongQueue)
+            .Select(i => Observable.Defer(() =>
+            {
+                started++;
+                return i == 10
+                    ? Observable.Throw<int>(new InvalidOperationException("leg 10"))
+                    : Observable.Return(i);
+            }))
+            .MergeBounded(Bound)
+            .Subscribe(_ => { }, ex => error = ex, () => completed = true);
+
+        Assert.Equal("leg 10", error?.Message);
+        Assert.False(completed);
+        Assert.Equal(11, started);
     }
 
     [Fact]
