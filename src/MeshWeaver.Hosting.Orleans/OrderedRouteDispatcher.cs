@@ -139,24 +139,33 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
     /// <c>Destinations</c>: how many distinct addresses those channels belong to.
     /// <c>Deepest</c>: the largest number of legs queued behind the one executing leg of any single
     /// channel (0 when every channel is down to its in-flight leg).
+    /// <c>DeepestChannel</c>: WHICH channel that is — <c>destination [stream]</c>, or <c>null</c> when
+    /// no leg is queued behind another. A non-zero depth with no name told the reader that one stream
+    /// was stacking up and never which one, so the producer behind a 63-deep burst could not be found
+    /// from the line that measured it.
     /// </returns>
-    internal (int Channels, int Destinations, int Deepest) QueueSnapshot()
+    internal (int Channels, int Destinations, int Deepest, string? DeepestChannel) QueueSnapshot()
     {
         lock (gate)
         {
             var deepest = 0;
-            foreach (var queue in queues.Values)
+            string? deepestChannel = null;
+            foreach (var (channel, queue) in queues)
             {
                 var depth = 0;
                 foreach (var _ in queue.Pending) depth++;
-                if (depth > deepest) deepest = depth;
+                if (depth <= deepest) continue;
+                deepest = depth;
+                deepestChannel = channel.OrderingKey is null
+                    ? channel.Destination
+                    : $"{channel.Destination} [{channel.OrderingKey}]";
             }
             // LINQ's own dedupe rather than a set of ours: this runs once per saturation episode (the
             // report latches) or from a test, never on the dispatch path, so there is no reason for
             // the diagnostic to introduce a collection shape a future reader has to reason about.
             // Ordinal by default, which is what an address path needs.
             var destinations = queues.Keys.Select(channel => channel.Destination).Distinct().Count();
-            return (queues.Count, destinations, deepest);
+            return (queues.Count, destinations, deepest, deepestChannel);
         }
     }
 

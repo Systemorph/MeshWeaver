@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Orleans' <c>NonReentrancyQueueSize</c> limit. Both are wrong, and this test pins why:</para>
 ///
 /// <list type="number">
-///   <item><b>64 is not a bound.</b> It is <c>RoutingGrain.SaturationThreshold</c>, a MeshWeaver
+///   <item><b>64 is not a bound.</b> It is <c>RoutingSaturationReport.SaturationThreshold</c>, a MeshWeaver
 ///     constant, and it gates a LOG LINE only — the routing <see cref="IIoPool"/> is capped at 256
 ///     and nothing refuses, queues or throttles at 64. The reason prod always printed exactly 64 is
 ///     that the report latches on the single increment that crosses the line.</item>
@@ -55,7 +55,7 @@ public class RoutingBackpressureShapeTest
     /// </summary>
     private static readonly TimeSpan Budget = TestTimeouts.Quick;
 
-    /// <summary>Mirrors <c>RoutingGrain.SaturationThreshold</c> — the value every prod report printed.</summary>
+    /// <summary>Mirrors <c>RoutingSaturationReport.SaturationThreshold</c> — the value every prod report printed.</summary>
     private const int Legs = 64;
 
     /// <summary>
@@ -86,7 +86,7 @@ public class RoutingBackpressureShapeTest
                 });
         }
 
-        var (channels, destinations, deepest) = dispatcher.QueueSnapshot();
+        var (channels, destinations, deepest, _) = dispatcher.QueueSnapshot();
         return (Volatile.Read(ref inFlight), channels, destinations, deepest, subjects,
             () => Volatile.Read(ref completed));
     }

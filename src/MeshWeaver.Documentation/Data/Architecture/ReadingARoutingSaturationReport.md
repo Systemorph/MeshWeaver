@@ -16,7 +16,7 @@ Latest dispatch target … — the address that happened to cross the threshold,
 ```
 
 This line is the single most-ticketed log site in the platform. It is **a gauge, not a bound**:
-nothing throttles, queues or refuses at 64. `RoutingGrain.SaturationThreshold` gates a log call and
+nothing throttles, queues or refuses at 64. `RoutingSaturationReport.SaturationThreshold` gates a log call and
 nothing else, which is why every report in production prints *exactly* 64 — the report latches on the
 single increment that crosses the line, so 64 is the only value it can print. That artefact has twice
 been read as evidence of a hard cap.
@@ -121,7 +121,7 @@ title merges the readings and loses the only thing that separates them.
 |---|---|---|
 | **Head-of-line** | `deepest per-channel queue` ≥ 1 | frames of ONE stream stacking up. Structural, routing's own. Before the channel key was narrowed to `(destination, stream)` this read `deepest per-destination queue` 23–62 and meant something quite different — see [Ordered Route Channels](../OrderedRouteChannels) |
 | **Load** | `deepest 0`, many channels over few destinations | dispatch volume, or a silo that has lost the CPU. Usually not a routing defect at all |
-| **Alerting policy** | the SHAPE decides the level | `deepest >= 1` is reported at `Critical` and files an incident — a leg is waiting on a LEG, which is actionable. `deepest = 0` is reported at `Warning`: still logged, with every field it had before and still paired with the `cleared after … ms` line, but it opens no ticket. The red-log path files per `Critical` fingerprint, so an unconditional Critical meant every ordinary busy moment became an issue — measured 17 load crossings against 4 head-of-line ones |
+| **Alerting policy** | the OLDEST LEG's age decides the level | a leg older than `RoutingSaturationReport.LegSelfBound` — the sum of the leg's own timeouts (resolve + subscriber probe + post, 100 s) — is reported at `Critical` and files an incident: its own bounds cannot explain it, so it is a leaked slot or a starved silo. Every younger crossing is `Warning`: still logged with every field, now naming the deepest channel, still paired with the `cleared after … ms` line — but it opens no ticket. A latched episode re-reads its oldest leg (at most every 10 s, on dispatches it makes anyway) and escalates ONCE with `… has not drained after N ms` when a leg outlives its bounds under it |
 
 🚨 **A line that still spells `deepest per-destination queue` came from an older image.** It is the
 only way to tell which side of the channel-key change produced a given sample, which matters in any
@@ -142,34 +142,62 @@ ratio between them, and "64 of 256" describes nothing. Reaching for it is the sa
 A threshold conversation is legitimate *after* a post-fix sample shows what the crossings actually are.
 It is not legitimate as a way of making them stop.
 
-### Why the alerting verdict is not "the alert is crying wolf"
+### The level rule, and why depth could not carry it
 
-The standing ask on the alerting verdict was to raise the threshold or to demote a `0`-queued
-crossing below `Critical`. Both are refused: the first is a widened bound, the second is a log level
-changed for verbosity. Neither is needed, because the premise is wrong — **the alert is not firing on
-a healthy state, it is firing on a state it cannot classify.** The fix is to make the line carry its
-own verdict, not to make it quieter.
+Two rules have been tried at this site, and the evidence retired the first.
 
-Two facts bear on it, and both are easy to get backwards:
+**Level by depth (#5322).** `deepest >= 1` stayed `Critical`, `deepest = 0` became `Warning` —
+because a leg queued behind a leg is head-of-line blocking. True, but depth is sampled **at the
+crossing**, where it is largely an artefact of the threshold, and it cannot tell a stream whose
+producer has just posted sixty frames from a stream that is stuck. Every `Critical` quoted in the
+tickets filed after that rule shipped (#5595, #5616–#5618, #5622, #5631, #5632, #5638) had a deep
+queue **and** a young oldest leg:
 
-- The crossing report **latches** — the only writer that clears it is the drained report — so a
-  crossing at episode *N+1* already **proves** episode *N* drained. "Did it drain?" is not what a
-  single sample lacks.
-- What a single sample lacks is the **absence** of a later line, and *no event-driven report can
-  state an absence*. That is the entire reason the oldest-leg age exists.
+| deepest | oldest leg |
+|---|---|
+| 63 | 11 ms |
+| 62 | 343 ms |
+| 57 | 9 ms |
+| 54 | 81 ms |
+| 43 | 14.8 s |
+| 42 | 1.7 s |
+| 1 | 7 ms · 3.1 s |
 
-The `Critical` level itself stays. So does the drained report's `Warning`: it is deliberately not
-`Critical`, because the ticketing path files an incident per `Critical` fingerprint and a `Critical`
-"cleared" line would file a ticket for a **recovery**, inverting the signal.
+Every one inside the leg's own bounds — not one named a leg its own timeouts could not explain — and
+a ticket for each.
+
+**Level by the oldest leg's age.** A started leg carries its own timeouts, so its age has a ceiling:
+`LegSelfBound` = `ResolveTimeout` + `SubscriberProbeTimeout` + `StreamPostTimeout` (the stream leg,
+the longest composition). A leg older than that cannot be a slow destination — its timeouts would have
+ended it. It is either **not terminating** (a leaked slot; the label names it) or **never started its
+timeouts** because the silo had no thread (ThreadPool starvation). Both are real defects, both stay
+`Critical`. Everything younger is `Warning`. The bound is derived, not chosen: raising it to make the
+report quieter would change what a leg is allowed to do, which is exactly the band-aid this page
+refuses.
+
+**The one absence the report now states.** An event-driven report cannot say "nothing happened" —
+except about an episode it is still holding. While an episode is latched, the report re-reads its
+oldest leg on the dispatches the grain makes anyway (rate-limited to once per 10 s, no timer) and, if a
+leg has outlived its bounds, emits ONE `Critical` — `[ROUTE] Routing back-pressure [<activation>#<n>]
+has not drained after N ms: oldest leg in flight …`. Without it, an episode that crossed on young legs
+and then leaked under them would never produce a second line.
+
+**The deep channel is now named.** `deepest per-channel queue 63 on cache/x [sync/…]` — a recurring
+deep queue is a PRODUCER posting faster than one stream drains, and the channel is where to look.
+The name moved the reading from "something is
+deep" to "this stream is deep".
+
+The drained report stays `Warning`: a `Critical` "cleared" line would file a ticket for a
+**recovery**, inverting the signal.
 
 ## Reading order for one sample
 
 1. **Rule the process out.** OOM, a `LocalSiloHealthMonitor` stall, or a placement timeout on the
    same pod in the same window ⇒ this line is a symptom; go there.
-2. **`oldest leg in flight`.** Minutes ⇒ a slot is leaked, and the label names the leg.
-   Milliseconds ⇒ load.
-3. **`deepest per-channel queue`.** ≥ 1 ⇒ one stream's frames are stacking; this is routing's own
-   structure. `0` ⇒ breadth.
+2. **`oldest leg in flight`.** Past the printed bound ⇒ a slot is leaked or the silo is starved, and
+   the label names the leg — this is the only reading that makes the line `Critical`. Inside it ⇒ load.
+3. **`deepest per-channel queue … on <channel>`.** ≥ 1 ⇒ one stream's frames are stacking, and the
+   channel names the stream; a channel that recurs across episodes is a producer to fix. `0` ⇒ breadth.
 4. **`waiting for a pool slot` against `routing pool subscribing`.** Waiting high while subscribing is
    *not* at the cap ⇒ work that has not reached the gate: a thread shortage. Both low ⇒ the legs are
    past their subscribe and the wait is downstream I/O.
