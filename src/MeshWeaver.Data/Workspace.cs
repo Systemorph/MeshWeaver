@@ -463,7 +463,7 @@ public class Workspace : IWorkspace
         // needs to keep receiving updates until it drops on its own. The eviction only prevents
         // NEW callers from re-using the now-stale stream; the next GetRemoteStream creates a
         // fresh one against the (re-)activated owner. A stream whose holders DECLARED
-        // themselves (see <see cref="LeaseRemoteStream"/>) and have all left is reclaimed
+        // themselves (see <see cref="TryLeaseRemoteStream"/>) and have all left is reclaimed
         // immediately — it is out of the cache, so nothing can adopt it any more.
         foreach (var key in _remoteStreamCache.Keys)
         {
@@ -546,18 +546,78 @@ public class Workspace : IWorkspace
 
             // Live at resolve time: take the hold, then re-check. Only a reclaim landing in that
             // window makes this disagree, and only that race is worth another turn.
-            var lease = LeaseRemoteStream(stream);
-            if (StreamLiveness.IsUsable(stream))
+            var lease = TryLeaseResolved(stream);
+            if (lease is not null)
                 return (stream, lease);
-            lease.Dispose();
         }
     }
 
-    /// <summary>Declares a holder of <paramref name="stream"/>; disposing the returned
-    /// handle releases it (idempotent).</summary>
-    private IDisposable LeaseRemoteStream(ISynchronizationStream stream)
+    /// <summary>
+    /// Declares a hold on a stream the caller has ALREADY resolved, and re-checks it is still
+    /// usable. Returns <c>null</c> when the hold cannot be granted — the stream is being reclaimed
+    /// or is no longer usable — in which case the caller resolves again (the reclaimed stream is
+    /// out of the cache, so the next resolve builds a fresh one).
+    /// </summary>
+    internal IDisposable? TryLeaseResolved(ISynchronizationStream stream)
     {
-        _remoteStreamLeases.AddOrUpdate(stream, 1, (_, count) => count + 1);
+        var lease = TryLeaseRemoteStream(stream);
+        if (lease is null)
+            return null;
+        if (StreamLiveness.IsUsable(stream))
+            return lease;
+        lease.Dispose();
+        // A dead stream is never handed out again (every resolve drops an unusable instance), so a
+        // zero entry left for it would only pin the corpse in the bookkeeping. Conditional on 0:
+        // another holder's count, or a reclaim's sentinel, is never touched.
+        ((ICollection<KeyValuePair<ISynchronizationStream, int>>)_remoteStreamLeases)
+            .Remove(new KeyValuePair<ISynchronizationStream, int>(stream, 0));
+        return null;
+    }
+
+    /// <summary>
+    /// TEST SEAM (null in production): runs in <see cref="ReclaimIfUnheld"/> once the reclaim has
+    /// CLAIMED the stream (decided it is unheld) and BEFORE it takes the parking entry and disposes
+    /// it — the window a concurrent lease, or a detach-and-re-park, used to land in (#5087).
+    /// <c>ReclaimLeaseAtomicityTest</c> drives both there. Instance state; never static.
+    /// </summary>
+    internal Action<ISynchronizationStream>? ReclaimClaimed { get; set; }
+
+    /// <summary>
+    /// Mints the CLAIM TOKEN a reclaim writes into a stream's lease count: a fresh negative value
+    /// per claim. 🚨 Systemorph/MeshWeaver#5087: the reclaim used to READ the count, then remove the
+    /// entry and dispose — so a writer that resolved the stream before its eviction could take a
+    /// lease in between, pass its <c>IsUsable</c> re-check (nothing was disposed yet), and then have
+    /// the stream disposed under it; its base read completed EMPTY ("this hub's mirror ended without
+    /// ever carrying the node's state"). Now the reclaim compare-exchanges the count from <c>0</c> to
+    /// its token, a lease is taken only by compare-exchange from a non-negative count, and so the two
+    /// are ONE decision over the same dictionary slot: the lease lands first (the claim fails and the
+    /// stream stays) or the claim lands first (the lease is refused and the writer resolves a fresh
+    /// stream). The token is UNIQUE per claim, not a shared <c>-1</c>, because ownership can be
+    /// handed out and back inside the claim — <see cref="DetachRemoteStreams"/> drops the lease entry
+    /// (the claim with it) and <see cref="ParkRemoteStreams"/> re-parks the stream as a NEW
+    /// ownership. A reclaim that still finds its OWN token after taking the parking entry knows no
+    /// handover happened; any other value means its claim was superseded. Instance state; never
+    /// static.
+    /// </summary>
+    private int _reclaimClaims;
+
+    /// <summary>Declares a holder of <paramref name="stream"/>; disposing the returned handle
+    /// releases it (idempotent). Returns <c>null</c> when a reclaim has already claimed the
+    /// stream — see <see cref="_reclaimClaims"/>.</summary>
+    private IDisposable? TryLeaseRemoteStream(ISynchronizationStream stream)
+    {
+        while (true)
+        {
+            if (_remoteStreamLeases.TryGetValue(stream, out var count))
+            {
+                if (count < 0)
+                    return null;    // claimed by a reclaim — never hand out a hold on it
+                if (_remoteStreamLeases.TryUpdate(stream, count + 1, count))
+                    break;
+            }
+            else if (_remoteStreamLeases.TryAdd(stream, 1))
+                break;
+        }
         // Disposable.Create runs its action AT MOST ONCE (Interlocked-swapped internally), so a
         // double-dispose of the lease handle cannot under-count the holders.
         return System.Reactive.Disposables.Disposable.Create(() =>
@@ -566,10 +626,12 @@ public class Workspace : IWorkspace
             {
                 // 🚨 Read-then-TryUpdate, never AddOrUpdate: DetachRemoteStreams REMOVES the
                 // bookkeeping when it hands ownership out, and re-adding a zero entry here would
-                // pin a stream this workspace no longer owns.
-                if (!_remoteStreamLeases.TryGetValue(stream, out var current))
+                // pin a stream this workspace no longer owns. A count at or below zero holds no
+                // lease of ours (the entry was handed out and re-created, or a reclaim owns it),
+                // so there is nothing to release.
+                if (!_remoteStreamLeases.TryGetValue(stream, out var current) || current <= 0)
                     return;
-                var remaining = current > 0 ? current - 1 : 0;
+                var remaining = current - 1;
                 if (!_remoteStreamLeases.TryUpdate(stream, remaining, current))
                     continue;
                 if (remaining == 0)
@@ -582,15 +644,41 @@ public class Workspace : IWorkspace
     /// <summary>
     /// Disposes <paramref name="stream"/> iff it is BOTH evicted (parked — no caller can adopt
     /// it) AND has no remaining declared holder. Called from the two edges that can make that
-    /// true: the eviction itself, and the release of the last lease.
+    /// true: the eviction itself, and the release of the last lease. The "no holder" half is a
+    /// compare-exchange of the lease count from <c>0</c> to a per-claim token (see
+    /// <see cref="_reclaimClaims"/>), so no lease can be granted between the decision and the
+    /// disposal, and a claim superseded by a detach-and-re-park never disposes the re-parked stream
+    /// (#5087).
     /// </summary>
     private void ReclaimIfUnheld(ISynchronizationStream stream)
     {
-        if (!_remoteStreamLeases.TryGetValue(stream, out var leases) || leases != 0)
+        // Parked first: a stream still in the cache is adoptable, and claiming it would refuse
+        // leases on a live, cached mirror.
+        if (!_evictedRemoteStreams.ContainsKey(stream))
             return;
+        // The atomic claim. Fails when a holder remains (count > 0), when another reclaim already
+        // claimed it (a negative token), or when nobody ever leased it (no entry — an undeclared
+        // holder may still read it; see the _remoteStreamLeases note).
+        var claim = -Interlocked.Increment(ref _reclaimClaims);
+        if (!_remoteStreamLeases.TryUpdate(stream, claim, 0))
+            return;
+        ReclaimClaimed?.Invoke(stream);
         if (!_evictedRemoteStreams.TryRemove(stream, out _))
+        {
+            // Another edge (DetachRemoteStreams, Dispose) took ownership after the claim; give the
+            // slot back (only if it is still ours) so the bookkeeping does not keep refusing a
+            // stream we no longer reclaim.
+            _remoteStreamLeases.TryUpdate(stream, 0, claim);
             return;
-        _remoteStreamLeases.TryRemove(stream, out _);
+        }
+        if (!_remoteStreamLeases.TryGetValue(stream, out var held) || held != claim)
+        {
+            // The parking entry we just took is NOT the one we claimed: ownership was handed out
+            // (DetachRemoteStreams dropped our token) and back (ParkRemoteStreams) inside the claim.
+            // That re-park is a new ownership — restore it and leave the stream alone.
+            _evictedRemoteStreams[stream] = 0;
+            return;
+        }
         try
         {
             stream.Dispose();
@@ -603,6 +691,13 @@ public class Workspace : IWorkspace
             _logger.LogDebug(ex,
                 "Workspace {WorkspaceId} error disposing superseded remote stream for {Owner}",
                 Id, stream.Owner);
+        }
+        finally
+        {
+            // Drop the claim only once the stream is disposed: from here a late lease attempt finds
+            // a dead stream, fails its IsUsable re-check and resolves a fresh one.
+            ((ICollection<KeyValuePair<ISynchronizationStream, int>>)_remoteStreamLeases)
+                .Remove(new KeyValuePair<ISynchronizationStream, int>(stream, claim));
         }
     }
 
