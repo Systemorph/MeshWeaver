@@ -1223,19 +1223,27 @@ public static class DynamicTypePreWarmer
                     // #5544 — the readiness message names THIS type and the bound it may take,
                     // so a sweep that is slow reads as slow, on the right type, rather than as
                     // "enumerating" for hours.
+                    //
+                    // 🚨 A type ABSENT from batchSources had no source set the discovery could
+                    // establish (its own query failed, or its record contradicts an empty answer).
+                    // It is warmed by activation — ONE type leaves the batch, never all of them, and
+                    // it is never compiled against an empty set (that would be #1216's fabricated
+                    // verdict).
+                    IReadOnlyList<MeshNode>? batchSet = null;
+                    MeshNode? typeNode = null;
+                    var inBatch = batchSources is not null
+                                  && batchSources.TryGetValue(p, out batchSet)
+                                  && nodes.TryGetValue(p, out typeNode);
                     progress?.Invoke(
                         $"building {pending.IndexOf(p) + 1} of {pending.Count} pending NodeType(s) "
-                        + (batchSources is not null
+                        + (inBatch
                             ? "by direct batch compile"
                             : bytesMissing.Contains(p)
                                 ? "by a store-miss rebuild"
-                                : "by activation (the batch was not available)")
+                                : "by activation (the batch did not establish its sources)")
                         + $": waiting on {p}, for up to {budget}");
-                    var warm = batchSources is not null && nodes.TryGetValue(p, out var typeNode)
-                        ? NodeTypeBatchBake.BakeOne(
-                            mesh, typeNode,
-                            batchSources.TryGetValue(p, out var srcs) ? srcs : Array.Empty<MeshNode>(),
-                            budget, logger)
+                    var warm = inBatch
+                        ? NodeTypeBatchBake.BakeOne(mesh, typeNode!, batchSet!, budget, logger)
                         : missingBytes
                             ? RebuildMissingBytes(workspace, accessService, p, budget, logger)
                             : WarmOne(workspace, accessService, p, budget, logger);
@@ -1243,6 +1251,8 @@ public static class DynamicTypePreWarmer
                     return warm
                         .DelaySubscription(
                             i == 0 || batchSources is not null ? TimeSpan.Zero : pacing)
+                        // (A type the batch withheld is activated WITHOUT pacing too: batchSources is
+                        // non-null only on a gated pod, which serves nobody while it bakes.)
                         // 🚨 A verdict against a node that NO LONGER EXISTS is not a verdict about
                         // the image. The definitions were enumerated once, at the start of the
                         // sweep; a repository sync can prune a retired type at any moment after
@@ -1288,8 +1298,13 @@ public static class DynamicTypePreWarmer
         // does not know what the sources ARE, and a compile driven from a set you did not establish
         // produces verdicts about code from evidence you do not have — on memex-cloud 2026-08-11
         // that read as "169 of 237 types are content-broken" and, on an ungated pod, would have
-        // baked a fleet of empty assemblies with nothing refusing readiness. Whole-batch fallback is
-        // the only safe answer: the activation-driven sweep resolves each type's sources itself.
+        // baked a fleet of empty assemblies with nothing refusing readiness. The unit of that "I don't
+        // know" is the TYPE, not the batch: ResolveSources re-resolves every type from its own
+        // anchored queries when the global pass cannot be trusted, and leaves out of the map only the
+        // types it still could not establish — those, and only those, take the activation-driven
+        // sweep (which resolves their sources itself). Measured on memex-cloud 2026-09-24: one
+        // unanswerable global fetch sent ALL 38–80 pending types of every boot down that road. What
+        // still reaches the Catch below is a fault in discovery's own composition, not a query's.
         IObservable<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?> BatchSources() =>
             Observable.Defer(() =>
             {

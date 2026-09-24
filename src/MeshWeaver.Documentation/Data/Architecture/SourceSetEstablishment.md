@@ -42,10 +42,52 @@ anything has been compiled. It is the only independent witness available at disc
 is used in both directions — the same field, read for both polarities, which is what makes the two
 classifications agree by construction rather than by coincidence.
 
-`NodeTypeBatchBake.DiscoveryUnestablished` is the one predicate. When it answers true the whole
-batch is abandoned with `SourceDiscoveryFailedException` and the pod falls back to the
-activation-driven sweep, which re-resolves each type individually — slower, correct, and impossible
-to mistake for a content verdict.
+`NodeTypeBatchBake.DiscoveryUnestablished` is the one predicate. When it answers true for any type
+after the GLOBAL pass, that pass is distrusted as a whole (a short read that empties one type may
+have shortened others undetectably) — and the batch then re-resolves every pending type from its OWN
+anchored queries, as described next. A type the predicate still refuses is left out of the batch and
+warmed by activation, which resolves its sources itself — slower, correct, and impossible to mistake
+for a content verdict.
+
+## The unit of "I don't know" is the type, not the batch
+
+The global pass is three mesh-wide fetches (`nodeType:Code partitions:all`, and the
+`namespace:*/Source` / `namespace:*/Test` subtrees). On a partitioned Postgres mesh each is ONE
+`UNION ALL` over every partition schema, so **one partition that cannot answer fails every fetch** —
+and until this change that failed every pending type with it.
+
+Measured on memex-cloud (core `bf5ac85526`, 2026-09-24): on every one of eight boots between 07:12Z
+and 08:06Z, `nodeType:Code partitions:all` settled at 1586 nodes and ~25 ms later the pod logged
+`batched source discovery did not establish the source sets — abandoning the batch and falling back
+to the activation-driven sweep for ALL N pending type(s)`, with N between 38 and 80. That cost each
+boot 5–14 minutes of per-type activations; on memex, combined with the activation wait deadlock
+fixed in #5643, it held a pod unready for hours.
+
+So when the global pass faults, times out, reaches its ceiling or is contradicted by a type's
+record, `ResolveSources` falls back to `ResolvePerQuery`: every DISTINCT source query the pending
+types expand to is run on its own — anchored, so pinned to the one partition it names — with a
+concurrency of four, and each type is handed the union of its own queries' answers
+(`AssemblePerQuery`). A type joins the batch only when every one of its queries answered and the
+answer is established; a type left out is ABSENT from the map, and the sweep warms exactly that type
+by activation. It is never handed an empty set, which would be #1216's fabricated verdict.
+
+The fault itself was read off the same boot (pod `…-6f9d6848f8-gf5df`): the line logged 13 µs
+after the abandonment at 07:34:15.089Z is `Npgsql.PostgresException (0x80004005): 42703: column
+n.created_by does not exist` — the `namespace:*/Source` fetch reads the `code` satellite table of
+every schema, and at least one schema's `code` table lacks the authorship columns V57 adds. The
+same `42703` recurs on that pod every 60 s from some other mesh-wide read. Which schema, and why V57
+did not reach it, was NOT established.
+
+What this does NOT do: it does not name or repair the partition that could not answer. The global
+fetch's fault is logged at Warning with its exception (`BatchBake: the GLOBAL source-discovery pass
+did not establish the source sets (<exception type>) …`), and the types withheld are named with the
+query and fault that withheld them — the partition itself is a separate defect in the backend that
+answered.
+
+Pinned by `OnePartitionCostsOnlyItsOwnTypesTest`: a query provider that refuses every mesh-wide
+`nodeType:Code` fetch and the anchored reads of ONE type leaves the healthy type in the batch with
+its real source set and the broken one absent. With the fallback replaced by a rethrow, the same
+test fails with the provider's fault — the pre-fix behaviour.
 
 ## What went wrong (issue #3663)
 

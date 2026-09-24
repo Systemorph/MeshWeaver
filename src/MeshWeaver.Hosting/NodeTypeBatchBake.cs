@@ -170,7 +170,7 @@ internal static class NodeTypeBatchBake
     /// change — the in-memory match handles only the shapes it provably mirrors
     /// (<c>path:</c>/<c>namespace:</c>/<c>scope:</c>/<c>nodeType:Code</c>).
     /// </summary>
-    /// <returns>Per-type source lists keyed by type path; missing key = no sources resolved.</returns>
+    /// <returns>Per-type source lists keyed by type path. A pending type ABSENT from the map had no source set this pass could establish, and must be warmed by activation — never compiled against nothing.</returns>
     public static IObservable<ImmutableDictionary<string, IReadOnlyList<MeshNode>>> ResolveSources(
         IMeshService meshService,
         AccessService? accessService,
@@ -199,7 +199,7 @@ internal static class NodeTypeBatchBake
     /// <param name="pendingTypePaths">The types this batch is discovering sources for.</param>
     /// <param name="logger">Logger, or <c>null</c>.</param>
     /// <param name="discovery">Where each pass's timing is published, or <c>null</c> to publish none.</param>
-    /// <returns>Per-type source lists keyed by type path; missing key = no sources resolved.</returns>
+    /// <returns>Per-type source lists keyed by type path. A pending type ABSENT from the map had no source set this pass could establish, and must be warmed by activation — never compiled against nothing.</returns>
     public static IObservable<ImmutableDictionary<string, IReadOnlyList<MeshNode>>> ResolveSources(
         IMeshService meshService,
         AccessService? accessService,
@@ -285,10 +285,150 @@ internal static class NodeTypeBatchBake
                             .Select(results => results.ToImmutableDictionary(
                                 r => r.Query, r => r.Nodes, StringComparer.Ordinal));
 
+                    // 🚨 THE GLOBAL PASS IS AN OPTIMISATION, NEVER A PRECONDITION. Its three fetches
+                    // are mesh-wide by construction — on a partitioned Postgres mesh each one is ONE
+                    // UNION ALL over every partition schema — so ONE partition that cannot answer
+                    // fails ALL of them, and with them every pending type, including every type whose
+                    // sources live in partitions that answer perfectly well. Measured on memex-cloud
+                    // (core bf5ac85526, 2026-09-24): on every one of eight boots between 07:12Z and
+                    // 08:06Z `nodeType:Code partitions:all` settled at 1586 nodes and the pass was
+                    // abandoned ~25 ms later, before the `namespace:*/Source` fetch settled — and
+                    // each abandonment cost the boot the activation-driven sweep for ALL of its 38–80
+                    // pending types (5–14 minutes per boot; on memex, with #5643's wait deadlock,
+                    // hours).
+                    //
+                    // So a global pass that cannot be TRUSTED — it faulted, it timed out, it hit its
+                    // ceiling, or one type's record contradicts it (#3663: then the read is short for
+                    // reasons nobody can see, and a PARTIAL set elsewhere is undetectable) — is not
+                    // the end of the batch. Every pending type is re-resolved from its OWN anchored
+                    // queries (ResolvePerQuery): the queries the compiler runs for it, each pinned to
+                    // the partition it names, so a partition that cannot answer takes down exactly
+                    // the types that read from it. Those — and only those — leave the batch for the
+                    // activation-driven sweep; the rest are still baked directly.
                     return globalFetch
                         .SelectMany(allCode => exoticFetch.Select(exotic => Assemble(perType, allCode, exotic, logger)))
-                        .Timeout(DiscoveryBudget);
+                        .Timeout(DiscoveryBudget)
+                        .Catch<ImmutableDictionary<string, IReadOnlyList<MeshNode>>, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "BatchBake: the GLOBAL source-discovery pass did not establish the "
+                                + "source sets ({Reason}) — re-resolving each of the {Count} pending "
+                                + "type(s) from its OWN anchored source queries, so only the types "
+                                + "whose own queries cannot be answered leave the batch",
+                                ex.GetType().Name, perType.Count);
+                            return ResolvePerQuery(meshService, perType, logger, discovery);
+                        });
                 });
+    }
+
+    /// <summary>How many of the per-type anchored discovery queries run at once. Each one is pinned
+    /// to ONE partition and spends most of its life in <see cref="QueryQuietWindow"/>, so running
+    /// them strictly one after another would cost about one second per query for nothing.</summary>
+    private const int PerQueryConcurrency = 4;
+
+    /// <summary>
+    /// The per-type discovery pass — what the batch does when the global pass cannot be trusted.
+    /// Runs every DISTINCT source query the pending types expand to, each against the mesh on its
+    /// own (anchored, so pinned to the partition it names), and hands each type the union of ITS
+    /// queries' answers. A query that faults, times out or hits its ceiling is recorded as a
+    /// failure of THAT query; <see cref="AssemblePerQuery"/> then withholds exactly the types that
+    /// depend on it.
+    /// </summary>
+    private static IObservable<ImmutableDictionary<string, IReadOnlyList<MeshNode>>> ResolvePerQuery(
+        IMeshService meshService,
+        IReadOnlyList<PendingType> perType,
+        ILogger? logger,
+        SourceDiscoveryRegistry? discovery)
+    {
+        var queries = perType
+            .SelectMany(t => t.Matchable.Concat(t.Exotic))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (queries.Count == 0)
+            return Observable.Return(AssemblePerQuery(
+                perType, ImmutableDictionary<string, QueryAnswer>.Empty, logger));
+
+        return queries
+            .Select(q => RunQuery(meshService, q, logger, discovery)
+                .Timeout(DiscoveryBudget)
+                .Select(nodes => new QueryAnswer(nodes, null))
+                // Not a swallow: the fault becomes THIS query's recorded answer, and every type that
+                // reads from it is withheld from the batch and named, with this fault, below.
+                .Catch<QueryAnswer, Exception>(ex => Observable.Return(new QueryAnswer(null, ex)))
+                .Select(answer => (Query: q, Answer: answer)))
+            .Merge(PerQueryConcurrency)
+            .ToList()
+            .Select(answers => AssemblePerQuery(
+                perType,
+                answers.ToImmutableDictionary(a => a.Query, a => a.Answer, StringComparer.Ordinal),
+                logger));
+    }
+
+    /// <summary>One discovery query's outcome: its settled node map, or the fault that stopped it.</summary>
+    /// <param name="Nodes">The settled path→node map, or <c>null</c> when the query failed.</param>
+    /// <param name="Fault">Why the query produced no map, or <c>null</c> when it settled.</param>
+    internal sealed record QueryAnswer(ImmutableDictionary<string, MeshNode>? Nodes, Exception? Fault);
+
+    /// <summary>
+    /// 🚨 <b>Per-type assembly: a type joins the batch only when EVERY one of its own queries
+    /// answered and the answer is established</b> (<see cref="DiscoveryUnestablished"/>). A type left
+    /// out is NOT a verdict — the sweep warms it by activation, exactly as the whole batch used to be
+    /// warmed when one partition failed. Pure, so the degradation rule is pinned without a mesh.
+    /// </summary>
+    /// <param name="perType">The pending types and their expanded queries.</param>
+    /// <param name="answers">Each distinct query's outcome, keyed by the query text.</param>
+    /// <param name="logger">Logger, or <c>null</c>.</param>
+    /// <returns>The established source sets; a pending type ABSENT from the map was not established.</returns>
+    internal static ImmutableDictionary<string, IReadOnlyList<MeshNode>> AssemblePerQuery(
+        IReadOnlyList<PendingType> perType,
+        IReadOnlyDictionary<string, QueryAnswer> answers,
+        ILogger? logger)
+    {
+        var builder = ImmutableDictionary.CreateBuilder<string, IReadOnlyList<MeshNode>>(
+            StringComparer.OrdinalIgnoreCase);
+        var withheld = ImmutableList<string>.Empty;
+        foreach (var pending in perType)
+        {
+            var matched = ImmutableDictionary<string, MeshNode>.Empty
+                .WithComparers(StringComparer.OrdinalIgnoreCase);
+            string? failure = null;
+            foreach (var q in pending.Matchable.Concat(pending.Exotic))
+            {
+                if (!answers.TryGetValue(q, out var answer) || answer.Nodes is null)
+                {
+                    failure = $"its source query '{q}' could not be answered"
+                              + (answer?.Fault is { } fault ? $" ({fault.GetType().Name}: {fault.Message})" : "");
+                    break;
+                }
+                matched = matched.SetItems(answer.Nodes);
+            }
+
+            if (failure is null
+                && DiscoveryUnestablished(matched.Count, pending.DeclaresSources, pending.KnownSourceCount))
+                failure = "its own queries resolved an EMPTY set that its record contradicts";
+
+            if (failure is not null)
+            {
+                withheld = withheld.Add($"{pending.TypePath} — {failure}");
+                continue;
+            }
+
+            builder[pending.TypePath] = matched.Values
+                .OrderBy(n => n.Path, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        logger?.LogInformation(
+            "BatchBake: per-type source discovery established {Resolved} of {Total} pending type(s) "
+            + "from {Queries} anchored quer(ies)",
+            builder.Count, perType.Count, answers.Count);
+        if (!withheld.IsEmpty)
+            logger?.LogWarning(
+                "BatchBake: {Count} pending type(s) are warmed by ACTIVATION instead of the batch, "
+                + "because their source set could not be established — not a content or compile "
+                + "verdict: {Types}",
+                withheld.Count, string.Join("; ", withheld));
+        return builder.ToImmutable();
     }
 
     /// <summary>
@@ -354,7 +494,7 @@ internal static class NodeTypeBatchBake
     /// corroboration that "no matches" is the mesh's real answer, a positive value is independent
     /// evidence that it is NOT, and <c>null</c> (absent snapshot) is no evidence either way.
     /// </param>
-    private sealed record PendingType(
+    internal sealed record PendingType(
         string TypePath,
         IReadOnlyList<string> Matchable,
         IReadOnlyList<string> Exotic,
