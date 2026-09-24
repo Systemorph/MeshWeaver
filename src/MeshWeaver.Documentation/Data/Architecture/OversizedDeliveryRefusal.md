@@ -418,11 +418,13 @@ That copy isolates nothing. `MessageDelivery<T>` is a record whose members are a
 an `ImmutableDictionary` of properties and an `ImmutableList` routing path, and every change is a
 `with`. The payload that reaches a grain call is `RawJson`, because `OrleansRoutingService` is only
 ever reached through `delivery.Package(…)`. And a non-Orleans mesh already hands the same instances
-from hub to hub. So `MessageDeliveryCopier` (`MeshWeaver.Connection.Orleans`) now claims every
-`IMessageDelivery` type and returns the input, and `JsonCodec`'s `isCopyable` excludes those types,
-so the two never compete for one. Cross-silo calls still SERIALISE through `JsonCodec`; that is a
-different path and is unchanged. `LocalGrainCallSharesTheEnvelopeTest` asserts it through the silo's
-own `DeepCopier`, and asserts that a mutable non-envelope value is still copied.
+from hub to hub. So `MessageDeliveryCopier` (`MeshWeaver.Connection.Orleans`) now claims exactly
+the packaged shape, `MessageDelivery<RawJson>`, and returns the input; `JsonCodec`'s `isCopyable`
+excludes that type, so the two never compete for one. A delivery still carrying a typed CLR message
+may carry a mutable payload, so it keeps the isolating copy. Cross-silo calls still SERIALISE through
+`JsonCodec`; that is a different path and is unchanged. `LocalGrainCallSharesTheEnvelopeTest`
+asserts it through the silo's own `DeepCopier`, and asserts that an un-packaged delivery and a
+mutable non-envelope value are still copied.
 
 This settles the question #4824 left open, *"must `$type` come first, and can the converter's
 nested session go?"*, for the path that actually failed: on a local hop the converter is no longer

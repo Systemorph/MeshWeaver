@@ -31,8 +31,15 @@ internal sealed class MessageDeliveryCopier : IGeneralizedCopier
 {
     /// <summary>Whether <paramref name="type"/> is a delivery envelope this copier owns — also the
     /// predicate that takes those types away from <c>JsonCodec</c>'s copying, so the two can never
-    /// both claim one type.</summary>
-    internal static bool Covers(Type type) => typeof(IMessageDelivery).IsAssignableFrom(type);
+    /// both claim one type.
+    ///
+    /// <para>🚨 EXACTLY the PACKAGED shape, <c>MessageDelivery&lt;RawJson&gt;</c>, and nothing wider.
+    /// The immutability argument holds for the envelope plus a <see cref="RawJson"/> payload; a
+    /// delivery still carrying a typed CLR message (a caller that invoked a grain without packaging
+    /// first) may carry a mutable payload, and that one keeps <c>JsonCodec</c>'s isolating copy.
+    /// Every delivery the router hands to a grain is packaged, so the hot path — and every large
+    /// payload, which is what the out-of-memory stacks were — takes the reference.</para></summary>
+    internal static bool Covers(Type type) => type == typeof(MessageDelivery<RawJson>);
 
     /// <inheritdoc />
     public bool IsSupportedType(Type type) => Covers(type);

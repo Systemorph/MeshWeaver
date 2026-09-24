@@ -53,6 +53,27 @@ public class LocalGrainCallSharesTheEnvelopeTest(TwoSiloCacheUpdateFixture fixtu
     }
 
     /// <summary>
+    /// 🚨 An UN-packaged delivery keeps the isolating copy: its typed payload may be mutable, and
+    /// the immutability argument only covers the packaged <c>RawJson</c> shape.
+    /// </summary>
+    [Fact]
+    public void An_unpackaged_delivery_is_still_copied()
+    {
+        // The payload type is what selects the copier, so any un-packaged message shows it.
+        var delivery = new MessageDelivery<string>(
+            new Address("client", $"sender-{Guid.NewGuid():N}"),
+            new Address("client", $"target-{Guid.NewGuid():N}"),
+            "an un-packaged message",
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        var copied = SiloCopier(fixture.Cluster).Copy<IMessageDelivery>(delivery);
+
+        ReferenceEquals(copied, delivery).Should().BeFalse(
+            "a delivery that was not packaged may carry a mutable CLR payload, so it must not be "
+            + "aliased across a grain call — only the packaged RawJson shape is immutable end to end");
+    }
+
+    /// <summary>
     /// 🚨 THE CONTROL: the silo's copier still COPIES what is not an envelope, so the assertion above
     /// is about the envelope and not about a copier that stopped copying everything.
     /// </summary>

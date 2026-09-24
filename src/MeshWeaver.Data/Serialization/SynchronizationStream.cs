@@ -334,9 +334,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     private Exception? terminalFault;
 
     /// <summary>
-    /// 🚨 Set when this server-side stream ends because its SUBSCRIBER is gone — it asked for the
-    /// end itself (an <see cref="UnsubscribeRequest"/> reached this stream's sync hub), or the
-    /// router proved its address unserved (<c>Workspace.EvictClientSubscriptions</c>).
+    /// 🚨 Set when this server-side stream ends because its SUBSCRIBER asked for the end itself: an
+    /// <see cref="UnsubscribeRequest"/> reached this stream's sync hub. Nothing else sets it — an
+    /// owner-side end (an idle release, <c>Workspace.EvictClientSubscriptions</c>) is still
+    /// announced.
     ///
     /// <para>Read by the owner's end-of-stream announcement (<c>StreamEndedEvent</c>, #2191), which
     /// exists to tell a subscriber about an end it did NOT ask for. Telling it about the end it
