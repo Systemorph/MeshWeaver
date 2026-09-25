@@ -115,6 +115,17 @@ public class OAuthCredentialEvictionTest
     }
 
     [Fact]
+    public void ADeadRowNewerThanTheExchange_IsRemovedToo()
+    {
+        // A concurrent exchange minted t05 after t04's, and it was revoked since. It opens nothing, so
+        // t04's exchange removes it even though it is newer; a newer LIVE row stays untouched.
+        var tokens = new[] { Token(1), Token(4), Token(5, revoked: true), Token(6) };
+
+        OAuthCredentialEviction.Evict(tokens, Label, "u/ApiToken/t04", T0.AddMinutes(4), 5)
+            .Should().Equal(["u/ApiToken/t05"]);
+    }
+
+    [Fact]
     public void AnotherClientsTokens_AreNeverTouched()
     {
         var tokens = new[] { Token(1, "OAuth: other"), Token(2, "OAuth: other"), Token(3) };

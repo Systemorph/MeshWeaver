@@ -452,7 +452,7 @@ public class OAuthConnectController(
     /// also makes the read's lag harmless: a listing that has not caught up yet simply leaves an
     /// older row for the next authorization to collect, and can never take the new one.</para>
     ///
-    /// <para>Deleted, not merely marked revoked: this issue is BOTH "one live credential" and the
+    /// <para>Deleted, not merely marked revoked: this is BOTH the live-credential bound and the
     /// unbounded accumulation behind it, and a revoked row keeps accumulating. It matches what
     /// #1477's expiry sweep already does with a dead credential.</para>
     ///
@@ -477,9 +477,9 @@ public class OAuthConnectController(
                 // see the other's freshly-minted token in this listing, and a not-mine rule would
                 // have them delete each other's: both clients then walk away holding a credential
                 // that was removed moments later. Ordering by (CreatedAt, path) makes the outcome
-                // convergent instead — every participant deletes strictly below itself, so the
-                // NEWEST token survives no matter which exchange evaluates last, and there is
-                // still exactly one live credential at the end.
+                // convergent instead — every participant evicts only below itself, so the NEWEST
+                // tokens survive no matter which exchange evaluates last, and at most maxLive live
+                // credentials remain at the end.
                 //
                 // The path tiebreak matters: CreatedAt is a UTC timestamp and two exchanges can
                 // land on the same tick, where "strictly older by time" would let both survive.

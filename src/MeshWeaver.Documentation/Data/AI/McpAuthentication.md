@@ -176,7 +176,7 @@ A re-authorization **adds** a credential, and the client keeps at most **N live 
 
 With a bound of N, up to N concurrent sessions of one installation coexist. Above N the oldest session's token is evicted and that session re-authorizes — with a live portal session silently (`/authorize` redirects straight back with a code), with a lapsed one through a sign-in.
 
-**The rule is convergent under concurrent exchanges.** Each exchange considers only tokens strictly **older** than its own, in a total order over `(CreatedAt, path)`, keeps the newest N−1 of those that are live, and evicts the rest; a revoked or expired row never holds a kept slot and is always removed. A token among the N newest therefore has at most N−2 tokens between it and any newer exchange, so no exchange ever evicts it, and a listing that trails the store only makes an exchange evict less. The rule is pure (`OAuthCredentialEviction.Evict`) and pinned by `OAuthCredentialEvictionTest`; the end-to-end control is `OAuthBoundedLiveCredentialsTest`.
+**The rule is convergent under concurrent exchanges.** Each exchange ranks only tokens strictly **older** than its own, in a total order over `(CreatedAt, path)`, keeps the newest N−1 of those that are live, and evicts the other older ones; a newer live token is never touched. A revoked or expired row never holds a kept slot and is always removed, whatever its age. A token among the N newest therefore has at most N−2 tokens between it and any newer exchange, so no exchange ever evicts it, and a listing that trails the store only makes an exchange evict less. The rule is pure (`OAuthCredentialEviction.Evict`) and pinned by `OAuthCredentialEvictionTest`; the end-to-end control is `OAuthBoundedLiveCredentialsTest`.
 
 ### Reading a rejection
 
