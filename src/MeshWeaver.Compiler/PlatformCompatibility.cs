@@ -299,6 +299,10 @@ public static class PlatformCompatibility
         var liveOrdinal = PlatformReleaseOrder.BuildOrdinal(livePlatformVersion);
         if ((producerOrdinal is null) != (liveOrdinal is null))
             return false;
+        // `-ci.0` is the LOCAL build stamp (Directory.Build.props: no run number off CI), not a
+        // publication — a developer's process is never "older" than every CI bake. Unordered.
+        if (producerOrdinal == 0 || liveOrdinal == 0)
+            return false;
         return PlatformReleaseOrder.Compare(producerPlatformVersion, livePlatformVersion) > 0;
     }
 
@@ -338,10 +342,7 @@ public static class PlatformCompatibility
     /// (its AssemblyRef), or null for an unversioned reference.</param>
     /// <param name="running">The version the running platform carries.</param>
     public static bool MayBind(Version? compiledAgainst, Version running)
-    {
-        ArgumentNullException.ThrowIfNull(running);
-        return compiledAgainst is null || running >= compiledAgainst;
-    }
+        => MeshWeaver.Mesh.PlatformBinding.MayBind(compiledAgainst, running);
 }
 
 /// <summary>

@@ -1,0 +1,84 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "aks-system-1-vmss000000",
+    "labels": {
+     "kubernetes.azure.com/agentpool": "system"
+    }
+   },
+   "spec": {},
+   "status": {
+    "nodeInfo": {
+     "kubeletVersion": "v1.34.7"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "aks-silos-2-vmss000000",
+    "labels": {
+     "kubernetes.azure.com/agentpool": "silos"
+    }
+   },
+   "spec": {},
+   "status": {
+    "nodeInfo": {
+     "kubeletVersion": "v1.34.7"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "aks-silos-2-vmss000001",
+    "labels": {
+     "kubernetes.azure.com/agentpool": "silos"
+    }
+   },
+   "spec": {},
+   "status": {
+    "nodeInfo": {
+     "kubeletVersion": "v1.34.7"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "aks-cibuildv6-3-vmss000000",
+    "labels": {
+     "kubernetes.azure.com/agentpool": "cibuildv6"
+    }
+   },
+   "spec": {},
+   "status": {
+    "nodeInfo": {
+     "kubeletVersion": "v1.34.7"
+    },
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  }
+ ]
+}

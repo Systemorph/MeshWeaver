@@ -2257,6 +2257,181 @@ refuses_hard "hosting-migrate refuses an image reference with a metacharacter" "
 refuses_hard "hosting-migrate needs --release" "missing required flag --release" \
   env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --image "$_mg_img"
 
+# ── hosting-aks-upgrade: the governed cluster upgrade (MeshWeaver.Plugins Hosting/ClusterUpgrade.md) ─
+# The ORDER of the upgrade is the plugin's (ClusterUpgradePlan, tested there): one approval, the
+# control-plane minors chained, every pool upgraded ONCE to the final version, the pool hosting the
+# portals last. What these cases pin is what only the cluster can answer and this command decides:
+#   • facts is READ-ONLY and carries everything the plan reads — the template image AGAINST the
+#     serving pods' image, the deprecated-API metric (an unreadable one is UNREAD, never "none"),
+#     the scanned manifests' apiVersions (a templated one skipped), the runner's own pool;
+#   • a STUCK ROLL refuses the pre-flight gate, naming the Deployment and both images, having issued
+#     nothing — memex, 2026-09-25: template 3.0.0-ci.9260 (deadlocks at bake) over serving pods of
+#     3.0.0-ci.9218, alive only because nothing evicted them;
+#   • between pools the gate waits inside the job budget and PAUSES there, and it FAILS on what
+#     Kubernetes has given up on (a pod not Ready past its own startup budget);
+#   • every mutation is idempotent: already there → nothing issued; a hop an earlier run went PAST →
+#     nothing issued (never a downgrade); a pool hosting this job's own runner is issued and NOT
+#     waited on (detached, paused), and every later step of that run is skipped;
+#   • verify says aks_upgrade=complete only when everything is at the version and healthy;
+#   • an ARM read the identity may not make is REFUSED by name, never "nothing to upgrade".
+echo
+echo "── hosting-aks-upgrade: facts, the stuck-roll gate, resumable idempotent hops ──"
+AU_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/aks-upgrade" && pwd)"
+AU_FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/aks-upgrade" && pwd)"
+_au_new() { _au_fix="$(mktemp -d)"; _au_state="$(mktemp -d)"; cp -R "$AU_FIXTURES/." "$_au_fix/"; mkdir -p "$_au_fix/health"; }
+_au() { env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" \
+  HOSTING_UPGRADE_STATE="$_au_state" HOSTING_UPGRADE_POLL_SECONDS=1 HOSTNAME=aks-silos-runner-x \
+  hosting-aks-upgrade "$@" --resource-group memex-aks-rg --cluster memexaks-cluster 2>&1; }
+# 🚨 Every call here that could WAIT carries a budget of seconds: the default is the job's 35 minutes,
+# and a regression in a wait would otherwise spin the whole suite for that long instead of failing.
+_au_issued() { grep -c "^az aks \(nodepool \)\?upgrade " "$_au_state/log" 2>/dev/null || true; }
+# the memex shape of 2026-09-25: template 9260, two Ready pods serving 9218, one 9260 pod not Ready
+_au_stuck() { # $1 = startTime of the 9260 pod (young = far future → age 0; old = past its 10800 s budget)
+  jq '.items[0].spec.template.spec.containers[0].image = "cr.example.test/memex-portal-ai:3.0.0-ci.9260"
+      | .items[0].status.updatedReplicas = 1 | .items[0].metadata.generation = 46' \
+    "$AU_FIXTURES/deployments.json" > "$_au_fix/deployments.json"
+  jq --arg t "$1" '.items[0].spec.containers[0].image = "cr.example.test/memex-portal-ai:3.0.0-ci.9218"
+      | .items[1].spec.containers[0].image = "cr.example.test/memex-portal-ai:3.0.0-ci.9218"
+      | .items += [{metadata: {name: "memex-portal-new"}, spec: {nodeName: "aks-silos-2-vmss000000",
+          containers: [{name: "memex-portal", image: "cr.example.test/memex-portal-ai:3.0.0-ci.9260"}]},
+          status: {startTime: $t, conditions: [{type: "Ready", status: "False"}]}}]' \
+    "$AU_FIXTURES/pods-memex.json" > "$_au_fix/pods-memex.json"
+}
+
+# facts — read-only, and everything the plan reads
+_au_new
+_au_out="$(_au facts --scan "$_au_fix/manifests")"; _au_rc=$?
+_au_facts="$(printf '%s\n' "$_au_out" | sed -n 's/.*::hosting:: aks_facts=//p' | base64 -d 2>/dev/null)"
+if [ "$_au_rc" -eq 0 ] && [ "$(jq -r '.cluster.kubernetesVersion' <<<"$_au_facts")" = "1.34.7" ] \
+   && [ "$(jq -r '.controlPlaneUpgrades[-1]' <<<"$_au_facts")" = "1.35.7" ] \
+   && [ "$(jq -r '.controlPlaneUpgrades | index("1.36.0")' <<<"$_au_facts")" = "null" ] \
+   && [ "$(jq -r '.portals[0].templateImage' <<<"$_au_facts")" = "cr.example.test/memex-portal-ai:3.0.0-ci.9270" ] \
+   && [ "$(jq -r '.portals[0].pods[0].pool' <<<"$_au_facts")" = "silos" ] \
+   && [ "$(jq -r '.portals | length' <<<"$_au_facts")" = "1" ] \
+   && [ "$(jq -r '.runner.node' <<<"$_au_facts")" = "aks-cibuildv6-3-vmss000000" ] \
+   && [ "$(jq -r '.deprecatedApis.read' <<<"$_au_facts")" = "true" ] \
+   && [ "$(jq -r '.deprecatedApis.items[0].removedRelease' <<<"$_au_facts")" = "1.32" ] \
+   && [ "$(jq -r '[.manifestApis[].apiVersion] | sort | join(",")' <<<"$_au_facts")" = "batch/v1,policy/v1" ] \
+   && [ "$(jq -r '[.versions[] | select(.version == "1.35.7") | .supportPlans[]] | join(",")' <<<"$_au_facts")" = "KubernetesOfficial,AKSLongTermSupport" ]; then
+  ok "facts carries the plan's whole input: versions (previews out), template vs serving images, deprecated APIs, manifests (templated skipped), the runner's pool"
+else
+  bad "facts carries the plan's whole input" "rc=${_au_rc} facts=${_au_facts} out=${_au_out}"
+fi
+if [ "$(_au_issued)" = "0" ]; then ok "facts issues nothing"; else bad "facts issues nothing" "$(cat "$_au_state/log")"; fi
+
+_au_new; touch "$_au_fix/metrics-forbidden"
+_au_facts="$(_au facts | sed -n 's/.*::hosting:: aks_facts=//p' | base64 -d 2>/dev/null)"
+if [ "$(jq -r '.deprecatedApis.read' <<<"$_au_facts")" = "false" ] && jq -r '.deprecatedApis.error' <<<"$_au_facts" | grep -q Forbidden; then
+  ok "an unreadable deprecated-API metric is carried as UNREAD with its error — never as 'none in use'"
+else
+  bad "an unreadable deprecated-API metric is carried as UNREAD" "${_au_facts}"
+fi
+
+_au_new; touch "$_au_fix/forbidden"
+refuses_hard "an ARM read the identity may not make is REFUSED by name, not 'nothing to upgrade'" "REFUSED, not absent" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  hosting-aks-upgrade facts --resource-group memex-aks-rg --cluster memexaks-cluster
+
+# the pre-flight gate
+_au_new
+emits "gate --strict passes a converged, healthy cluster" "::hosting:: aks_gate=healthy" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  hosting-aks-upgrade gate --strict --resource-group memex-aks-rg --cluster memexaks-cluster
+
+_au_new; _au_stuck "2099-01-01T00:00:00Z"
+_au_out="$(_au gate --strict --budget-seconds 5)"; _au_rc=$?
+if [ "$_au_rc" -ne 0 ] && printf '%s' "$_au_out" | grep -q "STUCK ROLL memex/memex-portal-deployment" \
+   && printf '%s' "$_au_out" | grep -q "template names cr.example.test/memex-portal-ai:3.0.0-ci.9260" \
+   && printf '%s' "$_au_out" | grep -q "serve cr.example.test/memex-portal-ai:3.0.0-ci.9218" \
+   && printf '%s' "$_au_out" | grep -q "refused before anything changed" \
+   && ! printf '%s' "$_au_out" | grep -q "::hosting:: aks_gate=" && [ "$(_au_issued)" = "0" ]; then
+  ok "a STUCK ROLL (template 9260 over serving 9218) refuses the pre-flight, naming both images, having issued nothing"
+else
+  bad "a STUCK ROLL refuses the pre-flight gate" "rc=${_au_rc} out=${_au_out}"
+fi
+
+_au_new; _au_stuck "2026-01-01T00:00:00Z"
+refuses "between pools, a roll whose new pod is not Ready past its OWN startup budget FAILS the gate" "past its own startup budget of 10800s" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  HOSTING_UPGRADE_POLL_SECONDS=1 hosting-aks-upgrade gate --budget-seconds 5 --resource-group memex-aks-rg --cluster memexaks-cluster
+
+_au_new; _au_stuck "2099-01-01T00:00:00Z"
+_au_out="$(_au gate --budget-seconds 0)"; _au_rc=$?
+if [ "$_au_rc" -eq 0 ] && printf '%s' "$_au_out" | grep -q "::hosting:: aks_upgrade=incomplete" && [ -f "$_au_state/hosting-aks-upgrade.paused" ]; then
+  ok "between pools, a gate still waiting at the job budget PAUSES (aks_upgrade=incomplete) — nothing failed"
+else
+  bad "a gate still waiting at the job budget pauses" "rc=${_au_rc} out=${_au_out}"
+fi
+_au_out="$(_au verify --version 1.35.7)"
+if printf '%s' "$_au_out" | grep -q "::hosting:: aks_step=skipped" && ! printf '%s' "$_au_out" | grep -q "aks_upgrade=complete"; then
+  ok "every later step of a paused run is skipped — verify included"
+else
+  bad "every later step of a paused run is skipped" "${_au_out}"
+fi
+
+_au_new; echo 503 > "$_au_fix/health/memex.example.test"
+refuses "gate --strict refuses a portal whose /health does not answer 200" "health answers 503" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  hosting-aks-upgrade gate --strict --resource-group memex-aks-rg --cluster memexaks-cluster
+
+# the hops
+_au_new
+refuses_hard "control-plane refuses a --version that is not MAJOR.MINOR.PATCH" "is not a Kubernetes version" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  hosting-aks-upgrade control-plane --version '1.35.7;id' --resource-group memex-aks-rg --cluster memexaks-cluster
+refuses_hard "node-pool refuses a pool name that is not an AKS pool name" "is not an AKS node pool name" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  hosting-aks-upgrade node-pool --pool 'silos$(id)' --version 1.35.7 --resource-group memex-aks-rg --cluster memexaks-cluster
+
+_au_new
+_au_out="$(_au control-plane --version 1.34.7 --budget-seconds 5)"
+if printf '%s' "$_au_out" | grep -q "::hosting:: aks_step=already" && [ "$(_au_issued)" = "0" ]; then
+  ok "control-plane already at the version issues nothing"
+else bad "control-plane already at the version issues nothing" "${_au_out}"; fi
+
+_au_new
+_au_out="$(_au control-plane --version 1.35.7 --budget-seconds 5)"; _au_rc=$?
+if [ "$_au_rc" -eq 0 ] && printf '%s' "$_au_out" | grep -q "::hosting:: aks_step=done" \
+   && grep -qx "az aks upgrade -g memex-aks-rg -n memexaks-cluster --kubernetes-version 1.35.7 --control-plane-only --yes --no-wait" "$_au_state/log" \
+   && [ "$(_au_issued)" = "1" ]; then
+  ok "a control-plane hop issues ONE control-plane-only upgrade and waits for the version"
+else
+  bad "a control-plane hop issues one control-plane-only upgrade" "rc=${_au_rc} out=${_au_out} log=$(cat "$_au_state/log")"
+fi
+
+_au_new; cp "$_au_fix/show.after.json" "$_au_fix/show.json"
+_au_out="$(_au control-plane --version 1.34.10 --budget-seconds 5)"
+if printf '%s' "$_au_out" | grep -q "already past this hop" && [ "$(_au_issued)" = "0" ]; then
+  ok "a continuation meeting a hop an earlier run went PAST issues nothing — never a downgrade"
+else bad "a hop already gone past issues nothing" "${_au_out}"; fi
+
+_au_new
+_au_out="$(_au node-pool --pool cibuildv6 --version 1.35.7 --budget-seconds 5)"; _au_rc=$?
+if [ "$_au_rc" -eq 0 ] && printf '%s' "$_au_out" | grep -q "::hosting:: aks_step=detached" \
+   && printf '%s' "$_au_out" | grep -q "::hosting:: aks_upgrade=incomplete" \
+   && grep -q "^az aks nodepool upgrade -g memex-aks-rg --cluster-name memexaks-cluster -n cibuildv6 --kubernetes-version 1.35.7 --yes --no-wait" "$_au_state/log"; then
+  ok "the pool hosting this job's own runner is issued and NOT waited on — detached, paused for a continuation"
+else
+  bad "the runner's own pool is issued and detached" "rc=${_au_rc} out=${_au_out}"
+fi
+
+_au_new
+_au_out="$(_au node-pool --pool silos --version 1.35.7 --budget-seconds 5)"; _au_rc=$?
+if [ "$_au_rc" -eq 0 ] && printf '%s' "$_au_out" | grep -q "::hosting:: aks_step=done" && [ "$(_au_issued)" = "1" ]; then
+  ok "a node-pool step issues ONE upgrade of that pool straight to the version and waits for it"
+else bad "a node-pool step issues one upgrade and waits" "rc=${_au_rc} out=${_au_out}"; fi
+
+# verify
+_au_new; cp "$_au_fix/show.after.json" "$_au_fix/show.json"; cp "$_au_fix/pools.after.json" "$_au_fix/pools.json"
+sed 's/v1\.34\.7/v1.35.7/' "$AU_FIXTURES/nodes.json" > "$_au_fix/nodes.json"
+emits "verify says aks_upgrade=complete only with everything at the version and healthy" "::hosting:: aks_upgrade=complete" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  hosting-aks-upgrade verify --version 1.35.7 --budget-seconds 5 --resource-group memex-aks-rg --cluster memexaks-cluster
+_au_new; cp "$_au_fix/show.after.json" "$_au_fix/show.json"
+refuses "verify refuses while a pool is still behind the version" "node pool cibuildv6 at 1.34.7" \
+  env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
+  hosting-aks-upgrade verify --version 1.35.7 --budget-seconds 5 --resource-group memex-aks-rg --cluster memexaks-cluster
+
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
 # The manifest lives three directories away from the scripts and is reviewed separately; twice a
 # script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile

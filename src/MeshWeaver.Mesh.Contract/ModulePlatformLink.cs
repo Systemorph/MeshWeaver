@@ -979,11 +979,14 @@ public static class ModulePlatformLink
                         + "version of this platform's copy is not known — not compared");
                     continue;
                 }
-                var order = wantedVersion.CompareTo(haveVersion);
-                if (order > 0)
+                // 🚨 THE binding rule (policy platform-backwards-compatibility): the running copy
+                // binds whenever it is the same or HIGHER — PlatformBinding.MayBind, the one
+                // comparison every reader applies. A HIGHER wanted version is the floor-not-met
+                // case: a hard verdict naming both versions.
+                if (!PlatformBinding.MayBind(wantedVersion, haveVersion))
                     conflicts.Add(new AssemblyBindingConflict(
                         assemblyName, wantedVersion.ToString(4), haveVersion.ToString(4)));
-                else if (order < 0)
+                else if (wantedVersion < haveVersion)
                     advisories.Add(
                         $"{assemblyName}: the module references {wantedVersion.ToString(4)}, this "
                         + $"platform carries {haveVersion.ToString(4)} — binds and rolls forward");

@@ -103,6 +103,7 @@ public static class MemexConfiguration
             [
                 PrebuiltAssemblySeeder.LiveFrameworkMvid,
                 MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
+                MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedProvenance,
             ],
         }.Read();
 
@@ -354,9 +355,15 @@ public static class MemexConfiguration
                 // re-declined by every boot, and reported as "a restart activates them" across a
                 // restart that could not clear one of them. With both stated, a bundle packed by
                 // the build that produced this image MATCHES and is adopted.
+                //
+                // 🚨 Since the compatibility key (policy platform-backwards-compatibility) both of
+                // those readings ARE the key (c003e001), so a module packed against ANY build of
+                // this epoch matches. The third reading is the TRANSITION: a bundle packed before
+                // the key states this image's own g<sha> provenance, and still matches its build.
                 [
                     PrebuiltAssemblySeeder.LiveFrameworkMvid,
                     MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
+                    MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedProvenance,
                 ]);
             // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
             // `Assembly.LoadFrom`, which throws FileNotFoundException, so one stale line in

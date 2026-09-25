@@ -112,6 +112,33 @@ public class ModuleUpdateIdentityTest
     }
 
     /// <summary>
+    /// 🚨 <b>THE LADDER (policy platform-backwards-compatibility).</b> Module bytes now state the
+    /// platform COMPATIBILITY KEY, identical for every platform build of one major and epoch — so
+    /// the same version packed against a LATER build of the same epoch is the SAME artifact to this
+    /// decision: a platform roll does not re-download, re-land or re-seal a single module. Its
+    /// negative control is the epoch bump below, which is exactly #723's shape, declared.
+    /// </summary>
+    [Fact]
+    public void SameVersion_SameCompatibilityKey_FromAnotherPlatformBuild_Skips()
+    {
+        var key = MeshWeaver.Compiler.PlatformCompatibility.KeyOf(3, 1);
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate, Decide("1.1.0", Landed("1.1.0", key), key).Action);
+    }
+
+    /// <summary>The negative control: a DECLARED break (epoch bump) re-keys the artifact, and the
+    /// same version packed for the new epoch lands, naming both keys.</summary>
+    [Fact]
+    public void SameVersion_AnEpochBump_Lands()
+    {
+        var before = MeshWeaver.Compiler.PlatformCompatibility.KeyOf(3, 1);
+        var after = MeshWeaver.Compiler.PlatformCompatibility.KeyOf(3, 2);
+        var verdict = Decide("1.1.0", Landed("1.1.0", before), after);
+        Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
+        Assert.Contains(before, verdict.Reason);
+        Assert.Contains(after, verdict.Reason);
+    }
+
+    /// <summary>
     /// The convergence proof for the case above: landing records the identity that was compared, so
     /// the very next reconcile agrees. Without this the fix would trade a silent skip for an
     /// unbounded re-download.

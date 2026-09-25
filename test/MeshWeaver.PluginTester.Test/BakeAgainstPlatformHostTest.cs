@@ -114,9 +114,11 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
             SynthesizeHost(host);
             var hostIdentity = FrameworkBuildIdentity.ResolveIdentityForDirectory(host).Identity;
             Assert.NotNull(hostIdentity);
-            Assert.StartsWith("s", hostIdentity, StringComparison.Ordinal);
-            // The discriminating fact: the HOST resolves an identity this PROCESS does not.
-            Assert.NotEqual(PrebuiltAssemblySeeder.LiveFrameworkMvid, hostIdentity);
+            // The address is the host's platform COMPATIBILITY KEY (policy
+            // platform-backwards-compatibility), read off its own MeshWeaver.Compiler.dll — the SAME
+            // key this process runs whenever the two are builds of one major and epoch.
+            Assert.True(MeshWeaver.Compiler.PlatformCompatibility.IsKey(hostIdentity));
+            Assert.Equal(PrebuiltAssemblySeeder.LiveFrameworkMvid, hostIdentity);
 
             var log = new StringWriter();
             var report = TreeBake.Run(new TreeBake.Options
@@ -159,8 +161,14 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// A host whose anchor states NO compatibility key (an assembly built outside the platform's
+    /// Directory.Build.props sits where MeshWeaver.Compiler.dll should be) is refused — the address
+    /// is read off the anchor, and a host that states none is one no portal resolves. A surface
+    /// manifest is no longer needed for the address (it is provenance now).
+    /// </summary>
     [Fact]
-    public void AHostWithoutASurfaceManifest_IsRefused_NeverFallenBackOn()
+    public void AHostWhoseAnchorStatesNoKey_IsRefused_NeverFallenBackOn()
     {
         var repo = TempDirectory("mw-host-nomanifest-repo");
         var host = TempDirectory("mw-host-nomanifest-app");
@@ -169,6 +177,9 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
         {
             WriteWidget(repo);
             SynthesizeHost(host, writeManifest: false);
+            var anchor = Path.Combine(host, "MeshWeaver.Compiler.dll");
+            File.Delete(anchor);   // the symlink — replace with an assembly that states no epoch
+            File.Copy(Path.Combine(AppContext.BaseDirectory, "xunit.v3.core.dll"), anchor);
 
             var report = TreeBake.Run(new TreeBake.Options
             {
@@ -180,8 +191,8 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
             });
 
             Assert.NotNull(report.FatalError);
-            Assert.Contains("resolves no framework identity", report.FatalError, StringComparison.Ordinal);
-            Assert.Contains(FrameworkBuildIdentity.SurfaceManifestFileName, report.FatalError, StringComparison.Ordinal);
+            Assert.Contains("resolves no framework compatibility key", report.FatalError, StringComparison.Ordinal);
+            Assert.Contains(MeshWeaver.Compiler.PlatformCompatibility.EpochMetadataKey, report.FatalError, StringComparison.Ordinal);
             Assert.Empty(report.Bundles);
             // Nothing sealed under any identity — the fallback layer is exactly what must not be
             // published under.
@@ -196,12 +207,15 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// 🚨 The invariant that makes recording the host's identity honest: the TOOLCHAIN that ran must
-    /// be the host's own bytes. The host here ships a <c>MeshWeaver.Compiler.dll</c> that is a
-    /// different assembly under that name, so its MVID differs from the one this process executes.
+    /// 🚨 The toolchain invariant, as the compatibility rule states it (policy
+    /// platform-backwards-compatibility): a toolchain of the SAME key is compatible whatever BUILD it
+    /// is, so a host whose toolchain bytes differ from this process's (here: another platform
+    /// assembly's bytes under the MeshWeaver.Compiler name — same major, same epoch stamp) is NOT
+    /// refused for the drift; the drift is provenance. The refusal of a DIFFERENT key is held by
+    /// <see cref="TheGateRefusesToRunAsAHostItIsNot_AndAcceptsTheOneItIs"/>.
     /// </summary>
     [Fact]
-    public void AHostWhoseToolchainThisProcessDoesNotRun_IsRefusedNamingTheAssembly()
+    public void AHostWhoseToolchainBuildDiffersWithinTheKey_IsNotRefusedForIt()
     {
         var repo = TempDirectory("mw-host-toolchain-repo");
         var host = TempDirectory("mw-host-toolchain-app");
@@ -223,10 +237,14 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
                 SharedFrameworksRoot = SharedFrameworksRoot(),
             });
 
-            Assert.NotNull(report.FatalError);
-            Assert.Contains("toolchain", report.FatalError, StringComparison.Ordinal);
-            Assert.Contains("MeshWeaver.Compiler mvid", report.FatalError, StringComparison.Ordinal);
-            Assert.Empty(report.Bundles);
+            // Precondition, asserted: the substituted anchor states THIS process's key and its bytes
+            // differ (so a per-build toolchain gate WOULD have refused it).
+            Assert.Equal(PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                FrameworkBuildIdentity.ResolveIdentityForDirectory(host).Identity);
+            Assert.NotEqual(FrameworkBuildIdentity.ProcessImplMvidOf("MeshWeaver.Compiler"),
+                FrameworkBuildIdentity.ImplMvidInDirectory(host, "MeshWeaver.Compiler"));
+            Assert.DoesNotContain("toolchain", report.FatalError ?? "", StringComparison.Ordinal);
+            Assert.DoesNotContain("compatibility key", report.FatalError ?? "", StringComparison.Ordinal);
         }
         finally
         {
@@ -414,13 +432,17 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
 
             Assert.Null(GateHostCheck.Verify(host, hostIdentity));
 
-            var refused = GateHostCheck.Verify(host, PrebuiltAssemblySeeder.LiveFrameworkMvid);
+            // A gate of ANOTHER compatibility key (a declared break) is refused, naming both.
+            Assert.True(MeshWeaver.Compiler.PlatformCompatibility.TryParseKey(hostIdentity, out var major, out var epoch));
+            var otherEpoch = MeshWeaver.Compiler.PlatformCompatibility.KeyOf(major, epoch + 1);
+            var refused = GateHostCheck.Verify(host, otherEpoch);
             Assert.NotNull(refused);
             Assert.Contains(hostIdentity, refused, StringComparison.Ordinal);
-            Assert.Contains(PrebuiltAssemblySeeder.LiveFrameworkMvid, refused, StringComparison.Ordinal);
+            Assert.Contains(otherEpoch, refused, StringComparison.Ordinal);
             Assert.Contains("RUN AS the platform host", refused, StringComparison.Ordinal);
 
             SynthesizeHost(bare, writeManifest: false);
+            File.Delete(Path.Combine(bare, "MeshWeaver.Compiler.dll"));
             var noIdentity = GateHostCheck.Verify(bare, hostIdentity);
             Assert.NotNull(noIdentity);
             Assert.Contains("resolves no framework identity", noIdentity, StringComparison.Ordinal);

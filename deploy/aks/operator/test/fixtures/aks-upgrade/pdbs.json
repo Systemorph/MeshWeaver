@@ -1,0 +1,14 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "namespace": "memex",
+    "name": "memex-portal"
+   },
+   "status": {
+    "disruptionsAllowed": 1,
+    "expectedPods": 2
+   }
+  }
+ ]
+}

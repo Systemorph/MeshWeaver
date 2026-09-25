@@ -49,11 +49,14 @@ public class PrebuiltAssemblySeederGateTest
     {
         var live = NodeTypeCompilationHelpers.FrameworkVersion;
 
-        // The store's FrameworkTag is FrameworkVersion[..8]. A prefix match here would adopt any
-        // assembly whose framework merely shares that tag — which is precisely the collision the
-        // full MVID exists to rule out.
-        Assert.NotNull(PrebuiltAssemblySeeder.DeclineReason(live[..8]));
+        // The live identity is the platform COMPATIBILITY KEY (policy
+        // platform-backwards-compatibility) — and its comparison is still EXACT: a truncated key,
+        // a differently-cased one, and the neighbouring epoch all decline.
+        Assert.True(MeshWeaver.Compiler.PlatformCompatibility.TryParseKey(live, out var major, out var epoch));
+        Assert.NotNull(PrebuiltAssemblySeeder.DeclineReason(live[..7]));
         Assert.NotNull(PrebuiltAssemblySeeder.DeclineReason(live.ToUpperInvariant()));
+        Assert.NotNull(PrebuiltAssemblySeeder.DeclineReason(
+            MeshWeaver.Compiler.PlatformCompatibility.KeyOf(major, epoch + 1)));
     }
 
     // ── IsAlreadyAdopted: the "need we adopt at all" half ────────────────────────────────────────

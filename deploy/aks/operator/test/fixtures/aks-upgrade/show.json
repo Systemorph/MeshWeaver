@@ -1,0 +1,19 @@
+{
+ "name": "memexaks-cluster",
+ "resourceGroup": "memex-aks-rg",
+ "location": "swedencentral",
+ "currentKubernetesVersion": "1.34.7",
+ "kubernetesVersion": "1.34.7",
+ "provisioningState": "Succeeded",
+ "powerState": {
+  "code": "Running"
+ },
+ "sku": {
+  "name": "Base",
+  "tier": "Standard"
+ },
+ "supportPlan": "KubernetesOfficial",
+ "autoUpgradeProfile": {
+  "nodeOsUpgradeChannel": "NodeImage"
+ }
+}

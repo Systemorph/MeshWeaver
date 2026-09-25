@@ -2960,9 +2960,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // query opened after teardown has begun must TERMINATE, never park: its connect would be
         // cancelled by the disposed _queryConnections below, so without this the subscriber would
         // wait on a Replay(1) that nothing will ever feed (the "burst then silence" shape).
+        //
+        // 🚨 Refused ON THE MESH'S RELEASE LANE, never with a synchronous Observable.Throw. This is
+        // the same terminal the disposal's release delivers to the chains already attached, and a
+        // consumer composing several queries (the permission fold) receives both: a refusal thrown on
+        // the subscribing thread raced the lane's releases into the same SelectMany/Zip gates and
+        // deadlocked them (see ReleaseLane).
         if (System.Threading.Volatile.Read(ref _disposed) != 0)
-            return (Observable.Throw<IEnumerable<MeshNode>>(
-                new ObjectDisposedException(nameof(MeshNodeStreamCache))), signature);
+            return (_releaseLane.Refuse<IEnumerable<MeshNode>>(
+                () => new ObjectDisposedException(nameof(MeshNodeStreamCache))), signature);
 
         while (true)
         {
@@ -2997,10 +3003,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     // one place that can observe the cache's teardown having happened in between.
                     // Refuse here rather than resolve `cacheHub.GetWorkspace()` from a scope that
                     // Dispose() has since closed: that resolve is what every disposed-scope straggler
-                    // in the 2026-09-08 CI captures was (Plugins run 34222933802).
+                    // in the 2026-09-08 CI captures was (Plugins run 34222933802). The refusal goes
+                    // through the release lane like every other terminal of a released query, so
+                    // the Replay(1) below hands it to its subscribers on the lane, not on this pool
+                    // thread racing the lane (see the disposed-cache guard above).
                     if (System.Threading.Volatile.Read(ref _disposed) != 0)
-                        return Observable.Throw<IEnumerable<MeshNode>>(
-                            new ObjectDisposedException(nameof(MeshNodeStreamCache)));
+                        return _releaseLane.Refuse<IEnumerable<MeshNode>>(
+                            () => new ObjectDisposedException(nameof(MeshNodeStreamCache)));
                     var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
                         cacheHub.GetWorkspace(), id, queries);
                     // 🚨 A FRAME NOBODY ANSWERED IS NOT AN ANSWER, SO IT MUST NOT BE THE CACHED ONE

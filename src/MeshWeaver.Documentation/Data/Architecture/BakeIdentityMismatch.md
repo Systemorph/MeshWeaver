@@ -7,6 +7,18 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Bake Identity Mismatch
 
+> 🚨 **The address is now the platform COMPATIBILITY KEY** (policy `platform-backwards-compatibility`;
+> manual: [Module Versioning](../ModuleVersioning) → "The compatibility LADDER"). A bake publishes under
+> `c<major>e<epoch>` (e.g. `c003e001`), read off `MeshWeaver.Compiler.dll`'s own metadata — every
+> platform build of one epoch resolves the SAME address, so the fork this page reconstructs (two images
+> of one commit hashing different reference assemblies) can no longer move it, and a platform roll
+> neither misses the bake nor needs a re-seal. A NEWER build's publication under the same key is
+> ranged by its `producerPlatformVersion` floor, not by a new address. The per-build `s…`/`g…`
+> identity below is provenance now; the page stays as the record of why the address had to stop
+> depending on it. **Seal only behind a declared break**: an epoch bump in
+> `src/MeshWeaver.Compiler/platform-compatibility.json` is the ONE event that re-addresses bakes and
+> obliges a coordinated rebuild and seal of the affected plugins.
+
 The framework build identity is an **address**, not a checksum. A bake published under `sAAAA…` is
 adopted only by a host that resolves `sAAAA…`; publish it under anything else and it is **inert** —
 the bundles exist, every publication-side check is green, and every pod compiles the whole shipped
