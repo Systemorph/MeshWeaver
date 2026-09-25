@@ -83,31 +83,28 @@ public class HeapStepNamesItsAllocatorTest
     public void ConcurrentRecordAndDrain_LoseNoSample()
     {
         const int writers = 4, perWriter = 50_000;
-        // 🚨 Each marker sample weighs 1 GiB, and the test runs its OWN noise: 2×TopTypes heavier
-        // types recorded concurrently, because the live sampler also receives the real ~100 KB
-        // allocation samples of every test in this host and Drain reports only the heaviest
-        // TopTypes types. With 1-byte marker samples a window holding a few of them ranked below
-        // the noise and fell out of Top — 199,960 of 200,000 on the CI queue — a loss in the TEST's
-        // arithmetic, not in the sampler. Making the noise explicit makes that condition present on
-        // every run rather than on a busy CI host; at 1 GiB per sample the marker heads every
-        // window it appears in, so what remains measured is the record/drain race alone.
-        const long weight = 1L << 30;
-        RecordAgainstDrainUnderNoise(writers, perWriter, weight)
-            .Should().Be(writers * perWriter * weight, "every recorded sample lands in exactly one drained window");
+        // 🚨 The race is measured on the WHOLE taken window (TakeWindow), never on Drain's Top
+        // summary. The sampler is live, so every test in this host feeds it real ~100 KB samples,
+        // and Drain reports only the TopTypes heaviest types: reading the marker out of Top lost it
+        // whenever a window ranked it below other types — 187,818 of 200,000 on queue run
+        // 36016772968 — a loss in the TEST's reading, not in the sampler. The noise thread makes
+        // that condition present on every run instead of only on a busy CI host.
+        RecordAgainstTakeUnderNoise(writers, perWriter)
+            .Should().Be(writers * perWriter, "every recorded sample lands in exactly one taken window");
     }
 
     /// <summary>
-    /// Records <paramref name="perWriter"/> marker samples from each of <paramref name="writers"/>
-    /// threads while a noise thread records heavier types and the calling thread drains in a loop;
-    /// returns the marker bytes the drains reported.
+    /// Records <paramref name="perWriter"/> one-byte marker samples from each of
+    /// <paramref name="writers"/> threads while a noise thread records heavier types and the calling
+    /// thread takes the window in a loop; returns the marker bytes the takes held.
     /// </summary>
-    internal static long RecordAgainstDrainUnderNoise(int writers, int perWriter, long weight)
+    internal static long RecordAgainstTakeUnderNoise(int writers, int perWriter)
     {
         using var sampler = new AllocationByTypeSampler();
         const string type = "ConcurrentRecordAndDrainMarker";
         var noiseTypes = Enumerable.Range(0, 2 * AllocationByTypeSampler.TopTypes)
             .Select(i => $"Noise{i}").ToArray();
-        var drainedBytes = 0L;
+        var takenBytes = 0L;
         var done = 0;
         var noise = new System.Threading.Thread(() =>
         {
@@ -118,19 +115,40 @@ public class HeapStepNamesItsAllocatorTest
         var threads = Enumerable.Range(0, writers).Select(_ => new System.Threading.Thread(() =>
         {
             for (var i = 0; i < perWriter; i++)
-                sampler.Record(type, weight);
+                sampler.Record(type, 1);
             System.Threading.Interlocked.Increment(ref done);
         })).ToArray();
         noise.Start();
         foreach (var t in threads)
             t.Start();
         while (System.Threading.Volatile.Read(ref done) < writers)
-            drainedBytes += sampler.Drain().Top.Where(t => t.TypeName == type).Sum(t => t.Bytes);
+            takenBytes += sampler.TakeWindow().GetValueOrDefault(type);
         foreach (var t in threads)
             t.Join();
         noise.Join();
-        drainedBytes += sampler.Drain().Top.Where(t => t.TypeName == type).Sum(t => t.Bytes);
-        return drainedBytes;
+        takenBytes += sampler.TakeWindow().GetValueOrDefault(type);
+        return takenBytes;
+    }
+
+    /// <summary>
+    /// Drain's summary is the taken window ranked: heaviest first, at most
+    /// <see cref="AllocationByTypeSampler.TopTypes"/> types, and a total over EVERY type — so a type
+    /// that falls out of Top is still counted in the total.
+    /// </summary>
+    [Fact]
+    public void Drain_RanksTheWindow_AndTotalsEveryType()
+    {
+        using var sampler = new AllocationByTypeSampler();
+        const long heavy = 1L << 40; // heavier than anything the runtime samples into one window here
+        const int types = 2 * AllocationByTypeSampler.TopTypes;
+        for (var i = 0; i < types; i++)
+            sampler.Record($"Ranked{i:D2}", heavy + i);
+
+        var window = sampler.Drain();
+
+        window.Top.Count.Should().Be(AllocationByTypeSampler.TopTypes);
+        window.Top[0].TypeName.Should().Be($"Ranked{types - 1:D2}", "the heaviest type is first");
+        (window.TotalBytes >= types * heavy).Should().BeTrue("the total counts the types Top leaves out");
     }
 
     /// <summary>

@@ -113,9 +113,20 @@ public sealed class AllocationByTypeSampler : EventListener
     /// The window since the previous drain, heaviest types first, and a fresh window started.
     /// </summary>
     /// <returns>What was sampled since the last call.</returns>
-    public AllocationWindow Drain()
+    public AllocationWindow Drain() => Summarize(TakeWindow());
+
+    /// <summary>
+    /// Takes the WHOLE window since the previous take — every type, not only the heaviest — and
+    /// starts a fresh one. <see cref="Drain"/> is this plus the Top-<see cref="TopTypes"/> summary;
+    /// the record/drain race is a property of this take alone, so it is measured here, where no
+    /// ranking can hide a sample.
+    /// </summary>
+    /// <returns>Every type sampled since the last take, with its summed bytes.</returns>
+    internal ImmutableDictionary<string, long> TakeWindow() =>
+        Interlocked.Exchange(ref window, window.Clear());
+
+    private static AllocationWindow Summarize(ImmutableDictionary<string, long> drained)
     {
-        var drained = Interlocked.Exchange(ref window, window.Clear());
         if (drained.IsEmpty)
             return AllocationWindow.Empty;
 
