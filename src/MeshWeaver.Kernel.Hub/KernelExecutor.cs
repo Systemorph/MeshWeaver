@@ -452,13 +452,17 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     var options = scriptOptions;
                     return cpuLane
                         .InvokeBlocking(t => current.Compile(cleaned, options, typeof(MeshScriptGlobals), t))
-                        .SelectMany(compiled => compilePool.Invoke(async t =>
+                        .SelectMany(compiled => compilePool.Invoke(t =>
                         {
+                            // The scope is held only while the submission STARTS: its first await
+                            // captures the ExecutionContext with the identity set, and the scope is
+                            // then restored on THIS thread (the restore is thread-affine). Awaiting
+                            // inside the using would dispose it on whichever thread resumed.
                             using (accessContext is null
                                        ? null
                                        : publicHub.ServiceProvider.GetService<AccessService>()
                                            ?.SwitchAccessContext(accessContext))
-                                return await current.ExecuteAsync(compiled, t).ConfigureAwait(false);
+                                return current.ExecuteAsync(compiled, t);
                         }));
                 })
                 .Select(returnValue =>
