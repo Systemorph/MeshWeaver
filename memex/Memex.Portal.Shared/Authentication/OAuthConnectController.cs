@@ -11,7 +11,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Memex.Portal.Shared.Authentication;
 
@@ -30,10 +29,11 @@ public class OAuthConnectController(
 
     /// <summary>
     /// How many live OAuth credentials one <c>(user, client_id)</c> keeps — see
-    /// <see cref="OAuthServerOptions.MaxLiveCredentialsPerClient"/>. Clamped to at least 1.
+    /// <see cref="OAuthCredentialBound"/>. Optional configuration: a provider without one (a test's
+    /// bare service collection) gets the default.
     /// </summary>
     private int MaxLiveCredentialsPerClient =>
-        Math.Max(1, serviceProvider.GetRequiredService<IOptions<OAuthServerOptions>>().Value.MaxLiveCredentialsPerClient);
+        OAuthCredentialBound.From(serviceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
 
     /// <summary>
     /// Resolves the mesh <c>User.Id</c> for the issued token. 🚨 It MUST be the mesh

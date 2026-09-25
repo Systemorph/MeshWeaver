@@ -15,7 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -59,7 +59,9 @@ public class OAuthBoundedLiveCredentialsTest(ITestOutputHelper output) : Monolit
         services.AddSingleton(new OAuthCodeStore(
             Storage, Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<OAuthCodeStore>>()));
         services.AddSingleton(TokenService());
-        services.AddSingleton(Options.Create(new OAuthServerOptions { MaxLiveCredentialsPerClient = Bound }));
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection([new(OAuthCredentialBound.ConfigKey, Bound.ToString())])
+            .Build());
         var provider = services.BuildServiceProvider();
 
         var identity = new ClaimsIdentity(

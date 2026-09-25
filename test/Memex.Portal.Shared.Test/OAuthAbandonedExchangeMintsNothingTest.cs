@@ -16,7 +16,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -72,7 +72,9 @@ public class OAuthAbandonedExchangeMintsNothingTest(ITestOutputHelper output) : 
         // Pinned at ONE live credential per client: this test is about the supersede's mechanics,
         // which the bound only changes in how many older rows it keeps (see
         // OAuthBoundedLiveCredentialsTest for the bound itself).
-        services.AddSingleton(Options.Create(new OAuthServerOptions { MaxLiveCredentialsPerClient = 1 }));
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection([new(OAuthCredentialBound.ConfigKey, "1")])
+            .Build());
         var provider = services.BuildServiceProvider();
 
         var identity = new ClaimsIdentity(

@@ -81,9 +81,6 @@ public static class McpAuthenticationExtensions
         // composition needing an extra call.
         services.AddTransient<IStartupFilter, McpEndpointRoutes.StartupFilter>();
 
-        // The OAuth authorization server's knobs (how many live credentials one client keeps).
-        services.AddOptions<OAuthServerOptions>().BindConfiguration(OAuthServerOptions.SectionName);
-
         services.AddAuthentication()
             .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
                 ApiTokenAuthenticationHandler.SchemeName, _ => { })

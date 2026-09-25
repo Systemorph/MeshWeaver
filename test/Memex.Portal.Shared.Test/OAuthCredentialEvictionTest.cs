@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Microsoft.Extensions.Configuration;
 using Memex.Portal.Shared.Authentication;
 using Xunit;
 
@@ -34,7 +35,7 @@ public class OAuthCredentialEvictionTest
         var tokens = Enumerable.Range(1, 5).Select(m => Token(m)).ToArray();
 
         OAuthCredentialEviction.Evict(tokens, Label, "u/ApiToken/t05", T0.AddMinutes(5),
-                OAuthServerOptions.DefaultMaxLiveCredentialsPerClient)
+                OAuthCredentialBound.Default)
             .Should().BeEmpty("five live credentials is within a bound of five — the sibling sessions keep theirs");
     }
 
@@ -124,6 +125,28 @@ public class OAuthCredentialEvictionTest
         OAuthCredentialEviction.Evict(tokens, Label, "u/ApiToken/t04", T0.AddMinutes(4), 5)
             .Should().Equal(["u/ApiToken/t05"]);
     }
+
+    [Theory]
+    [InlineData(null, 5)]
+    [InlineData("3", 3)]
+    [InlineData("0", 1)]
+    [InlineData("-4", 1)]
+    [InlineData("many", 5)]
+    public void TheBound_ComesFromConfiguration_WithADefaultOfFive(string? configured, int expected)
+    {
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(configured is null
+                ? []
+                : [new(OAuthCredentialBound.ConfigKey, configured)])
+            .Build();
+
+        OAuthCredentialBound.From(configuration).Should().Be(expected);
+    }
+
+    [Fact]
+    public void NoConfigurationAtAll_IsTheDefault()
+        // The shape of a caller that builds the controller's provider without IConfiguration.
+        => OAuthCredentialBound.From(null).Should().Be(OAuthCredentialBound.Default);
 
     [Fact]
     public void AnotherClientsTokens_AreNeverTouched()
