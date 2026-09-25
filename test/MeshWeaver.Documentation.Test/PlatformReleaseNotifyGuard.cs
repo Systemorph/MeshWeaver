@@ -285,10 +285,14 @@ public class PlatformReleaseNotifyGuard
                 .Where(l => !l.TrimStart().StartsWith('#')).ToArray();
             Assert.True(SendsARepositoryDispatch(lines),
                 $"{file} is ledgered as a dispatch sender but sends nothing any more — delete the ledger entry in the same change.");
-            foreach (var line in lines.Where(l => l.Contains("/dispatches", StringComparison.Ordinal)))
-                Assert.Contains("repos/Systemorph/MeshWeaver.Plugins/dispatches", line, StringComparison.Ordinal);
-            foreach (var line in lines.Where(l => l.Contains("event_type", StringComparison.Ordinal)))
-                Assert.Contains("event_type: \"core-candidate-suites\"", line, StringComparison.Ordinal);
+            // EXACTLY one of each: a second POST — even to the same target with the same event —
+            // would start a duplicate candidate run racing on the same verdict ref.
+            var posts = lines.Where(l => l.Contains("/dispatches", StringComparison.Ordinal)).ToArray();
+            Assert.True(posts.Length == 1, $"{file} must send exactly ONE dispatch; found {posts.Length}:\n  " + string.Join("\n  ", posts));
+            Assert.Contains("repos/Systemorph/MeshWeaver.Plugins/dispatches", posts[0], StringComparison.Ordinal);
+            var events = lines.Where(l => l.Contains("event_type", StringComparison.Ordinal)).ToArray();
+            Assert.True(events.Length == 1, $"{file} must build exactly ONE event_type payload; found {events.Length}");
+            Assert.Contains("event_type: \"core-candidate-suites\"", events[0], StringComparison.Ordinal);
             Assert.DoesNotContain("repository-dispatch@", string.Join("\n", lines), StringComparison.Ordinal);
             Assert.DoesNotContain("createDispatchEvent", string.Join("\n", lines), StringComparison.Ordinal);
         }

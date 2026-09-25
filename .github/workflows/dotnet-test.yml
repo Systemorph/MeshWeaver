@@ -3606,11 +3606,18 @@ jobs:
         GH_TOKEN: ${{ steps.token.outputs.token }}
       run: |
         set -euo pipefail
-        if ! gh api "repos/Systemorph/MeshWeaver.Plugins/contents/.github/workflows/core-candidate.yml" --jq .sha >/dev/null; then
+        if ! gh api "repos/Systemorph/MeshWeaver.Plugins/contents/.github/workflows/core-candidate.yml" --jq .content > "$RUNNER_TEMP/receiver.b64"; then
           echo "::error::MeshWeaver.Plugins has no .github/workflows/core-candidate.yml on its default branch (or this token cannot read it) — the request would start nothing. The receiver lands in Plugins FIRST."
           exit 1
         fi
-        echo "receiver present"
+        # Present is not LISTENING: the file must still subscribe to this exact event type. (Whether
+        # the workflow is DISABLED in Plugins' settings needs `actions: read`, which this App does not
+        # hold; a disabled receiver surfaces as the waiter's "did not answer", which names its URL.)
+        if ! tr -d '\n' < "$RUNNER_TEMP/receiver.b64" | base64 -d | grep -Eq '^\s*types:\s*\[\s*core-candidate-suites\s*\]'; then
+          echo "::error::MeshWeaver.Plugins' core-candidate.yml no longer subscribes to 'repository_dispatch: types: [core-candidate-suites]' — the request would be accepted and start nothing."
+          exit 1
+        fi
+        echo "receiver present and subscribed to core-candidate-suites"
     - name: Request the dependent's suites against this candidate
       if: steps.want.outputs.requested == 'true'
       env:

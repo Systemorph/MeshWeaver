@@ -34,6 +34,18 @@ import urllib.request
 
 REPO = "Systemorph/MeshWeaver.Plugins"
 API = "https://api.github.com"
+# 🔒 The ONLY verdict fields that ever reach this PUBLIC log. The verdict is read from a private
+# repository; whatever else it might carry is dropped, not printed.
+PUBLIC_COUNTS = ("selected", "universe", "legs", "drift", "preExisting", "missingEvidence")
+
+
+def public_view(verdict: dict) -> dict:
+    counts = verdict.get("counts") if isinstance(verdict.get("counts"), dict) else {}
+    return {"conclusion": verdict.get("conclusion"), "candidate": verdict.get("candidate"),
+            "base": verdict.get("base"), "key": verdict.get("key"),
+            "counts": {k: counts.get(k) for k in PUBLIC_COUNTS if isinstance(counts.get(k), int)},
+            "summary": verdict.get("summary") if isinstance(verdict.get("summary"), str) else None,
+            "run": verdict.get("run") if isinstance(verdict.get("run"), str) else None}
 
 
 def validate(verdict: object, key: str, candidate: str, base: str) -> tuple[bool, str]:
@@ -47,8 +59,15 @@ def validate(verdict: object, key: str, candidate: str, base: str) -> tuple[bool
             return False, (f"the verdict at this key names {field}={verdict.get(field)!r}, not {want!r} — "
                            "it is about a different measurement")
     conclusion = verdict.get("conclusion")
-    summary = verdict.get("summary") or "(no summary)"
-    run = verdict.get("run") or "(no run link)"
+    summary, run, counts = verdict.get("summary"), verdict.get("run"), verdict.get("counts")
+    # A green must carry its evidence: a sentence, the run it rests on, and the counts. A "success"
+    # without them is an empty answer, and an empty answer is not a pass.
+    if not (isinstance(summary, str) and summary.strip()):
+        return False, "the verdict carries no summary sentence — refusing a green without its evidence"
+    if not (isinstance(run, str) and run.startswith(f"https://github.com/{REPO}/actions/runs/")):
+        return False, f"the verdict's run link {run!r} is not a {REPO} Actions run — refusing a green that cites nothing"
+    if conclusion == "success" and not (isinstance(counts, dict) and all(isinstance(counts.get(k), int) for k in PUBLIC_COUNTS)):
+        return False, f"the verdict's counts {counts!r} are not the integers {PUBLIC_COUNTS} — refusing a green without a denominator"
     if conclusion == "success":
         return True, f"✅ MeshWeaver.Plugins passes against this candidate: {summary} — {run}"
     return False, (f"🚨 MeshWeaver.Plugins reports '{conclusion}' against this candidate: {summary}. "
@@ -103,7 +122,9 @@ def self_test() -> int:
         print(("  ok   " if ok else "  FAIL ") + name + ("" if ok else f" — {detail}"))
         failures += 0 if ok else 1
 
-    good = {"schema": 1, "key": K, "candidate": C, "base": B, "conclusion": "success", "summary": "5 of 83", "run": "u"}
+    counts = {"selected": 5, "universe": 83, "legs": 1, "drift": 0, "preExisting": 0, "missingEvidence": 0}
+    good = {"schema": 1, "key": K, "candidate": C, "base": B, "conclusion": "success", "summary": "5 of 83",
+            "run": f"https://github.com/{REPO}/actions/runs/1", "counts": counts}
     ok, _ = validate(good, K, C, B)
     check("a success for exactly this key, candidate and base passes", ok)
     for field, value in (("key", "999-1"), ("candidate", "d" * 40), ("base", "e" * 40)):
@@ -119,6 +140,14 @@ def self_test() -> int:
     check("a non-object verdict is RED", not ok)
     ok, _ = validate({"malformed": "x"}, K, C, B)
     check("a malformed verdict is RED", not ok)
+    for field in ("summary", "run", "counts"):
+        ok, text = validate({k: v for k, v in good.items() if k != field}, K, C, B)
+        check(f"a 'success' WITHOUT its {field} is RED (a green must carry its evidence)", not ok, text)
+    ok, _ = validate({**good, "run": "https://example.com/x"}, K, C, B)
+    check("a run link that is not a Plugins Actions run is RED", not ok)
+    view = public_view({**good, "failingTests": ["Secret.Test.Name"], "counts": {**counts, "names": ["x"]}})
+    check("the public view drops every field and count that is not allow-listed",
+          "failingTests" not in view and "names" not in view["counts"] and "Secret" not in json.dumps(view), json.dumps(view))
     # The poll loop itself, against a scripted API: silence by the deadline must come back as NO
     # verdict (main maps that to exit 1), and a ref that appears must be read through its commit.
     global _get
@@ -171,7 +200,8 @@ def main() -> int:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
-            f.write(f"### Dependent suites (MeshWeaver.Plugins)\n\n{text}\n\n```json\n{json.dumps(verdict, indent=1)}\n```\n")
+            view = public_view(verdict) if isinstance(verdict, dict) else {}
+            f.write(f"### Dependent suites (MeshWeaver.Plugins)\n\n{text}\n\n```json\n{json.dumps(view, indent=1)}\n```\n")
     return 0 if ok else 1
 
 
