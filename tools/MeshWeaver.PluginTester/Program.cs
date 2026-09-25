@@ -72,6 +72,8 @@ try
         return RunFrameworkIdentity(args[1..]);
     if (args.Length > 0 && args[0] == "platform-surface")
         return RunPlatformSurface(args[1..]);
+    if (args.Length > 0 && args[0] == PlatformLink.Verb)
+        return PlatformLink.Run(args[1..]);
     return await RunGate(args);
 }
 catch (Exception ex)

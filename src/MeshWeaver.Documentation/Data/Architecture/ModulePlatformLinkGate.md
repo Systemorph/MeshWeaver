@@ -212,11 +212,15 @@ direction.
 
 ### What it does NOT see
 
-**Member-level skew.** A method or constructor signature that moved on a type that still exists —
-MeshWeaver#2234's original `MissingMethodException` — is invisible here, because this checks TYPE
-references. That shape is caught at install by
-`IncompatibleModule`, and the two are complementary halves rather than
-one check. Stating this explicitly matters: a gate whose blind spot is undocumented gets read as
+**Member-level skew — at boot, landing and the roll.** A method or constructor signature that moved
+on a type that still exists — MeshWeaver#2234's original `MissingMethodException` — is invisible to
+these runtime call sites, because they check TYPE references (`ModuleLinkOptions.TypesOnly`). The
+SAME probe carries an opt-in member half (`ModuleLinkOptions.WithMembers`: every `MemberRef` resolved
+by name and exact signature, plus accessibility and what a plugin type owes the interfaces and base
+classes it implements), and it runs where a platform change is DECIDED rather than where a module is
+loaded: on every platform pull request and every promoted image, against the deployed plugin set —
+see [The Platform Compatibility Ladder](../PlatformCompatibilityLadder). A published surface document
+carries type names only, so the member half against one is `Indeterminate`, never a silent pass. Stating this explicitly matters: a gate whose blind spot is undocumented gets read as
 covering more than it does.
 
 ## Where it runs, and what it protects

@@ -168,7 +168,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// overload exists so a test whose leaf can only end by cancellation need not spend the grace.
     /// </param>
     public IoPool(int maxConcurrency, TimeSpan drainTimeout, TimeSpan drainGrace)
-        : this(maxConcurrency, drainTimeout, drainGrace, dedicatedThreads: false) { }
+        : this(maxConcurrency, drainTimeout, drainGrace, LimitedConcurrencyLevelTaskScheduler.BlockingThreadName) { }
 
     /// <summary>
     /// As <see cref="IoPool(int, TimeSpan, TimeSpan)"/>, choosing where <see cref="InvokeBlocking{T}"/>
@@ -178,13 +178,27 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="drainTimeout">How long <see cref="Drain"/> waits at each of its joins AFTER cancelling.</param>
     /// <param name="drainGrace">How long <see cref="Drain"/> waits for in-flight work BEFORE cancelling.</param>
     /// <param name="dedicatedThreads">
-    /// <c>true</c>: <see cref="InvokeBlocking{T}"/> leaves run on at most <paramref name="maxConcurrency"/>
-    /// threads this pool starts itself, never on ThreadPool workers — for CPU-bound leaves, whose
-    /// whole cost is the time they HOLD a thread (<see cref="IoPoolNames.CompileCpu"/>). Only the
-    /// blocking entry point changes; the async entry points still start on the ThreadPool, so a
-    /// dedicated-thread pool is meant for <see cref="InvokeBlocking{T}"/> alone.
+    /// <c>true</c> (what every other constructor does): <see cref="InvokeBlocking{T}"/> leaves run on at
+    /// most <paramref name="maxConcurrency"/> threads this pool starts itself, never on ThreadPool
+    /// workers — a blocking leaf's whole cost to the silo is the time it HOLDS a thread, and the
+    /// ThreadPool is the one the grain turns run on (<c>Doc/Architecture/BlockingLeavesOffTheThreadPool</c>).
+    /// <c>false</c> borrows ThreadPool workers, which is the starvation shape; it exists so a test can
+    /// show the difference. Only the blocking entry point changes: the async entry points always start
+    /// on the ThreadPool, because an async leaf yields its thread at every await.
     /// </param>
     public IoPool(int maxConcurrency, TimeSpan drainTimeout, TimeSpan drainGrace, bool dedicatedThreads)
+        : this(maxConcurrency, drainTimeout, drainGrace,
+            dedicatedThreads ? LimitedConcurrencyLevelTaskScheduler.BlockingThreadName : null) { }
+
+    /// <summary>
+    /// As <see cref="IoPool(int, TimeSpan, TimeSpan, bool)"/>, naming the threads the blocking leaves
+    /// run on — so a dump tells the CPU lane (<c>mw-cpu-lane</c>) from an IO lane (<c>mw-io-lane</c>).
+    /// </summary>
+    /// <param name="maxConcurrency">Maximum number of operations allowed to run concurrently; must be at least 1.</param>
+    /// <param name="drainTimeout">How long <see cref="Drain"/> waits at each of its joins AFTER cancelling.</param>
+    /// <param name="drainGrace">How long <see cref="Drain"/> waits for in-flight work BEFORE cancelling.</param>
+    /// <param name="blockingThreadName">The blocking leaves' thread name; <c>null</c> borrows ThreadPool workers.</param>
+    internal IoPool(int maxConcurrency, TimeSpan drainTimeout, TimeSpan drainGrace, string? blockingThreadName)
     {
         if (maxConcurrency < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
@@ -200,7 +214,7 @@ public sealed class IoPool : IIoPool, IDisposable
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             TaskContinuationOptions.None,
-            new LimitedConcurrencyLevelTaskScheduler(maxConcurrency, dedicatedThreads));
+            new LimitedConcurrencyLevelTaskScheduler(maxConcurrency, blockingThreadName));
         // 🚨 STARTED HERE, NOT AT TEARDOWN — see StartCanceller. Every field the thread touches is
         // assigned above; it parks on _cancelRequestedLatch and does nothing until Drain()/Dispose()
         // raises it.

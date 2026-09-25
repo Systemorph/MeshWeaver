@@ -799,6 +799,57 @@ the one identity all four images share: the version tag is per-RUN.
 > built by this lane at all. Kept as a note only so a reader who remembers the wart knows it was
 > resolved rather than overlooked.
 
+## The ladder — the platform delivery never waits on a Plugins seal
+
+Policy `platform-backwards-compatibility` ([Policy Not Prose](../PolicyNotProse)): platform builds are
+backwards compatible **within a compatibility epoch**. So platform and plugins roll as SEPARATE,
+independent steps, one rung at a time:
+
+| Rung | What runs | What had to happen first |
+|---|---|---|
+| platform 1 + plugin 1 | — | — |
+| platform 2 + plugin 1 | the new platform, the plugin bytes the install already ran | the platform set is promoted, verified and baked — **nothing on the Plugins side** |
+| platform 2 + plugin 2 | plugins built against the RUNNING platform | the plugin's declared floor is ≤ the running platform — **no platform roll** |
+| platform 3 + plugin 2 | … and so on | … |
+
+Only a declared compatibility break (an epoch bump) breaks the ladder, and only then is a plugin seal
+for the new line a precondition of anything. On the ordinary path, a Plugins seal is never on a
+platform roll's critical path, and a platform roll is never on a plugin roll's.
+
+**What `main-cd.yml` does with that.** The PLATFORM set — the image legs, `promote`,
+`verify-images`, `publish-bake` (platform content + the `_releases/<version>` marker) and
+`notify-platform-update` — is delivered, announced and judged on its own:
+
+* **`delivery-verdict`** (`CD delivered, or had a good reason not to`) needs only those jobs. It
+  reads no `plugins-*` or `satellite-compat*` result, directly or through a need of a need.
+* **The `handoff` step's `DELIVERY_LEGS`** carries platform legs only. A Plugins red used to count as
+  "HEAD's publication is incomplete" and dispatched a FULL re-publish of a platform set that was
+  already complete — a new build number over identical bytes.
+* **`alert-on-failure`** keys on a DIRECT need failing (`always() && contains(needs.*.result,
+  'failure')`), never on `failure()`, which is true when any ANCESTOR failed — and the compatibility
+  legs have `plugins-modules` as an ancestor. A satellite-compat leg that RAN and broke is still a
+  direct need, so a measured break is still filed on `ci-failure`.
+* **`report-plugins-seal`** (`Plugins seal + satellite compatibility for this set (reported — never
+  gates the platform)`) judges the Plugins seal this run attempted: RED when a DUE seal did not reach
+  `success`, and it writes the durable artefact — a comment on the open `cd-plugins-seal` issue under
+  a `cd-seal-leg-failed:` marker that the reconcile's attempt ledger does not count. The re-seal
+  itself is the reconcile's seal probe (`gate.plugins_seal_due`, see
+  [CD Reconciles the Plugins Seal](../CdReconcilesThePluginsSeal)), which re-bakes that one leg and
+  moves no tag. The satellite-compatibility relay lives in this job too, because its legs compile
+  against this run's module bundles.
+
+Why it had to change, measured: CD runs 9309, 9311, 9313, 9315, 9316, 9317 and 9320 (2026-09-24) went
+red on `Plugins: pack the module bundles … / Module tests` — a MeshWeaver.Plugins unit test — over
+platform sets that were promoted, verified and baked. Run 9317 on `651ee2d` promoted and baked, then
+reddened the platform verdict; its handoff dispatched 9320, which failed the same Plugins test again;
+the first all-green set for that commit was 9321, a host-refresh publish an hour later.
+
+`PlatformDeliveryNeverWaitsOnPluginsGuard` (MeshWeaver.Documentation.Test) holds every one of those
+properties against the workflow's YAML — the needs TRANSITIVELY — each with a negative control that
+re-introduces the coupling and must be caught; `test-cd-steps.py` runs the handoff step itself over
+the platform-only legs. The same guard refuses a pinned platform image tag in any chart value,
+compose file or Deployment record shipped under `deploy/` — the ordinary path never needs a pin.
+
 ## After the promote — the bake publication and the dependent-repo dispatch
 
 Two post-promote legs ride every armed release (#1660 WS3):
@@ -864,6 +915,16 @@ five attempts with backoff, then a loud error naming it a REGISTRY/INFRA failure
 sibling jobs in the same run reached the same registry fine. `alert-on-failure` still files the red
 on the `ci-failure` issue, so a genuinely broken bake is never silent.
 
+**`platform-ladder-compat` — the deployed plugin BYTES on the promoted image.** Where
+`satellite-compat` recompiles satellite SOURCE, this job takes the four module bundles the fleet ran
+before this promote (the same baseline bundles `satellite-compat-image` verified) and links them,
+unchanged, against the portal image this run promoted — types, assembly versions and every member by
+signature (`mw-plugin-test platform-link`). It is rung 2 of the
+[Platform Compatibility Ladder](/Doc/Architecture/PlatformCompatibilityLadder) measured on the image
+that ships; the same check already blocks every core pull request (`Platform compatibility: deployed
+plugin set links against this platform (ladder)`, a need of `Consolidate test results`). Additive
+here: it gates no later job.
+
 **`satellite-compat` (2026-09-12) — every core build MEASURES every satellite, none of them blocks
 it.** The fleet assumes the platform is backwards compatible within a major, so the satellites
 (SocialMedia, Crm, Reinsurance, Education, Manufacturing; Plugins is built inside this run) rebuild
@@ -902,7 +963,7 @@ is red. **A red satellite leg turns the run RED while delivery has completed; th
 says compatibility, not shipping** — which is why the verdict's summary and the alert open with
 `🚨 DELIVERY COMPLETED — this run is red because this core build BROKE N satellite(s): … (previous
 image compiled, new image does not). Nothing failed to ship.` `alert-on-failure` files it on the `ci-failure` issue naming the satellite, the set and the
-first failing types (from each leg's `verdict-artifact`), and `delivery-verdict` renders every leg
+first failing types (from each leg's `verdict-artifact`), and `report-plugins-seal` renders every leg
 under **Compatibility** — and goes red itself if the gate was *skipped* on a publishing run, because
 a skipped measurement painted grey is the one outcome worse than a red one. `fail-fast: false`, no
 `continue-on-error`, no `if:` on a credential: `preflight` asserts `FLEET_READER_APP_ID` /
@@ -1088,4 +1149,5 @@ green lane red.
 - [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) — where the version number comes from.
 - [Deployment](/Doc/Architecture/Deployment) — the route router (AKS vs Container Apps).
 - [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges) — what the `mw-plugin-test` leg is for.
+- [The Platform Compatibility Ladder](/Doc/Architecture/PlatformCompatibilityLadder) — why a platform roll never needs the plugins rebuilt, and the checks that prove it on every platform build (policy `platform-backwards-compatibility`).
 - [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) — which releases an install can take by itself, and the three conditions a tag must clear before it is a safe helm target.

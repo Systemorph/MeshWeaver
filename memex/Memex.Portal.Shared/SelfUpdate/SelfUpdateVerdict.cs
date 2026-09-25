@@ -308,8 +308,9 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     public static SelfUpdateVerdict HandedOver(string tag, string destination, string detail) => new(
         SelfUpdateOutcome.HandedOver,
         $"update available: {tag} — handed to the control lane ({destination}: {detail}); the control "
-        + "plane opens a Roll for this deployment (a Roll to the record's pinned tag restores "
-        + "unattended, a newer tag waits for an approval in the mesh). This install does not patch itself.",
+        + "plane opens a routed Roll for this deployment, which runs UNATTENDED when the deployment "
+        + "record's update policy is Continuous and its update pattern admits this tag, and waits for "
+        + "an approval in the mesh otherwise. This install does not patch itself.",
         tag);
 
     /// <summary>

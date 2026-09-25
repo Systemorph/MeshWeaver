@@ -44,9 +44,13 @@ public enum SelfUpdateApply
 /// Kubernetes PATCH with ONE signed event into the control instance's inbox
 /// (<c>/api/hooks/Hosting/PlatformBuilds</c>, GitHub-style <c>X-Hub-Signature-256</c> over the raw
 /// body). The control plane turns it into a <c>Hosting/InstanceAction</c> <c>Roll</c> on this
-/// deployment's record: a Roll to the tag the record already pins restores unattended, a newer
-/// tag waits for an approval in the mesh. A <c>Continuous</c> policy therefore means "one approval
-/// per release", and a merge that moves the record's pin is what makes a roll unattended.</para>
+/// deployment's record. That ROUTED Roll runs UNATTENDED when the record's <c>updatePolicy</c> is
+/// <c>Continuous</c> and the tag is admitted both by the pattern this instance's policy admitted it
+/// under and by the record's own update pattern, which is the ceiling (MeshWeaver.Plugins
+/// <c>ActionsExecutor.AdmittedUnattended</c>); anything else — another policy, a tag outside the
+/// record's pattern, a person's later edit of the action — waits for an approval in the mesh. No
+/// pinned tag is involved: records do not pin an image (policy
+/// <c>platform-backwards-compatibility</c>; the update policy chooses the image at roll time).</para>
 ///
 /// <para><b>The channel is the one every portal already has to the control instance</b> — the
 /// pair the Feedback hand-over uses (<c>Hosting:ControlInbox:Url</c> + <c>Hosting:ControlInbox:Secret</c>),
