@@ -833,6 +833,23 @@ carries counts, one sentence and the link to the Plugins run — never a test na
 assertion. That is also why the suites cannot run in core's own workflow: its logs and artifacts are
 public.
 
+### Proven live, both directions
+
+Run against branch `ci/dependent-suites-controls` through Plugins' `workflow_dispatch` before this
+gate was required:
+
+| control | candidate | selected | verdict | dispatch → verdict |
+|---|---|---|---|---|
+| positive — a comment-only change in `src/MeshWeaver.Testcontainers` | `9801798b` | 1 of 83 | `success`, drift 0 (run 36118343132) | ~3.5 min |
+| negative — the same file's `ArgumentException` message reworded, signature unchanged | `62840cc7` | 1 of 83 | `failure`, **drift 1**; the control arm re-ran the suite at the base and it passed (run 36117392480) | ~9 min |
+| full-size — core merge `202199cc2b` | `202199cc` | 80 of 83, 12 legs | every suite exit 0; ONE `.trx` was empty, so the verdict was `failure — missing evidence` (run 36118353941) | 26 min |
+
+The full-size run is the evidence the missing-evidence rule is worth having: `dotnet test` printed
+`Passed! 14` for `MeshWeaver.Serialization.Test` over a 0-byte `.trx` — the xunit trx reporter
+silently writes an empty file when a test's output carries ANSI ESC — which every lane that only
+checks that a `.trx` EXISTS had been reading as a pass (fixed in MeshWeaver.Plugins#2377). Each
+from-source leg build took 5–6 minutes.
+
 ### Why this is not the withdrawn dispatcher
 
 The same shape (`dependent-suites.yml`, #3103) was withdrawn on 2026-09-03 because the context went
