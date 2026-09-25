@@ -451,12 +451,20 @@ never settled from the listing and always took the per-pack owner reads.
   union with ONE `ReadMany` (`ReadProbes`). Each query then picks the paths it asked for out of that
   one read and applies its own filter. Walk scopes are unchanged.
 - The exclusions run per query, against the query that found the node.
+- A fault keeps its isolation. One batched read has one terminal, so a fault on one path would end
+  the whole batch and empty every query's answer. When the batch faults, its paths are read again
+  one at a time, each with its own catch. Paths that read cleanly keep their rows. Only a path whose
+  own read faults is dropped, and that sets `SnapshotIncomplete`. The per-path cost is paid only
+  when a fault happens.
 
 `ExactProbeBatchingTest` (`test/MeshWeaver.Hosting.Test`) pins both. Thirty exact queries reach the
 store as one `ReadMany` carrying all thirty paths, and the Initial holds every record that exists,
 grants included. Negative control, run against the unfixed provider: the Initial lacks all three
 grants, and a two-query request makes 2 `ReadMany` calls where the fix makes 1. A second case pins
-per-query attribution: a node probed by a query whose `nodeType:` does not match stays out.
+per-query attribution: a node probed by a query whose `nodeType:` does not match stays out. A third case pins
+the fault isolation: with one query's path poisoned, the other two queries keep their rows and the
+frame is marked incomplete. Its negative control is the batch without the per-path re-read, which
+answers with an empty Initial.
 
 The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
 

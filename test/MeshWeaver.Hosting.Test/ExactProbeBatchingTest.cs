@@ -42,7 +42,7 @@ public class ExactProbeBatchingTest
     private const int Plugins = 15;
 
     /// <summary>Delegates to a real <see cref="InMemoryStorageAdapter"/> and counts batched reads.</summary>
-    private sealed class CountingAdapter(InMemoryStorageAdapter inner) : IStorageAdapter
+    private sealed class CountingAdapter(InMemoryStorageAdapter inner, string? faultOnPath = null) : IStorageAdapter
     {
         private int readManyCalls;
         private int pathsRequested;
@@ -55,7 +55,11 @@ public class ExactProbeBatchingTest
             {
                 Interlocked.Increment(ref readManyCalls);
                 Interlocked.Add(ref pathsRequested, paths.Count);
-                return ((IStorageAdapter)inner).ReadMany(paths, options);
+                // A read that includes the poisoned path faults AS A WHOLE — the shape of a batched
+                // statement, or of a merge of point reads that one fault cancels.
+                return faultOnPath is not null && paths.Contains(faultOnPath)
+                    ? Observable.Throw<MeshNode>(new TimeoutException("The operation has timed out."))
+                    : ((IStorageAdapter)inner).ReadMany(paths, options);
             });
 
         public IObservable<DataChangeNotification> Changes => inner.Changes;
@@ -159,5 +163,33 @@ public class ExactProbeBatchingTest
         frame.Items.Select(n => n.Path).Should().Equal(["Acme/Beta"],
             "Acme/Alpha is a Story and the only query that probed it asked for Tasks");
         adapter.ReadManyCalls.Should().Be(1, "both probes share the request's one read");
+    }
+
+    /// <summary>
+    /// 🚨 One faulting path must not cost the OTHER queries of the request their rows. Before the
+    /// reads were batched each query had its own probe and its own catch; a single batched read is
+    /// one terminal, so without the per-path fallback a fault on one query's path emptied the
+    /// answer for every query. The faulted path's own query is still reported short.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AFaultOnOneQuerysPath_KeepsTheOtherQueriesRows_AndMarksTheSnapshotIncomplete()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = new InMemoryStorageAdapter();
+        await store.Write(Node("Acme/Alpha", "Story"), Options).Await(ct);
+        await store.Write(Node("Acme/Beta", "Story"), Options).Await(ct);
+        await store.Write(Node("Acme/Poisoned", "Story"), Options).Await(ct);
+
+        var adapter = new CountingAdapter(store, faultOnPath: "Acme/Poisoned");
+        var provider = new StorageAdapterMeshQueryProvider(adapter);
+
+        var frame = await FirstFrame(provider, MeshQueryRequest.FromQueries(
+            ["path:Acme/Alpha", "path:Acme/Poisoned", "path:Acme/Beta"], "system-security"), ct);
+
+        frame.Items.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal).Should().Equal(
+            ["Acme/Alpha", "Acme/Beta"],
+            "the two queries whose paths read cleanly must keep their rows when a third query's path faults");
+        frame.SnapshotIncomplete.Should().BeTrue(
+            "the poisoned path's row was dropped by a fault, so the Initial must say it is short");
     }
 }

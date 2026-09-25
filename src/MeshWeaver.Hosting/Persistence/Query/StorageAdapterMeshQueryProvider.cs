@@ -612,10 +612,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// indexed by path so each query picks out the paths IT asked for. Emits exactly once — an
     /// empty index when nothing is probed, without touching the store.
     ///
-    /// <para>🚨 A fault here keeps the rows that did arrive and records the drop on
+    /// <para>🚨 <b>A fault must not cost the healthy paths their rows.</b> One batched read is one
+    /// terminal: when any path's read faults (the default <c>ReadMany</c> is a MERGE of point reads,
+    /// so one faulting read cancels the others in flight), the batch ends with only what had arrived
+    /// by then. Before the reads were batched each query had its own probe and its own catch, so a
+    /// fault on one query's path never touched another query's rows. That isolation is kept by
+    /// re-reading a faulted batch PATH BY PATH, each with its own catch: the paths that read cleanly
+    /// are served, and only a path whose own read faults is dropped and recorded on
     /// <paramref name="completeness"/>, so the Initial says it is short
-    /// (<see cref="QueryResultChange{T}.SnapshotIncomplete"/>, MeshWeaver#1186) — exactly what each
-    /// query's own probe did before the reads were batched. A teardown cancellation is not recorded
+    /// (<see cref="QueryResultChange{T}.SnapshotIncomplete"/>, MeshWeaver#1186). The healthy path costs
+    /// one read; only a faulted batch pays the per-path price the unbatched provider always paid. A
+    /// teardown cancellation is not a fault: it stops the read and is not recorded
     /// (see <see cref="PipelineFaultOrStopped{T}"/>).</para>
     /// </summary>
     private IObservable<IReadOnlyDictionary<string, MeshNode>> ReadProbes(
@@ -623,31 +630,49 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         ReadCompleteness? completeness)
     {
         if (paths.Count == 0)
-            return Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
-                new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase));
-        return Observable.Defer(() =>
-            {
-                try { return persistence.ReadMany(paths, options); }
-                catch (Exception ex)
-                {
-                    completeness?.RecordDroppedRead();
-                    logger?.LogWarning(ex,
-                        "[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously paths=[{Paths}]",
-                        string.Join(",", paths));
-                    return Observable.Empty<MeshNode>();
-                }
-            })
-            .Catch<MeshNode, Exception>(ex =>
-                PipelineFaultOrStopped<MeshNode>(ex, "ExactScope", request, string.Join(",", paths), completeness))
+            return Observable.Return(Index([]));
+        return ReadManyDeferred(paths, options)
             .ToList()
-            .Select(nodes =>
+            .Select(nodes => Index(nodes))
+            .Catch<IReadOnlyDictionary<string, MeshNode>, Exception>(ex =>
             {
-                var byPath = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
-                foreach (var node in nodes)
-                    if (!string.IsNullOrEmpty(node.Path))
-                        byPath[NormalizePath(node.Path)] = node;
-                return (IReadOnlyDictionary<string, MeshNode>)byPath;
+                if (IsTeardownCancellation(ex))
+                    return PipelineFaultOrStopped<MeshNode>(ex, "ExactScope", request, string.Join(",", paths), completeness)
+                        .ToList()
+                        .Select(nodes => Index(nodes));
+                logger?.LogWarning(ex,
+                    "[StorageAdapterMeshQueryProvider.ExactRead] batched read of {Count} path(s) faulted; "
+                    + "re-reading them one by one so the paths that read cleanly keep their rows. paths=[{Paths}]",
+                    paths.Count, string.Join(",", paths));
+                return paths
+                    .Select(path => ReadManyDeferred([path], options)
+                        .Catch<MeshNode, Exception>(pathFault =>
+                            PipelineFaultOrStopped<MeshNode>(pathFault, "ExactScope", request, path, completeness)))
+                    .Concat()
+                    .ToList()
+                    .Select(nodes => Index(nodes));
             });
+    }
+
+    /// <summary>
+    /// <see cref="IStorageAdapter.ReadMany"/>, with a SYNCHRONOUS throw from the adapter turned into
+    /// an <c>OnError</c> so the caller's catch sees it like any other read fault.
+    /// </summary>
+    private IObservable<MeshNode> ReadManyDeferred(IReadOnlyList<string> paths, JsonSerializerOptions options)
+        => Observable.Defer(() =>
+        {
+            try { return persistence.ReadMany(paths, options); }
+            catch (Exception ex) { return Observable.Throw<MeshNode>(ex); }
+        });
+
+    /// <summary>The probed nodes by normalized path (ordinal-ignore-case, as the probes match). Pure.</summary>
+    private static IReadOnlyDictionary<string, MeshNode> Index(IEnumerable<MeshNode> nodes)
+    {
+        var byPath = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in nodes)
+            if (!string.IsNullOrEmpty(node.Path))
+                byPath[NormalizePath(node.Path)] = node;
+        return byPath;
     }
 
     /// <summary>
