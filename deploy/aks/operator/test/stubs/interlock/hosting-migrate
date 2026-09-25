@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# A stand-in `hosting-migrate` for run.sh's migrate-first interlock tests. Records each call in
+# $HOSTING_INTERLOCK_LOG (in order with the plan's own steps, which the tests also log there) and
+# fails on demand ($HOSTING_INTERLOCK_MIGRATE_FAILS=true). hosting-migrate's own behaviour is tested
+# against stubs/migrate; here only WHETHER and WHEN run.sh calls it is under test.
+set -uo pipefail
+log="${HOSTING_INTERLOCK_LOG:?the hosting-migrate stub needs HOSTING_INTERLOCK_LOG}"
+printf 'hosting-migrate %s\n' "$*" >> "$log"
+if [ "${HOSTING_INTERLOCK_MIGRATE_FAILS:-false}" = "true" ]; then
+  echo "hosting-migrate stub: migration FAILED" >&2
+  exit 1
+fi
+echo "::hosting:: migration=completed"

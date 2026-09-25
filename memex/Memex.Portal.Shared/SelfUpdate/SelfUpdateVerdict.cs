@@ -432,7 +432,49 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// one route and another in the other.</para>
     /// </summary>
     public static bool MayPatchAfter(MigrationRunOutcome outcome) =>
-        outcome is MigrationRunOutcome.Completed or MigrationRunOutcome.NotSupported;
+        MayPatchAfter(outcome, ReleaseSchemaStep.Unknown(""));
+
+    /// <summary>
+    /// 🚨 <see cref="MayPatchAfter(MigrationRunOutcome)"/>, refined by the PUBLISHED schema step
+    /// (<see cref="ReleaseSchemaMarker"/>, #4764 (b3); policy <c>db-migration-planned</c>) — the form
+    /// every route that patches reads.
+    ///
+    /// <para>The two numbers change exactly the two outcomes that establish nothing about the schema,
+    /// and in opposite directions:</para>
+    /// <list type="bullet">
+    ///   <item><c>NotSupported</c> with a target that MOVES the schema is REFUSED. The blanket rule
+    ///     rolled it "because refusing would freeze the install", which was the right call only while
+    ///     nobody could tell a schema-bumping release from any other; with both numbers published the
+    ///     roll is known to crash-loop on <c>DbVersionGate</c>, so rolling is no longer the lesser
+    ///     harm.</item>
+    ///   <item><c>Forbidden</c> with a target that KEEPS the schema MAY patch: the database already
+    ///     has what the target expects (the running pods passed <c>DbVersionGate</c> at the running
+    ///     release's number), so the missing <c>batch/jobs</c> grant blocks nothing that matters.</item>
+    /// </list>
+    /// <para>An unknown step (either marker absent) leaves the blanket rule exactly as it was.</para>
+    /// </summary>
+    public static bool MayPatchAfter(MigrationRunOutcome outcome, ReleaseSchemaStep step) => outcome switch
+    {
+        MigrationRunOutcome.Completed => true,
+        MigrationRunOutcome.NotSupported => !step.MovesSchema,
+        MigrationRunOutcome.Forbidden => step.KeepsSchema,
+        _ => false,
+    };
+
+    /// <summary>
+    /// 🚨 The roll was REFUSED because the target is PUBLISHED to expect a newer schema than the
+    /// running release, and this install could not run its migration at all
+    /// (<see cref="MigrationRunOutcome.NotSupported"/>). Names both numbers, so the refusal says
+    /// exactly what a person has to move — never the silent crash-loop it replaces.
+    /// </summary>
+    public static SelfUpdateVerdict SchemaAhead(string tag, MigrationRunOutcome outcome, ReleaseSchemaStep step) => new(
+        SelfUpdateOutcome.MigrationUnavailable,
+        $"roll to {tag} REFUSED: {step.Describe()}, and this install could not run the migration ({outcome}) — "
+        + "rolling would make every new pod refuse to start on DbVersionGate behind pods that keep answering "
+        + "200. Run the migration for this instance first (a helm upgrade, or a control-plane Roll, which "
+        + "migrates first), or update the MeshWeaver.SelfUpdate.Aks module so it can. "
+        + "Doc/Architecture/PlanningADatabaseMigration.",
+        tag);
 
     /// <summary>The check faulted.</summary>
     public static SelfUpdateVerdict CheckFailed(Exception ex) => new(

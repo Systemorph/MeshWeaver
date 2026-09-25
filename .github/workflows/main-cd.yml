@@ -1546,6 +1546,10 @@ jobs:
     timeout-minutes: 30
     outputs:
       version: ${{ steps.vars.outputs.version }}
+      # The database schema this image expects (DbVersion.Latest in the checked-out Plugins commit)
+      # — published beside the release marker as ExpectedDbVersion (#4764 (b3); policy
+      # db-migration-planned), so every roll planner can compare two numbers before it moves anything.
+      expected_db_version: ${{ steps.dbversion.outputs.expected }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1577,6 +1581,24 @@ jobs:
           path: plugins-repo
           ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
           fetch-depth: 1
+      # 🚨 ExpectedDbVersion (#4764 (b3); policy db-migration-planned). DbVersion.Latest is the ONE
+      # constant both DbVersionGate and the migration runner compile (linked source), and
+      # MigrationRegistry.VerifyComplete crashes the migration if it drifts from the highest V##, so
+      # this file IS the number. Read from the SAME Plugins commit the image is built from — never a
+      # second resolution. Exactly one well-formed match or RED: a regex that keeps returning a
+      # plausible number after the definition moves is how a wrong one gets published.
+      - name: Read the database schema this image expects (DbVersion.Latest)
+        id: dbversion
+        run: |
+          set -euo pipefail
+          file=plugins-repo/src/Memex.Database.Migration/DbVersion.cs
+          [ -f "$file" ] || { echo "::error::$file does not exist in the Plugins checkout — DbVersion.Latest moved; update this step, never publish a release without its ExpectedDbVersion."; exit 1; }
+          matches=$(grep -cE '^[[:space:]]*public const int Latest = [0-9]+;' "$file" || true)
+          [ "$matches" = "1" ] || { echo "::error::$file holds $matches 'public const int Latest = N;' declarations, expected exactly 1 — refusing to guess the schema version."; exit 1; }
+          expected=$(sed -nE 's/^[[:space:]]*public const int Latest = ([0-9]+);.*/\1/p' "$file")
+          case "$expected" in ''|*[!0-9]*) echo "::error::DbVersion.Latest read as '$expected' — not an integer"; exit 1 ;; esac
+          echo "expected=$expected" >> "$GITHUB_OUTPUT"
+          echo "ExpectedDbVersion: $expected (DbVersion.Latest at Plugins ${{ needs.gate.outputs.plugins_sha }})"
       # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
       # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
       - name: Setup .NET
@@ -2747,6 +2769,10 @@ jobs:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           BAKE_ARCHITECTURE: ${{ matrix.arch }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          # ExpectedDbVersion, published at _releases/_db/<version> beside the marker (#4764 (b3)).
+          # Empty on a bake-only reconcile (portal-image did not run): the script then writes no
+          # schema file, which readers take as UNKNOWN — never as a number it did not read.
+          EXPECTED_DB_VERSION: ${{ needs.portal-image.outputs.expected_db_version }}
           # This lane bakes the PLATFORM's OWN content, so the content repository IS this
           # repository. Stated explicitly rather than left to the script's fallback, so no live
           # publisher depends on a default that is only right by coincidence (MeshWeaver#3583).
@@ -2797,6 +2823,7 @@ jobs:
         id: registry-publication
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          EXPECTED_DB_VERSION: ${{ needs.portal-image.outputs.expected_db_version }}
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
         run: |
           set -euo pipefail
