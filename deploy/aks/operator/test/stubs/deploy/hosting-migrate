@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# A stand-in `hosting-migrate` for hosting-deploy's migrate-first tests. hosting-migrate itself is
+# tested on its own (stubs/migrate); what these cases pin is WHETHER and WHEN hosting-deploy calls it,
+# so this stub only records the call in $HOSTING_DEPLOY_STUB_LOG — in order with the helm/kubectl
+# calls — and fails on demand ($HOSTING_DEPLOY_FIXTURE/migrate-fails exists).
+set -uo pipefail
+log="${HOSTING_DEPLOY_STUB_LOG:?the hosting-migrate stub needs HOSTING_DEPLOY_STUB_LOG}"
+fixture="${HOSTING_DEPLOY_FIXTURE:?the hosting-migrate stub needs HOSTING_DEPLOY_FIXTURE}"
+printf 'hosting-migrate %s\n' "$*" >> "$log"
+if [ -f "$fixture/migrate-fails" ]; then
+  echo "hosting-migrate stub: migration memex-migration-roll-x FAILED" >&2
+  exit 1
+fi
+echo "::hosting:: migration=completed"

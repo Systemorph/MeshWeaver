@@ -115,23 +115,24 @@ sets=(
 # does not count as an image. Pure bash on purpose: an awk regex with POSIX classes passed on the
 # macOS awk and matched NOTHING on the ubuntu runner's mawk — a guard whose answer depends on which
 # awk the image happens to ship is not a guard.
-values_carry_portal_image() {
-  local line value in_portal=false
+values_block_image() { # <block> <file> → prints <block>.image when set and non-empty
+  local block="$1" line value in_block=false
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       ''|' '*|$'\t'*|'#'*) ;;
-      *) # a top-level key: we are inside portal: only when the line is exactly `portal:`
-         value="${line#portal:}"; value="${value//[[:space:]]/}"
-         if [[ "$line" == portal:* && -z "$value" ]]; then in_portal=true; else in_portal=false; fi
+      *) # a top-level key: we are inside <block>: only when the line is exactly `<block>:`
+         value="${line#"${block}":}"; value="${value//[[:space:]]/}"
+         if [[ "$line" == "${block}:"* && -z "$value" ]]; then in_block=true; else in_block=false; fi
          continue ;;
     esac
-    if $in_portal && [[ "$line" == '  image:'* ]]; then
+    if $in_block && [[ "$line" == '  image:'* ]]; then
       value="${line#  image:}"; value="${value//[[:space:]]/}"; value="${value//\"/}"
-      [ -n "$value" ] && return 0
+      [ -n "$value" ] && { printf '%s' "$value"; return 0; }
     fi
-  done < "$1"
+  done < "$2"
   return 1
 }
+values_carry_portal_image() { values_block_image portal "$1" >/dev/null; }
 if [ -z "$image" ] && ! values_carry_portal_image "$values"; then
   # 🚨 THREE ANSWERS, not two (MeshWeaver#4722) — and this one is the most expensive to get wrong
   # in the whole file. The read used to be `2>/dev/null || true`, so a Forbidden on `deployments`
@@ -311,6 +312,43 @@ case "$release_state" in
   "") hosting::log "release   ${release} is not installed yet (first install)" ;;
   *) hosting::log "release   ${release} is '${release_state}'" ;;
 esac
+
+# ── migrate BEFORE the image moves (policy roll-migrates-first) ─────────────────────────────────
+# 🚨 The chart's migration Job is a plain release object, not a hook, so `helm upgrade` applies it
+# and the portal Deployment IN THE SAME APPLY: when this upgrade also moves the image, the new pods
+# start while the migration is still running, and any that boot first crash-loop on DbVersionGate
+# until it finishes. The old pods keep serving throughout (maxUnavailable 0) — but that is a race the
+# rule forbids, and a migration that FAILS leaves the new pods crash-looping with nothing to say so.
+# So an upgrade of an INSTALLED release whose target image differs from the running one runs the
+# target's migration first, as its own Job (hosting-migrate), and helm is never reached unless it
+# succeeded. A first install (nothing running) and an upgrade that keeps the image need no such step:
+# there is no older build serving, or no schema the image does not already expect.
+target_portal="$image"
+target_migration=""
+if [ -n "$image" ]; then
+  target_migration="${image/memex-portal-ai/memex-migration}"
+else
+  target_portal="$(values_block_image portal "$values" || true)"
+  target_migration="$(values_block_image migration "$values" || true)"
+fi
+if [ -n "$release_state" ] && [ -n "$target_portal" ]; then
+  hosting::probe any kubectl -n "$namespace" get deploy memex-portal-deployment \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="memex-portal")].image}'
+  case $? in
+    2) hosting::die_refused "deployment/memex-portal-deployment in ${namespace}, which decides whether this upgrade moves the image and must migrate first" ;;
+  esac
+  live_image="$HOSTING_PROBE_OUT"
+  if [ -n "$live_image" ] && [ "$live_image" != "$target_portal" ]; then
+    hosting::log "migrate   the upgrade moves the portal ${live_image} → ${target_portal}: running its migration FIRST (policy roll-migrates-first)"
+    if [[ "$target_migration" =~ /memex-migration:[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      hosting-migrate --namespace "$namespace" --release "$release" --image "$target_migration" \
+        || hosting::die "the migration for ${target_portal} did not succeed — helm upgrade NOT run, so the portal image did not move (policy roll-migrates-first). Read the migration Job's log."
+    else
+      hosting-migrate --namespace "$namespace" --release "$release" --tag "${target_portal##*:}" \
+        || hosting::die "the migration for ${target_portal} did not succeed — helm upgrade NOT run, so the portal image did not move (policy roll-migrates-first). Read the migration Job's log."
+    fi
+  fi
+fi
 
 # ── apply, and ONLY apply ───────────────────────────────────────────────────────────────────────
 # 🚨 NO --atomic AND NO --wait, and that is the whole point of this block. helm APPLIES here; the

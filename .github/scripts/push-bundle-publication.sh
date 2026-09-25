@@ -215,7 +215,14 @@ json_escape() {
 # release, and that run is usually one whose bundles are already published.
 publish_release_identity() {
   [ -n "$RELEASE" ] || return 0
-  printf '{"identity":"%s","version":"%s"}' "$(json_escape "$IDENTITY")" "$(json_escape "$RELEASE")" > "$WORK/release.json"
+  # ExpectedDbVersion (#4764 (b3)) rides the same config when the caller knows it — an integer or
+  # nothing, never a guess; absent means UNKNOWN to every reader.
+  local schema=""
+  if [ -n "${EXPECTED_DB_VERSION:-}" ]; then
+    case "$EXPECTED_DB_VERSION" in *[!0-9]*) fail "EXPECTED_DB_VERSION '$EXPECTED_DB_VERSION' is not an integer" ;; esac
+    schema=",\"expectedDbVersion\":$EXPECTED_DB_VERSION"
+  fi
+  printf '{"identity":"%s","version":"%s"%s}' "$(json_escape "$IDENTITY")" "$(json_escape "$RELEASE")" "$schema" > "$WORK/release.json"
   local release_digest
   release_digest=$("$ORAS" push "${OFLAGS[@]}" "$REGISTRY/plugins/releases:$RELEASE" \
       --artifact-type application/vnd.meshweaver.release.v1+json \

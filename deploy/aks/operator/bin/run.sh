@@ -7,6 +7,19 @@
 # deliberate: the rules are then testable without a cluster, and there is exactly one place to read
 # them. A step added here would be a second, untested planner.
 #
+# 🚨 ONE INTERLOCK, and it is not a planner: policy `roll-migrates-first` (Doc/Architecture/
+# PlanningADatabaseMigration). A step that moves the portal image (`set image … memex-portal=<ref>`)
+# never runs unless the SAME plan ran `hosting-migrate` for that namespace and tag before it — and if
+# it did not, this script runs `hosting-migrate --namespace <ns> --tag <tag>` itself, and a failure
+# there stops the run before the image moves. Why here and not only in the planner: the plan is
+# composed by the Hosting code the PORTAL runs, and a portal whose Hosting generation predates the
+# migrate-first plan (Plugins #2219) planned image-only rolls of ITSELF — memex, 2026-09-24/25:
+# 2-step `set image` plans to ci.9317/9321/9332 past DbVersion 58, a pod crash-looping 91 times on
+# DbVersionGate, and the fix unable to arrive because it would have had to arrive through that roll.
+# This image (`hosting-operator:main`, pulled Always) is the one piece of the roll path that does not
+# depend on the build being rolled — so the rule the control plane cannot be trusted to carry lives
+# here too. A plan that already migrates first is untouched (the interlock sees its step).
+#
 # The contract (HostingOperator.JobManifest):
 #   HOSTING_ACTION           provision | teardown | suspend | reactivate | restore | export | …
 #   HOSTING_DEPLOYMENT       the deployment id, for logging
@@ -108,12 +121,85 @@ while IFS=$'\t' read -r name command; do
 done <<< "$plan"
 
 [ "$total" -gt 0 ] || hosting::die "the decoded plan has no steps"
+
+# ── the migrate-first interlock (policy roll-migrates-first; see the header) ─────────────────────
+# Recognise a step that moves the PORTAL image and pull out its namespace and target tag. Anything
+# that names deployment/memex-portal-deployment and `memex-portal=` in a `set image` is one; a step
+# that does but whose namespace or tag cannot be read is REFUSED — an image move the interlock
+# cannot place is exactly the move it exists to stop.
+portal_image_move() { # <command> → sets pim_ns pim_tag; returns 0 when the command moves the portal image
+  local cmd="$1" ref
+  pim_ns="" pim_tag=""
+  [[ "$cmd" == *"set image"* && "$cmd" == *"memex-portal-deployment"* && "$cmd" == *"memex-portal="* ]] || return 1
+  if [[ "$cmd" =~ (^|[[:space:]])(-n|--namespace)[[:space:]=]+([A-Za-z0-9][A-Za-z0-9-]*) ]]; then pim_ns="${BASH_REMATCH[3]}"; fi
+  if [[ "$cmd" =~ memex-portal=([^[:space:]\"\']+) ]]; then
+    ref="${BASH_REMATCH[1]}"; pim_tag="${ref##*:}"
+    { [ "$pim_tag" != "$ref" ] && [[ "$pim_tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; } || pim_tag=""
+  fi
+  return 0
+}
+migrates() { # <command> <ns> <tag> → 0 when the command runs hosting-migrate for exactly that ns and tag
+  local cmd="$1" ns="$2" tag="$3"
+  [[ "$cmd" == *"hosting-migrate"* ]] || return 1
+  [[ "$cmd" =~ --namespace[[:space:]=]+([A-Za-z0-9-]+) && "${BASH_REMATCH[1]}" == "$ns" ]] || return 1
+  [[ "$cmd" =~ memex-migration:([A-Za-z0-9._-]+) && "${BASH_REMATCH[1]}" == "$tag" ]] && return 0
+  [[ "$cmd" =~ --tag[[:space:]=]+([A-Za-z0-9._-]+) && "${BASH_REMATCH[1]}" == "$tag" ]]
+}
+interlocked=""   # "<position>:<ns>:<tag>" per guarded step, space-separated
+seen_cmds=()
+scan=0
+while IFS=$'\t' read -r name command; do
+  [ -n "${name:-}" ] || continue
+  scan=$((scan + 1))
+  if portal_image_move "${command:-}"; then
+    [ -n "$pim_ns" ] && [ -n "$pim_tag" ] \
+      || hosting::die "step ${scan} ('${name}') moves the portal image, but its namespace or target tag cannot be read (${command}) — the migrate-first interlock cannot place it, so it refuses the plan (policy roll-migrates-first). Nothing ran."
+    covered=false
+    for prior in "${seen_cmds[@]+"${seen_cmds[@]}"}"; do
+      if migrates "$prior" "$pim_ns" "$pim_tag"; then covered=true; break; fi
+    done
+    if ! $covered; then
+      interlocked="${interlocked} ${scan}:${pim_ns}:${pim_tag}"
+      total=$((total + 1))
+      hosting::log "interlock step ${scan} ('${name}') moves the portal image of ${pim_ns} to ${pim_tag} and the plan runs no migration for it first — the operator runs hosting-migrate before it (policy roll-migrates-first)"
+    fi
+  fi
+  seen_cmds+=("${command:-}")
+done <<< "$plan"
+[ -z "$interlocked" ] || hosting::say migrate_interlock "${interlocked# }"
+
 echo "  ${total} step(s)"
 echo
 
 index=0
+position=0
 while IFS=$'\t' read -r name command; do
   [ -n "${name:-}" ] || continue
+  position=$((position + 1))
+
+  # The interlock's synthesised step, immediately before the image move it guards.
+  for entry in $interlocked; do
+    [ "${entry%%:*}" = "$position" ] || continue
+    rest="${entry#*:}"; ilk_ns="${rest%%:*}"; ilk_tag="${rest#*:}"
+    index=$((index + 1))
+    ilk_name="Run the database migration first (operator interlock)"
+    ilk_cmd="hosting-migrate --namespace ${ilk_ns} --tag ${ilk_tag}"
+    hosting::step "$ilk_name"
+    echo "[${index}/${total}] ${ilk_name}"
+    if hosting::dry; then
+      echo "  DRY-RUN would run: ${ilk_cmd}"
+      echo
+      continue
+    fi
+    if bash -c "$ilk_cmd"; then
+      echo
+    else
+      rc=$?
+      echo
+      hosting::die "step ${index}/${total} '${ilk_name}' failed with exit ${rc}. The next step would have moved the portal image of ${ilk_ns} to ${ilk_tag} without its database migration — REFUSED (policy roll-migrates-first): the run stops before the image moves. Read the migration Job's log; re-request the action once it can succeed."
+    fi
+  done
+
   index=$((index + 1))
 
   if [ -z "${command:-}" ]; then

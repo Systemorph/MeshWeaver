@@ -10,6 +10,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 **The rule:** the schema moves *before* the image that expects it, every time, by the same
 mechanism, and a roll that cannot move the schema says so loudly instead of rolling anyway.
 
+> How a schema change is PLANNED before it merges — expand-only migrations, the `Db-migration:`
+> declaration and its rehearsal, `ExpectedDbVersion` on the release marker, and which roll paths
+> migrate first — is [Planning a Database Migration](../PlanningADatabaseMigration) (policy
+> `db-migration-planned`). This page is the routine for one instance.
+
 ## How the schema moves
 
 There is one migration program (`Memex.Database.Migration`, built as `memex-migration:<tag>`

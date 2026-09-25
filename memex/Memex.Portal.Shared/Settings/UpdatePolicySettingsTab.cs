@@ -187,26 +187,49 @@ public static class UpdatePolicySettingsTab
                         // The decision is SelfUpdateVerdict.MayPatchAfter — the same predicate the
                         // poller's outcome is held to, so the two routes cannot drift apart when an
                         // outcome is added to the enum.
-                        pool.Invoke(ct => updater!.RunMigrationAsync(tag, ct)).Subscribe(
-                            outcome =>
+                        //
+                        // 🚨 …refined by the PUBLISHED schema step (#4764 (b3)): both releases'
+                        // ExpectedDbVersion markers, read off the same share the availability gate
+                        // reads, so a click across a known schema bump that this install cannot
+                        // migrate is refused naming both numbers.
+                        var fileSystem = h.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                                         ?? IoPool.Unbounded;
+                        ReleaseSchemaMarker.ObserveStep(
+                                fileSystem,
+                                h.Hub.ServiceProvider.GetService<IConfiguration>()?[
+                                    MeshWeaver.Hosting.ShippedPrebuiltBundles.PublishedRootConfigKey],
+                                ShippedReleaseSeed.InstalledPlatformVersion, tag)
+                            .Catch((Exception _) => Observable.Return(ReleaseSchemaStep.Unknown(tag)))
+                            .SelectMany(step => pool.Invoke(ct => updater!.RunMigrationAsync(tag, ct))
+                                .Select(outcome => (outcome, step)))
+                            .Subscribe(
+                            reading =>
                             {
-                                if (!SelfUpdateVerdict.MayPatchAfter(outcome))
+                                var (outcome, step) = reading;
+                                if (!SelfUpdateVerdict.MayPatchAfter(outcome, step))
                                 {
                                     // The two refusals stay DIFFERENT sentences: a migration that ran
                                     // and broke sends the operator to the Job's log, one that could
                                     // not be created sends them to a helm upgrade. The outcome name
                                     // renders verbatim — machine text, like the gate diagnostics
                                     // above.
-                                    h.UpdateData(ResultId, h.Localize(
-                                        outcome == MigrationRunOutcome.Forbidden
-                                            ? "ui.updateMigrationUnavailableManual"
-                                            : "ui.updateMigrationFailedManual",
-                                        tag, outcome.ToString()));
+                                    // A refusal the published schema step decided (NotSupported
+                                    // across a known bump) is a could-not-run, like the 403, and
+                                    // carries both numbers verbatim beside the outcome.
+                                    h.UpdateData(ResultId, outcome switch
+                                    {
+                                        MigrationRunOutcome.NotSupported => h.Localize(
+                                            "ui.updateSchemaAheadManual", tag, step.Describe()),
+                                        MigrationRunOutcome.Forbidden => h.Localize(
+                                            "ui.updateMigrationUnavailableManual", tag,
+                                            step.Known ? $"{outcome}; {step.Describe()}" : outcome.ToString()),
+                                        _ => h.Localize("ui.updateMigrationFailedManual", tag, outcome.ToString()),
+                                    });
                                     return;
                                 }
                                 pool.Invoke(ct => updater!.PatchToVersionAsync(tag, ct)).Subscribe(
                                     _ => h.UpdateData(ResultId, h.Localize(
-                                        outcome == MigrationRunOutcome.NotSupported
+                                        outcome == MigrationRunOutcome.NotSupported && !step.KeepsSchema
                                             ? "ui.updateRollingUnmigrated"
                                             : "ui.updateRolling",
                                         tag)),
