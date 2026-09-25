@@ -31,11 +31,13 @@ namespace MeshWeaver.GitSync;
 /// identity were declined on their source fingerprint, every type compiled from whatever the mesh
 /// held, and the record of that compile dangled on the next restart.</para>
 ///
-/// <para>So: a source BEHIND the seal is imported at the sealed commit (the gate now says Go — the
-/// seal IS the evidence it was waiting for); a source AT the sealed commit whose types were
-/// nevertheless declined is re-imported at that commit with the content-skip bypassed
-/// (<see cref="ImportConflictPolicy.Reconcile"/> — every conflict protection stays armed). Anything
-/// else is left alone, with the reason stated.</para>
+/// <para>So: a source AT the sealed commit whose types were nevertheless declined is re-imported at
+/// that commit with the content-skip bypassed (<see cref="ImportConflictPolicy.Reconcile"/> — every
+/// conflict protection stays armed), and a released bundle hold re-imports at the commit whose
+/// sources were held. 🚨 Nothing else is imported (policy <c>module-sync-per-manifest-hash</c>): the
+/// seal does not choose a source's commit. A source on another commit is usually AHEAD of the seal,
+/// and a source with no commit yet is brought by its first import or its next green build — an
+/// import at the seal would move the first backwards and race the second.</para>
 /// </summary>
 public static class SealedSyncReconcile
 {
@@ -45,7 +47,9 @@ public static class SealedSyncReconcile
         /// <summary>Nothing — the source is not this seal's business, or it is held; see the reason.</summary>
         None = 1,
 
-        /// <summary>The source is behind the seal: import it at the sealed commit.</summary>
+        /// <summary>The source is behind the seal: import it at the sealed commit. No longer produced
+        /// (policy <c>module-sync-per-manifest-hash</c>: the seal does not choose a source's commit);
+        /// the member stays because the enum is public and persisted in log copy.</summary>
         ImportAtSealedCommit = 2,
 
         /// <summary>The source claims the sealed commit but its types were declined on their
@@ -139,36 +143,38 @@ public static class SealedSyncReconcile
         var at = config.LastSyncCommitSha;
         if (!SameCommit(at, commit))
         {
-            var verdict = SealedSyncGate.Decide(repo, commit, at, sealedForThisIdentity, identity);
-            // 🚨 #4499 — the green-build webhook has skipped a source with a FINAL verdict at the
-            // built commit since #3945; this trigger never asked, so a source that can never
-            // converge at the sealed commit was fetched again on EVERY publication announcement.
-            // Measured on memex.systemorph.com, 2026-09-16: two Spaces whose subdirectory matches
-            // nothing refused ~32×/hour at one unchanged seal, each refusal a full repository fetch
-            // and an Activity node. Asked AFTER the gate, so a source the seal holds is still
-            // recorded as held; and via the one shared predicate, so an edit of the source or a new
-            // sealed commit re-attempts exactly as it does on the webhook path.
             // 🚨 #3845 hole 4 — a hold the SHELF can release is not settled, whatever the attempt
-            // pair says about the commit. Asked before the settled shortcut, and only when a hold is
-            // actually recorded, so nothing else changes shape.
-            if (verdict.Proceed && ReleasesAHold(config, inventory, identity) is { } released)
-                return new Plan(Action.ReconcileAtSealedCommit, commit,
-                    $"'{sealedSource.Source}' is sealed at {Short(commit)} and this source holds "
-                    + $"NodeType sources for a bundle that has now arrived ({released}) — re-importing "
-                    + "at the sealed commit so the held sources land on the bytes that match them");
-            if (verdict.Proceed && GitHubSyncService.HasFinalVerdictAt(config, commit))
-                return new Plan(Action.None, commit,
-                    $"'{sealedSource.Source}' is sealed at {Short(commit)} and this source already reached a "
-                    + $"final verdict on that commit under its current configuration ('{config.LastSyncOutcome}') — "
-                    + "re-reading it re-derives the same verdict; an edit of the source or a new sealed commit re-attempts")
-                {
-                    Settled = true,
-                };
-            return verdict.Proceed
-                ? new Plan(Action.ImportAtSealedCommit, commit,
-                    $"'{sealedSource.Source}' is sealed at {Short(commit)} for this instance and the "
-                    + $"source sits at {(at is null ? "no commit" : Short(at))} — the seal releases the sync")
-                : new Plan(Action.None, commit, verdict.HoldReason ?? "held");
+            // pair says about the commit. Since policy module-sync-per-manifest-hash such a hold is
+            // taken only on a `Modules:RequirePrebuilt` mesh, and the sources it held are those of
+            // the commit the import ATTEMPTED — which is where the release re-imports, never the
+            // sealed commit (the source may be ahead of it).
+            if (ReleasesAHold(config, inventory, identity) is { } released)
+            {
+                var heldAt = config.LastAttemptedCommitSha is { Length: > 0 } attempted ? attempted : commit;
+                return new Plan(Action.ReconcileAtSealedCommit, heldAt,
+                    $"this source holds NodeType sources for a bundle that has now arrived ({released}) — "
+                    + $"re-importing at {Short(heldAt)}, the commit whose sources were held, so they land on "
+                    + "the bytes that match them");
+            }
+
+            // 🚨 THE SEAL NEVER CHOOSES A SOURCE'S COMMIT (policy module-sync-per-manifest-hash) —
+            // not for a source that has one, and not for one that has none yet. A source on another
+            // commit is usually AHEAD of the seal (its green builds advance it per module manifest
+            // hash), so importing the sealed commit would move it BACKWARDS. A source with no commit
+            // yet is brought by its first import (the configured branch, which the discovery scan
+            // re-attempts while no commit is recorded) or its next green build — and an import at
+            // the seal fired alongside those would RACE them, whichever landed last deciding the
+            // tree. Not a hold, never recorded: the seal decides only whether each type adopts bytes
+            // or compiles.
+            return new Plan(Action.None, commit,
+                at is { Length: > 0 }
+                    ? $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source sits at {Short(at)} — "
+                      + "the seal does not choose a source's commit (policy module-sync-per-manifest-hash); "
+                      + "green builds advance it, and each NodeType adopts a matching bundle or compiles"
+                    : $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source has landed no commit "
+                      + "yet — its first import or its next green build brings it; the seal does not choose a "
+                      + "source's commit (policy module-sync-per-manifest-hash)",
+                SteadyState: true);
         }
 
         var declinedHere = declinedTypePaths
@@ -420,15 +426,18 @@ internal sealed class SealedPublicationSyncReconciler(
                         case SealedSyncReconcile.Action.ReconcileAtSealedCommit:
                             gateLetSomethingThrough = true;
                             logger?.LogWarning("[SealedSync] {Space}: {Reason}", target.SpacePath, plan.Reason);
+                            // The plan names the commit: the seal's, or — for a released bundle
+                            // hold — the commit whose sources were held (never moved backwards).
+                            var reconcileAt = plan.Commit ?? commit;
                             accessService.RunAsSystem(() => hub.ReconcileAtProvenCommitFromGitHub(
-                                    target.SpacePath, target.UserId, commit, sourceId: target.SourceId))
+                                    target.SpacePath, target.UserId, reconcileAt, sourceId: target.SourceId))
                                 .Subscribe(
                                     activity => logger?.LogInformation(
                                         "[SealedSync] reconciling import of {Space} at {Sha} completed ({Activity}).",
-                                        target.SpacePath, commit, activity),
+                                        target.SpacePath, reconcileAt, activity),
                                     ex => logger?.LogWarning(ex,
                                         "[SealedSync] reconciling import of {Space} at {Sha} failed.",
-                                        target.SpacePath, commit));
+                                        target.SpacePath, reconcileAt));
                             dispatched++;
                             break;
                         default:

@@ -7,14 +7,26 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Sync-Ref Contract
 
-**An import never puts a repository's sources ahead of the bytes this instance runs.** When a
-publication of the repository is sealed for this instance's framework identity, EVERY import of it —
-a green build, the seal's own arrival, a first import, the boot install, *and a person pressing
-**Update to latest** or **Re-import at this commit*** — lands on the commit that publication was
-baked from, or imports nothing and says why. For any other repository, an unattended import reads a
-commit a build PROVED, and a person may still read a branch tip.
+> 🚨 **Superseded in part by policy [`module-sync-per-manifest-hash`](../PolicyNotProse)** — see
+> [Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash). **The seal no longer chooses, redirects
+> or holds a source's commit.** A green build imports the commit it built. A person's Update or
+> Re-import reads exactly what was asked. A first import (discovery, boot install) resolves the
+> configured branch, and the seal's arrival imports nothing by itself. Each module of the tree is then
+> judged alone by the content hash in its `manifest.lock`, and the seal decides only whether each
+> NodeType adopts prebuilt bytes or compiles. What still holds from this page: an unattended import
+> reads a commit a build PROVED when a build names one, and "a build" means the repository's content
+> CI. The sections below that say "lands on the sealed commit" or "holds" describe the rule this
+> policy replaced, and are kept because they are why it was replaced.
 
-That is the whole rule. Everything below is why it has to be a rule rather than a habit, what
+**The rule this page stated until then:** an import never put a repository's sources ahead of the
+bytes this instance ran. When a publication of the repository was sealed for this instance's
+framework identity, EVERY import of it — a green build, the seal's own arrival, a first import, the
+boot install, *and a person pressing **Update to latest** or **Re-import at this commit*** — landed on
+the commit that publication was baked from, or imported nothing and said why. For any other
+repository, an unattended import read a commit a build PROVED, and a person could still read a branch
+tip.
+
+That was the whole rule. Everything below is why it has to be a rule rather than a habit, what
 enforces it, and — because it once read differently — what changed on 2026-09-17 and what that costs.
 
 > 🚨 **Until 2026-09-17 this page said the opposite about people:** *"Only a human-initiated 'Update

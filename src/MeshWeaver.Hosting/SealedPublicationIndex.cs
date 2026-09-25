@@ -33,7 +33,8 @@ public sealed record SealedSource(
     /// 🚨 True when the publication IS sealed but was produced by a platform build NEWER than the
     /// one this instance runs — the one rung the ladder forbids (platform 1 + plugin 2). The reading
     /// then reports it as not sealed FOR THIS INSTANCE (<see cref="IsSealed"/> false), and
-    /// <see cref="Refusal"/> names both versions; the source advances when the PLATFORM roll lands.
+    /// <see cref="Refusal"/> names both versions; its bytes become adoptable when the PLATFORM roll
+    /// lands, while its sources still sync (policy <c>module-sync-per-manifest-hash</c>).
     /// </summary>
     public bool HeldForNewerPlatform { get; init; }
 
@@ -303,8 +304,10 @@ public static class SealedPublicationIndex
             Refusal = $"sealed at {at} only by platform {source.ProducerPlatformVersion}, which is NEWER "
                       + $"than the running platform {runningPlatformVersion} — a plugin never runs on a "
                       + "platform older than the one it was built for (policy "
-                      + "platform-backwards-compatibility); this source advances when the PLATFORM roll "
-                      + "lands, and a platform roll does not wait for this seal",
+                      + "platform-backwards-compatibility); these BYTES are not adopted here — the sources "
+                      + "still sync and compile against the running platform (policy "
+                      + "module-sync-per-manifest-hash), and the bytes become adoptable when the PLATFORM "
+                      + "roll lands, which does not wait for this seal",
         };
     }
 

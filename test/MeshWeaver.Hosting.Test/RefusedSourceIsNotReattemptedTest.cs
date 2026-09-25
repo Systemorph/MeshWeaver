@@ -118,50 +118,45 @@ public class RefusedSourceIsNotReattemptedTest(ITestOutputHelper output) : Monol
     private GitHubCredentialService Credentials => Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// 🚨 Policy <c>module-sync-per-manifest-hash</c> re-expresses this case. The seal's announcement
+    /// no longer imports ANY source by itself — it used to import a source with no last-sync commit at
+    /// the sealed commit, which is where #4499's loop lived — so the loop cannot recur on this lane at
+    /// all, whatever the attempt pair says and whether or not the source was edited. The refusal is
+    /// still a conclusion that records itself (final, scoped to its configuration), which the
+    /// green-build webhook's skip reads (<see cref="GreenBuildSkipsASettledSourceTest"/>).
+    /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task ARefusalAtTheSealedCommit_IsNotRefetched_UntilTheSourceIsEdited()
+    public async Task ASealAnnouncement_NeverRefetchesARefusedSource_EditedOrNot()
     {
         var ct = TestContext.Current.CancellationToken;
         var space = await ArmedSpace(ct);
 
-        // ── 1. the precondition: the announcement imports at the seal, and the import REFUSES ──
-        var firstFetch = repoClient.Fetches.Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("a source with no last-sync commit is behind the seal, so the announcement imports it");
+        // ── 1. the announcement alone imports nothing, even for a source with no commit ──────────
         await AnnouncePublication(ct);
-        (await firstFetch).Should().Be(SealedSha);
+        (await Reconcile(ct)).Should().Be(0,
+            "the seal does not choose a source's commit; a source with no commit is brought by its "
+            + "first import or its next green build");
 
+        // ── 2. the source refuses at the sealed commit when a person imports it there ────────────
+        var refusal = await Sync.ReimportAtCommit(space, SealedSha, UserId)
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        refusal.Should().BeOfType<SyncSubdirectoryEmptyException>("the subdirectory matches nothing");
         var refused = await ConfigWhen(space,
             c => string.Equals(c.LastSyncOutcome, GitHubSyncService.RefusedOutcome, StringComparison.Ordinal)
                  && c.LastAttemptWasFinal, ct);
-        Output.WriteLine(
-            $"after the refusal: outcome={refused.LastSyncOutcome} attempted={refused.LastAttemptedCommitSha} "
-            + $"final={refused.LastAttemptWasFinal} fingerprint={refused.LastAttemptedConfigFingerprint} "
-            + $"seen={refused.LastSyncCommitSha ?? "(none)"}");
-
         refused.LastAttemptedCommitSha.Should().Be(SealedSha,
             "the refusal IS an attempt, and a verdict about exactly the bytes at this commit");
-        refused.LastAttemptedConfigFingerprint.Should().NotBeNullOrEmpty(
-            "…read under exactly this configuration — without it a corrected subdirectory could not "
-            + "be told apart from the one that was refused");
-        refused.LastSyncCommitSha.Should().BeNull(
-            "nothing landed, so the SEEN pointer must not claim this commit");
-
-        // The reconciler selects its candidates from an eventually-consistent QUERY; reconciling the
-        // instant the stream shows the verdict would measure the index lag, not the decision.
+        refused.LastAttemptedConfigFingerprint.Should().NotBeNullOrEmpty();
+        refused.LastSyncCommitSha.Should().BeNull("nothing landed, so the SEEN pointer must not claim this commit");
         await QueryShows(space, c => c.LastAttemptedCommitSha == SealedSha && c.LastAttemptWasFinal, ct);
 
-        // ── 2. THE PIN: the next reconcile at the same seal dispatches nothing ────────────────────
-        // Asked of the reconciler the announcement drives (step 1 already proved the announcement
-        // reaches it), because it ANSWERS how many imports it dispatched. That makes the negative
-        // structural: a "nothing was fetched" window always spends its whole budget, and a CI-scaled
-        // budget is exactly what turns such a window into an anonymous timeout.
-        var dispatched = await Reconcile(ct);
-        dispatched.Should().Be(0,
-            "the same commit under the same subdirectory lists the same nothing — on "
-            + "memex.systemorph.com this import was dispatched ~32×/hour at one unchanged seal, each "
-            + "a full repository fetch and an Activity (#4499)");
+        // ── 3. THE PIN: no reconcile at this seal dispatches anything — refused, or edited ───────
+        (await Reconcile(ct)).Should().Be(0, "the #4499 loop was this dispatch; it no longer exists");
 
-        // ── 3. THE CONTROL: the operator corrects the subdirectory; the commit does NOT move ──────
         await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
             .Update(node => node with
             {
@@ -173,13 +168,8 @@ public class RefusedSourceIsNotReattemptedTest(ITestOutputHelper output) : Monol
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         await QueryShows(space, c => c.Subdirectory == CorrectedSubdirectory, ct);
-
-        var reattempt = repoClient.Fetches.Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("an edit of the source is the remedy for a refusal, and it must take effect at the "
-                  + "SAME commit — waiting for the repository to move would strand every correction");
-        (await Reconcile(ct)).Should().Be(1,
-            "the same instrument as step 2, on the same seal: only the configuration changed");
-        (await reattempt).Should().Be(SealedSha, "at the commit the seal names, exactly as before");
+        (await Reconcile(ct)).Should().Be(0,
+            "a corrected source is re-attempted by its next green build or a person's import, never by the seal");
     }
 
     /// <summary>One reconcile of this identity's sealed publications — exactly what a publication

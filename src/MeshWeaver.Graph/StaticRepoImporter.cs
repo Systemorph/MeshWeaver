@@ -73,6 +73,15 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> BundleHeldNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The modules this import did NOT write because each declares a platform floor above the
+    /// running platform — the one per-module decline of policy <c>module-sync-per-manifest-hash</c>
+    /// (<c>Doc/Architecture/ModuleSyncPerManifestHash</c>). Each entry is <c>module (≥ floor)</c>.
+    /// Set by the caller that decided it (<c>GitHubSyncService</c>) so the one activity line every
+    /// import path logs can name them; every sibling module synced. Empty when nothing was declined.
+    /// </summary>
+    public ImmutableList<string> DeclinedModules { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
     /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
     ///

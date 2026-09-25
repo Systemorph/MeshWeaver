@@ -9,9 +9,11 @@ using Xunit;
 namespace MeshWeaver.Documentation.Test;
 
 /// <summary>
-/// 🚨 <b>The claim this pins is stated in prose in four places and was asserted nowhere: a source
-/// with NO <c>LastSyncCommitSha</c> — a held or never-run FIRST import — is BEHIND the seal, so the
-/// seal's arrival releases it.</b>
+/// 🚨 <b>Since policy <c>module-sync-per-manifest-hash</c> the seal's arrival imports NOTHING by
+/// itself</b> — not a source on another commit (it is usually ahead of the seal), and not a source
+/// with no commit yet (its first import resolves the branch). What follows is the history of the
+/// claim this file used to pin: a source with NO <c>LastSyncCommitSha</c> — a held or never-run
+/// FIRST import — was BEHIND the seal, so the seal's arrival released it.
 ///
 /// <para>It matters because of what it is load-bearing for. MeshWeaver#4212 holds
 /// <c>ModuleDiscoveryService.FirstImport</c> when the seal is unreadable or torn; MeshWeaver#4209
@@ -51,21 +53,30 @@ public class SealedPublicationSyncReconcilerDecisionTest
     };
 
     [Fact]
-    public void AFirstImportHasNoLastSyncCommit_AndIsBehindTheSeal_SoTheSealReleasesIt()
+    public void AFirstImportThatHasNotLanded_IsNotPinnedToTheSeal()
     {
+        // 🚨 Policy module-sync-per-manifest-hash. This used to import the sealed commit for a source
+        // with no LastSyncCommitSha (a HELD first import, #4209 composing with #4212). First imports
+        // are no longer held — they resolve the configured branch — and an import at the seal fired
+        // alongside them would RACE the first import or the next green build, whichever landed last
+        // deciding the tree.
         var plan = Decide(Config(null));
-        plan.Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
-            "a Space whose first import was held carries no LastSyncCommitSha, so the arriving seal "
-            + "— not the next green build and not the next restart — is what imports it "
-            + "(MeshWeaver#4209 composing with #4212)");
-        plan.Commit.Should().Be(SealedSha, "it imports at the commit sealed for THIS identity, never at the branch tip");
-        plan.SteadyState.Should().BeFalse("a first import that has not happened is not a steady state");
+        plan.Action.Should().Be(SealedSyncReconcile.Action.None);
+        plan.SteadyState.Should().BeTrue("not a hold, and never recorded as one");
+        plan.Reason.Should().Contain("landed no commit");
     }
 
     [Fact]
-    public void ASourceBehindTheSeal_IsImportedAtTheSealedCommit()
-        => Decide(Config(OtherSha)).Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
-            "the seal is the evidence the gate was waiting for");
+    public void ASourceOnAnotherCommit_IsNeverMovedToTheSeal()
+    {
+        // This used to import the sealed commit ("the source is behind the seal"), but a source on
+        // another commit is usually AHEAD of it — its green builds advance it per module by manifest
+        // hash — and importing the seal would move it BACKWARDS, and the next green build forward.
+        var plan = Decide(Config(OtherSha));
+        plan.Action.Should().Be(SealedSyncReconcile.Action.None);
+        plan.SteadyState.Should().BeTrue("it is not a hold, and must never be RECORDED as one on the config");
+        plan.Reason.Should().Contain("module-sync-per-manifest-hash");
+    }
 
     [Fact]
     public void ASourceAtTheSealWithNothingDeclined_IsTheSteadyState_AndMovesNothing()
@@ -83,15 +94,17 @@ public class SealedPublicationSyncReconcilerDecisionTest
                 new SealedSource("plugins", "Systemorph/MeshWeaver.Plugins", SealedSha, false, "sentinel absent"),
                 Plugins, SpacePath, Config(null), [SealedPlugins], Identity, [])
             .Action.Should().Be(SealedSyncReconcile.Action.None,
-                "a torn publication is not evidence — #4212 holds the first import precisely so that "
-                + "an unsealed set never becomes the commit a Space is provisioned at");
+                "a torn publication is not evidence of anything a source could land on");
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  #4499 — a FINAL verdict at the sealed commit is not re-attempted on every announcement
+    //  #4499 — a FINAL verdict was not re-attempted on every announcement. Since policy
+    //  module-sync-per-manifest-hash the announcement re-attempts NOTHING, whatever the attempt pair
+    //  recorded — so the loop #4499 measured (~32 fetches/hour at one seal) cannot recur here at all.
+    //  The webhook lane still asks HasFinalVerdictAt, where the skip keeps its meaning.
     // ══════════════════════════════════════════════════════════════════════════
 
-    /// <summary>A source that REFUSED at the sealed commit — its subdirectory matched nothing — and
-    /// recorded that refusal as the attempt it was, under the configuration it carries.</summary>
+    /// <summary>A source that REFUSED at a commit — its subdirectory matched nothing — and recorded
+    /// that refusal as the attempt it was, under the configuration it carries.</summary>
     private static GitHubSyncConfig RefusedAt(string commit, string subdirectory = "DeepSign")
     {
         var config = new GitHubSyncConfig
@@ -99,7 +112,7 @@ public class SealedPublicationSyncReconcilerDecisionTest
             RepositoryUrl = "https://github.com/Systemorph/MeshWeaver.Plugins",
             Branch = "main",
             Subdirectory = subdirectory,
-            LastSyncCommitSha = OtherSha,
+            LastSyncCommitSha = null,
             LastSyncOutcome = GitHubSyncService.RefusedOutcome,
             LastAttemptedCommitSha = commit,
             LastAttemptWasFinal = true,
@@ -108,49 +121,26 @@ public class SealedPublicationSyncReconcilerDecisionTest
     }
 
     [Fact]
-    public void ASourceWithAFinalVerdictAtTheSealedCommit_IsNotReattempted_AndIsNotRecordedAsAHold()
+    public void NoRecordedAttempt_EverMakesTheSealImport()
     {
-        var plan = Decide(RefusedAt(SealedSha));
-        plan.Action.Should().Be(SealedSyncReconcile.Action.None,
-            "the refusal is a verdict about exactly these bytes as this source reads them — measured "
-            + "on memex.systemorph.com (#4499) the reconciler re-fetched the whole repository ~32×/hour "
-            + "at ONE unchanged seal, because only the webhook ever asked whether a verdict was final");
-        plan.Settled.Should().BeTrue(
-            "and it must be the SETTLED None, never a hold: recording a hold clears the attempt pair, "
-            + "which would licence the next announcement to re-attempt — refuse, hold, refuse, forever");
-        plan.SteadyState.Should().BeFalse("the source is not at the seal; it is settled short of it");
+        var variants = new[]
+        {
+            RefusedAt(SealedSha),
+            RefusedAt(SealedSha) with { Subdirectory = "Signature" },
+            RefusedAt(OtherSha),
+            RefusedAt(SealedSha) with { LastAttemptWasFinal = false },
+            RefusedAt(SealedSha) with { LastAttemptedConfigFingerprint = null },
+        };
+        foreach (var config in variants)
+        {
+            var plan = Decide(config);
+            plan.Action.Should().Be(SealedSyncReconcile.Action.None,
+                "the seal does not choose a source's commit, so no attempt state can license an import");
+            plan.SteadyState.Should().BeTrue(
+                "and it is never recorded as a hold — a hold would clear the attempt pair the webhook's "
+                + "own #4499 skip reads");
+        }
     }
-
-    [Fact]
-    public void EditingTheSource_ReattemptsAtTheSameSealedCommit()
-    {
-        // The operator's fix: the subdirectory is corrected, the repository has not moved.
-        var corrected = RefusedAt(SealedSha) with { Subdirectory = "Signature" };
-        Decide(corrected).Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
-            "a verdict is final for the commit AS THIS SOURCE READ IT — a corrected subdirectory is a "
-            + "different read, and waiting for the repository to produce a new commit before trying the "
-            + "correction is the stranding this fingerprint exists to prevent");
-    }
-
-    [Fact]
-    public void ANewSealedCommit_Reattempts()
-        => Decide(RefusedAt(OtherSha) with { LastSyncCommitSha = null })
-            .Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
-                "the skip is scoped to the ONE commit already judged, never to the source");
-
-    [Fact]
-    public void AVerdictThatWasNotFinal_IsStillReattempted()
-        => Decide(RefusedAt(SealedSha) with { LastAttemptWasFinal = false })
-            .Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
-                "a failure that might not recur — an unreachable store, a truncated listing — must keep "
-                + "being attempted, or a transient becomes permanent (#3101)");
-
-    [Fact]
-    public void AFinalVerdictRecordedBeforeTheFingerprintExisted_IsReattemptedOnce()
-        => Decide(RefusedAt(SealedSha) with { LastAttemptedConfigFingerprint = null })
-            .Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
-                "a verdict with no recorded configuration cannot say it was reached under THIS one, so "
-                + "it licenses nothing — the safe direction is one more attempt, which records it");
 
     [Fact]
     public void TheFingerprint_IgnoresTheRecordedVerdict_AndReadsWhatTheImportReads()

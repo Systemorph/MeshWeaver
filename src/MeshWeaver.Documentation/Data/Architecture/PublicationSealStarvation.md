@@ -22,6 +22,18 @@ The short version:
 > — and the only thing that then converges a Space is a pod restart, which re-reads the same stale
 > seal and imports nothing new.
 
+## −1. The hold is gone (policy `module-sync-per-manifest-hash`)
+
+🚨 **The gate this page describes no longer holds a source.** It held the control instance's
+`Hosting/_GitSync` at a stale Plugins commit while the only newer seals were for newer platforms, so
+the migrate-first Roll planner never reached the control plane — and §6.3's "the roll is the only
+remedy" turned into a bootstrap deadlock: the thing that plans the roll depended on the roll. Under
+[Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash) an instance always syncs every module
+it has. Each module is judged alone by the content hash in its `manifest.lock`, a module whose
+declared platform floor is above the running platform is the one per-module decline, and the seal
+decides only whether a NodeType adopts bytes or compiles. What follows is kept as the history of why.
+`/health`'s `publication-seal` entry now also prints every module's last outcome.
+
 ## 0. Under the ladder (policy `platform-backwards-compatibility`)
 
 Most of this page is the history of a per-BUILD identity: every platform build minted a new one, so a
