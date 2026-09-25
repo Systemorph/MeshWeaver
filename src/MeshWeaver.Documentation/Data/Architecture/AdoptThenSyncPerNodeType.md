@@ -12,6 +12,15 @@ icon: /static/NodeTypeIcons/box.svg
 
 # Adopt Then Sync, Per NodeType
 
+> 🚨 **Narrowed by policy [`module-sync-per-manifest-hash`](../PolicyNotProse)** — see
+> [Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash). The seal no longer lands a Space on
+> its commit (a green build lands its own), and the per-type hold below is taken **only on a
+> `Modules:RequirePrebuilt` mesh**, where a local compile is refused by design and moving the sources
+> would park the type. On every other mesh a changed adopted type is NOT held: its sources move onto
+> the incoming commit and it compiles from them against the running platform, because under the
+> compatibility ladder holding it only stranded it on an old tree until a publication or a roll
+> arrived. The rule, the decision and the release below are unchanged for the RequirePrebuilt mesh.
+
 [The Sync-Ref Contract](../SyncRefContract) gets a Space onto the commit this instance's bundles were
 baked from: every import of a repository whose publication is sealed for the running framework
 identity lands on that publication's `source-commit.txt`, whoever asked. That closes the *tree*

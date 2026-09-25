@@ -1542,15 +1542,21 @@ public sealed class InstanceAutoRegistrationService(
         }
         var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
         var repo = new RepoIdentity(owner, name);
-        // 🚨 `ReadingFor`, not `ReadFor`: a reading that FAILED holds this source instead of listing
-        // it at its configured ref (#3461). An unreadable index answers with the same empty list a
-        // repository this instance runs no publication of does, and only the repository marker can
-        // attribute a seal at a first import — so "I could not look" would install from the branch.
+        // Policy module-sync-per-manifest-hash: the seal no longer pins (or holds) this lane's ref —
+        // the same answer the GitSync first import takes, so the two writers of a partition agree.
+        // The configured ref is therefore NOT proven, and where a sync source keeps the target
+        // partition current the install defers to it (UnprovenRefHold, MeshWeaver#4588) — one
+        // partition, one bookkeeping. An unreadable index is said, never read as "nothing sealed".
         return pools.Get(IoPoolNames.FileSystem)
             .InvokeBlocking(_ => SealedPublicationIndex.ReadingFor(publishedRoot, identity, logger))
-            .Select(reading => ApplyPlan(source,
-                SealedSyncGate.RefusedFirstImportForUnreadableIndex(reading.Outcome, identity)
-                ?? SealedSyncGate.DecideFirstImport(repo, reading.Sources, identity)));
+            .Select(reading =>
+            {
+                if (SealedSyncGate.RefusedForUnreadableIndex(reading.Outcome, identity) is { HoldReason: { } unreadable })
+                    logger.LogWarning(
+                        "[DefaultInstall] {Name}: {Unreadable}. The source is listed at its configured ref; "
+                        + "no prebuilt bytes are adopted on this reading.", source.Name, unreadable);
+                return ApplyPlan(source, SealedSyncGate.DecideFirstImport(repo, reading.Sources, identity));
+            });
     }
 
     /// <summary>

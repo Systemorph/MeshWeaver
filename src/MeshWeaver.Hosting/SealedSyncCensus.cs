@@ -88,6 +88,41 @@ public sealed record SealedSyncHold(
 }
 
 /// <summary>
+/// One module's outcome in one GitSynced Space, as the last import judged it (policy
+/// <c>module-sync-per-manifest-hash</c>): unchanged, synced, or declined with its reason.
+/// </summary>
+/// <param name="Space">The Space the module syncs into.</param>
+/// <param name="Module">The module name.</param>
+/// <param name="Outcome">The outcome word (<c>Unchanged</c>, <c>Synced</c>, <c>Declined</c> — an open
+/// vocabulary owned by MeshWeaver.GitSync).</param>
+/// <param name="ModuleVersion">The manifest hash the incoming tree carried, or null.</param>
+/// <param name="Reason">The decision's own sentence — the same one the sync config carries.</param>
+/// <param name="At">When this reading was taken.</param>
+public sealed record ModuleOutcomeReading(
+    string Space, string Module, string Outcome, string? ModuleVersion, string Reason, DateTimeOffset At)
+{
+    /// <summary>The outcome word for a declined module — the one this census escalates.</summary>
+    public const string DeclinedOutcome = "Declined";
+
+    /// <summary>🚨 When THIS PROCESS first saw the module declined — preserved across readings, like
+    /// <see cref="SealedSyncHold.FirstObservedAt"/>, so a decline that persists is not reported as
+    /// fresh on every delivery. Equal to <see cref="At"/> for any other outcome.</summary>
+    public DateTimeOffset FirstObservedAt { get; init; } = At;
+
+    /// <summary>True when the module was declined.</summary>
+    public bool IsDeclined => string.Equals(Outcome, DeclinedOutcome, StringComparison.Ordinal);
+
+    /// <summary>This reading as one line.</summary>
+    /// <param name="now">The reading's clock.</param>
+    /// <returns>The line.</returns>
+    public string Line(DateTimeOffset now) =>
+        $"{Space} · {Module}: {Outcome}"
+        + (IsDeclined
+            ? $" (first seen by this replica {(int)(now - FirstObservedAt).TotalMinutes}m ago) — {Reason}"
+            : ModuleVersion is { Length: > 0 } v ? $" at {v}" : "");
+}
+
+/// <summary>
 /// 🚨 <b>A publication seal that stops advancing freezes every GitSynced Space of that repository,
 /// and until this census nothing on a RUNNING portal said so</b> (MeshWeaver#4063).
 ///
@@ -141,6 +176,10 @@ public sealed class SealedSyncCensus
     // one entry per producing repository currently held, removed the moment a delivery of that
     // repository is NOT held.
     private readonly ConcurrentDictionary<string, SealedSyncHold> held = new(StringComparer.OrdinalIgnoreCase);
+
+    // Instance state on the same mesh-scoped singleton: the last outcome of every (Space, module)
+    // pair an import judged. Bounded by the modules this mesh syncs.
+    private readonly ConcurrentDictionary<string, ModuleOutcomeReading> modules = new(StringComparer.OrdinalIgnoreCase);
 
     // Volatile reference, replaced whole. The newest reading always wins: unlike a gap high-water
     // mark this is a STATE, and a stale state is exactly what #4063 is about.
@@ -197,6 +236,100 @@ public sealed class SealedSyncCensus
     {
         if (!string.IsNullOrWhiteSpace(repository))
             held.TryRemove(repository, out _);
+    }
+
+    /// <summary>
+    /// Records one module's outcome from an import (policy <c>module-sync-per-manifest-hash</c>).
+    /// A decline keeps the time this replica FIRST saw it; any other outcome replaces the entry.
+    /// </summary>
+    /// <param name="reading">The module's outcome.</param>
+    public void RecordModuleOutcome(ModuleOutcomeReading reading)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+        modules.AddOrUpdate(
+            reading.Space + "#" + reading.Module,
+            _ => reading,
+            (_, previous) => previous.IsDeclined && reading.IsDeclined
+                ? reading with { FirstObservedAt = previous.FirstObservedAt }
+                : reading);
+    }
+
+    /// <summary>
+    /// Replaces EVERY module outcome of one Space with the given set (review on #5701): a module the
+    /// Space's tree no longer carries is removed, so the census stays bounded by the modules that
+    /// currently exist and a stale decline cannot keep the replica Degraded. A decline that persists
+    /// keeps the time it was first seen (<see cref="RecordModuleOutcome"/>). An empty set clears the
+    /// Space. Entries of a Space whose sync source is deleted are not observed here and live until
+    /// the process restarts.
+    /// </summary>
+    /// <param name="space">The Space the import wrote.</param>
+    /// <param name="readings">Every module outcome of that import; all must name <paramref name="space"/>.</param>
+    public void RecordSpaceModules(string space, IReadOnlyList<ModuleOutcomeReading> readings)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(space);
+        ArgumentNullException.ThrowIfNull(readings);
+        var keep = readings
+            .Select(r => r.Space + "#" + r.Module)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in modules.Keys)
+            if (key.StartsWith(space + "#", StringComparison.OrdinalIgnoreCase) && !keep.Contains(key))
+                modules.TryRemove(key, out _);
+        foreach (var reading in readings)
+            RecordModuleOutcome(reading);
+    }
+
+    /// <summary>Every module outcome recorded, declined first, then by Space and module.</summary>
+    /// <returns>The outcomes.</returns>
+    public ImmutableList<ModuleOutcomeReading> ModuleOutcomes() =>
+        modules.Values
+            .OrderByDescending(m => m.IsDeclined)
+            .ThenBy(m => m.Space, StringComparer.Ordinal)
+            .ThenBy(m => m.Module, StringComparer.Ordinal)
+            .ToImmutableList();
+
+    /// <summary>
+    /// Whether a module DECLINE has outlived <see cref="HoldIndictsAfter"/> — a module whose declared
+    /// platform floor this instance still does not meet after the CI job cap is a platform that has
+    /// not been rolled, and that is worth a Degraded reading (never Unhealthy: it costs one module's
+    /// content, not the replica).
+    /// </summary>
+    /// <param name="outcomes">The module outcomes.</param>
+    /// <param name="now">The clock.</param>
+    /// <returns><c>true</c> when some module has been declined past the CI job cap.</returns>
+    public static bool IsModuleDeclineIndicted(IReadOnlyList<ModuleOutcomeReading> outcomes, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(outcomes);
+        return outcomes.Any(m => m.IsDeclined && now - m.FirstObservedAt >= HoldIndictsAfter);
+    }
+
+    /// <summary>
+    /// The publication sentence plus the per-module sentence — what <c>/health</c> prints. The
+    /// module half prints whatever it holds: "no module judged yet", counts per outcome, and every
+    /// declined module by name with its reason.
+    /// </summary>
+    /// <param name="published">The most recent publication reading, or <c>null</c>.</param>
+    /// <param name="holds">Every repository currently held.</param>
+    /// <param name="outcomes">Every module outcome recorded.</param>
+    /// <param name="now">The clock.</param>
+    /// <returns>The sentence.</returns>
+    public static string DescribeWithModules(
+        SealedPublicationReading? published, IReadOnlyList<SealedSyncHold> holds,
+        IReadOnlyList<ModuleOutcomeReading> outcomes, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(outcomes);
+        var head = Describe(published, holds, now);
+        if (outcomes.Count == 0)
+            return head + " Modules: no GitSynced module has been judged by its manifest hash on this "
+                   + "replica yet (policy module-sync-per-manifest-hash).";
+        var counts = string.Join(", ", outcomes
+            .GroupBy(m => m.Outcome, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => $"{g.Count()} {g.Key}"));
+        var declined = outcomes.Where(m => m.IsDeclined).ToList();
+        return head + $" Modules (by manifest hash, policy module-sync-per-manifest-hash): {counts}."
+               + (declined.Count == 0
+                   ? " No module is declined."
+                   : $" DECLINED: {string.Join("; ", declined.Select(m => m.Line(now)))}.");
     }
 
     /// <summary>Every repository currently held, longest-observed first.</summary>

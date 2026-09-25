@@ -36,14 +36,24 @@ public class SealedSyncReconcileTest
     };
 
     [Fact]
-    public void ASealLandingAfterTheHookHeldTheSource_ReleasesTheSync()
+    public void ASealLanding_NeverMovesASourceThatHasACommit()
     {
-        // The source sits at the older commit: the hook for the newer one was HELD ("not sealed
-        // for this instance"). Now it IS sealed — the seal releases the import at exactly that commit.
+        // 🚨 Policy module-sync-per-manifest-hash: the hook no longer HOLDS a source, so there is
+        // nothing for the seal to release — and a source on another commit is usually AHEAD of the
+        // seal, so importing the sealed commit would move it backwards.
         var plan = SealedSyncReconcile.Decide(Sealed(), Crm, "Crm", At(OlderCommit), [Sealed()], Identity, []);
-        plan.Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit);
-        plan.Commit.Should().Be(SealedCommit);
-        plan.Reason.Should().Contain("releases the sync");
+        plan.Action.Should().Be(SealedSyncReconcile.Action.None);
+        plan.SteadyState.Should().BeTrue("never recorded as a hold on the config");
+    }
+
+    [Fact]
+    public void ASealLanding_DoesNotPinASourceThatHasNoCommitYet()
+    {
+        var plan = SealedSyncReconcile.Decide(Sealed(), Crm, "Crm", At(null), [Sealed()], Identity, []);
+        plan.Action.Should().Be(SealedSyncReconcile.Action.None,
+            "its first import resolves the branch and its next green build lands its own commit — an "
+            + "import at the seal fired alongside would race them");
+        plan.SteadyState.Should().BeTrue();
     }
 
     [Fact]
@@ -92,13 +102,11 @@ public class SealedSyncReconcileTest
             .Should().Be(SealedSyncReconcile.Action.None);
 
     [Fact]
-    public void TheGateStillHolds_WhenAnotherSealOfTheRepositoryDisagrees()
+    public void SealsThatDisagree_StillNeverMoveASourceThatHasACommit()
     {
-        // Two sealed sources attribute to the repository and disagree on the commit — the gate's
-        // own rule decides, and this decision does not second-guess it.
         var other = new SealedSource("crm-b", "Systemorph/MeshWeaver.Crm", OlderCommit, true, null);
         var plan = SealedSyncReconcile.Decide(other, Crm, "Crm", At("ffffffff00000000"), [Sealed(), other], Identity, []);
-        plan.Action.Should().Be(SealedSyncReconcile.Action.ImportAtSealedCommit,
-            "a seal at the built commit proceeds — SealedSyncGate.Decide's own rule");
+        plan.Action.Should().Be(SealedSyncReconcile.Action.None);
+        plan.SteadyState.Should().BeTrue();
     }
 }

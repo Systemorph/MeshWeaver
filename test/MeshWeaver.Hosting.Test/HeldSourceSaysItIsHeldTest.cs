@@ -165,170 +165,102 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     // constant, and the inner waits below already carry the adaptive bound. This outer one
     // only has to stop a WEDGE.
     /// <summary>
-    /// 🚨 <b>The webhook LANDS on the sealed commit — it no longer only holds</b> (MeshWeaver#3845).
-    /// A green build the seal does not cover used to leave a Space that had never synced exactly where
-    /// it was until the reconciler next read the seal; the commit that reconciler imports is the one
-    /// the webhook can name itself. Against the pre-change code this fetches NOTHING — the delivery
-    /// records a hold and the config never reaches the sealed commit.
+    /// 🚨 <b>A green build lands its OWN commit — the seal never redirects or holds it</b> (policy
+    /// <c>module-sync-per-manifest-hash</c>). This used to pin the redirect onto the sealed commit
+    /// (MeshWeaver#3845); against that code this fetches the SEALED commit and the config never
+    /// reaches the built one.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task AGreenBuildNotSealedForThisInstance_ImportsTheSealedCommit_NeverTheBuiltOne()
+    public async Task AGreenBuildNotSealedForThisInstance_ImportsTheBuiltCommit_NeverTheSealedOne()
     {
         var space = await ArmedSpace("Lands", TestContext.Current.CancellationToken);
 
-        var sealedFetched = repoClient.FetchedRefs.Where(r => r == SealedSha)
+        var builtFetched = repoClient.FetchedRefs.Where(r => r == UnsealedSha)
             .Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("a green build not sealed for this instance lands its sources on the commit that IS "
-                  + "sealed — the one the reconciler would import when it next reads the seal",
+            .Emit("a green build the seal does not cover still lands its own commit",
                 TestContext.Current.CancellationToken);
 
         await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
-        (await sealedFetched).Should().Be(SealedSha);
+        (await builtFetched).Should().Be(UnsealedSha);
 
         var landed = await ConfigWhenOrCurrent(space,
-            c => string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
+            c => string.Equals(c.LastSyncCommitSha, UnsealedSha, StringComparison.OrdinalIgnoreCase),
             TestContext.Current.CancellationToken);
-        landed.LastSyncCommitSha.Should().Be(SealedSha,
-            "the Space sits on the commit whose bytes this instance runs");
-        repoClient.Requested.Should().NotContain(UnsealedSha,
-            "the built commit is not sealed for this identity; its sources would run ahead of the bytes");
+        landed.LastSyncCommitSha.Should().Be(UnsealedSha, "the Space sits on the commit the build proved");
+        landed.LastSyncOutcome.Should().NotBe(GitHubSyncService.HeldOutcome);
+        repoClient.Requested.Should().NotContain(SealedSha,
+            "the seal decides adoption only — it never chooses which commit the sources land on");
     }
 
     /// <summary>
-    /// 🚨 <b>A source sitting on an UNSEALED tip is rolled back by the next build OF THAT SAME
-    /// COMMIT</b> — and the activity says which commit landed and why (review on #4576).
-    ///
-    /// <para>Two defects in one shape. <c>SkipReason</c> asked "already at this commit" about
-    /// <c>head_sha</c> BEFORE the seal gate, so a Space a pre-gate tip import had put on the built
-    /// commit was skipped and never rolled back to the sealed one — the per-landing checks after the
-    /// gate were unreachable. And the landing ran the PROVEN-commit activity, whose title calls the
-    /// commit it lands on "the built commit": for this lane's redirect that is the one thing that is
-    /// not true, and the only explanation lived in the server log.</para>
+    /// 🚨 <b>A source on a commit the seal does not cover is NEVER rolled back to the seal</b> (policy
+    /// <c>module-sync-per-manifest-hash</c>). This used to pin the rollback (review on #4576): a build
+    /// of the commit the Space already held re-imported the older sealed commit. Now the delivery is
+    /// "already at this commit" and nothing is fetched at all.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task ASourceOnAnUnsealedTip_IsRolledBackAndTheActivitySaysSo()
+    public async Task ASourceOnAnUnsealedCommit_StaysThere_AndIsNeverRolledBackToTheSeal()
     {
-        var space = await ArmedSpace("Rollback", TestContext.Current.CancellationToken);
+        var space = await ArmedSpace("Stays", TestContext.Current.CancellationToken);
 
-        // Put the Space on the UNSEALED commit the way a person's pre-gate tip import did: the
-        // service level, which never consults the gate.
         await Sync.ReimportAtCommit(space, UnsealedSha, UserId)
             .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
-        var onTheTip = await ConfigWhen(space,
+        var onIt = await ConfigWhen(space,
             c => string.Equals(c.LastSyncCommitSha, UnsealedSha, StringComparison.OrdinalIgnoreCase),
             TestContext.Current.CancellationToken);
-        onTheTip.LastSyncCommitSha.Should().Be(UnsealedSha, "the premise: the Space holds an unsealed tree");
+        onIt.LastSyncCommitSha.Should().Be(UnsealedSha, "the premise: the Space holds a tree the seal does not cover");
 
-        var rolledBack = repoClient.FetchedRefs.Where(r => r == SealedSha)
-            .Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("a build OF the commit the Space already holds is exactly the delivery that used to "
-                  + "be skipped before the gate could roll it back",
-                TestContext.Current.CancellationToken);
+        // STRUCTURAL, never a silence window: the webhook's decision for this source, read off the
+        // gate it asks with the seal this instance runs on disk. The seal is at an OLDER commit, and
+        // the plan lands the built commit — the source already holds it, so nothing is imported.
+        var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        var plan = SealedSyncGate.DecideBuild(
+            new RepoIdentity("test", "held-source"), UnsealedSha, onIt.LastSyncCommitSha,
+            SealedPublicationIndex.ReadFor(publishedRoot, identity), identity, null);
+        plan.Commit.Should().Be(UnsealedSha, "the seal never redirects a green build onto the sealed commit");
+        plan.Redirected.Should().BeFalse();
 
         await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
-        (await rolledBack).Should().Be(SealedSha);
-
-        var afterRollback = await ConfigWhen(space,
-            c => string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
-            TestContext.Current.CancellationToken);
-        afterRollback.LastSyncCommitSha.Should().Be(SealedSha);
-
-        // …and the ACTIVITY — the artefact a person reads — names the sealed commit as such and
-        // carries the gate's own explanation, in the viewer's language. Waited for on its TERMINAL
-        // status: an activity's lines are appended as it runs, so a predicate on the title alone
-        // matches a transcript that is still being written.
-        var landing = await ActivityWhen(space,
-            log => log.Status != ActivityStatus.Running
-                   && log.Messages.Any(m => m.MessageKey == "activity.gitsync.updateToSealedCommit.title"),
-            TestContext.Current.CancellationToken);
-        landing.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.landsOnSeal",
-            "the proven-commit surface would have called the sealed commit 'the built commit', which "
-            + "is what did NOT arrive");
-        landing.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.fetching");
+        var after = await ConfigWhenOrCurrent(space, _ => true, TestContext.Current.CancellationToken);
+        after.LastSyncCommitSha.Should().Be(UnsealedSha, "moving it to the older sealed commit would go backwards");
+        after.LastSyncOutcome.Should().NotBe(GitHubSyncService.HeldOutcome, "nothing is held any more");
     }
 
+    /// <summary>
+    /// 🚨 <b>Successive green builds the seal does not cover each LAND, and none records a hold</b>
+    /// (policy <c>module-sync-per-manifest-hash</c>). This used to pin the per-delivery HOLD record
+    /// (#4063/#4065) on a source already on the seal; with no hold to take, the node carries each
+    /// import's own outcome and an empty note — so "held" can never be read off a source that is
+    /// simply up to date, and a source that is behind is behind only until its next green build.
+    /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task SealHeldSource_RecordsTheHoldOnItsConfig_SoItCannotReadAsSettled()
+    public async Task GreenBuildsTheSealDoesNotCover_EachLand_AndNoneRecordsAHold()
     {
-        var space = await ArmedSpace("Held", TestContext.Current.CancellationToken);
+        var space = await ArmedSpace("NoHold", TestContext.Current.CancellationToken);
 
-        // ── bring the source onto the seal: a build the seal does not cover lands it there ──
         await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
         await ConfigWhen(space,
-            c => string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
+            c => string.Equals(c.LastSyncCommitSha, UnsealedSha, StringComparison.OrdinalIgnoreCase),
             TestContext.Current.CancellationToken);
 
-        // ── the delivery the seal does not cover, to a source ALREADY on the seal ──────────
-        // Nothing to import, so the only trace of this build is what the node says.
-        //
-        // The "never fetched" window closes on the delivery's OWN verdict — the config recording the
-        // hold — rather than on a fixed Quick window: once the hold is recorded, the delivery has
-        // been decided without an import, which is the claim. A fixed window cost this test a whole
-        // TestTimeouts.Quick on every run (≈36 s on a CI runner; MeshWeaver.Feedback#17) and proved
-        // nothing more. If the hold is never recorded, the window runs to its bound and the
-        // outcome assertion below is what fails.
-        var holdRecorded = Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
-            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is { } c
-                        && string.Equals(c.LastSyncOutcome, GitHubSyncService.HeldOutcome, StringComparison.Ordinal));
-        var neverFetched = repoClient.FetchedRefs.Skip(repoClient.Requested.Count)
-            .TakeUntil(holdRecorded)
-            .Should().NotEmit(within: TestTimeouts.Convergence, cancellationToken: TestContext.Current.CancellationToken);
-
-        await Deliver(LaterUnsealedSha, TestContext.Current.CancellationToken);
-        await neverFetched;
-
-        // 🚨 Read the node back with a FALLBACK to whatever it currently says, never a bare wait:
-        // against the pre-fix code the predicate is never satisfied, and a TimeoutException names no
-        // field and reads as a hang. The assertions below must be able to state what the node
-        // actually said instead.
-        var afterHold = await ConfigWhenOrCurrent(space, c =>
-            string.Equals(c.LastSyncOutcome, GitHubSyncService.HeldOutcome, StringComparison.Ordinal),
-            TestContext.Current.CancellationToken);
-
-        Output.WriteLine(
-            $"after the held delivery: outcome={afterHold.LastSyncOutcome} "
-            + $"note={afterHold.LastSyncNote} attempted={afterHold.LastAttemptedCommitSha ?? "(cleared)"}");
-
-        afterHold.LastSyncOutcome.Should().Be(GitHubSyncService.HeldOutcome,
-            "a source the publication seal held is not a source that is up to date, and the node is "
-            + "the one artefact an operator reads — on both production portals a held Hosting source "
-            + "read 'Imported … final: true' for nine hours while two tagged releases never arrived");
-        afterHold.LastSyncNote.Should().NotBeNullOrEmpty(
-            "the hold must carry its REASON where the outcome is; a hold whose reason lives only in "
-            + "a log line asks the reader to already suspect a hold before they can find one");
-        afterHold.LastSyncNote.Should().Contain(SealedSha[..8],
-            "the reason names the commit this instance's identity IS sealed at, which is what tells "
-            + "an operator whether to wait for a publication or to roll the instance");
-        afterHold.LastAttemptedCommitSha.Should().BeNull(
-            "a hold means no import ran, so it must never leave a #3945 'already attempted at this "
-            + "commit, final' licence standing for the delivery that follows it");
-        afterHold.LastAttemptWasFinal.Should().BeFalse(
-            "the finality flag is only ever read beside the attempted sha it qualifies");
-
-        // ── the control: the seal ADVANCES to cover this build, so it imports and the note clears ──
         var fetched = repoClient.FetchedRefs.Where(r => r == LaterUnsealedSha)
             .Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("a green build AT the sealed commit is exactly what the gate waits for",
+            .Emit("the next green build is imported at its own commit, sealed or not",
                 TestContext.Current.CancellationToken);
-
-        StageSealedPublication(LaterUnsealedSha);
         await Deliver(LaterUnsealedSha, TestContext.Current.CancellationToken);
         (await fetched).Should().Be(LaterUnsealedSha);
 
-        var afterImport = await ConfigWhen(space, c =>
+        var afterImport = await ConfigWhenOrCurrent(space, c =>
             string.Equals(c.LastSyncCommitSha, LaterUnsealedSha, StringComparison.OrdinalIgnoreCase),
             TestContext.Current.CancellationToken);
-
         Output.WriteLine(
-            $"after the sealed delivery: outcome={afterImport.LastSyncOutcome} "
+            $"after the second delivery: outcome={afterImport.LastSyncOutcome} "
             + $"note={afterImport.LastSyncNote ?? "(cleared)"} sha={afterImport.LastSyncCommitSha}");
-
+        afterImport.LastSyncCommitSha.Should().Be(LaterUnsealedSha);
         afterImport.LastSyncOutcome.Should().NotBe(GitHubSyncService.HeldOutcome,
-            "the hold describes ONE delivery; an import that ran must replace it, or the record "
-            + "would turn a transient condition into a permanent label");
-        afterImport.LastSyncNote.Should().BeNullOrEmpty(
-            "the note describes the LAST attempt only — a stale hold reason surviving a successful "
-            + "import is the same false reading in the opposite direction");
+            "the seal holds no source, so no delivery may record a hold");
+        afterImport.LastSyncNote.Should().BeNullOrEmpty("nothing was held, declined or preserved");
+        repoClient.Requested.Should().NotContain(SealedSha);
     }
 
     /// <summary>
@@ -384,6 +316,10 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     /// request is ANONYMOUS — its authorization is the HMAC signature — so the processor's own
     /// System impersonation must be what carries the lookups and the writes.</summary>
     private async Task Deliver(string headSha, CancellationToken cancellationToken)
+        => await DeliverCounting(headSha, cancellationToken);
+
+    /// <summary>Delivers a green build and answers how many imports it dispatched.</summary>
+    private async Task<int> DeliverCounting(string headSha, CancellationToken cancellationToken)
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.ClearHostIdentity();
@@ -391,7 +327,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         accessService.SetContext(null);
         try
         {
-            await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
+            return await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
                 .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         }
         finally

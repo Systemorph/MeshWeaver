@@ -32,7 +32,8 @@ namespace MeshWeaver.Documentation.Test;
 ///
 /// <para>These tests pin both halves: the reading (<see cref="SealedPublicationIndex.NewerLineThan"/>)
 /// and the sentence it produces — and, as much as the clause itself, the cases where it must say
-/// NOTHING rather than guess a direction.</para>
+/// NOTHING rather than guess a direction. Since policy <c>module-sync-per-manifest-hash</c> the
+/// gate holds nothing, so the sentence rides the green build's plan instead of a hold note.</para>
 /// </summary>
 public class HeldNoteNamesTheNewerLineTest
 {
@@ -46,48 +47,50 @@ public class HeldNoteNamesTheNewerLineTest
         [new("plugins", "Systemorph/MeshWeaver.Plugins", Sealed, true, null)];
 
     // ── The sentence ──────────────────────────────────────────────────────────
+    //
+    // 🚨 Policy module-sync-per-manifest-hash: the gate no longer HOLDS, so there is no hold note to
+    // carry a direction. The newer line is still READ and still STATED — on the build plan's reason,
+    // which is what tells an operator whether a synced type will adopt bytes or compile — and it is
+    // still never invented where no marker places this instance.
 
     [Fact]
-    public void AHoldWithNoLineInformation_SaysExactlyWhatItAlwaysSaid()
+    public void ANoLineReading_NeverInventsADirection()
     {
-        var verdict = SealedSyncGate.Decide(Plugins, Built, Sealed, HeldAtAnotherCommit(), Mine, null);
+        var plan = SealedSyncGate.DecideBuild(Plugins, Built, Sealed, HeldAtAnotherCommit(), Mine, null);
 
-        verdict.Proceed.Should().BeFalse();
-        verdict.HoldReason.Should().Contain("not sealed for this instance")
-            .And.NotContain("a roll",
+        plan.Proceed.Should().BeTrue("the seal no longer holds a source");
+        plan.Commit.Should().Be(Built);
+        plan.Reason.Should().Contain("'plugins' sealed at 627fb3cd")
+            .And.NotContain("has since sealed",
                 "a caller that could not place this instance on a line must not have a direction "
-                + "invented for it — the note is allowed to be silent, never to guess");
+                + "invented for it");
     }
 
     [Fact]
-    public void AHoldAgainstANewerLine_NamesTheRemedyAsTheImage_NotAnotherPublication()
+    public void ANewerLine_IsStated_WhileTheBuildStillLands()
     {
-        var verdict = SealedSyncGate.Decide(
+        var plan = SealedSyncGate.DecideBuild(
             Plugins, Built, Sealed, HeldAtAnotherCommit(), Mine, new PublicationLine(Newer, "3.0.0-ci.8600"));
 
-        verdict.Proceed.Should().BeFalse();
-        verdict.HoldReason.Should().Contain("built at e2ef5679", "the original sentence is kept whole")
-            .And.Contain("'plugins' is sealed at 627fb3cd")
+        plan.Proceed.Should().BeTrue();
+        plan.Redirected.Should().BeFalse("the seal no longer chooses the commit");
+        plan.Commit.Should().Be(Built);
+        plan.Reason.Should().Contain("imported at the built commit e2ef5679")
+            .And.Contain("'plugins' sealed at 627fb3cd")
             .And.Contain("3.0.0-ci.8600", "the operator must be able to see WHICH line moved on")
-            .And.Contain(Newer, "…and under which identity, so it can be compared with this one")
-            .And.Contain("a roll",
-                "naming the remedy is the whole point — 'sealed at an older commit' is what is seen, "
-                + "'roll this instance' is what has to be done")
-            .And.Contain("NOT when another publication lands",
-                "this is the reading that was taken twice and is the one the clause must refuse");
+            .And.Contain(Newer, "…and under which identity, so it can be compared with this one");
     }
 
     [Fact]
-    public void TheClauseRidesOnTheUNSEALEDHoldToo_NotOnlyTheWrongCommitOne()
+    public void AnUnsealedPublication_IsStated_WhileTheBuildStillLands()
     {
-        var verdict = SealedSyncGate.Decide(
+        var plan = SealedSyncGate.DecideBuild(
             Plugins, Built, null,
             [new("plugins", "Systemorph/MeshWeaver.Plugins", Sealed, false, "sentinel absent")],
             Mine, new PublicationLine(Newer, "3.0.0-ci.8600"));
 
-        verdict.Proceed.Should().BeFalse();
-        verdict.HoldReason.Should().Contain("is not sealed").And.Contain("a roll",
-            "both hold shapes are read by the same operator and mislead in the same direction");
+        plan.Proceed.Should().BeTrue();
+        plan.Reason.Should().Contain("sentinel absent").And.Contain("3.0.0-ci.8600");
     }
 
     [Fact]

@@ -11,9 +11,10 @@ namespace Memex.Portal.ServiceDefaults;
 /// how long (MeshWeaver#4063).
 ///
 /// <para><b>What it answers.</b> The identity this pod resolved, every publication sealed under it
-/// (source, producing repository, baked commit, sealed or torn), and every repository whose
-/// GitSynced sources <c>SealedSyncGate</c> is currently holding back, with the hold reason the log
-/// line and the node's <c>lastSyncNote</c> carry verbatim.</para>
+/// (source, producing repository, baked commit, sealed or torn), and — since policy
+/// <c>module-sync-per-manifest-hash</c>, under which the seal holds no source — every GitSynced
+/// MODULE's last outcome: unchanged, synced, or declined with its reason (a declared platform floor
+/// above the running platform). A decline that outlives the CI job cap reads Degraded.</para>
 ///
 /// <para>🚨 <b>A freeze looks exactly like a quiet week, which is why the CLEAN reading must print
 /// too.</b> Both are "no import happened". On 2026-09-12 both production portals read
@@ -48,14 +49,20 @@ public sealed class SealedSyncHealthCheck(IServiceProvider services) : IHealthCh
         // instrument, and Describe(null, …) already says "measured NOTHING" in those words.
         var census = services.GetService<SealedSyncCensus>();
         var holds = census?.Holds() ?? [];
-        var description = SealedSyncCensus.Describe(census?.Published, holds, now);
+        // Policy module-sync-per-manifest-hash: per MODULE, not per Space — which module is
+        // unchanged, which synced, which is declined and why.
+        var modules = census?.ModuleOutcomes() ?? [];
+        var description = SealedSyncCensus.DescribeWithModules(census?.Published, holds, modules, now);
 
         var data = holds.ToDictionary(
             h => h.Repository,
             h => (object)h.Line(now),
             StringComparer.Ordinal);
+        foreach (var module in modules)
+            data[$"module:{module.Space}#{module.Module}"] = module.Line(now);
 
         return Task.FromResult(SealedSyncCensus.IsIndicted(holds, now)
+                               || SealedSyncCensus.IsModuleDeclineIndicted(modules, now)
             ? HealthCheckResult.Degraded(description, data: data)
             : HealthCheckResult.Healthy(description, data: data));
     }

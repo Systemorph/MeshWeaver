@@ -10,6 +10,11 @@ namespace MeshWeaver.Documentation.Test;
 /// <summary>
 /// 🚨 An empty reading of the sealed index had TWO meanings, and the gate acted on the wrong one.
 ///
+/// <para>Since policy <c>module-sync-per-manifest-hash</c> no platform lane HOLDS sources on an
+/// unreadable reading — the seal decides adoption only, so what cannot be read is whether bytes can
+/// be adopted. The distinction pinned here still decides that: an unreadable reading is reported as
+/// such and adopts nothing it cannot verify, never read as "nothing sealed".</para>
+///
 /// <para><see cref="SealedSyncGate.Decide(RepoIdentity, string, string?, System.Collections.Generic.IReadOnlyList{SealedSource}, string)"/>
 /// answers <c>Go</c> when no sealed source is attributable to the repository — correct, because an
 /// instance running no publication of it is not this gate's business. A reading that FAILED
@@ -59,7 +64,7 @@ public class AnUnreadableSealIndexHoldsTest
     /// like from this reader. The empty list must not read as "nothing sealed".
     /// </summary>
     [Fact]
-    public void AnIdentityPathThatCannotBeEnumerated_IsUNREADABLE_AndHoldsEverySource()
+    public void AnIdentityPathThatCannotBeEnumerated_IsUNREADABLE_AndIsStatedAsSuch()
     {
         using var root = new TempRoot();
         File.WriteAllText(Path.Combine(root.Path, Identity), "not a directory");

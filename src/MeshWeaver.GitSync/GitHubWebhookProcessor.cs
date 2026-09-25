@@ -398,10 +398,15 @@ public sealed class GitHubWebhookProcessor
                     ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
                 var (sealedForThisIdentity, readOutcome) =
                     SealedPublicationIndex.ReadingFor(publishedRoot, identity, logger);
-                // 🚨 ONE question, asked before any per-repository verdict (#3461): if the index
-                // could not be READ, its empty list is an absence of measurement and every verdict
-                // taken from it would be `Go` — the rule switched off, silently, fleet-wide.
-                var indexRefusal = SealedSyncGate.RefusedForUnreadableIndex(readOutcome, identity);
+                // 🚨 An UNREADABLE index is stated, never read as "nothing sealed" (#3461) — but it
+                // no longer holds a single source (policy module-sync-per-manifest-hash): the seal
+                // decides ADOPTION only, and what cannot be read is whether bytes can be adopted.
+                // The sources arrive at the built commit; each changed NodeType compiles from them.
+                if (SealedSyncGate.RefusedForUnreadableIndex(readOutcome, identity) is { HoldReason: { } unreadable })
+                    logger?.LogWarning(
+                        "Green build of {Repo}@{Branch} ({Sha}): {Unreadable}. The sources still sync at the "
+                        + "built commit; no prebuilt bytes are adopted on this reading.",
+                        repo, branch, headSha, unreadable);
                 // 🚨 The half a hold cannot state about itself (#4063): whether the registry has
                 // sealed a NEWER line that this instance does not run. Without it "not sealed for
                 // this instance" reads the same whether the lane stopped publishing or this image
@@ -425,19 +430,11 @@ public sealed class GitHubWebhookProcessor
                         continue;
                     }
                     gateEvaluated++;
-                    if (indexRefusal is { } unreadable)
-                    {
-                        held++;
-                        heldReason ??= unreadable.HoldReason;
-                        skipped.Add($"{node.Path} ({unreadable.HoldReason})");
-                        RecordSealHold(node, cfg, unreadable.HoldReason);
-                        continue;
-                    }
-                    // 🚨 LAND on the sealed commit rather than only holding (#3845). The first import
-                    // (#4212), the seal's arrival (#4209) and the boot install (#4259) already do; this
-                    // was the last unattended lane that stopped at "not sealed for this instance" and
-                    // waited for the reconciler to read the seal — the commit it would then import is
-                    // exactly the one DecideBuild names here.
+                    // 🚨 The built commit, always (policy module-sync-per-manifest-hash): the seal no
+                    // longer holds or redirects a source. Each module of the tree is then judged by
+                    // its manifest hash inside the import — unchanged writes nothing, changed syncs,
+                    // a floor above the running platform declines that module alone. The hold and
+                    // redirect arms below are kept for the plan's shape; DecideBuild takes neither.
                     var plan = SealedSyncGate.DecideBuild(
                         repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity, newerLine);
                     if (!plan.Proceed)
