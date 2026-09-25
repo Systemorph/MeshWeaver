@@ -1838,11 +1838,16 @@ _ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
 printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  image: "cr.example.test/memex-portal-ai:7"\n  imagePullSecret: "registry-pull"\nmigration:\n  image: "cr.example.test/memex-migration:7"\n' > "$_ki_vals"; : > "$_ki_log"
 _ki_out="$(_ki_run)"; _ki_rc=$?
 _ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+# 🚨 It MOVES the image (running 9101 → 7), so the running image IS read now — by the migrate-first
+# step (policy roll-migrates-first), which runs the values' own migration image before helm.
+_ki_mig="$(grep -n '^hosting-migrate' "$_ki_log" | head -1 | cut -d: -f1)"
+_ki_upl="$(grep -n '^helm upgrade' "$_ki_log" | head -1 | cut -d: -f1)"
 if [ "$_ki_rc" -eq 0 ] && [ -n "$_ki_up" ] && ! printf '%s' "$_ki_up" | grep -q -- '--set portal.image=' \
-   && ! grep -q 'get deploy memex-portal-deployment' "$_ki_log"; then
-  ok "a rendered portal.image is left to the values — no --set override, no running-image read"
+   && grep -q '^hosting-migrate --namespace memex --release memex --image cr.example.test/memex-migration:7$' "$_ki_log" \
+   && [ -n "$_ki_mig" ] && [ -n "$_ki_upl" ] && [ "$_ki_mig" -lt "$_ki_upl" ]; then
+  ok "a rendered portal.image is left to the values (no --set override), and its migration runs BEFORE helm"
 else
-  bad "a rendered portal.image is left to the values" "rc=${_ki_rc} upgrade: '${_ki_up}' log: $(cat "$_ki_log")"
+  bad "a rendered portal.image is left to the values and migrates first" "rc=${_ki_rc} upgrade: '${_ki_up}' log: $(cat "$_ki_log")"
 fi
 # Nothing running and no image anywhere: still the first-install refusal, before helm.
 printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\n' > "$_ki_vals"; rm -f "$_ki_dir/running-image"; : > "$_ki_log"
@@ -2256,6 +2261,172 @@ refuses_hard "hosting-migrate refuses an image reference with a metacharacter" "
   env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image 'cr.example.test/memex-migration:1;rm -rf /'
 refuses_hard "hosting-migrate needs --release" "missing required flag --release" \
   env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --image "$_mg_img"
+refuses_hard "hosting-migrate refuses --image AND --tag together" "both set" \
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image "$_mg_img" --tag 3.0.0-ci.9101
+refuses_hard "hosting-migrate refuses a --tag with a metacharacter" "not a plain image tag" \
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --tag '1;rm -rf /'
+refuses_hard "hosting-migrate needs --image or --tag" "missing required flag --image (or --tag)" \
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl
+
+# ── hosting-migrate --tag: the interlock's form — release and migration repository are the RELEASE'S ──
+# run.sh's interlock knows only the namespace and the tag the plan's `set image` moves to. The
+# release is read off the portal Deployment's helm annotation (three answers: a Forbidden is not
+# "no release"), and the image is the release's own migration repository at the new tag.
+_mg_tag_run() { env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
+  HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 "$@" \
+  hosting-migrate --namespace pearl --tag 3.0.0-ci.9101 2>&1; }
+_mg_new; echo pearl > "$_mg_dir/release-name"; echo 1 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
+_mg_out="$(_mg_tag_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q '::hosting:: migration=completed' \
+   && grep -q '^helm get manifest pearl --namespace pearl' "$_mg_log" \
+   && [ "$(jq -r '.spec.template.spec.containers[0].image' "$_mg_dir/created.json")" = "$_mg_img" ] \
+   && [ "$(jq -r '.metadata.name' "$_mg_dir/created.json")" = "$_mg_job" ]; then
+  ok "--tag reads the release off the Deployment and moves the release's OWN migration repository to the tag"
+else
+  bad "--tag derives the release and the migration image" "rc=${_mg_rc} out: ${_mg_out} log: $(cat "$_mg_log")"
+fi
+rm -rf "$_mg_dir"
+_mg_new; echo forbidden > "$_mg_dir/release-name"
+_mg_out="$(_mg_tag_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'REFUSED, not absent' && ! grep -q '^helm ' "$_mg_log"; then
+  ok "--tag: a Forbidden on the release read is REFUSED (not 'no release'), and nothing else runs"
+else
+  bad "--tag: a Forbidden release read is refused" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+_mg_new
+_mg_out="$(_mg_tag_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'cannot establish the helm release' && ! grep -q ' create -f -' "$_mg_log"; then
+  ok "--tag: a Deployment with no helm release is a refusal — the image must not move"
+else
+  bad "--tag: no release is a refusal" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+
+# ── run.sh's migrate-first interlock (policy roll-migrates-first) ────────────────────────────────
+# 🚨 memex, 2026-09-24/25: the control instance's Hosting generation predated the migrate-first
+# Roll plan (Plugins #2219, held behind a seal), so it planned 2-step `set image` + hand-off rolls
+# of ITSELF past DbVersion 58, and the new pod crash-looped 91 times on DbVersionGate. The operator
+# image floats on main; these cases pin that it never lets a portal image move without the target
+# tag's migration first — whatever generation composed the plan.
+echo
+echo "── run.sh: the migrate-first interlock ──────────────────────────"
+IL_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/interlock" && pwd)"
+_il_set="kubectl -n memex set image deployment/memex-portal-deployment memex-portal=cr.example.test/memex-portal-ai:3.0.0-ci.9332"
+_il_run() { env PATH="$IL_STUBS:$PATH" HOSTING_INTERLOCK_LOG="$_il_log" HOSTING_ACTION=roll HOSTING_DEPLOYMENT=memex "$@" "$BIN/run.sh" 2>&1; }
+# 1. the stale 2-step plan: the interlock migrates first, then the image moves
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_PLAN="$(plan "Set the portal image	${_il_set}
+Hand rollout to control plane	echo handed")")"; _il_rc=$?
+_il_m="$(grep -n '^hosting-migrate --namespace memex --tag 3.0.0-ci.9332$' "$_il_log" | head -1 | cut -d: -f1)"
+_il_s="$(grep -n 'set image' "$_il_log" | head -1 | cut -d: -f1)"
+if [ "$_il_rc" -eq 0 ] && [ -n "$_il_m" ] && [ -n "$_il_s" ] && [ "$_il_m" -lt "$_il_s" ] \
+   && printf '%s' "$_il_out" | grep -q '3 step(s)' \
+   && printf '%s' "$_il_out" | grep -q '::hosting:: migrate_interlock=1:memex:3.0.0-ci.9332'; then
+  ok "an image-only plan gets the target tag's migration BEFORE the image moves, and says so"
+else
+  bad "the interlock migrates before an image-only set image" "rc=${_il_rc} out: ${_il_out} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+# 2. a plan that already migrates the SAME tag first is left alone — one migration, not two
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_PLAN="$(plan "Run the database migration	hosting-migrate --namespace memex --release memex --image cr.example.test/memex-migration:3.0.0-ci.9332
+Set the portal image	${_il_set}")")"; _il_rc=$?
+if [ "$_il_rc" -eq 0 ] && [ "$(grep -c '^hosting-migrate' "$_il_log")" = "1" ] && ! printf '%s' "$_il_out" | grep -q 'migrate_interlock'; then
+  ok "a plan that already migrates the same tag first is untouched (exactly one migration)"
+else
+  bad "a migrate-first plan is untouched" "rc=${_il_rc} out: ${_il_out} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+# 3. a migration for a DIFFERENT tag (or namespace) does not cover the move
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_PLAN="$(plan "Run the database migration	hosting-migrate --namespace memex --release memex --image cr.example.test/memex-migration:3.0.0-ci.9218
+Set the portal image	${_il_set}")")"; _il_rc=$?
+if [ "$_il_rc" -eq 0 ] && grep -q '^hosting-migrate --namespace memex --tag 3.0.0-ci.9332$' "$_il_log"; then
+  ok "a migration for another tag does not cover the move — the interlock runs the target's"
+else
+  bad "a migration for another tag does not cover the move" "rc=${_il_rc} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+# 4. the interlock's migration FAILS → the image never moves, and the refusal names the policy
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_INTERLOCK_MIGRATE_FAILS=true HOSTING_PLAN="$(plan "Set the portal image	${_il_set}")")"; _il_rc=$?
+if [ "$_il_rc" -ne 0 ] && ! grep -q 'set image' "$_il_log" && printf '%s' "$_il_out" | grep -q 'roll-migrates-first'; then
+  ok "a failed interlock migration stops the run BEFORE the image moves, naming the policy"
+else
+  bad "a failed interlock migration stops the run" "rc=${_il_rc} out: ${_il_out} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+# 5. a portal image move the interlock cannot place (no namespace) is refused with nothing run
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_PLAN="$(plan "Set the portal image	kubectl set image deployment/memex-portal-deployment memex-portal=cr.example.test/memex-portal-ai:3.0.0-ci.9332")")"; _il_rc=$?
+if [ "$_il_rc" -ne 0 ] && [ ! -s "$_il_log" ] && printf '%s' "$_il_out" | grep -q 'cannot place it'; then
+  ok "an image move whose namespace cannot be read is refused, and nothing runs"
+else
+  bad "an unplaceable image move is refused" "rc=${_il_rc} out: ${_il_out} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+# 6. a dry run narrates the interlock's step and runs nothing
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_DRY_RUN=true HOSTING_PLAN="$(plan "Set the portal image	${_il_set}")")"; _il_rc=$?
+if [ "$_il_rc" -eq 0 ] && [ ! -s "$_il_log" ] && printf '%s' "$_il_out" | grep -q 'DRY-RUN would run: hosting-migrate --namespace memex --tag 3.0.0-ci.9332'; then
+  ok "a dry run narrates the interlock's migration and runs nothing"
+else
+  bad "a dry run narrates the interlock" "rc=${_il_rc} out: ${_il_out}"
+fi
+rm -f "$_il_log"
+# 7. a plan that does not move the portal image is untouched
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_PLAN="$(plan "Restart	kubectl -n memex rollout restart deployment/memex-portal-deployment")")"; _il_rc=$?
+if [ "$_il_rc" -eq 0 ] && ! grep -q '^hosting-migrate' "$_il_log"; then
+  ok "a plan that does not move the portal image runs no migration"
+else
+  bad "a non-image plan runs no migration" "rc=${_il_rc} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+
+# ── hosting-deploy migrates BEFORE helm when the upgrade moves the image (roll-migrates-first) ──
+# The chart's migration Job is a plain release object, applied in the SAME helm apply as the portal
+# Deployment — so an upgrade that moves the image raced its own migration. These cases pin: an
+# installed release whose image moves runs the target's migration first, a failure stops before
+# helm, and a keep-running upgrade / a first install runs none.
+echo
+echo "── hosting-deploy: migrates before helm when the image moves ────"
+_md_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_md_dir/"; _md_log="$_md_dir/calls.log"; : > "$_md_log"
+_md_vals="$_md_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_md_vals"
+printf '%s' "cr.example.test/memex-portal-ai:3.0.0-ci.9218" > "$_md_dir/running-image"
+_md_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_md_dir" HOSTING_DEPLOY_STUB_LOG="$_md_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_md_vals" "$@" 2>&1; }
+_md_out="$(_md_run --image cr.example.test/memex-portal-ai:3.0.0-ci.9332)"; _md_rc=$?
+_md_m="$(grep -n '^hosting-migrate --namespace memex --release memex --image cr.example.test/memex-migration:3.0.0-ci.9332$' "$_md_log" | head -1 | cut -d: -f1)"
+_md_h="$(grep -n '^helm upgrade' "$_md_log" | head -1 | cut -d: -f1)"
+if [ "$_md_rc" -eq 0 ] && [ -n "$_md_m" ] && [ -n "$_md_h" ] && [ "$_md_m" -lt "$_md_h" ]; then
+  ok "an upgrade that moves the image runs the target's migration BEFORE helm"
+else
+  bad "an image-moving upgrade migrates first" "rc=${_md_rc} out: ${_md_out} log: $(cat "$_md_log")"
+fi
+: > "$_md_log"; touch "$_md_dir/migrate-fails"
+_md_out="$(_md_run --image cr.example.test/memex-portal-ai:3.0.0-ci.9332)"; _md_rc=$?
+if [ "$_md_rc" -ne 0 ] && ! grep -q '^helm upgrade' "$_md_log" && printf '%s' "$_md_out" | grep -q 'helm upgrade NOT run'; then
+  ok "a failed migration stops the upgrade before helm — the image does not move"
+else
+  bad "a failed migration stops the upgrade" "rc=${_md_rc} out: ${_md_out} log: $(cat "$_md_log")"
+fi
+rm -f "$_md_dir/migrate-fails"; : > "$_md_log"
+_md_out="$(_md_run --image cr.example.test/memex-portal-ai:3.0.0-ci.9218)"; _md_rc=$?
+if [ "$_md_rc" -eq 0 ] && ! grep -q '^hosting-migrate' "$_md_log"; then
+  ok "an upgrade that keeps the running image runs no extra migration"
+else
+  bad "a keep-image upgrade runs no extra migration" "rc=${_md_rc} log: $(cat "$_md_log")"
+fi
+rm -f "$_md_dir/status.json" "$_md_dir/running-image"; : > "$_md_log"
+_md_out="$(_md_run --image cr.example.test/memex-portal-ai:3.0.0-ci.9332)"; _md_rc=$?
+if ! grep -q '^hosting-migrate' "$_md_log"; then
+  ok "a first install (no release) runs no pre-migration — nothing older is serving"
+else
+  bad "a first install runs no pre-migration" "rc=${_md_rc} log: $(cat "$_md_log")"
+fi
+rm -rf "$_md_dir"
 
 # ── hosting-aks-upgrade: the governed cluster upgrade (MeshWeaver.Plugins Hosting/ClusterUpgrade.md) ─
 # The ORDER of the upgrade is the plugin's (ClusterUpgradePlan, tested there): one approval, the

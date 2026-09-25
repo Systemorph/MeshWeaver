@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # hosting-migrate --namespace <ns> --release <release> --image <registry>/<path>/memex-migration:<tag>
+# hosting-migrate --namespace <ns> [--release <release>] --tag <tag>
+#
+# The second form is the one run.sh's interlock uses (policy `roll-migrates-first`): it knows only the
+# namespace and the TARGET TAG the plan's `set image` moves to. The release is then read off the portal
+# Deployment's own `meta.helm.sh/release-name` annotation, and the migration image is the release's own
+# migration Job image with only its tag moved — so the interlock needs nothing the plan did not say.
 #
 # Run the database migration for a TARGET image as its own run-once Job, OUTSIDE the portal, and
 # wait for it to finish — the step a Roll runs BEFORE it moves the portal image. The rule
@@ -36,37 +42,61 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-migrate"
 
-namespace="" release="" image=""
+namespace="" release="" image="" tag=""
 interval="${HOSTING_MIGRATE_INTERVAL:-5}" grace="${HOSTING_MIGRATE_GRACE:-120}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --namespace) namespace="${2:-}"; shift 2 ;;
     --release)   release="${2:-}";   shift 2 ;;
     --image)     image="${2:-}";     shift 2 ;;
+    --tag)       tag="${2:-}";       shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
 
 hosting::need_flag namespace "$namespace"
-hosting::need_flag release "$release"
-hosting::need_flag image "$image"
 hosting::safe_name namespace "$namespace"
-hosting::safe_name release "$release"
-# A plain reference to the MIGRATION image, never the portal's: it lands in a Job spec, and a portal
-# image there would run the portal as a Job and report whatever that did as the migration.
-[[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9./_-]*/memex-migration:[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
-  || hosting::die "--image '${image}' is not a plain memex-migration image reference (registry/…/memex-migration:tag) — refusing"
+# Exactly ONE of --image / --tag: two answers to "which build migrates" would be one too many.
+if [ -n "$image" ] && [ -n "$tag" ]; then
+  hosting::die "--image and --tag are both set — name the target ONCE (--image for a full reference, --tag to keep the release's own migration repository)"
+fi
+[ -n "$image" ] || [ -n "$tag" ] || hosting::die "missing required flag --image (or --tag)"
+if [ -n "$image" ]; then
+  # --release stays REQUIRED with --image: that is the plan's form, and the plan always knows it.
+  hosting::need_flag release "$release"
+  # A plain reference to the MIGRATION image, never the portal's: it lands in a Job spec, and a portal
+  # image there would run the portal as a Job and report whatever that did as the migration.
+  [[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9./_-]*/memex-migration:[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || hosting::die "--image '${image}' is not a plain memex-migration image reference (registry/…/memex-migration:tag) — refusing"
+  tag="${image##*:}"
+else
+  [[ "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || hosting::die "--tag '${tag}' is not a plain image tag — refusing to interpolate it"
+fi
+[ -z "$release" ] || hosting::safe_name release "$release"
 command -v jq >/dev/null 2>&1 \
   || hosting::die "jq is not installed in this image — the release's manifest and the Job's status are JSON"
 
+# --release omitted (the interlock's form): read it off the portal Deployment helm owns. THREE answers
+# (MeshWeaver#4722) — a Forbidden is not "no release", and neither answer may move an image.
+if [ -z "$release" ]; then
+  hosting::probe output kubectl -n "$namespace" get deployment memex-portal-deployment \
+      -o 'jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}'
+  case $? in
+    2) hosting::die_refused "deployment/memex-portal-deployment in ${namespace}, whose helm release owns the migration Job" ;;
+    1) hosting::die "cannot establish the helm release of namespace ${namespace}: deployment/memex-portal-deployment carries no meta.helm.sh/release-name (${HOSTING_PROBE_ERR:-empty}). Without the release there is no migration Job to run, so the portal image must not move." ;;
+  esac
+  release="$HOSTING_PROBE_OUT"
+  hosting::safe_name release "$release"
+fi
+
 # The Job's name: DNS-1123, at most 63 characters, one per tag.
-tag="${image##*:}"
 suffix="$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
 job="memex-migration-roll-${suffix}"
 job="${job:0:63}"
 while [[ "$job" == *- ]]; do job="${job%-}"; done
 
-hosting::log "image     ${image}"
+hosting::log "image     ${image:-<the migration repository of the release>:${tag}}"
 hosting::log "release   ${release} → namespace ${namespace}"
 hosting::log "job       ${job}"
 
@@ -91,6 +121,18 @@ rendered="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -c '
   | select(.kind == "Job" and .metadata.labels["app.kubernetes.io/component"] == "memex-migration")' | head -1)"
 [ -n "$rendered" ] \
   || hosting::die "release ${release} in ${namespace} renders no migration Job (kind Job, label app.kubernetes.io/component=memex-migration) — nothing establishes the schema, so the image must not move"
+
+# --tag: the target is the release's OWN migration repository at the new tag — the registry and
+# path the install already migrates from, never one guessed from the portal's.
+if [ -z "$image" ]; then
+  current="$(printf '%s' "$rendered" | jq -r '[.spec.template.spec.containers[]?, .spec.template.spec.initContainers[]? | .image // "" | select(test("/memex-migration:"))] | first // ""')"
+  [ -n "$current" ] \
+    || hosting::die "release ${release}'s migration Job runs no memex-migration image — there is no repository to move to ${tag}, so the image must not move"
+  image="${current%:*}:${tag}"
+  [[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9./_-]*/memex-migration:[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || hosting::die "the release's migration image '${current}' does not yield a plain memex-migration reference at ${tag} — refusing"
+  hosting::log "image     ${image} (the release's own migration repository, moved to ${tag})"
+fi
 
 # Rename, and move ONLY the containers that run the migration image. wait-for-postgres (busybox)
 # and anything else keep their images; the rehearsal init container runs the migration image and

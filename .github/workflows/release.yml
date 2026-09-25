@@ -247,6 +247,31 @@ jobs:
               exit 1
             fi
             printf '%s\n' "$identity" > "$tmp/$VERSION"
+            # ExpectedDbVersion (_releases/_db/<version>, #4764 (b3)) travels with the marker, BEFORE
+            # it, when the continuous build published one. Its absence is carried as absence (a
+            # pre-field build) — never invented. A download that fails for any other reason than
+            # the file not existing is the same refusal as the marker's.
+            mkdir -p "$tmp/_db"; rm -f "$tmp/_db/$CI_VERSION" "$tmp/_db/$VERSION"
+            schema_exists=$(az storage file exists --account-name "$account" --share-name "$share" \
+              --path "$dir/_db/$CI_VERSION" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors)
+            if [ "$schema_exists" = "true" ]; then
+              az storage file download --account-name "$account" --share-name "$share" \
+                --path "$dir/_db/$CI_VERSION" --dest "$tmp/_db/$CI_VERSION" \
+                --auth-mode login --backup-intent --only-show-errors > /dev/null
+              expected=$(tr -d '[:space:]' < "$tmp/_db/$CI_VERSION")
+              case "$expected" in ''|*[!0-9]*) echo "::error::$account/$share/$dir/_db/$CI_VERSION does not hold an integer ('$expected') — refusing to promote a schema version nobody can read."; exit 1 ;; esac
+              printf '%s\n' "$expected" > "$tmp/_db/$VERSION"
+              exists_dir=$(az storage directory exists --account-name "$account" --share-name "$share" \
+                --name "$dir/_db" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors)
+              [ "$exists_dir" = "true" ] || az storage directory create --account-name "$account" --share-name "$share" \
+                --name "$dir/_db" --auth-mode login --backup-intent --only-show-errors > /dev/null
+              az storage file upload --account-name "$account" --share-name "$share" \
+                --path "$dir/_db" --source "$tmp/_db/$VERSION" \
+                --auth-mode login --backup-intent --only-show-errors > /dev/null
+              echo "release schema: $account/$share/$dir/_db/$VERSION → ExpectedDbVersion $expected"
+            else
+              echo "release schema: $CI_VERSION published no ExpectedDbVersion (a build before the field) — $VERSION carries none either"
+            fi
             # Directory-as-path: the CLI appends the source basename, which is the version.
             az storage file upload --account-name "$account" --share-name "$share" \
               --path "$dir" --source "$tmp/$VERSION" \
