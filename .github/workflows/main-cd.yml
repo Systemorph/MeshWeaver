@@ -3560,6 +3560,101 @@ jobs:
       content-app-id: ${{ secrets.FLEET_READER_APP_ID }}
       content-app-private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
 
+  # ───────────── THE LADDER'S RUNG 2 on the PROMOTED image (policy platform-backwards-compatibility) ─────────────
+  # "platform 1 + plugin 1 must be compatible with platform 2 + plugin 1": the plugin module bundles that
+  # shipped with the set the fleet is on BEFORE this promote (satellite-compat-image's verified baseline — the
+  # same four bundles the satellites bind) are linked, UNCHANGED, against the portal image this run just
+  # promoted: every type, assembly version and member they reference, by signature, with the one probe
+  # (`mw-plugin-test platform-link`, ModulePlatformLink). The pull-request lane
+  # (dotnet-test.yml `platform-compat`) already holds every core PR to this against the core build; this job
+  # proves it on the image that actually ships — the full portal closure, including what the portal host adds
+  # from MeshWeaver.Plugins. Additive: it gates nothing downstream here (workstream C owns the roll/seal
+  # steps); a red is the platform build that broke a deployed plugin, named, and is answered by FIXING
+  # compatibility or a declared epoch bump — never a seal, pin or rebuild-everything fallback.
+  # Doc/Architecture/PlatformCompatibilityLadder.
+  platform-ladder-compat:
+    name: "Compatibility: newest deployed plugin set runs on this platform (ladder)"
+    needs: [preflight, gate, promote, plugins-bake-image, satellite-compat-image]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          sparse-checkout: |
+            .github/scripts
+            src/MeshWeaver.Compiler
+      # 🚨 No baseline = no verdict = RED, with the reason satellite-compat-image recorded. The satellite
+      # legs treat a missing baseline as "refuse to judge" because there the baseline is a CONTROL; here the
+      # baseline IS the subject (the plugin bytes the fleet runs), so a run without it has measured nothing.
+      - name: "The deployed plugin set must be established"
+        env:
+          BASELINE_DIGEST: ${{ needs.satellite-compat-image.outputs.baseline_digest }}
+          BASELINE_REASON: ${{ needs.satellite-compat-image.outputs.baseline_reason }}
+        run: |
+          set -euo pipefail
+          [ -n "${BASELINE_DIGEST:-}" ] || { echo "::error::the plugin set the fleet ran before this promote could not be established — ${BASELINE_REASON:-no reason recorded}. Rung 2 of the compatibility ladder measured NOTHING on this build."; exit 1; }
+      - name: "Download the deployed plugin set (the baseline bundles)"
+        uses: actions/download-artifact@v8
+        with:
+          name: satellite-compat-baseline-bundles
+          path: ${{ runner.temp }}/deployed-plugins
+      - name: "Read the compatibility epoch the deployed set was built on"
+        id: epoch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_RUN_NUMBER: ${{ needs.gate.outputs.baseline_run_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/$REPO/actions/workflows/main-cd.yml/runs?per_page=100" \
+            --jq "[.workflow_runs[] | select(.run_number == $BASELINE_RUN_NUMBER)] | .[0].head_sha // empty")
+          [ -n "$sha" ] || { echo "::error::run #$BASELINE_RUN_NUMBER (the baseline) is not among the last 100 main-cd runs — its platform commit, and so its compatibility epoch, cannot be read"; exit 1; }
+          git fetch --no-tags --depth=1 origin "$sha"
+          base=""
+          if git cat-file -e "${sha}:src/MeshWeaver.Compiler/platform-compatibility.json" 2>/dev/null; then
+            base=$(git show "${sha}:src/MeshWeaver.Compiler/platform-compatibility.json" | jq -er '.epoch')
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "deployed set built on platform $sha, compatibility epoch ${base:-none declared}"
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: "Link the deployed plugins against the PROMOTED portal image — types, versions, members"
+        env:
+          PORTAL: ${{ env.ACR }}/memex-portal-ai@${{ needs.plugins-bake-image.outputs.platform_digest }}
+          TESTER: ${{ needs.plugins-bake-image.outputs.image }}
+          BASE_EPOCH: ${{ steps.epoch.outputs.base }}
+        run: |
+          set -euo pipefail
+          case "$PORTAL" in *@sha256:*) ;; *) echo "::error::plugins-bake-image resolved no portal digest — nothing to link against"; exit 1 ;; esac
+          n=$(find "$RUNNER_TEMP/deployed-plugins" -name '*.module.nupkg' | wc -l | tr -d ' ')
+          [ "$n" -gt 0 ] || { echo "::error::the baseline artifact carried no module bundle"; exit 1; }
+          STAGE="$RUNNER_TEMP/portal-image"
+          rm -rf "$STAGE"; mkdir -p "$STAGE"
+          docker pull --quiet --platform linux/amd64 "$PORTAL"
+          cid="$(docker create --platform linux/amd64 "$PORTAL")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/app" "$STAGE"
+          docker cp "$cid:/usr/share/dotnet/shared" "$STAGE/shared"
+          args=(platform-link /portal/app --shared-frameworks /portal/shared --host container
+                --bundles-dir /plugins --declaration /decl/platform-compatibility.json)
+          [ -n "${BASE_EPOCH:-}" ] && args+=(--base-epoch "$BASE_EPOCH")
+          docker run --rm --init --platform linux/amd64 \
+            -v "$STAGE:/portal:ro" -v "$RUNNER_TEMP/deployed-plugins:/plugins:ro" \
+            -v "$GITHUB_WORKSPACE/src/MeshWeaver.Compiler:/decl:ro" \
+            --entrypoint /app/mw-plugin-test "$TESTER" "${args[@]}"
+
   verify-images:
     name: "Verify every image shipped"
     needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote]
