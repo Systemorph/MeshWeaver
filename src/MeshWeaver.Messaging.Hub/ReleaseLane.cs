@@ -1,4 +1,5 @@
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Runtime.ExceptionServices;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -35,9 +36,28 @@ namespace MeshWeaver.Messaging;
 /// consumer may compose must release on the same lane — that is the whole guarantee. Never a
 /// static: a lane lives exactly as long as the mesh (or registry) that owns it.</para>
 ///
+/// <para>🚨 <b>A REFUSAL is a release terminal too, and goes on the same lane.</b> A subscriber that
+/// arrives after its owner was released is refused with the same <see cref="ObjectDisposedException"/>
+/// — and that refusal used to be an <c>Observable.Throw</c>, delivered SYNCHRONOUSLY on the
+/// subscriber's own thread. So the lane serialised release against release while a refusal still
+/// raced it: measured on MeshWeaver.Plugins (<c>SendDocumentIdentityPanelTest</c>, a layout render
+/// still subscribing the permission fold when its mesh tore down), the lane held a <c>Zip</c> gate
+/// delivering one query's release and went for the enclosing <c>SelectMany</c> gate, while the render
+/// thread held that <c>SelectMany</c> gate delivering a sibling query's refusal and went for the
+/// <c>Zip</c> gate to dispose it. Neither returned; the render's pooled subscribe leaf never left the
+/// Layout pool and the teardown was reported DIRTY after the whole drain budget. Every terminal an
+/// owned connection produces — release or refusal — is therefore delivered here, through
+/// <see cref="Post"/> or <see cref="Refuse{T}"/>, never on the thread that asked.</para>
+///
 /// <para><b>Not a gate.</b> Nothing waits on the lane; a post is an enqueue. The serialisation is
 /// Rx's own <c>ObserveOn</c> queue, fed through <see cref="Subject.Synchronize{TSource}(ISubject{TSource})"/>
-/// so posts from several disposing threads keep the Rx grammar.</para>
+/// so posts from several disposing threads keep the Rx grammar. 🚨 The queue drains on POOLED
+/// ThreadPool work items, never on a dedicated thread: <see cref="TaskPoolScheduler.Default"/> offers
+/// <see cref="ISchedulerLongRunning"/>, and <c>ObserveOn</c> takes it when offered — one thread
+/// started by the lane's first post and parked in <c>Monitor.Wait</c> from then on. The lane is
+/// never disposed (see the constructor), so that thread never exited — and, being a GC root, kept
+/// the lane and its owner's closures alive with it: one leaked thread for every lane that ever
+/// delivered a release, i.e. one per torn-down mesh in a process that builds a mesh per test.</para>
 /// </summary>
 public sealed class ReleaseLane
 {
@@ -52,7 +72,7 @@ public sealed class ReleaseLane
         // release posted during the owner's own teardown must still be delivered. Nothing roots
         // the subscription but a queued release, so the lane is collected with its owner.
         subject
-            .ObserveOn(TaskPoolScheduler.Default)
+            .ObserveOn(TaskPoolScheduler.Default.DisableOptimizations(typeof(ISchedulerLongRunning)))
             .Subscribe(Run);
     }
 
@@ -80,4 +100,30 @@ public sealed class ReleaseLane
     /// <summary>Queues <paramref name="release"/> behind every release posted before it.</summary>
     /// <param name="release">The terminal to deliver.</param>
     internal void Post(Action release) => releases.OnNext(release);
+
+    /// <summary>
+    /// A sequence that REFUSES every subscriber with <paramref name="error"/> — delivered on this
+    /// lane, behind every release posted before the subscription, and never on the subscribing
+    /// thread. The one spelling for "this owner is released, go away" on a read that a consumer may
+    /// compose with the owner's other connections (see the remarks on why a synchronous
+    /// <c>Observable.Throw</c> there deadlocks). Disposing the subscription before the lane reaches
+    /// it cancels the delivery.
+    /// </summary>
+    /// <typeparam name="T">Element type of the refused sequence.</typeparam>
+    /// <param name="error">Creates the terminal, once per subscriber.</param>
+    /// <returns>A cold sequence that only ever errors, on the lane.</returns>
+    public IObservable<T> Refuse<T>(Func<Exception> error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return Observable.Create<T>(observer =>
+        {
+            var cancelled = new BooleanDisposable();
+            Post(() =>
+            {
+                if (!cancelled.IsDisposed)
+                    observer.OnError(error());
+            });
+            return cancelled;
+        });
+    }
 }
