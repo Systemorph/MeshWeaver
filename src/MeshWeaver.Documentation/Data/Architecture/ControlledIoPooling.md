@@ -185,7 +185,7 @@ The concurrency cap is enforced two ways, chosen per leaf kind:
 | Leaf kind | Mechanism | Why |
 |---|---|---|
 | **Genuinely-async** (`Invoke`, `InvokeStream`) | `SemaphoreSlim` async gate, then `.SubscribeOn(TaskPoolScheduler.Default)` | The gate caps **in-flight ops**; the ThreadPool thread is *released during the await*, so a cap of 32 network ops uses ~0 threads while waiting. `SubscribeOn` moves the whole subscribe — gate wait and the function's synchronous prologue — onto the ThreadPool, so it never runs on the calling hub scheduler. (`FromAsync`'s own scheduler argument only schedules *notification delivery*, not where the function is invoked — hence `SubscribeOn`, exactly as `MeshQuery` does.) |
-| **Sync-blocking / CPU** (`InvokeBlocking`) | Dedicated `LimitedConcurrencyLevelTaskScheduler` | Blocking work holds a real thread for its whole duration. The limited-concurrency scheduler borrows ThreadPool threads but dispatches at most *cap* at a time, so a burst can't trigger runaway thread-injection that starves Orleans' grain schedulers. |
+| **Sync-blocking / CPU** (`InvokeBlocking`) | Dedicated `LimitedConcurrencyLevelTaskScheduler` | Blocking work holds a real thread for its whole duration. The limited-concurrency scheduler runs at most *cap* leaves at a time, **on threads it starts itself** (`mw-io-lane`; the CPU lane's are `mw-cpu-lane`), never ThreadPool workers. It used to BORROW pool workers, and a cap never protected the pool: with caps up to 256 over a pool whose minimum is the core count, a burst of blocking reads held every worker the grain turns need — see [Blocking Leaves Off the ThreadPool](../BlockingLeavesOffTheThreadPool). |
 
 > This design is "compatible with how Orleans wants us to pool": it **reuses the ThreadPool the framework already uses** and merely puts a governor in front of it — no custom OS threads that Orleans can't see or coordinate with.
 
@@ -479,7 +479,7 @@ These four properties must hold for every leaf that uses `IIoPool`:
 
 - **Cancellation and release.** Every shape releases its slot in a `finally`. `WaitAsync(ct)` makes acquisition itself cancellable — a dispose before the slot is granted throws before the in-flight increment, so no slot leaks. The subscription's `ct` flows into the leaf, so file/blob calls cancel on unsubscribe.
 
-- **Disposal.** `IoPoolRegistry` disposes each `IoPool`, which disposes its `SemaphoreSlim`. The limited-concurrency scheduler borrows ThreadPool threads — nothing to dispose.
+- **Disposal.** `IoPoolRegistry` disposes each `IoPool`, which disposes its `SemaphoreSlim`. The limited-concurrency scheduler's threads are background threads that exit when its queue is empty — nothing to dispose.
 
 - **No sync-context capture.** `.SubscribeOn(TaskPoolScheduler.Default)` + `.ConfigureAwait(false)` everywhere; `InvokeBlocking` dispatches via the scheduler-bound `TaskFactory`, never `TaskScheduler.Current`. Safe even when `Subscribe` is called inside a grain handler.
 
