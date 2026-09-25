@@ -3544,10 +3544,23 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         PR: ${{ github.event.pull_request.number }}
+        HEAD_REF: ${{ github.event.merge_group.head_ref }}
       run: |
         set -euo pipefail
         if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
-          echo "requested=true" >> "$GITHUB_OUTPUT"; echo "merge-queue entry: always."; exit 0
+          # 🔒 The candidate's code runs on MeshWeaver.Plugins' runners beside that PRIVATE
+          # repository's checkout. A same-repo branch is written by someone with push here; a FORK
+          # is anyone on the internet. So a fork-originated entry is refused, not waved through:
+          # re-land it from a branch in this repository (the queue entry's PR is the last in the
+          # group; the entries ahead of it were each checked on their own build).
+          pr=$(printf '%s' "$HEAD_REF" | sed -n 's#^\(refs/heads/\)\{0,1\}gh-readonly-queue/[^/]*/pr-\([0-9]*\)-.*#\2#p')
+          [ -n "$pr" ] || { echo "::error::cannot read the PR number from the queue ref '$HEAD_REF' — refusing to send an unidentified candidate to a private repository"; exit 1; }
+          fork=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.head.repo.fork')
+          if [ "$fork" != "false" ]; then
+            echo "::error::queue entry PR #$pr comes from a fork (head.repo.fork=$fork). Its code would run beside MeshWeaver.Plugins' private source, so the dependent's suites are not requested for it — re-land it from a branch in this repository."
+            exit 1
+          fi
+          echo "requested=true" >> "$GITHUB_OUTPUT"; echo "merge-queue entry (PR #$pr, same-repo): always."; exit 0
         fi
         labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --jq '.[].name')
         if printf '%s\n' "$labels" | grep -qx 'dependent-suites'; then

@@ -853,6 +853,11 @@ passes against both behaviours, landed first — the expand-then-contract order.
 - **A flaky Plugins test** that fails at the candidate and passes at the base reads as drift; the
   merge-queue steward's flake catalogue is where that is handled.
 - **In-mesh NodeType source** is not compiled by these suites; that stays the compile gates' job.
+- **A fork's queue entry is refused, not run.** The candidate's code executes on Plugins' runners
+  beside that private repository's checkout, so the request job reads the entry's pull request and
+  fails RED when its head is a fork — re-land it from a branch here. On the Plugins side the registry
+  credential exists only for the step that pre-pulls the test image, and is logged out before any
+  candidate code runs.
 
 ## The dependent reacts to core's events — core never waits
 
