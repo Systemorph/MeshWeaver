@@ -158,11 +158,11 @@ nothing**. The whole board, so that "uncovered" is written down rather than infe
 |---|---|---|---|
 | 1 | a public **type** leaves `src/` | `Cross-repo pair (public surface)` | **gated** |
 | 2 | an **added overload** makes a dependent's `<see cref>` ambiguous | — | **UNCOVERED** |
-| 3 | a **JSON envelope's field names** change | — | **UNCOVERED** |
+| 3 | a **JSON envelope's field names** change | `Dependent suites (MeshWeaver.Plugins)` | **run** where a Plugins suite exercises the envelope; otherwise uncovered |
 | 4 | a **comment** another repo's regex parses as data | — | **UNCOVERED** |
 | 5 | an i18n **value** change | — | **UNCOVERED** (the mirror guard compares against a *pinned* core commit) |
 | 6 | a public **member** leaves a type that stays | `Cross-repo pair (public surface)` | **gated** |
-| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | — | **UNCOVERED**, and undetectable by construction |
+| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | `Dependent suites (MeshWeaver.Plugins)` | **run** — Plugins' reachable suites against the candidate, in the merge queue (below); still undetectable by any SURFACE detector, and uncovered for the other satellites |
 | 8 | a `PackageVersion` a satellite consumes VERSIONLESS is removed | `Satellite package pins (removal declared)` | **gated** (#3349) |
 | 9 | a RENDERED-UI change a satellite's e2e asserts on | — | **UNCOVERED**; the honest instrument is the release note |
 | 10 | a member **ADDED** to a public interface breaks external IMPLEMENTERS | `Interface additions (implementers declared)` | **gated** (#3465) |
@@ -174,8 +174,9 @@ The structural answer to those is the one #2689 names as its acceptance criterio
 **compile-and-run the dependent's suite against the candidate core commit**, as a CI-time
 integration and never as a build-time reference. That keeps the dependency direction intact: core
 still builds and ships without the plugin repos present, and the integration is an *observation
-about* a candidate commit rather than a *link into* it. This gate is the half of that which core can do alone. The other
-half is **event-based and lives in the dependent**: see *"The dependent reacts to core's events"* below.
+about* a candidate commit rather than a *link into* it. **For MeshWeaver.Plugins it is now built** —
+see *"The dependent's suites run against the candidate"* below. For every other satellite the answer
+is still event-based and lives in the dependent: see *"The dependent reacts to core's events"*.
 
 ## The seven CODE shapes
 
@@ -792,6 +793,89 @@ now **refused**, and a reason that mentions a sweep (`sweep`, `swept`, `search_c
 quoting `searched: true` is refused too. A reason that rests on something else — *"only read by the
 test this PR rewrites"* — is judged on its length alone, as before.
 
+## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins)`)
+
+**Policy [`dependent-suites-gate`](../PolicyNotProse): a core change reaches `main` only after
+MeshWeaver.Plugins' suites that can reach it pass against the CANDIDATE commit.**
+
+### Why it exists
+
+Three core merges in two days — #5635 (`bf5ac85526`), #5647 and #5655 (`777e84819a`) — each turned
+MeshWeaver.Plugins' `main` red: `StaleLiveBoundAreaTest`, the `LayoutAreaIdentityTest` dispose wedge,
+`NodeTypeBatchBakeDiscoveryInvariantTest`, and a `MeshWeaver.AI` test host dying on exit 134. That
+blocked the sealed plugins publication and every satellite's CI for hours. Every one was shape 7 —
+a behaviour change behind an unchanged signature — so every one was green here, and the pair,
+interface and pin gates above were right to be silent.
+
+### How it works
+
+| step | where | what |
+|---|---|---|
+| request | `dotnet-test.yml` → `Dependent suites (request)` | proves the receiver exists on Plugins' default branch, then sends ONE `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base, and a key unique to the run attempt |
+| scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | selects the Plugins suites whose compiled closure (Plugins' project graph + its `$(MeshWeaverRoot)` references + core's own reverse closure) can reach `base..candidate`; the **full** universe of 83 on any uncertainty (an unowned build input, an empty diff, core's `test/xunit.runner.json`); legs cut by the portal-host lane's measured weights |
+| candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished) and run; exit codes and dead hosts recorded exactly as the platform canary records them |
+| control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
+| verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base) or on ANY missing evidence; written as a root commit at `refs/core-candidate/<key>` in Plugins |
+| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; green only for `success` about exactly this key, candidate and base; silence by the deadline is red |
+
+It is a `needs:` of `Consolidate test results` with an explicit fail step, so it blocks.
+
+**Where it runs.** Every merge-queue entry — the only road to `main`, and the entry's commit is the
+combination that actually lands — plus a pull request labelled `dependent-suites` (read live, so
+label and re-run). Not every pull-request push, and that is a cost decision measured before it was
+made: over core's last 200 merges the selector reaches nothing for 9, the 5 doc-reading suites for 59
+(documentation pages only), 11–22 suites for ~40, and **70–80 of 83 for ~100** — Plugins' test bases
+reference core's foundations. A candidate is therefore roughly two runner-hours of suite time on the
+self-hosted `aks-silos-dind` pool, and pull-request pushes outnumber queue entries several times over.
+
+**What core prints.** This repository is public and MeshWeaver.Plugins is private, so the verdict
+carries counts, one sentence and the link to the Plugins run — never a test name, a suite name or an
+assertion. That is also why the suites cannot run in core's own workflow: its logs and artifacts are
+public.
+
+### Proven live, both directions
+
+Run against branch `ci/dependent-suites-controls` through Plugins' `workflow_dispatch` before this
+gate was required:
+
+| control | candidate | selected | verdict | dispatch → verdict |
+|---|---|---|---|---|
+| positive — a comment-only change in `src/MeshWeaver.Testcontainers` | `9801798b` | 1 of 83 | `success`, drift 0 (run 36118343132) | ~3.5 min |
+| negative — the same file's `ArgumentException` message reworded, signature unchanged | `62840cc7` | 1 of 83 | `failure`, **drift 1**; the control arm re-ran the suite at the base and it passed (run 36117392480) | ~9 min |
+| full-size — core merge `202199cc2b` | `202199cc` | 80 of 83, 12 legs | every suite exit 0; ONE `.trx` was empty, so the verdict was `failure — missing evidence` (run 36118353941) | 26 min |
+
+The full-size run is the evidence the missing-evidence rule is worth having: `dotnet test` printed
+`Passed! 14` for `MeshWeaver.Serialization.Test` over a 0-byte `.trx` — the xunit trx reporter
+silently writes an empty file when a test's output carries ANSI ESC — which every lane that only
+checks that a `.trx` EXISTS had been reading as a pass (fixed in MeshWeaver.Plugins#2377). Each
+from-source leg build took 5–6 minutes.
+
+### Why this is not the withdrawn dispatcher
+
+The same shape (`dependent-suites.yml`, #3103) was withdrawn on 2026-09-03 because the context went
+red on every core pull request while Plugins had no receiver, and because it coupled the two trunks.
+The receiver now lands in Plugins FIRST and the request job refuses to send to a default branch
+without one; the control arm means a red that exists in Plugins' own `main` never blocks core; and
+it runs where landing happens rather than on every push. The coupling is real and stated: a core
+change that DELIBERATELY retires behaviour a Plugins test encodes needs a Plugins adaptation that
+passes against both behaviours, landed first — the expand-then-contract order.
+
+### Where its teeth stop
+
+- **MeshWeaver.Plugins only.** Education, Reinsurance, SocialMedia, Crm and Manufacturing still find
+  a core break in their own daily run.
+- **No `-warnaserror`** on the candidate build: a new obsoletion is a warning there, so shape 2 (an
+  ambiguous `<see cref>`, an error only under warnings-as-errors) is still caught by the dependent's
+  own CI, not here.
+- **A flaky Plugins test** that fails at the candidate and passes at the base reads as drift; the
+  merge-queue steward's flake catalogue is where that is handled.
+- **In-mesh NodeType source** is not compiled by these suites; that stays the compile gates' job.
+- **A fork's queue entry is refused, not run.** The candidate's code executes on Plugins' runners
+  beside that private repository's checkout, so the request job reads the entry's pull request and
+  fails RED when its head is a fork — re-land it from a branch here. On the Plugins side the registry
+  credential exists only for the step that pre-pulls the test image, and is logged out before any
+  candidate code runs.
+
 ## The dependent reacts to core's events — core never waits
 
 **Rule (maintainer, 2026-09-03): none of the top-level repositories depends on another, and the
@@ -873,13 +957,9 @@ the inbox watcher, registration and broadcast in the Hosting module's `PlatformB
 under `.github/workflows` — there is no ledger — and
 `UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` pins the lane's call.
 
-What this deliberately does NOT do: put a context on the core pull request that only a plugin
-repository can turn green. A dispatcher of that shape (`dependent-suites.yml`, `core-pr-suites`) was
-built for #3103 on 2026-09-03 and withdrawn the same day — it coupled the two trunks (every core
-pull request went red until a receiver existed in the plugin repository), and a synchronous wait on
-a sibling repository is a dependency whatever token it uses.
-`PlatformNeverDependsOnPluginsGuard.ApiReadLedger` therefore lists only the two read-only edges
-core keeps (the shared-rules sweep and the `Pairs-with:` resolution) and refuses a third.
+What this section's rule used to forbid outright — a context on the core pull request that only a
+plugin repository can turn green — now exists for exactly one question and one repository; the next
+section is why, and how it avoids the reasons the 2026-09-03 attempt was withdrawn.
 
 The consequence the pair gate covers stays: a pull request that REMOVES public surface must name
 its merged counterpart. Since #3465 one ADDITIVE shape is covered here too — a member added to a
