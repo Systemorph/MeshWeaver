@@ -179,6 +179,25 @@ public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
             var armedId = registry.ArmedRequestIds.Single();
             Output.WriteLine($"[fence] caller is armed on the late watch (request={armedId})");
 
+            // 🚨 …and the OWNER has ACCEPTED it — OBSERVED, never assumed. The caller arms its late
+            // watch BEFORE it posts (#2882: register, THEN post, so no answer can slip past), so an
+            // armed watch says the patch has been SENT, not that the owner's handler has run. The
+            // disposal NACK this test is about is registered by that handler; a patch still in
+            // transit when the mesh goes down reaches an owner that never registered one, the owner
+            // goes Dead owing nothing, and the assertion below then fails on a precondition this test
+            // never established rather than on #2778. That is exactly the one red this test produced
+            // (queue run 36019287652: armed at +52 ms, Mesh.Dispose() 1 ms later, owner Dead inside
+            // the next 50 ms, watch still armed, not one framework warning). Holding the post back
+            // by 120 ms after the watch arms reproduces that failure 40 of 40. The handler stamps
+            // PATCH_MERGE_DISPATCHED strictly after RegisterOwnerDisposingNack, on the tree's shared
+            // request-fate ledger — the same "accepted is observed" wait DisposalRaceNackTest makes.
+            var acceptedStage = $"PATCH_MERGE_DISPATCHED@{owner.Address}";
+            await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+                .Select(_ => Mesh.DescribeRequestFate(armedId))
+                .Where(trail => trail.Contains(acceptedStage, StringComparison.Ordinal))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            Output.WriteLine($"[fence] the owner accepted the patch — {acceptedStage} is on its trail");
+
             // 🚨 The scenario. Dispose the MESH, not the node hub: the owner's disposal action then
             // runs with its parent already past DisposeHostedHubs — the exact window in which the
             // old guard skipped the post and the caller heard nothing.
