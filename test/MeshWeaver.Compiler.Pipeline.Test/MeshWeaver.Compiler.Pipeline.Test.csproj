@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Build\MeshWeaver.Plugin.Build.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
