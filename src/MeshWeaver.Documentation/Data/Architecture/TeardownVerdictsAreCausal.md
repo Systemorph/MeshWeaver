@@ -206,6 +206,31 @@ re-attempt is refused quickly during a teardown — i.e. the assertion was readi
 no right to observe. `ArmedRequestIds` exists for exactly this (its own remarks say so): name the
 correlation the verdict has to land on, and a second, unrelated arm cannot falsify it.
 
+### A third: an ARMED watch is not an ACCEPTED patch
+
+The fence before the teardown waited for the caller's late watch to be armed and read that as "the
+owner has the patch". It is not the same fact. The caller arms the watch **before** it posts
+(#2882: register, then post, so no answer can slip past), so an armed watch means the patch was
+SENT. The disposal NACK is registered by the owner's patch handler, which runs later. If
+`Mesh.Dispose()` lands between the two, the patch reaches an owner that never registered a NACK.
+That owner goes `Dead` owing nothing, and the assertion fails on a precondition the test never
+established.
+
+That was the test's one red in the merge queue (run 36019287652, shard 4). The watch was armed at
++52 ms, `Mesh.Dispose()` ran 1 ms later, and the owner was `Dead` within the next 50 ms poll. The
+watch was still armed and the window held no framework warning. It could not be reproduced by
+looping: 0 failures in over 400 runs, alone, in bulk, on 2 CPUs, at the failing commit and on
+`main`, because the handler normally runs 1–5 ms after the post. Holding the post back by 120 ms
+after the watch arms reproduces it **40 of 40** with the identical assertion text. With the fence
+below, the same delayed build passes 40 of 40.
+
+The fence now observes acceptance, and does not assume it. The handler stamps
+`PATCH_MERGE_DISPATCHED` on the tree's request-fate ledger strictly after
+`RegisterOwnerDisposingNack`, so the test waits for `PATCH_MERGE_DISPATCHED@<owner>` in
+`Mesh.DescribeRequestFate(armedId)`. That is the same "accepted is observed, never assumed" wait
+`DisposalRaceNackTest` makes on `ENQUEUED@<victim>`. Generalized: **a fence must observe the fact
+that the assertion depends on, not an earlier step that usually comes just before it.**
+
 ## The rule, generalized
 
 **If an answer is produced by a `RegisterForDisposal` registrant, a `ShuttingDown` handler, or
