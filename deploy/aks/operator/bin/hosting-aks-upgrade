@@ -358,15 +358,26 @@ case "$sub" in
     minor="$(printf '%s' "$current" | cut -d. -f2)"
     upgrades="$(az_read "the upgrades offered to ${cluster}" aks get-upgrades -g "$rg" -n "$cluster" \
       | jq -c '[.controlPlaneProfile.upgrades[]? | select((.isPreview // false) | not) | .kubernetesVersion] | unique | sort_by(split(".") | map(tonumber))')"
-    versions="$(az_read "the Kubernetes versions offered in ${location}" aks get-versions -l "$location" | jq -c --argjson m "${minor:-0}" '
+    # The REGION's version graph is what chains a second minor and names the LTS offer. It is a
+    # subscription-scope read (locations/kubernetesVersions), which a cluster-scoped grant does not
+    # carry — so an unreadable graph is carried as UNREAD with its error (the plan then chains no
+    # further than THIS cluster's own get-upgrades, and says so), never as "nothing offered".
+    verr="$(mktemp)" versions_read=true versions_error=""
+    if ! vraw="$(az aks get-versions -l "$location" -o json 2>"$verr")"; then
+      versions_read=false; versions_error="$(head -2 "$verr" | tr '\n' ' ')"; vraw='{"values":[]}'
+    fi
+    rm -f "$verr"
+    versions="$(jq -c --argjson m "${minor:-0}" '
       [.values[]? | . as $v | ($v.patchVersions // {}) | to_entries[]
        | {version: .key, upgrades: (.value.upgrades // []), supportPlans: ($v.capabilities.supportPlan // []), preview: ($v.isPreview // false)}
-       | select((.version | split(".")[1] | tonumber) >= $m)] | sort_by(.version | split(".") | map(tonumber))')"
+       | select((.version | split(".")[1] | tonumber) >= $m)] | sort_by(.version | split(".") | map(tonumber))' <<<"$vraw")"
     pl="$(pools_json)"; n="$(nodes_json)"; p="$(portals_json "$n")"; pdbs="$(pdbs_json)"
     dep="$(deprecated_json)"; man="$(manifests_json)"; runner="$(runner_json)"
     facts="$(jq -cn --argjson c "$c" --argjson u "$upgrades" --argjson v "$versions" --argjson pl "$pl" \
       --argjson n "$n" --argjson p "$p" --argjson pdb "$pdbs" --argjson d "$dep" --argjson m "$man" --argjson r "$runner" \
-      '{schema: 1, readAt: (now | todate), cluster: $c, controlPlaneUpgrades: $u, versions: $v, pools: $pl,
+      --argjson vr "$versions_read" --arg ve "$versions_error" \
+      '{schema: 1, readAt: (now | todate), cluster: $c, controlPlaneUpgrades: $u, versions: $v,
+        versionsRead: $vr, versionsError: (if $ve == "" then null else $ve end), pools: $pl,
         nodes: $n, portals: $p, pdbs: $pdb, deprecatedApis: $d, manifestApis: $m, runner: $r}')"
     hosting::log "cluster ${cluster}: Kubernetes ${current} ($(jq -r '.provisioningState' <<<"$c")), tier $(jq -r '.tier' <<<"$c"), support plan $(jq -r '.supportPlan' <<<"$c")"
     hosting::log "control-plane upgrades offered: $(jq -r 'join(", ")' <<<"$upgrades")"

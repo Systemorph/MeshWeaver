@@ -27,7 +27,13 @@ case "$*" in
     read_guard
     if [ -f "$state/cp-issued" ] && [ -f "$fixture/show.after.json" ]; then cat "$fixture/show.after.json"; else cat "$fixture/show.json"; fi ;;
   "aks get-upgrades "*)  read_guard; cat "$fixture/upgrades.json" ;;
-  "aks get-versions "*)  read_guard; cat "$fixture/versions.json" ;;
+  "aks get-versions "*)
+    read_guard
+    if [ -f "$fixture/versions-forbidden" ]; then
+      echo "(AuthorizationFailed) The client 'x' does not have authorization to perform action 'Microsoft.ContainerService/locations/kubernetesVersions/read'" >&2
+      exit 1
+    fi
+    cat "$fixture/versions.json" ;;
   "aks nodepool list "*) read_guard; cat "$fixture/pools.json" ;;
   "aks nodepool show "*)
     read_guard
