@@ -47,6 +47,18 @@ internal static class BundleKeyedHoldReading
         IMessageHub hub, string partition, IReadOnlyList<MeshNode> incoming, ILogger? logger)
         => Observable.Defer(() =>
         {
+            // 🚨 UNDER THE LADDER A CHANGED TYPE COMPILES — it is not held (policy
+            // module-sync-per-manifest-hash, coordinated with platform-backwards-compatibility). A
+            // type whose incoming sources no bundle for this identity carries is released by the
+            // import onto those sources; adoption then finds no matching bytes and the type
+            // compiles against the RUNNING platform, the path every pull request proves green
+            // (Doc/Architecture/ModuleAdoptionPolicy). Holding its sources instead stranded it on
+            // an old tree until a publication — or a roll — arrived. The ONE mesh where that
+            // compile cannot happen is a `Modules:RequirePrebuilt` one: there the local compile is
+            // refused by design, so moving the sources would PARK the type, and the hold is kept
+            // for exactly that mesh. Nothing is read on any other.
+            if (!PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+                return Observable.Return(BundleHoldDecision.Nothing);
             var configuration = hub.ServiceProvider.GetService<IConfiguration>();
             var publishedRoot = configuration?[ShippedPrebuiltBundles.PublishedRootConfigKey];
             var imageDirectory = configuration?[ShippedPrebuiltBundles.DirectoryConfigKey]

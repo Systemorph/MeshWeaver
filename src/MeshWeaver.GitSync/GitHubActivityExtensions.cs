@@ -380,8 +380,8 @@ public static class GitHubActivityExtensions
         {
             logger?.LogWarning(
                 "[SealedSync] no IoPoolRegistry is registered, so the seal under {Root} cannot be read on a "
-                + "drained pool — an import of {Repo} asked for '{Requested}' is HELD rather than read as "
-                + "unsealed.", publishedRoot, repo, requested);
+                + "drained pool — an import of {Repo} asked for '{Requested}' runs as asked, and no "
+                + "prebuilt bytes can be verified for it.", publishedRoot, repo, requested);
             return Observable.Return(SealedSyncGate.DecideRequestedImport(
                 repo, requested, config.LastSyncCommitSha, SealedReadOutcome.Unreadable, [], identity, null));
         }
@@ -759,7 +759,30 @@ public static class GitHubActivityExtensions
             ctx.Log(failedNodes);
         if (BundleHeldLine(result) is { } bundleHeld)
             ctx.Log(bundleHeld);
+        if (ModulesDeclinedLine(result) is { } modulesDeclined)
+            ctx.Log(modulesDeclined);
         ctx.Log(ImportedLine(result, commitish));
+    }
+
+    /// <summary>
+    /// The modules this import did not write because each declares a platform floor above the
+    /// running platform — the one per-module decline of policy <c>module-sync-per-manifest-hash</c>,
+    /// named on the activity in the viewer's language. Warning: those modules are deliberately not at
+    /// the commit the rest of the Space took, and every sibling module synced.
+    /// </summary>
+    private static LogMessage? ModulesDeclinedLine(StaticRepoImportResult result)
+    {
+        if (result.DeclinedModules.Count == 0)
+            return null;
+        var modules = string.Join(", ", result.DeclinedModules);
+        var running = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?";
+        return new LogMessage(
+                $"⛔ {result.DeclinedModules.Count} module(s) not written — each declares a platform newer "
+                + $"than the running {running}: {modules}. Every other module synced; these sync once this "
+                + "instance's platform is rolled forward.",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.modulesDeclined",
+                ("count", result.DeclinedModules.Count), ("running", running), ("modules", modules));
     }
 
     /// <summary>

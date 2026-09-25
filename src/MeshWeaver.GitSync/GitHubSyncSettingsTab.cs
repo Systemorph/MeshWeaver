@@ -4,6 +4,7 @@ using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -614,6 +615,28 @@ public static class GitHubSyncSettingsTab
                     {
                         ["count"] = bundleHeld.Count,
                         ["paths"] = string.Join(", ", bundleHeld.Select(h => h.Path)),
+                    }))
+                : null,
+            // Policy module-sync-per-manifest-hash — per MODULE: which modules were declined (a
+            // declared platform floor above the running one), and which were unchanged by their
+            // manifest hash. A declined module never held its siblings, so it is named, not the Space.
+            cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList()
+                is { Count: > 0 } declinedModules
+                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesDeclined", locale,
+                    new Dictionary<string, object>
+                    {
+                        ["count"] = declinedModules.Count,
+                        ["running"] = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?",
+                        ["modules"] = string.Join(", ", declinedModules.Select(m => $"{m.Module} (≥ {m.Floor})")),
+                    }))
+                : null,
+            cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Unchanged).ToList()
+                is { Count: > 0 } unchangedModules
+                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesUnchanged", locale,
+                    new Dictionary<string, object>
+                    {
+                        ["count"] = unchangedModules.Count,
+                        ["modules"] = string.Join(", ", unchangedModules.Select(m => m.Module)),
                     }))
                 : null,
         };

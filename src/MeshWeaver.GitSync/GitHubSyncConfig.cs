@@ -267,4 +267,28 @@ public record GitHubSyncConfig
     /// </summary>
     [Browsable(false)]
     public ImmutableList<BundleHeldNodeType>? BundleHeldNodeTypes { get; init; }
+
+    /// <summary>
+    /// 🚨 The <c>manifest.lock</c> content hash (<c>moduleVersion</c>) of every module this Space
+    /// holds, as of the last import that LANDED it — the key of the per-module sync decision (policy
+    /// <c>module-sync-per-manifest-hash</c>, <see cref="ModuleSyncDecision"/>). An incoming module
+    /// whose hash equals its entry here is unchanged and nothing is written for it.
+    ///
+    /// <para>Advanced only by an import whose nodes all landed (the <c>#2229 item C</c> rule the
+    /// commit baseline follows): recording a hash for a module that did not fully land would make the
+    /// next attempt read it as unchanged and the miss permanent. A declined module keeps the hash it
+    /// had. Null on a Space that has never synced a module-bearing tree. Not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableDictionary<string, string>? ModuleVersions { get; init; }
+
+    /// <summary>
+    /// The per-module outcome of the LAST import attempt — each module unchanged, synced, or
+    /// declined with its reason (policy <c>module-sync-per-manifest-hash</c>). Written on every
+    /// import conclusion, cleared by one whose tree states no module. It replaces the whole-Space
+    /// <c>Held</c> the sealed-publication gate used to write: a module is judged alone, and a declined
+    /// module never holds its siblings. Not user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableList<ModuleSyncOutcome>? ModuleOutcomes { get; init; }
 }

@@ -25,8 +25,14 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// 🚨 <b>The boot default install was the last unattended branch-tip import, and it was writing
-/// partitions a sync entry already held at the sealed commit</b> (Systemorph/MeshWeaver#4259).
+/// 🚨 <b>Policy <c>module-sync-per-manifest-hash</c>:</b> the seal no longer pins the boot default
+/// install's ref (the #4259 design below). Every boot lists the configured ref, and a partition a
+/// sync source keeps current is written by that source alone (#4588) — which is what keeps the two
+/// unattended writers of one partition from landing two trees now that the sync source follows
+/// green builds rather than the seal. The history is kept because it is why #4588's hold exists.
+///
+/// <para>🚨 <b>The boot default install was the last unattended branch-tip import, and it was writing
+/// partitions a sync entry already held at the sealed commit</b> (Systemorph/MeshWeaver#4259).</para>
 ///
 /// <para>The Sync-Ref Contract says an UNATTENDED import reads a commit a build proved; only a
 /// person clicking "Update to latest" reads a branch. Every GitSync path honours it and
@@ -118,67 +124,43 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// 🚨 Policy <c>module-sync-per-manifest-hash</c> re-expresses this case: the seal no longer pins
+    /// (or holds) the boot install's ref — the same answer the GitSync first import takes — so every
+    /// boot lists the CONFIGURED ref whatever is sealed: nothing sealed, sealed at an older commit, a
+    /// torn seal, another repository's seal. Against the #4259 code boot 2 fetched the sealed commit
+    /// and boot 3 held; here every boot asks the transport for <c>main</c> only.
+    /// </summary>
     [Fact(Timeout = 300_000)]
-    public async Task TheBootInstall_LandsOnTheCommitTheSealNames_NeverTheBranch()
+    public async Task TheBootInstall_ListsTheConfiguredRef_WhateverIsSealed()
     {
-        // ── Boot 1: nothing sealed for this identity ─────────────────────────────────────────
-        // The residue the contract names — a repository this instance runs no publication of —
-        // keeps today's behaviour: the configured branch. This is also the precondition that
-        // makes every later boot a measurement: the partition holds the TIP's tree.
         var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(TestContext.Current.CancellationToken);
         first.Packages.Should().Equal(new[] { Package });
         first.Failed.Should().Be(0);
-        (await Record())!.InstalledFromRef.Should().Be("main",
-            "with no publication of the repository sealed for this identity, the lane resolves the branch (the residue)");
+        (await Record())!.InstalledFromRef.Should().Be("main");
         (await Lesson()).Should().Be("# Lesson, as of main");
         (await Read(QuizPath)).Should().NotBeNull("the branch tip carries a node the sealed commit does not");
-        // A boot fetches at least twice — the listing and the package's files — so the measurement
-        // is the SET of refs asked for, never a count.
         repoClient.FetchedRefs.Should().NotBeEmpty().And.OnlyContain(r => r == "main");
-        var fetchesAfterFirstBoot = repoClient.FetchedRefs.Count;
 
-        // ── Boot 2: the repository is sealed at an OLDER commit for this identity ────────────
-        StageSeal(RepoFullName, SealedSha, complete: true);
-        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
-        second.Packages.Should().Equal(new[] { Package });
-        second.Failed.Should().Be(0);
-        second.ListingIncomplete.Should().BeFalse();
-        (await Record())!.InstalledFromRef.Should().Be(SealedSha,
-            "an unattended import lands on the commit whose bytes this instance runs, and the record says which");
-        (await Lesson()).Should().Be("# Lesson, as sealed",
-            "the partition holds the SEALED tree — the same tree the partition's sync entry is held to");
-        (await Read(QuizPath)).Should().BeNull(
-            "a node only the branch tip carries is pruned when the lane lands on the seal; the two "
-            + "unattended writers of this partition now agree on its tree, so nothing is left for the "
-            + "sealed reconciler to remove behind the installer's back");
-        repoClient.FetchedRefs.Skip(fetchesAfterFirstBoot).Should().NotBeEmpty("the sealed commit was fetched")
-            .And.NotContain("main", "the branch is never resolved by an unattended install once the repository is sealed here")
-            .And.OnlyContain(r => r == SealedSha);
-
-        // ── Boot 3: the seal is TORN (no completion sentinel) ────────────────────────────────
-        // "Cannot tell" is a hold, never "clear to resolve the branch": the very shape being
-        // removed would otherwise come back the moment a publication was half-written.
-        var fetchesBeforeHold = repoClient.FetchedRefs.Count;
-        StageSeal(RepoFullName, SealedSha, complete: false);
-        var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
-        third.Packages.Should().BeEmpty("a held source contributes no candidates this boot");
-        third.Failed.Should().Be(0, "a hold is not a failure — a retry cannot change a seal, the seal landing can");
-        third.ListingIncomplete.Should().BeTrue(
-            "the pass must not read its own silence as 'that source refuses nothing' (#4097)");
-        repoClient.FetchedRefs.Count.Should().Be(fetchesBeforeHold, "a held source is not fetched at any ref");
-        (await Record())!.InstalledFromRef.Should().Be(SealedSha, "the record is untouched by a hold");
-        (await Lesson()).Should().Be("# Lesson, as sealed");
-
-        // ── Boot 4: a seal of ANOTHER repository — not this lane's business ──────────────────
-        StageSeal(OtherRepoFullName, SealedSha, complete: true);
-        var fetchesBeforeFourth = repoClient.FetchedRefs.Count;
-        var fourth = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
-        fourth.Packages.Should().Equal(new[] { Package });
-        fourth.ListingIncomplete.Should().BeFalse();
-        (await Record())!.InstalledFromRef.Should().Be("main",
-            "another repository's seal holds nothing here — this repository is back to 'no publication sealed', the residue");
-        (await Read(QuizPath)).Should().NotBeNull("the branch tip's tree is back, so its extra node is too");
-        repoClient.FetchedRefs.Skip(fetchesBeforeFourth).Should().NotBeEmpty().And.OnlyContain(r => r == "main");
+        foreach (var (repository, complete, what) in new[]
+                 {
+                     (RepoFullName, true, "sealed at an OLDER commit for this identity"),
+                     (RepoFullName, false, "a TORN seal"),
+                     (OtherRepoFullName, true, "another repository's seal"),
+                 })
+        {
+            var fetchesBefore = repoClient.FetchedRefs.Count;
+            StageSeal(repository, SealedSha, complete);
+            var pass = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
+            pass.Packages.Should().Equal(new[] { Package }, $"{what}: the package is still installed");
+            pass.Failed.Should().Be(0);
+            pass.ListingIncomplete.Should().BeFalse($"{what}: nothing is held, so the listing is whole");
+            (await Record())!.InstalledFromRef.Should().Be("main",
+                $"{what}: the seal does not choose the ref (policy module-sync-per-manifest-hash)");
+            (await Read(QuizPath)).Should().NotBeNull($"{what}: the configured ref's tree stays");
+            repoClient.FetchedRefs.Skip(fetchesBefore).Should().NotContain(SealedSha,
+                $"{what}: the sealed commit is never asked for");
+        }
     }
 
     /// <summary>
@@ -199,10 +181,11 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
     /// writer keeps current, whatever that writer is held to. The witness is the transport's own
     /// request log — what a lane ASKED FOR is the one thing it cannot fake.</para>
     ///
-    /// <para><b>The control is in the same test and differs by one fact</b>: once the repository IS
-    /// sealed for this identity the same sync-owned partition installs again, at the sealed commit.
-    /// The gate discriminates on whether the REF was proven, never on whether the partition has a
-    /// second writer — so it cannot become "the boot install stopped installing".</para>
+    /// <para><b>Since policy <c>module-sync-per-manifest-hash</c> the seal proves no ref</b>, so the
+    /// arms that used to install at the sealed commit (a partition synced from its own repository)
+    /// defer to the partition's sync source as well: it follows green builds per module manifest hash
+    /// and is the partition's one writer. A partition nothing syncs still installs (boot 1 here, and
+    /// every boot of the case above), so this is not "the boot install stopped installing".</para>
     /// </summary>
     [Fact(Timeout = 300_000)]
     public async Task TheBootInstall_HoldsAnUnprovenRef_WhereAnotherWriterKeepsThePartitionCurrent()
@@ -266,45 +249,31 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
             "and the record was NOT re-stamped — a hold that moved the record would leave the next "
             + "delta computed against a claim nothing wrote");
 
-        // ── ARM 2: a PROVEN ref, into a partition synced from ANOTHER repository. ──────────────
-        // 🚨 This arm used to be the "control", and it was UNSOUND — which Copilot's review of
-        // #4619 said in as many words: the fixture connects the partition to `Systemorph/Example`
-        // while the package is sealed from `test/boot-seal`, so "the two agree" was never true of
-        // it. Both writers are pinned, and they are pinned to two different repositories. #4619
-        // left that as MeshWeaver#4625 because nothing compared them. Gate 1d now does, so the same
-        // fixture is no longer a control: it IS the #4625 case, and it must HOLD.
+        // ── ARMS 2 and 3, under policy module-sync-per-manifest-hash. ──────────────────────────
+        // The seal no longer PROVES the install's ref, so a seal of this repository changes nothing
+        // here: whether the partition syncs from ANOTHER repository (arm 2, which #4625 held on the
+        // repository mismatch) or from its OWN (arm 3, which used to install at the sealed commit),
+        // the partition's content is kept current by its sync source — its ONE writer, following
+        // green builds per module manifest hash — and the installer defers to it (#4588). Installing
+        // the sealed tree here would put an OLDER tree into a partition that writer has moved past:
+        // the two-writer mix #4355 describes, in the other direction.
         StageSeal(RepoFullName, SealedSha, complete: true);
         var mismatched = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
             .Await(TestContext.Current.CancellationToken);
-        var repoHold = mismatched.Held.Should().ContainSingle(h => h.Package == Package,
-            "a proven ref is not enough: this partition imports from a DIFFERENT repository, so the "
-            + "two pinned writers still land two trees (MeshWeaver#4625)").Subject;
-        repoHold.Reason.Should().Contain("MeshWeaver#4625",
-            "the hold names the gap it is about, or nobody can act on it");
-        repoHold.Reason.Should().Contain("two pinned writers, two repositories, one partition");
+        mismatched.Held.Should().ContainSingle(h => h.Package == Package,
+            "a partition another writer keeps current is not written by the boot install").Subject
+            .Reason.Should().Contain("MeshWeaver#4588");
         mismatched.Packages.Should().BeEmpty("a held package is not a package this pass landed");
-        (await Record())!.InstalledFromRef.Should().Be("main",
-            "and the record is still not re-stamped");
+        (await Record())!.InstalledFromRef.Should().Be("main", "and the record is still not re-stamped");
 
-        // ── ARM 3, THE CONTROL: a proven ref into the partition's OWN repository INSTALLS. ─────
-        // 🚨 This is the arm that must never break. It is the fleet's normal shape — a package
-        // sealed from a repository, installed into a partition synced from that repository's own
-        // folder — and holding it would take #4259's lane offline on every instance, which is the
-        // stated cost that kept #4625 open rather than folded into #4619. Only the REPOSITORY
-        // changes between arm 2 and arm 3: same seal, same proven ref, same partition. So what this
-        // pins is the comparison and nothing else.
         await PointTheSyncAt($"https://github.com/{RepoFullName}", Package);
         var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
             .Await(TestContext.Current.CancellationToken);
-        third.Held.Should().BeEmpty(
-            "the control: a PROVEN ref into the partition's OWN repository lands the same tree the "
-            + "partition's writer is held to, so the two agree and nothing is held — the gate must "
-            + "not read 'this partition has a second writer' as 'never install here again'");
-        third.Packages.Should().Equal(new[] { Package });
-        (await Record())!.InstalledFromRef.Should().Be(SealedSha);
-        (await Lesson()).Should().Be("# Lesson, as sealed",
-            "and the control really WROTE — the partition now holds the sealed tree, the same one "
-            + "its sync entry is held to, which is the state the two writers may share");
+        third.Held.Should().ContainSingle(h => h.Package == Package,
+            "a partition synced from its OWN repository has one writer too — the sync source");
+        third.Packages.Should().BeEmpty();
+        repoClient.FetchedRefs.Should().NotContain(SealedSha, "the sealed commit is never asked for");
+        (await Record())!.InstalledFromRef.Should().Be("main");
     }
 
     /// <summary>
