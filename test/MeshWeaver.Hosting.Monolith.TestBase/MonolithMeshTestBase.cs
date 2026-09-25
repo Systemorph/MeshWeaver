@@ -320,7 +320,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         /// The hosted services started on this shared mesh — once, by the first case that joined it
         /// (see <see cref="TryClaimHostedServiceStart"/>) — so its teardown stops exactly those.
         /// </summary>
-        public List<Microsoft.Extensions.Hosting.IHostedService> StartedHostedServices { get; } = [];
+        private System.Collections.Immutable.ImmutableList<Microsoft.Extensions.Hosting.IHostedService> startedHostedServices = [];
+
+        /// <summary>
+        /// Records one hosted service the claiming case started, atomically — the list is immutable
+        /// and swapped whole, so a reader never observes a partial update.
+        /// </summary>
+        public void RecordStarted(Microsoft.Extensions.Hosting.IHostedService hosted) =>
+            System.Collections.Immutable.ImmutableInterlocked.Update(ref startedHostedServices, list => list.Add(hosted));
 
         private int hostedServicesClaimed;
 
@@ -349,10 +356,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         private async Task TearDownMeshAsync(IServiceProvider provider)
         {
             var sw = Stopwatch.StartNew();
-            for (var i = StartedHostedServices.Count - 1; i >= 0; i--)
+            // Taken exactly once: the teardown owns the snapshot it swapped out.
+            var started = Interlocked.Exchange(
+                ref startedHostedServices,
+                System.Collections.Immutable.ImmutableList<Microsoft.Extensions.Hosting.IHostedService>.Empty);
+            for (var i = started.Count - 1; i >= 0; i--)
             {
                 using var stopCts = new CancellationTokenSource(DisposeTimeout);
-                var hosted = StartedHostedServices[i];
+                var hosted = started[i];
                 try { await hosted.StopAsync(stopCts.Token).WaitAsync(stopCts.Token); }
                 catch (Exception ex)
                 {
@@ -360,7 +371,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                         $"{hosted.GetType().Name}: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-            StartedHostedServices.Clear();
 
             var mesh = provider.GetService<IMessageHub>();
             if (mesh is null || mesh.IsDisposing)
@@ -951,16 +961,16 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // collection teardown stops them (SharedMeshProvider.TearDownMeshAsync). Every later
             // case joins services that are already running; starting the same singletons again
             // per [Fact] ran one more copy of each loop per case, none of which was ever stopped.
-            var startedList = _sharedMesh is null
-                ? _startedHostedServices
-                : _sharedMesh.TryClaimHostedServiceStart() ? _sharedMesh.StartedHostedServices : null;
-            if (startedList is not null)
+            if (_sharedMesh is null || _sharedMesh.TryClaimHostedServiceStart())
             {
                 foreach (var hosted in Mesh.ServiceProvider
                     .GetServices<Microsoft.Extensions.Hosting.IHostedService>())
                 {
                     await hosted.StartAsync(TestContext.Current.CancellationToken);
-                    startedList.Add(hosted);
+                    if (_sharedMesh is null)
+                        _startedHostedServices.Add(hosted);
+                    else
+                        _sharedMesh.RecordStarted(hosted);
                 }
             }
             TestPhaseTrace(name, "INIT_HOSTED_SERVICES_STARTED", sw.ElapsedMilliseconds);
