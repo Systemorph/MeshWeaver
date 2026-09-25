@@ -78,6 +78,28 @@ The strict-MVID rule stays where it belongs, on content bundles, in
 install across platform versions — and the roll gate does not apply it to modules either: it asks
 whether the *bytes* link, which is the question MVID equality only approximates.
 
+## The declared-break hold — the ladder's one roll hold (policy `platform-backwards-compatibility`)
+
+Platform builds are backwards compatible within a compatibility epoch, and publications are keyed on
+the compatibility key `c<major>e<epoch>`, so a **normal platform build needs no plugin seal at all**:
+the target carries the key the installed plugins were built under, every plugin keeps its bytes, and
+a missing bake is the boot-compile cost it always was. `ReleaseAvailability.PlatformRangeHold`
+answers null for every package on that path, and `DeclaredBreakRollHoldTest.AnOpenCeiling_SameKey_RollsWithoutAnySeal`
+is the ratchet that keeps it so.
+
+The hold exists only behind a DECLARED break (`src/MeshWeaver.Compiler/platform-compatibility.json`):
+when the target's key differs from the key an installed build was produced under (an epoch or major
+bump, whose `previousEpochCeiling` the old builds inherit), or the target is above a ceiling the
+installed build's bundle declares (`BundleReader.Manifest.PlatformCeiling`). Then the roll needs a
+REPLACEMENT — the package sealed under the target's key with a range that admits the target
+(`PlatformCompatibility.DeclineReason` null) — and without one the candidate is declined as
+`PackageAvailabilityKind.PlatformRangeExceeded`, the reason naming the plugin, the installed key and
+ceiling, and the target version and key. The walk is newest-first, so the environment lands on the
+newest release its plugins still cover rather than staying put. A legacy installed identity
+(`s…`/`g…`) states no epoch and is never held by this rule.
+
+The whole procedure, both paths: [Deploying Across Platform Versions](../DeployingAcrossPlatformVersions).
+
 ## The release marker — how a release's identity becomes knowable at all
 
 A framework identity is a property of the **binaries**: the image resolves it from its own surface
@@ -614,6 +636,8 @@ A satellite adopts this check when it moves its `node-repo-module-pack.yml@<sha>
 pinned by SHA, so nothing changes for a repo until it bumps.
 
 ## See also
+
+* [Deploying Across Platform Versions](../DeployingAcrossPlatformVersions) — the ladder, the declared-break hold, and what "build complete" means on each path
 
 - [The Release Gate's Denominator](../ReleaseGateDenominator) — why "which packages must be baked" may never be read from the artifact under judgement
 - [Roll Selection](../RollSelection) — the same predicate applied when CHOOSING the target rather than approving one, and the measured boundary of what a published set can be asked

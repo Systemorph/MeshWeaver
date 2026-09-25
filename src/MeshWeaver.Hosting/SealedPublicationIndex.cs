@@ -18,7 +18,29 @@ namespace MeshWeaver.Hosting;
 /// is on disk — the same rule the boot seeder judges by.</param>
 /// <param name="Refusal">Why <paramref name="IsSealed"/> is false, or null.</param>
 public sealed record SealedSource(
-    string Source, string? Repository, string? SourceCommit, bool IsSealed, string? Refusal);
+    string Source, string? Repository, string? SourceCommit, bool IsSealed, string? Refusal)
+{
+    /// <summary>
+    /// The PRODUCING platform build of this publication — the newest
+    /// <c>BundleReader.Manifest.ProducerPlatformVersion</c> over the bundles its seal lists (policy
+    /// <c>platform-backwards-compatibility</c>: the publication's platform FLOOR), or null when no
+    /// bundle records one (unknown producer = older = accepted). Init-only: the positional
+    /// constructor is binary API.
+    /// </summary>
+    public string? ProducerPlatformVersion { get; init; }
+
+    /// <summary>
+    /// 🚨 True when the publication IS sealed but was produced by a platform build NEWER than the
+    /// one this instance runs — the one rung the ladder forbids (platform 1 + plugin 2). The reading
+    /// then reports it as not sealed FOR THIS INSTANCE (<see cref="IsSealed"/> false), and
+    /// <see cref="Refusal"/> names both versions; the source advances when the PLATFORM roll lands.
+    /// </summary>
+    public bool HeldForNewerPlatform { get; init; }
+
+    /// <summary>The running platform build a <see cref="HeldForNewerPlatform"/> publication was
+    /// compared against, or null.</summary>
+    public string? RunningPlatformVersion { get; init; }
+}
 
 /// <summary>
 /// A platform publication LINE: the framework identity a set of bundles was sealed under, and the
@@ -234,6 +256,61 @@ public static class SealedPublicationIndex
     internal static (IReadOnlyList<(SealedSource Source, string Directory)> Sources,
                      SealedReadOutcome Outcome) ResolvedReadingFor(
         string? publishedRoot, string? identity, ILogger? logger = null)
+        => ResolvedReadingFor(publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger);
+
+    /// <summary>
+    /// <see cref="ReadingFor"/> against an EXPLICIT running platform build rather than this
+    /// process's — the seam the ladder rule is pinned through (policy
+    /// <c>platform-backwards-compatibility</c>): a publication sealed under this key by a platform
+    /// build NEWER than <paramref name="runningPlatformVersion"/> reads as not sealed for this
+    /// instance (<see cref="SealedSource.HeldForNewerPlatform"/>), because a plugin never runs on a
+    /// platform older than the one it was built for. An older or unknown producer reads exactly as
+    /// before — the ordinary path needs no seal for the running build.
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="identity">This instance's identity (compatibility key).</param>
+    /// <param name="runningPlatformVersion">The platform build this instance runs, or null when
+    /// unknown (then no producer can be shown newer, and nothing is held on this rule).</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static (IReadOnlyList<SealedSource> Sources, SealedReadOutcome Outcome) ReadingForRunning(
+        string? publishedRoot, string? identity, string? runningPlatformVersion, ILogger? logger = null)
+    {
+        var (sources, outcome) = ResolvedReadingFor(publishedRoot, identity, runningPlatformVersion, logger);
+        return ([.. sources.Select(r => r.Source)], outcome);
+    }
+
+    /// <summary>
+    /// 🚨 THE LADDER over one reading (policy <c>platform-backwards-compatibility</c>): a sealed
+    /// publication whose producing build is NEWER than the running one is not sealed for this
+    /// instance. Pure. Unknown on either side never holds (<c>PlatformCompatibility.ProducerIsNewer</c>
+    /// answers false), so a publication from a producer that predates the field reads as before.
+    /// </summary>
+    /// <param name="source">One source's reading.</param>
+    /// <param name="runningPlatformVersion">The platform build this instance runs.</param>
+    /// <returns>The reading, held when the producer is newer.</returns>
+    public static SealedSource ApplyLadder(SealedSource source, string? runningPlatformVersion)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!source.IsSealed
+            || !Compiler.PlatformCompatibility.ProducerIsNewer(source.ProducerPlatformVersion, runningPlatformVersion))
+            return source;
+        var at = source.SourceCommit is { Length: > 8 } c ? c[..8] : source.SourceCommit ?? "an unknown commit";
+        return source with
+        {
+            IsSealed = false,
+            HeldForNewerPlatform = true,
+            RunningPlatformVersion = runningPlatformVersion,
+            Refusal = $"sealed at {at} only by platform {source.ProducerPlatformVersion}, which is NEWER "
+                      + $"than the running platform {runningPlatformVersion} — a plugin never runs on a "
+                      + "platform older than the one it was built for (policy "
+                      + "platform-backwards-compatibility); this source advances when the PLATFORM roll "
+                      + "lands, and a platform roll does not wait for this seal",
+        };
+    }
+
+    private static (IReadOnlyList<(SealedSource Source, string Directory)> Sources,
+                     SealedReadOutcome Outcome) ResolvedReadingFor(
+        string? publishedRoot, string? identity, string? runningPlatformVersion, ILogger? logger)
     {
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
             return ([], SealedReadOutcome.NotConfigured);
@@ -262,6 +339,7 @@ public static class SealedPublicationIndex
             // as "this instance runs no publication of that repository", i.e. as a licence to
             // advance. The question is not per repository: a source nobody could attribute may be
             // ANY repository's, so no per-repository verdict taken from this list is trustworthy.
+            readings = [.. readings.Select(r => (ApplyLadder(r.Source, runningPlatformVersion), r.Directory, r.Unreadable))];
             var faulted = readings.Where(r => r.Unreadable).ToList();
             if (faulted.Count == 0)
                 return (readings.Select(r => (r.Source, r.Directory)).ToList(), SealedReadOutcome.Read);
@@ -379,14 +457,26 @@ public static class SealedPublicationIndex
                       + "publication sits behind it — which publication applies could not be read"
                     : "no completion sentinel"), publication, unreadable);
             }
-            var missing = seal
+            var listed = seal
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
-                .FirstOrDefault(name => !File.Exists(Path.Combine(publication, name)));
-            return (missing is null
-                ? new SealedSource(source, repository, commit, true, null)
-                : new SealedSource(source, repository, commit, false,
+                .ToList();
+            var missing = listed.FirstOrDefault(name => !File.Exists(Path.Combine(publication, name)));
+            if (missing is not null)
+                return (new SealedSource(source, repository, commit, false,
                     $"the seal lists '{missing}', which is not on disk"), publication, false);
+            // 🚨 An UNREADABLE manifest is not an absent field. "Unknown producer = older" is the
+            // rule for a producer that predates the field; a manifest that could not be READ may
+            // belong to a newer publication, and treating it as older would let this instance
+            // advance onto the forbidden rung. So it makes the reading UNREADABLE — the gate holds.
+            var (producer, manifestFault) = ProducerOf(publication, listed, logger);
+            return manifestFault is null
+                ? (new SealedSource(source, repository, commit, true, null) { ProducerPlatformVersion = producer },
+                    publication, false)
+                : (new SealedSource(source, repository, commit, false,
+                    $"a bundle manifest could not be read ({manifestFault}) — its producing platform build "
+                    + "is unknown, so whether it may run on this platform cannot be established"),
+                    publication, true);
         }
         catch (Exception ex)
         {
@@ -428,4 +518,38 @@ public static class SealedPublicationIndex
     }
 
     private static string? ReadMarker(string path) => ReadMarker(path, out _);
+
+    /// <summary>
+    /// The newest producing platform build any listed bundle's manifest records
+    /// (<c>ProducerPlatformVersion</c>), by sealed-publication lineage — null when none records one
+    /// (a producer that predates the field: unknown = older = accepted) — and the FAULT when a
+    /// manifest could not be read at all, which the caller turns into an unreadable reading.
+    /// </summary>
+    private static (string? Producer, string? Fault) ProducerOf(
+        string publication, IReadOnlyList<string> listed, ILogger? logger)
+    {
+        string? newest = null;
+        foreach (var name in listed.Where(n => n.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)))
+        {
+            string? producer;
+            try
+            {
+                producer = Plugin.Packaging.BundleReader.ReadManifest(Path.Combine(publication, name))?.ProducerPlatformVersion;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException
+                                           or System.Text.Json.JsonException or UnauthorizedAccessException)
+            {
+                logger?.LogWarning(ex,
+                    "SealedPublicationIndex: the manifest of {Bundle} could not be read — its producing "
+                    + "platform build is unknown, so this reading is UNREADABLE and the gate holds",
+                    Path.Combine(publication, name));
+                return (null, $"{name}: {ex.GetType().Name}: {ex.Message}");
+            }
+            if (string.IsNullOrWhiteSpace(producer))
+                continue;
+            if (newest is null || Plugin.Packaging.PlatformReleaseOrder.Newest.Compare(producer, newest) > 0)
+                newest = producer;
+        }
+        return (newest, null);
+    }
 }

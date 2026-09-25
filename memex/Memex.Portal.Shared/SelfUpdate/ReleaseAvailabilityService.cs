@@ -549,6 +549,12 @@ public class ReleaseAvailabilityService(
             .GroupBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
 
+        // The build this environment RUNS: bytes adopted under the running platform's compatibility
+        // key (policy platform-backwards-compatibility). Its key and any ceiling its bundles declare
+        // are what the declared-break hold compares a target against; on the ordinary path the
+        // target carries the same key and no ceiling is declared, so nothing here can hold a roll.
+        var liveKey = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        var (installedRanges, rangeRefusal) = PublishedBundleCatalogue.RangesForIdentity(PublishedRoot, liveKey, logger);
         var required = installed
             .Select(manifest => new RequiredPackage(
                 manifest.Id,
@@ -564,6 +570,10 @@ public class ReleaseAvailabilityService(
             {
                 ModuleName = string.IsNullOrWhiteSpace(manifest.Module) ? null : manifest.Module,
                 LandedModulePath = LandedPathOf(moduleRoot, manifest.Module, landed),
+                InstalledKey = liveKey,
+                InstalledCeiling = installedRanges.TryGetValue(manifest.Id, out var range) ? range.Ceiling : null,
+                InstalledRangeUnreadable = rangeRefusal
+                    ?? (installedRanges.TryGetValue(manifest.Id, out var read) ? read.Unreadable : null),
             })
             .ToImmutableArray();
         // 🚨 PRINT THE DENOMINATOR. A completeness gate whose expected count nobody can

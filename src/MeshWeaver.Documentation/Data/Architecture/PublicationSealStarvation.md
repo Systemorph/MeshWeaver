@@ -22,6 +22,35 @@ The short version:
 > — and the only thing that then converges a Space is a pod restart, which re-reads the same stale
 > seal and imports nothing new.
 
+## 0. Under the ladder (policy `platform-backwards-compatibility`)
+
+Most of this page is the history of a per-BUILD identity: every platform build minted a new one, so a
+publication sealed for the build an instance ran stopped matching the moment the instance rolled, and
+the hold below became unsatisfiable. Publications are now keyed on the platform COMPATIBILITY key
+`c<major>e<epoch>`, which every build of one epoch shares. So:
+
+* **A platform roll no longer starves a Space.** The instance's key does not change on a normal roll,
+  so the publication sealed under it keeps matching — no re-seal for the new build is needed for the
+  source to advance (platform 2 + plugin 1).
+* **A new plugin publication advances the source without a platform roll** when it was produced by
+  the running build or an older one of the same key (platform 2 + plugin 2).
+* **The one rung that is held is platform 1 + plugin 2** — a publication produced by a platform build
+  NEWER than the one running. `SealedPublicationIndex` reads each sealed source's producing build (the
+  newest `producerPlatformVersion` its bundles' manifests record) and `ApplyLadder` reports such a
+  publication as not sealed for this instance (`SealedSource.HeldForNewerPlatform`); the gate words
+  the hold with both versions — *"sealed at C only by platform P, which is NEWER than the running
+  platform R … this source advances when the PLATFORM roll lands, and a platform roll does not wait
+  for this seal"* — and the Space's activity carries it as `activity.gitsync.seal.heldNewerPlatform`.
+  An unknown producer (a bundle from before the field) or an unknown running build holds nothing.
+
+The shape this settles was measured on memex.systemorph.com on 2026-09-25: the control instance ran
+`3.0.0-ci.9218`, `Hosting/_GitSync` was Held at `7545d355`, and MeshWeaver.Plugins `1470fbf3` was
+sealed only by `3.0.0-ci.9321`. That hold was correct — the plugin was built for a newer platform —
+and its remedy was the platform roll; what the old note could not say was that the roll is the ONLY
+remedy and that nothing about the roll waits for a seal. `SealedSyncFollowsTheLadderTest` reproduces
+it on a real published root. The whole procedure: [Deploying Across Platform
+Versions](../DeployingAcrossPlatformVersions).
+
 ## 1. The gate, and why it exists
 
 `SealedSyncGate.Decide` (`src/MeshWeaver.GitSync/SealedSyncGate.cs`) answers one question per sync

@@ -21,7 +21,9 @@ public class SealedPublicationIndexTest : IDisposable
         var dir = Path.Combine(root, Identity, name);
         Directory.CreateDirectory(dir);
         foreach (var b in bundles)
-            File.WriteAllText(Path.Combine(dir, b), "zip");
+            // A real (empty) archive: the sealed reading reads each bundle manifest for its producing
+            // platform build, and bytes that are not an archive make the reading UNREADABLE.
+            using (System.IO.Compression.ZipFile.Open(Path.Combine(dir, b), System.IO.Compression.ZipArchiveMode.Create)) { }
         if (commit is not null)
             File.WriteAllText(Path.Combine(dir, SealedPublicationIndex.SourceCommitMarkerFileName), commit + "\n");
         if (repository is not null)

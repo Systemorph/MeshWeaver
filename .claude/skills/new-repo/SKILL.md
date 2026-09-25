@@ -400,6 +400,15 @@ A real caller, verbatim from it:
 
 ## 6. CD — publish, bake, and the poll that actually delivers
 
+> **The ladder (policy `platform-backwards-compatibility`).** A node repo's publication is sealed
+> under the platform COMPATIBILITY key `c<major>e<epoch>`, which every platform build of one epoch
+> shares — so a new platform build does NOT require this repo to rebuild or re-seal, and installs keep
+> running its bytes across platform rolls. Its publication rolls independently once its floor (the
+> producing platform build) is ≤ the platform an install runs. Only a DECLARED break (an epoch bump)
+> requires a coordinated rebuild and seal, and then platform rolls are held by name until it lands.
+> Never pin a platform image or a Deployment record to work around one. Full procedure:
+> [Deploying Across Platform Versions](../../../src/MeshWeaver.Documentation/Data/Architecture/DeployingAcrossPlatformVersions.md).
+
 **Publication is `node-repo-publish-bake.yml`**, gated main-only *or* on a release trigger:
 
 ```yaml

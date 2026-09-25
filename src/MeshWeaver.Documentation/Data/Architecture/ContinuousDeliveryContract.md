@@ -1145,6 +1145,7 @@ green lane red.
 
 ## See also
 
+- [Deploying Across Platform Versions](/Doc/Architecture/DeployingAcrossPlatformVersions) — the ladder end to end: which image a portal rolls to, which plugins it runs afterwards, and what "build complete" means on the compatible and the breaking path.
 - [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy) — the two channels, the update policy node, and how each install applies an update.
 - [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) — where the version number comes from.
 - [Deployment](/Doc/Architecture/Deployment) — the route router (AKS vs Container Apps).
