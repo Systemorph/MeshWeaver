@@ -989,6 +989,24 @@ if [ -n "${RELEASE_VERSION:-}" ]; then
   printf '%s\n' "$IDENTITY" > "$RELEASE_MARKER_LOCAL"
 fi
 
+# ExpectedDbVersion (#4764 (b3); policy db-migration-planned; PluginCatalog ReleaseSchemaMarker):
+# the database schema this release's portal image expects, at _releases/_db/<release-version>,
+# whose whole content is the integer. A SUBDIRECTORY on purpose — every reader of _releases, the
+# portals already deployed included, enumerates FILES only and reads each body as an identity, so a
+# second line or a sibling file would be misread by images that predate this field. Written only
+# when the caller KNOWS the number (main-cd's portal-image reads DbVersion.Latest off the Plugins
+# commit it built); a bake-only reconcile passes none and writes none — absent is UNKNOWN to every
+# reader, never zero. Its own temp directory, so nothing that uploads the sentinel directory carries it.
+RELEASE_SCHEMA_DIR="_db"
+RELEASE_SCHEMA_LOCAL=""
+if [ -n "${RELEASE_MARKER_LOCAL:-}" ] && [ -n "${EXPECTED_DB_VERSION:-}" ]; then
+  case "$EXPECTED_DB_VERSION" in
+    *[!0-9]*) echo "::error::EXPECTED_DB_VERSION '$EXPECTED_DB_VERSION' is not a plain integer — refusing to publish a schema version nobody read"; exit 1;;
+  esac
+  RELEASE_SCHEMA_LOCAL="$(mktemp -d)/$RELEASE_VERSION"
+  printf '%s\n' "$EXPECTED_DB_VERSION" > "$RELEASE_SCHEMA_LOCAL"
+fi
+
 ensure_directory() { # <account> <share> <dir-path>
   local account="$1" share="$2" dest="$3" path="" part
   # az storage directory create is not recursive and errors on an existing directory on some CLI
@@ -1014,6 +1032,15 @@ publish_release_marker() { # <account> <share> <base>
   local account="$1" share="$2" base="$3"
   local dir="${base:+$base/}prebuilt-bundles/$RELEASES_DIR"
   ensure_directory "$account" "$share" "$dir"
+  # The schema file lands BEFORE the marker it describes, so a reader that finds the marker finds
+  # the number with it (when this run knows one).
+  if [ -n "${RELEASE_SCHEMA_LOCAL:-}" ]; then
+    ensure_directory "$account" "$share" "$dir/$RELEASE_SCHEMA_DIR"
+    az storage file upload --account-name "$account" --share-name "$share" \
+      --path "$dir/$RELEASE_SCHEMA_DIR" --source "$RELEASE_SCHEMA_LOCAL" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null
+    echo "release schema: $account/$share/$dir/$RELEASE_SCHEMA_DIR/$RELEASE_VERSION → ExpectedDbVersion $EXPECTED_DB_VERSION"
+  fi
   # Same directory-as---path trick as the sentinel below: the CLI appends the source basename, and
   # the local file is already named after the version.
   az storage file upload --account-name "$account" --share-name "$share" \

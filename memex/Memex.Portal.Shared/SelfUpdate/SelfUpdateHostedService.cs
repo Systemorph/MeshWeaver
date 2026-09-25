@@ -1494,18 +1494,20 @@ public class SelfUpdateHostedService : IHostedService
     ///     <see cref="SelfUpdateVerdict.Unmigrated"/>, so the policy node distinguishes a roll whose
     ///     schema moved from one that rolled blind — #4764's second ask.</item>
     /// </list>
-    /// <para>🚨 What this canNOT do, and the reason it is a blanket rule rather than a version
-    /// compare: the schema a build expects is a constant compiled into that build
-    /// (<c>DbVersionGate.ExpectedDbVersion</c>), not a published property of a release, so a portal
-    /// running the OLD image cannot read the NEW image's number. Running the migration IS the
-    /// comparison, executed rather than computed — which is why "could not run it" and "do not know"
-    /// are the same fact here. Making the expected version knowable from outside an image is the open
-    /// half, described on <c>Doc/Architecture/SelfUpdateSchemaWall</c>.</para>
+    /// <para>🚨 <b>The published schema step refines the two outcomes that establish nothing</b>
+    /// (#4764 (b3); policy <c>db-migration-planned</c>). The schema a build expects used to be only a
+    /// constant compiled into it, so "could not run the migration" and "do not know" were the same
+    /// fact. The release marker now carries <c>ExpectedDbVersion</c> (<see cref="ReleaseSchemaMarker"/>),
+    /// so when both the running and the target release publish it the decision is a comparison of
+    /// two numbers — <c>NotSupported</c> across a schema bump is REFUSED naming both, and
+    /// <c>Forbidden</c> on a target that keeps the schema may roll. The shared predicate
+    /// <see cref="SelfUpdateVerdict.MayPatchAfter(MigrationRunOutcome, ReleaseSchemaStep)"/> is the
+    /// rule; this switch only says it in words. An unknown step changes nothing.</para>
     /// <para>Both calls run on the Http pool like every other Kubernetes edge here; the migration
     /// wait is bounded by <see cref="SelfUpdateOptions.MigrationJobTimeout"/> inside the updater.</para>
     /// </summary>
     private IObservable<SelfUpdateVerdict> MigrateThenPatch(string target, DateTimeOffset? lastRolledAt) =>
-        _http.Invoke(ct => _updater.RunMigrationAsync(target, ct))
+        ReadSchemaStep(target).SelectMany(step => _http.Invoke(ct => _updater.RunMigrationAsync(target, ct))
             .SelectMany(outcome =>
             {
                 // The qualifier a roll taken WITHOUT its migration carries on the policy node, or
@@ -1526,6 +1528,15 @@ public class SelfUpdateHostedService : IHostedService
                             + "exists to prevent. Read the Job log and Doc/Architecture/DatabaseMigrationProcedure.",
                             target, outcome);
                         return Observable.Return(SelfUpdateVerdict.MigrationFailed(target, outcome));
+                    case MigrationRunOutcome.Forbidden when step.KeepsSchema:
+                        // The Job could not be created, but there is nothing for it to establish:
+                        // the target expects no newer schema than the running release, whose pods
+                        // passed DbVersionGate at that number. The missing grant blocks nothing.
+                        _logger?.LogInformation(
+                            "[SelfUpdate] the migration Job for {Tag} was refused (403), but {Step} — "
+                            + "the schema does not move, so the portal image is patched.",
+                            target, step.Describe());
+                        break;
                     case MigrationRunOutcome.Forbidden:
                         // 🚨 REFUSED, not "rolled loudly" (#4764). A 403 establishes nothing about
                         // the schema, and the move it used to make — patch and let DbVersionGate
@@ -1547,6 +1558,21 @@ public class SelfUpdateHostedService : IHostedService
                             "The portal service account has no batch/jobs grant, so the migration Job could "
                             + "not be created; run a helm upgrade for this instance — the chart's "
                             + "memex-portal/rbac.yaml adds the grant AND its own Job runs the migration."));
+                    case MigrationRunOutcome.NotSupported when step.MovesSchema:
+                        // 🚨 REFUSED: the published markers say this target moves the schema, and
+                        // this install cannot move it — rolling is now KNOWN to crash-loop on
+                        // DbVersionGate, so it is no longer the lesser harm (#4764 (b3)).
+                        _logger?.LogCritical(
+                            "[SelfUpdate] roll to {Tag} REFUSED: {Step}, and this install's deployment "
+                            + "updater cannot run a database migration. Doc/Architecture/PlanningADatabaseMigration.",
+                            target, step.Describe());
+                        return Observable.Return(SelfUpdateVerdict.SchemaAhead(target, outcome, step));
+                    case MigrationRunOutcome.NotSupported when step.KeepsSchema:
+                        _logger?.LogInformation(
+                            "[SelfUpdate] {Tag} cannot be migrated by this install, but {Step} — the schema "
+                            + "does not move, so the roll is not blind.",
+                            target, step.Describe());
+                        break;
                     case MigrationRunOutcome.NotSupported:
                         // Rolls on, because an install that can NEVER migrate would otherwise freeze
                         // for ever and silently (#2553) — but the record says it rolled blind.
@@ -1571,6 +1597,29 @@ public class SelfUpdateHostedService : IHostedService
                             target, ShippedReleaseSeed.InstalledPlatformVersion, lastRolledAt);
                         return unmigrated is null ? applied : applied.Unmigrated(unmigrated);
                     });
+            }));
+
+    /// <summary>
+    /// The published schema step for a roll to <paramref name="target"/> — both releases'
+    /// <c>ExpectedDbVersion</c> markers (<see cref="ReleaseSchemaMarker"/>), read on the file-system
+    /// pool. An unreadable reading is <see cref="ReleaseSchemaStep.Unknown"/>, which leaves the
+    /// decision exactly where it was before the field existed (the migration's own outcome decides);
+    /// the reader has already logged why. Virtual: the markers live on a mounted share, which is the
+    /// documented IO seam a test replaces.
+    /// </summary>
+    protected virtual IObservable<ReleaseSchemaStep> ReadSchemaStep(string target) =>
+        ReleaseSchemaMarker.ObserveStep(
+                _fileSystem,
+                ResolveConfiguration()?[MeshWeaver.Hosting.ShippedPrebuiltBundles.PublishedRootConfigKey],
+                ShippedReleaseSeed.InstalledPlatformVersion,
+                target,
+                _logger)
+            .Catch((Exception ex) =>
+            {
+                _logger?.LogWarning(ex,
+                    "[SelfUpdate] could not read the published ExpectedDbVersion markers for {Tag}; "
+                    + "only the migration's own outcome decides this roll.", target);
+                return Observable.Return(ReleaseSchemaStep.Unknown(target));
             });
 
     /// <summary>

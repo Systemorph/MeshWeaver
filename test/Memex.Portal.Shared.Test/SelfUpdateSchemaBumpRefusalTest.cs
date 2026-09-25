@@ -197,6 +197,54 @@ public class SelfUpdateSchemaBumpRefusalTest(ITestOutputHelper output) : Monolit
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  The published schema step (#4764 (b3)) — two numbers instead of a blanket rule
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 <b>The b3 acceptance criterion.</b> With the target PUBLISHED to expect a newer schema than
+    /// the running release, an install that cannot migrate is REFUSED — naming both numbers — instead
+    /// of rolling blind into the DbVersionGate crash-loop measured on memex 2026-09-24/25 (a pod on
+    /// ci.9332 restarting 91 times on <c>db_version=57 &lt; expected 58</c>).
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ACannotMigrateInstall_AcrossAPublishedSchemaBump_IsRefusedNamingBothNumbers()
+    {
+        await Seed(TestContext.Current.CancellationToken);
+        var updater = new RecordingUpdater(MigrationRunOutcome.NotSupported);
+
+        var content = await RunOneCheck(updater, new ReleaseSchemaStep("3.0.0-ci.1", 57, CandidateTag, 58));
+
+        updater.Tags.Should().BeEmpty(
+            "the published markers say this roll crash-loops on DbVersionGate, and this install cannot "
+            + "move the schema — rolling is no longer the lesser harm");
+        content.LastCheckVerdict.Should().Contain("REFUSED");
+        content.LastCheckVerdict.Should().Contain("db_version 58",
+            "a refusal that names the two numbers says exactly what a person has to move");
+        content.LastCheckVerdict.Should().Contain("expects 57");
+        content.LastCheckVerdict.Should().NotContain("applied update");
+    }
+
+    /// <summary>
+    /// The other direction: a target PUBLISHED to keep the schema needs no migration, so neither a
+    /// missing mechanism nor a missing grant may block it — and the roll is not recorded as blind.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ATargetThatKeepsTheSchema_RollsUnqualified_EvenWithoutAMigration()
+    {
+        await Seed(TestContext.Current.CancellationToken);
+        var updater = new RecordingUpdater(MigrationRunOutcome.Forbidden);
+
+        var content = await RunOneCheck(updater, new ReleaseSchemaStep("3.0.0-ci.1", 58, CandidateTag, 58));
+
+        updater.Tags.Should().Contain(CandidateTag,
+            "the database already has what the target expects — the running pods passed DbVersionGate "
+            + "at that number — so the refused Job blocks nothing that matters");
+        content.LastCheckVerdict.Should().Contain("applied update");
+        content.LastCheckVerdict.Should().NotContain("UNMIGRATED");
+        content.LastCheckVerdict.Should().NotContain("REFUSED");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  One decision, two routes
     // ══════════════════════════════════════════════════════════════════════════
 
@@ -215,21 +263,28 @@ public class SelfUpdateSchemaBumpRefusalTest(ITestOutputHelper output) : Monolit
     /// updater's recorded tags rather than off any verdict text.</para>
     /// </summary>
     [Theory(Timeout = 240_000)]
-    [InlineData(MigrationRunOutcome.Completed)]
-    [InlineData(MigrationRunOutcome.Failed)]
-    [InlineData(MigrationRunOutcome.TimedOut)]
-    [InlineData(MigrationRunOutcome.Forbidden)]
-    [InlineData(MigrationRunOutcome.NotSupported)]
-    public async Task ThePollerPatchesExactlyWhenTheSharedDecisionSaysItMay(MigrationRunOutcome outcome)
+    [InlineData(MigrationRunOutcome.Completed, null, null)]
+    [InlineData(MigrationRunOutcome.Failed, null, null)]
+    [InlineData(MigrationRunOutcome.TimedOut, null, null)]
+    [InlineData(MigrationRunOutcome.Forbidden, null, null)]
+    [InlineData(MigrationRunOutcome.NotSupported, null, null)]
+    [InlineData(MigrationRunOutcome.NotSupported, 57, 58)]
+    [InlineData(MigrationRunOutcome.NotSupported, 58, 58)]
+    [InlineData(MigrationRunOutcome.Forbidden, 57, 58)]
+    [InlineData(MigrationRunOutcome.Forbidden, 58, 58)]
+    [InlineData(MigrationRunOutcome.Completed, 57, 58)]
+    public async Task ThePollerPatchesExactlyWhenTheSharedDecisionSaysItMay(
+        MigrationRunOutcome outcome, int? installedExpected, int? targetExpected)
     {
         await Seed(TestContext.Current.CancellationToken);
         var updater = new RecordingUpdater(outcome);
+        var step = new ReleaseSchemaStep("3.0.0-ci.1", installedExpected, CandidateTag, targetExpected);
 
-        await RunOneCheck(updater);
+        await RunOneCheck(updater, step);
 
         updater.Migrations.Should().Contain(CandidateTag,
             "every roll asks about the schema first, whatever the answer turns out to be");
-        if (SelfUpdateVerdict.MayPatchAfter(outcome))
+        if (SelfUpdateVerdict.MayPatchAfter(outcome, step))
             updater.Tags.Should().Contain(CandidateTag,
                 "MayPatchAfter says this outcome permits the patch, and the manual Apply route will "
                 + "patch on it — the poller must not be stricter than the predicate the other route "
@@ -255,14 +310,15 @@ public class SelfUpdateSchemaBumpRefusalTest(ITestOutputHelper output) : Monolit
     /// yet" are indistinguishable from outside, and on a loaded shard the second is what actually
     /// happens — reported as if it were a wrong verdict.</para>
     /// </summary>
-    private async Task<UpdatePolicyContent> RunOneCheck(RecordingUpdater updater)
+    private async Task<UpdatePolicyContent> RunOneCheck(RecordingUpdater updater, ReleaseSchemaStep? step = null)
     {
         var ct = TestContext.Current.CancellationToken;
         var service = new GatedSelfUpdateService(
             Mesh, new FakeAcrTagLister(), updater, FastPoll(),
             Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(),
             new AlwaysAvailable(Mesh, new ConfigurationBuilder().Build()),
-            new ComboVerificationGate(Mesh));
+            new ComboVerificationGate(Mesh),
+            step ?? ReleaseSchemaStep.Unknown(CandidateTag));
 
         await service.StartAsync(CancellationToken.None);
         try
@@ -350,9 +406,15 @@ public class SelfUpdateSchemaBumpRefusalTest(ITestOutputHelper output) : Monolit
         SelfUpdateOptions options,
         ILogger<SelfUpdateHostedService>? logger,
         ReleaseAvailabilityService? gate,
-        ComboVerificationGate? combo)
+        ComboVerificationGate? combo,
+        ReleaseSchemaStep step)
         : SelfUpdateHostedService(hub, acr, updater, options, logger)
     {
+        /// <summary>The published schema step, supplied directly: the markers live on a mounted
+        /// share (the documented IO seam), and the decision under test is what the poller does with
+        /// the two numbers, not how a file is read — <c>ReleaseSchemaMarkerTest</c> pins the read.</summary>
+        protected override IObservable<ReleaseSchemaStep> ReadSchemaStep(string target) => Observable.Return(step);
+
         /// <summary>Surfaces the base class's per-check completion. The base member is
         /// <c>protected internal</c> and this assembly is not in its friend list, so a derived-class
         /// forward is the local way to reach it.</summary>
