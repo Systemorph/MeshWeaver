@@ -27,10 +27,10 @@
 # a pipe, and bridges nothing. The reads were already inside IIoPool.InvokeBlocking, so this was
 # never a hub park — it was async-over-sync at a boundary that does not need async at all.
 
-# Rx's blocking IObservable.Wait() over an @@-include resolution whose chain completes on
-# subscribe (a dictionary lookup). Safe as written, but the shape is one refactor away from a
-# real source and therefore from a real park.
-src/MeshWeaver.Compiler/NodeSetCompiler.cs	1
+# NodeSetCompiler's Rx .Wait() over the @@-include walk is GONE from this list: the tree bake now
+# hands the walk a SYNCHRONOUS reader (NodeCompileShaping.ResolveCodeIncludesInMemory), takes the
+# value from the subscription, and throws rather than parks if the chain ever stops completing
+# inside Subscribe. src/ carries no blocking bridge.
 
 # Rx's blocking IObservable.Wait() on the Orleans cluster disposal join. Bounded by an
 # upstream .Timeout(timeout), whose timer runs on the default scheduler and so always unblocks
