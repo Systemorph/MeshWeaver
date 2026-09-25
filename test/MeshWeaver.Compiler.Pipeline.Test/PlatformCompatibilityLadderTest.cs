@@ -45,7 +45,14 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 /// </summary>
 public class PlatformCompatibilityLadderTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string TypePath = "type/LadderPlugin";
+    /// <summary>
+    /// 🚨 One NodeType path PER TEST. The test assembly store is per CLASS on disk
+    /// (<c>meshweaver-test-assembly-store-&lt;pid&gt;-&lt;class&gt;</c>), so a shared path let one test
+    /// adopt bytes another test compiled on a DIFFERENT platform build — measured on CI: rung 1 picked
+    /// up the P3-floor bytes of the "newer platform" control, the floor rule correctly refused them
+    /// on P1, and the rebuild read as a ladder failure. A unique path makes each test's bytes its own.
+    /// </summary>
+    private readonly string TypePath = "type/LadderPlugin" + Guid.NewGuid().ToString("N")[..8];
 
     /// <summary>The three platform builds of one major and epoch the ladder climbs.</summary>
     private const string P1 = "3.0.0-ci.1000";
@@ -227,7 +234,7 @@ public class PlatformCompatibilityLadderTest(ITestOutputHelper output) : Monolit
     {
         await MeshService.CreateNode(MeshNode.FromPath(TypePath) with
             {
-                Name = "LadderPlugin",
+                Name = TypePath[(TypePath.LastIndexOf('/') + 1)..],
                 NodeType = MeshNode.NodeTypePath,
                 State = MeshNodeState.Active,
                 Content = new NodeTypeDefinition
