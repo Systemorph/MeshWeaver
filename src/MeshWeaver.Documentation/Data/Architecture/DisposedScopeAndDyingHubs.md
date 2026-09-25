@@ -67,6 +67,41 @@ goes straight to `host.DisposeAsync()` — no `StopAsync`, no `StoppedAsync` —
 is disposed with the silo still stopping. So an R1-shaped fault on a pod that never finished
 booting is a *different* condition, and the ordering fix is not the answer to it.
 
+### 🚨 Disposing a container is never how a mesh learns it is shutting down (Plugins#2362)
+
+Autofac marks a lifetime scope disposed **before** it disposes anything in it
+(`Disposable.Dispose` sets the flag, then runs `Dispose(true)`; even `CurrentScopeEnding` fires on
+an already-dead scope). So there is no instant, inside a container's disposal, at which a hub it
+roots can learn "shut down" while its resolves still work. The shutdown signal — `IsShuttingDown`,
+`ShuttingDown`, and the `HostedHubsCollection.CloseCreation` cascade that carries it through every
+hosted descendant — starts at `mesh.Dispose()`. **Whoever owns a container that roots a mesh must
+drive the mesh's teardown to `DisposalCompleted` (and the I/O drain) first, and dispose the container
+second.** Production does it in `MeshTeardownHostedService.StoppedAsync`; tests do it through
+`MeshTeardownExtensions.TeardownAsync`.
+
+The test harness had a path that skipped it. A `MonolithMeshTestBase` class that opts into
+`ShareMeshAcrossTests` has its provider held by a collection-scoped `SharedMeshProvider`, which
+disposed the provider with the mesh still **live** — no hosted-service stop, no activity quiesce, no
+`Dispose()`, no drain. Measured with `EveryHubShutsDownBeforeItsContainerTest` (Graph.Test): at the
+first instant the container was dead, the mesh, a hosted child, a hosted grandchild and a
+router-minted per-node hub all read `IsShuttingDown=False, RunLevel=Started`. That is the whole of
+Plugins#2362's "10 of 11 callbacks read `IsShuttingDown = false`" — 33 `MeshWeaver.AI.Test` classes
+share their mesh, and their thread hubs and mesh hubs had their scope killed under them without ever
+being told. The cascade was never missing; it was never **started**. The holder now stops the hosted
+services it started, runs `TeardownAsync`, traces the report (`DISPOSE_SHARED_MESH_DONE` /
+`DISPOSE_SHARED_DIRTY_TEARDOWN` / `DISPOSE_SHARED_MESH_ERROR`) and only then disposes the provider.
+The same change starts a shared mesh's hosted services ONCE (the first case that joins it) — the
+old path called `StartAsync` on the same singletons once per `[Fact]` and never stopped any of them.
+
+Negative control: with only the `MonolithMeshTestBase` change reverted, the shared-mesh case fails
+with all four readings `False/Started`; the per-test case (which always disposed the mesh first)
+passes both ways.
+
+What this does not change: a hub's own gate. A callback that can outlive its hub still needs the
+`IsShuttingDown || IsServiceScopeDisposed()` probe (see R3 and Plugins' `TeardownSafeCallback`) —
+an aborted startup (above) still disposes the root provider with the mesh live, and nothing on
+that path can signal first.
+
 ### 🚨 A one-shot signal must outlive the container (#5557)
 
 The aborted-startup path has a second casualty that is not an Autofac frame at all:
