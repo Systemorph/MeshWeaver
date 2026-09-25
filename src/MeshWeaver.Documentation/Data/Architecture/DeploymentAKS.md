@@ -302,6 +302,36 @@ were readable at 01:08Z and gone at 01:11Z) — read a cluster-wide incident pro
 header of `deploy/aks/scripts/values.observability.yaml` for what the loki-stack chart can and
 cannot persist.
 
+## Kubernetes version upgrades — the governed `UpgradeCluster` action, never `az aks upgrade`
+
+Upgrading the cluster's Kubernetes version is a node drain of every pool, so it is the one
+operation most likely to recreate every portal pod at once — and it is governed like any other
+change to what runs (policy [`cluster-upgrade-governed`](../PolicyNotProse)): a
+`Hosting/InstanceAction` with `requestedAction: UpgradeCluster` on the control instance, approved
+in the mesh, executed on the `aks-ops` lane. `az aks upgrade`, `az aks nodepool upgrade` and a hand
+`kubectl drain` are break-glass, exactly as a hand `kubectl set image` is.
+
+- **Plan first, read-only.** The same kind with `dryRun: true` needs no approval and changes nothing:
+  it reads the cluster (`hosting-aks-upgrade facts` — versions offered, every pool and node, every
+  portal Deployment's TEMPLATE image against the image its pods SERVE, `/health`, every
+  PodDisruptionBudget, the API server's deprecated-API metric, the manifests' apiVersions) and the
+  plugin writes the plan onto the node: the target (default: the highest version reachable by
+  chaining the offered control-plane upgrades one minor at a time), the control-plane hops, the pool
+  order, every refusal and finding, and whether an LTS support plan is on offer.
+- **One approval, one drain per pool.** The approved run chains the control-plane-only hops, then
+  upgrades each pool ONCE straight to the final version (node skew allows it), the pool hosting the
+  portals last, with a health gate before each pool. It pauses at the job's budget and the control
+  plane continues it — every step is idempotent.
+- **A stuck roll refuses it.** A portal Deployment whose template names an image its serving pods do
+  not run is refused by name before anything starts — a drain would recreate those pods from the
+  template. Measured 2026-09-25: memex's template named `3.0.0-ci.9260` (deadlocks at bake) while
+  its serving pods were `3.0.0-ci.9218`, alive only because nothing had evicted them.
+
+The operator half is `deploy/aks/operator/bin/hosting-aks-upgrade` (behaviour-tested in
+`deploy/aks/operator/test/run-tests.sh`); the plan, the approval binding and the continuation are the
+Hosting plugin's — the full manual, with the exact action JSON, is `Hosting/ClusterUpgrade` in
+MeshWeaver.Plugins (`get Hosting/ClusterUpgrade` on the memex MCP).
+
 ## Self-update ops — pausing, pinning, and the rules that bite
 
 Operational facts about the in-pod updater (learned the hard way — each cost a debugging session):

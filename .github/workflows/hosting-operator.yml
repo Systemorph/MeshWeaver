@@ -65,8 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 31 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 31 (28 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 32 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 32 (29 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -187,6 +187,14 @@ jobs:
           # against an older image stops at "command not found" BEFORE the image moves. The line
           # moves up into the plan list in the change that merges that plan step.
           hosting-migrate            #5148 — ships and is behaviour-tested, but no plan step emits it yet: the plan half is draft Plugins#2219
+          #
+          # hosting-aks-upgrade is the same shape: the cluster half of the governed UpgradeCluster
+          # action (MeshWeaver.Plugins Hosting/ClusterUpgrade.md). The behaviour suite drives every
+          # subcommand against test/stubs/aks-upgrade, so deleting it reds this gate. The plan step
+          # that emits it lands in MeshWeaver.Plugins (ClusterUpgradePlan), AFTER this image is on
+          # hosting-operator:main — the plan half would otherwise stop at "command not found". The
+          # line moves up into the plan list in the change after that plan merges.
+          hosting-aks-upgrade        ships and is behaviour-tested; the plan half is the UpgradeCluster change in MeshWeaver.Plugins
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
@@ -233,7 +241,7 @@ jobs:
         # MeshWeaver#4722 sweep added them with the helm one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore deploy/aks/operator/test/stubs/aks-upgrade/az deploy/aks/operator/test/stubs/aks-upgrade/kubectl deploy/aks/operator/test/stubs/aks-upgrade/curl; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done
