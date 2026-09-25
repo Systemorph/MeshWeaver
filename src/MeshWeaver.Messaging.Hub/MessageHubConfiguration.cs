@@ -598,6 +598,27 @@ public record MessageHubConfiguration
                     $"via AccessContextScope.FromNode. See AccessContextPropagation.md / " +
                     $"feedback_access_context_always_set.";
                 logger?.LogError("PostPipeline: {FailureReason}", failureReason);
+                // 🔎 THE POST SITE, on a companion line. The Error above names only the SENDING
+                // hub, and for the mesh's shared seams (`portal/reads-{meshId}`,
+                // `portal/nodeops-{meshId}`) that is every root-hub holder in the process — a
+                // Blazor component, a mesh singleton, an Rx callback off a change feed — so the
+                // line could not say WHICH caller lost the identity (#5227: 47 refusals in 6 h,
+                // sender never established). This guard runs synchronously inside Post, so the
+                // stack HERE is the post's own call chain, subscribe and all. Captured only on
+                // this failure path, and written on its OWN category at Warning so the Error's
+                // text — and with it the incident fingerprint the tracker folds on — is unchanged.
+                // The logger is resolved here, not per hub at pipeline build (every hub builds this
+                // pipeline, and almost none ever reaches this line), and the stack is captured only
+                // when the Warning will actually be written.
+                var postSiteLogger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(PostSiteLogCategory);
+                if (postSiteLogger?.IsEnabled(LogLevel.Warning) == true)
+                    postSiteLogger.LogWarning(
+                        "PostPipeline: unattributed post site — hub={Hub}, message={MessageType}, target={Target}; posted from:{PostSite}",
+                        syncPipeline.Hub.Address,
+                        d.Message?.GetType().Name ?? "(null)",
+                        d.Target?.ToString() ?? "(null)",
+                        DescribePostSite());
                 return d.Failed(failureReason);
             }
             // Per-message; gate on Debug so the 5 arg evaluations + boxing are
@@ -630,6 +651,50 @@ public record MessageHubConfiguration
     // constant here because Messaging.Hub sits below Mesh.Contract in the project
     // graph and adding the dep would invert it (same rationale as ImpersonateAsSystem).
     private const string SystemSecurityObjectId = "system-security";
+
+    /// <summary>
+    /// The log category of the never-null guard's companion line, which names the call chain
+    /// that posted without an identity. Separate from <c>MeshWeaver.AccessContext</c> so the
+    /// guard's Error line — the CI tripwire and the incident fingerprint — keeps its text.
+    /// </summary>
+    public const string PostSiteLogCategory = "MeshWeaver.AccessContext.PostSite";
+
+    /// <summary>At most this many frames of the post site are written; the rest are counted.</summary>
+    private const int MaxPostSiteFrames = 40;
+
+    /// <summary>
+    /// Renders the current call chain for the never-null guard's companion line: one frame per
+    /// line as <c>Type.Method</c>, without file info (no symbol read on the hot thread), with the
+    /// Rx / threading / async-machinery frames elided and counted — they are most of an Rx stack
+    /// and name no caller. An async method appears as its state machine type, whose name carries
+    /// the method's.
+    /// </summary>
+    internal static string DescribePostSite()
+    {
+        var frames = new System.Diagnostics.StackTrace(1, false).GetFrames();
+        var text = new System.Text.StringBuilder();
+        var shown = 0;
+        var elided = 0;
+        foreach (var frame in frames)
+        {
+            var method = frame.GetMethod();
+            var type = method?.DeclaringType;
+            var ns = type?.Namespace ?? string.Empty;
+            if (ns.StartsWith("System.Reactive", StringComparison.Ordinal)
+                || ns.StartsWith("System.Threading", StringComparison.Ordinal)
+                || ns.StartsWith("System.Runtime.CompilerServices", StringComparison.Ordinal)
+                || shown >= MaxPostSiteFrames)
+            {
+                elided++;
+                continue;
+            }
+            text.Append("\n   at ").Append(type?.FullName ?? "?").Append('.').Append(method?.Name ?? "?");
+            shown++;
+        }
+        if (elided > 0)
+            text.Append("\n   (").Append(elided).Append(" Rx/threading/async or overflow frame(s) elided)");
+        return text.ToString();
+    }
 
     private static bool IsFrameworkLifecycleMessage(object? message)
     {
