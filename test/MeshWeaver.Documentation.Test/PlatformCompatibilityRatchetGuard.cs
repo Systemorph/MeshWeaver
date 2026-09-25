@@ -34,7 +34,7 @@ public class PlatformCompatibilityRatchetGuard
     private static readonly ImmutableArray<string> ScannedRoots = ["src", "memex", "tools"];
 
     private static readonly Regex ProvenanceMember = new(
-        @"\b(?:BuildProvenance|ProducerStatedProvenance|ResolveBuildProvenanceForDirectory|ReadProvenance)\b",
+        @"\b(?:FrameworkBuildIdentity\s*\.\s*(?:BuildProvenance|ProducerStatedProvenance|ResolveBuildProvenanceForDirectory)|FrameworkIdentity\s*\.\s*ReadProvenance)\b",
         RegexOptions.Compiled);
 
     private static readonly Regex Comparison = new(
@@ -109,6 +109,12 @@ public class PlatformCompatibilityRatchetGuard
             "// string.Equals(x, FrameworkBuildIdentity.BuildProvenance)\nclass E { string s = \"BuildProvenance == x\"; }"));
         Assert.Empty(ProvenanceComparisonsIn(
             "class F { bool M(string x) => string.Equals(x, FrameworkBuildIdentity.FrameworkVersion, StringComparison.Ordinal); }"));
+        // A same-named, unrelated member (NodeTypeDefinition.BuildProvenance, an adoption-kind enum)
+        // is not the per-build identity.
+        Assert.Empty(ProvenanceComparisonsIn(
+            "class K { bool M(NodeTypeDefinition def) => def.BuildProvenance == BuildProvenance.StaleAdopted; }"));
+        Assert.NotEmpty(ProvenanceComparisonsIn(
+            "class L { bool M(string p, string k) => FrameworkIdentity.ReadProvenance(p) == k; }"));
 
         // (d)
         Assert.True(ExactVersionLoadContext(
