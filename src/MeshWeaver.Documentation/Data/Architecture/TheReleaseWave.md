@@ -16,6 +16,12 @@ bounded state rather than an adoption failure. What the wave still decides is *w
 publication for a new identity exists at all. The mechanics below are unchanged by either. The mechanism that wakes them is the **release wave**: one `repository_dispatch` per
 subscribed repository.
 
+> **Under the ladder** (policy `platform-backwards-compatibility`): a normal platform build needs no
+> wave and no re-seal — publications are keyed on the compatibility key `c<major>e<epoch>`, shared by
+> every build of one epoch, so a plugin publication keeps serving across platform rolls. A plugin
+> seal for a new platform is a precondition of anything only behind a DECLARED break, and then the
+> roll is held per plugin, by name — [Deploying Across Platform Versions](../DeployingAcrossPlatformVersions).
+
 This page exists because the wave has been mis-diagnosed twice in one day, in opposite directions —
 once by blaming a receiver's pin, once by blaming an emitter that did not exist. Both mistakes are
 cheap to repeat, because **the evidence for "who sent this" is not in the repo that received it.**

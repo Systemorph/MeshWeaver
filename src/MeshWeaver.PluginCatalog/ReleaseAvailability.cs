@@ -202,6 +202,15 @@ public static class ReleaseAvailability
         // what the artifact stores can answer — is the bake there, is the sealed set consistent —
         // and what the landed bytes can answer: would the module LOAD on the target.
 
+        // 🚨 A DECLARED COMPATIBILITY BREAK FIRST (policy platform-backwards-compatibility). On the
+        // ordinary path this answers null for every package — no seal, no rebuild, no plugin step
+        // is on a platform roll's critical path. Only behind a declared break (an epoch/major bump,
+        // or a ceiling the installed bytes declare) does a target the installed build does not
+        // cover need a replacement sealed for the target, and without one the roll is HELD here,
+        // naming the plugin and both versions.
+        if (PlatformRangeHold(package, target, artifacts) is { } rangeHold)
+            return new Evaluation(rangeHold, null);
+
         // 🚨 THE MODULE LANE FIRST (#3651): an unloadable module is the one hold on this lane, and
         // it must not be shadowed by a content advisory on the same package (a MIXED package —
         // content plus a compiled module — is the MeshWeaver.SocialMedia shape).
@@ -238,6 +247,81 @@ public static class ReleaseAvailability
         return new Evaluation(
             new PackageAvailability(package.Name, PackageAvailabilityKind.Available, null),
             linkAdvisory);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The ladder's one roll hold</b> (policy <c>platform-backwards-compatibility</c>): does the
+    /// build this environment RUNS for <paramref name="package"/> cover the target platform, and if
+    /// not, is a replacement sealed for the target?
+    ///
+    /// <para>A normal platform build changes nothing for plugins: the target carries the installed
+    /// build's compatibility key and no ceiling is declared, so this answers <c>null</c> — no seal is
+    /// required, and a missing bake stays the boot-compile COST it always was. The build stops
+    /// covering the target only behind a DECLARED break:</para>
+    /// <list type="bullet">
+    /// <item><description>the target's key (<c>c&lt;major&gt;e&lt;epoch&gt;</c>) differs from the key the
+    /// installed build was produced under — an epoch or major bump, declared in
+    /// <c>platform-compatibility.json</c>, whose ceiling
+    /// (<see cref="CompatibilityDeclaration.CeilingForEpoch"/>) the installed build inherits;</description></item>
+    /// <item><description>the installed build declares a ceiling of its own and the target is
+    /// above it.</description></item>
+    /// </list>
+    /// <para>Then the roll needs a REPLACEMENT: the package sealed under the target's key with a
+    /// range that admits the target (<c>PlatformCompatibility.DeclineReason</c> answers null for
+    /// it). Without one the roll is HELD as <see cref="PackageAvailabilityKind.PlatformRangeExceeded"/>,
+    /// and the reason names the plugin, the installed key and ceiling, and the target version and
+    /// key. A legacy installed identity (<c>s…</c>/<c>g…</c>, no epoch) declares no range and is never
+    /// held here — the first roll onto the keyed platform is an ordinary roll.</para>
+    /// </summary>
+    private static PackageAvailability? PlatformRangeHold(
+        RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
+    {
+        if (!package.HasContent && string.IsNullOrWhiteSpace(package.ModuleName))
+            return null;
+        var targetKey = target.FrameworkIdentity;
+        var installedKey = package.InstalledKey;
+        var keyBreak = PlatformCompatibility.TryParseKey(installedKey, out _, out var installedEpoch)
+                       && PlatformCompatibility.IsKey(targetKey)
+                       && !string.Equals(installedKey, targetKey, StringComparison.Ordinal);
+        var ceiling = package.InstalledCeiling
+                      ?? (keyBreak ? PlatformCompatibility.Declaration.CeilingForEpoch(installedEpoch) : null);
+        var aboveCeiling = ceiling is not null && PlatformCompatibility.ProducerIsNewer(target.Version, ceiling);
+        if (!keyBreak && !aboveCeiling)
+            return null;
+
+        var covered = keyBreak
+            ? $"built for compatibility key {installedKey}"
+              + (ceiling is null ? "" : $", which the declared break caps at platform {ceiling}")
+            : $"declares platform ceiling {ceiling}";
+
+        // A replacement must be sealed under the TARGET's key and admit the target.
+        var contentSealed = !package.HasContent || artifacts.SealedBundles.Contains(package.BundleName);
+        var moduleSealed = string.IsNullOrWhiteSpace(package.ModuleName)
+                           || artifacts.Modules?.MvidByModule.ContainsKey(package.ModuleName) == true;
+        if (contentSealed && moduleSealed && !string.IsNullOrWhiteSpace(targetKey))
+        {
+            var range = artifacts.BundleRanges.TryGetValue(package.BundleName, out var r) ? r : null;
+            var replacementDecline = PlatformCompatibility.DeclineReason(
+                targetKey, range?.Floor, range?.Ceiling, targetKey, target.Version);
+            if (replacementDecline is null)
+                return null;
+            return new PackageAvailability(
+                package.Name,
+                PackageAvailabilityKind.PlatformRangeExceeded,
+                $"the installed build {covered}, so it does not cover target {target.Version} "
+                + $"({targetKey}); a replacement is sealed under {targetKey} but does not admit the "
+                + $"target: {replacementDecline}. The roll is HELD until {package.Name} is rebuilt and "
+                + $"sealed for {targetKey} with a range that covers {target.Version}");
+        }
+
+        return new PackageAvailability(
+            package.Name,
+            PackageAvailabilityKind.PlatformRangeExceeded,
+            $"the installed build {covered}, so it does not cover target {target.Version} "
+            + $"({targetKey ?? "key unknown"}), and no replacement is sealed under "
+            + $"{targetKey ?? "the target's key"} — a declared compatibility break (policy "
+            + "platform-backwards-compatibility). The roll is HELD until "
+            + $"{package.Name} is rebuilt against the new platform and sealed for it");
     }
 
     /// <summary>
@@ -502,7 +586,31 @@ public sealed record RequiredPackage(
     /// what <see cref="ModuleLinkObservation.Measure"/> links against the target's surface.
     /// </summary>
     public string? LandedModulePath { get; init; }
+
+    /// <summary>
+    /// The compatibility key (<c>c&lt;major&gt;e&lt;epoch&gt;</c>) the build this environment RUNS for
+    /// the package was produced under — the running platform's key for bytes it adopted — or null
+    /// when unknown / a legacy identity. Read by the declared-break hold only
+    /// (policy <c>platform-backwards-compatibility</c>); init-only, the constructor is binary API.
+    /// </summary>
+    public string? InstalledKey { get; init; }
+
+    /// <summary>
+    /// The platform CEILING the installed build declares (<c>BundleReader.Manifest.PlatformCeiling</c>),
+    /// or null — open, the default. Set only behind a declared break.
+    /// </summary>
+    public string? InstalledCeiling { get; init; }
 }
+
+/// <summary>
+/// The platform RANGE one sealed bundle's manifest declares — the floor (the producing platform
+/// build) and the ceiling (open when null) — policy <c>platform-backwards-compatibility</c>.
+/// </summary>
+/// <param name="Floor">The producing platform build (<c>BundleReader.Manifest.ProducerPlatformVersion</c>),
+/// or null — unknown producer = older = accepted.</param>
+/// <param name="Ceiling">The highest platform build the bytes claim (<c>BundleReader.Manifest.PlatformCeiling</c>),
+/// or null — open.</param>
+public sealed record BundlePlatformRange(string? Floor, string? Ceiling);
 
 /// <summary>
 /// The instance's gate policy (#3651): what a missing content bake MEANS on this deployment.
@@ -569,6 +677,14 @@ public sealed record ReleaseArtifacts(
     /// </summary>
     public ImmutableDictionary<string, ModuleLinkVerdict> ModuleLinks { get; init; } =
         ImmutableDictionary<string, ModuleLinkVerdict>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every sealed bundle's declared platform range (<see cref="BundlePlatformRange"/>), by bundle
+    /// id — what a replacement sealed for the target admits. A bundle with no entry declared none
+    /// (unknown floor, open ceiling).
+    /// </summary>
+    public ImmutableDictionary<string, BundlePlatformRange> BundleRanges { get; init; } =
+        ImmutableDictionary<string, BundlePlatformRange>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>An observation that failed — the fail-safe constructor.</summary>
     public static ReleaseArtifacts Unreadable(string reason) =>
@@ -652,6 +768,15 @@ public enum PackageAvailabilityKind
     /// reason names the module and the missing types. Appended, never inserted.
     /// </summary>
     ModuleUnloadable,
+
+    /// <summary>
+    /// 🚨 A DECLARED compatibility break (policy <c>platform-backwards-compatibility</c>): the build
+    /// this environment runs for the package does not cover the target platform — the target's key
+    /// is another epoch or major, or it is above the ceiling the installed build declares — and no
+    /// replacement sealed for the target admits it. The reason names the plugin, the installed key
+    /// and ceiling, and the target. Never produced on the ordinary path. Appended, never inserted.
+    /// </summary>
+    PlatformRangeExceeded,
 }
 
 /// <summary>

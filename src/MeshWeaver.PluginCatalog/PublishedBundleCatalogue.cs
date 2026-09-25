@@ -435,6 +435,7 @@ public static class PublishedBundleCatalogue
     {
         var bundles = new List<string>();
         var records = ImmutableArray.CreateBuilder<BundleDependencyRecord>();
+        var ranges = ImmutableDictionary.CreateBuilder<string, BundlePlatformRange>(StringComparer.OrdinalIgnoreCase);
         // The DECLARED modules — what an instance registers, and therefore what a record must name.
         var sealedBy = new Dictionary<string, (string Mvid, string Source)>(StringComparer.Ordinal);
         // EVERY copy of every MeshWeaver.* assembly the sealed module bundles carry, declared or
@@ -461,7 +462,12 @@ public static class PublishedBundleCatalogue
             var source = Path.GetFileName(sourceDirectory)!;
             bundles.AddRange(complete);
             foreach (var bundle in complete)
-                records.AddRange(DependencyRecordsOf(Path.Combine(publication, bundle), bundle, logger));
+            {
+                var (bundleRecords, range) = ManifestFactsOf(Path.Combine(publication, bundle), bundle, logger);
+                records.AddRange(bundleRecords);
+                if (range is not null)
+                    ranges[StripZip(bundle)] = range;
+            }
             if (surface is null)
             {
                 var (read, note) = PlatformSurfaceOf(publication, source, logger);
@@ -519,6 +525,7 @@ public static class PublishedBundleCatalogue
                 conflicts.ToImmutable(),
                 refusals.Count == 0 ? null : string.Join("; ", refusals)),
             DependencyRecords = records.ToImmutable(),
+            BundleRanges = ranges.ToImmutable(),
             PlatformSurface = surface,
             PlatformSurfaceDetail = surface is not null
                 ? null
@@ -657,12 +664,10 @@ public static class PublishedBundleCatalogue
     /// hold. A bundle without readable records simply has nothing for the consistency check to
     /// judge, exactly as a legacy bundle recorded before #1707 slice 2 has none.</para>
     /// </summary>
-    private static IReadOnlyList<BundleDependencyRecord> DependencyRecordsOf(
+    private static (IReadOnlyList<BundleDependencyRecord> Records, BundlePlatformRange? Range) ManifestFactsOf(
         string bundlePath, string bundleFileName, ILogger? logger)
     {
-        var id = bundleFileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
-            ? bundleFileName[..^4]
-            : bundleFileName;
+        var id = StripZip(bundleFileName);
         BundleReader.Manifest? manifest;
         try
         {
@@ -674,7 +679,7 @@ public static class PublishedBundleCatalogue
                 "ReleaseAvailability: sealed bundle {Bundle} carries no readable manifest — it counts "
                 + "for presence, and its dependency records cannot be checked for consistency",
                 bundlePath);
-            return [];
+            return ([], null);
         }
         var records = new List<BundleDependencyRecord>();
         foreach (var assembly in manifest?.Assemblies ?? [])
@@ -685,7 +690,61 @@ public static class PublishedBundleCatalogue
                 id, assembly.NodePath,
                 assembly.Dependencies.ToImmutableDictionary(StringComparer.Ordinal)));
         }
-        return records;
+        // The declared platform RANGE (policy platform-backwards-compatibility): absent fields are
+        // an unknown floor and an open ceiling, and a bundle declaring neither contributes nothing.
+        var range = manifest is null
+                    || (string.IsNullOrWhiteSpace(manifest.ProducerPlatformVersion)
+                        && string.IsNullOrWhiteSpace(manifest.PlatformCeiling))
+            ? null
+            : new BundlePlatformRange(
+                string.IsNullOrWhiteSpace(manifest.ProducerPlatformVersion) ? null : manifest.ProducerPlatformVersion,
+                string.IsNullOrWhiteSpace(manifest.PlatformCeiling) ? null : manifest.PlatformCeiling);
+        return (records, range);
+    }
+
+    private static string StripZip(string bundleFileName) =>
+        bundleFileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+            ? bundleFileName[..^4]
+            : bundleFileName;
+
+    /// <summary>
+    /// The declared platform RANGE of every bundle sealed under one identity (key) directory, by
+    /// bundle id — manifests only, no assembly is inflated. What the roll gate reads for the build
+    /// an environment RUNS (its own key's publication), so a ceiling the installed bytes declare is
+    /// honoured (policy <c>platform-backwards-compatibility</c>). Total: an unreadable root or source
+    /// contributes nothing, which is an open ceiling — the ordinary path — never a hold.
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="identity">The identity (compatibility key) whose publications to read.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static ImmutableDictionary<string, BundlePlatformRange> RangesForIdentity(
+        string? publishedRoot, string? identity, ILogger? logger = null)
+    {
+        var ranges = ImmutableDictionary.CreateBuilder<string, BundlePlatformRange>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
+            return ranges.ToImmutable();
+        var identityDirectory = Path.Combine(publishedRoot, identity);
+        try
+        {
+            if (!Directory.Exists(identityDirectory))
+                return ranges.ToImmutable();
+            foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory).OrderBy(d => d, StringComparer.Ordinal))
+            {
+                var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
+                if (complete is null)
+                    continue;
+                foreach (var bundle in complete)
+                    if (ManifestFactsOf(Path.Combine(publication, bundle), bundle, logger).Range is { } range)
+                        ranges[StripZip(bundle)] = range;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger?.LogWarning(ex,
+                "ReleaseAvailability: could not read the declared platform ranges under {Directory} — "
+                + "every installed build reads as OPEN (no ceiling), which is the ordinary path", identityDirectory);
+        }
+        return ranges.ToImmutable();
     }
 
     private static IEnumerable<string> SealedBundleNames(string identityDirectory, ILogger? logger)

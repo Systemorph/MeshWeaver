@@ -270,6 +270,23 @@ public static class SealedSyncGate
             .ToList();
         if (unusable.Count > 0)
         {
+            // 🚨 THE LADDER (policy platform-backwards-compatibility): a publication sealed only by a
+            // platform build NEWER than the running one is the forbidden rung (platform 1 + plugin 2).
+            // It is named as that — with both versions and the remedy, the PLATFORM roll — never as
+            // "not sealed", which would send the reader to a publishing lane that is green.
+            if (unusable.FirstOrDefault(s => s.HeldForNewerPlatform) is { } newer)
+                return (null,
+                    $"this instance's publication of '{newer.Source}' ({repo}) is {newer.Refusal}",
+                    new LogMessage(
+                            $"Nothing was imported: this instance's publication of '{newer.Source}' ({repo}) "
+                            + $"is sealed only by platform {newer.ProducerPlatformVersion}, newer than the "
+                            + $"running platform {newer.RunningPlatformVersion} — this Space advances when the "
+                            + "PLATFORM roll lands; a platform roll does not wait for this seal.",
+                            LogLevel.Warning)
+                        .WithKey("activity.gitsync.seal.heldNewerPlatform",
+                            ("source", newer.Source), ("repo", repo.ToString()),
+                            ("producer", newer.ProducerPlatformVersion ?? "?"),
+                            ("running", newer.RunningPlatformVersion ?? "?")));
             var witness = unusable[0];
             var others = unusable.Count > 1 ? $" (and {unusable.Count - 1} more of {repo})" : "";
             return witness.IsSealed
@@ -456,7 +473,9 @@ public static class SealedSyncGate
         if (mine.Any(s => s.IsSealed && SameCommit(s.SourceCommit, headSha)))
             return Verdict.Go;
         var witness = mine.OrderByDescending(s => s.IsSealed).ThenBy(s => s.Source, StringComparer.Ordinal).First();
-        var reason = witness.IsSealed
+        var reason = witness.HeldForNewerPlatform
+            ? $"built at {Short(headSha)}; this instance's publication of '{witness.Source}' is {witness.Refusal}"
+            : witness.IsSealed
             ? $"built at {Short(headSha)}, not sealed for this instance (identity {identity}: "
               + $"'{witness.Source}' is sealed at {(witness.SourceCommit is null ? "an unknown commit" : Short(witness.SourceCommit))})"
             : $"built at {Short(headSha)}, and this instance's publication of '{witness.Source}' is not sealed "

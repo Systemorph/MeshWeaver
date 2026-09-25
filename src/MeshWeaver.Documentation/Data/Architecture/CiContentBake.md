@@ -353,6 +353,13 @@ control fails loudly instead of the assertion quietly proving nothing.
 
 ## The identity rule: adoptable when the SURFACE is unchanged
 
+> **Superseded as the adoption KEY** (policy `platform-backwards-compatibility`): bytes are now keyed
+> on the platform compatibility key `c<major>e<epoch>`, shared by every build of one epoch, with the
+> producing build as the FLOOR — see [Module Versioning](../ModuleVersioning) and [Deploying Across
+> Platform Versions](../DeployingAcrossPlatformVersions). A new platform build therefore does NOT
+> require a re-bake or re-seal of any plugin; only a declared break does. The surface hash below
+> remains the history of why the per-build identity was replaced.
+
 Adoption is gated by `PrebuiltAssemblySeeder.DeclineReason` on the **framework build identity**
 (`NodeTypeCompilationHelpers.FrameworkVersion` / `FrameworkBuildIdentity` — #1660 WS3). For the
 hosts that matter here — the bake host and the portals, which both ship a

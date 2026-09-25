@@ -1487,6 +1487,7 @@
   "activity.gitsync.seal.landsOnSeal": "{repo} is sealed at {sealed} for this instance (framework identity {identity}) — importing that commit instead of {requested}, so the Space's sources match the bundles this instance runs.",
   "activity.gitsync.seal.heldUnreadable": "Nothing was imported: the publication index for this instance's framework identity {identity} could not be read, so the commit its bundles were baked from is unknown.",
   "activity.gitsync.seal.heldNotSealed": "Nothing was imported: this instance's publication of '{source}' ({repo}) is not sealed for framework identity {identity} ({refusal}).",
+  "activity.gitsync.seal.heldNewerPlatform": "Nothing was imported: this instance's publication of '{source}' ({repo}) is sealed only by platform {producer}, newer than the running platform {running} — this Space advances when the PLATFORM roll lands; a platform roll does not wait for this seal.",
   "activity.gitsync.seal.heldUnknownCommit": "Nothing was imported: this instance's publication of '{source}' ({repo}) is sealed at an unknown commit, so there is no commit to land on.",
   "activity.gitsync.seal.heldDisagree": "Nothing was imported: this instance's publications of {repo} disagree about the commit ({commits}), so no single commit matches the bundles it runs.",
   "activity.gitsync.seal.advanceByRoll": "The registry has since sealed {version} under framework identity {newerIdentity}, which this instance does not run — this Space advances when this instance is ROLLED onto it, not when another publication lands.",
