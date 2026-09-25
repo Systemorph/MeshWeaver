@@ -114,6 +114,8 @@ public class PlatformCompatibilityLadderTest(ITestOutputHelper output) : Monolit
             var rung5 = await ReadDefinition();
             rung5.LatestAssemblyPath.Should().Be(rung4.LatestAssemblyPath,
                 "only the platform moved again: the p3 bytes built on P2 serve on P3 unchanged");
+            rung5.CompiledPlatformVersion.Should().Be(rung4.CompiledPlatformVersion,
+                "and the floor still names P2, the build that produced them — a re-stamp over the same bytes is a re-seal");
         }
         finally
         {
@@ -349,6 +351,7 @@ public class PlatformCompatibilityLadderTest(ITestOutputHelper output) : Monolit
         Output.WriteLine($"{rung}: {frame[..Math.Min(frame.Length, 400)]}");
         frame.Should().StartWith("{", $"{rung}: SERVES — a fresh instance must render, got: {frame[..Math.Min(frame.Length, 300)]}");
         using var envelope = JsonDocument.Parse(frame);
-        envelope.RootElement.TryGetProperty("areas", out _).Should().BeTrue($"{rung}: SERVES — a real {{areas, data}} frame");
+        envelope.RootElement.TryGetProperty("areas", out _).Should().BeTrue($"{rung}: SERVES — a real {{areas, data}} frame (areas)");
+        envelope.RootElement.TryGetProperty("data", out _).Should().BeTrue($"{rung}: SERVES — a real {{areas, data}} frame (data)");
     }
 }
