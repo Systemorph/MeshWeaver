@@ -46,6 +46,23 @@ The three modes (`PostingIdentity` enum, consumed by `UserServicePostPipeline`):
 2. **`System`.** Routing and persistence. The hub's own otherwise-unattributed posts are stamped `system-security`. **Never overwrites** a user identity already on the delivery (a forwarded user delivery, or a response inheriting the request's identity via `ResponseFor`) — System is only the fallback for the hub's OWN posts.
 3. **Cannot post → fail the delivery.** The `User`-mode fallback above *is* this: a hub that can resolve no identity does not get to post a non-exempt application message.
 
+### Reading a refusal: the Error names the HUB, the companion line names the CALLER
+
+The refusal's Error line (`MeshWeaver.AccessContext`, *"AccessContext must never be null for an application post … hub=…, message=…, target=…"*) names the **sending hub**. For a per-node or per-circuit hub that identifies the caller. For the mesh's shared seams it does not: `portal/reads-{meshId}` and `portal/nodeops-{meshId}` post on behalf of **every root-hub holder in the process** — a Blazor component holding the injected hub, a mesh singleton, an Rx callback off a change feed. Production logged 47 such refusals from `portal/reads-…` in six hours and the sender could not be named from the line (#5227).
+
+The guard runs synchronously inside `Post`, so every refusal also writes a **companion Warning** on its own category, `MeshWeaver.AccessContext.PostSite`:
+
+```text
+PostPipeline: unattributed post site — hub=portal/reads-…, message=GetDataRequest, target=Store; posted from:
+   at MeshWeaver.Messaging.MessageHub.Post
+   at …the caller's own frames…
+   (N Rx/threading/async or overflow frame(s) elided)
+```
+
+It carries the post's own call chain, as `Type.Method` frames with no file info, up to 40 frames. Rx, threading and async-machinery frames are elided and counted. An async method shows up as its state-machine type, and that type's name contains the method name. To find the sender, read the companion line that has the same `hub`, `message` and `target` in the same second on the same pod. A `Logs` InstanceAction on `"unattributed post site"` returns these lines.
+
+The companion line is on a **separate** category because the Error line's text is two things at once. It is the CI tripwire, and it is what the incident tracker fingerprints on. If the stack were in that text, every caller would mint its own incident. `UnattributedPostNamesItsSiteTest` pins three things: the refusal still happens, the Error text contains no frames, and the companion line names the method that subscribed.
+
 ### Exempt traffic — the only messages that may carry a null context
 
 Genuinely identity-free framework traffic is exempt from the never-null rule and is delivered (not failed) even with no context:
