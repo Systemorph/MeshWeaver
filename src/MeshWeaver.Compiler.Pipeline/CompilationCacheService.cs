@@ -821,6 +821,27 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
+        // 🚨 THE PLATFORM FIRST (policy platform-backwards-compatibility): a name the default
+        // context can bind — every platform assembly — binds to the RUNNING platform's copy, which
+        // the default context serves for any requested version at or below its own
+        // (PlatformBinding.MayBind). A NodeType compiled against platform 3.0.0.0 therefore binds on
+        // 3.1.0.0, and a same-named copy in a NuGet probing directory can never split the identity
+        // or pin an exact version. A HIGHER requested version is refused by the default context
+        // (FileLoadException) and falls through — the floor-not-met case the adoption gate declines
+        // loudly before bytes ever get here.
+        if (assemblyName.Name is { Length: > 0 } platformName
+            && platformName.StartsWith("MeshWeaver.", StringComparison.Ordinal))
+        {
+            try
+            {
+                return Default.LoadFromAssemblyName(assemblyName);
+            }
+            catch (Exception e) when (e is FileNotFoundException or FileLoadException or BadImageFormatException)
+            {
+                // Not the platform's (a module assembly): probe below, then the default fallback.
+            }
+        }
+
         // Probe registered NuGet package directories for transitive dependencies.
         var name = assemblyName.Name;
         if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty)

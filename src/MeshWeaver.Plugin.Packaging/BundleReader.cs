@@ -74,6 +74,25 @@ public static class BundleReader
         /// <see cref="AssemblyRef.SourceFingerprint"/> for why.</para>
         /// </summary>
         public string? SourceCommit { get; init; }
+
+        /// <summary>
+        /// 🚨 <b>The platform FLOOR — the producing platform build</b> (e.g. <c>3.0.0-ci.9215</c>,
+        /// the producer's <c>PlatformBuildInfo.PlatformVersion</c>), policy
+        /// <c>platform-backwards-compatibility</c>. Within one compatibility key
+        /// (<see cref="FrameworkMvid"/>) bytes adopt on the producing build and every LATER one; a
+        /// consumer running an OLDER build declines them loudly
+        /// (<c>PlatformCompatibility.DeclineReason</c>). Null from a producer that predates the
+        /// field: "unknown producer = older", accepted. An INIT property for the binary-break reason
+        /// <see cref="AssemblyRef.SourceFingerprint"/> states.
+        /// </summary>
+        public string? ProducerPlatformVersion { get; init; }
+
+        /// <summary>
+        /// The platform CEILING — the highest platform build these bytes claim to work on, or null
+        /// (open, the default). A consumer running ABOVE it declines loudly. Set only behind a
+        /// declared compatibility break (<c>platform-compatibility.json</c>).
+        /// </summary>
+        public string? PlatformCeiling { get; init; }
     }
 
     /// <summary>One assembly and the NodeType it implements.</summary>

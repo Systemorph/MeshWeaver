@@ -143,6 +143,10 @@ public static class NodeTypeOperationalContent
         "adoptedModuleVersion",
         "currentModuleVersion",
         "compiledFrameworkVersion",
+        // The build's platform FLOOR/CEILING (policy platform-backwards-compatibility) — operational
+        // for the same reason: they decide whether this process adopts the recorded build.
+        "compiledPlatformVersion",
+        "platformCeiling",
         // #1793 — the inputs the standing FAILURE verdict was formed from. Operational for the
         // same reason compiledFrameworkVersion is, and for one sharper one: an authored token that
         // happened to match this deployment's live inputs would SUPPRESS the one automatic retry a

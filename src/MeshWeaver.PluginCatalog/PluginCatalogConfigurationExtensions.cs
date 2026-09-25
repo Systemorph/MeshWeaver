@@ -237,6 +237,10 @@ public static class PluginCatalogConfigurationExtensions
                     [
                         Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid,
                         MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
+                        // TRANSITION reading (policy platform-backwards-compatibility): a bundle
+                        // packed before the compatibility key states this build's g<sha>, and it
+                        // still matches the build that produced this image.
+                        MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedProvenance,
                     ],
                 })
                 // 🚨 MeshWeaver#4655 — takes the FIRST reading of the module volume at host start,

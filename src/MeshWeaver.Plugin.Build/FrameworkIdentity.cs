@@ -41,6 +41,22 @@ public static class FrameworkIdentity
     /// </summary>
     public static string ReadIdentity(string assemblyPath)
     {
+        // 🚨 The COMPATIBILITY KEY (policy platform-backwards-compatibility): what the runtime keys
+        // module and NodeType bytes on. An anchor that states no epoch (a build from before the key
+        // existed) falls back to its stamped/MVID provenance, which no key-reading consumer matches —
+        // the conservative direction.
+        if (PlatformCompatibility.KeyOfAssemblyFile(assemblyPath).Key is { } key)
+            return key;
+        return ReadProvenance(assemblyPath);
+    }
+
+    /// <summary>
+    /// PROVENANCE: the stamped <c>MeshWeaverFrameworkIdentity</c> commit identity when present (CI
+    /// builds), else the MVID — what <see cref="ReadIdentity"/> answered before the compatibility
+    /// key. Logged and recorded; never an adoption key.
+    /// </summary>
+    public static string ReadProvenance(string assemblyPath)
+    {
         using var stream = File.OpenRead(assemblyPath);
         using var peReader = new PEReader(stream);
         var metadata = peReader.GetMetadataReader();
