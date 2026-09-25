@@ -1,15 +1,16 @@
 ---
 Name: What the DataContext Init Time-Box Bounds
 Category: Architecture
-Description: The 120 s DataContext initialization time-box is a wait nested three deep — data source, stream, type-source leg. For a per-node hub it is in practice one unbounded storage read. The timeout now names the leg it was waiting on instead of guessing, and a failed init errors every stream the hub holds without creating new ones.
+Description: The 120 s DataContext initialization time-box is a wait nested three deep — data source, stream, type-source leg. For a per-node hub it is in practice one unbounded storage read. The timeout now names the leg it was waiting on instead of guessing, a failed init errors every stream the hub holds without creating new ones, and a timed-out on-demand hub is retired so the next access re-creates it — with no timer and no re-ask.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/></svg>
 ---
 
 # What the DataContext Init Time-Box Bounds
 
 Every hub that carries data runs a 120 s time-box around its `DataContext` initialization
-(`DataContext.OpenInitializationGate`). When it expires the hub enters a FAILED state and answers
-every later request with a terminal `DeliveryFailure`. The bound is a liveness guarantee and it
+(`DataContext.OpenInitializationGate`). When it expires, a hub that routing re-creates on demand
+(every per-node hub) is retired and comes back on the next access; any other hub enters a FAILED
+state and answers every later request with a terminal `DeliveryFailure`. The bound is a liveness guarantee and it
 stays — see [Initialization Gates](../InitializationGates). This page is about what it is actually
 waiting on, because the timeout used to guess and the guess was wrong.
 
@@ -151,19 +152,73 @@ accessor is get-or-**create**, and the call was wrong twice:
 
 The failure path now walks `IDataSource.OpenStreams` — presence only — and errors each one.
 
+## A timed-out activation is retired, not latched
+
+Policy [`init-timeout-retires-activation`](../PolicyNotProse). When the time-box expires on a hub
+that demand routing re-creates — `WithReactivationOnDemand`, which every per-node hub declares in
+`NodeTypeRebindWatcher` — the hub is **disposed**, and the **next access** re-creates it and
+initializes again. It used to take the FAILED latch: `InitializationError` recorded, a rejection
+handler answering every later request terminally, for the life of the process. That turned one
+stall into an outage of the address until a restart — the 2026-09-15 event in #1122 took one
+user's course navigation, quiz and activity tracking dark for 34 minutes, and a *transient fault*
+on the same hubs was already retired rather than latched ([Retiring an Activation](../RetiringAnActivation)).
+
+`DataContext.SettleInitializationGate` does it in the transient branch's order — `FailGate` first,
+with the classification stated, then `Dispose()` — and logs at **Error**:
+
+```text
+fail: DataContext initialization TIMED OUT for {Address}. Retiring this activation instead of
+      latching it FAILED — the next access re-creates it; nothing retries on its own.
+      System.TimeoutException: Hub '…' DataContext initialization did not complete within 115s.
+      Still waiting on …
+```
+
+🚨 That is a **new log template**. The old one (*"… Hub is now in FAILED state."*) would now be a
+false sentence for these hubs, so a `LogIncident` watching this fault collects a new fingerprint
+from the first roll that carries the change; the old fingerprint keeps collecting only hubs that
+still latch (below).
+
+### Why it cannot storm
+
+The objection recorded when the latch was kept was that retiring on a timeout trades a latch for a
+loop. It does not, for four reasons that each hold on their own:
+
+| Property | What makes it true |
+|---|---|
+| **Self-pacing.** A permanently stuck address costs at most ONE activation per time-box, whatever the caller's rate. | The branch runs only after the whole box expired on *this* activation, and activation is single-flight per address (`HostedHubsCollection`'s creation `Lazy`; one grain activation on Orleans). A hot caller's deliveries park behind the one gate; none mints a hub. |
+| **No re-ask.** Nothing re-creates the address without an access. | The parked backlog is answered **`ErrorType.Failed`**, in words no transient classifier matches — deliberately *not* the `ShuttingDown` banner the transient retirement uses. A `ShuttingDown` answer is ridden out by every `[ReaskedOnShutdown]` producer and resubscribe latch, which would re-create the address by itself: a background retry loop under another name. There is no timer. |
+| **Re-access is already bounded on the read path.** | `MeshNodeStreamCache` records every non-missing-node fault in its **transient breaker**: the first `TransientGraceFailures` re-probe at once, after that re-probes back off exponentially up to `TransientMaxCooldown`, and the cached fault is replayed without opening an upstream subscribe while the window is open. A successful read or a change-feed invalidation clears it. No new breaker was needed. |
+| **Only the timeout retires.** | A deterministic init *fault* fails in milliseconds, so retiring on it would re-create at the caller's rate — that is the loop the latch guards against, and a non-transient fault keeps the latch. A time-out is paced by its own box. |
+
+### What still latches
+
+- a hub **without** `WithReactivationOnDemand` — the root mesh hub, and a `sync/*` sub-hub owned by
+  a live stream. Nothing would re-create them if they were retired, so the latch stays the honest
+  answer and the old template still reports it;
+- a non-transient init **fault** (above);
+- a `MessageHub` **BuildupAction** that hangs (`HandleInitialize`'s own bound). That is a different
+  seam from this time-box — the `DataContext` wait is armed by a BuildupAction that returns at once,
+  so it never runs inside it — and it was not part of this decision.
+
+### Pinned by
+
+`DataContextInitTimeoutRetiresTheActivationTest` (Data.Test, `HubTestBase`, no mocks):
+
+- `ATimedOutInit_RetiresTheActivation_AndTheNextAccessIsServedByAFreshOne` — the parked requester
+  is answered `Failed` naming the box and the retirement (never the shutdown banner), the activation
+  reaches `Dead`, and the next access is served by a fresh activation whose initialization ran again.
+- `WithoutReactivationOnDemand_TheSameTimeOutKeepsTheFailedLatch` — the control: the marker, not
+  the time-out, selects the retirement.
+- `AHotCallerOnAPermanentlyStuckAddress_CostsOneActivationPerTimeBox_AndNothingRetriesOnItsOwn` —
+  25 concurrent requests cost one activation, three time-boxes with no access create none, and the
+  next burst costs exactly one more.
+
 ## What this does not change
 
 - **The storage read keeps no bound of its own**, for the reason given above. A saturated read gate
   still costs 120 s and still fails the hub. Whether the 34-minute event in #1122 was that, a remote
   hub that never answered, or something else is **not established**: its log lines named nothing.
   The next occurrence will say.
-- **A timed-out hub stays FAILED for the life of the process** even when it would be re-created on
-  demand, while a *transient infrastructure fault* retires it instead
-  ([Retiring an Activation](../RetiringAnActivation)). That asymmetry is what turns one stall into
-  a user-visible outage lasting until a restart. It is left as is here on purpose: retiring on a
-  timeout risks trading a latch for a loop — a permanently stuck dependency would re-run a 120 s
-  initialization on every delivery — and that needs its own decision, taken on the attributed
-  evidence this change starts collecting.
 - **The sub-hub's own message is attributed too, and it is now the FIRST of the two to fire.** It
   used to read *"a BuildupAction did not complete within 120s (a hung dependency or stuck
   compile)"* — two candidates, neither measured — and it names the pending action by position and

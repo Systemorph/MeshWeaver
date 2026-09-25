@@ -607,6 +607,54 @@ public sealed record DataContext : IDisposable
                 + "is recycled or the process restarts.", Hub.Address);
         }
 
+        // 🚨 A TIMED-OUT initialization of a hub that demand routing re-creates is RETIRED, not
+        // latched (Systemorph/MeshWeaver#1122 — policy `init-timeout-retires-activation`). The
+        // latch below answered every later request with a terminal failure for the life of the
+        // process, so one stall — a storage read that did not come back, a remote hub that never
+        // answered a subscribe — became an outage of that address lasting until a restart: the
+        // 2026-09-15 event took one user's course, quiz and activity tracking dark for 34 minutes.
+        // The activation is disposed instead, and the NEXT ACCESS re-creates it and initializes
+        // again. Nothing here retries on its own: there is no timer and no re-ask.
+        //
+        // Why this cannot storm, stated per property (full account: Doc/Architecture/
+        // DataContextInitializationTimeout → "A timed-out activation is retired"):
+        //   • It is SELF-PACING. This branch is reached only after the whole time-box expired on
+        //     THIS activation, and activation is single-flight per address, so a hot caller's
+        //     deliveries during the window park behind the gate of the ONE activation — they
+        //     never mint a second. However fast the caller, a permanently broken address costs at
+        //     most one activation per time-box.
+        //   • The backlog is answered TERMINALLY (ErrorType.Failed), in words no transient
+        //     classifier matches (no "is shutting down" banner). A ShuttingDown answer would make
+        //     every [ReaskedOnShutdown] producer and resubscribe latch re-ask by itself — a
+        //     background retry loop by another name. With Failed, only a NEW access re-creates.
+        //   • The read path's existing breaker bounds re-access: MeshNodeStreamCache records any
+        //     non-missing-node fault in its transient breaker (TransientGraceFailures, then an
+        //     exponential window up to TransientMaxCooldown) and replays it without opening an
+        //     upstream subscribe while the window is open.
+        //   • Only the TIMEOUT retires. A FAULT (below) keeps the latch unless it is transient: a
+        //     deterministic fault fails in milliseconds, so retiring on it WOULD re-create at the
+        //     caller's rate — that is the loop the latch guards against.
+        //
+        // FailGate FIRST, Dispose SECOND, with the classification stated — the ordering the
+        // transient branch above documents (#4261, Doc/Architecture/RetiringAnActivation).
+        if (!allInit.IsCompleted
+            && Hub.Configuration.ReactivatesOnDemand
+            && Hub.Address.Type != AddressExtensions.MeshType)
+        {
+            var timedOut = new TimeoutException(
+                $"Hub '{Hub.Address}' DataContext initialization did not complete within "
+                + $"{EffectiveInitializationTimeout.TotalSeconds:F0}s. {DescribePendingInitialization()}");
+            var reason = $"{timedOut.Message} This activation is retired rather than latched: "
+                + "the next access re-creates it and initializes again.";
+            logger.LogError(timedOut,
+                "DataContext initialization TIMED OUT for {Address}. Retiring this activation instead of "
+                + "latching it FAILED — the next access re-creates it; nothing retries on its own.",
+                Hub.Address);
+            Hub.FailGate(InitializationGateName, reason, ErrorType.Failed);
+            Hub.Dispose();
+            return;
+        }
+
         Exception? failure = null;
         if (!allInit.IsCompleted)
         {
