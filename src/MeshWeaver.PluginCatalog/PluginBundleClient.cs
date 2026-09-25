@@ -1011,7 +1011,7 @@ public sealed class PluginBundleClient
                 }
 
                 return assemblies
-                    .Select(a => PrebuiltAssemblySeeder.Seed(
+                    .Select(a => PrebuiltAssemblySeeder.SeedDetailed(
                         _hub, a.NodePath, a.Assembly, a.Pdb, manifest!.FrameworkMvid, _logger,
                         a.Dependencies,
                         // 🚨 #2813 — the producer's source fingerprint, or null from a legacy
@@ -1027,7 +1027,12 @@ public sealed class PluginBundleClient
                         // #4280 — WHICH sources (and which @@-includes) the bytes were built from,
                         // so the owner can tell a live set still arriving from one that moved.
                         a.SourcePaths,
-                        a.SourceIncludes))
+                        a.SourceIncludes,
+                        // The bytes' platform RANGE (policy platform-backwards-compatibility):
+                        // declined loudly outside floor..ceiling, never adopted.
+                        manifest.ProducerPlatformVersion,
+                        manifest.PlatformCeiling)
+                        .Select(outcome => outcome is PrebuiltAssemblySeeder.SeedOutcome.Adopted or PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale))
                     .Concat()
                     .Count(adopted => adopted)
                     .Do(count =>

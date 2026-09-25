@@ -44,6 +44,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- THE platform compatibility declaration (policy platform-backwards-compatibility): the epoch
+         Directory.Build.props stamps, plus every declared break and the ceiling it applies to plugins
+         built against the previous epoch. Embedded so the adoption code reads the SAME file
+         (PlatformCompatibility.Declaration). -->
+    <EmbeddedResource Include="platform-compatibility.json" LogicalName="MeshWeaver.Compiler.platform-compatibility.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <!-- 🚨 #3934 — NuGetVersionComparer, the ONE version fold in the repo. A module entry of a

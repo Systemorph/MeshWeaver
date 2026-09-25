@@ -386,10 +386,16 @@ public sealed class DynamicTypePreWarmerHostedService(
         // staleness key is the API-surface hash (stable across internal-only merges), so "which
         // commit built this process" is no longer derivable from the key — the g<sha> stamp is,
         // and this is the one line that ties the two together for an operator reading a roll.
+        // 🚨 The key is the platform COMPATIBILITY key (policy platform-backwards-compatibility),
+        // stable across every build of one epoch; the per-build surface identity and the platform
+        // build are PROVENANCE, named beside it so a roll can still be read.
         logger.LogInformation(
             "DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs "
-            + "(framework identity {FrameworkIdentity}, build {Provenance})",
+            + "(framework compatibility key {FrameworkIdentity}, platform build {PlatformBuild}, "
+            + "build provenance {BuildProvenance}, commit {Provenance})",
             Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid,
+            Graph.Configuration.PrebuiltAssemblySeeder.LivePlatformVersion ?? "(unknown)",
+            MeshWeaver.Compiler.FrameworkBuildIdentity.BuildProvenance,
             MeshWeaver.Compiler.FrameworkBuildIdentity.StampedIdentityOf(
                 typeof(MeshWeaver.Compiler.FrameworkBuildIdentity).Assembly) ?? "(unstamped)");
         // A degraded identity resolution (torn/unusable surface manifest → stamp/MVID fallback)

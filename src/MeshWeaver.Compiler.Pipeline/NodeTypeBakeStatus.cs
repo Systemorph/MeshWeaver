@@ -23,10 +23,17 @@ public enum BakeState
     NeverBuilt,
 
     /// <summary>
-    /// An assembly is recorded, but it was compiled against a DIFFERENT framework than the live one.
-    /// This is the ordinary every-deploy state: <see cref="NodeTypeCompilationHelpers.FrameworkVersion"/>
-    /// (Graph's MVID) is baked into the store's filename AND its lookup glob, so a new image misses
-    /// the whole cache by design — ABI safety, not a bug.
+    /// An assembly is recorded, but it is out of this process's reach: it was compiled for a
+    /// DIFFERENT platform compatibility key (a declared epoch or major break, or a record from
+    /// before the key existed), or — within the live key — its platform RANGE excludes this build
+    /// (produced by a NEWER build, or a ceiling below this one).
+    ///
+    /// <para>🚨 <b>No longer the every-deploy state.</b> It was, while the key was the per-build
+    /// surface/MVID identity: every new image missed the whole cache. The key is now the
+    /// compatibility key (<see cref="NodeTypeCompilationHelpers.FrameworkVersion"/>, policy
+    /// <c>platform-backwards-compatibility</c>), equal across every platform build of one epoch, so
+    /// an ordinary roll leaves every type <see cref="Baked"/>. A large count here after a roll means
+    /// a declared break, or records from the pre-key scheme being re-keyed ONCE.</para>
     /// </summary>
     FrameworkStale,
 
@@ -339,6 +346,24 @@ public static class NodeTypeBakeStatus
         Func<string, string?>? liveDependencyIdOf = null,
         string? liveToolchainId = null,
         string? liveGeneratedInputDigest = null)
+        => ClassifyAgainst(
+            definition, storeHasBytes, liveFrameworkVersion, NodeTypeCompilationHelpers.LivePlatformVersion,
+            liveDependencyIdOf, liveToolchainId, liveGeneratedInputDigest);
+
+    /// <summary>
+    /// <see cref="ClassifyDetailed"/> with the running platform BUILD explicit — the seam a test
+    /// stages a mixed roll through (policy <c>platform-backwards-compatibility</c>): within one
+    /// compatibility key, a record produced by a NEWER build than <paramref name="livePlatformVersion"/>
+    /// is <see cref="BakeState.FrameworkStale"/> even when the store holds its bytes.
+    /// </summary>
+    internal static (BakeState State, string? DependencyMismatch) ClassifyAgainst(
+        NodeTypeDefinition definition,
+        bool storeHasBytes,
+        string liveFrameworkVersion,
+        string? livePlatformVersion,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null,
+        string? liveGeneratedInputDigest = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
@@ -353,7 +378,16 @@ public static class NodeTypeBakeStatus
         if (!hasRecordedAssembly)
             return (BakeState.NeverBuilt, null);
 
-        var frameworkMoved = !string.Equals(
+        // 🚨 The KEY is the platform compatibility key (policy platform-backwards-compatibility):
+        // equal across every platform build of one epoch, so an ordinary roll moves nothing. What
+        // DOES move a build out of reach within one key is its platform RANGE: bytes a NEWER build
+        // produced (or whose ceiling this build exceeds) are not this process's to serve, and a
+        // store hit must not launder them — so the range is judged BEFORE the bytes-win rule.
+        var outOfRange = string.Equals(
+                definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal)
+            && NodeTypeBuildIdentity.RefusalReason(
+                definition, liveFrameworkVersion, livePlatformVersion) is not null;
+        var frameworkMoved = outOfRange || !string.Equals(
             definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal);
 
         // 🚨 The per-type dependency record (#1707 slice 2) is checked BEFORE the bytes-win rule:
@@ -404,6 +438,12 @@ public static class NodeTypeBakeStatus
         // another replica compiled it and its write-back lagged, failed, or was never made at all.
         // Reporting that FrameworkStale would rebuild something already sitting on the volume, which
         // is exactly the wasted work this probe exists to avoid.
+        //
+        // …EXCEPT for a record whose platform RANGE excludes this build (a newer producer, or a
+        // ceiling below it): the store key cannot tell those bytes from ours, so a hit would serve
+        // bytes built against surface this platform lacks.
+        if (outOfRange)
+            return (BakeState.FrameworkStale, null);
         if (storeHasBytes)
             return (BakeState.Baked, null);
 

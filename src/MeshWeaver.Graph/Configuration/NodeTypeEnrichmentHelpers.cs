@@ -1114,7 +1114,23 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     internal static FrameworkStaleAction DecideFrameworkStale(
         NodeTypeDefinition judged, string liveFrameworkVersion, DateTimeOffset? bootedAt, bool leaving, int recompileAttempts)
+        => DecideFrameworkStale(judged, liveFrameworkVersion, NodeTypeCompilationHelpers.LivePlatformVersion,
+            bootedAt, leaving, recompileAttempts);
+
+    /// <summary>
+    /// <see cref="DecideFrameworkStale(NodeTypeDefinition, string, DateTimeOffset?, bool, int)"/>
+    /// with the running platform BUILD explicit. 🚨 A record of THIS compatibility key whose floor is
+    /// a NEWER platform build YIELDS unconditionally (policy platform-backwards-compatibility,
+    /// <see cref="NodeTypeBuildIdentity.OwnedByANewerPlatformBuild"/>): the order is known, so the
+    /// older replica never recompiles the newer one's record backwards — leaving or not. That is what
+    /// keeps a mixed roll between two builds of one epoch from fighting a re-key war.
+    /// </summary>
+    internal static FrameworkStaleAction DecideFrameworkStale(
+        NodeTypeDefinition judged, string liveFrameworkVersion, string? livePlatformVersion,
+        DateTimeOffset? bootedAt, bool leaving, int recompileAttempts)
     {
+        if (NodeTypeBuildIdentity.OwnedByANewerPlatformBuild(judged, liveFrameworkVersion, livePlatformVersion))
+            return FrameworkStaleAction.Yield;
         if (leaving
             && bootedAt is { } boot
             && NodeTypeBuildIdentity.OwnedByANewerGeneration(judged, liveFrameworkVersion, boot))
@@ -1721,13 +1737,15 @@ internal static class NodeTypeEnrichmentHelpers
             IObservable<MeshNode> YieldToNewerGeneration(NodeTypeDefinition owned)
             {
                 logger?.LogWarning(
-                    "EnrichWithNodeType: {NodeType} was compiled for framework {Compiled} at {StampedAt:O}, AFTER this "
-                    + "process started ({BootedAt:O}) — a replica on another image owns the type mid-roll; NOT "
-                    + "recompiling for the live framework {Live} (that would re-key the record backwards). "
-                    + "Overlaying '{InstancePath}' as framework-stale instead",
-                    nodeType, owned.CompiledFrameworkVersion ?? "(null)", owned.LastCompileSucceededAt,
+                    "EnrichWithNodeType: {NodeType} was compiled for framework {Compiled} by platform build "
+                    + "{Floor} at {StampedAt:O} (this process started {BootedAt:O}, runs {Live} build {LiveBuild}) — "
+                    + "a NEWER generation owns the type; NOT recompiling (that would re-key the record "
+                    + "backwards). Overlaying '{InstancePath}' as framework-stale instead",
+                    nodeType, owned.CompiledFrameworkVersion ?? "(null)", owned.CompiledPlatformVersion ?? "(unknown)",
+                    owned.LastCompileSucceededAt,
                     meshHub.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc,
-                    NodeTypeCompilationHelpers.FrameworkVersion, node.Path);
+                    NodeTypeCompilationHelpers.FrameworkVersion,
+                    NodeTypeCompilationHelpers.LivePlatformVersion ?? "(unknown)", node.Path);
                 var (yieldIntro, yieldCta, yieldGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
                 return Observable.Return(
                     WithOverlaySelfHeal(

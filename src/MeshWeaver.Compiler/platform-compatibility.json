@@ -1,0 +1,5 @@
+{
+  "$comment": "THE platform compatibility declaration — policy platform-backwards-compatibility (Doc/Architecture/PolicyNotProse, Doc/Architecture/ModuleVersioning). 'epoch' is the ONE source of $(PlatformCompatibilityEpoch) (Directory.Build.props reads it from here) and of the compatibility key c<major:D3>e<epoch:D3>. A normal platform build changes NOTHING here: builds within one major and epoch are backwards compatible and plugins keep their bytes. A DECLARED BREAK bumps 'epoch' and appends one entry to 'breaks' naming the new epoch, the CEILING applied to everything built against the previous epoch (the last platform build of that epoch, e.g. 3.0.0-ci.9400 — plugins built against it 'work up to' it), and the reason. Only a declared break requires a coordinated rebuild and seal of the affected plugins.",
+  "epoch": 1,
+  "breaks": []
+}

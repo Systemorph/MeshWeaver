@@ -138,12 +138,13 @@ internal sealed class BakeHost
         {
             FrameworkIdentity = PrebuiltAssemblySeeder.LiveFrameworkMvid,
             AppDirectory = AppContext.BaseDirectory,
-            IdOf = CompiledDependencies.CreateIdResolver(
-                FrameworkBuildIdentity.ProcessSurfacePairs,
+            // 🚨 Platform entries keyed on the COMPATIBILITY KEY (policy
+            // platform-backwards-compatibility) — the same resolver the portal validates with.
+            IdOf = CompiledDependencies.CreateCompatibilityIdResolver(
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
                 TreeBake.ModuleMvidsOf(modules),
-                FrameworkBuildIdentity.ProcessImplMvidOf,
                 TreeBake.ModuleVersionResolverOf(modules)),
-            ToolchainId = CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf),
+            ToolchainId = CompiledDependencies.ToolchainIdOf(PrebuiltAssemblySeeder.LiveFrameworkMvid),
             References = CompileReferences.ComposeWithModules(modules),
             Description =
                 $"reference set = this process's own application directory '{AppContext.BaseDirectory}' "
@@ -180,19 +181,28 @@ internal sealed class BakeHost
         ArgumentException.ThrowIfNullOrWhiteSpace(sharedFrameworksRoot);
         var app = Path.GetFullPath(appDirectory);
 
-        // 🚨 The ADDRESS first. A directory with no usable surface manifest resolves the stamp/MVID
-        // fallback identity, which no bake may be published under (two manifest-less hosts of one
-        // commit resolve the SAME fallback, so a comparison over them verifies nothing). Refuse.
+        // 🚨 The ADDRESS first — the host's platform COMPATIBILITY KEY, read off its own
+        // MeshWeaver.Compiler.dll (policy platform-backwards-compatibility). A host that states no
+        // key is not one any portal resolves; nothing baked against it could be adopted. Refuse.
         var (identity, identityProblem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(app);
         if (identity is null)
             return (null,
-                $"the platform host at '{app}' resolves no framework identity — {identityProblem}. "
-                + "A bake is ADDRESSED to the host it compiles against, and a host without a surface "
-                + "manifest is not one any portal resolves; nothing baked against it could be adopted. "
-                + "Pass the platform image's /app (the directory holding "
-                + $"{FrameworkBuildIdentity.SurfaceManifestFileName} beside its assemblies).");
+                $"the platform host at '{app}' resolves no framework compatibility key — "
+                + $"{identityProblem}. A bake is ADDRESSED to the host it compiles against. Pass the "
+                + $"platform image's /app (the directory holding {FrameworkBuildIdentity.AnchorAssemblyName}.dll "
+                + "beside its assemblies).");
 
-        // 🚨 THE TOOLCHAIN INVARIANT — see the type remarks. Member by member, both sides named.
+        // 🚨 THE TOOLCHAIN INVARIANT, as the compatibility rule states it: the toolchain this
+        // process runs must be of the SAME compatibility key as the host's — a different key is a
+        // declared break and is refused. Within one key a different toolchain BUILD is compatible by
+        // policy; the member-by-member MVID drift is PROVENANCE, reported in the note, never a
+        // refusal.
+        var live = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        if (!string.Equals(live, identity, StringComparison.Ordinal))
+            return (null,
+                $"the compile toolchain this process runs is compatibility key '{live}' but the "
+                + $"platform host at '{app}' is '{identity}' — a declared compatibility-epoch or major "
+                + "break. Run this CLI from a tester image of the host's major and epoch.");
         var drift = FrameworkBuildIdentity.ToolchainClosureOf(app)
             .Select(name => (
                 Name: name,
@@ -200,16 +210,12 @@ internal sealed class BakeHost
                 Host: FrameworkBuildIdentity.ImplMvidInDirectory(app, name)))
             .Where(x => !string.Equals(x.Running, x.Host, StringComparison.Ordinal))
             .ToImmutableArray();
-        if (drift.Length > 0)
-            return (null,
-                $"the compile toolchain this process runs is not the one the platform host at '{app}' "
-                + "ships, so a bake keyed to that host's identity would claim a toolchain it did not "
-                + "run. Differing (running vs host): "
-                + string.Join("; ", drift.Select(d =>
-                    $"{d.Name} mvid {d.Running ?? CompiledDependencies.AbsentId} vs {d.Host ?? CompiledDependencies.AbsentId}"))
-                + ". Run this CLI from the tester image of the SAME CD wave as the platform image "
-                + "(the two pins move together), or run it from a host composed of the platform's own "
-                + "/app (compose-gate-host.sh).");
+        var toolchainProvenance = drift.Length == 0
+            ? null
+            : "toolchain build differs from the host's (same compatibility key, compatible by policy; "
+              + "provenance, running vs host): "
+              + string.Join("; ", drift.Select(d =>
+                  $"{d.Name} mvid {d.Running ?? CompiledDependencies.AbsentId} vs {d.Host ?? CompiledDependencies.AbsentId}"));
 
         ContainerReferenceSet set;
         try
@@ -254,22 +260,21 @@ internal sealed class BakeHost
                 references.Add(MetadataReference.CreateFromFile(location));
         }
 
-        var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
-            File.ReadAllText(Path.Combine(app, FrameworkBuildIdentity.SurfaceManifestFileName)));
+        var manifestPath = Path.Combine(app, FrameworkBuildIdentity.SurfaceManifestFileName);
+        var pairs = File.Exists(manifestPath)
+            ? FrameworkBuildIdentity.ParseSurfaceManifest(File.ReadAllText(manifestPath))
+            : new Dictionary<string, string>(StringComparer.Ordinal);
         // 🚨 ONE PRODUCER PER ASSEMBLY NAME (#3175) — refused here, where both provenances are in
         // one hand, never sealed and discovered at the fleet.
         if (ShippedByHostProblem(app, pairs, modules) is { } twoProducers)
             return (null, twoProducers);
-        string? HostMvidOf(string name) => FrameworkBuildIdentity.ImplMvidInDirectory(app, name);
-        var live = PrebuiltAssemblySeeder.LiveFrameworkMvid;
         return (new BakeHost
         {
             FrameworkIdentity = identity,
             AppDirectory = app,
-            IdOf = CompiledDependencies.CreateIdResolver(
-                pairs, TreeBake.ModuleMvidsOf(modules), HostMvidOf,
-                TreeBake.ModuleVersionResolverOf(modules)),
-            ToolchainId = CompiledDependencies.ComputeToolchainId(HostMvidOf),
+            IdOf = CompiledDependencies.CreateCompatibilityIdResolver(
+                identity, TreeBake.ModuleMvidsOf(modules), TreeBake.ModuleVersionResolverOf(modules)),
+            ToolchainId = CompiledDependencies.ToolchainIdOf(identity),
             References = references,
             Description =
                 $"reference set = platform host '{app}' ({fromApp} assemblies) + its shared frameworks "
@@ -285,11 +290,7 @@ internal sealed class BakeHost
             // canonical surfaces differ from the host's still emits bytes bound to the host's
             // assemblies (they are the references) and records the host's ids. The bake is valid
             // for the host — and only for the host, which the identity now says.
-            Note = string.Equals(live, identity, StringComparison.Ordinal)
-                ? null
-                : $"this process resolves '{live}' but the bake is keyed to the host's '{identity}' — "
-                  + "the toolchain is verified identical, so the bundles are valid for that host and "
-                  + "for no other",
+            Note = toolchainProvenance,
         }, null);
     }
 

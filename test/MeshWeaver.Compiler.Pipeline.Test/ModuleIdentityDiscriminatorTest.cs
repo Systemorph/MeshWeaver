@@ -199,6 +199,47 @@ public class ModuleIdentityDiscriminatorTest : IDisposable
         Assert.Empty(skips);
     }
 
+    // ──────────────────────────── the compatibility key: the ladder (policy platform-backwards-compatibility)
+
+    /// <summary>
+    /// 🚨 THE LADDER. Since the platform states the COMPATIBILITY KEY (<c>c003e001</c>), a store
+    /// copy packed against ANY build of the running major and epoch states that same key and
+    /// MATCHES: a platform roll no longer declines every landed module generation in favour of the
+    /// image's copy (memex-cloud, 2026-09-25: eight generations declined on a per-commit
+    /// <c>g&lt;sha&gt;</c>). Its negative control is the next test.
+    /// </summary>
+    [Fact]
+    public async Task AStoreCopyPackedAgainstAnotherBuildOfThisEpoch_OverridesTheImage()
+    {
+        var key = MeshWeaver.Compiler.PlatformCompatibility.KeyOf(3, 1);
+        await Land(key);
+
+        var skips = new List<(string Module, string Reason)>();
+        var effective = Boot(key, [ImageBaseline], (m, r) => skips.Add((m, r)));
+
+        var module = Assert.Single(effective);
+        module.Landed.Should().NotBeNull("the same compatibility key is this platform, whatever build packed it");
+        module.Landed!.FrameworkMvid.Should().Be(key);
+        Assert.Empty(skips);
+    }
+
+    /// <summary>The negative control: a store copy packed for ANOTHER epoch is a declared break —
+    /// the image's own copy runs, and the decline names both keys.</summary>
+    [Fact]
+    public async Task AStoreCopyPackedForAnotherEpoch_IsDeclined_NamingBothKeys()
+    {
+        var live = MeshWeaver.Compiler.PlatformCompatibility.KeyOf(3, 2);
+        var previous = MeshWeaver.Compiler.PlatformCompatibility.KeyOf(3, 1);
+        await Land(previous);
+
+        var skips = new List<(string Module, string Reason)>();
+        var effective = Boot(live, [ImageBaseline], (m, r) => skips.Add((m, r)));
+
+        Assert.Single(effective).Landed.Should().BeNull("another epoch is a declared break");
+        var skip = Assert.Single(skips);
+        skip.Reason.Should().Contain(previous).And.Contain(live);
+    }
+
     // ───────────────────────────────────── the decline has to REACH the loader, not just the log
 
     /// <summary>
