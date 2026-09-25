@@ -204,6 +204,75 @@ public static class ProcessLiveness
     /// <summary>One day — a cadence past this is a typo, and the instrument would publish nothing.</summary>
     public static readonly TimeSpan MaximumPeriod = TimeSpan.FromDays(1);
 
+    /// <summary>
+    /// Heap growth inside ONE tick that makes the heartbeat say what was allocated (MeshWeaver#5555).
+    /// The steps being hunted are 2–10&#160;GiB inside 100&#160;s, i.e. at least this much in some
+    /// 10&#160;s tick; the ordinary post-warm-up floor moves by tens of MiB per HOUR, so a window this
+    /// large is never routine and the line stays rare.
+    /// </summary>
+    public const long HeapStepThresholdBytes = 512L * 1024 * 1024;
+
+    /// <summary>
+    /// The <c>[HEAPSTEP]</c> line for a tick whose heap grew by at least
+    /// <see cref="HeapStepThresholdBytes"/> since the previous tick, naming the types the runtime
+    /// sampled as allocated in that window; <c>null</c> for every other tick.
+    ///
+    /// <para>🚨 <b>Conditional on purpose, unlike the <c>[LIVENESS]</c> line.</b> The liveness line
+    /// must print unconditionally because its ABSENCE is a reading. This line is a second reading
+    /// ABOUT a tick the liveness line already published — its absence means "the heap did not step in
+    /// that tick", which the liveness line's own <c>heap=</c> already says.</para>
+    /// </summary>
+    /// <param name="previous">The previous tick's sample, or null on the first tick (which never reports).</param>
+    /// <param name="current">This tick's sample.</param>
+    /// <param name="allocations">What was sampled as allocated since the previous tick, or
+    /// <c>null</c> when this process has no running sampler — two different sentences, because "the
+    /// sampler ran and saw nothing" and "there is no sampler" are different readings.</param>
+    /// <returns>The line, or null when the heap did not step.</returns>
+    public static string? DescribeHeapStep(
+        ProcessLivenessSample? previous, ProcessLivenessSample current, AllocationWindow? allocations)
+    {
+        if (previous is null)
+            return null;
+        var growth = current.HeapBytes - previous.HeapBytes;
+        if (growth < HeapStepThresholdBytes)
+            return null;
+
+        var line = new System.Text.StringBuilder(512)
+            .Append(CultureInfo.InvariantCulture,
+                $"[HEAPSTEP] tick={current.TickSeq} heap={Gib(previous.HeapBytes)}→{Gib(current.HeapBytes)} (+{Gib(growth)}) in {Seconds(current.Elapsed - previous.Elapsed)}");
+
+        if (allocations is null)
+            return line.Append(
+                    " — the allocation sampler is NOT running in this process, so this line cannot name "
+                    + "the allocator.")
+                .ToString();
+        if (allocations.TotalBytes <= 0)
+            return line.Append(
+                    " — the sampler is running but sampled NO allocation in this window, so this line "
+                    + "cannot name the allocator.")
+                .ToString();
+
+        line.Append(CultureInfo.InvariantCulture,
+            $"; sampled allocation in the window {Gib(allocations.TotalBytes)}, heaviest types:");
+        foreach (var type in allocations.Top)
+            line.Append(CultureInfo.InvariantCulture,
+                $" {type.TypeName}={Gib(type.Bytes)} ({Share(type.Bytes, allocations.TotalBytes)})");
+        return line
+            .Append(". Allocated, not retained: the leading type is the candidate for what the step holds.")
+            .ToString();
+    }
+
+    private static string Gib(long bytes) =>
+        string.Create(CultureInfo.InvariantCulture, $"{bytes / (double)(1L << 30):0.00}GiB");
+
+    private static string Seconds(TimeSpan value) =>
+        string.Create(CultureInfo.InvariantCulture, $"{value.TotalSeconds:0.00}s");
+
+    private static string Share(long part, long whole) =>
+        whole <= 0
+            ? "n/a"
+            : string.Create(CultureInfo.InvariantCulture, $"{100.0 * part / whole:0}%");
+
     /// <summary>The production probe: what the runtime says right now.</summary>
     /// <param name="tickSeq">This tick's number.</param>
     /// <param name="elapsed">The heartbeat's monotonic clock at this tick.</param>
