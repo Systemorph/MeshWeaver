@@ -98,7 +98,9 @@ ends in `AddressRecyclingException`, which is the honest answer while the databa
 whose own `IsTransient` says so — every ADO.NET provider classifies its connection failures and
 timeouts there; Npgsql sets it for exactly the two shapes measured, with no provider reference
 needed in core — or a bare `SocketException`. A `TimeoutException` on its own is NOT transient:
-the init time-box mints one for a hang, and a hang is a defect. A provider that leaves
+the init time-box mints one for a hang, and a hang is a defect. (A hung `DataContext` initialization
+of an on-demand hub is retired all the same, by its own rule and with a terminal answer rather than
+a transient one — [What the DataContext Init Time-Box Bounds](../DataContextInitializationTimeout).) A provider that leaves
 `IsTransient` false has made its own classification, which is honoured.
 
 🚨 **An `AggregateException` is transient only when EVERY branch is.** A `DataContext` initialises

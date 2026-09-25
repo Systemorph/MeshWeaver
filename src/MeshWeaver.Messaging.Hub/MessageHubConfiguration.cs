@@ -856,6 +856,12 @@ public record MessageHubConfiguration
     /// carries, and every caller already rides it out (the paced re-probe, the resubscribe
     /// latch). Systemorph/MeshWeaver#4067 / #4068.</para>
     ///
+    /// <para>A <c>DataContext</c> initialization that TIMES OUT retires such a hub too (policy
+    /// <c>init-timeout-retires-activation</c>, Systemorph/MeshWeaver#1122) — but its backlog is
+    /// answered with a TERMINAL <c>ErrorType.Failed</c>, not the transient refusal, so no re-ask
+    /// latch re-creates the address by itself: only the next access does. See
+    /// <c>Doc/Architecture/DataContextInitializationTimeout</c>.</para>
+    ///
     /// <para>A hub WITHOUT this declaration keeps the latch, because retiring it would not bring
     /// it back: the root mesh hub is built once for the process, and a hub owned by a live object
     /// (a synchronization stream's sub-hub) is re-created by that owner's own recovery, not by
