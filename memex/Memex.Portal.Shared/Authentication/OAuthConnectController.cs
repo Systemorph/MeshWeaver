@@ -28,6 +28,14 @@ public class OAuthConnectController(
     private ApiTokenService TokenService => serviceProvider.GetRequiredService<ApiTokenService>();
 
     /// <summary>
+    /// How many live OAuth credentials one <c>(user, client_id)</c> keeps — see
+    /// <see cref="OAuthCredentialBound"/>. Optional configuration: a provider without one (a test's
+    /// bare service collection) gets the default.
+    /// </summary>
+    private int MaxLiveCredentialsPerClient =>
+        OAuthCredentialBound.From(serviceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
+
+    /// <summary>
     /// Resolves the mesh <c>User.Id</c> for the issued token. 🚨 It MUST be the mesh
     /// User.Id (e.g. <c>rbuergi</c>), NEVER the raw <c>preferred_username</c> claim — Entra
     /// fills that with the email/UPN, and an email userId routes the token node + its
@@ -325,6 +333,7 @@ public class OAuthConnectController(
         // root singletons, so the captured instances stay valid for the whole chain.
         var codeStore = CodeStore;
         var tokens = TokenService;
+        var maxLive = MaxLiveCredentialsPerClient;
 
         // Exchange the code against the mesh-backed store (replica-safe: the code may
         // have been minted by any pod, and the single-use consume is atomic across
@@ -379,12 +388,14 @@ public class OAuthConnectController(
                         userEmail: entry.UserEmail,
                         label: label,
                         expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime))
-                    // 🚨 ONE live credential per client, not N (#1493). Every authorization used to
+                    // 🚨 A BOUNDED number of live credentials per client (#1493, #5074). Every authorization used to
                     // mint a FRESH year-long token and leave the previous one live and listed, so a
                     // reinstall, a new device, or a revoked-and-reconnected integration each left
                     // another usable credential behind — for a year. That is what dominated the 86
                     // ApiToken rows found on the live portal, and each of them is a key that still
-                    // opens the door.
+                    // opens the door. The bound is not ONE: a client_id is shared by every process of
+                    // one installation (Claude Code keeps one registration per machine), and a
+                    // one-per-client rule made each new sign-in revoke every sibling session (#5074).
                     //
                     // Ordered mint-THEN-supersede, never the reverse: if the mint fails the client
                     // must keep the credential it already has, so revoking first could strand it
@@ -401,7 +412,7 @@ public class OAuthConnectController(
                     .SelectMany(creation => (ct.IsCancellationRequested
                             ? Observable.Return(false)
                             : SupersedePreviousTokens(
-                                tokens, entry.UserId, label, creation.Node.Path, MintedAt(creation), ct))
+                                tokens, entry.UserId, label, creation.Node.Path, MintedAt(creation), maxLive, ct))
                         .SelectMany(completed => completed
                             ? Observable.Return((Creation: creation, Abandoned: (IActionResult?)null))
                             : RevokeUndeliveredToken(tokens, creation, request.client_id)))
@@ -428,8 +439,10 @@ public class OAuthConnectController(
     }
 
     /// <summary>
-    /// Removes this client's PREVIOUS tokens once a fresh authorization has minted its replacement
-    /// (#1493), so a `(user, client_id)` pair has exactly one live credential.
+    /// Evicts this client's OLDEST tokens once a fresh authorization has minted a new one, so a
+    /// <c>(user, client_id)</c> pair holds at most <paramref name="maxLive"/> live credentials — the
+    /// newest ones, the one just minted included (#1493 bounded the count; #5074 raised the bound
+    /// from one, because every process of one installation shares the <c>client_id</c>).
     ///
     /// <para>Identity is the label — <c>OAuth: {client_id}</c> — and <c>client_id</c> is DERIVED
     /// from the client's own metadata (see <see cref="DeriveClientId"/>), so a shared label means
@@ -439,16 +452,21 @@ public class OAuthConnectController(
     /// also makes the read's lag harmless: a listing that has not caught up yet simply leaves an
     /// older row for the next authorization to collect, and can never take the new one.</para>
     ///
-    /// <para>Deleted, not merely marked revoked: this issue is BOTH "one live credential" and the
+    /// <para>Deleted, not merely marked revoked: this is BOTH the live-credential bound and the
     /// unbounded accumulation behind it, and a revoked row keeps accumulating. It matches what
     /// #1477's expiry sweep already does with a dead credential.</para>
+    ///
+    /// <para>Evictions are logged at three points: the candidate set before any delete (intent), one
+    /// line per credential a delete actually removed, and the tally once every delete has answered
+    /// (outcome). A removed path's last segment is the hash prefix the evicted holder's 401 is logged
+    /// under.</para>
     ///
     /// <para>Never fails the exchange. The client has a valid token by this point; housekeeping
     /// that could not complete is a Warning and the next authorization tries again.</para>
     /// </summary>
     private IObservable<bool> SupersedePreviousTokens(
         ApiTokenService tokens, string userId, string label, string keepPath, DateTimeOffset mintedAt,
-        CancellationToken abandoned)
+        int maxLive, CancellationToken abandoned)
     {
         return tokens.GetTokensForUser(userId)
             .Take(1)
@@ -459,18 +477,19 @@ public class OAuthConnectController(
                 // see the other's freshly-minted token in this listing, and a not-mine rule would
                 // have them delete each other's: both clients then walk away holding a credential
                 // that was removed moments later. Ordering by (CreatedAt, path) makes the outcome
-                // convergent instead — every participant deletes strictly below itself, so the
-                // NEWEST token survives no matter which exchange evaluates last, and there is
-                // still exactly one live credential at the end.
+                // convergent instead — every participant evicts only below itself, so the NEWEST
+                // tokens survive no matter which exchange evaluates last, and at most maxLive live
+                // credentials remain at the end.
                 //
                 // The path tiebreak matters: CreatedAt is a UTC timestamp and two exchanges can
                 // land on the same tick, where "strictly older by time" would let both survive.
-                var superseded = all
-                    .Where(t => t.Label == label && t.NodePath != keepPath)
-                    .Where(t => t.CreatedAt < mintedAt
-                                || (t.CreatedAt == mintedAt
-                                    && string.CompareOrdinal(t.NodePath, keepPath) < 0))
-                    .Select(t => t.NodePath)
+                //
+                // Of the strictly-older tokens, the newest (maxLive - 1) are KEPT beside the one just
+                // minted and only the rest are evicted. Still convergent: a token among the maxLive
+                // newest overall has at most (maxLive - 2) tokens between it and any exchange newer
+                // than it, so NO exchange evicts it — and a listing that lags (misses a row) only
+                // ranks the older rows higher, i.e. evicts less, never a newer token.
+                var superseded = OAuthCredentialEviction.Evict(all, label, keepPath, mintedAt, maxLive)
                     .ToArray();
                 if (superseded.Length == 0)
                     return Observable.Return(true);
@@ -498,8 +517,8 @@ public class OAuthConnectController(
                 logger.LogInformation(
                     "OAuth: superseding {Count} previous token(s) for user {UserId}, client label {Label} — "
                     + "candidates {SupersededPaths}, keeping {KeptPath}; "
-                    + "a re-authorization replaces the client's credential rather than adding one",
-                    superseded.Length, userId, label, string.Join(", ", superseded), keepPath);
+                    + "a client keeps at most {MaxLive} live credential(s), the oldest are evicted",
+                    superseded.Length, userId, label, string.Join(", ", superseded), keepPath, maxLive);
 
                 // Self-paced (Concat, never Merge): one delete at a time, the same shape the expiry
                 // sweep uses, so a client that re-authorized many times drains gently. Each
@@ -508,6 +527,15 @@ public class OAuthConnectController(
                 return Observable.Concat(superseded.Select(path => Observable.Defer(() => abandoned.IsCancellationRequested
                         ? Observable.Return((Path: path, Removed: false, Skipped: true))
                         : tokens.DeleteToken(path)
+                        .Do(removed =>
+                        {
+                            if (removed)
+                                logger.LogInformation(
+                                    "OAuth: evicted credential {Path} for user {UserId}, client label {Label} — "
+                                    + "older than the {MaxLive} newest live credential(s) of this client; "
+                                    + "its holder's next call answers 401 and re-authorizes",
+                                    path, userId, label, maxLive);
+                        })
                         .Select(removed => (Path: path, Removed: removed, Skipped: false))
                         .Catch<(string Path, bool Removed, bool Skipped), Exception>(ex =>
                         {
