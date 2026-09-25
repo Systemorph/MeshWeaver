@@ -120,6 +120,21 @@
          run. NuGet publication is retired: in-mesh source compiles against the IMAGE, never against
          a feed (Doc/Architecture/PluginPackaging); the packages on nuget.org stay as history. -->
     <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
+    <!-- 🚨 THE COMPATIBILITY EPOCH — policy `platform-backwards-compatibility`
+         (Doc/Architecture/PolicyNotProse). Compiled NodeType and module bytes are keyed on
+         c<major:D3>e<epoch:D3> (MeshWeaver.Compiler.PlatformCompatibility.KeyOf), NOT on a per-build
+         identity: platform builds within one major and one epoch are backwards compatible, so a
+         platform roll keeps every compiled byte and a plugin rolls independently against the
+         running platform. Stamped into every assembly below as
+         AssemblyMetadata("MeshWeaverCompatibilityEpoch") so producer and consumer read the same
+         value off the same file.
+
+         BUMP IT (and only then) when compiled bytes must be invalidated: a public API removal or
+         signature change that compiled content can bind, or a change to the skeleton generator /
+         any toolchain-generated compile input whose old output is no longer loadable or correct.
+         Bumping it re-keys every compiled NodeType and every module bundle — the declared break.
+         Never gate on an exact build identity, never seal or pin around a break: bump this. -->
+    <PlatformCompatibilityEpoch Condition="'$(PlatformCompatibilityEpoch)' == ''">1</PlatformCompatibilityEpoch>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers
@@ -408,6 +423,14 @@
        them inline here was invisible to that repo: the first portal image built there (3.0.0-rc8.ci.5768)
        declared MeshWeaverSurfaceManifest=true and shipped NO manifest — the #1699 fallback identity. -->
   <Import Project="$(MSBuildThisFileDirectory)MeshWeaverSurfaceManifest.targets" />
+  <!-- The compatibility epoch (see $(PlatformCompatibilityEpoch) above) — a function of the
+       COMMIT, so it keeps every compiled attribute commit-deterministic (#3022). -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>MeshWeaverCompatibilityEpoch</_Parameter1>
+      <_Parameter2>$(PlatformCompatibilityEpoch)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
   <Target Name="AddCommitHashMetadata"
           BeforeTargets="CoreGenerateAssemblyInfo"
           DependsOnTargets="InitializeSourceControlInformation"

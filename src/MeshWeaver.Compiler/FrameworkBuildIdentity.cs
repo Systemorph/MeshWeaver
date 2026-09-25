@@ -358,46 +358,84 @@ public static class FrameworkBuildIdentity
         string.IsNullOrWhiteSpace(stamped) ? contentIdentity : stamped;
 
     /// <summary>
-    /// The live MeshWeaver framework identity a compiled NodeType release is pinned to — THE one
-    /// process-lifetime resolution, anchored on this (the MeshWeaver.Compiler) assembly. Every
-    /// consumer — the assembly-store filename tag, <c>CompiledFrameworkVersion</c> stamps, the CI
-    /// bake artifact key, the seeder's adoption gate, the build-protocol fingerprint — reads it
-    /// from here (directly or through the delegating shims in <c>MeshWeaver.Graph</c>), so a
-    /// producer and a consumer can never disagree about what "the framework" is. A mismatch
-    /// against a NodeType's <c>CompiledFrameworkVersion</c> means "recompile".
+    /// 🚨 <b>The live framework identity every compiled NodeType release and module bundle is KEYED
+    /// on — the platform COMPATIBILITY KEY</b> (<see cref="PlatformCompatibility.KeyOf"/>,
+    /// <c>c&lt;major:D3&gt;e&lt;epoch:D3&gt;</c>, e.g. <c>c003e001</c>), policy
+    /// <c>platform-backwards-compatibility</c>. THE one process-lifetime resolution, read off this
+    /// (the MeshWeaver.Compiler) assembly: its <c>AssemblyVersion</c> major and its
+    /// <see cref="PlatformCompatibility.EpochMetadataKey"/> stamp. Every consumer — the
+    /// assembly-store filename tag, <c>CompiledFrameworkVersion</c> stamps, the CI bake artifact
+    /// key, the seeder's adoption gate, the module-bundle identity, the build-protocol fingerprint —
+    /// reads it from here, so a producer and a consumer can never disagree about it.
+    ///
+    /// <para>It is STABLE across platform builds within one major and one declared epoch. The
+    /// per-build surface/MVID identity it used to be is <see cref="BuildProvenance"/> now —
+    /// recorded and logged, never a cache miss or a decline. A mismatch against a NodeType's
+    /// <c>CompiledFrameworkVersion</c> therefore means a DECLARED break (an epoch or major bump)
+    /// or a record from before the key existed — "recompile" in both cases.</para>
     /// </summary>
-    public static string FrameworkVersion => Resolved.Value.Identity;
+    public static string FrameworkVersion => Compatibility.Value.Key;
 
-    /// <summary>Degradation warning from the identity resolution (a torn/unusable surface
-    /// manifest fell back to the stamp/MVID layer), or null on the happy path — cached with the
-    /// identity itself so the pre-warmer can log it beside the identity it announces.</summary>
-    public static string? FrameworkVersionWarning => Resolved.Value.Warning;
+    /// <summary>The platform compatibility key — the same value as <see cref="FrameworkVersion"/>,
+    /// under the name that says what it is.</summary>
+    public static string CompatibilityKey => Compatibility.Value.Key;
+
+    /// <summary>Degradation warning from the key's resolution — the anchor carried no
+    /// compatibility-epoch stamp (a non-platform build) and epoch 0 was assumed — or null on the
+    /// happy path. Cached with the key so the pre-warmer can log it beside the key it
+    /// announces.</summary>
+    public static string? FrameworkVersionWarning => Compatibility.Value.Warning;
+
+    private static readonly Lazy<(string Key, string? Warning)> Compatibility = new(() =>
+        ResolveCompatibilityKey(typeof(FrameworkBuildIdentity).Assembly));
 
     /// <summary>
-    /// 🚨 <b>The identity a module PACKER reading this platform would STATE about it</b> — the
-    /// stamped commit identity (<c>g&lt;sha&gt;</c>) when the anchor carries one, else the anchor's
-    /// MVID. It is exactly what <c>MeshWeaver.Plugin.Build.FrameworkIdentity.ReadIdentity</c>
-    /// answers for this process's own <c>MeshWeaver.Compiler.dll</c>, which is the file every
-    /// module-pack lane reads to fill a bundle's <c>frameworkMvid</c>.
-    ///
-    /// <para><b>Why it is not <see cref="FrameworkVersion"/>, and why both exist.</b>
-    /// <see cref="FrameworkVersion"/> is the API-SURFACE identity (<c>s&lt;hash&gt;</c>) — the
-    /// staleness key for content this process COMPILES, resolved from the surface manifest beside
-    /// the app. A module bundle's bytes were compiled somewhere else, by a producer that had no
-    /// manifest to hash and stated the anchor's reading instead. The two are different SCHEMES of
-    /// the same fact, and comparing one against the other answers "different" for every pair,
-    /// whatever the bytes are: measured on memex.systemorph.com 2026-09-16, every store-landed
-    /// copy of a module the image also ships was declined against <c>s4b2836…</c> while stating
-    /// <c>gce971b2…</c> — a core commit — so the registry lane was shadowed for those modules no
-    /// matter what it published, and <c>/health</c> reported them as waiting for a restart that
-    /// re-ran the same comparison.</para>
-    ///
-    /// <para>So a consumer deciding about MODULE bytes compares like with like: a producer-stated
-    /// identity against this value, a surface identity against <see cref="FrameworkVersion"/>. See
-    /// <c>MeshWeaver.PluginCatalog.ModuleFrameworkIdentity</c>, which is the one place that rule
-    /// lives.</para>
+    /// The compatibility key an anchor assembly states, never a throw: a missing epoch stamp costs
+    /// epoch 0 and a warning (that key matches no platform build's, so nothing is adopted across
+    /// it — the conservative direction).
     /// </summary>
-    public static string ProducerStatedIdentity => ProducerStated.Value;
+    /// <param name="anchorAssembly">The MeshWeaver.Compiler assembly.</param>
+    public static (string Key, string? Warning) ResolveCompatibilityKey(Assembly anchorAssembly)
+    {
+        ArgumentNullException.ThrowIfNull(anchorAssembly);
+        var (key, problem) = PlatformCompatibility.KeyOfAssembly(anchorAssembly);
+        if (key is not null)
+            return (key, null);
+        var major = anchorAssembly.GetName().Version?.Major ?? 0;
+        return (PlatformCompatibility.KeyOf(Math.Clamp(major, 0, 999), 0),
+            problem + " — resolved epoch 0");
+    }
+
+    /// <summary>
+    /// 🚨 <b>PROVENANCE ONLY</b> — the per-build identity this process resolves: the API-surface
+    /// hash (<c>s&lt;hash&gt;</c>) when a surface manifest ships beside the app, else the stamped
+    /// commit (<c>g&lt;sha&gt;</c>), else the anchor's MVID. It answers "which build produced
+    /// these bytes" and is logged and recorded beside <see cref="FrameworkVersion"/>, but it NEVER
+    /// decides a cache miss, an adoption or a rebuild (policy
+    /// <c>platform-backwards-compatibility</c>). It was the key until the compatibility epoch
+    /// replaced it; it changed on essentially every platform build.
+    /// </summary>
+    public static string BuildProvenance => Resolved.Value.Identity;
+
+    /// <summary>Degradation warning from the <see cref="BuildProvenance"/> resolution (a torn or
+    /// unusable surface manifest fell back to the stamp/MVID layer), or null.</summary>
+    public static string? BuildProvenanceWarning => Resolved.Value.Warning;
+
+    /// <summary>
+    /// 🚨 <b>The identity a module PACKER reading this platform STATES about it</b> — the
+    /// compatibility key of this process's own <c>MeshWeaver.Compiler.dll</c>, exactly what
+    /// <c>MeshWeaver.Plugin.Build.FrameworkIdentity.ReadIdentity</c> answers for that file and what
+    /// every module-pack lane writes into a bundle's <c>frameworkMvid</c>. Since the compatibility
+    /// key replaced the per-build identity this is the SAME value as <see cref="FrameworkVersion"/>:
+    /// a module packed against any build of this major and epoch states the key this process runs,
+    /// so a platform roll no longer declines every landed module generation. The per-build reading
+    /// a packer used to state is <see cref="ProducerStatedProvenance"/>.
+    /// </summary>
+    public static string ProducerStatedIdentity => FrameworkVersion;
+
+    /// <summary>PROVENANCE: the stamped commit identity (<c>g&lt;sha&gt;</c>) of this process's
+    /// anchor, else its MVID — what a packer stated before the compatibility key.</summary>
+    public static string ProducerStatedProvenance => ProducerStated.Value;
 
     private static readonly Lazy<string> ProducerStated = new(() =>
         Resolve(
