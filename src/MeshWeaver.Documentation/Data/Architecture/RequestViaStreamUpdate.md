@@ -149,6 +149,16 @@ the request. Two properties matter and are deliberate:
 - **Strictly after the response, fire-and-forget.** A cold per-node activation can take 5–45 s in CI
   (NodeType compile, dependency load, JIT), so it must never gate, delay or fail a create. An owner
   that cannot be woken is a warning naming the path; the node is created and unchanged.
+- **Built inside `Observable.Defer`, because "after the response" means the caller may already have
+  disposed the handling hub.** `GetMeshNodeStream` resolves the workspace out of that hub's DI scope
+  eagerly, and called bare from the create's completion callback it threw `ObjectDisposedException`
+  *out of* the callback — no error arm sees a throw at construction — onto the pool thread that
+  completed the chain. That is an unhandled exception: core CI run 36104469492 shows
+  `MeshWeaver.Compiler.Pipeline.Test` exiting `2` after 1102 passes, the `[FATAL ERROR]` stack ending in
+  `ActivatePendingControlPlane`. The post-creation chain and its rollback are deferred for the same
+  reason. Pinned deterministically by `ACreateCompletingOnADisposedHubTest`, which parks a
+  post-creation handler, disposes the hub handling the create, and releases the park on the test
+  thread.
 - **Gated on the content, not done for every create.** A bulk install fans `CreateOrUpdateNodeRequest`
   out into an inner `CreateNodeRequest` per node, so activating unconditionally would wake a hub per
   imported file — 141 for `Hosting`, 425 for the core samples. Inert data needs no watcher; only a

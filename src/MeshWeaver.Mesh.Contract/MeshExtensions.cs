@@ -1262,7 +1262,12 @@ public static class MeshExtensions
                     // ORIGINAL cause plus the rollback outcome.
                     logger.LogDebug("[CreateNode] step=post-handlers-start path={Path}", resultNode.Path);
                     hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_START");
-                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
+                    // 🚨 Deferred, like every builder this chain calls from inside a Subscribe callback:
+                    // it resolves the handling hub's services EAGERLY, and a hub disposed while the
+                    // write was in flight would otherwise throw out of this callback onto the pool
+                    // thread that completed the save — an unhandled exception, not an error arm
+                    // (see ActivatePendingControlPlane).
+                    Observable.Defer(() => RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger))
                         .Subscribe(
                             _ => { },
                             ex =>
@@ -1272,7 +1277,7 @@ public static class MeshExtensions
                                 logger.LogError(ex,
                                     "Post-creation handler chain errored at {Path} — rolling the create back (#638)",
                                     resultNode.Path);
-                                CompensateFailedCreate(hub, resultNode, mode, logger)
+                                Observable.Defer(() => CompensateFailedCreate(hub, resultNode, mode, logger))
                                     .Subscribe(
                                         // 🚨 {error} and {outcome} stay as the upstream fault's
                                         // and the compensation's own English. A named argument
@@ -5384,7 +5389,16 @@ public static class MeshExtensions
         // The read IS the activation (SubscribeRequest to the owner). One emission is enough: the
         // watcher is installed during activation and keeps running on the now-live hub, so nothing
         // here has to stay subscribed for it to finish its work.
-        hub.GetMeshNodeStream(node.Path)
+        //
+        // 🚨 DEFERRED, because this runs AFTER the response: the caller, once answered, may dispose
+        // the very hub handling this create (a retired node-operation hub, a test tearing its mesh
+        // down), and GetMeshNodeStream resolves the workspace out of that hub's DI scope EAGERLY.
+        // Called bare, the ObjectDisposedException left this Subscribe callback synchronously —
+        // no error arm can see a throw at construction — and unwound into whichever pool thread
+        // completed the post-creation chain: an unhandled exception, and a test host that exits 2
+        // after a clean summary (core run 36104469492). Inside Defer the factory's throw is an
+        // OnError, reported by the arm below like any other activation that did not happen.
+        Observable.Defer(() => hub.GetMeshNodeStream(node.Path))
             .Where(n => n is not null)
             .Take(1)
             .Timeout(ControlPlaneActivationBudget)
