@@ -17,11 +17,12 @@ namespace MeshWeaver.Documentation.Test;
 ///
 /// <para>Publications are keyed on the platform COMPATIBILITY key (<c>c&lt;major&gt;e&lt;epoch&gt;</c>),
 /// so every build of one epoch reads the same directory: a publication sealed by an OLDER build of
-/// the key is this instance's — its sources advance to it with no seal for the running build
+/// the key is this instance's — its bytes are adoptable with no seal for the running build
 /// (platform 2 + plugin 1, then platform 2 + plugin 2). The one rung the ladder forbids is a
-/// publication produced by a NEWER build than the running one (platform 1 + plugin 2): the gate
-/// holds it and says so — both versions, and the remedy, the PLATFORM roll, which never waits for
-/// this seal.</para>
+/// publication produced by a NEWER build than the running one (platform 1 + plugin 2): the READING
+/// marks it not usable here and says so — both versions — and, since policy
+/// <c>module-sync-per-manifest-hash</c>, that decides ADOPTION only: the sources still land and
+/// compile against the running platform.</para>
 ///
 /// <para>The shape is the control-instance deadlock measured on memex.systemorph.com on
 /// 2026-09-25: the instance ran <c>3.0.0-ci.9218</c>, <c>Hosting/_GitSync</c> was Held at
@@ -44,7 +45,7 @@ public class SealedSyncFollowsTheLadderTest
     private const string Running = "3.0.0-ci.9218";
 
     [Fact]
-    public void APublicationProducedByANewerBuild_IsHeld_AndNamesThePlatformRoll()
+    public void APublicationProducedByANewerBuild_IsNotAdoptable_ButTheSourcesStillLand()
     {
         using var root = new TempRoot();
         Publish(root.Path, Head, producer: "3.0.0-ci.9321");
@@ -57,15 +58,19 @@ public class SealedSyncFollowsTheLadderTest
         plugins.IsSealed.Should().BeFalse("sealed only for a NEWER platform is not sealed for this instance");
         plugins.ProducerPlatformVersion.Should().Be("3.0.0-ci.9321");
 
-        var verdict = SealedSyncGate.Decide(Plugins, Head, OldSync, sources, Key);
-        verdict.Proceed.Should().BeFalse("platform 1 + plugin 2 is the rung the ladder forbids");
-        verdict.HoldReason.Should().Contain("3.0.0-ci.9321").And.Contain(Running)
-            .And.Contain("PLATFORM roll").And.Contain("does not wait for this seal");
+        plugins.Refusal.Should().Contain("3.0.0-ci.9321").And.Contain(Running)
+            .And.Contain("BYTES are not adopted").And.Contain("sources still sync");
 
+        // 🚨 Policy module-sync-per-manifest-hash — the forbidden rung is a fact about BYTES
+        // (platform 1 + plugin 2 bytes are never adopted), never a reason to freeze the SOURCES:
+        // this is the control-instance deadlock, where the hold stranded the Roll planner's own fix.
+        SealedSyncGate.Decide(Plugins, Head, OldSync, sources, Key).Proceed.Should().BeTrue();
         var plan = SealedSyncGate.DecideBuild(Plugins, Head, OldSync, sources, Key, null);
-        plan.Proceed.Should().BeFalse();
-        plan.Notice.Should().Contain(n => n.MessageKey == "activity.gitsync.seal.heldNewerPlatform",
-            "the Space's activity says WHY in the viewer's language, not 'not sealed'");
+        plan.Proceed.Should().BeTrue();
+        plan.Commit.Should().Be(Head, "the green build lands at its own commit");
+        plan.SealedCommit.Should().BeNull("no publication usable HERE was baked from it — its types compile");
+        plan.Reason.Should().Contain("3.0.0-ci.9321",
+            "the plan still states why the bytes are not adopted, so an operator can tell compile from adopt");
     }
 
     [Fact]
@@ -120,7 +125,7 @@ public class SealedSyncFollowsTheLadderTest
     }
 
     [Fact]
-    public void AHeldNewerSibling_HoldsTheRepository_EvenBesideASealAtTheBuiltCommit()
+    public void ANewerSibling_NoLongerHoldsTheRepository_BesideASealAtTheBuiltCommit()
     {
         IReadOnlyList<SealedSource> sources =
         [
@@ -132,11 +137,11 @@ public class SealedSyncFollowsTheLadderTest
                 }, Running),
         ];
 
-        var verdict = SealedSyncGate.Decide(Plugins, Head, OldSync, sources, Key);
-
-        verdict.Proceed.Should().BeFalse(
-            "part of the repository's bytes are for a newer platform — the matching sibling must not open the gate");
-        verdict.HoldReason.Should().Contain("plugins-extra").And.Contain("PLATFORM roll");
+        SealedSyncGate.Decide(Plugins, Head, OldSync, sources, Key).Proceed.Should().BeTrue(
+            "the newer sibling's bytes are declined at adoption, per type — the sources land either way");
+        var plan = SealedSyncGate.DecideBuild(Plugins, Head, OldSync, sources, Key, null);
+        plan.SealedCommit.Should().Be(Head, "the usable 'plugins' publication was baked from the built commit");
+        plan.Reason.Should().Contain("plugins-extra").And.Contain("not usable here");
     }
 
     [Fact]

@@ -23,32 +23,21 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// 🚨 <b>A person's import of a repository whose bundles this instance runs lands on the SEALED
-/// commit — never the branch tip.</b> MeshWeaver#3845 hole 3.
+/// 🚨 <b>A person's import reads EXACTLY what was asked — the seal no longer redirects or holds
+/// it</b> (policy <c>module-sync-per-manifest-hash</c>; this used to pin the redirect onto the sealed
+/// commit, MeshWeaver#3845 hole 3).
 ///
-/// <para><b>The hole.</b> The unattended lanes — the green-build webhook, the seal's arrival, the
-/// first import, the boot install — all ask <see cref="SealedSyncGate"/> which commit a repository's
-/// sources may land on. The two GUI paths did not: <c>GitHubActionArea</c>'s <b>Update from GitHub</b>
-/// called <see cref="GitHubActivityExtensions.UpdateToLatestFromGitHub"/>, which resolved the branch
-/// at fetch time, and the settings tab's <b>Re-import at this commit</b> passed whatever was typed —
-/// its placeholder reads "commit SHA or branch" — to
-/// <see cref="GitHubActivityExtensions.ReimportFromGitHub"/>. <c>SyncRefContract</c> stated that as
-/// the rule ("only a human-initiated Update may read a branch tip"), and the maintainer reversed it on
-/// 2026-09-17: sources on a tree no bundle for this identity was baked from are declined on their
-/// fingerprint whoever pressed the button.</para>
-///
-/// <para><b>What is measured, and what could falsify it.</b> The ref that reaches
-/// <see cref="IGitHubRepoClient.Fetch"/> — not a log line and not a decision function, because the
-/// defect is precisely what the fetch receives. Against the pre-fix code the first two facts fetch
-/// <c>main</c> and the third fetches <c>main</c> where it must fetch nothing. The fourth is the control
-/// that keeps the other three honest: a repository this instance runs NO publication of must still
-/// read the branch (hole 1's adjudication), or the gate would be a switch that blocks every import.</para>
+/// <para><b>What is measured.</b> The ref that reaches <see cref="IGitHubRepoClient.Fetch"/> — not a
+/// log line and not a decision function. Over the same three publications that used to redirect or
+/// hold (sealed, torn, another repository's), the fetch receives what the person asked for, and the
+/// activity carries no seal line. Whether each module then writes anything is judged inside the
+/// import by its manifest hash (<c>ModuleSyncDecisionTest</c>), and whether each NodeType adopts
+/// bytes or compiles is decided per type.</para>
 ///
 /// <para>One seam is substituted, the GitHub transport, exactly as in
 /// <c>HeldSourceSaysItIsHeldTest</c>. The published bundle root is a REAL directory carrying the
 /// markers <c>publish-bake-bundles.sh</c> writes, read by the real index on the real FileSystem pool.
-/// Everything between is the real mesh: the real activity runner, the real gate, the real sync
-/// service, the real node streams.</para>
+/// Everything between is the real mesh.</para>
 /// </summary>
 public class APersonsImportLandsOnTheSealTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -128,7 +117,7 @@ public class APersonsImportLandsOnTheSealTest(ITestOutputHelper output)
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
     [Fact(Timeout = 120_000)]
-    public async Task UpdateToLatest_OfASealedRepository_FetchesTheSealedCommit_NeverTheBranch()
+    public async Task UpdateToLatest_OfASealedRepository_ReadsTheBranch_AsAsked()
     {
         StagePublication(RepoFullName, sealedState: true);
         var space = await ArmedSpace("Update", TestContext.Current.CancellationToken);
@@ -137,53 +126,37 @@ public class APersonsImportLandsOnTheSealTest(ITestOutputHelper output)
 
         // The activity is terminal and the import runs INSIDE it, so every fetch it made is already
         // recorded: this list is complete, not a window.
-        repoClient.Requested.Should().Equal([SealedSha],
-            "a person's Update of a repository whose bundles this instance runs lands on the commit those "
-            + "bundles were baked from — never on the branch, which would put sources ahead of the bytes");
-        log.Status.Should().Be(ActivityStatus.Warning,
-            "the person asked for latest and got the sealed commit — a quiet Succeeded would say they got "
-            + "what they asked for");
-        log.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.landsOnSeal");
-        log.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.advanceBySeal",
-            "a redirect must name what moves the Space further — roll the instance, or the publishing lane");
-
-        var config = await ConfigWhen(space,
-            c => string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
-            TestContext.Current.CancellationToken);
-        config.LastSyncCommitSha.Should().Be(SealedSha);
+        repoClient.Requested.Should().Equal(["main"],
+            "policy module-sync-per-manifest-hash: the seal never chooses a source's commit — a person's "
+            + "Update reads the branch, and each module is then judged by its manifest hash");
+        log.Messages.Select(m => m.MessageKey)
+            .Should().NotContain(k => k != null && k.StartsWith("activity.gitsync.seal.", StringComparison.Ordinal),
+                "an import that runs exactly as asked has nothing about a seal to say");
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task ReimportAtATypedBranch_OfASealedRepository_FetchesTheSealedCommit()
+    public async Task ReimportAtATypedBranch_OfASealedRepository_FetchesWhatWasTyped()
     {
         StagePublication(RepoFullName, sealedState: true);
         var space = await ArmedSpace("Reimport", TestContext.Current.CancellationToken);
 
-        var log = await Run(Mesh.ReimportFromGitHub(space, "main", UserId), TestContext.Current.CancellationToken);
+        await Run(Mesh.ReimportFromGitHub(space, "main", UserId), TestContext.Current.CancellationToken);
 
-        repoClient.Requested.Should().Equal([SealedSha],
-            "the re-import field accepts a branch, and a branch typed there was a tip import with a text box "
-            + "in front of it");
-        log.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.landsOnSeal");
+        repoClient.Requested.Should().Equal(["main"], "the re-import reads exactly the typed ref");
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task UpdateToLatest_AgainstATornPublication_FetchesNothing_AndSaysWhy()
+    public async Task UpdateToLatest_AgainstATornPublication_StillReadsTheBranch()
     {
         StagePublication(RepoFullName, sealedState: false);
         var space = await ArmedSpace("Torn", TestContext.Current.CancellationToken);
 
         var log = await Run(Mesh.UpdateToLatestFromGitHub(space, UserId), TestContext.Current.CancellationToken);
 
-        repoClient.Requested.Should().BeEmpty(
-            "'we could not establish a commit' and 'the branch tip' are different answers — a torn seal "
-            + "imports nothing rather than falling back to what was asked");
-        log.Status.Should().Be(ActivityStatus.Warning,
-            "a hold is neither a success nor a failure a retry could change — the seal landing changes it");
-        log.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.heldNotSealed",
-            "the person must be told WHICH publication holds the Space and why, in their own language");
-        log.Messages.Single(m => m.MessageKey == "activity.gitsync.seal.heldNotSealed").Message
-            .Should().Contain("no completion sentinel");
+        repoClient.Requested.Should().Equal(["main"],
+            "a torn publication means no bytes are adopted — it never stops the sources from arriving");
+        log.Messages.Select(m => m.MessageKey)
+            .Should().NotContain("activity.gitsync.seal.heldNotSealed", "nothing is held any more");
     }
 
     [Fact(Timeout = 120_000)]

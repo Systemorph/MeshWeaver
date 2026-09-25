@@ -784,16 +784,18 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     {
         var (owner, name) = ModuleDiscovery.SplitRepo(source.RepoPath);
         var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        // 🚨 `ReadingFor`, not `ReadFor`: an unreadable index HOLDS this first import rather than
-        // provisioning the Space from the branch tip (#3461). The two answers are the same empty
-        // list, and at a first import there is no built commit and no `LastSyncCommitSha` to
-        // attribute a seal with, so "I could not look" is indistinguishable from "not my business".
+        // Policy module-sync-per-manifest-hash: the seal no longer chooses (or holds) a first
+        // import's commit — it resolves the branch, and every module is then judged by its manifest
+        // hash. The reading is still taken so the plan's reason states what was sealed (adoption
+        // versus compile), and an unreadable index is said, never read as "nothing sealed".
         var reading = SealedPublicationIndex.ReadingFor(
             hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey],
             identity, logger);
-        return SealedSyncGate.RefusedFirstImportForUnreadableIndex(reading.Outcome, identity)
-            ?? SealedSyncGate.DecideFirstImport(
-                new RepoIdentity(owner, name), reading.Sources, identity);
+        if (SealedSyncGate.RefusedForUnreadableIndex(reading.Outcome, identity) is { HoldReason: { } unreadable })
+            logger?.LogWarning(
+                "[ModuleDiscovery] {Repo}: {Unreadable}. The first import still resolves the branch; "
+                + "no prebuilt bytes are adopted on this reading.", source.RepoPath, unreadable);
+        return SealedSyncGate.DecideFirstImport(new RepoIdentity(owner, name), reading.Sources, identity);
     }
 
     /// <summary>The branch a sync entry commits against. A ref of <c>HEAD</c> (the catalog default,

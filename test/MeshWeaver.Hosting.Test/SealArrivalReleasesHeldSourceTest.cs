@@ -25,8 +25,12 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// 🚨 <b>"It advances on the next green build" is FALSE, and that is MeshWeaver#4063's convergence
-/// defect.</b> The <c>workflow_run</c> hook fires when a repository's build goes green — BEFORE its
+/// 🚨 <b>Since policy <c>module-sync-per-manifest-hash</c> the seal HOLDS nothing, so its arrival
+/// releases nothing — and must move nothing.</b> The history below is why the arrival was listened
+/// to at all; the test now pins that listening to it never rolls a source back.
+///
+/// 🚨 <b>"It advances on the next green build" was FALSE, and that was MeshWeaver#4063's
+/// convergence defect.</b> The <c>workflow_run</c> hook fires when a repository's build goes green — BEFORE its
 /// publish-bake job seals the bundles for this instance's framework identity — so
 /// <see cref="SealedSyncGate"/> holds, correctly. The seal lands minutes later and nothing
 /// re-evaluates it. And the NEXT green build does not rescue the source either: that delivery asks
@@ -162,55 +166,43 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
     private GitHubWebhookProcessor Webhooks =>
         Mesh.ServiceProvider.GetRequiredService<GitHubWebhookProcessor>();
 
+    /// <summary>
+    /// 🚨 Policy <c>module-sync-per-manifest-hash</c> re-expresses this test. There is no hold for
+    /// the seal's arrival to release any more: the green build lands at once, and the census never
+    /// records the repository frozen. What the arrival must STILL never do is move a source — neither
+    /// back to an OLDER sealed commit (the source is ahead of it) nor anywhere once the seal catches
+    /// up to the commit the source already holds.
+    /// </summary>
     [Fact(Timeout = 180_000)]
-    public async Task APublicationSealedAfterTheGreenBuild_ReleasesTheHeldSource_WithoutAnotherWebhook()
+    public async Task WithNothingHeld_TheBuildLandsAtOnce_AndASealArrivalNeverMovesTheSource()
     {
         await ArmedSpace("SealArrival");
 
         var census = Mesh.ServiceProvider.GetRequiredService<SealedSyncCensus>();
 
-        // ── the precondition: a green build the seal does not cover is HELD ──────────────
-        var neverFetchedWhileHeld = repoClient.FetchedRefs.Where(r => r == LaterSha)
-            .Should().NotEmit(within: TestTimeouts.Quick);
-        await Deliver(LaterSha);
-        await neverFetchedWhileHeld;
-
-        // …and /health says so. This is the assertion that keeps the release assertion below from
-        // being vacuous: a census that never recorded the hold would report "nothing held" at the
-        // end for the wrong reason.
-        var held = Assert.Single(census.Holds());
-        Assert.Equal(RepoFullName, held.Repository);
-        Assert.Equal(LaterSha, held.BuiltCommit);
-
-        // ── the negative control: an announcement while the seal is STILL at the old commit
-        //    must move nothing, or this watcher imports on any stimulus rather than on the seal ──
-        var stillNothing = repoClient.FetchedRefs.Where(r => r == LaterSha)
-            .Should().NotEmit(within: TestTimeouts.Quick);
-        await AnnouncePublication();
-        await stillNothing;
-
-        // ── the fact under test: the lane seals at that commit and announces it ──────────
-        var released = repoClient.FetchedRefs.Where(r => r == LaterSha)
+        // ── a green build the seal does not cover LANDS, with no seal involved ──────────────
+        var landed = repoClient.FetchedRefs.Where(r => r == LaterSha)
             .Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("the seal is the trigger the green-build hook cannot be: it lands AFTER the hook, "
-                  + "and the next hook asks about a newer commit the seal does not cover either — so "
-                  + "without the announcement being listened to, this source waits for a restart");
+            .Emit("the green build is the proof; the seal decides adoption only",
+                TestContext.Current.CancellationToken);
+        await Deliver(LaterSha);
+        (await landed).Should().Be(LaterSha);
+        census.Holds().Should().BeEmpty("the seal holds no source, so nothing is ever reported frozen");
 
+        // ── an announcement while the seal is at an OLDER commit must not roll the source back ──
+        var neverBack = repoClient.FetchedRefs.Where(r => r == SealedSha)
+            .Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
+        await AnnouncePublication();
+        await neverBack;
+
+        // ── the seal catches up to the commit the source holds: the steady state, nothing moves ──
+        var fetchedSoFar = repoClient.Count;
+        var nothingMore = repoClient.FetchedRefs.Skip(fetchedSoFar)
+            .Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
         StageSeal(LaterSha);
         await AnnouncePublication();
-
-        (await released).Should().Be(LaterSha);
-
-        // 🚨 …and the census stops reporting the repository frozen. The HOLD is a statement about
-        // the gate's verdict, so its RELEASE has to come from the same evidence — otherwise a
-        // quiet repository would sit `publication-seal` Degraded until its next green build or a
-        // process restart, which is the #4063 blindness pointing the other way.
-        await Observable.Interval(50.Milliseconds()).StartWith(0L)
-            .Select(_ => census.Holds())
-            .Where(h => h.Count == 0)
-            .FirstAsync()
-            .Timeout(TestTimeouts.Convergence)
-            .Await(TestContext.Current.CancellationToken);
+        await nothingMore;
+        census.Holds().Should().BeEmpty();
     }
 
     /// <summary>
@@ -329,12 +321,18 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
     {
         private readonly ReplaySubject<string> fetched = new();
 
+        private int count;
+
         /// <summary>Every commitish a fetch has asked for, replayed to a late subscriber.</summary>
         public IObservable<string> FetchedRefs => fetched;
+
+        /// <summary>How many fetches have been asked for so far.</summary>
+        public int Count => System.Threading.Volatile.Read(ref count);
 
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
         {
+            System.Threading.Interlocked.Increment(ref count);
             fetched.OnNext(commitish);
             // An empty snapshot at the requested sha: the import then has nothing to write, which is
             // exactly what this test wants — the RECORD is the measurement, the content is not.

@@ -117,8 +117,48 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
     private GitHubCredentialService Credentials =>
         Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
 
+    /// <summary>
+    /// 🚨 Policy <c>module-sync-per-manifest-hash</c> — on a mesh that COMPILES (every mesh without
+    /// <c>Modules:RequirePrebuilt</c>), a changed adopted type is NOT held: its sources move onto the
+    /// incoming commit and it compiles from them against the running platform. The hold stranded the
+    /// type on an old tree until a publication or a roll arrived; the control instance's Hosting
+    /// Space is that case.
+    /// </summary>
     [Fact(Timeout = 300_000)]
-    public async Task AnAdoptedTypesSources_WaitForABundleThatCarriesThem()
+    public async Task OnAMeshThatCompiles_AnAdoptedTypesChangedSources_Sync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        Space = "Moves" + Guid.NewGuid().ToString("N")[..8];
+        StageSeal(CommitA);
+        repoClient.Stage(CommitA, Tree("class WidgetView { }", "Notes at A"));
+        repoClient.Stage(CommitB, Tree("class WidgetView { int n; }", "Notes at B"));
+
+        var adoptedFingerprint = await AdoptAtCommitA(cancellationToken);
+
+        await Sync.ReimportAtCommit(Space, CommitB, UserId)
+            .Timeout(TestTimeouts.CrossSilo).Await(cancellationToken);
+
+        (await SourceTextWhen(text => text.Contains("int n"), cancellationToken))
+            .Should().Contain("int n",
+                "no bundle carries commit B's fingerprint, and on a mesh that compiles that means the "
+                + "type compiles from B's sources — it is never held on A's");
+        var config = await ConfigWhenOrCurrent(
+            c => string.Equals(c.LastSyncCommitSha, CommitB, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        config.LastSyncCommitSha.Should().Be(CommitB, "nothing was held, so the Space holds commit B");
+        config.BundleHeldNodeTypes.Should().BeNull("no type is held on a mesh that compiles");
+        (await DefinitionWhen(d => d.CurrentSourceFingerprint is { Length: > 0 } f && f != adoptedFingerprint,
+                cancellationToken))
+            .CurrentSourceFingerprint.Should().NotBe(adoptedFingerprint, "the type's compile input moved");
+    }
+
+    /// <summary>
+    /// The hold as it is KEPT — only on a <c>Modules:RequirePrebuilt</c> mesh, where a local compile
+    /// is refused by design and moving the sources would park the type. The adoption premise is
+    /// established on a compiling mesh; the flag is then switched on, as the reading asks it per
+    /// import.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task OnARequirePrebuiltMesh_AnAdoptedTypesSources_WaitForABundleThatCarriesThem()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         Space = "Held" + Guid.NewGuid().ToString("N")[..8];
@@ -126,38 +166,10 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         repoClient.Stage(CommitA, Tree("class WidgetView { }", "Notes at A"));
         repoClient.Stage(CommitB, Tree("class WidgetView { int n; }", "Notes at B"));
 
-        // ── 1. The Space takes commit A, and its type ADOPTS a bundle built from those sources ──
-        await Armed(cancellationToken);
-        await Sync.ReimportAtCommit(Space, CommitA, UserId)
-            .Timeout(TestTimeouts.CrossSilo).Await(cancellationToken);
-
-        // Importing activates the type and can already dispatch its first compile. A source
-        // fingerprint does not mean that compile has finished: seeding at that point races its
-        // terminal stamp, which honestly changes provenance back to Compiled. Establish the
-        // completed initial build and the import's handled release request before replacing them
-        // with the adoption this test exercises.
-        var adoptedFingerprint = await FingerprintWhen(d =>
-                d.CurrentSourceFingerprint is { Length: > 0 }
-                && d.CompilationStatus is CompilationStatus.Ok
-                && d.BuildProvenance is BuildProvenance.Compiled
-                && !d.IsDirty
-                && d.RequestedReleaseAt is { } requested
-                && d.LastReleaseRequestHandledAt >= requested,
-            cancellationToken);
-        Output.WriteLine($"live fingerprint at {CommitA[..8]}: {adoptedFingerprint}");
-        StageBundle("widget-a.zip", adoptedFingerprint);
-
-        var seeded = await PrebuiltAssemblySeeder.SeedDetailed(
-                Mesh, TypePath, TestAssemblyBytes(), pdbBytes: null,
-                frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                logger: null, dependencies: null, sourceFingerprint: adoptedFingerprint)
-            .Should().Within(TestTimeouts.WriteConvergence).Emit("a seed completes either way",
-                cancellationToken);
-        Output.WriteLine($"seed outcome: {seeded}");
-        var adopted = await DefinitionWhen(d => d.BuildProvenance is BuildProvenance.AdoptedVerified,
-            cancellationToken);
-        adopted.CurrentSourceFingerprint.Should().Be(adoptedFingerprint,
-            "the premise: the type is adopted AND verified against the sources the mesh holds");
+        var adoptedFingerprint = await AdoptAtCommitA(cancellationToken);
+        Mesh.ServiceProvider.GetRequiredService<IConfiguration>()[PrebuiltAssemblySeeder.RequirePrebuiltConfigKey] = "true";
+        PrebuiltAssemblySeeder.RequirePrebuilt(Mesh.ServiceProvider).Should().BeTrue(
+            "the premise of this case: the mesh now refuses a local compile");
 
         // ── 2. Commit B moves the type's sources, and NO bundle carries the fingerprint they make ──
         await Sync.ReimportAtCommit(Space, CommitB, UserId)
@@ -213,6 +225,45 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
             cancellationToken);
         released.BundleHeldNodeTypes.Should().BeNull(
             "the record describes the LAST attempt: a released hold leaves no entry behind");
+    }
+
+    /// <summary>Step 1 of both cases: the Space takes commit A, its type compiles, then ADOPTS a
+    /// bundle built from exactly those sources. Returns the adopted fingerprint.</summary>
+    private async Task<string> AdoptAtCommitA(CancellationToken cancellationToken)
+    {
+        await Armed(cancellationToken);
+        await Sync.ReimportAtCommit(Space, CommitA, UserId)
+            .Timeout(TestTimeouts.CrossSilo).Await(cancellationToken);
+
+        // Importing activates the type and can already dispatch its first compile. A source
+        // fingerprint does not mean that compile has finished: seeding at that point races its
+        // terminal stamp, which honestly changes provenance back to Compiled. Establish the
+        // completed initial build and the import's handled release request before replacing them
+        // with the adoption this test exercises.
+        var adoptedFingerprint = await FingerprintWhen(d =>
+                d.CurrentSourceFingerprint is { Length: > 0 }
+                && d.CompilationStatus is CompilationStatus.Ok
+                && d.BuildProvenance is BuildProvenance.Compiled
+                && !d.IsDirty
+                && d.RequestedReleaseAt is { } requested
+                && d.LastReleaseRequestHandledAt >= requested,
+            cancellationToken);
+        Output.WriteLine($"live fingerprint at {CommitA[..8]}: {adoptedFingerprint}");
+        StageBundle("widget-a.zip", adoptedFingerprint);
+
+        var seeded = await PrebuiltAssemblySeeder.SeedDetailed(
+                Mesh, TypePath, TestAssemblyBytes(), pdbBytes: null,
+                frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                logger: null, dependencies: null, sourceFingerprint: adoptedFingerprint)
+            .Should().Within(TestTimeouts.WriteConvergence).Emit("a seed completes either way",
+                cancellationToken);
+        Output.WriteLine($"seed outcome: {seeded}");
+        var adopted = await DefinitionWhen(d => d.BuildProvenance is BuildProvenance.AdoptedVerified,
+            cancellationToken);
+        adopted.CurrentSourceFingerprint.Should().Be(adoptedFingerprint,
+            "the premise: the type is adopted AND verified against the sources the mesh holds");
+
+        return adoptedFingerprint;
     }
 
     // ── staging ───────────────────────────────────────────────────────────────

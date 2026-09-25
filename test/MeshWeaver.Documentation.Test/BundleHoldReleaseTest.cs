@@ -110,17 +110,32 @@ public class BundleHoldReleaseTest
             Sealed(), Crm, "Crm", config, [Sealed()], Identity, [], inventory);
 
     [Fact]
-    public void TheHeldStateIsSettled_SoNothingButAReleaseCanReImport()
+    public void TheHeldStateIsNotMovedByTheSealAlone_SoNothingButAReleaseCanReImport()
     {
         // The negative control for every fact below: with an empty shelf the source stays put, so a
         // re-import in any other case IS the release firing rather than the seal.
         var plan = Decide(Held(Entry(Root, RootWanted, bySharing: false)), Shelf());
 
-        plan.Action.Should().Be(SealedSyncReconcile.Action.None);
-        plan.Settled.Should().BeTrue(
-            "a held source has already reached a final verdict at the sealed commit — if this were "
-            + "false the reconciler would re-import on the seal alone and every case below would "
-            + "pass for a reason that has nothing to do with the release");
+        plan.Action.Should().Be(SealedSyncReconcile.Action.None,
+            "if the seal alone re-imported, every case below would pass for a reason that has nothing "
+            + "to do with the release");
+        (plan.Settled || plan.SteadyState).Should().BeTrue(
+            "and it is never RECORDED as a hold — since policy module-sync-per-manifest-hash the seal "
+            + "does not move a source that has a commit at all");
+    }
+
+    [Fact]
+    public void AReleaseReImportsAtTheCommitWhoseSourcesWereHeld_NeverAtTheSeal()
+    {
+        var plan = Decide(Held(Entry(Root, RootWanted, bySharing: false)) with
+            {
+                LastAttemptedCommitSha = "feedfacefeedfacefeedfacefeedfacefeedface",
+            },
+            Shelf((Root, RootWanted)));
+
+        plan.Action.Should().Be(SealedSyncReconcile.Action.ReconcileAtSealedCommit);
+        plan.Commit.Should().Be("feedfacefeedfacefeedfacefeedfacefeedface",
+            "the held sources are those of the attempted commit; the seal may be BEHIND the source");
     }
 
     [Fact]

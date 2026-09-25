@@ -107,6 +107,15 @@ public sealed record BundleHoldDecision(
 /// fingerprint no bundle for this identity carries. That type's source set is held — neither written
 /// nor pruned — and the rest of the Space imports.</para>
 ///
+/// <para>🚨 <b>Only on a <c>Modules:RequirePrebuilt</c> mesh</b> (policy
+/// <c>module-sync-per-manifest-hash</c>). Everywhere else a changed type is NOT held: under the
+/// compatibility ladder it compiles from the synced source against the running platform, and
+/// holding its sources stranded it on an old tree until a publication or a roll arrived. A
+/// RequirePrebuilt mesh refuses the local compile by design, so moving the sources there would park
+/// the type — the one case this hold still protects, which is why
+/// <c>BundleKeyedHoldReading</c> asks this decision only on such a mesh. The pure decision below is
+/// unchanged: it is what that mesh takes.</para>
+///
 /// <para>Pure and offline: the caller supplies the incoming tree, the current partition, the live
 /// definitions and the inventory. The fingerprints are computed by the SAME functions the bake and
 /// the owner use (<see cref="NodeSet.ResolveSources"/> +

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -417,7 +418,8 @@ public sealed class GitHubSyncService
                 // until an import actually lands them).
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
                         SyncIgnore.For(config), progress, policy,
-                        baseSha: force ? null : config.LastSyncCommitSha)
+                        baseSha: force ? null : config.LastSyncCommitSha,
+                        heldModuleVersions: config.ModuleVersions)
                     // 🚨 A REFUSAL IS A CONCLUSION, AND EVERY CONCLUSION RECORDS ITSELF (#3581).
                     // The empty-subdirectory refusal below was the one branch that escaped that
                     // rule: it logged, it threw, and it wrote NOTHING to the config node — so from
@@ -429,7 +431,7 @@ public sealed class GitHubSyncService
                     //
                     // Recorded and then RE-THROWN: the caller's error contract is unchanged, and
                     // this is not a swallow — the fault still propagates exactly as it did.
-                    .Catch<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold), SyncSubdirectoryEmptyException>(
+                    .Catch<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules), SyncSubdirectoryEmptyException>(
                         refusal => RecordSyncResult(
                                 spacePath, RefusedOutcome,
                                 // Nothing landed: the SEEN pointer and the horizon stay where they
@@ -451,7 +453,7 @@ public sealed class GitHubSyncService
                                 attemptWasFinal: refusal.ListingIsComplete,
                                 attemptedConfig: config)
                             .SelectMany(_ => Observable
-                                .Throw<(StaticRepoImportResult, string, BundleHoldDecision)>(refusal)))
+                                .Throw<(StaticRepoImportResult, string, BundleHoldDecision, ImmutableList<ModuleSyncOutcome>)>(refusal)))
                     // 🚨 RECOMPILE WHAT THE SYNC CHANGED — part of the sync transaction, not a
                     // follow-up human step. Importing new Source/Code nodes and walking away leaves
                     // every affected NodeType serving its STALE assembly (the "assembly is the
@@ -513,7 +515,12 @@ public sealed class GitHubSyncService
                         // means — one commit the mesh genuinely holds — and the held files stay in
                         // the next diff, so the import is cumulative and self-healing. See
                         // Doc/Architecture/AdoptThenSyncPerNodeType → "What a partially-held Space is".
-                        var mayAdvance = MayAdvanceBaseline(x.Result) && !x.Hold.Holds;
+                        // 🚨 A DECLINED module did not land either (policy
+                        // module-sync-per-manifest-hash): its files stay in the next diff exactly
+                        // like a held type's, so the baseline stays too.
+                        var anyDeclined = x.Modules.Any(m => m.Outcome == ModuleSyncOutcomeKind.Declined);
+                        var landed = MayAdvanceBaseline(x.Result) && !x.Hold.Holds;
+                        var mayAdvance = landed && !anyDeclined;
                         var skipped = string.Equals(x.Result.Outcome, "Skipped",
                             StringComparison.OrdinalIgnoreCase);
                         return RecordSyncResult(spacePath, x.Result.Outcome,
@@ -533,7 +540,7 @@ public sealed class GitHubSyncService
                                 // wait for their bundle — both are drift the sync cannot close by
                                 // itself, stated where the settings tab and the status surface read
                                 // it rather than only in the activity log.
-                                note: Notes(HeldNote(x.Result), BundleHeldNote(x.Hold)),
+                                note: Notes(HeldNote(x.Result), BundleHeldNote(x.Hold), ModuleDeclinedNote(x.Modules)),
                                 // 🚨 #3945 — the SECOND, weaker pointer, and the whole reason it is
                                 // a second one. "We have already looked at exactly these bytes" is
                                 // not "the mesh holds this commit", and one field answering both is
@@ -542,13 +549,25 @@ public sealed class GitHubSyncService
                                 // is stamped whatever the outcome; whether it may LICENCE a skip is
                                 // the flag beside it, never this sha alone.
                                 attemptedCommitSha: x.CommitSha,
-                                attemptWasFinal: x.Result.VerdictIsFinal,
+                                // A decline is a verdict about the RUNNING platform, not about
+                                // these bytes: a roll changes it at the same commit, so it is never
+                                // recorded as final.
+                                attemptWasFinal: x.Result.VerdictIsFinal && !anyDeclined,
                                 attemptedConfig: config,
                                 // 🚨 The hold is on the RECORD, not only in the log (#4063's lesson
                                 // one level down): a held source that says nothing is
                                 // indistinguishable from one that is up to date, and this list is
                                 // what the seal reconciler asks before it re-fetches anything.
-                                bundleHeld: x.Hold.Held)
+                                bundleHeld: x.Hold.Held,
+                                // 🚨 Per-module: the outcome of every module (unchanged / synced /
+                                // declined), and the manifest hashes the Space now HOLDS — advanced
+                                // only when the import's nodes all landed, so a module that did not
+                                // fully land is never read as unchanged next time (#2229 item C).
+                                modules: x.Modules,
+                                moduleVersions: landed && !x.Modules.IsEmpty
+                                    ? ModuleSyncDecision.Recorded(x.Modules)
+                                    : null)
+                            .Do(_ => RecordModuleCensus(spacePath, x.Modules))
                             .Select(_ => x.Result);
                     });
             });
@@ -754,10 +773,10 @@ public sealed class GitHubSyncService
                         "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
                         "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
 
-    private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold)> FetchAndImport(
+    private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
         SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null,
-        string? baseSha = null)
+        string? baseSha = null, IReadOnlyDictionary<string, string>? heldModuleVersions = null)
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
         {
@@ -781,7 +800,7 @@ public sealed class GitHubSyncService
                 // 🚨 TYPED so the caller can RECORD this conclusion without matching on the message
                 // text (#4499). It derives from InvalidOperationException, so anything that already
                 // catches that keeps behaving exactly as before.
-                return Observable.Throw<(StaticRepoImportResult, string, BundleHoldDecision)>(
+                return Observable.Throw<(StaticRepoImportResult, string, BundleHoldDecision, ImmutableList<ModuleSyncOutcome>)>(
                     new SyncSubdirectoryEmptyException(message)
                     {
                         // The commit the listing was READ at, and whether that listing was whole —
@@ -790,6 +809,49 @@ public sealed class GitHubSyncService
                         ListingIsComplete = snapshot.ListingIsComplete,
                     });
             }
+            // 🚨 EVERY MODULE SYNCS, JUDGED ALONE BY ITS MANIFEST HASH (policy
+            // module-sync-per-manifest-hash; Doc/Architecture/ModuleSyncPerManifestHash). This
+            // replaces the whole-Space hold the sealed-publication gate used to take BEFORE the
+            // fetch: an unchanged module writes nothing, a changed one syncs, and a module declaring
+            // a platform floor above the running one is the ONE decline — its paths are neither
+            // written nor pruned, and no sibling waits for it. A tree with no manifest.lock states no
+            // module and imports exactly as before.
+            var modules = ModuleSyncDecision.Decide(
+                ModuleSyncDecision.Read(snapshot.Files.Select(f => (f.Path, f.Content))),
+                heldModuleVersions,
+                PrebuiltAdoptionPolicy.RunningPlatformVersion,
+                reconcile: policy is { Force: true } or { Reconcile: true });
+            var notWritten = modules
+                .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
+                .ToList();
+            var declined = modules.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList();
+            foreach (var decline in declined)
+                logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
+            var declinedNames = declined
+                .Select(m => $"{m.Module} (≥ {m.Floor})")
+                .ToImmutableList();
+            // Nothing of this tree is written when every file sits under a module that is unchanged
+            // or declined — the whole import is a no-op, and says which.
+            if (notWritten.Count > 0
+                && snapshot.Files.All(f => notWritten.Any(m => IsAtOrUnder(f.Path, m.Root))))
+            {
+                logger?.LogInformation(
+                    "[ModuleSync] {Space}: nothing written at {Sha} — {Modules}", spaceId,
+                    Short(snapshot.CommitSha), string.Join("; ", notWritten.Select(m => m.Reason)));
+                var noop = new StaticRepoImportResult(spaceId,
+                    "manifest:" + string.Join(",", notWritten.Select(m => $"{m.Module}={m.IncomingVersion}")),
+                    declined.Count > 0 ? DeclinedOutcome : "Skipped")
+                {
+                    DeclinedModules = declinedNames,
+                };
+                return Observable.Return((noop, snapshot.CommitSha, BundleHoldDecision.Nothing, modules));
+            }
+            // Only the modules that are not written are held; a module rooted at the Space root
+            // always takes the no-op arm above (it covers every file), so every root here is a
+            // real folder.
+            var moduleHeld = new SyncIgnore(Array.Empty<string>())
+                .WithHeldPaths(notWritten.Select(m => m.Root).Where(r => r.Length > 0));
+            var importIgnore = ignore.WithHeldPaths(notWritten.Select(m => m.Root).Where(r => r.Length > 0));
             // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
             // webhook/update — not a force, not a first import), ask GitHub what changed between it
             // and the head and import ONLY those nodes. A null answer (no base, force, force-push,
@@ -803,7 +865,7 @@ public sealed class GitHubSyncService
                 ? Observable.Return<IReadOnlyList<string>?>(null)
                 : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
             return diff.SelectMany(changedFiles =>
-                ParseSnapshot(snapshot, spaceId, ignore, readmePolicy, progress).SelectMany(parsed =>
+                ParseSnapshot(snapshot, spaceId, importIgnore, readmePolicy, progress).SelectMany(parsed =>
                     // 🚨 ADOPT, THEN SYNC, PER NODETYPE (MeshWeaver#3845 hole 4). The seal got this
                     // tree onto the commit this instance's bundles were baked from — a REPOSITORY
                     // fact. Whether one NodeType's sources may move is a per-TYPE fact, and a
@@ -815,9 +877,13 @@ public sealed class GitHubSyncService
                     BundleKeyedHoldReading.Decide(hub, spaceId, parsed.Children, logger)
                         .SelectMany(hold =>
                         {
-                            var children = hold.Holds
-                                ? parsed.Children.Where(n => !hold.HoldsNode(spaceId, n.Path)).ToList()
-                                : parsed.Children;
+                            // A module's own node can live BESIDE its folder (`Hosting.json` for
+                            // `Hosting/`), which the file-level ignore does not reach — so parsed
+                            // nodes are filtered by node path through the same matcher.
+                            var children = parsed.Children
+                                .Where(n => !hold.HoldsNode(spaceId, n.Path)
+                                            && !moduleHeld.IsIgnored(RelativeTo(spaceId, n.Path)))
+                                .ToList();
                             // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
                             // needs them to tell "the repo dropped this node" from "this node never syncs".
                             // The HELD paths ride the same way — a held node is absent from `children`
@@ -830,7 +896,7 @@ public sealed class GitHubSyncService
                             // withheld, because a stale extra is recoverable and a silent delete is not.
                             var source = new InMemoryStaticRepoSource(
                                 spaceId, children, parsed.Root, parsed.ContentSyncs,
-                                ignore.WithHeldPaths(hold.HeldPaths),
+                                importIgnore.WithHeldPaths(hold.HeldPaths),
                                 listingIsComplete: snapshot.ListingIsComplete,
                                 ownsReadme: readmePolicy.IsPackage);
                             var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
@@ -852,9 +918,14 @@ public sealed class GitHubSyncService
                                 // import path logs can name them and the baseline decision below can
                                 // see them without a second channel.
                                 .Select(result => (
-                                    result with { BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)] },
+                                    result with
+                                    {
+                                        BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)],
+                                        DeclinedModules = declinedNames,
+                                    },
                                     snapshot.CommitSha,
-                                    Hold: hold));
+                                    Hold: hold,
+                                    Modules: modules));
                         })));
         });
     }
@@ -884,6 +955,22 @@ public sealed class GitHubSyncService
 
     private static string Short(string? sha) =>
         string.IsNullOrEmpty(sha) ? "(none)" : sha.Length <= 8 ? sha : sha[..8];
+
+    /// <summary>Whether a Space-relative path is <paramref name="root"/> or beneath it; every path
+    /// is under the empty root (a Space that IS the module).</summary>
+    private static bool IsAtOrUnder(string relativePath, string root)
+        => root.Length == 0
+           || string.Equals(relativePath, root, StringComparison.OrdinalIgnoreCase)
+           || (relativePath.Length > root.Length + 1
+               && relativePath[root.Length] == '/'
+               && relativePath.StartsWith(root, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A node's absolute path relative to its Space, the shape <see cref="SyncIgnore"/>
+    /// matches; a path outside the Space is returned whole.</summary>
+    private static string RelativeTo(string spaceId, string? nodePath)
+        => nodePath is { Length: > 0 } path && path.StartsWith(spaceId + "/", StringComparison.OrdinalIgnoreCase)
+            ? path[(spaceId.Length + 1)..]
+            : nodePath ?? "";
 
     private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children, IReadOnlyList<StaticContentSync> ContentSyncs)> ParseSnapshot(
         RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, ReadmeFilePolicy readmePolicy,
@@ -1225,7 +1312,9 @@ public sealed class GitHubSyncService
         string? sourceId = null, string? note = null,
         string? attemptedCommitSha = null, bool attemptWasFinal = false,
         GitHubSyncConfig? attemptedConfig = null,
-        ImmutableList<BundleHeldNodeType>? bundleHeld = null)
+        ImmutableList<BundleHeldNodeType>? bundleHeld = null,
+        ImmutableList<ModuleSyncOutcome>? modules = null,
+        ImmutableDictionary<string, string>? moduleVersions = null)
     {
         var now = DateTimeOffset.UtcNow;
         return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
@@ -1265,6 +1354,11 @@ public sealed class GitHubSyncService
                     // would make the seal reconciler re-fetch for a hold that no longer exists, and a
                     // missing one would leave a hold nothing asks about.
                     BundleHeldNodeTypes = bundleHeld is { IsEmpty: false } held ? held : null,
+                    // Policy module-sync-per-manifest-hash — the LAST attempt's per-module outcomes
+                    // (null clears them: a conclusion that judged no module describes none), and
+                    // the hashes the Space holds, which only an import that landed moves.
+                    ModuleOutcomes = modules is { IsEmpty: false } judged ? judged : null,
+                    ModuleVersions = moduleVersions ?? cur.ModuleVersions,
                 },
             };
         });
@@ -1273,6 +1367,42 @@ public sealed class GitHubSyncService
     /// <summary>The outcome literal recorded when a source is held back from a commit (by the
     /// sealed-publication gate, or the reconciler) rather than attempted.</summary>
     public const string HeldOutcome = "Held";
+
+    /// <summary>
+    /// The outcome literal recorded when an import wrote NOTHING because every module of the tree
+    /// declares a platform floor above the running platform (policy
+    /// <c>module-sync-per-manifest-hash</c>). Per module, never per Space: a Space whose tree carries
+    /// other modules imports them and records their outcome, with the declined ones named in
+    /// <see cref="GitHubSyncConfig.ModuleOutcomes"/>.
+    /// </summary>
+    public const string DeclinedOutcome = "Declined";
+
+    /// <summary>
+    /// The <see cref="GitHubSyncConfig.LastSyncNote"/> sentence for the modules an import declined —
+    /// each with its declared floor and the running platform — or null when none was. Pure.
+    /// </summary>
+    /// <param name="modules">The import's per-module outcomes.</param>
+    internal static string? ModuleDeclinedNote(IReadOnlyList<ModuleSyncOutcome>? modules)
+        => modules?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList() is { Count: > 0 } declined
+            ? $"{declined.Count} module(s) not written: "
+              + string.Join("; ", declined.Select(m => m.Reason))
+              + ". Every other module of this Space synced."
+            : null;
+
+    /// <summary>
+    /// States this import's per-module outcomes on <c>/health</c> (<see cref="SealedSyncCensus"/>)
+    /// — a declined module is the one per-module fact an operator must be able to find without
+    /// opening the Space. Best-effort: a mesh without the census records nothing.
+    /// </summary>
+    private void RecordModuleCensus(string spacePath, ImmutableList<ModuleSyncOutcome> modules)
+    {
+        if (modules.IsEmpty || hub.ServiceProvider.GetService<SealedSyncCensus>() is not { } census)
+            return;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var m in modules)
+            census.RecordModuleOutcome(new ModuleOutcomeReading(
+                spacePath, m.Module, m.Outcome, m.IncomingVersion, m.Reason, now));
+    }
 
     /// <summary>
     /// A source that REFUSED to import — the fetch succeeded and the import was declined, so the
