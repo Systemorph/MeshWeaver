@@ -111,6 +111,20 @@ public class ABakedTypeRegistersWithoutAnInstanceTest(ITestOutputHelper output) 
             "the bake's build stamp lands on the NodeType record", cancellationToken);
     }
 
+    /// <summary>
+    /// The NodeType's definition read straight from the STORE — the authority, not the lagging
+    /// listing and not the NodeType stream (whose first touch may kick a compile, which is exactly
+    /// what the "no recompile" half must not provoke).
+    /// </summary>
+    private async Task<NodeTypeDefinition> Stored(CancellationToken cancellationToken)
+    {
+        var node = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Read(TypePath, Mesh.JsonSerializerOptions)
+            .Should().Within(TestTimeouts.Convergence).Emit("the NodeType row is readable", cancellationToken);
+        node.Should().NotBeNull();
+        return node!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+    }
+
     private async Task<ContentTypeRegistrationOutcome[]> RunPass(
         DynamicTypePreWarmer.DynamicTypes types, CancellationToken cancellationToken)
     {
@@ -135,7 +149,8 @@ public class ABakedTypeRegistersWithoutAnInstanceTest(ITestOutputHelper output) 
         var ct = TestContext.Current.CancellationToken;
         await Seed(ct);
         var baked = await Bake(ct);
-        var before = baked.Definitions[TypePath]!;
+        var before = await Stored(ct);
+        before.LatestAssemblyPath.Should().NotBeNullOrEmpty("the store holds the bake's stamp");
 
         Registry.TryResolveByNodeType(TypePath, out _).Should().BeFalse(
             "CONTROL — the bake compiled the type and stamped its record without building its "
@@ -151,7 +166,7 @@ public class ABakedTypeRegistersWithoutAnInstanceTest(ITestOutputHelper output) 
         registered.Assembly.IsCollectible.Should().BeTrue(
             "the registered type comes from the baked (collectible) assembly, not a stand-in");
 
-        var after = (await Enumerate(_ => true, "the record is still listed", ct)).Definitions[TypePath]!;
+        var after = await Stored(ct);
         after.LatestAssemblyPath.Should().Be(before.LatestAssemblyPath,
             "a pass that healed by COMPILING would have published a new build — the unsafe shape");
         after.LastCompiledVersion.Should().Be(before.LastCompiledVersion);
@@ -177,7 +192,6 @@ public class ABakedTypeRegistersWithoutAnInstanceTest(ITestOutputHelper output) 
 
         outcome.Status.Should().Be(ContentTypeRegistrationStatus.NotBaked);
         Registry.TryResolveByNodeType(TypePath, out _).Should().BeFalse();
-        (await Enumerate(_ => true, "the record is still listed", ct)).Definitions[TypePath]!
-            .LatestAssemblyPath.Should().BeNullOrEmpty("the pass compiled nothing");
+        (await Stored(ct)).LatestAssemblyPath.Should().BeNullOrEmpty("the pass compiled nothing");
     }
 }

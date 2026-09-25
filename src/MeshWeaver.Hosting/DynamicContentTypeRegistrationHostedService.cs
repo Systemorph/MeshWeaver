@@ -75,13 +75,22 @@ public sealed class DynamicContentTypeRegistrationHostedService(
                     BetweenTypesConfigKey, pacingRaw, pacing);
         }
 
-        var mesh = services.GetRequiredService<IMessageHub>();
-        var bake = services.GetRequiredService<PreWarmCompletion>();
+        // Optional, like the pre-warmer's own resolution: AddDynamicTypePreWarming is documented as
+        // safe on a host with no mesh hub, and there it is a no-op rather than a startup fault.
+        var mesh = services.GetService<IMessageHub>();
+        if (mesh is null)
+        {
+            logger.LogDebug("DynamicContentTypeRegistration: no mesh hub resolved — nothing to register");
+            return;
+        }
+        // No barrier registered means no bake to wait for: run straight away.
+        var settled = services.GetService<PreWarmCompletion>()?.Settled.Select(_ => System.Reactive.Unit.Default)
+                      ?? Observable.Return(System.Reactive.Unit.Default);
         var startedAt = DateTimeOffset.MinValue;
         // Appended on the pass's own subscription only (Concat — one outcome at a time).
         var outcomes = ImmutableList<ContentTypeRegistrationOutcome>.Empty;
 
-        _pass = bake.Settled
+        _pass = settled
             .Take(1)
             .Do(_ => startedAt = DateTimeOffset.UtcNow)
             .SelectMany(_ => DynamicContentTypeRegistrar.RegisterBakedTypes(mesh, pacing, logger))

@@ -79,8 +79,8 @@ public sealed record ContentTypeRegistrationOutcome(
 /// corrupt-file self-heal — and on a PACED trickle off the readiness path: the ~13.5 s of assembly
 /// opening #1660 removed from boot is paid here, in the background, one type at a time. Each load
 /// runs through the <see cref="IoPoolNames.FileSystem"/> <see cref="IIoPool"/> (it is blocking file
-/// I/O plus reflection), and the pause between types is the sequence's own delay, so the pass
-/// never holds more than one pool slot.</para>
+/// I/O plus reflection), as do the store lookup and the probe build, and the pause between types is
+/// the sequence's own delay, so the pass never holds more than one pool slot at a time.</para>
 /// </summary>
 public static class DynamicContentTypeRegistrar
 {
@@ -179,8 +179,9 @@ public static class DynamicContentTypeRegistrar
             ? (IAssemblyStore)FrameworkAssemblyStore.Instance
             : mesh.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
 
-        return store.TryGetAssemblyPath(path, version)
-            .Take(1)
+        // 🚨 The store lookup is file I/O too — FileSystemAssemblyStore probes the directory and
+        // reads timestamps when SUBSCRIBED — so it runs inside the pool, never on the emitting thread.
+        return pool.InvokeObservable(_ => store.TryGetAssemblyPath(path, version).Take(1))
             .SelectMany(localPath =>
             {
                 if (string.IsNullOrEmpty(localPath))
@@ -205,7 +206,10 @@ public static class DynamicContentTypeRegistrar
                     .SelectMany(step => step.Mismatch is { } stale
                         ? Observable.Return(new ContentTypeRegistrationOutcome(
                             path, ContentTypeRegistrationStatus.StaleBytes, stale))
-                        : step.Load.Take(1).Select(result => Register(mesh, registry, path, result, logger)));
+                        // The probe build — a hosted hub's configuration and data-context build —
+                        // is blocking work as well, so it takes its own pool slot.
+                        : step.Load.Take(1).SelectMany(result =>
+                            pool.InvokeBlocking(_ => Register(mesh, registry, path, result, logger))));
             })
             .Catch<ContentTypeRegistrationOutcome, Exception>(ex => Observable.Return(
                 new ContentTypeRegistrationOutcome(
