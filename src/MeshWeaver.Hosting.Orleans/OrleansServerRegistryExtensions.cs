@@ -123,6 +123,12 @@ public static class OrleansServerRegistryExtensions
             // IClusterMembershipFeed and OrleansRoutingService.AttachPodHub. Absent on a client or
             // a monolith, where membership cannot change under this process at all.
             services.TryAddSingleton<IClusterMembershipFeed, OrleansClusterMembershipFeed>();
+            // 🚨 Issue #5037. Placing a [StatelessWorker] (routing/default above all) must never wait
+            // on a REMOTE directory partition for an answer that can only be "not registered" — see
+            // StatelessWorkerGrainDirectoryResolver. Silo-only for the same reason as the two above:
+            // a grain directory resolver exists only where placement does.
+            services.AddSingleton<global::Orleans.Runtime.GrainDirectory.IGrainDirectoryResolver,
+                StatelessWorkerGrainDirectoryResolver>();
         });
 
         silo.AddMemoryStreams(StreamProviders.Memory);
