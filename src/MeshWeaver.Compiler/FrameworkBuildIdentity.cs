@@ -14,7 +14,17 @@ namespace MeshWeaver.Compiler;
 /// identity, one resolution — a producer and a consumer can never disagree about what "the
 /// framework" is.
 ///
-/// <para><b>Three schemes, in resolution order:</b></para>
+/// <para>🚨 <b>The KEY is the platform COMPATIBILITY KEY, not a build identity</b> (policy
+/// <c>platform-backwards-compatibility</c>): <see cref="FrameworkVersion"/> resolves
+/// <see cref="PlatformCompatibility.KeyOf"/> — <c>c&lt;major&gt;e&lt;epoch&gt;</c> off this
+/// assembly's version and <see cref="PlatformCompatibility.EpochMetadataKey"/> stamp — which is
+/// stable across every platform build of one major and one declared epoch. A developer who changes
+/// the skeleton generator or any toolchain-generated compile input in a way that must invalidate
+/// compiled bytes bumps <c>$(PlatformCompatibilityEpoch)</c>. The three schemes below are what
+/// <see cref="BuildProvenance"/> resolves: PROVENANCE — logged and recorded, never a cache miss, a
+/// decline or a rebuild trigger.</para>
+///
+/// <para><b>Three provenance schemes, in resolution order:</b></para>
 /// <list type="number">
 /// <item><description><b>The API-SURFACE identity (<c>s&lt;hash&gt;</c>)</b> — the default for
 /// every host that ships a <c>meshweaver-surface.manifest</c> (the portals and the CI bake host;
@@ -583,8 +593,39 @@ public static class FrameworkBuildIdentity
     // ── Resolving ANOTHER host's identity, from its binaries alone ─────────────────────────────
 
     /// <summary>
-    /// 🚨 The identity a host whose application binaries live in <paramref name="appDirectory"/>
-    /// resolves — the SAME computation <see cref="ResolveProcessIdentityWithDiagnostics"/> performs
+    /// 🚨 The framework identity — the COMPATIBILITY KEY (<see cref="FrameworkVersion"/>) — a host
+    /// whose application binaries live in <paramref name="appDirectory"/> resolves, read off its
+    /// <c>MeshWeaver.Compiler.dll</c> without loading anything
+    /// (<see cref="PlatformCompatibility.KeyOfAssemblyFile"/>). This is the value CD compares
+    /// between the bake host and the shipped portal (<c>mw-plugin-test framework-identity … --expect</c>)
+    /// and the address a bake publishes under.
+    ///
+    /// <para>The identity is an ADDRESS: a bake publishes its bundles under the identity its own
+    /// host resolves, and a portal only ever looks under the identity IT resolves (#1814 shipped
+    /// because the two disagreed). With the compatibility key the two agree for every build of one
+    /// major and epoch, which is the point; the per-build surface identity the comparison used to be
+    /// is <see cref="ResolveBuildProvenanceForDirectory"/>, provenance only.</para>
+    ///
+    /// <para><b>Fails loudly rather than degrading.</b> A directory whose anchor is missing or
+    /// states no epoch yields a null identity plus a diagnostic, never a fallback value.</para>
+    /// </summary>
+    /// <param name="appDirectory">The host's application directory (a container's <c>/app</c>).</param>
+    /// <returns>The compatibility key, or null with <c>Problem</c> naming why not.</returns>
+    public static (string? Identity, string? Problem) ResolveIdentityForDirectory(string appDirectory)
+    {
+        if (!Directory.Exists(appDirectory))
+            return (null, $"'{appDirectory}' does not exist or is not a directory");
+        return PlatformCompatibility.KeyOfAssemblyFile(
+            Path.Combine(appDirectory, AnchorAssemblyName + ".dll"));
+    }
+
+    /// <summary>The anchor assembly the compatibility key (and the stamped provenance) is read
+    /// off — the compile toolchain assembly.</summary>
+    public const string AnchorAssemblyName = "MeshWeaver.Compiler";
+
+    /// <summary>
+    /// PROVENANCE ONLY — the per-build surface identity a host whose application binaries live in
+    /// <paramref name="appDirectory"/> resolves — the SAME computation <see cref="ResolveProcessIdentityWithDiagnostics"/> performs
     /// for its own base directory, expressed over a DIRECTORY so one process can answer it for
     /// another's shipped binaries without loading a single assembly.
     ///
@@ -612,7 +653,7 @@ public static class FrameworkBuildIdentity
     /// <param name="appDirectory">The host's application directory — the one holding
     /// <see cref="SurfaceManifestFileName"/> beside its assemblies (a container's <c>/app</c>).</param>
     /// <returns>The resolved surface identity, or null with <c>Problem</c> naming why not.</returns>
-    public static (string? Identity, string? Problem) ResolveIdentityForDirectory(string appDirectory)
+    public static (string? Identity, string? Problem) ResolveBuildProvenanceForDirectory(string appDirectory)
     {
         if (!Directory.Exists(appDirectory))
             return (null, $"'{appDirectory}' does not exist or is not a directory");

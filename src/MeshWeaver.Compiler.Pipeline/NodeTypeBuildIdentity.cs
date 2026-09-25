@@ -95,6 +95,21 @@ public static class NodeTypeBuildIdentity
     /// for a type that simply has not been built.</para>
     /// </summary>
     public static string? RefusalReason(NodeTypeDefinition? definition, string liveFrameworkVersion)
+        => RefusalReason(definition, liveFrameworkVersion, NodeTypeCompilationHelpers.LivePlatformVersion);
+
+    /// <summary>
+    /// <see cref="RefusalReason(NodeTypeDefinition?, string)"/> with the running platform BUILD
+    /// explicit — the platform-range half (policy <c>platform-backwards-compatibility</c>): within
+    /// one compatibility key a record whose FLOOR (<see cref="NodeTypeDefinition.CompiledPlatformVersion"/>,
+    /// the build that produced it) is NEWER than <paramref name="livePlatformVersion"/>, or whose
+    /// CEILING is below it, is refused — both versions named. An absent floor is "unknown producer =
+    /// older" and admitted.
+    /// </summary>
+    /// <param name="definition">The NodeType record.</param>
+    /// <param name="liveFrameworkVersion">This process's compatibility key.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or null when unknown.</param>
+    public static string? RefusalReason(
+        NodeTypeDefinition? definition, string liveFrameworkVersion, string? livePlatformVersion)
     {
         if (definition is null)
             return null;
@@ -103,7 +118,11 @@ public static class NodeTypeBuildIdentity
             return null;
         if (string.Equals(
                 definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal))
-            return null;
+            return Compiler.PlatformCompatibility.DeclineReason(
+                definition.CompiledFrameworkVersion, definition.CompiledPlatformVersion,
+                definition.PlatformCeiling, liveFrameworkVersion, livePlatformVersion) is { } range
+                ? $"its record names an assembly whose platform range excludes this process: {range}"
+                : null;
         return string.IsNullOrEmpty(definition.CompiledFrameworkVersion)
             ? $"its record names an assembly but records NO framework build identity, so those "
               + $"bytes cannot be shown ABI-compatible with the live framework "
@@ -256,6 +275,26 @@ public static class NodeTypeBuildIdentity
         NodeTypeDefinition? definition, string liveFrameworkVersion, DateTimeOffset bootedAt)
         => ReportedStatus(definition, liveFrameworkVersion) is CompilationStatus.Foreign
             && StampedAfter(definition, bootedAt);
+
+    /// <summary>
+    /// 🚨 <b>A NEWER platform build provably owns this record</b> — the record carries THIS
+    /// process's compatibility key but a platform FLOOR newer than the running build (policy
+    /// <c>platform-backwards-compatibility</c>). Unlike <see cref="OwnedByANewerGeneration"/>, the
+    /// ORDER is known here (the platform build carries a run ordinal), so the bind path yields on it
+    /// UNCONDITIONALLY — leaving or not, before boot or after: recompiling it from here would
+    /// re-key a newer replica's record backwards, which is the re-key war a mixed roll must never
+    /// fight. The newer replica keeps it; this process serves nothing it cannot load, and says so.
+    /// Pure.
+    /// </summary>
+    /// <param name="definition">The NodeType record.</param>
+    /// <param name="liveFrameworkVersion">This process's compatibility key.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or null when unknown.</param>
+    public static bool OwnedByANewerPlatformBuild(
+        NodeTypeDefinition? definition, string liveFrameworkVersion, string? livePlatformVersion)
+        => definition is not null
+           && !string.IsNullOrEmpty(definition.LatestAssemblyPath)
+           && string.Equals(definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal)
+           && Compiler.PlatformCompatibility.ProducerIsNewer(definition.CompiledPlatformVersion, livePlatformVersion);
 
     /// <summary>First eight characters — the same width the assembly-store filename tag carries, so
     /// a log line and a DLL name can be compared by eye.</summary>

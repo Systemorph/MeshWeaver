@@ -139,13 +139,39 @@ public static class PrebuiltAssemblySeeder
     /// <c>NodeTypeBakeStatus.Classify</c> exposes for the same reason).
     /// </summary>
     public static string? DeclineReason(string? frameworkMvid, string liveFrameworkMvid) =>
-        string.IsNullOrEmpty(frameworkMvid)
-            ? $"the producer recorded no framework identity, so it cannot be shown ABI-compatible "
-              + $"with the live framework {liveFrameworkMvid}"
-            : !string.Equals(frameworkMvid, liveFrameworkMvid, StringComparison.Ordinal)
-                ? $"built against framework {frameworkMvid}, live framework is "
-                  + $"{liveFrameworkMvid}"
-                : null;
+        PlatformCompatibility.DeclineReason(frameworkMvid, null, null, liveFrameworkMvid, null);
+
+    /// <summary>
+    /// 🚨 THE full adoption rule for prebuilt bytes (policy <c>platform-backwards-compatibility</c>)
+    /// — <see cref="PlatformCompatibility.DeclineReason(string?, string?, string?, string, string?)"/>:
+    /// the produced compatibility key must equal the live one, and the running platform build must
+    /// lie in the bytes' range (floor = the producing build, ceiling = open unless declared). Null
+    /// when the bytes may be adopted. Pure.
+    /// </summary>
+    /// <param name="frameworkMvid">The compatibility key the producer recorded.</param>
+    /// <param name="producerPlatformVersion">The FLOOR — the producing platform build, or null.</param>
+    /// <param name="platformCeiling">The CEILING, or null (open).</param>
+    /// <param name="liveFrameworkMvid">This process's compatibility key.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or null.</param>
+    public static string? DeclineReason(
+        string? frameworkMvid,
+        string? producerPlatformVersion,
+        string? platformCeiling,
+        string liveFrameworkMvid,
+        string? livePlatformVersion) =>
+        PlatformCompatibility.DeclineReason(
+            frameworkMvid, producerPlatformVersion, platformCeiling, liveFrameworkMvid, livePlatformVersion);
+
+    /// <summary>The four-argument form B's ladder test writes against — the range with an open
+    /// ceiling.</summary>
+    /// <param name="frameworkMvid">The compatibility key the producer recorded.</param>
+    /// <param name="producerPlatformVersion">The FLOOR — the producing platform build, or null.</param>
+    /// <param name="liveFrameworkMvid">This process's compatibility key.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or null.</param>
+    public static string? DeclineReason(
+        string? frameworkMvid, string? producerPlatformVersion, string liveFrameworkMvid, string? livePlatformVersion) =>
+        PlatformCompatibility.DeclineReason(
+            frameworkMvid, producerPlatformVersion, null, liveFrameworkMvid, livePlatformVersion);
 
     /// <summary>
     /// The LIVE framework identity a producer must record beside its bytes — the resolved
@@ -155,6 +181,15 @@ public static class PrebuiltAssemblySeeder
     /// never disagree about what "the framework identity" is.
     /// </summary>
     public static string LiveFrameworkMvid => NodeTypeCompilationHelpers.FrameworkVersion;
+
+    /// <summary>
+    /// This process's platform BUILD (<c>PlatformBuildInfo.PlatformVersion</c>, build metadata
+    /// stripped), or null when unknown — the FLOOR a producer stamps beside its bytes
+    /// (<c>producerPlatformVersion</c> / <see cref="NodeTypeDefinition.CompiledPlatformVersion"/>)
+    /// and the running side of the floor/ceiling comparison (policy
+    /// <c>platform-backwards-compatibility</c>).
+    /// </summary>
+    public static string? LivePlatformVersion => NodeTypeCompilationHelpers.LivePlatformVersion;
 
     /// <summary>
     /// Degradation warning from the live identity's resolution (a torn or unusable surface
@@ -655,8 +690,72 @@ public static class PrebuiltAssemblySeeder
         string? moduleVersion,
         IReadOnlyList<string>? sourcePaths,
         IReadOnlyList<string>? sourceIncludes)
+        => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes,
+            producerPlatformVersion: null, platformCeiling: null);
+
+    /// <summary>
+    /// <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string, IReadOnlyList{string}, IReadOnlyList{string})"/>
+    /// carrying the bundle's platform RANGE (policy <c>platform-backwards-compatibility</c>): the
+    /// FLOOR (<c>producerPlatformVersion</c>, the build that produced the bytes) and the CEILING
+    /// (<c>platformCeiling</c>, open when null). Bytes adopt only when the key matches and
+    /// floor &lt;= running &lt;= ceiling; the adopted record carries both, so every later reader
+    /// judges the same range.
+    /// </summary>
+    public static IObservable<SeedOutcome> SeedDetailed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths,
+        IReadOnlyList<string>? sourceIncludes,
+        string? producerPlatformVersion,
+        string? platformCeiling)
     {
-        // 🚨 THE GATE. FrameworkVersion is the resolved framework build identity — a content/
+        // 🚨 THE GATE — the platform COMPATIBILITY rule (policy platform-backwards-compatibility):
+        // the bytes' compatibility key must be the live one, and the running build must sit inside
+        // the bytes' platform range (floor = the producing build, ceiling = open unless declared).
+        // A floor/ceiling decline is LOUD (Warning, both versions named): bytes from a NEWER build
+        // must never be adopted, and nothing here recompiles them away silently.
+        if (DeclineReason(frameworkMvid, producerPlatformVersion, platformCeiling,
+                LiveFrameworkMvid, NodeTypeCompilationHelpers.LivePlatformVersion) is { } rangeReason)
+        {
+            var outOfRange = string.Equals(frameworkMvid, LiveFrameworkMvid, StringComparison.Ordinal);
+            if (outOfRange)
+                logger?.LogWarning(
+                    "Prebuilt assembly for {NodeTypePath} DECLINED (platform range): {Reason}",
+                    nodeTypePath, rangeReason);
+            else
+                logger?.LogInformation(
+                    "Prebuilt assembly for {NodeTypePath} DECLINED: {Reason} — compiling instead",
+                    nodeTypePath, rangeReason);
+            return Observable.Return(SeedOutcome.DeclinedIdentity);
+        }
+        return SeedAdmitted(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes, producerPlatformVersion, platformCeiling);
+    }
+
+    private static IObservable<SeedOutcome> SeedAdmitted(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths,
+        IReadOnlyList<string>? sourceIncludes,
+        string? producerPlatformVersion,
+        string? platformCeiling)
+    {
+        // 🚨 THE GATE (key half, re-stated for a direct reader of this body). FrameworkVersion is the resolved framework build identity — a content/
         // surface identity, not a version string — and the assembly-store key carries the first
         // eight characters of it. So seeding bytes built against a different framework writes
         // them under the LIVE framework's tag, where the store reports them as a usable build:
@@ -746,7 +845,8 @@ public static class PrebuiltAssemblySeeder
                 .Take(1)
                 .SelectMany(node => SeedObserved(
                     hub, workspace, node!, nodeTypePath, assemblyBytes, pdbBytes, logger,
-                    dependencies, sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes)));
+                    dependencies, sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes,
+                    producerPlatformVersion, platformCeiling)));
         });
     }
 
@@ -764,7 +864,9 @@ public static class PrebuiltAssemblySeeder
         string? sourceFingerprint,
         string? moduleVersion,
         IReadOnlyList<string>? sourcePaths,
-        IReadOnlyList<string>? sourceIncludes)
+        IReadOnlyList<string>? sourceIncludes,
+        string? producerPlatformVersion,
+        string? platformCeiling)
     {
         var observed = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         if (observed is null)
@@ -971,6 +1073,11 @@ public static class PrebuiltAssemblySeeder
                                 ServedBuildIdentity.OfBytes(assemblyBytes)
                                 ?? def.LatestAssemblyMvid,
                             CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+                            // The bytes' platform RANGE, as the PRODUCER stated it — the floor is
+                            // the build that compiled them, never this adopting process (policy
+                            // platform-backwards-compatibility). Unknown stays unknown (= older).
+                            CompiledPlatformVersion = producerPlatformVersion,
+                            PlatformCeiling = platformCeiling,
                             // The adopted build retires any standing FAILURE verdict, so
                             // the inputs it was formed from go with it (#1793) — exactly as
                             // ApplyCompileSuccess does. A token left behind would describe a

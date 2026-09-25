@@ -2759,6 +2759,24 @@ internal static class NodeTypeCompilationHelpers
     /// </summary>
     internal static string FrameworkVersion => FrameworkBuildIdentity.FrameworkVersion;
 
+    /// <summary>
+    /// This process's platform build (<see cref="Mesh.PlatformBuildInfo.PlatformVersion"/>, the
+    /// <c>+sha</c> build metadata stripped), or null when it is not known — the FLOOR every compile
+    /// and adoption stamps as <see cref="NodeTypeDefinition.CompiledPlatformVersion"/>, and the
+    /// running side of the floor/ceiling comparison (policy platform-backwards-compatibility).
+    /// </summary>
+    internal static string? LivePlatformVersion
+    {
+        get
+        {
+            var version = Mesh.PlatformBuildInfo.PlatformVersion;
+            if (string.IsNullOrWhiteSpace(version) || version == "unknown")
+                return null;
+            var plus = version.IndexOf('+');
+            return plus < 0 ? version : version[..plus];
+        }
+    }
+
     /// <summary>Degradation warning from the identity resolution (a torn/unusable surface
     /// manifest fell back to the stamp/MVID layer), or null on the happy path — see
     /// <see cref="FrameworkBuildIdentity.FrameworkVersionWarning"/>.</summary>
@@ -3185,10 +3203,12 @@ internal static class NodeTypeCompilationHelpers
     internal static Func<string, string?> DependencyIdResolverOf(IMessageHub hub)
     {
         var versions = ModuleVersionsOf(hub);
-        return Compiler.CompiledDependencies.CreateIdResolver(
-            FrameworkBuildIdentity.ProcessSurfacePairs,
+        // 🚨 Platform entries are keyed on the COMPATIBILITY KEY (policy
+        // platform-backwards-compatibility), never on per-build ref-asm hashes: a platform roll
+        // within one epoch must not move a single type's record.
+        return Compiler.CompiledDependencies.CreateCompatibilityIdResolver(
+            FrameworkVersion,
             ModuleMvidsOf(hub),
-            FrameworkBuildIdentity.ProcessImplMvidOf,
             name => versions.TryGetValue(name, out var version) ? version : null);
     }
 
@@ -3231,7 +3251,7 @@ internal static class NodeTypeCompilationHelpers
     internal static string ProcessToolchainId => _toolchainId.Value;
 
     private static readonly Lazy<string> _toolchainId = new(() =>
-        Compiler.CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf));
+        Compiler.CompiledDependencies.ToolchainIdOf(FrameworkVersion));
 
     /// <summary>
     /// True when this NodeType has a cached compiled assembly (the durable
@@ -3862,6 +3882,10 @@ internal static class NodeTypeCompilationHelpers
             // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
             // loading an ABI-stale DLL.
             CompiledFrameworkVersion = FrameworkVersion,
+            // The producing platform build — the bytes' FLOOR (policy
+            // platform-backwards-compatibility): an OLDER replica refuses and yields, never re-keys.
+            CompiledPlatformVersion = LivePlatformVersion,
+            PlatformCeiling = null,
             // The installed-module fingerprint (#1644 step 1 — recorded, not yet decisive; the
             // property doc on NodeTypeDefinition carries the full story). Preserved when the
             // caller cannot resolve a fingerprint, so a stamped hash is never erased.

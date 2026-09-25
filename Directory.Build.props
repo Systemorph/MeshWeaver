@@ -134,7 +134,11 @@
          any toolchain-generated compile input whose old output is no longer loadable or correct.
          Bumping it re-keys every compiled NodeType and every module bundle — the declared break.
          Never gate on an exact build identity, never seal or pin around a break: bump this. -->
-    <PlatformCompatibilityEpoch Condition="'$(PlatformCompatibilityEpoch)' == ''">1</PlatformCompatibilityEpoch>
+    <!-- ONE source: the checked-in declaration src/MeshWeaver.Compiler/platform-compatibility.json
+         ("epoch"), which also lists every DECLARED BREAK and the ceiling it applies to plugins built
+         against the previous epoch. Edit the epoch THERE, never here. -->
+    <_PlatformCompatibilityFile>$(MSBuildThisFileDirectory)src/MeshWeaver.Compiler/platform-compatibility.json</_PlatformCompatibilityFile>
+    <PlatformCompatibilityEpoch Condition="'$(PlatformCompatibilityEpoch)' == '' and Exists('$(_PlatformCompatibilityFile)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_PlatformCompatibilityFile)')), '"epoch"\s*:\s*(\d+)').Groups[1].Value)</PlatformCompatibilityEpoch>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers

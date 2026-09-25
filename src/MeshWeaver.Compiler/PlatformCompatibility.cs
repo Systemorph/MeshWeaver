@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Reflection.Metadata;
 using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Compiler;
@@ -104,6 +105,95 @@ public static class PlatformCompatibility
     }
 
     /// <summary>
+    /// The compatibility key an assembly FILE states — metadata only, nothing loaded, so it answers
+    /// for a foreign host's binaries (a container's extracted <c>/app</c>) exactly as
+    /// <see cref="KeyOfAssembly"/> answers for a loaded one. Null with the reason when the file is
+    /// missing, unreadable, or states no epoch.
+    /// </summary>
+    /// <param name="assemblyPath">Path to the assembly (in practice <c>MeshWeaver.Compiler.dll</c>).</param>
+    public static (string? Key, string? Problem) KeyOfAssemblyFile(string assemblyPath)
+    {
+        if (!File.Exists(assemblyPath))
+            return (null, $"'{assemblyPath}' does not exist");
+        try
+        {
+            using var stream = File.OpenRead(assemblyPath);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            var md = pe.GetMetadataReader();
+            var definition = md.GetAssemblyDefinition();
+            return Compose(
+                md.GetString(definition.Name),
+                definition.Version.Major,
+                ReadAssemblyMetadata(md, EpochMetadataKey));
+        }
+        catch (Exception ex) when (ex is IOException or BadImageFormatException or InvalidOperationException
+                                       or UnauthorizedAccessException)
+        {
+            return (null, $"'{assemblyPath}' could not be read ({ex.GetType().Name}: {ex.Message})");
+        }
+    }
+
+    /// <summary>
+    /// An <c>AssemblyMetadata(key, value)</c> value on the assembly definition, decoded by hand from
+    /// the custom-attribute blob (two serialized strings after the 0x0001 prolog) because
+    /// <see cref="System.Reflection.Metadata.MetadataReader"/> has no reflection-free typed decoder
+    /// and this must not load the assembly. Null when absent.
+    /// </summary>
+    /// <param name="metadata">The assembly's metadata.</param>
+    /// <param name="key">The metadata key.</param>
+    public static string? ReadAssemblyMetadata(System.Reflection.Metadata.MetadataReader metadata, string key)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        foreach (var handle in metadata.GetAssemblyDefinition().GetCustomAttributes())
+        {
+            var attribute = metadata.GetCustomAttribute(handle);
+            if (!IsAssemblyMetadataAttribute(metadata, attribute))
+                continue;
+            var blob = metadata.GetBlobReader(attribute.Value);
+            if (blob.Length < 2 || blob.ReadUInt16() != 0x0001)
+                continue;
+            var k = blob.ReadSerializedString();
+            var v = blob.ReadSerializedString();
+            if (string.Equals(k, key, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(v))
+                return v;
+        }
+        return null;
+    }
+
+    private static bool IsAssemblyMetadataAttribute(
+        System.Reflection.Metadata.MetadataReader metadata, System.Reflection.Metadata.CustomAttribute attribute)
+    {
+        string? name = null;
+        string? ns = null;
+        switch (attribute.Constructor.Kind)
+        {
+            case System.Reflection.Metadata.HandleKind.MemberReference:
+            {
+                var member = metadata.GetMemberReference(
+                    (System.Reflection.Metadata.MemberReferenceHandle)attribute.Constructor);
+                if (member.Parent.Kind != System.Reflection.Metadata.HandleKind.TypeReference)
+                    return false;
+                var type = metadata.GetTypeReference(
+                    (System.Reflection.Metadata.TypeReferenceHandle)member.Parent);
+                name = metadata.GetString(type.Name);
+                ns = metadata.GetString(type.Namespace);
+                break;
+            }
+            case System.Reflection.Metadata.HandleKind.MethodDefinition:
+            {
+                var method = metadata.GetMethodDefinition(
+                    (System.Reflection.Metadata.MethodDefinitionHandle)attribute.Constructor);
+                var type = metadata.GetTypeDefinition(method.GetDeclaringType());
+                name = metadata.GetString(type.Name);
+                ns = metadata.GetString(type.Namespace);
+                break;
+            }
+        }
+        return string.Equals(name, nameof(AssemblyMetadataAttribute), StringComparison.Ordinal)
+               && string.Equals(ns, "System.Reflection", StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The pure composition behind <see cref="KeyOfAssembly"/> and the metadata-only file read —
     /// so both answer identically for the same (major, epoch) facts.
     /// </summary>
@@ -143,26 +233,60 @@ public static class PlatformCompatibility
     /// (<c>PlatformBuildInfo.PlatformVersion</c>), or null when unknown.</param>
     public static string? DeclineReason(
         string? producedKey, string? producerPlatformVersion, string liveKey, string? livePlatformVersion)
+        => DeclineReason(producedKey, producerPlatformVersion, null, liveKey, livePlatformVersion);
+
+    /// <summary>
+    /// 🚨 <b>THE adoption decision with the full platform RANGE</b> — floor (the producing platform
+    /// build) and ceiling (the highest platform the bytes claim, OPEN by default):
+    /// <c>same key AND floor &lt;= running &lt;= ceiling</c> ⇒ adopt and bind to the running platform;
+    /// anything else ⇒ declined LOUDLY with both versions named. There is no other version gate.
+    /// </summary>
+    /// <param name="producedKey">The key the producer stamped beside the bytes.</param>
+    /// <param name="floorPlatformVersion">The FLOOR — the producing platform build, or null
+    /// (unknown producer = older = accepted).</param>
+    /// <param name="ceilingPlatformVersion">The CEILING — the highest platform build the bytes claim
+    /// to work on, or null (open). A declared break applies one to everything built against the
+    /// previous epoch (<see cref="Declaration"/>).</param>
+    /// <param name="liveKey">This process's key.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or null when unknown.</param>
+    public static string? DeclineReason(
+        string? producedKey,
+        string? floorPlatformVersion,
+        string? ceilingPlatformVersion,
+        string liveKey,
+        string? livePlatformVersion)
     {
         if (string.IsNullOrEmpty(producedKey))
             return $"the producer recorded no compatibility key, so it cannot be shown compatible "
                 + $"with the live platform {liveKey}";
         if (!string.Equals(producedKey, liveKey, StringComparison.Ordinal))
-            return IsKey(producedKey)
-                ? $"built for compatibility key {producedKey}, live platform is {liveKey} — a "
-                  + "declared compatibility-epoch or major break"
-                : $"built under the retired build identity {producedKey}, which states no "
-                  + $"compatibility epoch; live platform is {liveKey}";
-        if (ProducerIsNewer(producerPlatformVersion, livePlatformVersion))
-            return $"produced by platform {producerPlatformVersion}, NEWER than the running "
-                + $"platform {livePlatformVersion} (key {liveKey}) — bytes from a newer build may "
-                + "bind surface this platform does not have; roll the platform forward or publish "
-                + "for this build";
+        {
+            if (!IsKey(producedKey))
+                return $"built under the retired build identity {producedKey}, which states no "
+                    + $"compatibility epoch; live platform is {liveKey}";
+            var declared = TryParseKey(producedKey, out _, out var producedEpoch)
+                           && Declaration.CeilingForEpoch(producedEpoch) is { } declaredCeiling
+                ? $"; the declared break caps everything built against epoch {producedEpoch} at "
+                  + $"platform {declaredCeiling}"
+                : "";
+            return $"built for compatibility key {producedKey}, live platform is {liveKey} "
+                + $"({livePlatformVersion ?? "version unknown"}) — a declared compatibility-epoch or "
+                + $"major break{declared}; rebuild and seal against {liveKey}";
+        }
+        if (ProducerIsNewer(floorPlatformVersion, livePlatformVersion))
+            return $"its platform floor {floorPlatformVersion} (the build that produced it) is NEWER "
+                + $"than the running platform {livePlatformVersion} (key {liveKey}) — bytes from a "
+                + "newer build may bind surface this platform does not have; roll the platform "
+                + "forward or publish for this build";
+        if (ProducerIsNewer(livePlatformVersion, ceilingPlatformVersion))
+            return $"the running platform {livePlatformVersion} (key {liveKey}) is ABOVE its "
+                + $"platform ceiling {ceilingPlatformVersion} — it declares it works only up to that "
+                + "build; rebuild and seal it against the running platform";
         return null;
     }
 
     /// <summary>
-    /// The FLOOR half of <see cref="DeclineReason"/>: true only when BOTH versions are readable and
+    /// The FLOOR half of <see cref="DeclineReason(string?, string?, string?, string, string?)"/>: true only when BOTH versions are readable and
     /// the producer is strictly newer. Comparable means both carry a run ordinal (two continuous
     /// builds) or neither does (two releases); a release against a continuous build is not ordered
     /// by run number and answers false — unknown is accepted, never declined.
@@ -179,6 +303,30 @@ public static class PlatformCompatibility
     }
 
     /// <summary>
+    /// The checked-in compatibility declaration (<c>src/MeshWeaver.Compiler/platform-compatibility.json</c>,
+    /// embedded) — the ONE source of the epoch <c>Directory.Build.props</c> stamps and of every
+    /// declared break. Parsed once; an unreadable resource yields an EMPTY declaration (no breaks),
+    /// which only removes wording from a decline, never a decline itself.
+    /// </summary>
+    public static CompatibilityDeclaration Declaration => DeclarationValue.Value;
+
+    private static readonly Lazy<CompatibilityDeclaration> DeclarationValue = new(() =>
+    {
+        try
+        {
+            using var stream = typeof(PlatformCompatibility).Assembly
+                .GetManifestResourceStream("MeshWeaver.Compiler.platform-compatibility.json");
+            return stream is null
+                ? CompatibilityDeclaration.Empty
+                : CompatibilityDeclaration.Parse(new StreamReader(stream).ReadToEnd());
+        }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException)
+        {
+            return CompatibilityDeclaration.Empty;
+        }
+    });
+
+    /// <summary>
     /// 🚨 <b>THE binding rule</b> for a platform-shared assembly reference out of a plugin or NodeType
     /// assembly: bind to the RUNNING platform's assembly whenever it is the same or a HIGHER version
     /// than the one compiled against — never a hard link to the exact version, never a private copy
@@ -193,5 +341,49 @@ public static class PlatformCompatibility
     {
         ArgumentNullException.ThrowIfNull(running);
         return compiledAgainst is null || running >= compiledAgainst;
+    }
+}
+
+/// <summary>
+/// One DECLARED BREAK: from <see cref="Epoch"/> on, everything built against the previous epoch is
+/// capped at <see cref="PreviousEpochCeiling"/> — "works up to platform N-1".
+/// </summary>
+/// <param name="Epoch">The epoch the break introduced.</param>
+/// <param name="PreviousEpochCeiling">The last platform build of the previous epoch — the ceiling
+/// applied to every plugin/NodeType built against it.</param>
+/// <param name="Reason">Why the break was declared.</param>
+public sealed record CompatibilityBreak(int Epoch, string? PreviousEpochCeiling, string? Reason);
+
+/// <summary>
+/// The parsed <c>platform-compatibility.json</c>: the current epoch and every declared break. Pure
+/// parse; see <see cref="PlatformCompatibility.Declaration"/>.
+/// </summary>
+/// <param name="Epoch">The current compatibility epoch.</param>
+/// <param name="Breaks">Every declared break, oldest first.</param>
+public sealed record CompatibilityDeclaration(int Epoch, System.Collections.Immutable.ImmutableArray<CompatibilityBreak> Breaks)
+{
+    /// <summary>No epoch, no breaks.</summary>
+    public static CompatibilityDeclaration Empty { get; } = new(0, []);
+
+    /// <summary>The ceiling the declared break applies to bytes built against
+    /// <paramref name="epoch"/>, or null when no break closed that epoch.</summary>
+    public string? CeilingForEpoch(int epoch) =>
+        Breaks.FirstOrDefault(b => b.Epoch == epoch + 1)?.PreviousEpochCeiling;
+
+    /// <summary>Parses the declaration's JSON text. Throws <see cref="System.Text.Json.JsonException"/>
+    /// on malformed input.</summary>
+    public static CompatibilityDeclaration Parse(string json)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var epoch = root.TryGetProperty("epoch", out var e) && e.TryGetInt32(out var parsed) ? parsed : 0;
+        var breaks = System.Collections.Immutable.ImmutableArray.CreateBuilder<CompatibilityBreak>();
+        if (root.TryGetProperty("breaks", out var list) && list.ValueKind == System.Text.Json.JsonValueKind.Array)
+            foreach (var item in list.EnumerateArray())
+                breaks.Add(new CompatibilityBreak(
+                    item.TryGetProperty("epoch", out var be) && be.TryGetInt32(out var bEpoch) ? bEpoch : 0,
+                    item.TryGetProperty("previousEpochCeiling", out var c) ? c.GetString() : null,
+                    item.TryGetProperty("reason", out var r) ? r.GetString() : null));
+        return new CompatibilityDeclaration(epoch, breaks.ToImmutable());
     }
 }
