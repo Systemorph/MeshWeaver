@@ -123,6 +123,36 @@ public static class BundleWriter
     /// <param name="assemblies">One entry per compiled NodeType.</param>
     /// <param name="sourceSha">The commit the content was synced from, recorded in the manifest for
     /// provenance (which tree produced these bytes). Ignored by <see cref="BundleReader"/>.</param>
+    /// <param name="content">The package's node definition files, or null.</param>
+    /// <param name="sourceIncluded">Whether <paramref name="content"/> includes the C# source.</param>
+    /// <param name="producerPlatformVersion">The producing platform build — the FLOOR
+    /// (<see cref="BundleReader.Manifest.ProducerPlatformVersion"/>), or null when unknown.</param>
+    /// <param name="platformCeiling">The platform CEILING
+    /// (<see cref="BundleReader.Manifest.PlatformCeiling"/>), or null (open).</param>
+    public static void Write(
+        Stream destination,
+        string? plugin,
+        string? version,
+        string frameworkMvid,
+        IReadOnlyList<AssemblyEntry> assemblies,
+        string? sourceSha,
+        IReadOnlyList<ContentEntry>? content,
+        bool? sourceIncluded,
+        string? producerPlatformVersion,
+        string? platformCeiling = null)
+        => WriteCore(destination, plugin, version, frameworkMvid, assemblies, sourceSha, content,
+            sourceIncluded, producerPlatformVersion, platformCeiling);
+
+    /// <summary>The pre-floor overload: writes no producer platform version (a consumer reads it as
+    /// "unknown producer = older").</summary>
+    /// <param name="destination">Target stream.</param>
+    /// <param name="plugin">Plugin / package id.</param>
+    /// <param name="version">The package's released version, or null.</param>
+    /// <param name="frameworkMvid">The compatibility key the bytes were compiled for.</param>
+    /// <param name="assemblies">One entry per compiled NodeType.</param>
+    /// <param name="sourceSha">The commit the content was synced from.</param>
+    /// <param name="content">The package's node definition files, or null.</param>
+    /// <param name="sourceIncluded">Whether <paramref name="content"/> includes the C# source.</param>
     public static void Write(
         Stream destination,
         string? plugin,
@@ -132,6 +162,20 @@ public static class BundleWriter
         string? sourceSha = null,
         IReadOnlyList<ContentEntry>? content = null,
         bool? sourceIncluded = null)
+        => WriteCore(destination, plugin, version, frameworkMvid, assemblies, sourceSha, content,
+            sourceIncluded, null, null);
+
+    private static void WriteCore(
+        Stream destination,
+        string? plugin,
+        string? version,
+        string frameworkMvid,
+        IReadOnlyList<AssemblyEntry> assemblies,
+        string? sourceSha,
+        IReadOnlyList<ContentEntry>? content,
+        bool? sourceIncluded,
+        string? producerPlatformVersion,
+        string? platformCeiling)
     {
         ArgumentException.ThrowIfNullOrEmpty(frameworkMvid);
         ArgumentNullException.ThrowIfNull(assemblies);
@@ -148,6 +192,8 @@ public static class BundleWriter
             version,
             frameworkMvid,
             sourceSha,
+            producerPlatformVersion,
+            platformCeiling,
             assemblies = assemblies
                 .Select(a => new
                 {

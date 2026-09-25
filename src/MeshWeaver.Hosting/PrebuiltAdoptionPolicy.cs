@@ -113,7 +113,21 @@ public static class PrebuiltAdoptionPolicy
     /// <param name="PlatformVersion">The platform version that identity was published under
     /// (<c>_releases/&lt;version&gt;</c>), or null when no release marker names it.</param>
     /// <param name="MinMeshVersion">The bundle's declared platform floor, or null for none.</param>
-    public sealed record Candidate(string? FrameworkIdentity, string? PlatformVersion, string? MinMeshVersion);
+    public sealed record Candidate(string? FrameworkIdentity, string? PlatformVersion, string? MinMeshVersion)
+    {
+        /// <summary>
+        /// 🚨 The platform FLOOR the bundle itself states — its manifest's
+        /// <c>producerPlatformVersion</c>, the build that produced these bytes — or null when the
+        /// producer recorded none (unknown = older = accepted). Deliberately NOT
+        /// <see cref="PlatformVersion"/>: that is the NEWEST <c>_releases</c> marker naming the
+        /// identity, and since the identity is the compatibility key shared by every build of an
+        /// epoch, it names the newest build of the epoch, not the one that made these bytes.
+        /// </summary>
+        public string? ProducerPlatformVersion { get; init; }
+
+        /// <summary>The platform CEILING the bundle states, or null (open).</summary>
+        public string? PlatformCeiling { get; init; }
+    }
 
     /// <summary>The running process as the policy sees it.</summary>
     /// <param name="FrameworkIdentity">This process's framework identity
@@ -204,8 +218,21 @@ public static class PrebuiltAdoptionPolicy
 
         if (!string.IsNullOrEmpty(candidate.FrameworkIdentity)
             && string.Equals(candidate.FrameworkIdentity, live.FrameworkIdentity, StringComparison.Ordinal))
+        {
+            // 🚨 The identity is the platform COMPATIBILITY KEY (policy
+            // platform-backwards-compatibility), shared by every build of one epoch — so "sealed for
+            // this identity" is necessary and no longer sufficient: a publication a NEWER build
+            // produced is outside this build's range and is declined LOUDLY, both versions named.
+            if (Compiler.PlatformCompatibility.DeclineReason(
+                    candidate.FrameworkIdentity, candidate.ProducerPlatformVersion, candidate.PlatformCeiling,
+                    live.FrameworkIdentity, live.PlatformVersion) is { } range)
+                return new AdoptionDecision(AdoptionVerdict.Decline, range, LinkCheckRequired: false);
             return new AdoptionDecision(AdoptionVerdict.Adopt,
-                $"sealed for this framework identity {live.FrameworkIdentity}", LinkCheckRequired: false);
+                $"sealed for this platform compatibility key {live.FrameworkIdentity}"
+                + (candidate.ProducerPlatformVersion is null ? "" : $" by platform {candidate.ProducerPlatformVersion}")
+                + (live.PlatformVersion is null ? "" : $", running {live.PlatformVersion}"),
+                LinkCheckRequired: false);
+        }
 
         if (strictness == VersionStrictness.Exact)
             return new AdoptionDecision(AdoptionVerdict.Decline,

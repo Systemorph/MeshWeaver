@@ -50,9 +50,9 @@ public interface IIoPool
     /// <summary>
     /// Runs a sync-blocking / CPU-bound leaf (e.g. <c>File.ReadAllBytes</c>,
     /// Roslyn compile, <c>Process.WaitForExit</c>) on a dedicated
-    /// limited-concurrency scheduler, so the (real, thread-holding) work cannot
-    /// trigger ThreadPool thread-injection that would starve Orleans' grain
-    /// schedulers.
+    /// limited-concurrency scheduler whose threads the pool starts itself, so the
+    /// (real, thread-holding) work never occupies a ThreadPool worker Orleans'
+    /// grain schedulers need (<c>Doc/Architecture/BlockingLeavesOffTheThreadPool</c>).
     /// </summary>
     IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work);
 

@@ -87,8 +87,13 @@ public sealed class IoPoolRegistry : IDisposable
         // exit. Same reason the refusal path below disposes `raced`.
         IoPool? candidate = null;
         var pool = _pools.GetOrAdd(name, n => candidate = new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace,
-            // The CPU lane holds its threads for pure computation — never borrow them from the pool.
-            dedicatedThreads: n == IoPoolNames.CompileCpu));
+            // Every pool's blocking leaves run on threads of their own, never ThreadPool workers: a
+            // blocking leaf holds its thread for as long as it blocks, and the ThreadPool is the one
+            // the grain turns run on (#5388, Doc/Architecture/BlockingLeavesOffTheThreadPool). The name
+            // only tells the CPU lane from the IO lanes in a dump.
+            n == IoPoolNames.CompileCpu
+                ? LimitedConcurrencyLevelTaskScheduler.DedicatedThreadName
+                : LimitedConcurrencyLevelTaskScheduler.BlockingThreadName));
         if (candidate is not null && !ReferenceEquals(pool, candidate))
             candidate.Dispose();
 

@@ -680,7 +680,10 @@ public static class TreeBake
                     [.. entries.OrderBy(e => e.NodePath, StringComparer.Ordinal)],
                     sourceSha,
                     content,
-                    sourceIncluded: true);
+                    sourceIncluded: true,
+                    // The bytes' platform FLOOR — this image's build (policy
+                    // platform-backwards-compatibility). A portal on an OLDER build declines them.
+                    producerPlatformVersion: PrebuiltAssemblySeeder.LivePlatformVersion);
             written.Add(bundlePath);
             options.Output.WriteLine(
                 $"bake: {packageId} → {entries.Count} assembly(ies) + {content.Count} node file(s) → {bundlePath}");

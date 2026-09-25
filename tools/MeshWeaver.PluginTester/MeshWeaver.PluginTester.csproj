@@ -211,6 +211,16 @@
        image is the answer: `docker run` with the entrypoint /app/mw-plugin-test in the pinned
        image, which is exactly what every lane already does. -->
 
+  <!-- The run-numbered platform version this image belongs to — the SAME variable the portal image
+       carries (PlatformBuildInfo.PlatformVersion reads it first). A bake stamps it into every bundle
+       and record it produces as the bytes' platform FLOOR (producerPlatformVersion /
+       CompiledPlatformVersion; policy platform-backwards-compatibility), so a portal running an
+       OLDER build declines them loudly instead of adopting bytes built against surface it lacks.
+       Image CONFIG only — never a compiled attribute (#3022). -->
+  <ItemGroup Condition="'$(CIRun)' == 'true'">
+    <ContainerEnvironmentVariable Include="MESHWEAVER_PLATFORM_VERSION" Value="$(Version)" />
+  </ItemGroup>
+
   <!-- 🚨 NO ContainerEnvironmentVariable PATH override. The one that used to sit here (added for
        GitHub Actions `container:` jobs, which run steps through `sh -c` and need the apphost on
        PATH) BROKE the image twice over, and its reason no longer exists:

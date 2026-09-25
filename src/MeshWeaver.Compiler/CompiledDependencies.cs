@@ -508,6 +508,53 @@ public static class CompiledDependencies
         => CreateIdResolver(surfaceByName, moduleMvidByName, implMvidOf, static _ => null);
 
     /// <summary>
+    /// 🚨 <b>THE resolver producers and consumers use</b> (policy
+    /// <c>platform-backwards-compatibility</c>): installed modules exactly as
+    /// <see cref="CreateIdResolver(IReadOnlyDictionary{string, string}, IReadOnlyDictionary{string, string}, Func{string, string}, Func{string, string})"/>
+    /// resolves them (a <c>min:</c> floor, else an <c>mvid:</c> pin), and EVERY platform assembly
+    /// (<c>MeshWeaver.*</c>) as <c>compat:&lt;key&gt;</c> — the platform compatibility key, stable
+    /// across every platform build of one major and epoch. A platform build no longer moves a
+    /// type's record; only a declared epoch bump, or a module it binds, does.
+    /// </summary>
+    /// <param name="compatibilityKey">The environment's platform compatibility key
+    /// (<see cref="FrameworkBuildIdentity.FrameworkVersion"/>, or a foreign host's
+    /// <see cref="FrameworkBuildIdentity.ResolveIdentityForDirectory"/>).</param>
+    /// <param name="moduleMvidByName">Installed module assembly simple name → MVID ("N").</param>
+    /// <param name="moduleVersionOf">Installed module assembly simple name → its build version.</param>
+    public static Func<string, string?> CreateCompatibilityIdResolver(
+        string compatibilityKey,
+        IReadOnlyDictionary<string, string> moduleMvidByName,
+        Func<string, string?> moduleVersionOf)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(compatibilityKey);
+        var platformId = CompatScheme + compatibilityKey;
+        return name =>
+        {
+            if (moduleMvidByName.TryGetValue(name, out var moduleMvid))
+                return moduleVersionOf(name) is { Length: > 0 } version
+                    ? MinVersionScheme + version
+                    : MvidScheme + moduleMvid;
+            return name.StartsWith("MeshWeaver.", StringComparison.Ordinal) ? platformId : null;
+        };
+    }
+
+    /// <summary>
+    /// The toolchain id for <see cref="ToolchainKey"/> under the compatibility key:
+    /// <c>compat:&lt;key&gt;</c>. The toolchain is part of the platform, so it is covered by the
+    /// same promise — a change to generated compile input that must invalidate bytes bumps the
+    /// epoch, which moves this id.
+    /// </summary>
+    /// <param name="compatibilityKey">The environment's platform compatibility key.</param>
+    public static string ToolchainIdOf(string compatibilityKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(compatibilityKey);
+        return CompatScheme + compatibilityKey;
+    }
+
+    /// <summary>The id scheme of a platform entry keyed on the compatibility key.</summary>
+    public const string CompatScheme = "compat:";
+
+    /// <summary>
     /// <see cref="CreateIdResolver(IReadOnlyDictionary{string, string}, IReadOnlyDictionary{string, string}, Func{string, string})"/>
     /// with the module lane resolving a VERSION FLOOR (#3934) instead of an exact build.
     ///

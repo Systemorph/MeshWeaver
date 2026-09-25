@@ -890,8 +890,32 @@ public record NodeTypeDefinition
     /// machine, the assembly version does not.</para>
     ///
     /// <para><c>null</c> until the first successful compile completes.</para>
+    ///
+    /// <para>🚨 <b>Now the platform COMPATIBILITY KEY</b> (<c>c003e001</c>; policy
+    /// <c>platform-backwards-compatibility</c>): stable across every platform build of one major
+    /// and epoch, so a platform roll no longer makes a build unusable. The producing build is
+    /// <see cref="CompiledPlatformVersion"/> (the FLOOR); the old per-build identity is provenance
+    /// only.</para>
     /// </summary>
     public string? CompiledFrameworkVersion { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>The platform FLOOR of the recorded build — the platform build that produced it</b>
+    /// (<c>PlatformBuildInfo.PlatformVersion</c> of the compiling or adopting process, e.g.
+    /// <c>3.0.0-ci.9215</c>), policy <c>platform-backwards-compatibility</c>. Within one
+    /// <see cref="CompiledFrameworkVersion"/> key a process running an OLDER build refuses these
+    /// bytes loudly and YIELDS (it never re-keys the record backwards); a process at or above it
+    /// adopts them. <c>null</c> on a record written before the field existed — "unknown producer =
+    /// older", accepted.
+    /// </summary>
+    public string? CompiledPlatformVersion { get; init; }
+
+    /// <summary>
+    /// The platform CEILING of the recorded build — the highest platform build it claims to work
+    /// on, or <c>null</c> (open, the default). A process running above it refuses the bytes loudly.
+    /// Set only behind a declared compatibility break (<c>platform-compatibility.json</c>).
+    /// </summary>
+    public string? PlatformCeiling { get; init; }
 
     /// <summary>
     /// The deployment's installed-MODULE fingerprint the assembly was compiled under —

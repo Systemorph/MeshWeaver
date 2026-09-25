@@ -361,10 +361,13 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// produce INCOMPATIBLE DLLs. Without this tag a freshly-deployed image's lookup matched (and
     /// first-write-wins RETURNED) the PREVIOUS image's DLL → System.BadImageFormatException on ALC
     /// load, which cascaded into failed grain activations and a portal-wide wedge on deploy (prod
-    /// 2026-06-20). The identity (<see cref="FrameworkBuildIdentity.FrameworkVersion"/>)
-    /// changes only when the framework's content-facing surface / toolchain changes, so a new
-    /// image misses the old DLLs (clean recompile) while an unchanged framework still hits the
-    /// cache.
+    /// 2026-06-20). The identity (<see cref="FrameworkBuildIdentity.FrameworkVersion"/>) is the
+    /// platform COMPATIBILITY KEY (<c>c003e001</c> — eight characters, so the whole key is the tag;
+    /// policy <c>platform-backwards-compatibility</c>): it changes only on a declared epoch or major
+    /// bump, so every platform build of one epoch HITS the previous build's bytes — the ladder's
+    /// "platform rolls, keeps the old plugin bytes" — and a declared break misses them (clean
+    /// recompile). Bytes a NEWER platform build produced are refused above the store, by the record's
+    /// producer floor (<c>NodeTypeBuildIdentity</c>), never by the tag.
     ///
     /// <para>It is also the GENERATION key: a whole new set of files is written per image, and
     /// nothing in the store removes an old one — see <c>AssemblyCacheGenerations</c> (in

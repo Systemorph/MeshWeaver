@@ -784,7 +784,12 @@ internal static class NodeTypeContractHandler
             // it is the only case where an ABI-staleness marker is real and must not be erased.
             CompiledFrameworkVersion = freshCompile || ReferenceCameFromResponse(response)
                 ? NodeTypeCompilationHelpers.FrameworkVersion
-                : def.CompiledFrameworkVersion
+                : def.CompiledFrameworkVersion,
+            // The FLOOR travels with the key, by the same predicate: a fresh compile is THIS
+            // build's; a hydrate of a record's bytes keeps the record's producer.
+            CompiledPlatformVersion = freshCompile
+                ? NodeTypeCompilationHelpers.LivePlatformVersion
+                : def.CompiledPlatformVersion,
         };
 
 

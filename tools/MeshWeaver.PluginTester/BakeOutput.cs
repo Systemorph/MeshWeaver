@@ -164,7 +164,10 @@ public static class BakeOutput
                                 entries.ToList(),
                                 sourceSha,
                                 content,
-                                sourceIncluded: true);
+                                sourceIncluded: true,
+                                // The bytes' platform FLOOR (policy
+                                // platform-backwards-compatibility).
+                                producerPlatformVersion: PrebuiltAssemblySeeder.LivePlatformVersion);
                         options.Output.WriteLine(
                             $"bake: {package.Id} → {entries.Count} assembly(ies) + {content.Count} node file(s) → {bundlePath}");
                         return entries.Count;

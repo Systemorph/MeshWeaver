@@ -112,6 +112,12 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
         root.GetProperty("trigger").GetString().Should().Be(nameof(SelfUpdateTrigger.Startup));
 
         content.LastCheckVerdict.Should().Contain("handed to the control lane").And.Contain(InboxUrl);
+        // The verdict states the rule the control plane actually applies to a ROUTED roll
+        // (Plugins ActionsExecutor.AdmittedUnattended): unattended under a Continuous record whose
+        // pattern admits the tag. It must never tell an operator that a PIN restores unattended —
+        // records do not pin an image (policy platform-backwards-compatibility).
+        content.LastCheckVerdict.Should().Contain("runs UNATTENDED when the deployment record's update policy is Continuous")
+            .And.NotContain("pinned tag", "no record pins an image; the old wording described a rule no longer in force");
         content.HandedOverTag.Should().Be(CandidateTag, "the Updates tab must say where the release went");
         content.HandedOverTo.Should().Be(InboxUrl);
         content.HandedOverAt.Should().NotBeNull();

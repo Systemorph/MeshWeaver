@@ -72,6 +72,8 @@ try
         return RunFrameworkIdentity(args[1..]);
     if (args.Length > 0 && args[0] == "platform-surface")
         return RunPlatformSurface(args[1..]);
+    if (args.Length > 0 && args[0] == PlatformLink.Verb)
+        return PlatformLink.Run(args[1..]);
     return await RunGate(args);
 }
 catch (Exception ex)
@@ -714,7 +716,7 @@ static int RunFrameworkIdentity(string[] args)
     {
         Console.Error.WriteLine(
             "framework-identity: <app-dir> is required (the host's application directory — the one "
-            + "holding meshweaver-surface.manifest beside its assemblies; a container's /app).");
+            + "holding MeshWeaver.Compiler.dll, whose compatibility key is the identity; a container's /app).");
         return 2;
     }
 
@@ -740,8 +742,12 @@ static int RunFrameworkIdentity(string[] args)
         return 0;
     }
 
-    var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
-        File.ReadAllText(Path.Combine(full, FrameworkBuildIdentity.SurfaceManifestFileName)));
+    // The identity is the platform COMPATIBILITY KEY now (policy platform-backwards-compatibility),
+    // read off the anchor; the surface manifest is provenance and may be absent.
+    var manifestPath = Path.Combine(full, FrameworkBuildIdentity.SurfaceManifestFileName);
+    var pairs = File.Exists(manifestPath)
+        ? FrameworkBuildIdentity.ParseSurfaceManifest(File.ReadAllText(manifestPath))
+        : new Dictionary<string, string>(StringComparer.Ordinal);
     var absent = FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(pairs);
     Console.Error.WriteLine(
         $"framework-identity: MISMATCH — the bake published under '{expected}' but '{full}' "

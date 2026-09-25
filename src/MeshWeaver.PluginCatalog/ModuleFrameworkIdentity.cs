@@ -27,6 +27,15 @@ public enum ModuleIdentityScheme
     /// <summary>Anything else — compared by exact equality against other values of this shape, and
     /// never against a value of a named scheme above.</summary>
     Other,
+
+    /// <summary>🚨 The platform COMPATIBILITY KEY, <c>c&lt;major:D3&gt;e&lt;epoch:D3&gt;</c> (e.g.
+    /// <c>c003e001</c>) — what every platform build of one major and epoch states, both as the
+    /// identity it keys compiled bytes on and as what a module packer reads off its anchor (policy
+    /// <c>platform-backwards-compatibility</c>). A module packed against ANY build of the running
+    /// key MATCHES: a platform roll no longer declines every landed module generation. The per-build
+    /// <see cref="Surface"/>/<see cref="Commit"/> readings are provenance and never compare with it
+    /// (<see cref="ModuleIdentityVerdict.NotComparable"/> — a legacy bundle, republished once).</summary>
+    Compatibility,
 }
 
 /// <summary>What comparing a stated identity against what a platform states came to.</summary>
@@ -96,6 +105,8 @@ public static class ModuleFrameworkIdentity
         if (string.IsNullOrWhiteSpace(identity))
             return ModuleIdentityScheme.Unstated;
         var value = identity.Trim();
+        if (MeshWeaver.Compiler.PlatformCompatibility.IsKey(value))
+            return ModuleIdentityScheme.Compatibility;
         if (value.Length == 33 && value[0] is 's' or 'S' && IsHex(value.AsSpan(1)))
             return ModuleIdentityScheme.Surface;
         // A commit identity is 'g' + a git sha — the full 40 in every lane that writes one, but a
@@ -152,6 +163,7 @@ public static class ModuleFrameworkIdentity
         ModuleIdentityScheme.Surface => "an API-surface identity (s<hash>)",
         ModuleIdentityScheme.Commit => "a commit identity (g<sha>)",
         ModuleIdentityScheme.Content => "a content identity (the anchor's MVID)",
+        ModuleIdentityScheme.Compatibility => "a platform compatibility key (c<major>e<epoch>)",
         ModuleIdentityScheme.Unstated => "nothing",
         _ => "an identity of an unrecognised shape",
     };

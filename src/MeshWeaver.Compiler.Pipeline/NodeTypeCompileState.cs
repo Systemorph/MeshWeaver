@@ -129,6 +129,13 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/>.</summary>
     public string? CompiledFrameworkVersion { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.CompiledPlatformVersion"/> — the build's platform
+    /// FLOOR.</summary>
+    public string? CompiledPlatformVersion { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.PlatformCeiling"/>.</summary>
+    public string? PlatformCeiling { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CompiledModulesHash"/> — the installed-MODULE
     /// fingerprint the build ran under (#1644/#1664). Mirrored for the same reason as the framework
     /// version beside it: both answer "is this build still usable here", and the satellite carries
@@ -225,6 +232,8 @@ public record NodeTypeCompileState
                 CurrentSourceVersions = definition.CurrentSourceVersions,
                 RequestedSourceStampAt = definition.RequestedSourceStampAt,
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
+                CompiledPlatformVersion = definition.CompiledPlatformVersion,
+                PlatformCeiling = definition.PlatformCeiling,
                 CompiledModulesHash = definition.CompiledModulesHash,
                 CompiledDependencies = definition.CompiledDependencies,
                 FailedBuildInputs = definition.FailedBuildInputs,
@@ -256,6 +265,7 @@ public record NodeTypeCompileState
         && CompiledSources is null && CurrentSourceVersions is null
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
+        && CompiledPlatformVersion is null && PlatformCeiling is null
         && CompiledModulesHash is null && CompiledDependencies is null
         && DispatchedBuildInputs is null
         && FailedSourceQueries is null

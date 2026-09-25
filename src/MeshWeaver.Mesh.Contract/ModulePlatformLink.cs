@@ -110,8 +110,8 @@ public sealed record ModuleLinkVerdict(
         ModuleLinkState.BindingConflict =>
             "held: " + string.Join("; ", Conflicts.Select(c => c.Short())),
         ModuleLinkState.Unlinkable =>
-            "held: references " + string.Join(", ", MissingTypes.Take(3))
-            + (MissingTypes.Length > 3 ? $" (+{MissingTypes.Length - 3} more)" : "")
+            "held: references " + string.Join(", ", Missing().Take(3))
+            + (Missing().Length > 3 ? $" (+{Missing().Length - 3} more)" : "")
             + ", which this platform does not carry",
         _ => $"held: whether it links could not be determined ({Detail})",
     };
@@ -123,8 +123,8 @@ public sealed record ModuleLinkVerdict(
     public string? Needs() => State switch
     {
         ModuleLinkState.BindingConflict => string.Join(", ", Conflicts.Select(c => $"{c.Assembly} {c.Referenced}")),
-        ModuleLinkState.Unlinkable => string.Join(", ", MissingTypes.Take(3))
-            + (MissingTypes.Length > 3 ? $" (+{MissingTypes.Length - 3})" : ""),
+        ModuleLinkState.Unlinkable => string.Join(", ", Missing().Take(3))
+            + (Missing().Length > 3 ? $" (+{Missing().Length - 3})" : ""),
         ModuleLinkState.Indeterminate => Detail,
         _ => null,
     };
@@ -152,6 +152,28 @@ public sealed record ModuleLinkVerdict(
     public int ComparedAssemblyReferences { get; init; }
 
     /// <summary>
+    /// 🚨 The MEMBER half (the <c>MissingMethodException</c> / <c>MissingFieldException</c> shape):
+    /// methods, constructors, property/event accessors and fields this module's bytes call on a
+    /// platform type that still EXISTS, but no longer carries that member with that exact signature
+    /// — each as <c>Full.Type.Name::Member(signature) (AssemblySimpleName)</c>. Measured only when
+    /// the caller asked for it (<see cref="ModuleLinkOptions.CheckMembers"/>); empty otherwise, and
+    /// empty on a <see cref="ModuleLinkState.Linkable"/> verdict.
+    /// </summary>
+    public ImmutableArray<string> MissingMembers { get; init; } = [];
+
+    /// <summary>How many member references were resolved against a platform type's definition —
+    /// the member half's DENOMINATOR. Zero whenever <see cref="ModuleLinkOptions.CheckMembers"/>
+    /// was off, which <see cref="Report"/> says out loud rather than letting a type-only verdict
+    /// read as a member-level one.</summary>
+    public int CheckedMemberReferences { get; init; }
+
+    /// <summary>Member references into a judged platform assembly whose declaring type could be
+    /// found but whose inheritance chain left the platform surface before the member was found
+    /// (a base type in an assembly the surface cannot read). Named rather than counted as missing
+    /// — an unverifiable reference is not a proven break — and never folded into "checked".</summary>
+    public ImmutableArray<string> UnverifiedMembers { get; init; } = [];
+
+    /// <summary>
     /// The operator-facing sentence: which module, what it wants that this build does not have,
     /// and what was actually measured. English by design — this goes to stderr and
     /// <c>/health</c>, which are operator channels; the VIEWER-facing rendering of the same fact
@@ -165,12 +187,15 @@ public sealed record ModuleLinkVerdict(
         ModuleLinkState.Unlinkable =>
             $"Module '{Module}' was built against a platform this deployment is NOT running and "
             + "CANNOT be loaded here: it references "
-            + string.Join(", ", MissingTypes)
+            + string.Join(", ", Missing())
             + ", which the copy this process would bind to does not have. Loading it anyway "
-            + "throws TypeLoadException at the first render that touches it — every render, "
-            + "forever, with nothing connecting it to the install. Move the platform and the "
-            + "module together: this module becomes loadable when the platform updates. "
-            + $"({Denominator()}" + Unchecked() + ")" + Advised(),
+            + "throws TypeLoadException (a missing type) or MissingMethodException / "
+            + "MissingFieldException (a missing member) at the first code path that touches it — "
+            + "every render, forever, with nothing connecting it to the install. Within a major "
+            + "the platform is backwards compatible (policy platform-backwards-compatibility), so "
+            + "a platform that removed or re-signed a member a compiled module calls is the "
+            + "defect: restore the member (an [Obsolete] forwarder) or declare a compatibility-"
+            + $"epoch bump. ({Denominator()}" + Unchecked() + ")" + Advised(),
         ModuleLinkState.BindingConflict =>
             $"Module '{Module}' was built against assembly VERSIONS this deployment is NOT running "
             + "and CANNOT be loaded here: it references "
@@ -196,7 +221,20 @@ public sealed record ModuleLinkVerdict(
     private string Denominator() =>
         $"{CheckedTypeReferences} type reference(s) checked across {CheckedAssemblies.Length} "
         + $"platform assembly/assemblies, {ComparedAssemblyReferences} assembly reference(s) "
-        + "compared by version";
+        + "compared by version, "
+        + (CheckedMemberReferences > 0 || !MissingMembers.IsDefaultOrEmpty
+            ? $"{CheckedMemberReferences} member reference(s) checked by signature"
+            : "member references NOT checked (a type-level verdict)")
+        + (UnverifiedMembers.IsDefaultOrEmpty
+            ? string.Empty
+            : $", {UnverifiedMembers.Length} member reference(s) UNVERIFIABLE (the declaring "
+              + "type's inheritance chain leaves the surface): "
+              + string.Join(", ", UnverifiedMembers));
+
+    /// <summary>Every missing reference the verdict names — types first, then members.</summary>
+    private ImmutableArray<string> Missing() =>
+        [.. (MissingTypes.IsDefault ? [] : MissingTypes),
+         .. (MissingMembers.IsDefault ? [] : MissingMembers)];
 
     private string Unchecked() =>
         UncheckedAssemblies.IsDefaultOrEmpty
@@ -748,6 +786,49 @@ public sealed class ModulePlatformSurface
         }
     }
 
+    // Per-instance memo of each platform assembly's METADATA, for the member half (the static
+    // compatibility gate). The bytes are read into memory once — a PEReader over an immutable
+    // image holds no file handle — and live exactly as long as this surface does.
+    private readonly ConcurrentDictionary<string, MetadataReader?> _metadata =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The metadata of the copy of <paramref name="assemblyName"/> this platform binds — the loaded
+    /// copy's file, else the probed/listed file. Null for a DECLARED surface (a published document
+    /// carries type names only) and for an assembly with no readable file.
+    /// </summary>
+    internal MetadataReader? MetadataOf(string assemblyName) =>
+        _metadata.GetOrAdd(assemblyName, ReadMetadata);
+
+    private MetadataReader? ReadMetadata(string assemblyName)
+    {
+        if (_declared.ContainsKey(assemblyName))
+            return null;
+        var path = _loaded.TryGetValue(assemblyName, out var assembly)
+                   && !string.IsNullOrEmpty(assembly.Location)
+                   && File.Exists(assembly.Location)
+            ? assembly.Location
+            : _files.GetValueOrDefault(assemblyName);
+        if (path is null)
+            return null;
+        try
+        {
+            var image = File.ReadAllBytes(path);
+            // No copy: the image array is handed over as-is (ImmutableCollectionsMarshal), typed ImmutableArray<byte>.
+            var peReader = new PEReader(System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(image));
+            return peReader.HasMetadata ? peReader.GetMetadataReader() : null;
+        }
+        catch (Exception exception) when (exception is IOException or BadImageFormatException
+                                              or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Whether this surface was read back from a document and therefore knows types but
+    /// no member signatures.</summary>
+    internal bool IsDeclaredOnly(string assemblyName) => _declared.ContainsKey(assemblyName);
+
     /// <summary>Whether the loaded copy of <paramref name="assemblyName"/> has
     /// <paramref name="fullTypeName"/>, asked through reflection — the fallback for a platform
     /// assembly with no readable file.</summary>
@@ -827,13 +908,16 @@ public sealed class ModulePlatformSurface
 /// by the loader and is a hard verdict here. <c>MeshWeaver.*</c> assemblies keep the type-identity
 /// rule and are compared by version like every other carried assembly.</para>
 ///
-/// <para><b>Member-level skew is NOT covered and must not be assumed to be.</b> This checks TYPE
-/// references. A method or constructor signature that moved on a type that still exists (#2234's
-/// original <c>MissingMethodException</c>) is invisible here; that shape is caught at install by
-/// <see cref="IncompatibleModule"/>, and the two are complementary halves rather than one
-/// check.</para>
+/// <para><b>Member-level skew is measured only when asked for.</b> The runtime call sites (boot,
+/// landing, prebuilt adoption, the roll gate) check TYPE references
+/// (<see cref="ModuleLinkOptions.TypesOnly"/>); a method or constructor signature that moved on a
+/// type that still exists (#2234's original <c>MissingMethodException</c>) is invisible to them.
+/// <see cref="ModuleLinkOptions.WithMembers"/> adds the member half — every <c>MemberRef</c> by name
+/// and exact signature, accessibility, and what a module type owes the platform types it implements —
+/// and is what the platform compatibility gate runs on every platform pull request against the
+/// deployed plugin set (policy <c>platform-backwards-compatibility</c>).</para>
 /// </summary>
-public static class ModulePlatformLink
+public static partial class ModulePlatformLink
 {
     /// <summary>The assembly-name prefix that makes an assembly the PLATFORM's rather than a
     /// module's private dependency. A reference to one of these that the deployment does not carry
@@ -850,10 +934,25 @@ public static class ModulePlatformLink
     /// </summary>
     /// <param name="modulePath">Path to the module's entry DLL.</param>
     /// <param name="surface">The platform this module would be loaded into.</param>
-    public static ModuleLinkVerdict Check(string modulePath, ModulePlatformSurface surface)
+    public static ModuleLinkVerdict Check(string modulePath, ModulePlatformSurface surface) =>
+        Check(modulePath, surface, ModuleLinkOptions.TypesOnly);
+
+    /// <summary>
+    /// <see cref="Check(string, ModulePlatformSurface)"/> with explicit
+    /// <paramref name="options"/> — the entry the STATIC compatibility gate uses
+    /// (<see cref="ModuleLinkOptions.CheckMembers"/>: every member a compiled plugin calls must
+    /// still exist, with its signature, on the new platform), and the ONE implementation: the
+    /// type and version halves run exactly as they do for every other caller.
+    /// </summary>
+    /// <param name="modulePath">Path to the module's entry DLL.</param>
+    /// <param name="surface">The platform this module would be loaded into.</param>
+    /// <param name="options">What to measure beyond the type and version halves.</param>
+    public static ModuleLinkVerdict Check(
+        string modulePath, ModulePlatformSurface surface, ModuleLinkOptions options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modulePath);
         ArgumentNullException.ThrowIfNull(surface);
+        ArgumentNullException.ThrowIfNull(options);
         var moduleName = Path.GetFileNameWithoutExtension(modulePath);
         var directory = Path.GetDirectoryName(Path.GetFullPath(modulePath));
         var siblings = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
@@ -864,7 +963,7 @@ public static class ModulePlatformLink
         try
         {
             using var stream = File.OpenRead(modulePath);
-            return Check(stream, moduleName, siblings.ToImmutable(), surface);
+            return Check(stream, moduleName, siblings.ToImmutable(), surface, options);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
                                               or BadImageFormatException)
@@ -893,12 +992,12 @@ public static class ModulePlatformLink
         ArgumentNullException.ThrowIfNull(closure);
         ArgumentNullException.ThrowIfNull(surface);
         using var stream = new MemoryStream(entryBytes, writable: false);
-        return Check(stream, moduleName, closure, surface);
+        return Check(stream, moduleName, closure, surface, ModuleLinkOptions.TypesOnly);
     }
 
     private static ModuleLinkVerdict Check(
         Stream module, string moduleName, IReadOnlySet<string> closure,
-        ModulePlatformSurface surface)
+        ModulePlatformSurface surface, ModuleLinkOptions options)
     {
         List<string> missing = [];
         var checkedRefs = 0;
@@ -927,6 +1026,7 @@ public static class ModulePlatformLink
         List<AssemblyBindingConflict> conflicts = [];
         List<string> advisories = [];
         var comparedRefs = 0;
+        var members = new MemberTally();
 
         using (peReader)
         {
@@ -946,6 +1046,8 @@ public static class ModulePlatformLink
             {
                 var reference = metadata.GetAssemblyReference(handle);
                 var assemblyName = metadata.GetString(reference.Name);
+                if (!options.Judges(assemblyName))
+                    continue;
                 if (!InDenominator(assemblyName, closure, surface))
                     continue;
 
@@ -979,11 +1081,14 @@ public static class ModulePlatformLink
                         + "version of this platform's copy is not known — not compared");
                     continue;
                 }
-                var order = wantedVersion.CompareTo(haveVersion);
-                if (order > 0)
+                // 🚨 THE binding rule (policy platform-backwards-compatibility): the running copy
+                // binds whenever it is the same or HIGHER — PlatformBinding.MayBind, the one
+                // comparison every reader applies. A HIGHER wanted version is the floor-not-met
+                // case: a hard verdict naming both versions.
+                if (!PlatformBinding.MayBind(wantedVersion, haveVersion))
                     conflicts.Add(new AssemblyBindingConflict(
                         assemblyName, wantedVersion.ToString(4), haveVersion.ToString(4)));
-                else if (order < 0)
+                else if (wantedVersion < haveVersion)
                     advisories.Add(
                         $"{assemblyName}: the module references {wantedVersion.ToString(4)}, this "
                         + $"platform carries {haveVersion.ToString(4)} — binds and rolls forward");
@@ -994,6 +1099,14 @@ public static class ModulePlatformLink
                 var reference = metadata.GetTypeReference(handle);
                 if (ResolveScope(metadata, reference) is not { } assemblyName)
                     continue; // same-assembly or module-scoped reference — nothing external to check
+
+                // Outside the caller's JUDGED scope (ModuleLinkOptions.JudgedAssemblies): an
+                // assembly this measurement has no authority over — named, never refused.
+                if (!options.Judges(assemblyName))
+                {
+                    uncheckedAssemblies.Add(assemblyName);
+                    continue;
+                }
 
                 // The module's own closure: built together with the entry, so their agreement is
                 // not this gate's question — UNLESS the platform carries the same simple name and
@@ -1038,12 +1151,24 @@ public static class ModulePlatformLink
                     missing.Add($"{fullName} ({assemblyName})");
                 }
             }
+
+            // 🚨 THE MEMBER HALF — opt-in (ModuleLinkOptions.CheckMembers). The type walk above
+            // proves the TYPE is there; a method whose signature moved on a type that stayed is a
+            // MissingMethodException at the first call, and no type-level check can see it.
+            if (options.CheckMembers)
+            {
+                if (!MeasureMembers(metadata, closure, surface, options, members))
+                    return Indeterminate(moduleName,
+                        "member references were asked to be checked, but this surface carries no "
+                        + "member signatures (a published surface document describes types only) — "
+                        + "a member-level verdict needs the platform's assembly files");
+            }
         }
 
         // A binding conflict is the loader's FIRST refusal — the assembly never binds, so no type
         // in it is ever looked up — which is why it outranks a missing type in the verdict.
         var state = conflicts.Count > 0 ? ModuleLinkState.BindingConflict
-            : missing.Count > 0 ? ModuleLinkState.Unlinkable
+            : missing.Count > 0 || members.Missing.Count > 0 ? ModuleLinkState.Unlinkable
             : ModuleLinkState.Linkable;
         return new ModuleLinkVerdict(
             state,
@@ -1056,6 +1181,9 @@ public static class ModulePlatformLink
             Conflicts = [.. conflicts.Distinct().OrderBy(c => c.Assembly, StringComparer.Ordinal)],
             Advisories = [.. advisories.Distinct(StringComparer.Ordinal).OrderBy(a => a, StringComparer.Ordinal)],
             ComparedAssemblyReferences = comparedRefs,
+            MissingMembers = [.. members.Missing.Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal)],
+            CheckedMemberReferences = members.Checked,
+            UnverifiedMembers = [.. members.Unverified.Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal)],
         };
     }
 

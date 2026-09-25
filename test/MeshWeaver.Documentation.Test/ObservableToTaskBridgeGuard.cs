@@ -263,7 +263,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     private const int TotalBudget = 2;
 
     /// <summary>The seeded inventory's size for <see cref="NoNewBlockingBridgeInProductionCode"/>.</summary>
-    private const int ProductionBlockingTotalBudget = 7;
+    private const int ProductionBlockingTotalBudget = 6;
 
     /// <summary>
     /// A bridge found in source: where it is, and which detector saw it.
