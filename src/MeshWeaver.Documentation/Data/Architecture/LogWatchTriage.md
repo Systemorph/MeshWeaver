@@ -283,8 +283,10 @@ not work"*.
 
 Measured on [#1134](https://github.com/Systemorph/MeshWeaver/issues/1134), fingerprint
 `9ca334c1e8dad9ca` (category `Polly`). The issue was filed on timeout events that could not be
-attributed to any call path — `Source: '-standard//Standard-AttemptTimeout'`, the empty client name
-of the ONE shared `ConfigureHttpClientDefaults` pipeline. #1133/#1137 fixed that by re-registering
+attributed to any call path — `Source: '-standard//Standard-AttemptTimeout'`, the ONE shared
+`ConfigureHttpClientDefaults` pipeline with its empty instance (every client that does not
+re-register itself rode it, named or not; the instance is the client's name since #4528 — see
+[Every HttpClient Names Its Pipeline](../EveryHttpClientNamesItsPipeline)). #1133/#1137 fixed that by re-registering
 the registry clients by name (`ServiceDefaults.AddServiceDefaults`). `samples[]` is a ROLLING window
 — it holds the last `MaxSamples` lines, not the history — so it can say what the events carry NOW,
 never that every occurrence since a fix was attributed: read 2026-09-15, all ten name a pipeline
