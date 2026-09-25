@@ -195,7 +195,9 @@ public static class NodeCompileShaping
         string? result = null;
         Exception? fault = null;
         var completed = false;
-        ResolveCodeIncludes(
+        // Disposed on every exit, so the failure path below tears down a walk that did NOT finish
+        // inside Subscribe instead of leaving it running with callbacks nobody reads.
+        using var subscription = ResolveCodeIncludes(
                 code, new HashSet<string>(StringComparer.Ordinal), anchorPath,
                 (anchored, authored) => Observable.Return(readInclude(anchored, authored)),
                 logger, closure)
