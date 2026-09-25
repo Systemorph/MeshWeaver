@@ -511,7 +511,11 @@ public static class ShippedPrebuiltBundles
                 new PrebuiltAdoptionPolicy.Candidate(
                     manifest.FrameworkMvid,
                     manifest.FrameworkMvid is { Length: > 0 } id && VersionByIdentity.TryGetValue(id, out var v) ? v : null,
-                    manifest.Module?.MinMeshVersion),
+                    manifest.Module?.MinMeshVersion)
+                {
+                    ProducerPlatformVersion = manifest.ProducerPlatformVersion,
+                    PlatformCeiling = manifest.PlatformCeiling,
+                },
                 Live);
     }
 
