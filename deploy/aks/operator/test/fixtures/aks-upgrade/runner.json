@@ -1,0 +1,12 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "aks-silos-runner-x"
+   },
+   "spec": {
+    "nodeName": "aks-cibuildv6-3-vmss000000"
+   }
+  }
+ ]
+}

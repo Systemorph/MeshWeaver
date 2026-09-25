@@ -258,7 +258,10 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
         var owner = new CompositeDisposable();
         var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
 
-        using var subscription = shared.Subscribe(_ => { });
+        // The error arm is NOT optional: the release terminates this attached subscriber on the lane
+        // (ASubscriberAttachedWhileInFlight_IsTerminatedByTheRelease), and an unobserved OnError on a
+        // pool thread is an unhandled exception that takes the test host down.
+        using var subscription = shared.Subscribe(_ => { }, _ => { });
         upstream.HasObservers.Should().BeTrue("CONTROL ARM: the first subscriber connected the upstream");
         owner.Count.Should().Be(1, "CONTROL ARM: the connection is registered");
 
@@ -268,8 +271,8 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             "the owner's disposal unsubscribes the upstream — the connection is no longer rooted by the chain");
     }
 
-    [Fact]
-    public void ASubscriptionAfterTheRelease_IsRefusedNamingTheOwner()
+    [Fact(Timeout = 60_000)]
+    public async Task ASubscriptionAfterTheRelease_IsRefusedNamingTheOwner_OnTheLane()
     {
         var upstream = new Subject<int>();
         var owner = new CompositeDisposable();
@@ -279,20 +282,201 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             upstream.OnNext(7);
         owner.Dispose();
 
-        // The refusal is emitted synchronously on subscribe (a Defer that throws), so a plain
-        // Subscribe captures it — no blocking bridge, nothing to wait on.
-        Notification<int>? terminal = null;
-        using (shared.Materialize().Take(1).Subscribe(n => terminal = n))
-        {
-        }
+        // The refusal is delivered on the release lane, never on the subscribing thread (see
+        // ARefusalAndAReleaseMeetingInOneConsumer_NeverDeadlock for why), so it is awaited — and the
+        // thread it arrived on is recorded against this one.
+        var subscribingThread = Environment.CurrentManagedThreadId;
+        var deliveredOnThread = -1;
+        var terminal = await shared.Materialize()
+            .Do(_ => Volatile.Write(ref deliveredOnThread, Environment.CurrentManagedThreadId))
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "a subscriber arriving after the release must be TOLD — never parked",
+                TestContext.Current.CancellationToken);
 
-        terminal.Should().NotBeNull("the refusal is synchronous — a subscriber is told at once, never parked");
-        terminal!.Kind.Should().Be(NotificationKind.OnError,
+        terminal.Kind.Should().Be(NotificationKind.OnError,
             "a subscriber arriving after the release must TERMINATE — a bare Replay(1) would hand it the "
             + "buffered 7 and then go silent forever, the burst-then-silence hang");
         terminal.Exception.Should().BeOfType<ObjectDisposedException>()
             .Which.ObjectName.Should().Be("test-owner", "the refusal names the owner so the straggler is attributable");
+        Volatile.Read(ref deliveredOnThread).Should().NotBe(subscribingThread,
+            "a refusal is a release terminal and goes on the lane — thrown on the subscriber's thread it "
+            + "races the lane's releases into whatever gates the consumer composes");
         upstream.HasObservers.Should().BeFalse("a refused subscription opens no upstream");
+    }
+
+    /// <summary>
+    /// 🚨 <b>A refusal and a release reaching one consumer are delivered ONE AT A TIME</b> — the
+    /// deadlock that left a Layout render leaf running after its mesh's teardown
+    /// (MeshWeaver.Plugins scheduled run 36090164894, <c>SendDocumentIdentityPanelTest</c>: <c>teardown
+    /// DIRTY … [Layout=1 [Defer&lt;EntityStoreAndUpdates&gt;]]</c>).
+    ///
+    /// <para><b>The shape, as captured</b> (<c>dotnet-stack</c> on the reproduced hang, Linux, 2 CPUs):
+    /// the permission fold is a <c>SelectMany</c> whose inners are <c>Zip</c>s of cache queries. The
+    /// RELEASE LANE was delivering one query's release: it held the first <c>Zip</c>'s gate and was
+    /// entering the <c>SelectMany</c> gate. The RENDER thread was subscribing the next inner, whose
+    /// query was already released and so REFUSED — synchronously, on the render thread: it held the
+    /// <c>SelectMany</c> gate forwarding that error and was disposing the first <c>Zip</c>, which takes
+    /// the first <c>Zip</c>'s gate. #5660 serialised release against release; the refusal was the
+    /// same terminal delivered off the lane.</para>
+    ///
+    /// <para><b>Made deterministic.</b> The lane is parked INSIDE the first Zip's gate (a <c>Do</c> on
+    /// its error arm) until the subscriber either holds the SelectMany gate forwarding an error on its
+    /// own thread — the old shape — or has finished subscribing the second inner without being told
+    /// anything on its own thread, which is the fix. In the old shape the subscriber then waits, still
+    /// inside the SelectMany gate, until the lane has left the park and is BLOCKED on that gate (its
+    /// thread reads <see cref="ThreadState.WaitSleepJoin"/>) — only then does it go on to dispose the
+    /// first Zip. That order is load-bearing: a disposal that ran first would detach the <c>Do</c>'s
+    /// observer before the lane forwarded through it, and the lane's error would be dropped instead of
+    /// reaching the gate — the incident's lane had already passed every intermediate sink. So nothing
+    /// here depends on timing: both outcomes are reached by construction.</para>
+    ///
+    /// <para><b>Negative control</b> (run by hand when this test was written): restoring
+    /// <c>Observable.Throw</c> for the refusal in <c>AutoConnectOwnedBy</c> makes the subscriber
+    /// thread never return — the assertion on <c>subscriberReturned</c> fails and the two threads
+    /// stay deadlocked for the life of the process, on the very frames captured from the CI hang.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARefusalAndAReleaseMeetingInOneConsumer_NeverDeadlock()
+    {
+        var lane = new ReleaseLane();
+        var owner = new CompositeDisposable();
+        var upstreamA = new Subject<int>();
+        var upstreamB = new Subject<int>();
+        var a = upstreamA.Replay(1).AutoConnectOwnedBy(owner, lane, "owner");
+        var b = upstreamB.Replay(1).AutoConnectOwnedBy(owner, lane, "owner");
+
+        var laneHoldsFirstZipGate = 0;
+        var laneLeftThePark = 0;
+        Thread? laneThread = null;
+        var subscriberHoldsSelectManyGate = 0;
+        var subscriberReturned = 0;
+        var subscriberThread = -1;
+        var parkBudget = TestTimeouts.Convergence;
+
+        var outer = new Subject<int>();
+        var received = outer
+            .SelectMany(i => a.Zip(b, (x, y) => x + y)
+                // Inside the Zip's error forwarding — its gate is held — and BEFORE the SelectMany
+                // gate. Only the FIRST inner parks, and only the lane reaches it (it is the release).
+                .Do(_ => { }, _ =>
+                {
+                    if (i != 1)
+                        return;
+                    Volatile.Write(ref laneThread, Thread.CurrentThread);
+                    Volatile.Write(ref laneHoldsFirstZipGate, 1);
+                    try
+                    {
+                        SpinWait.SpinUntil(
+                            () => Volatile.Read(ref subscriberHoldsSelectManyGate) == 1
+                                  || Volatile.Read(ref subscriberReturned) == 1,
+                            parkBudget);
+                    }
+                    finally
+                    {
+                        // From here the lane forwards straight on to the SelectMany gate.
+                        Volatile.Write(ref laneLeftThePark, 1);
+                    }
+                }))
+            .Materialize()
+            // Inside the SelectMany's error forwarding — its gate is held — and BEFORE it disposes its
+            // inners (the first Zip among them).
+            .Do(n =>
+            {
+                if (n.Kind != NotificationKind.OnError
+                    || Environment.CurrentManagedThreadId != Volatile.Read(ref subscriberThread))
+                    return;
+                Volatile.Write(ref subscriberHoldsSelectManyGate, 1);
+                // Hold the SelectMany gate until the lane is blocked on it, then let the disposal of
+                // the first Zip go ahead — the order the incident's two threads met in.
+                SpinWait.SpinUntil(
+                    () => Volatile.Read(ref laneLeftThePark) == 1
+                          && Volatile.Read(ref laneThread) is { } lane
+                          && (lane.ThreadState & ThreadState.WaitSleepJoin) != 0,
+                    parkBudget);
+            })
+            .Replay();
+        // NOT `using`: disposed at the end of the GREEN path only. If the regression returns, the
+        // two threads below are blocked on each other's Monitor for good — nothing can release a
+        // lock-order deadlock from outside — and tearing the composition down would walk into those
+        // same gates from the test thread, turning a named assertion failure into a hung teardown.
+        // Both parks are bounded, so no callback of this test is left waiting on a flag; what is
+        // left behind on failure is the deadlock itself, on background threads.
+        var connection = received.Connect();
+
+        outer.OnNext(1);
+        upstreamA.OnNext(1);
+        upstreamB.OnNext(2);
+        var first = await received.Should().Within(TestTimeouts.Convergence).Emit(
+            "CONTROL ARM: the first inner is live and zips both connections",
+            TestContext.Current.CancellationToken);
+        first.Value.Should().Be(3);
+
+        owner.Dispose(); // the release of both connections is posted to the lane
+        SpinWait.SpinUntil(() => Volatile.Read(ref laneHoldsFirstZipGate) == 1, parkBudget).Should().BeTrue(
+            "CONTROL ARM: the lane is delivering the release and holds the first Zip's gate");
+
+        // The render thread of the incident: subscribes the next inner while the lane holds that gate.
+        var subscriber = new Thread(() =>
+        {
+            Volatile.Write(ref subscriberThread, Environment.CurrentManagedThreadId);
+            try
+            {
+                outer.OnNext(2);
+            }
+            finally
+            {
+                Volatile.Write(ref subscriberReturned, 1);
+            }
+        })
+        { IsBackground = true, Name = "render-subscribe" };
+        subscriber.Start();
+
+        SpinWait.SpinUntil(() => Volatile.Read(ref subscriberReturned) == 1, parkBudget).Should().BeTrue(
+            "subscribing the next inner must RETURN — a refusal thrown on the subscribing thread takes the "
+            + "SelectMany gate and waits for the Zip gate the lane holds, while the lane waits for the "
+            + "SelectMany gate: a deadlock neither side leaves");
+        Volatile.Read(ref subscriberHoldsSelectManyGate).Should().Be(0,
+            "the refusal must not be delivered on the subscribing thread at all — it goes on the lane, "
+            + "behind the releases posted before it");
+
+        var terminal = await received.Where(n => n.Kind != NotificationKind.OnNext)
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "the consumer must still be TERMINATED — by the lane, once",
+                TestContext.Current.CancellationToken);
+        terminal.Kind.Should().Be(NotificationKind.OnError);
+        terminal.Exception.Should().BeOfType<ObjectDisposedException>();
+
+        // The worker has provably returned (asserted above), so joining it cannot park the test.
+        subscriber.Join();
+        connection.Dispose();
+    }
+
+    /// <summary>
+    /// The lane drains on POOLED work items. Taking <c>ObserveOn</c>'s long-running path parked one
+    /// dedicated thread per lane in <c>Monitor.Wait</c> forever — the lane is never disposed, so that
+    /// thread never exited (visible in every stack capture of a test host: one
+    /// <c>ObserveOnObserverLongRunning.Drain</c> per torn-down mesh).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AReleaseRunsOnAPooledThread_NeverOnADedicatedOne()
+    {
+        var upstream = new Subject<int>();
+        var owner = new CompositeDisposable();
+        var shared = upstream.Replay(1).AutoConnectOwnedBy(owner, new ReleaseLane(), "test-owner");
+
+        var onPool = new AsyncSubject<bool>();
+        using var subscription = shared.Subscribe(_ => { }, _ =>
+        {
+            onPool.OnNext(Thread.CurrentThread.IsThreadPoolThread);
+            onPool.OnCompleted();
+        });
+        owner.Dispose();
+
+        var pooled = await onPool.Should().Within(TestTimeouts.Convergence).Emit(
+            "the release must reach the attached subscriber", TestContext.Current.CancellationToken);
+        pooled.Should().BeTrue(
+            "a lane that drains on a dedicated long-running thread keeps that thread parked for the "
+            + "lane's whole life — one leaked thread per mesh");
     }
 
     [Fact]
@@ -385,13 +569,10 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             "RegisterForDisposal runs the release in the hub's ShutDown phase — strictly inside its "
             + "DisposalCompleted, before any scope closes");
 
-        Notification<int>? terminal = null;
-        using (shared.Materialize().Take(1).Subscribe(n => terminal = n))
-        {
-        }
-
-        terminal.Should().NotBeNull("the refusal is synchronous");
-        terminal!.Kind.Should().Be(NotificationKind.OnError, "a subscriber after the hub's teardown is refused");
+        // Refused on the mesh's release lane, not on this thread — awaited, never read synchronously.
+        var terminal = await shared.Materialize().Should().Within(TestTimeouts.Convergence).Emit(
+            "a subscriber after the hub's teardown must be told", TestContext.Current.CancellationToken);
+        terminal.Kind.Should().Be(NotificationKind.OnError, "a subscriber after the hub's teardown is refused");
         terminal.Exception.Should().BeOfType<ObjectDisposedException>().Which.ObjectName.Should().Be("hosted-owner");
     }
 }
