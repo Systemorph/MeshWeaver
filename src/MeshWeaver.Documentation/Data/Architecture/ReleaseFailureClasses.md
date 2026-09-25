@@ -376,6 +376,62 @@ the control is `TheRestoredDiagnosis_ReadsAsARepair`: a re-cut that WORKED must 
 no failure wording in it, because a fix that made every outcome sound like a failure would satisfy
 every other assertion here and be worse than the defect.
 
+## A release that lands after BOTH bounds is adopted when it lands (#5057, third half)
+
+### What was still live after the same-id re-cut
+
+The same-id re-cut adopts a late landing that arrives inside the re-cut's own bound. A landing slower
+than both bounds still ended the settle with no release. The node was stamped `unreleasedBuildPath` =
+the id both attempts were minting, and then the node landed at exactly that id. Measured on the
+control instance on the image carrying the same-id re-cut: `Hosting/TriageItem/Release/20260923055416-Hd-IFSiA`
+landed 21 s after its id was minted, which is past two bounds. #5474, folded into #5057, carried 69 more
+lines of `could not be re-cut: the create did not land within 00:00:10` from 2026-09-22 to 2026-09-24,
+over `Hosting/*` and `Publish/Deck`, on both portals. Nothing read the stamp again. The release existed,
+the stamp named it, and the type kept binding the previous build's release until someone asked for a
+new one.
+
+### The change: the pointer follows the landing, not a clock
+
+`LateReleaseAdoption` is installed on every NodeType hub beside the compile and release-request
+watchers (`MeshDataSource`). While the hub's own record carries an `unreleasedBuildPath`, the hub
+watches for that path in ONE synced listing per type (`path:{type}/Release scope:children
+select:path`), which is never a point read of an absent path, the storm shape. The listing is not
+keyed per stamped path, because the stream cache keeps every distinct query set's connection for the
+life of the process. When the path is listed, one owner write, issued as System and composed INTO
+the watched chain, moves `latestReleasePath` to it and clears
+`unreleasedBuildPath`, `unreleasedBuildReason` and the spent `releaseNotes`. The write re-checks that
+the stamp still names that path, and that check is the whole guard:
+
+- the stamp is written only for an id minted for this build's bytes (`IsReusableAttempt`), so a node at
+  that path names these bytes;
+- every later settle rewrites or clears the stamp, so a stamp that still names the path still describes
+  the current build.
+
+A faulted write therefore faults the watcher. The hub-watcher re-establish then re-derives the
+stamp and the listing and retries the adoption, rather than logging once and never asking again.
+No bound is widened, and no timer or poll is added. A release that never lands leaves the stamp
+standing, and the stamp is the report. The watch is re-derived from the record, so a landing that
+happened while no activation was alive is adopted by the next activation, whose first listing already
+holds the node.
+
+### The control
+
+`ALateReleaseIsAdoptedWhenItLandsTest`, on a real monolith mesh. A NodeType is seeded in exactly the
+stamped state and its owner is activated. The release node is then created at the stamped path, and the
+type's `latestReleasePath` must follow it with the stamp cleared. With the watcher's registration
+removed from `MeshDataSource`, the same test is red at that wait (measured: it times out after 72 s with
+the pointer still on the previous release). The negative half is a release at another path: it is not
+adopted and the stamp stands. The pure decision is covered as a table.
+
+### What closes the incident, amended
+
+The read in *What closes the incident* above stands. One addition: a type that carried
+`unreleasedBuildPath` for an id that has since landed must now read `unreleasedBuildPath: null`, with
+`latestReleasePath` naming that id. A stamp that stays set over an id that does not exist is still the
+finding the stamp exists to make visible. Why a release create takes more than 20 s during a boot
+compile wave is **not** answered here. It is a slow owner, not a lost create, and it belongs to the
+compile-lane load work.
+
 ## What this does not claim
 
 - **It does not establish WHY the re-cut's create does not land.** That is the point: the reason was

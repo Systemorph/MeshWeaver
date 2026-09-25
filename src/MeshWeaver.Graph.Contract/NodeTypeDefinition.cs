@@ -481,7 +481,9 @@ public record NodeTypeDefinition
     /// <para>This is the ONE place to look: the path names the id the attempt minted, so a reader
     /// can tell "the node exists and the pointer never advanced" from "the create never landed"
     /// with one read, and the next re-cut reuses this same id (so a late landing is adopted rather
-    /// than duplicated). Cleared by every stamp that lands a release. Mesh-owned, never authored —
+    /// than duplicated). Cleared by every stamp that lands a release, and by the NodeType hub
+    /// itself when the node at this path lands after the settle stopped waiting for it — the
+    /// pointer then moves to it (<c>LateReleaseAdoption</c>). Mesh-owned, never authored —
     /// masked by the sync seams like the rest of the compile state.</para>
     /// </summary>
     public string? UnreleasedBuildPath { get; init; }
