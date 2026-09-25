@@ -1,0 +1,39 @@
+{
+ "controlPlaneProfile": {
+  "kubernetesVersion": "1.34.7",
+  "upgrades": [
+   {
+    "kubernetesVersion": "1.34.8",
+    "isPreview": null
+   },
+   {
+    "kubernetesVersion": "1.34.9",
+    "isPreview": null
+   },
+   {
+    "kubernetesVersion": "1.34.10",
+    "isPreview": null
+   },
+   {
+    "kubernetesVersion": "1.35.4",
+    "isPreview": null
+   },
+   {
+    "kubernetesVersion": "1.35.5",
+    "isPreview": null
+   },
+   {
+    "kubernetesVersion": "1.35.6",
+    "isPreview": null
+   },
+   {
+    "kubernetesVersion": "1.35.7",
+    "isPreview": null
+   },
+   {
+    "kubernetesVersion": "1.36.0",
+    "isPreview": true
+   }
+  ]
+ }
+}

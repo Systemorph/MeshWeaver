@@ -1,0 +1,13 @@
+{
+ "items": [
+  {
+   "spec": {
+    "rules": [
+     {
+      "host": "memex.example.test"
+     }
+    ]
+   }
+  }
+ ]
+}

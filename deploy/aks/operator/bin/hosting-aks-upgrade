@@ -1,0 +1,470 @@
+#!/usr/bin/env bash
+# hosting-aks-upgrade <facts|gate|control-plane|node-pool|verify> --resource-group <rg> --cluster <name> [flags]
+#
+# The cluster half of the governed `UpgradeCluster` InstanceAction (MeshWeaver.Plugins
+# Hosting/ClusterUpgrade.md). The Kubernetes upgrade of the AKS cluster itself — control plane,
+# then every node pool — as ordered, idempotent, resumable steps. Never run by hand: the plan is
+# composed and ORDERED by the Hosting plugin's pure ClusterUpgradePlan (one approval, control-plane
+# minors chained, every pool upgraded ONCE to the final version, the pool hosting the portals LAST,
+# a health gate before each pool) and arrives as a signed bundle on the aks-ops lane.
+#
+# 🚨 THIS SCRIPT DECIDES NOTHING ABOUT THE ORDER. Which versions, which pools, in what sequence is
+# the plan's (tested in the plugin). What lives here is what only the cluster can answer, measured
+# at the moment it matters:
+#
+#   facts           READ-ONLY. Everything the plan is evaluated from — cluster version, the versions
+#                   AKS offers (get-upgrades + the region's get-versions graph), every node pool,
+#                   every node, every portal Deployment (its TEMPLATE image against the image its
+#                   pods actually SERVE), each portal host's /health, every PodDisruptionBudget, the
+#                   API server's own deprecated-API usage metric and the apiVersions the scanned
+#                   manifests name — as ONE base64 JSON fact (`aks_facts=`).
+#   gate            The health gate between pools: no operation in flight, every node Ready and
+#                   schedulable, every portal converged on its template image and answering
+#                   /health 200. `--strict` refuses at once (the pre-flight); otherwise it waits
+#                   inside the job budget, and FAILS on what Kubernetes itself has given up on
+#                   (ProgressDeadlineExceeded, a pod not Ready past its own startup budget).
+#   control-plane   One control-plane-only hop to --version (the plan chains one hop per minor).
+#   node-pool       One pool straight to --version (the node skew policy allows it; the plan
+#                   upgrades each pool exactly once).
+#   verify          Everything at --version and healthy → `aks_upgrade=complete`, the ONLY success.
+#
+# 🚨 A STUCK ROLL REFUSES THE UPGRADE. A portal Deployment whose template names an image its
+# serving pods do not run is a roll in flight or wedged. Draining a node recreates those pods FROM
+# THE TEMPLATE — measured 2026-09-25: memex's template named 3.0.0-ci.9260 (pods of that image
+# deadlock at bake) while its serving pods were 3.0.0-ci.9218, alive only because nothing evicted
+# them. A node drain would have taken the control instance down. `gate --strict` names every such
+# Deployment and runs nothing.
+#
+# RESUMABLE, because an AKS upgrade outlives a 45-minute job. Every mutating step is idempotent
+# (already at the version → "already"; an operation in flight → it is waited on, never re-issued),
+# and the job's budget (--budget-seconds, measured from the FIRST step of this job) bounds every
+# wait. A wait that reaches the budget PAUSES the run: it says `aks_upgrade=incomplete`, exits 0,
+# and every later step of the same job is skipped — the control plane dispatches a continuation of
+# the same plan. A step that would drain the node its own runner stands on issues the upgrade and
+# pauses the same way (`aks_step=detached`) rather than waiting for its own eviction.
+#
+# Output contract (the ::hosting:: lines the plugin's OperatorOutput reads):
+#   aks_facts=<base64 JSON>          facts, the whole plan input
+#   aks_gate=healthy                 a gate passed
+#   aks_step=already|done|detached|skipped|would-upgrade
+#   aks_upgrade=incomplete           the run paused at its budget — continue it
+#   aks_upgrade=complete             verify passed — the ONLY completion
+#   aks_versions=<cp=…;pool=…>       what verify measured
+#
+# Identity: the aks-ops lane signs in as `hosting-operator` (OIDC) and mints the admin kubeconfig
+# per job. The az reads/writes here need Microsoft.ContainerService managedClusters read+write,
+# agentPools read+write and upgradeProfiles read on the cluster ("Azure Kubernetes Service
+# Contributor Role"); a missing grant is refused BY NAME below, never read as "nothing to upgrade".
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-aks-upgrade"
+
+sub="${1:-}"
+[ $# -gt 0 ] && shift
+rg="" cluster="" version="" pool="" budget="2100" strict=false
+scans=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --resource-group) rg="${2:-}";      shift 2 ;;
+    --cluster)        cluster="${2:-}"; shift 2 ;;
+    --version)        version="${2:-}"; shift 2 ;;
+    --pool)           pool="${2:-}";    shift 2 ;;
+    --budget-seconds) budget="${2:-}";  shift 2 ;;
+    --scan)           scans+=("${2:-}"); shift 2 ;;
+    --strict)         strict=true;      shift ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+case "$sub" in
+  facts|gate|control-plane|node-pool|verify) ;;
+  *) hosting::die "unknown subcommand '${sub}' — facts, gate, control-plane, node-pool or verify" ;;
+esac
+hosting::need_flag resource-group "$rg"
+hosting::need_flag cluster "$cluster"
+hosting::safe_name resource-group "$rg"
+hosting::safe_name cluster "$cluster"
+[[ "$budget" =~ ^[0-9]+$ ]] || hosting::die "--budget-seconds '${budget}' is not a whole number of seconds"
+if [ "$sub" = control-plane ] || [ "$sub" = node-pool ] || [ "$sub" = verify ]; then
+  hosting::need_flag version "$version"
+  # A Kubernetes version and nothing else: it lands on an az command line.
+  [[ "$version" =~ ^[0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] \
+    || hosting::die "--version '${version}' is not a Kubernetes version (MAJOR.MINOR.PATCH) — refusing"
+fi
+if [ "$sub" = node-pool ]; then
+  hosting::need_flag pool "$pool"
+  [[ "$pool" =~ ^[a-z][a-z0-9]{0,11}$ ]] \
+    || hosting::die "--pool '${pool}' is not an AKS node pool name (lower-case letter, then letters/digits, at most 12) — refusing"
+fi
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed — every answer read here is JSON"
+command -v az >/dev/null 2>&1 || hosting::die "az is not installed — the cluster's versions and pools are ARM facts"
+
+poll="${HOSTING_UPGRADE_POLL_SECONDS:-30}"
+state_dir="${HOSTING_UPGRADE_STATE:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}"
+paused_file="${state_dir}/hosting-aks-upgrade.paused"
+started_file="${state_dir}/hosting-aks-upgrade.started"
+now() { date -u +%s; }
+# a > b for MAJOR.MINOR.PATCH, numerically (portable — no `sort -V`).
+ver_gt() {
+  local IFS=. i
+  # shellcheck disable=SC2206  # the split on '.' is the point; both are validated versions
+  local a=($1) b=($2)
+  for i in 0 1 2; do
+    if (( 10#${a[i]:-0} > 10#${b[i]:-0} )); then return 0; fi
+    if (( 10#${a[i]:-0} < 10#${b[i]:-0} )); then return 1; fi
+  done
+  return 1
+}
+
+# The job budget is measured from the FIRST step of THIS job — a later step does not get a fresh one.
+if [ ! -f "$started_file" ]; then now > "$started_file"; fi
+deadline=$(( $(cat "$started_file") + budget ))
+
+# An earlier step of this job paused it: everything after is the continuation's, not ours.
+if [ -f "$paused_file" ] && [ "$sub" != facts ]; then
+  hosting::log "skipped — an earlier step of this run paused it ($(cat "$paused_file")); the control plane continues the plan in a new run"
+  hosting::say aks_step skipped
+  exit 0
+fi
+
+pause() {
+  printf '%s\n' "$1" > "$paused_file"
+  hosting::log "PAUSED at the job budget: $1 — nothing failed; the control plane dispatches a continuation of the same plan, and every step already done is skipped there"
+  hosting::say aks_upgrade incomplete
+  exit 0
+}
+
+# ── reads ─────────────────────────────────────────────────────────────────────────────────────────
+# Every read keeps its stderr: a Forbidden must come out as a REFUSED read naming the grant, never
+# as an empty list read as "nothing to upgrade" (the denied-vs-absent rule, bin/_common.sh).
+az_read() { # what… -- az args
+  local what="$1"; shift
+  local out err
+  err="$(mktemp)"
+  if ! out="$(az "$@" -o json 2>"$err")"; then
+    local e; e="$(head -3 "$err" | tr '\n' ' ')"; rm -f "$err"
+    case "$e" in
+      *AuthorizationFailed*|*Forbidden*|*"does not have authorization"*)
+        hosting::die "REFUSED, not absent: the signed-in identity may not read ${what} — nothing about it is known. Grant 'Azure Kubernetes Service Contributor Role' on the cluster to hosting-operator (Systemorph/Memex docs/aks-ops.md §3). az said: ${e}" ;;
+      *) hosting::die "could not read ${what}: ${e}" ;;
+    esac
+  fi
+  rm -f "$err"
+  printf '%s' "$out"
+}
+kube_read() { # what… -- kubectl args
+  local what="$1"; shift
+  local out err
+  err="$(mktemp)"
+  if ! out="$(kubectl "$@" 2>"$err")"; then
+    local e; e="$(head -3 "$err" | tr '\n' ' ')"; rm -f "$err"
+    case "$e" in
+      *Forbidden*|*forbidden*) hosting::die "REFUSED, not absent: this identity may not read ${what} — nothing about it is known. kubectl said: ${e}" ;;
+      *) hosting::die "could not read ${what}: ${e}" ;;
+    esac
+  fi
+  rm -f "$err"
+  printf '%s' "$out"
+}
+
+cluster_json() {
+  az_read "cluster ${cluster}" aks show -g "$rg" -n "$cluster" | jq -c '{
+    name, resourceGroup, location,
+    kubernetesVersion: (.currentKubernetesVersion // .kubernetesVersion),
+    provisioningState, powerState: (.powerState.code // null),
+    tier: (.sku.tier // null), supportPlan: (.supportPlan // null),
+    autoUpgradeChannel: (.autoUpgradeProfile.upgradeChannel // "none"),
+    nodeOsUpgradeChannel: (.autoUpgradeProfile.nodeOsUpgradeChannel // null)}'
+}
+pools_json() {
+  az_read "the node pools of ${cluster}" aks nodepool list -g "$rg" --cluster-name "$cluster" | jq -c '[.[] | {
+    name, mode, count: (.count // 0), minCount, maxCount, autoscaling: (.enableAutoScaling // false),
+    version: (.currentOrchestratorVersion // .orchestratorVersion),
+    provisioningState, powerState: (.powerState.code // null),
+    maxSurge: (.upgradeSettings.maxSurge // null)}] | sort_by(.name)'
+}
+nodes_json() {
+  kube_read "nodes" get nodes -o json | jq -c '[.items[] | {
+    name: .metadata.name,
+    pool: (.metadata.labels["kubernetes.azure.com/agentpool"] // .metadata.labels.agentpool // null),
+    kubeletVersion: .status.nodeInfo.kubeletVersion,
+    ready: ([.status.conditions[]? | select(.type == "Ready") | .status == "True"] | any),
+    unschedulable: (.spec.unschedulable // false)}] | sort_by(.name)'
+}
+health_of() { # host → HTTP status of https://host/health (000 when nothing answered)
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$1/health" 2>/dev/null)" || true
+  [[ "$code" =~ ^[0-9]{3}$ ]] || code="000"
+  printf '%s' "$code"
+}
+# Every portal Deployment on the cluster (the chart names it memex-portal-deployment), its template
+# image against what its pods SERVE, and its hosts' /health.
+portals_json() {
+  local nodes="$1" deployments ns rows="[]" deployment selector pods ingress hosts health h code
+  deployments="$(kube_read "portal deployments" get deployments --all-namespaces -o json \
+    | jq -c '[.items[] | select(.metadata.name == "memex-portal-deployment")]')"
+  for ns in $(printf '%s' "$deployments" | jq -r '.[].metadata.namespace' | sort -u); do
+    hosting::safe_name namespace "$ns"
+    deployment="$(printf '%s' "$deployments" | jq -c --arg ns "$ns" '.[] | select(.metadata.namespace == $ns)')"
+    selector="$(printf '%s' "$deployment" | jq -r '.spec.selector.matchLabels // {} | to_entries | map("\(.key)=\(.value)") | join(",")')"
+    [ -n "$selector" ] || hosting::die "deployment ${ns}/memex-portal-deployment has no matchLabels selector — its pods cannot be told from anything else's"
+    pods="$(kube_read "the portal pods in ${ns}" -n "$ns" get pods -l "$selector" -o json)"
+    ingress="$(kube_read "the ingresses in ${ns}" -n "$ns" get ingress -o json)"
+    hosts="$(printf '%s' "$ingress" | jq -r '[.items[].spec.rules[]?.host // empty] | unique | .[]')"
+    health="[]"
+    for h in $hosts; do
+      hosting::safe_host host "$h"
+      code="$(health_of "$h")"
+      health="$(jq -c --arg h "$h" --arg c "$code" '. + [{host: $h, status: ($c | tonumber)}]' <<<"$health")"
+    done
+    rows="$(jq -c --argjson d "$deployment" --argjson p "$pods" --argjson n "$nodes" --argjson hl "$health" '
+      def portal(c): ([c[]? | select(.name == "memex-portal")][0] // c[0]);
+      ($n | map({(.name): .pool}) | add // {}) as $poolOf
+      | ($d.spec.template.spec.containers | portal(.)) as $tc
+      | . + [{
+          namespace: $d.metadata.namespace, deployment: $d.metadata.name,
+          templateImage: $tc.image,
+          replicas: ($d.spec.replicas // 1), updated: ($d.status.updatedReplicas // 0),
+          ready: ($d.status.readyReplicas // 0), available: ($d.status.availableReplicas // 0),
+          generation: ($d.metadata.generation // 0), observedGeneration: ($d.status.observedGeneration // 0),
+          progressDeadlineExceeded: ([$d.status.conditions[]? | select(.type == "Progressing" and .reason == "ProgressDeadlineExceeded")] | length > 0),
+          startupBudgetSeconds: (if $tc.startupProbe then (($tc.startupProbe.periodSeconds // 10) * ($tc.startupProbe.failureThreshold // 3)) else null end),
+          health: $hl,
+          pods: [$p.items[] | {
+            name: .metadata.name,
+            image: (.spec.containers | portal(.)).image,
+            ready: ([.status.conditions[]? | select(.type == "Ready") | .status == "True"] | any),
+            terminating: (.metadata.deletionTimestamp != null),
+            node: (.spec.nodeName // null), pool: $poolOf[.spec.nodeName // ""],
+            ageSeconds: (if .status.startTime then ([0, ((now - (.status.startTime | fromdateiso8601)) | floor)] | max) else 0 end)}]
+        }]' <<<"$rows")"
+  done
+  printf '%s' "$rows"
+}
+pdbs_json() {
+  kube_read "pod disruption budgets" get pdb --all-namespaces -o json | jq -c '[.items[] | {
+    namespace: .metadata.namespace, name: .metadata.name,
+    disruptionsAllowed: (.status.disruptionsAllowed // 0), expectedPods: (.status.expectedPods // 0)}]'
+}
+# The API server's own count of deprecated APIs requested since it started, with the release each
+# is removed in — the authority for what the cluster's workloads actually call. An unreadable
+# metric is carried as UNREAD, never as "none in use".
+deprecated_json() {
+  local metrics err e
+  err="$(mktemp)"
+  if ! metrics="$(kubectl get --raw /metrics 2>"$err")"; then
+    e="$(head -2 "$err" | tr '\n' ' ')"; rm -f "$err"
+    jq -cn --arg e "$e" '{read: false, error: $e, items: []}'
+    return 0
+  fi
+  rm -f "$err"
+  printf '%s\n' "$metrics" | grep '^apiserver_requested_deprecated_apis{' | jq -R -s -c '
+    [split("\n")[] | select(length > 0)
+     | ([match("([a-z_]+)=\"([^\"]*)\""; "g") | {(.captures[0].string): .captures[1].string}] | add) as $l
+     | {group: ($l.group // ""), version: ($l.version // ""), resource: ($l.resource // ""),
+        removedRelease: ($l.removed_release // "")}] | unique | {read: true, error: null, items: .}'
+}
+# apiVersion+kind of every manifest under the scanned directories — the charts, the operator
+# manifests, the estate's overlays. A templated apiVersion ({{ … }}) is skipped: it is decided at
+# render time, and the live metric above covers what the cluster actually receives.
+manifests_json() {
+  local dir file lines="" line
+  for dir in "${scans[@]+"${scans[@]}"}"; do
+    [ -d "$dir" ] || hosting::die "--scan '${dir}' is not a directory — a scan of nothing is not a clean scan"
+    while IFS= read -r file; do
+      while IFS= read -r line; do lines+="${file}"$'\t'"${line}"$'\n'; done \
+        < <(grep -E '^(apiVersion|kind):' "$file" || true)
+    done < <(find "$dir" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+  done
+  printf '%s' "$lines" | jq -R -s -c '
+    [split("\n")[] | select(length > 0) | split("\t") | {file: .[0], line: .[1]}]
+    | reduce .[] as $r ({out: [], pending: null};
+        if ($r.line | startswith("apiVersion:")) then
+          .pending = {file: $r.file, apiVersion: ($r.line | sub("^apiVersion:\\s*"; "") | gsub("[\"'"'"' ]"; ""))}
+        elif (.pending != null and .pending.file == $r.file) then
+          .out += [.pending + {kind: ($r.line | sub("^kind:\\s*"; "") | gsub("[\"'"'"' ]"; ""))}] | .pending = null
+        else . end)
+    | .out | map(select((.apiVersion | test("\\{\\{")) | not)) | group_by(.apiVersion + " " + .kind) | map(.[0])'
+}
+runner_json() { # the pool this job's own runner pod stands on, when it runs inside the cluster
+  local me="${HOSTNAME:-}" found
+  [ -n "$me" ] || { printf 'null'; return 0; }
+  hosting::safe_name pod "$me"
+  found="$(kube_read "this runner's own pod" get pods --all-namespaces --field-selector "metadata.name=${me}" -o json \
+    | jq -c '.items[0] // null | if . == null then null else {pod: .metadata.name, node: (.spec.nodeName // null)} end')"
+  printf '%s' "$found"
+}
+runner_pool() { # nodes runner → pool name or ""
+  jq -r --argjson r "$2" 'if $r == null then "" else ([.[] | select(.name == $r.node) | .pool][0] // "") end' <<<"$1"
+}
+
+# ── the gate ──────────────────────────────────────────────────────────────────────────────────────
+# Prints one line per problem, each prefixed WAIT (may settle inside the budget) or FAIL (Kubernetes
+# itself has given up on it). Empty = healthy.
+gate_problems() { # cluster pools nodes portals
+  jq -rn --argjson c "$1" --argjson pl "$2" --argjson n "$3" --argjson p "$4" '
+    ( if $c.provisioningState != "Succeeded" then ["WAIT cluster \($c.name) is \($c.provisioningState) — an operation is in flight"] else [] end )
+    + [ $pl[] | select(.provisioningState != "Succeeded") | "WAIT node pool \(.name) is \(.provisioningState)" ]
+    + [ $n[] | select(.ready | not) | "WAIT node \(.name) (pool \(.pool)) is NOT Ready" ]
+    + [ $n[] | select(.unschedulable) | "WAIT node \(.name) (pool \(.pool)) is cordoned — a drain is in progress" ]
+    + [ $p[] | . as $d
+        | ([.pods[] | select(.terminating | not)]) as $live
+        | ([$live[] | .image] | unique) as $serving
+        | ( if .progressDeadlineExceeded then
+              ["FAIL \(.namespace)/\(.deployment): Kubernetes reports ProgressDeadlineExceeded — the roll to \(.templateImage) has stopped progressing"]
+            else [] end )
+          + ( [$live[] | select((.ready | not) and ($d.startupBudgetSeconds != null) and (.ageSeconds > $d.startupBudgetSeconds))
+               | "FAIL \($d.namespace)/\($d.deployment): pod \(.name) (\(.image)) is not Ready after \(.ageSeconds)s, past its own startup budget of \($d.startupBudgetSeconds)s"] )
+          + ( if ($serving != [$d.templateImage]) or ($d.updated < $d.replicas) or ($d.observedGeneration < $d.generation) then
+                ["WAIT STUCK ROLL \($d.namespace)/\($d.deployment): the template names \($d.templateImage) but the pods serve \($serving | join(", ")) (\($d.updated)/\($d.replicas) updated) — a drain would recreate them from the template"]
+              elif $d.ready < $d.replicas then
+                ["WAIT \($d.namespace)/\($d.deployment): \($d.ready)/\($d.replicas) pods Ready"]
+              else [] end )
+          + ( [$d.health[] | select(.status != 200) as $h
+               | if ([$live[] | select(.ready)] | length) == $d.replicas and ([$live[] | .ageSeconds] | min // 0) > 600 then
+                   "FAIL \($d.namespace): https://\($h.host)/health answers \($h.status) although every pod has been Ready for over 10 minutes"
+                 else "WAIT \($d.namespace): https://\($h.host)/health answers \($h.status)" end] )
+        | .[] ]
+    | .[]'
+}
+
+run_gate() {
+  local c pl n p problems fatal
+  while :; do
+    c="$(cluster_json)"; pl="$(pools_json)"; n="$(nodes_json)"; p="$(portals_json "$n")"
+    problems="$(gate_problems "$c" "$pl" "$n" "$p")"
+    if [ -z "$problems" ]; then
+      hosting::log "healthy: $(jq -r 'length' <<<"$p") portal(s) converged and answering /health 200; $(jq -r 'length' <<<"$n") node(s) Ready and schedulable; no operation in flight"
+      hosting::say aks_gate healthy
+      return 0
+    fi
+    printf '%s\n' "$problems" | sed 's/^/  /'
+    fatal="$(printf '%s\n' "$problems" | grep '^FAIL' || true)"
+    [ -z "$fatal" ] || hosting::die "the health gate FAILED — Kubernetes itself has given up on: $(printf '%s' "$fatal" | sed 's/^FAIL //' | tr '\n' ';')"
+    if [ "$strict" = true ]; then
+      hosting::die "refused before anything changed — the cluster is not in a state to upgrade: $(printf '%s' "$problems" | sed 's/^WAIT //' | tr '\n' ';')"
+    fi
+    [ "$(now)" -lt "$deadline" ] || pause "the health gate is still waiting: $(printf '%s' "$problems" | head -1 | sed 's/^WAIT //')"
+    sleep "$poll"
+  done
+}
+
+case "$sub" in
+  facts)
+    c="$(cluster_json)"
+    location="$(jq -r '.location' <<<"$c")"; hosting::safe_name location "$location"
+    current="$(jq -r '.kubernetesVersion' <<<"$c")"
+    minor="$(printf '%s' "$current" | cut -d. -f2)"
+    upgrades="$(az_read "the upgrades offered to ${cluster}" aks get-upgrades -g "$rg" -n "$cluster" \
+      | jq -c '[.controlPlaneProfile.upgrades[]? | select((.isPreview // false) | not) | .kubernetesVersion] | unique | sort_by(split(".") | map(tonumber))')"
+    versions="$(az_read "the Kubernetes versions offered in ${location}" aks get-versions -l "$location" | jq -c --argjson m "${minor:-0}" '
+      [.values[]? | . as $v | ($v.patchVersions // {}) | to_entries[]
+       | {version: .key, upgrades: (.value.upgrades // []), supportPlans: ($v.capabilities.supportPlan // []), preview: ($v.isPreview // false)}
+       | select((.version | split(".")[1] | tonumber) >= $m)] | sort_by(.version | split(".") | map(tonumber))')"
+    pl="$(pools_json)"; n="$(nodes_json)"; p="$(portals_json "$n")"; pdbs="$(pdbs_json)"
+    dep="$(deprecated_json)"; man="$(manifests_json)"; runner="$(runner_json)"
+    facts="$(jq -cn --argjson c "$c" --argjson u "$upgrades" --argjson v "$versions" --argjson pl "$pl" \
+      --argjson n "$n" --argjson p "$p" --argjson pdb "$pdbs" --argjson d "$dep" --argjson m "$man" --argjson r "$runner" \
+      '{schema: 1, readAt: (now | todate), cluster: $c, controlPlaneUpgrades: $u, versions: $v, pools: $pl,
+        nodes: $n, portals: $p, pdbs: $pdb, deprecatedApis: $d, manifestApis: $m, runner: $r}')"
+    hosting::log "cluster ${cluster}: Kubernetes ${current} ($(jq -r '.provisioningState' <<<"$c")), tier $(jq -r '.tier' <<<"$c"), support plan $(jq -r '.supportPlan' <<<"$c")"
+    hosting::log "control-plane upgrades offered: $(jq -r 'join(", ")' <<<"$upgrades")"
+    jq -r '.[] | "  pool \(.name): \(.mode), \(.count) node(s), \(.version), \(.provisioningState), maxSurge \(.maxSurge // "not set")"' <<<"$pl"
+    jq -r '.[] | "  portal \(.namespace): template \(.templateImage); serving \([.pods[] | select(.terminating | not) | .image] | unique | join(", ")); \(.ready)/\(.replicas) Ready"' <<<"$p"
+    hosting::log "deprecated-API metric read: $(jq -r '.read' <<<"$dep"), entries: $(jq -r '.items | length' <<<"$dep"); manifests scanned: $(jq -r 'length' <<<"$man") apiVersion/kind pair(s)"
+    hosting::say aks_facts "$(printf '%s' "$facts" | base64 | tr -d '\n')"
+    ;;
+
+  gate)
+    run_gate
+    ;;
+
+  control-plane)
+    issued=false
+    while :; do
+      c="$(cluster_json)"
+      v="$(jq -r '.kubernetesVersion' <<<"$c")"; st="$(jq -r '.provisioningState' <<<"$c")"
+      # A continuation re-runs the plan from the top: a hop an earlier run already went PAST is done,
+      # and issuing it would ask AKS for a downgrade.
+      if [ "$st" = Succeeded ] && [ "$issued" = false ] && ver_gt "$v" "$version"; then
+        hosting::log "control plane of ${cluster} is at ${v}, already past this hop to ${version} — nothing to do"
+        hosting::say aks_step already; exit 0
+      fi
+      if [ "$v" = "$version" ] && [ "$st" = Succeeded ]; then
+        if [ "$issued" = true ]; then
+          hosting::log "control plane of ${cluster} is at ${version}"; hosting::say aks_step "done"
+        else
+          hosting::log "control plane of ${cluster} is already at ${version} — nothing to do"; hosting::say aks_step already
+        fi
+        exit 0
+      fi
+      case "$st" in
+        Failed|Canceled) hosting::die "the control plane of ${cluster} is ${st} at ${v} — AKS ended the operation; read 'az aks show' / the activity log before anything else runs" ;;
+        Succeeded)
+          [ "$issued" = false ] || hosting::die "the control plane reports Succeeded at ${v}, not ${version}, after the upgrade was issued — AKS did not do what was asked"
+          hosting::do az aks upgrade -g "$rg" -n "$cluster" --kubernetes-version "$version" --control-plane-only --yes --no-wait \
+            || hosting::die "az aks upgrade --control-plane-only to ${version} was refused (see above)"
+          issued=true
+          if hosting::dry; then hosting::say aks_step would-upgrade; exit 0; fi
+          ;;
+        *) hosting::log "control plane of ${cluster}: ${v}, ${st} — waiting" ;;
+      esac
+      [ "$(now)" -lt "$deadline" ] || pause "control plane of ${cluster} still ${st} on its way to ${version}"
+      sleep "$poll"
+    done
+    ;;
+
+  node-pool)
+    issued=false
+    rp=""
+    while :; do
+      pj="$(az_read "node pool ${pool}" aks nodepool show -g "$rg" --cluster-name "$cluster" -n "$pool")"
+      v="$(jq -r '.currentOrchestratorVersion // .orchestratorVersion' <<<"$pj")"; st="$(jq -r '.provisioningState' <<<"$pj")"
+      if [ "$st" = Succeeded ] && [ "$issued" = false ] && ver_gt "$v" "$version"; then
+        hosting::log "node pool ${pool} is at ${v}, already past ${version} — nothing to do"
+        hosting::say aks_step already; exit 0
+      fi
+      if [ "$v" = "$version" ] && [ "$st" = Succeeded ]; then
+        if [ "$issued" = true ]; then
+          hosting::log "node pool ${pool} is at ${version}"; hosting::say aks_step "done"
+        else
+          hosting::log "node pool ${pool} is already at ${version} — nothing to do"; hosting::say aks_step already
+        fi
+        exit 0
+      fi
+      case "$st" in
+        Failed|Canceled) hosting::die "node pool ${pool} is ${st} at ${v} — AKS ended the operation; read 'az aks nodepool show' / the activity log before anything else runs" ;;
+        Succeeded)
+          [ "$issued" = false ] || hosting::die "node pool ${pool} reports Succeeded at ${v}, not ${version}, after the upgrade was issued — AKS did not do what was asked"
+          if [ -z "$rp" ]; then rp="$(runner_pool "$(nodes_json)" "$(runner_json)")"; fi
+          hosting::do az aks nodepool upgrade -g "$rg" --cluster-name "$cluster" -n "$pool" --kubernetes-version "$version" --yes --no-wait \
+            || hosting::die "az aks nodepool upgrade of ${pool} to ${version} was refused (see above)"
+          issued=true
+          if hosting::dry; then hosting::say aks_step would-upgrade; exit 0; fi
+          if [ "$rp" = "$pool" ]; then
+            hosting::say aks_step detached
+            pause "node pool ${pool} hosts this runner — the upgrade was issued and is not waited on from a node it will drain"
+          fi
+          ;;
+        *) hosting::log "node pool ${pool}: ${v}, ${st} — waiting" ;;
+      esac
+      [ "$(now)" -lt "$deadline" ] || pause "node pool ${pool} still ${st} on its way to ${version}"
+      sleep "$poll"
+    done
+    ;;
+
+  verify)
+    run_gate
+    c="$(cluster_json)"; pl="$(pools_json)"; n="$(nodes_json)"
+    off="$(jq -rn --arg v "$version" --argjson c "$c" --argjson pl "$pl" --argjson n "$n" '
+      ( if $c.kubernetesVersion != $v then ["control plane at \($c.kubernetesVersion)"] else [] end )
+      + [ $pl[] | select(.version != $v) | "node pool \(.name) at \(.version)" ]
+      + [ $n[] | select(.kubeletVersion != ("v" + $v)) | "node \(.name) runs kubelet \(.kubeletVersion)" ]
+      | .[]')"
+    [ -z "$off" ] || hosting::die "NOT at ${version}: $(printf '%s' "$off" | tr '\n' ';') — the upgrade is not complete"
+    hosting::say aks_versions "$(jq -rn --argjson c "$c" --argjson pl "$pl" '"cp=\($c.kubernetesVersion)" + ([$pl[] | ";\(.name)=\(.version)"] | join(""))')"
+    hosting::log "cluster ${cluster}: control plane, every pool and every node at ${version}, and healthy"
+    hosting::say aks_upgrade complete
+    ;;
+esac
