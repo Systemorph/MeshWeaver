@@ -501,7 +501,6 @@ public record MessageHubConfiguration
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
-        var postSiteLogger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(PostSiteLogCategory);
         // The hub's declared posting identity (feedback_access_context_always_set):
         //   User (default) → post as the ambient user; UNHAPPY (error + fail delivery)
         //     when no user context is set for a non-exempt message.
@@ -608,12 +607,18 @@ public record MessageHubConfiguration
                 // stack HERE is the post's own call chain, subscribe and all. Captured only on
                 // this failure path, and written on its OWN category at Warning so the Error's
                 // text — and with it the incident fingerprint the tracker folds on — is unchanged.
-                postSiteLogger?.LogWarning(
-                    "PostPipeline: unattributed post site — hub={Hub}, message={MessageType}, target={Target}; posted from:{PostSite}",
-                    syncPipeline.Hub.Address,
-                    d.Message?.GetType().Name ?? "(null)",
-                    d.Target?.ToString() ?? "(null)",
-                    DescribePostSite());
+                // The logger is resolved here, not per hub at pipeline build (every hub builds this
+                // pipeline, and almost none ever reaches this line), and the stack is captured only
+                // when the Warning will actually be written.
+                var postSiteLogger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(PostSiteLogCategory);
+                if (postSiteLogger?.IsEnabled(LogLevel.Warning) == true)
+                    postSiteLogger.LogWarning(
+                        "PostPipeline: unattributed post site — hub={Hub}, message={MessageType}, target={Target}; posted from:{PostSite}",
+                        syncPipeline.Hub.Address,
+                        d.Message?.GetType().Name ?? "(null)",
+                        d.Target?.ToString() ?? "(null)",
+                        DescribePostSite());
                 return d.Failed(failureReason);
             }
             // Per-message; gate on Debug so the 5 arg evaluations + boxing are
