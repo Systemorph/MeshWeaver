@@ -395,7 +395,13 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
                     parkBudget);
             })
             .Replay();
-        using var connection = received.Connect();
+        // NOT `using`: disposed at the end of the GREEN path only. If the regression returns, the
+        // two threads below are blocked on each other's Monitor for good — nothing can release a
+        // lock-order deadlock from outside — and tearing the composition down would walk into those
+        // same gates from the test thread, turning a named assertion failure into a hung teardown.
+        // Both parks are bounded, so no callback of this test is left waiting on a flag; what is
+        // left behind on failure is the deadlock itself, on background threads.
+        var connection = received.Connect();
 
         outer.OnNext(1);
         upstreamA.OnNext(1);
@@ -439,6 +445,10 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
                 TestContext.Current.CancellationToken);
         terminal.Kind.Should().Be(NotificationKind.OnError);
         terminal.Exception.Should().BeOfType<ObjectDisposedException>();
+
+        // The worker has provably returned (asserted above), so joining it cannot park the test.
+        subscriber.Join();
+        connection.Dispose();
     }
 
     /// <summary>
