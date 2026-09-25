@@ -110,29 +110,72 @@ public static class OwnedConnectionExtensions
         // eviction Catch included) could ever see it. The release signal fires only when the OWNER is
         // disposed — never when a terminated chain merely drops its handle, which must keep replaying
         // its settled value to late subscribers.
-        var released = new Subject<Unit>();
+        var released = new ReleaseSignal(lane, ownerName);
         var shared = source.AutoConnect(minObservers,
-            connection => Register(source, owner, connection, () => Release(lane, released, ownerName)));
+            connection => Register(source, owner, connection, released.Fire));
 
         // 🚨 Refuse, never park. After the release the replay subject still hands a late subscriber
         // whatever it buffered and then goes silent — the "burst then dead silence" wedge. A
         // refusal names the owner and terminates.
+        //
+        // 🚨 And refuse ON THE LANE, never on the subscriber's thread. A refusal is the same
+        // terminal as a release, and a consumer composing this connection with its siblings (the
+        // permission fold: a SelectMany over Zips of cache queries) receives both: the lane's release
+        // of one inner held that Zip's gate on its way to the SelectMany gate, while a synchronous
+        // refusal of the next inner held the SelectMany gate on its way to dispose that Zip — a
+        // lock-order deadlock between the lane and whatever thread was subscribing, which in a
+        // layout render is a pooled leaf that teardown then waits on forever (see ReleaseLane).
         return Observable.Defer(() => owner.IsDisposed
-            ? Observable.Throw<T>(Disposed(ownerName))
-            : shared.TakeUntil(released));
+            ? lane.Refuse<T>(() => Disposed(ownerName))
+            : shared.TakeUntil(released.Signal));
     }
 
     /// <summary>
-    /// Terminates every subscriber still attached to a released connection with the same
-    /// <see cref="ObjectDisposedException"/> a late subscriber is refused with. Delivered on the
-    /// ThreadPool, never on the disposing thread: the owner's release runs inside a hub's ShutDown
-    /// phase, and a subscriber's error continuation must not run on that turn (the IoPool refusal
-    /// makes the same trade, #4530). 🚨 And delivered on the LANE, never as a work item of its own:
-    /// one owner sweep releases many connections, and their terminals delivered concurrently
-    /// deadlock a consumer that composes them (see <see cref="ReleaseLane"/>).
+    /// The owner's release, as seen by the subscribers of ONE shared connection: every subscriber
+    /// still attached is terminated with the same <see cref="ObjectDisposedException"/> a late
+    /// subscriber is refused with, and every terminal — for the attached and for one that attaches
+    /// after the release — is delivered on the lane.
+    ///
+    /// <para>Delivered on the ThreadPool, never on the disposing thread: the owner's release runs
+    /// inside a hub's ShutDown phase, and a subscriber's error continuation must not run on that turn
+    /// (the IoPool refusal makes the same trade, #4530). Delivered on the LANE, never as a work item
+    /// of its own: one owner sweep releases many connections, and their terminals delivered
+    /// concurrently deadlock a consumer that composes them (see <see cref="ReleaseLane"/>).</para>
+    ///
+    /// <para>🚨 Why not a bare <see cref="Subject{T}"/>. A terminated subject replays its error
+    /// SYNCHRONOUSLY to a late subscriber, on that subscriber's thread — and a subscriber can pass the
+    /// <c>IsDisposed</c> check a moment before the owner's disposal, then subscribe the signal a
+    /// moment after the lane delivered it. That is the refusal-on-the-subscriber's-thread race again,
+    /// one line later. A subscriber that arrives once the signal has fired is refused on the lane
+    /// instead. The lock guards one flag and a subscribe to a subject that has not terminated, so
+    /// nothing is ever emitted under it.</para>
     /// </summary>
-    private static void Release(ReleaseLane lane, Subject<Unit> released, string ownerName)
-        => lane.Post(() => released.OnError(Disposed(ownerName)));
+    private sealed class ReleaseSignal(ReleaseLane lane, string ownerName)
+    {
+        private readonly Subject<Unit> released = new();
+        private readonly object gate = new();
+        private bool fired;
+
+        /// <summary>Fires the release: every attached subscriber errors, on the lane.</summary>
+        public void Fire() => lane.Post(() =>
+        {
+            lock (gate)
+                fired = true;
+            // Outside the lock: the error continuations run the subscribers' teardown.
+            released.OnError(Disposed(ownerName));
+        });
+
+        /// <summary>The signal a subscriber takes its terminal from — never on its own thread.</summary>
+        public IObservable<Unit> Signal => Observable.Create<Unit>(observer =>
+        {
+            lock (gate)
+            {
+                if (!fired)
+                    return released.Subscribe(observer);
+            }
+            return lane.Refuse<Unit>(() => Disposed(ownerName)).Subscribe(observer);
+        });
+    }
 
     /// <summary>
     /// <c>AutoConnect(minObservers)</c> whose connection is owned by <paramref name="hub"/>: released
