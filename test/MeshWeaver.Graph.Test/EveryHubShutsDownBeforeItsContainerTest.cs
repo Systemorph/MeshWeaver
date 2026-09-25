@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -141,7 +142,7 @@ public class EveryHubShutsDownBeforeItsContainerTest(ITestOutputHelper output)
             await Mesh.GetWorkspace().GetMeshNodeStream(nodePath)
                 .Where(n => n is not null)
                 .Take(1)
-                .Should().Within(TimeSpan.FromSeconds(30)).Emit("the node's own hub must come up", ct);
+                .Should().Within(TestTimeouts.Convergence).Emit("the node's own hub must come up", ct);
             var nodeHub = Mesh.GetHostedHub(new Address(nodePath), HostedHubCreation.Never);
             nodeHub.Should().NotBeNull("reading the node through the mesh activates its per-node hub");
 
