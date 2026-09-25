@@ -208,13 +208,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             {
                 var (matched, parsedQuery, _) = collected;
 
-                // Satellite paths and partition roots are not content-query results.
-                // 🚨 The rules live in IsExcludedFromResults — one predicate, documented there.
-                // This read is now the SOLE source of rows for both the Initial snapshot and every
-                // live delta (#1250 removed the live path's parallel admission of raw notification
-                // entities), so applying them here applies them everywhere.
-                IEnumerable<object> matchedNodes =
-                    matched.Where(n => !IsExcludedFromResults(n, parsedQuery));
+                // Satellite paths and partition roots are not content-query results. The rules live
+                // in IsExcludedFromResults and are applied PER QUERY inside CollectMatched — see the
+                // note there for why they cannot be applied here against the first query alone.
+                IEnumerable<object> matchedNodes = matched;
 
                 // 🚨 EVERY branch below ends in PathTiebreak, and the `else` exists at all for
                 // that reason: the sequence this produces is CLIPPED a few lines down
@@ -362,9 +359,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     }
 
     /// <summary>
-    /// The result-set exclusions this provider applies to EVERY emission. They live in
-    /// <see cref="RunQueryNodes"/> — the single read behind the Initial snapshot AND every live
-    /// delta (<see cref="ProcessBatch{T}"/> only diffs that read's output).
+    /// The result-set exclusions this provider applies to EVERY emission. They are applied in
+    /// <see cref="CollectMatched"/>, per query, inside the single read behind the Initial snapshot
+    /// AND every live delta (<see cref="ProcessBatch{T}"/> only diffs that read's output) — each
+    /// node judged against the query that found it (MeshWeaver#5315).
     ///
     /// <para>🚨 <b>One predicate, one path (#1193, #1250).</b> The snapshot used to own these rules
     /// inline while the live path ran a parallel admission of raw change-notification entities on
@@ -501,7 +499,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
         ParsedQuery? firstParsed = null;
         var basePaths = new List<string>(effectiveQueries.Count);
-        var perQuery = new List<IObservable<object>>(effectiveQueries.Count);
+        var resolved = new List<(ParsedQuery Parsed, QueryScope Scope, string BasePath, string? Context)>(
+            effectiveQueries.Count);
 
         for (var qi = 0; qi < effectiveQueries.Count; qi++)
         {
@@ -510,30 +509,61 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 parsedQuery = parsedQuery with { IsMain = true };
 
             var (basePath, effectiveScope) = ResolvePathAndScope(parsedQuery, request);
-            var context = request.Context ?? parsedQuery.Context;
             basePaths.Add(basePath);
             if (qi == 0)
                 firstParsed = parsedQuery;
-
-            // FindMatchingNodes emits objects reactively; apply the RLS validator
-            // (when useSecurityFilter) inline. Dedup runs once on the materialised
-            // set below — cheaper to express, identical union result.
-            perQuery.Add(
-                FindMatchingNodes(parsedQuery, effectiveScope, basePath, userId, context, request, options, completeness)
-                    .SelectMany(node =>
-                    {
-                        if (node is MeshNode meshNode)
-                            return useSecurityFilter
-                                ? ValidateRead(meshNode, userId).Where(valid => valid).Select(_ => (object)meshNode)
-                                : Observable.Return<object>(meshNode);
-                        return Observable.Return(node);
-                    }));
+            resolved.Add((parsedQuery, effectiveScope, basePath, request.Context ?? parsedQuery.Context));
         }
 
-        // Concat preserves query order (query #0's hits before #1's) — same ordering
-        // as the old sequential per-query ForEachAsync fold. ToList materialises the
-        // union once; the dedup fold below is in-memory, off the I/O path.
-        return perQuery.Concat()
+        // 🚨 ONE batched read for EVERY exact-path probe of EVERY query in the request
+        // (MeshWeaver#5315 / #1186). Each query used to issue its own ReadMany, and the queries run
+        // one after the other (the Concat below), so a request of N exact-path queries cost N
+        // SEQUENTIAL storage round-trips — each of which, on Postgres, first waits its turn on the
+        // process-wide `pg-read:` pool. The Store's standard-pack reconcile asks ONE request for a
+        // viewer's entitlement records over every free pack (two `path:` queries per pack, ~30 on
+        // memex-cloud), and those 30 serial round-trips are what ran past the query fan-in's 15 s
+        // Initial budget (`path:AppleMaps/_Entitlements/{user} select:path`, the first query of that
+        // request, 12 times on 2026-09-24). Reading the union once turns N round-trips into one
+        // ReadMany; a backend with a batched override answers it in one statement per table.
+        var probePaths = resolved
+            .SelectMany(q => ProbePaths(q.Parsed, q.BasePath, q.Scope))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return ReadProbes(probePaths, request, options, completeness)
+            .SelectMany(probed => resolved
+                .Select(q =>
+                    // FindMatchingNodes emits objects reactively; apply the RLS validator
+                    // (when useSecurityFilter) inline. Dedup runs once on the materialised
+                    // set below — cheaper to express, identical union result.
+                    FindMatchingNodes(q.Parsed, q.Scope, q.BasePath, userId, q.Context, request, options,
+                            completeness, probed)
+                        // Satellite paths and partition roots are not content-query results — one
+                        // predicate, IsExcludedFromResults, documented there. This read is the SOLE
+                        // source of rows for the Initial and every live delta (#1250), so applying it
+                        // here applies it everywhere.
+                        //
+                        // 🚨 Judged against the query that FOUND the node, never the request's first
+                        // query. It used to run once over the union against the first query's parse,
+                        // so a request pairing `path:{plugin}/_Entitlements/{viewer}` with
+                        // `path:{plugin}/_Access/{viewer}_Access` dropped every `_Access` row: the
+                        // first query does not target a configured satellite segment, so the second
+                        // query's own satellite rows were excluded as if nobody had asked for them.
+                        // The Store's entitlement prefetch is exactly that request, and it read every
+                        // viewer's grants as absent.
+                        .Where(node => !IsExcludedFromResults(node, q.Parsed))
+                        .SelectMany(node =>
+                        {
+                            if (node is MeshNode meshNode)
+                                return useSecurityFilter
+                                    ? ValidateRead(meshNode, userId).Where(valid => valid).Select(_ => (object)meshNode)
+                                    : Observable.Return<object>(meshNode);
+                            return Observable.Return(node);
+                        }))
+                // Concat preserves query order (query #0's hits before #1's) — same ordering
+                // as the old sequential per-query ForEachAsync fold. ToList materialises the
+                // union once; the dedup fold below is in-memory, off the I/O path.
+                .Concat())
             .ToList()
             .Select(all =>
             {
@@ -558,6 +588,65 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
                 var matched = matchedByPath.Values.Cast<object>().Concat(nonNodeMatched).ToList();
                 return ((IReadOnlyList<object>)matched, firstParsed ?? _parser.Parse(""), (IReadOnlyList<string>)basePaths);
+            });
+    }
+
+    /// <summary>
+    /// The exact paths ONE query probes with a point read: the full IN list of a multi-value
+    /// <c>path:a|b|c</c>, otherwise the self/ancestor paths its scope includes
+    /// (<see cref="GetPathsForScope"/>). <c>source:activity</c> and <c>scope:nextlevel</c> probe
+    /// nothing — both are answered by a walk alone. Blank paths are dropped. Pure.
+    /// </summary>
+    private static IReadOnlyList<string> ProbePaths(ParsedQuery parsedQuery, string basePath, QueryScope effectiveScope)
+    {
+        if (parsedQuery.Source == QuerySource.Activity || effectiveScope == QueryScope.NextLevel)
+            return [];
+        var paths = parsedQuery.Paths is { Count: > 1 } multi
+            ? multi.ToList()
+            : GetPathsForScope(basePath, effectiveScope);
+        return paths.Select(NormalizePath).Where(p => !string.IsNullOrEmpty(p)).ToList();
+    }
+
+    /// <summary>
+    /// The request's ONE batched read of every probed path (see <see cref="CollectMatched"/>),
+    /// indexed by path so each query picks out the paths IT asked for. Emits exactly once — an
+    /// empty index when nothing is probed, without touching the store.
+    ///
+    /// <para>🚨 A fault here keeps the rows that did arrive and records the drop on
+    /// <paramref name="completeness"/>, so the Initial says it is short
+    /// (<see cref="QueryResultChange{T}.SnapshotIncomplete"/>, MeshWeaver#1186) — exactly what each
+    /// query's own probe did before the reads were batched. A teardown cancellation is not recorded
+    /// (see <see cref="PipelineFaultOrStopped{T}"/>).</para>
+    /// </summary>
+    private IObservable<IReadOnlyDictionary<string, MeshNode>> ReadProbes(
+        IReadOnlyList<string> paths, MeshQueryRequest request, JsonSerializerOptions options,
+        ReadCompleteness? completeness)
+    {
+        if (paths.Count == 0)
+            return Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
+                new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase));
+        return Observable.Defer(() =>
+            {
+                try { return persistence.ReadMany(paths, options); }
+                catch (Exception ex)
+                {
+                    completeness?.RecordDroppedRead();
+                    logger?.LogWarning(ex,
+                        "[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously paths=[{Paths}]",
+                        string.Join(",", paths));
+                    return Observable.Empty<MeshNode>();
+                }
+            })
+            .Catch<MeshNode, Exception>(ex =>
+                PipelineFaultOrStopped<MeshNode>(ex, "ExactScope", request, string.Join(",", paths), completeness))
+            .ToList()
+            .Select(nodes =>
+            {
+                var byPath = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+                foreach (var node in nodes)
+                    if (!string.IsNullOrEmpty(node.Path))
+                        byPath[NormalizePath(node.Path)] = node;
+                return (IReadOnlyDictionary<string, MeshNode>)byPath;
             });
     }
 
@@ -600,7 +689,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         string? context,
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        ReadCompleteness? completeness)
+        ReadCompleteness? completeness,
+        IReadOnlyDictionary<string, MeshNode> probed)
     {
         // source:activity is a join with the `_activity` satellites — pushed
         // down to SQL by PostgreSqlSqlGenerator (INNER JOIN activities ON
@@ -688,34 +778,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // this is "probe every candidate ancestor and take the deepest hit", so
         // exact probes across the whole list are exactly what we want — no scope
         // walk on top.
-        var pathsToSearch = parsedQuery.Paths is { Count: > 1 } multi
-            ? multi.ToList()
-            : GetPathsForScope(basePath, effectiveScope);
         var emittedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Exact-path probes — batched via IStorageAdapter.ReadMany so the
-        // multi-value `path:a|b|c` URL-resolver query (and any other multi-path
-        // probe) collapses to ONE round-trip on backends that support it
-        // (Postgres: WHERE namespace = $1 AND id IN (…)). FileSystem / InMemory
-        // fall back to the default Merge of N Reads — fine, no per-call
-        // latency to amortise.
-        var nonEmptyPaths = pathsToSearch
-            .Where(p => !string.IsNullOrEmpty(p))
-            .ToList();
-        var exactPathNodes = (nonEmptyPaths.Count == 0
-                ? Observable.Empty<MeshNode>()
-                : Observable.Defer(() =>
-                {
-                    try { return persistence.ReadMany(nonEmptyPaths, options); }
-                    catch (Exception ex)
-                    {
-                        completeness?.RecordDroppedRead();
-                        logger?.LogWarning(ex,
-                            "[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously paths=[{Paths}]",
-                            string.Join(",", nonEmptyPaths));
-                        return Observable.Empty<MeshNode>();
-                    }
-                }))
+        // Exact-path probes — answered from the request's ONE batched read (see CollectMatched and
+        // ReadProbes): the multi-value `path:a|b|c` URL-resolver query, and every exact `path:`
+        // query of a multi-query request, cost one ReadMany between them instead of one each.
+        var exactPathNodes = ProbePaths(parsedQuery, basePath, effectiveScope)
+            .Select(path => probed.TryGetValue(path, out var hit) ? hit : null)
+            .Where(node => node is not null)
+            .Select(node => node!)
+            .ToList()
+            .ToInlineObservable()
             .Where(node => _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
