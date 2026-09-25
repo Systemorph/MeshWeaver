@@ -1262,12 +1262,9 @@ public static class MeshExtensions
                     // ORIGINAL cause plus the rollback outcome.
                     logger.LogDebug("[CreateNode] step=post-handlers-start path={Path}", resultNode.Path);
                     hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_START");
-                    // 🚨 Deferred, like every builder this chain calls from inside a Subscribe callback:
-                    // it resolves the handling hub's services EAGERLY, and a hub disposed while the
-                    // write was in flight would otherwise throw out of this callback onto the pool
-                    // thread that completed the save — an unhandled exception, not an error arm
-                    // (see ActivatePendingControlPlane).
-                    Observable.Defer(() => RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger))
+                    // Deferred inside (as is CompensateFailedCreate below): a hub disposed while the
+                    // write was in flight must reach the error arm, never throw out of this callback.
+                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
                         .Subscribe(
                             _ => { },
                             ex =>
@@ -1277,7 +1274,7 @@ public static class MeshExtensions
                                 logger.LogError(ex,
                                     "Post-creation handler chain errored at {Path} — rolling the create back (#638)",
                                     resultNode.Path);
-                                Observable.Defer(() => CompensateFailedCreate(hub, resultNode, mode, logger))
+                                CompensateFailedCreate(hub, resultNode, mode, logger)
                                     .Subscribe(
                                         // 🚨 {error} and {outcome} stay as the upstream fault's
                                         // and the compensation's own English. A named argument
@@ -1774,70 +1771,78 @@ public static class MeshExtensions
             return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
                 $"The node at '{created.Path}' existed before this request, so nothing was rolled back."));
 
-        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (persistence is null)
-            return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
-                "Nothing was persisted (no storage adapter), so there was nothing to roll back."));
+        // 🚨 DEFERRED, with the Catch below OUTSIDE it: this builder resolves the handling hub's
+        // services, and both callers (the single create's error arm, the bulk rollback's Concat)
+        // may run it after that hub is disposed. Resolved eagerly, the ObjectDisposedException left
+        // the caller's Subscribe callback — or aborted the bulk Concat before later ghosts were
+        // compensated — instead of becoming the Undetermined outcome every other rollback fault is.
+        return Observable.Defer(() =>
+        {
+            var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+            if (persistence is null)
+                return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
+                    "Nothing was persisted (no storage adapter), so there was nothing to roll back."));
 
-        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
+            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-        return persistence.Read(created.Path, hub.JsonSerializerOptions)
-            .Take(1)
-            .DefaultIfEmpty(null)
-            .SelectMany(stored =>
-            {
-                if (stored is null)
-                    return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
-                        $"No row remains at '{created.Path}' — nothing to roll back."));
-
-                // 🚨 NO STAMP AT ALL IS NOT "SOMEBODY ELSE'S ROW" (#4506). The create path always
-                // stamps CreatedDate, so `created.CreatedDate` is never default here — but the
-                // STORED value can be, and then the lineage check has established NOTHING rather
-                // than established a mismatch. It happens for real: on Postgres the authorship
-                // columns live only on `mesh_nodes`, and every satellite table (`_Access`,
-                // `_Thread`, `_Activity`, `_Comment`, `Source`, …) is read with
-                // `NULL::timestamptz AS created_date`, so a rollback aimed at a satellite path
-                // reads `default` for EVERY row, ours included. Answering LeftInPlace there told
-                // the operator a specific, false thing — "the stored row is no longer the one this
-                // request wrote" — about a row nothing was compared on. Undetermined is the state
-                // that says what actually happened, and it is quoted for a human exactly the same
-                // way; neither state deletes anything.
-                if (stored.CreatedDate == default)
+            return persistence.Read(created.Path, hub.JsonSerializerOptions)
+                .Take(1)
+                .DefaultIfEmpty(null)
+                .SelectMany(stored =>
                 {
-                    logger.LogError(
-                        "[CreateNode] rollback UNDETERMINED at {Path}: the store returned a row carrying NO creation "
-                        + "stamp, so it could not be compared with this create's ({OurCreated:O}) — not deleting a row "
-                        + "whose lineage was never established",
-                        created.Path, created.CreatedDate);
-                    return Observable.Return(new RollbackOutcome(RollbackDisposition.Undetermined,
-                        $"The node at '{created.Path}' was NOT rolled back: the store returned the row without a "
-                        + "creation stamp, so whether it is the one this request wrote could NOT be established. "
-                        + "Check it manually before retrying."));
-                }
+                    if (stored is null)
+                        return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
+                            $"No row remains at '{created.Path}' — nothing to roll back."));
 
-                if (stored.CreatedDate != created.CreatedDate)
-                {
-                    logger.LogError(
-                        "[CreateNode] rollback STOOD DOWN at {Path}: the stored row (created {StoredCreated:O}) is not "
-                        + "the one this create wrote (created {OurCreated:O}) — refusing to delete a node we did not create",
-                        created.Path, stored.CreatedDate, created.CreatedDate);
-                    return Observable.Return(new RollbackOutcome(RollbackDisposition.LeftInPlace,
-                        $"The node at '{created.Path}' was NOT rolled back: the stored row is no longer the one this "
-                        + "request wrote. Remove it manually before retrying."));
-                }
+                    // 🚨 NO STAMP AT ALL IS NOT "SOMEBODY ELSE'S ROW" (#4506). The create path always
+                    // stamps CreatedDate, so `created.CreatedDate` is never default here — but the
+                    // STORED value can be, and then the lineage check has established NOTHING rather
+                    // than established a mismatch. It happens for real: on Postgres the authorship
+                    // columns live only on `mesh_nodes`, and every satellite table (`_Access`,
+                    // `_Thread`, `_Activity`, `_Comment`, `Source`, …) is read with
+                    // `NULL::timestamptz AS created_date`, so a rollback aimed at a satellite path
+                    // reads `default` for EVERY row, ours included. Answering LeftInPlace there told
+                    // the operator a specific, false thing — "the stored row is no longer the one this
+                    // request wrote" — about a row nothing was compared on. Undetermined is the state
+                    // that says what actually happened, and it is quoted for a human exactly the same
+                    // way; neither state deletes anything.
+                    if (stored.CreatedDate == default)
+                    {
+                        logger.LogError(
+                            "[CreateNode] rollback UNDETERMINED at {Path}: the store returned a row carrying NO creation "
+                            + "stamp, so it could not be compared with this create's ({OurCreated:O}) — not deleting a row "
+                            + "whose lineage was never established",
+                            created.Path, created.CreatedDate);
+                        return Observable.Return(new RollbackOutcome(RollbackDisposition.Undetermined,
+                            $"The node at '{created.Path}' was NOT rolled back: the store returned the row without a "
+                            + "creation stamp, so whether it is the one this request wrote could NOT be established. "
+                            + "Check it manually before retrying."));
+                    }
 
-                // The rollback is infrastructure repairing its OWN half-finished write, on a node
-                // whose ownership grant is exactly what failed — so it runs as System (the caller
-                // provably cannot authorize a delete on a partition nobody was granted).
-                return AsSystem(accessService,
-                        () => persistence.DeleteAndPublish(created.Path, changeFeed, created.NodeType).Take(1))
-                    .Do(_ => logger.LogWarning(
-                        "[CreateNode] rolled back partially-created node at {Path} — the create is all-or-nothing (#638)",
-                        created.Path))
-                    .Select(_ => new RollbackOutcome(RollbackDisposition.Removed,
-                        $"The partially-created node at '{created.Path}' was rolled back; the create can be retried."));
-            })
+                    if (stored.CreatedDate != created.CreatedDate)
+                    {
+                        logger.LogError(
+                            "[CreateNode] rollback STOOD DOWN at {Path}: the stored row (created {StoredCreated:O}) is not "
+                            + "the one this create wrote (created {OurCreated:O}) — refusing to delete a node we did not create",
+                            created.Path, stored.CreatedDate, created.CreatedDate);
+                        return Observable.Return(new RollbackOutcome(RollbackDisposition.LeftInPlace,
+                            $"The node at '{created.Path}' was NOT rolled back: the stored row is no longer the one this "
+                            + "request wrote. Remove it manually before retrying."));
+                    }
+
+                    // The rollback is infrastructure repairing its OWN half-finished write, on a node
+                    // whose ownership grant is exactly what failed — so it runs as System (the caller
+                    // provably cannot authorize a delete on a partition nobody was granted).
+                    return AsSystem(accessService,
+                            () => persistence.DeleteAndPublish(created.Path, changeFeed, created.NodeType).Take(1))
+                        .Do(_ => logger.LogWarning(
+                            "[CreateNode] rolled back partially-created node at {Path} — the create is all-or-nothing (#638)",
+                            created.Path))
+                        .Select(_ => new RollbackOutcome(RollbackDisposition.Removed,
+                            $"The partially-created node at '{created.Path}' was rolled back; the create can be retried."));
+                });
+        })
             .Catch<RollbackOutcome, Exception>(ex =>
             {
                 // 🚨 UNDETERMINED, not "still present". The fault may be the READ that would have
@@ -5471,6 +5476,16 @@ public static class MeshExtensions
     /// <c>Observable.FromAsync</c>; no <c>await</c> in handler code itself.
     /// </summary>
     private static IObservable<System.Reactive.Unit> RunPostCreationHandlersObs(
+        IMessageHub hub,
+        MeshNode node,
+        string? createdBy,
+        ILogger logger)
+        // 🚨 DEFERRED: the builder resolves the handling hub's services, and its callers run it from
+        // inside Subscribe callbacks that may fire after that hub is disposed — an eager
+        // ObjectDisposedException would leave the callback instead of reaching its error arm.
+        => Observable.Defer(() => BuildPostCreationHandlers(hub, node, createdBy, logger));
+
+    private static IObservable<System.Reactive.Unit> BuildPostCreationHandlers(
         IMessageHub hub,
         MeshNode node,
         string? createdBy,
