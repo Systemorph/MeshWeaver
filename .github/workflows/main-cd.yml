@@ -3715,12 +3715,20 @@ jobs:
   #     the hour — so failing there would be noise, and noise is how a real red gets ignored.
   delivery-verdict:
     name: "CD delivered, or had a good reason not to"
-    # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
-    # publish actually happened while it can only see two of the nine jobs that make it happen.
+    # 🚨 Every PLATFORM delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert
+    # that a publish actually happened while it can only see two of the jobs that make it happen.
+    #
+    # 🚨 AND NOTHING ELSE IS — no `plugins-*` job and no `satellite-compat*` job, directly or through
+    # a need of a need (policy `platform-backwards-compatibility`, Doc/Architecture/ContinuousDeliveryContract
+    # → "The ladder"). Platform builds are backwards compatible within a compatibility epoch, so the
+    # platform set rolls FIRST and keeps the plugin bytes an install already runs; the Plugins
+    # re-seal for this build is an independent follow-up (`report-plugins-seal` below). Until this
+    # split a MeshWeaver.Plugins module test (CD 9309/9311/9313/9315/9316/9317/9320, all
+    # `Plugins: pack … / Module tests`) turned the PLATFORM delivery red, handed HEAD on to a
+    # re-publish and filed `ci-failure` ("no deployable image") over a set every install could
+    # already roll to. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds this list, transitively.
     needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote,
-            publish-bake, notify-platform-update, verify-images,
-            plugins-modules, plugins-bake-image, plugins-bake,
-            satellite-compat-image, satellite-compat]
+            publish-bake, notify-platform-update, verify-images]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -3963,9 +3971,6 @@ jobs:
             publish-bake=${{ needs.publish-bake.result }}
             notify-platform-update=${{ needs.notify-platform-update.result }}
             verify-images=${{ needs.verify-images.result }}
-            plugins-modules=${{ needs.plugins-modules.result }}
-            plugins-bake-image=${{ needs.plugins-bake-image.result }}
-            plugins-bake=${{ needs.plugins-bake.result }}
         run: |
           set -euo pipefail
           bad=""
@@ -3987,37 +3992,333 @@ jobs:
       # was silent about it. That is the same "a skipped leg ticks like a delivered one" defect the
       # step above exists to close, on the path that now performs repairs.
       #
-      # Two legs on that path, and each is judged only when it was DUE:
-      #   * `publish-bake` runs on every bake-only tick, so it is always judged;
-      #   * the three `plugins-*` legs run only when `gate.plugins_seal_due` is `true` — when it is
-      #     not, they are correctly `skipped` and naming them would cry wolf on every hourly tick.
-      # `gate` itself is not listed: this job cannot reach this step with a gate that did not run
-      # (the first step refuses an empty verdict), and `bake_only` is one of its outputs.
+      # ONE leg on that path belongs to the PLATFORM: `publish-bake` runs on every bake-only tick, so
+      # it is always judged here. The three `plugins-*` legs a due seal re-attempt runs are judged by
+      # `report-plugins-seal` — never here — because a Plugins re-seal is not platform delivery
+      # (policy `platform-backwards-compatibility`). `gate` itself is not listed: this job cannot
+      # reach this step with a gate that did not run (the first step refuses an empty verdict), and
+      # `bake_only` is one of its outputs.
       - name: A reconcile that re-asserted anything must have RUN those legs
         if: needs.gate.outputs.bake_only == 'true'
         env:
-          SEAL_DUE: ${{ needs.gate.outputs.plugins_seal_due }}
           BAKE_LEGS: >-
             publish-bake=${{ needs.publish-bake.result }}
+        run: |
+          set -euo pipefail
+          bad=""
+          for kv in $BAKE_LEGS; do
+            name="${kv%%=*}"; res="${kv#*=}"
+            if [ "$res" != "success" ]; then bad="$bad $name=$res"; fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::this reconcile re-asserted the platform content bake, but it did not run to success:$bad. With a missing platform bake every pod Roslyn-compiles shipped content at boot. Read the named job."
+            exit 1
+          fi
+          echo "every platform leg this reconcile owed ran and succeeded: $BAKE_LEGS"
+
+      # Make the outcome unmissable on the run page. A 3-second success and a 20-minute delivery
+      # are otherwise identical at a glance, which is how a merged fix sat unshipped.
+      - name: Say plainly what this run did
+        if: always()
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          REASON: ${{ needs.gate.outputs.reason }}
+          SHORT: ${{ needs.gate.outputs.short_sha }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+          # The third verdict (MeshWeaver#3513). Empty unless the step above found a live
+          # publication on this commit — so this is a POSITIVE finding, never a default.
+          DEFERRED_TO: ${{ steps.verdict.outputs.deferred_to }}
+          DEFERRED_STATUS: ${{ steps.verdict.outputs.deferred_status }}
+          DEFERRED_SINCE: ${{ steps.verdict.outputs.deferred_since }}
+        run: |
+          # 🚨 NO-OP is keyed on the gate having been SKIPPED — never on an empty reason. An empty
+          # reason is ALSO what a gate that errored, was cancelled, or produced no outputs looks
+          # like, and this step runs under `if: always()`, so labelling that "NO-OP" would stamp a
+          # broken run with the one label that says nothing was due. (Caught in review.)
+          if [ "$GATE_RESULT" = "skipped" ]; then
+            echo "### ⚪ NO-OP — the gate did not run: not a push to main, so no delivery was due" >> "$GITHUB_STEP_SUMMARY"
+          # 🚨 Ahead of the generic "NO PUBLISH", because those are two different facts and the
+          # summary is where a human decides whether to care. `🕐 NO PUBLISH … (reason: reconcile)`
+          # on a commit whose image set is incomplete reads as the stuck state; naming the run that
+          # IS publishing it is the whole content of MeshWeaver#3513's third verdict.
+          elif [ -n "$DEFERRED_TO" ]; then
+            echo "### ⏳ DEFERRED for \`${SHORT}\` — run [${DEFERRED_TO}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${DEFERRED_TO}) is \`${DEFERRED_STATUS}\` on this commit since ${DEFERRED_SINCE}. The image set is incomplete because that publication is still creating it — a correct no-op, not a stuck delivery (#3513)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
+            echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ]; then
+            echo "### ❌ DELIVERY FAILED for \`${SHORT}\` — the gate decided to publish but promote=${PROMOTE_RESULT}; see the leg check above" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$REASON" ]; then
+            echo "### 🕐 NO PUBLISH for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ❌ INCONCLUSIVE — gate=${GATE_RESULT} produced no verdict; this run is red above" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ───────────── THE LANE HANDS HEAD ON WHEN IT LETS GO OF IT (MeshWeaver#4652) ─────────────
+      # 🚨 A DEFERRAL IS A PROMISE. THIS IS THE STEP THAT KEEPS IT.
+      #
+      # The push lane is one concurrency group with `cancel-in-progress: false`, so GitHub holds
+      # ONE run in flight and ONE pending, and every further arrival REPLACES the pending one. That
+      # supersede rule is CORRECT and must stay — measured over the 21.7 h to 2026-09-17T19:29Z:
+      # 77 push-lane arrivals (median gap 8.3 min) against 14 runs that actually executed, whose
+      # wall clocks ran 35–107 min (median ~67). Not discarding would serialize 77 × ~67 min ≈ 86 h
+      # of lane time into a 21.7 h window: the lane would fall behind without bound and every
+      # publication would ship a commit hours stale. Discarding queued work is the only reason the
+      # lane keeps up at all — it ran 16.1 h busy out of 21.7 h, 74 % saturated.
+      #
+      # What is NOT correct is what the discard does to the two liveness probes. A run that is
+      # `pending` has executed nothing — measured: `jobs.total_count == 0` — and GitHub may delete
+      # it without ever running it. Both probes nevertheless read it as "a publication is in
+      # flight": `gate`'s #3376 probe DEFERS to it, and `delivery-verdict`'s #3513 probe SUPPRESSES
+      # the stuck-delivery alarm on it. Neither ever learns that the run it trusted was discarded.
+      # Measured on three consecutive hourly reconciles on 2026-09-17 — every one of them:
+      #   16:31Z run 35247143507 → deferred to 35246058388 → cancelled 16:37:35Z
+      #   17:26Z run 35252772696 → deferred to 35252764043 → cancelled 17:30:35Z, jobs.total_count 0
+      #   18:35Z run 35259738026 → deferred to 35259392545 → cancelled 18:42:33Z, jobs.total_count 0
+      # so the ONLY backstop for a failed or discarded cycle stood down, silently, on every tick.
+      #
+      # 🚨 THE FIX IS NOT TO NARROW THE PROBE. "Pending" genuinely means "will build" whenever the
+      # run survives (2026-09-10, workflow_run 34506317727 did), and a pending run has no job count
+      # to tell the two apart — the ambiguity is irreducible AT PROBE TIME. It is not irreducible
+      # AT RELEASE TIME: the run holding the lane is the one party that can see both what it built
+      # and what HEAD is now, and it sees it at the exact moment the lane frees. So the obligation
+      # is DISCHARGED here rather than promised there, and it needs no carrier, no marker and no
+      # state store — which is what the Continuous Delivery contract requires.
+      #
+      # 🚨 BOUNDED AT ONE HOP, BY CONSTRUCTION — this is a drain, never a retry loop. A run that was
+      # ITSELF dispatched does not dispatch again (`HANDOFF_ELIGIBLE` below), so one terminating
+      # lane holder produces at most ONE extra run. Without that, a deterministic promote failure
+      # would hand itself on forever; with it, the chain stops and `verdict` reds exactly as it does
+      # today. The dispatched run is additionally budgeted by the existing per-commit heal ledger
+      # (MAX_ATTEMPTS), which it consumes like any other reconcile.
+      #
+      # 🚨 IT COSTS ALMOST NOTHING, because it is gated on the state that makes a handoff MEAN
+      # something: HEAD's required check already GREEN, and no run of this workflow queued or
+      # running on HEAD. A green HEAD normally already has its own `workflow_run` CD run, so the
+      # probe finds a successor and this step dispatches nothing. It fires in precisely the two
+      # holes: HEAD's run was DISCARDED, or it EXECUTED AND FAILED. Everything else exits in three
+      # API reads inside a job that was running anyway.
+      - name: Hand main's HEAD on if this run is leaving it without a publisher
+        id: handoff
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          WORKFLOW_FILE: main-cd.yml
+          SHA: ${{ needs.gate.outputs.sha }}
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          COMPLETE: ${{ needs.gate.outputs.complete }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+          # 🚨 EVERY PLATFORM SHIPPING LEG, not `promote` alone — promote is only phase A, the image
+          # TAGS. A run can tag the set and still fail afterwards in the platform bake or the
+          # verification. Keyed on promote alone, this step would call such a run "HEAD's
+          # publication", exit before the successor probe, and hand nothing on — silently, in the
+          # one case it was built for. (Caught in review.)
+          #
+          # The criterion for membership is "a failure here means HEAD's PLATFORM publication is
+          # incomplete". Absent on purpose: `preflight`/`gate` (their failure leaves SHA empty, which
+          # exits above), `notify-platform-update` (the release EVENT — rebuilding publishes nothing
+          # new), `satellite-compat*` (the per-build COMPATIBILITY measurement) and the three
+          # `plugins-*` legs. 🚨 Those last three USED to be here (run 35257430439 died in
+          # `plugins-modules` past promote), and that is the coupling policy
+          # `platform-backwards-compatibility` forbids: a Plugins red handed HEAD on to a FULL
+          # re-publish of a platform set that was already complete, minting a new build number over
+          # identical bytes. A missing `plugins` publication is repaired by the reconcile's own seal
+          # probe (`gate.plugins_seal_due`), which re-bakes that one leg and moves no tag.
+          DELIVERY_LEGS: >-
+            ${{ needs.portal-image.result }} ${{ needs.portal-image-mirror.result }}
+            ${{ needs.migration-image.result }} ${{ needs.plugin-test-image.result }}
+            ${{ needs.promote.result }} ${{ needs.verify-images.result }}
+            ${{ needs.publish-bake.result }}
+          # 🚨 The one-hop bound. A run that arrived BY a handoff must not emit another, or a
+          # deterministic failure becomes an unbounded dispatch loop. Computed here rather than in
+          # the body because the body may carry no `${{ }}` — `test-cd-steps.py` extracts this step
+          # by its `id:` and refuses a body it would have to rewrite.
+          HANDOFF_ELIGIBLE: ${{ github.event_name != 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          say() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          # `gate` resolves a target for BOTH entry paths, so an EMPTY one means the gate never ran
+          # (a PR-triggered workflow_run) or died before resolving it. Either way this run never
+          # held the delivery lane and is leaving nothing behind.
+          if [ -z "${SHA:-}" ]; then
+            echo "no target commit — this run never held the delivery lane, so it hands nothing on."
+            exit 0
+          fi
+          if [ "$HANDOFF_ELIGIBLE" != "true" ]; then
+            echo "this run was itself dispatched — it does not hand on again (the chain is bounded at one hop). If HEAD is still unpublished, the hourly reconcile and the next merge's run both reach it, and \`verdict\` reds if nobody does."
+            exit 0
+          fi
+
+          # main's HEAD *now*. The gate's reading was taken before any leg ran; asking again is the
+          # whole point — the lane is about to be free and HEAD has usually moved.
+          if ! HEAD=$(gh api "repos/$REPO/commits/main" --jq '.sha') || [ -z "$HEAD" ]; then
+            echo "::warning::could not resolve main's tip, so this run cannot tell whether it is leaving HEAD without a publisher. NOT dispatching — this degrades to the hourly reconcile, which is where delivery stood before this step existed, rather than to silence. The API failure is the bug to chase."
+            exit 0
+          fi
+          SHORT_HEAD="${HEAD:0:9}"
+
+          # Did any SHIPPING leg fail? A `skipped` leg is not a failure — most of them skip on a
+          # bake-only or a no-publish run, which is the ordinary case. Only `failure` and
+          # `cancelled` mean this run did not finish what it started.
+          case " $DELIVERY_LEGS " in
+            *" failure "*|*" cancelled "*) DELIVERY_INCOMPLETE=true ;;
+            *)                             DELIVERY_INCOMPLETE=false ;;
+          esac
+
+          # Nothing is owed when this run IS HEAD's publication — either it shipped the set, or the
+          # gate found one already complete and took the bake-only branch. Two arms are
+          # load-bearing. Without the `COMPLETE` one a bake-only reconcile on HEAD would hand itself
+          # on forever; without `DELIVERY_INCOMPLETE` a run that tagged the set and then failed a
+          # later leg would count as HEAD's publication and hand nothing on.
+          if [ "$HEAD" = "$SHA" ] && [ "$DELIVERY_INCOMPLETE" != "true" ] \
+             && { { [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; } || [ "$COMPLETE" = "true" ]; }; then
+            echo "nothing owed — this run is main's HEAD ($SHORT_HEAD) publication (publish=$PUBLISH promote=$PROMOTE_RESULT complete=$COMPLETE, every shipping leg clean)."
+            exit 0
+          fi
+
+          # 🚨 Only a GREEN head is publishable, so only a green head can be owed anything. Same
+          # instrument and same filter as `gate`'s own read, deliberately: a handoff that disagreed
+          # with the gate about what "green" means would dispatch runs the gate then declines.
+          if ! CHECK=$(gh api "repos/$REPO/commits/$HEAD/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
+                         --jq '[.check_runs[] | select(.name=="Consolidate test results")]
+                               | sort_by(.started_at) | last // {}
+                               | "\(.status // "absent") \(.conclusion // "none")"'); then
+            echo "::warning::could not read the required check on main's tip $SHORT_HEAD, so this run cannot tell whether HEAD is publishable. NOT dispatching — the hourly reconcile remains. Chase the API failure."
+            exit 0
+          fi
+          read -r C_STATUS C_CONCL <<< "$CHECK"
+          if [ "$C_STATUS" != "completed" ] || [ "$C_CONCL" != "success" ]; then
+            echo "nothing owed — main's HEAD $SHORT_HEAD is not publishable yet (\`Consolidate test results\` → $C_STATUS/$C_CONCL). The workflow_run that fires when it settles green IS HEAD's publisher; inventing one now would only be declined."
+            exit 0
+          fi
+
+          # Is anybody else on HEAD? A queued run counts here — not because queuing is a promise,
+          # but because it inherits this obligation: whichever run finally executes runs this same
+          # step when IT terminates. That is what closes the loop the discard used to open.
+          if ! SUCCESSOR=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD&per_page=50" \
+                             --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")]
+                                   | sort_by(.id) | .[0] // empty
+                                   | \"\(.id) \(.status)\""); then
+            echo "::warning::the successor probe on main's tip $SHORT_HEAD failed, so this run cannot tell whether HEAD already has a publisher. NOT dispatching — a dispatch on an unanswered probe would be a guess that costs a duplicate image set (MeshWeaver#3376). The hourly reconcile remains; chase the API failure."
+            exit 0
+          fi
+          if [ -n "$SUCCESSOR" ]; then
+            read -r S_ID S_STATUS <<< "$SUCCESSOR"
+            echo "nothing owed — run $S_ID is \`$S_STATUS\` on main's HEAD $SHORT_HEAD and inherits the obligation: when it terminates it runs this same step. If GitHub discards it instead, the arrival that replaced it targets a newer HEAD and hands THAT on."
+            exit 0
+          fi
+
+          # HEAD is green, has no complete publication from this run, and NOTHING is queued or
+          # running for it. That is the state the hourly tick was supposed to catch and has been
+          # standing down on. Say it, then create the publisher.
+          say "### 🔁 HANDED ON — main's HEAD \`$SHORT_HEAD\` is green and has NO run of this workflow queued or running, so this run is leaving it without a publisher. Dispatching one now rather than waiting up to an hour for the reconcile tick (which stands down whenever a queued run exists — measured 3 of 3 ticks on 2026-09-17)."
+          if ! gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref main; then
+            echo "::error::main's HEAD \`$SHORT_HEAD\` is GREEN, has no complete image set from this run and NOTHING queued or running to publish it — and the dispatch that would have created its publisher FAILED. Delivery is left with no producer but the hourly reconcile, which stands down whenever a queued run appears. Check that this job still holds \`actions: write\`, then dispatch \`$WORKFLOW_FILE\` on main by hand."
+            exit 1
+          fi
+          say "   Dispatched \`$WORKFLOW_FILE\` on \`main\`. It enters the RECONCILE lane (so the push lane cannot discard it), resolves HEAD itself, and consumes the same per-commit heal budget as any other reconcile. It will NOT hand on again — the chain is bounded at one hop."
+
+  # ───────────── THE PLUGINS SEAL FOR THIS SET: REPORTED, NEVER GATING THE PLATFORM ─────────────
+  # 🚨 Policy `platform-backwards-compatibility` (Doc/Architecture/ContinuousDeliveryContract → "The
+  # ladder"): platform builds are backwards compatible within a compatibility epoch, so the PLATFORM
+  # set (build, promote, verify, platform content bake + release marker, the platform-update event)
+  # is delivered and announced on its own, and every install keeps the plugin bytes it already runs
+  # until a Plugins publication for a compatible identity arrives. The `plugins` re-seal this run
+  # attempts for the new identity is therefore an INDEPENDENT FOLLOW-UP: it is judged HERE, in a job
+  # no platform job needs, and its red never touches `delivery-verdict`, the `handoff` step or the
+  # `ci-failure` alert.
+  #
+  # 🚨 A follow-up is not a thing to forget. This job is RED when a DUE seal did not reach `success`
+  # (so the run says so), and its alert step writes the durable artefact — a comment on the open
+  # `cd-plugins-seal` issue, the same ledger the reconcile's seal probe (`gate.plugins_seal_due`)
+  # re-attempts from, under a marker that probe does not count as an attempt. Nothing here is a
+  # skip-trapdoor: a due leg that `skipped` is as red as one that failed, and "not due" is decided
+  # from the gate's own outputs, never from whether an input happens to be present.
+  #
+  # The satellite COMPATIBILITY relay lives here too, because its legs (`satellite-compat`) compile
+  # against THIS run's module bundles (`plugins-modules`): with the bundles missing the measurement
+  # cannot run, and that is a Plugins-side "not measured", never a platform delivery failure. A
+  # measured BREAK is still filed on `ci-failure` by `alert-on-failure`, which needs `satellite-compat`
+  # directly — that red is core's, by measurement.
+  report-plugins-seal:
+    name: "Plugins seal + satellite compatibility for this set (reported — never gates the platform)"
+    needs: [gate, portal-image, promote, plugins-modules, plugins-bake-image, plugins-bake,
+            satellite-compat-image, satellite-compat]
+    if: always() && needs.gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: A DUE Plugins seal must have RUN its legs
+        # 🚨 `seal_legs`, NOT `seal`: `gate` owns a step called `seal`, and `test-cd-steps.py`
+        # extracts a step by `id:` across EVERY job — a second `seal` would hand the harness
+        # whichever it met first, silently.
+        id: seal_legs
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+          SEAL_DUE: ${{ needs.gate.outputs.plugins_seal_due }}
           SEAL_LEGS: >-
             plugins-modules=${{ needs.plugins-modules.result }}
             plugins-bake-image=${{ needs.plugins-bake-image.result }}
             plugins-bake=${{ needs.plugins-bake.result }}
         run: |
           set -euo pipefail
-          legs="$BAKE_LEGS"
-          if [ "$SEAL_DUE" = "true" ]; then legs="$legs $SEAL_LEGS"; fi
+          # Due on exactly the two arms the legs' own `if:` run on: a publishing run whose promote
+          # succeeded, or a reconcile whose seal probe found `plugins` missing for this identity.
+          due=false
+          if [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then due=true; fi
+          if [ "$SEAL_DUE" = "true" ]; then due=true; fi
+          if [ "$due" != "true" ]; then
+            echo "no Plugins seal was due on this run (publish=$PUBLISH promote=$PROMOTE_RESULT plugins_seal_due=${SEAL_DUE:-<none>}) — the legs are correctly skipped."
+            exit 0
+          fi
           bad=""
-          for kv in $legs; do
+          for kv in $SEAL_LEGS; do
             name="${kv%%=*}"; res="${kv#*=}"
             if [ "$res" != "success" ]; then bad="$bad $name=$res"; fi
           done
           if [ -n "$bad" ]; then
-            echo "::error::this reconcile re-asserted the content bake${SEAL_DUE:+ (plugins seal due: $SEAL_DUE)}, but these legs did not run to success:$bad. A reconcile that did not complete its repair leaves the state it was started to heal: with a missing \`plugins\` publication every satellite holds on this set's framework identity, and with a missing platform bake every pod Roslyn-compiles shipped content at boot. Read the named job."
+            echo "bad=$bad" >> "$GITHUB_OUTPUT"
+            echo "::error::the Plugins seal for this set was DUE but these legs did not run to success:$bad. The PLATFORM set is delivered regardless (policy platform-backwards-compatibility): installs roll to it and keep adopting the newest \`plugins\` publication sealed for a COMPATIBLE identity. The reconcile's seal probe re-attempts this one leg (bounded, ledgered on the \`cd-plugins-seal\` issue); read the named job for the cause."
             exit 1
           fi
-          echo "every reconcile leg that was due ran and succeeded: $legs (plugins seal due: ${SEAL_DUE:-false})"
-
+          echo "the due Plugins seal ran and succeeded: $SEAL_LEGS"
+      - name: Record a failed seal on the cd-plugins-seal ledger
+        if: failure() && steps.seal_legs.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHORT: ${{ needs.gate.outputs.short_sha }}
+          PSHORT: ${{ needs.gate.outputs.plugins_short }}
+          BAD: ${{ steps.seal_legs.outputs.bad }}
+        run: |
+          set -euo pipefail
+          gh label create cd-plugins-seal --repo "$REPO" \
+            --description "A sealed platform set whose Plugins publication is missing for its framework identity" \
+            --color D93F0B --force >/dev/null || echo "::warning::could not ensure the cd-plugins-seal label (continuing to file the record)"
+          issue=$(gh issue list --repo "$REPO" --label cd-plugins-seal --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          # 🚨 The marker is `cd-seal-leg-failed:`, NEVER `cd-seal:` — the gate's seal probe counts
+          # `<!-- cd-seal:<pair> -->` comments as ATTEMPTS, and a failure record must not spend budget.
+          body="$(printf '%s\n\n%s\n\n%s' \
+            "<!-- cd-seal-leg-failed:$SHORT-p$PSHORT -->" \
+            "🔴 **The Plugins seal for \`$SHORT-p$PSHORT\` failed** ([run]($RUN_URL)):$BAD" \
+            "The platform set was delivered regardless (policy \`platform-backwards-compatibility\`) — installs keep adopting the newest \`plugins\` publication sealed for a compatible identity. The hourly reconcile re-attempts this leg from the seal probe; read the named job for the cause.")"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --label cd-plugins-seal \
+              --title "CD: a sealed platform set has no \`plugins\` publication for its identity" \
+              --body "$body"
+          fi
       # ─────────── Compatibility: every satellite's NodeTypes against this set ───────────
       # The legs are `satellite-compat`'s (see that job): RED on a break, NOT blocking. This step
       # RELAYS them — one table on the run page, one line per satellite in the log — and holds the
@@ -4129,215 +4430,6 @@ jobs:
             echo "compatibility: no satellite was broken by this build ($VERSION)${advisory:+; advisories: $advisory}"
           fi
 
-      # Make the outcome unmissable on the run page. A 3-second success and a 20-minute delivery
-      # are otherwise identical at a glance, which is how a merged fix sat unshipped.
-      - name: Say plainly what this run did
-        if: always()
-        env:
-          PUBLISH: ${{ needs.gate.outputs.publish }}
-          REASON: ${{ needs.gate.outputs.reason }}
-          SHORT: ${{ needs.gate.outputs.short_sha }}
-          GATE_RESULT: ${{ needs.gate.result }}
-          PROMOTE_RESULT: ${{ needs.promote.result }}
-          # The third verdict (MeshWeaver#3513). Empty unless the step above found a live
-          # publication on this commit — so this is a POSITIVE finding, never a default.
-          DEFERRED_TO: ${{ steps.verdict.outputs.deferred_to }}
-          DEFERRED_STATUS: ${{ steps.verdict.outputs.deferred_status }}
-          DEFERRED_SINCE: ${{ steps.verdict.outputs.deferred_since }}
-          # From the Compatibility step above (2026-09-12): a red satellite leg reds the RUN while
-          # delivery completed, so the headline must say which of the two the colour means.
-          COMPAT_RED: ${{ steps.compat.outputs.compat_red }}
-          COMPAT_RED_LIST: ${{ steps.compat.outputs.compat_red_list }}
-        run: |
-          # 🚨 NO-OP is keyed on the gate having been SKIPPED — never on an empty reason. An empty
-          # reason is ALSO what a gate that errored, was cancelled, or produced no outputs looks
-          # like, and this step runs under `if: always()`, so labelling that "NO-OP" would stamp a
-          # broken run with the one label that says nothing was due. (Caught in review.)
-          if [ "$GATE_RESULT" = "skipped" ]; then
-            echo "### ⚪ NO-OP — the gate did not run: not a push to main, so no delivery was due" >> "$GITHUB_STEP_SUMMARY"
-          # 🚨 Ahead of the generic "NO PUBLISH", because those are two different facts and the
-          # summary is where a human decides whether to care. `🕐 NO PUBLISH … (reason: reconcile)`
-          # on a commit whose image set is incomplete reads as the stuck state; naming the run that
-          # IS publishing it is the whole content of MeshWeaver#3513's third verdict.
-          elif [ -n "$DEFERRED_TO" ]; then
-            echo "### ⏳ DEFERRED for \`${SHORT}\` — run [${DEFERRED_TO}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${DEFERRED_TO}) is \`${DEFERRED_STATUS}\` on this commit since ${DEFERRED_SINCE}. The image set is incomplete because that publication is still creating it — a correct no-op, not a stuck delivery (#3513)." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ] && [ "${COMPAT_RED:-0}" != "0" ]; then
-            echo "### 🚨 DELIVERY COMPLETED — this run is red because this core build BROKE ${COMPAT_RED} satellite(s): ${COMPAT_RED_LIST} (previous image compiled, new image does not). Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
-            echo "✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON}) — the run's colour says COMPATIBILITY, not shipping; see the Compatibility table above and the \`ci-failure\` issue." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
-            echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$PUBLISH" = "true" ]; then
-            echo "### ❌ DELIVERY FAILED for \`${SHORT}\` — the gate decided to publish but promote=${PROMOTE_RESULT}; see the leg check above" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -n "$REASON" ]; then
-            echo "### 🕐 NO PUBLISH for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "### ❌ INCONCLUSIVE — gate=${GATE_RESULT} produced no verdict; this run is red above" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      # ───────────── THE LANE HANDS HEAD ON WHEN IT LETS GO OF IT (MeshWeaver#4652) ─────────────
-      # 🚨 A DEFERRAL IS A PROMISE. THIS IS THE STEP THAT KEEPS IT.
-      #
-      # The push lane is one concurrency group with `cancel-in-progress: false`, so GitHub holds
-      # ONE run in flight and ONE pending, and every further arrival REPLACES the pending one. That
-      # supersede rule is CORRECT and must stay — measured over the 21.7 h to 2026-09-17T19:29Z:
-      # 77 push-lane arrivals (median gap 8.3 min) against 14 runs that actually executed, whose
-      # wall clocks ran 35–107 min (median ~67). Not discarding would serialize 77 × ~67 min ≈ 86 h
-      # of lane time into a 21.7 h window: the lane would fall behind without bound and every
-      # publication would ship a commit hours stale. Discarding queued work is the only reason the
-      # lane keeps up at all — it ran 16.1 h busy out of 21.7 h, 74 % saturated.
-      #
-      # What is NOT correct is what the discard does to the two liveness probes. A run that is
-      # `pending` has executed nothing — measured: `jobs.total_count == 0` — and GitHub may delete
-      # it without ever running it. Both probes nevertheless read it as "a publication is in
-      # flight": `gate`'s #3376 probe DEFERS to it, and `delivery-verdict`'s #3513 probe SUPPRESSES
-      # the stuck-delivery alarm on it. Neither ever learns that the run it trusted was discarded.
-      # Measured on three consecutive hourly reconciles on 2026-09-17 — every one of them:
-      #   16:31Z run 35247143507 → deferred to 35246058388 → cancelled 16:37:35Z
-      #   17:26Z run 35252772696 → deferred to 35252764043 → cancelled 17:30:35Z, jobs.total_count 0
-      #   18:35Z run 35259738026 → deferred to 35259392545 → cancelled 18:42:33Z, jobs.total_count 0
-      # so the ONLY backstop for a failed or discarded cycle stood down, silently, on every tick.
-      #
-      # 🚨 THE FIX IS NOT TO NARROW THE PROBE. "Pending" genuinely means "will build" whenever the
-      # run survives (2026-09-10, workflow_run 34506317727 did), and a pending run has no job count
-      # to tell the two apart — the ambiguity is irreducible AT PROBE TIME. It is not irreducible
-      # AT RELEASE TIME: the run holding the lane is the one party that can see both what it built
-      # and what HEAD is now, and it sees it at the exact moment the lane frees. So the obligation
-      # is DISCHARGED here rather than promised there, and it needs no carrier, no marker and no
-      # state store — which is what the Continuous Delivery contract requires.
-      #
-      # 🚨 BOUNDED AT ONE HOP, BY CONSTRUCTION — this is a drain, never a retry loop. A run that was
-      # ITSELF dispatched does not dispatch again (`HANDOFF_ELIGIBLE` below), so one terminating
-      # lane holder produces at most ONE extra run. Without that, a deterministic promote failure
-      # would hand itself on forever; with it, the chain stops and `verdict` reds exactly as it does
-      # today. The dispatched run is additionally budgeted by the existing per-commit heal ledger
-      # (MAX_ATTEMPTS), which it consumes like any other reconcile.
-      #
-      # 🚨 IT COSTS ALMOST NOTHING, because it is gated on the state that makes a handoff MEAN
-      # something: HEAD's required check already GREEN, and no run of this workflow queued or
-      # running on HEAD. A green HEAD normally already has its own `workflow_run` CD run, so the
-      # probe finds a successor and this step dispatches nothing. It fires in precisely the two
-      # holes: HEAD's run was DISCARDED, or it EXECUTED AND FAILED. Everything else exits in three
-      # API reads inside a job that was running anyway.
-      - name: Hand main's HEAD on if this run is leaving it without a publisher
-        id: handoff
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          WORKFLOW_NAME: ${{ github.workflow }}
-          WORKFLOW_FILE: main-cd.yml
-          SHA: ${{ needs.gate.outputs.sha }}
-          PUBLISH: ${{ needs.gate.outputs.publish }}
-          COMPLETE: ${{ needs.gate.outputs.complete }}
-          PROMOTE_RESULT: ${{ needs.promote.result }}
-          # 🚨 EVERY SHIPPING LEG, not `promote` alone — promote is only phase A, the image TAGS.
-          # A run can tag the set and still fail afterwards in the bake or the Plugins bundle legs,
-          # which is EXACTLY the shape that stalled delivery on 2026-09-17 (run 35257430439 failed
-          # in `plugins-modules` well past promote). Keyed on promote alone, this step would call
-          # such a run "HEAD's publication", exit before the successor probe, and hand nothing on —
-          # silently, in the one case it was built for. (Caught in review.)
-          #
-          # The criterion for membership is "a failure here means HEAD's PUBLICATION is incomplete".
-          # Three needs are deliberately absent: `preflight`/`gate` (their failure leaves SHA empty,
-          # which exits above), `notify-platform-update` (the release EVENT — satellites do not
-          # learn, and rebuilding publishes nothing new), and `satellite-compat*` (the per-build
-          # COMPATIBILITY measurement, whose red this file twice states means "DELIVERY COMPLETED").
-          DELIVERY_LEGS: >-
-            ${{ needs.portal-image.result }} ${{ needs.portal-image-mirror.result }}
-            ${{ needs.migration-image.result }} ${{ needs.plugin-test-image.result }}
-            ${{ needs.promote.result }} ${{ needs.verify-images.result }}
-            ${{ needs.publish-bake.result }} ${{ needs.plugins-modules.result }}
-            ${{ needs.plugins-bake-image.result }} ${{ needs.plugins-bake.result }}
-          # 🚨 The one-hop bound. A run that arrived BY a handoff must not emit another, or a
-          # deterministic failure becomes an unbounded dispatch loop. Computed here rather than in
-          # the body because the body may carry no `${{ }}` — `test-cd-steps.py` extracts this step
-          # by its `id:` and refuses a body it would have to rewrite.
-          HANDOFF_ELIGIBLE: ${{ github.event_name != 'workflow_dispatch' }}
-        run: |
-          set -euo pipefail
-          say() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
-
-          # `gate` resolves a target for BOTH entry paths, so an EMPTY one means the gate never ran
-          # (a PR-triggered workflow_run) or died before resolving it. Either way this run never
-          # held the delivery lane and is leaving nothing behind.
-          if [ -z "${SHA:-}" ]; then
-            echo "no target commit — this run never held the delivery lane, so it hands nothing on."
-            exit 0
-          fi
-          if [ "$HANDOFF_ELIGIBLE" != "true" ]; then
-            echo "this run was itself dispatched — it does not hand on again (the chain is bounded at one hop). If HEAD is still unpublished, the hourly reconcile and the next merge's run both reach it, and \`verdict\` reds if nobody does."
-            exit 0
-          fi
-
-          # main's HEAD *now*. The gate's reading was taken before any leg ran; asking again is the
-          # whole point — the lane is about to be free and HEAD has usually moved.
-          if ! HEAD=$(gh api "repos/$REPO/commits/main" --jq '.sha') || [ -z "$HEAD" ]; then
-            echo "::warning::could not resolve main's tip, so this run cannot tell whether it is leaving HEAD without a publisher. NOT dispatching — this degrades to the hourly reconcile, which is where delivery stood before this step existed, rather than to silence. The API failure is the bug to chase."
-            exit 0
-          fi
-          SHORT_HEAD="${HEAD:0:9}"
-
-          # Did any SHIPPING leg fail? A `skipped` leg is not a failure — most of them skip on a
-          # bake-only or a no-publish run, which is the ordinary case. Only `failure` and
-          # `cancelled` mean this run did not finish what it started.
-          case " $DELIVERY_LEGS " in
-            *" failure "*|*" cancelled "*) DELIVERY_INCOMPLETE=true ;;
-            *)                             DELIVERY_INCOMPLETE=false ;;
-          esac
-
-          # Nothing is owed when this run IS HEAD's publication — either it shipped the set, or the
-          # gate found one already complete and took the bake-only branch. Two arms are
-          # load-bearing. Without the `COMPLETE` one a bake-only reconcile on HEAD would hand itself
-          # on forever; without `DELIVERY_INCOMPLETE` a run that tagged the set and then failed a
-          # later leg would count as HEAD's publication and hand nothing on.
-          if [ "$HEAD" = "$SHA" ] && [ "$DELIVERY_INCOMPLETE" != "true" ] \
-             && { { [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; } || [ "$COMPLETE" = "true" ]; }; then
-            echo "nothing owed — this run is main's HEAD ($SHORT_HEAD) publication (publish=$PUBLISH promote=$PROMOTE_RESULT complete=$COMPLETE, every shipping leg clean)."
-            exit 0
-          fi
-
-          # 🚨 Only a GREEN head is publishable, so only a green head can be owed anything. Same
-          # instrument and same filter as `gate`'s own read, deliberately: a handoff that disagreed
-          # with the gate about what "green" means would dispatch runs the gate then declines.
-          if ! CHECK=$(gh api "repos/$REPO/commits/$HEAD/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
-                         --jq '[.check_runs[] | select(.name=="Consolidate test results")]
-                               | sort_by(.started_at) | last // {}
-                               | "\(.status // "absent") \(.conclusion // "none")"'); then
-            echo "::warning::could not read the required check on main's tip $SHORT_HEAD, so this run cannot tell whether HEAD is publishable. NOT dispatching — the hourly reconcile remains. Chase the API failure."
-            exit 0
-          fi
-          read -r C_STATUS C_CONCL <<< "$CHECK"
-          if [ "$C_STATUS" != "completed" ] || [ "$C_CONCL" != "success" ]; then
-            echo "nothing owed — main's HEAD $SHORT_HEAD is not publishable yet (\`Consolidate test results\` → $C_STATUS/$C_CONCL). The workflow_run that fires when it settles green IS HEAD's publisher; inventing one now would only be declined."
-            exit 0
-          fi
-
-          # Is anybody else on HEAD? A queued run counts here — not because queuing is a promise,
-          # but because it inherits this obligation: whichever run finally executes runs this same
-          # step when IT terminates. That is what closes the loop the discard used to open.
-          if ! SUCCESSOR=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD&per_page=50" \
-                             --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")]
-                                   | sort_by(.id) | .[0] // empty
-                                   | \"\(.id) \(.status)\""); then
-            echo "::warning::the successor probe on main's tip $SHORT_HEAD failed, so this run cannot tell whether HEAD already has a publisher. NOT dispatching — a dispatch on an unanswered probe would be a guess that costs a duplicate image set (MeshWeaver#3376). The hourly reconcile remains; chase the API failure."
-            exit 0
-          fi
-          if [ -n "$SUCCESSOR" ]; then
-            read -r S_ID S_STATUS <<< "$SUCCESSOR"
-            echo "nothing owed — run $S_ID is \`$S_STATUS\` on main's HEAD $SHORT_HEAD and inherits the obligation: when it terminates it runs this same step. If GitHub discards it instead, the arrival that replaced it targets a newer HEAD and hands THAT on."
-            exit 0
-          fi
-
-          # HEAD is green, has no complete publication from this run, and NOTHING is queued or
-          # running for it. That is the state the hourly tick was supposed to catch and has been
-          # standing down on. Say it, then create the publisher.
-          say "### 🔁 HANDED ON — main's HEAD \`$SHORT_HEAD\` is green and has NO run of this workflow queued or running, so this run is leaving it without a publisher. Dispatching one now rather than waiting up to an hour for the reconcile tick (which stands down whenever a queued run exists — measured 3 of 3 ticks on 2026-09-17)."
-          if ! gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref main; then
-            echo "::error::main's HEAD \`$SHORT_HEAD\` is GREEN, has no complete image set from this run and NOTHING queued or running to publish it — and the dispatch that would have created its publisher FAILED. Delivery is left with no producer but the hourly reconcile, which stands down whenever a queued run appears. Check that this job still holds \`actions: write\`, then dispatch \`$WORKFLOW_FILE\` on main by hand."
-            exit 1
-          fi
-          say "   Dispatched \`$WORKFLOW_FILE\` on \`main\`. It enters the RECONCILE lane (so the push lane cannot discard it), resolves HEAD itself, and consumes the same per-commit heal budget as any other reconcile. It will NOT hand on again — the chain is bounded at one hop."
 
   alert-on-failure:
     name: "Alert: CD failed on main"
@@ -4353,7 +4445,13 @@ jobs:
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
     needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
-    if: failure()
+    # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
+    # compatibility legs need `plugins-modules`, so under `failure()` a Plugins red filed THIS issue
+    # ("no deployable image was published") over a platform set that was delivered. A Plugins seal
+    # red is recorded by `report-plugins-seal` on its own ledger (policy
+    # `platform-backwards-compatibility`); a satellite-compat leg that RAN and went red is still a
+    # direct need here, so a measured break is still filed.
+    if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Job-level permissions REPLACE the workflow-level map for this job: the default GITHUB_TOKEN
