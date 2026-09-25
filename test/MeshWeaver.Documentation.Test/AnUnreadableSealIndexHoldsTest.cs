@@ -134,7 +134,7 @@ public class AnUnreadableSealIndexHoldsTest
         using var root = new TempRoot();
         var source = Path.Combine(root.Path, Identity, "plugins");
         Directory.CreateDirectory(source);
-        File.WriteAllText(Path.Combine(source, "Store.zip"), "bytes");
+        WriteBundle(Path.Combine(source, "Store.zip"));
         File.WriteAllText(
             Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
         File.WriteAllText(
@@ -167,7 +167,7 @@ public class AnUnreadableSealIndexHoldsTest
         var source = Path.Combine(root.Path, Identity, "plugins");
         var generation = Path.Combine(source, "Systemorph-MeshWeaver-1-1");
         Directory.CreateDirectory(generation);
-        File.WriteAllText(Path.Combine(generation, "Store.zip"), "bytes");
+        WriteBundle(Path.Combine(generation, "Store.zip"));
         File.WriteAllText(
             Path.Combine(generation, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
         File.WriteAllText(
@@ -200,7 +200,7 @@ public class AnUnreadableSealIndexHoldsTest
         using var root = new TempRoot();
         var source = Path.Combine(root.Path, Identity, "plugins");
         Directory.CreateDirectory(source);
-        File.WriteAllText(Path.Combine(source, "Store.zip"), "bytes");
+        WriteBundle(Path.Combine(source, "Store.zip"));
         File.WriteAllText(
             Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
         File.WriteAllText(
@@ -250,7 +250,7 @@ public class AnUnreadableSealIndexHoldsTest
         using var root = new TempRoot();
         var source = Path.Combine(root.Path, Identity, "plugins");
         Directory.CreateDirectory(source);
-        File.WriteAllText(Path.Combine(source, "Store.zip"), "bytes");
+        WriteBundle(Path.Combine(source, "Store.zip"));
         File.WriteAllText(
             Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
         File.WriteAllText(
@@ -283,6 +283,15 @@ public class AnUnreadableSealIndexHoldsTest
                 "an empty list reads as 'no seal attributable to this repository' — correct for a "
                 + "real absence, and indistinguishable from a failed read, which is exactly why "
                 + "the caller must ask RefusedForUnreadableIndex FIRST");
+
+    /// <summary>A real (empty) bundle archive. Since the sealed reading reads each bundle's
+    /// manifest for its producing platform build (policy platform-backwards-compatibility), bytes
+    /// that are not an archive make the reading UNREADABLE — so a fixture of a SEALED source must be
+    /// a readable bundle.</summary>
+    private static void WriteBundle(string path)
+    {
+        using var zip = System.IO.Compression.ZipFile.Open(path, System.IO.Compression.ZipArchiveMode.Create);
+    }
 
     private sealed class TempRoot : IDisposable
     {

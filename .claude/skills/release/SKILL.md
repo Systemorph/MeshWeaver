@@ -41,7 +41,7 @@ and the version mechanics in
 | **Version** | `3.0.0-ci.<run#>` (build-numbered, monotonic from `$GITHUB_RUN_NUMBER`) | clean `3.0.0` — **the same bytes**, retagged |
 | **Workflow** | `main-cd.yml` (after `MeshWeaver Build and Test` passes) | `release.yml` |
 | **Docker** | **multi-arch** (`linux-x64;linux-arm64` → OCI image-index) → ACR | ACR retag + GHCR mirror, by digest |
-| **Bake / seal** | ✅ platform content + Plugins modules, sealed per framework identity | ✅ inherited — `_releases/<clean>` copies the identity marker |
+| **Bake / seal** | ✅ platform content, sealed under the compatibility key `c<major>e<epoch>`; the Plugins re-seal is an independent follow-up that never gates the platform | ✅ inherited — `_releases/<clean>` copies the key marker |
 | **NuGet** | ❌ never | ❌ **retired** (last publish `3.0.0-rc13`) |
 | **Rollout** | CD rolls memex/memex-cloud; an install self-updates onto it ONLY when its `Admin/UpdatePolicy` is `Continuous` **with a pattern** that admits the tag (`3.0.0-ci*`) | every install on the default (`Stable`, clean releases only) self-updates on its next check |
 
@@ -69,6 +69,17 @@ ends by itself when the next release is tagged. **Fleet today: `memex` and `meme
 `3.0-latest`, `3.0.1-latest`) are a fresh install's STARTING image and never a self-update
 candidate. Full rule: [ReleaseProcess.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseProcess.md)
 → "Which build an install takes".
+
+🚨 **THE LADDER — policy `platform-backwards-compatibility`.** Platform builds are backwards
+compatible within a compatibility epoch, so platform and plugins roll as SEPARATE steps: the platform
+first, keeping the plugin bytes an install runs (no rebuild, no re-seal), then a plugin built against
+the RUNNING platform (floor ≤ running, no platform roll). A normal platform build requires NO plugin
+seal anywhere — not in CD (`delivery-verdict` judges the platform legs only; the Plugins re-seal is
+`report-plugins-seal`, never on the critical path), not in the roll selection, not in the sealed-sync
+gate. A plugin seal is a precondition ONLY behind a DECLARED break (epoch/major bump in
+`src/MeshWeaver.Compiler/platform-compatibility.json`, with a ceiling on the old builds), and then the
+roll is HELD per installed plugin, by name, until a replacement covering the target is sealed.
+**Never seal or pin around a break — declare it.** Full procedure: [Deploying Across Platform Versions](../../../src/MeshWeaver.Documentation/Data/Architecture/DeployingAcrossPlatformVersions.md).
 
 🚨 **A platform roll no longer waits for every satellite to re-seal** (2026-09-08,
 `Modules:VersionStrictness`, default `Family`). A portal on 3.1.0 adopts a bundle sealed for any

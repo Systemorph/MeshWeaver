@@ -478,4 +478,5 @@ local verdict is CI's verdict. A repo that has not adopted yet still runs `pytho
 
 [Modules](/Doc/Architecture/Modules) · [MeshNode Versioning](/Doc/Architecture/MeshNodeVersioning) ·
 [Plugin Packaging](/Doc/Architecture/PluginPackaging) · [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges) ·
-[Plugin Registry](/Doc/Architecture/PluginRegistry) · [Plugin Update on Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild)
+[Plugin Registry](/Doc/Architecture/PluginRegistry) · [Plugin Update on Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild) ·
+[Deploying Across Platform Versions](/Doc/Architecture/DeployingAcrossPlatformVersions)

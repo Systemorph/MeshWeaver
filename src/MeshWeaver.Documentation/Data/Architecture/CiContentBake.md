@@ -353,7 +353,17 @@ control fails loudly instead of the assertion quietly proving nothing.
 
 ## The identity rule: adoptable when the SURFACE is unchanged
 
-Adoption is gated by `PrebuiltAssemblySeeder.DeclineReason` on the **framework build identity**
+> **Superseded as the adoption KEY** (policy `platform-backwards-compatibility`): bytes are now keyed
+> on the platform compatibility key `c<major>e<epoch>`, shared by every build of one epoch, with the
+> producing build as the FLOOR — see [Module Versioning](../ModuleVersioning) and [Deploying Across
+> Platform Versions](../DeployingAcrossPlatformVersions). A new platform build therefore does NOT
+> require a re-bake or re-seal of any plugin; only a declared break does. **Everything from here
+> to the end of this section is HISTORY** — how the retired per-build identity (`s<hash>`) worked
+> and why it was replaced; it no longer decides adoption, and "mints a new identity" below no
+> longer means "every build is stale". Today that identity survives only as PROVENANCE
+> (`FrameworkBuildIdentity.BuildProvenance`), logged and never compared.
+
+*(History)* Adoption was gated by `PrebuiltAssemblySeeder.DeclineReason` on the **framework build identity**
 (`NodeTypeCompilationHelpers.FrameworkVersion` / `FrameworkBuildIdentity` — #1660 WS3). For the
 hosts that matter here — the bake host and the portals, which both ship a
 `meshweaver-surface.manifest` — that identity is the **API-surface hash** `s<hash>`: per compile
