@@ -202,7 +202,14 @@ public class PlatformReleaseNotifyGuard
     /// was silent because the broadcaster had NO CALLER, not because a mesh hop is unreliable. Two
     /// emitters for one event is the cross-repo coupling the rule forbids.</para>
     ///
-    /// <para>There is NO ledger. The reusable lanes core hosts for the satellites
+    /// <para>ONE ledgered exception, and it is not a release event (policy
+    /// <c>dependent-suites-gate</c>, Doc/Architecture/CrossRepoPairGate): <see cref="DispatchLedger"/>.
+    /// Core's pull-request/merge-queue gate asks MeshWeaver.Plugins to run its suites against the
+    /// CANDIDATE commit (<c>core-candidate-suites</c>) and waits for the verdict — a TEST REQUEST
+    /// about an unmerged commit, which memex cannot carry because nothing has been published. The
+    /// release wave stays memex's, and every other sender is still a regression.</para>
+    ///
+    /// <para>Otherwise there is no ledger. The reusable lanes core hosts for the satellites
     /// (<c>node-repo-publish-bake.yml</c>, <c>node-repo-tag-modules.yml</c>) used to send
     /// <c>meshweaver-upstream-published</c> / <c>meshweaver-modules-published</c> in the calling
     /// satellite's context — CI-to-CI coupling by another name; since 2026-09-03 a lane ENDS by
@@ -222,7 +229,7 @@ public class PlatformReleaseNotifyGuard
 
         var senders = Directory.EnumerateFiles(workflows, "*.yml")
             .Select(f => (Name: Path.GetFileName(f), Sends: SendsARepositoryDispatch(f)))
-            .Where(x => x.Sends)
+            .Where(x => x.Sends && !DispatchLedger.ContainsKey(x.Name))
             .Select(x => x.Name)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
@@ -244,6 +251,47 @@ public class PlatformReleaseNotifyGuard
         var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
         Assert.DoesNotContain("notify-dependents=", legs, StringComparison.Ordinal);
         Assert.Contains("notify-platform-update=", legs, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The ONE permitted sender (policy <c>dependent-suites-gate</c>): <c>dotnet-test.yml</c> asks
+    /// MeshWeaver.Plugins to test a core CANDIDATE. Keyed by file, and every sending line in that
+    /// file is held to the one event type and the one target by
+    /// <see cref="TheLedgeredSender_SendsOnlyTheCandidateTestRequest"/>.
+    /// </summary>
+    private static readonly System.Collections.Immutable.ImmutableDictionary<string, string> DispatchLedger =
+        System.Collections.Immutable.ImmutableDictionary.CreateRange(StringComparer.Ordinal,
+        [
+            new System.Collections.Generic.KeyValuePair<string, string>("dotnet-test.yml",
+                "`dependent-suites-dispatch` sends `core-candidate-suites` to MeshWeaver.Plugins so its "
+                + "suites run against the candidate core commit before it lands (#2689; #5635/#5647/#5655 "
+                + "each turned Plugins' main red through a behaviour change no core gate could see)"),
+        ]);
+
+    /// <summary>
+    /// 🚨 The ledger entry is NOT a licence to dispatch anything from <c>dotnet-test.yml</c>. Every
+    /// sending line there must name the one event type and the one target — a second event, or a
+    /// dispatch to another repository, would be a new coupling hiding behind an old entry.
+    /// And the entry must still MATCH: a ledger line whose sender vanished is a detector that
+    /// stopped seeing its subject.
+    /// </summary>
+    [Fact]
+    public void TheLedgeredSender_SendsOnlyTheCandidateTestRequest()
+    {
+        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        foreach (var (file, _) in DispatchLedger)
+        {
+            var lines = File.ReadAllLines(Path.Combine(workflows, file))
+                .Where(l => !l.TrimStart().StartsWith('#')).ToArray();
+            Assert.True(SendsARepositoryDispatch(lines),
+                $"{file} is ledgered as a dispatch sender but sends nothing any more — delete the ledger entry in the same change.");
+            foreach (var line in lines.Where(l => l.Contains("/dispatches", StringComparison.Ordinal)))
+                Assert.Contains("repos/Systemorph/MeshWeaver.Plugins/dispatches", line, StringComparison.Ordinal);
+            foreach (var line in lines.Where(l => l.Contains("event_type", StringComparison.Ordinal)))
+                Assert.Contains("event_type: \"core-candidate-suites\"", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("repository-dispatch@", string.Join("\n", lines), StringComparison.Ordinal);
+            Assert.DoesNotContain("createDispatchEvent", string.Join("\n", lines), StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

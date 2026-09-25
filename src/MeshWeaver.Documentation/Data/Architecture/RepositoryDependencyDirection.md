@@ -115,14 +115,28 @@ Core still compiles, tests and ships with no sibling on disk. Every edge of this
 ASSERTED as well as documented — `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` enumerates them
 and fails in both directions, so a new one has to be a decision rather than a diff nobody noticed.
 
-There is deliberately NO third edge. A dispatcher that asked MeshWeaver.Plugins to build against a
-core pull request (`dependent-suites.yml`, #3103) existed for a few hours on 2026-09-03 and was
-withdrawn by the maintainer: **"none of the top-level repos should have any dependency to anyone
-else."** Even an event-plus-read is a dependency — a red on a core pull request that only a plugin
-repository can turn green couples the two repositories' trunks. The rule is the strict one:
-core reads facts about sibling repositories (the two ledger entries above) and sends them nothing;
-a plugin repository discovers a platform break in ITS OWN CI when ITS `platform-ref` moves, and fixes
-it there. `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` lists exactly the two permitted reads.
+The THIRD edge of this class is `dotnet-test.yml`'s `Dependent suites (MeshWeaver.Plugins)`
+(policy [`dependent-suites-gate`](../PolicyNotProse), #2689's acceptance criterion). Every merge-queue
+entry — and a pull request labelled `dependent-suites` — sends ONE `repository_dispatch
+core-candidate-suites` to MeshWeaver.Plugins naming the candidate commit, and then READS the verdict
+that repository writes at `refs/core-candidate/<key>` after building its reachable suites from source
+against the candidate. Plugins' source never enters core's build and Plugins writes nothing into
+core: the dispatch is a test REQUEST about an unmerged commit, and the read is a fact about it — see
+[The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's suites run against the candidate".
+
+🚨 **This reverses a decision, and says so.** A dispatcher of this shape (`dependent-suites.yml`,
+#3103) existed for a few hours on 2026-09-03 and was withdrawn by the maintainer — *"none of the
+top-level repos should have any dependency to anyone else"* — because it put a context on every core
+pull request that only MeshWeaver.Plugins could turn green, while Plugins had no receiver. Three core
+merges in two days (#5635, #5647, #5655) then turned Plugins' `main` red through behaviour changes no
+core gate could see, holding the sealed publication and every satellite for hours, and the
+maintainer asked for exactly this gate (*"we don't want these total breakdowns"*). What changed in
+the design: the receiver landed in Plugins FIRST and the request job proves it exists before sending;
+the Plugins side re-runs every candidate failure at the base, so a red that already exists there
+never blocks core; and the gate runs where landing happens (the merge queue), not on every push. The
+release wave is untouched — that stays memex's, and
+`PlatformReleaseNotifyGuard.DispatchLedger` admits exactly this one sender, this one event type and
+this one target. `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` carries the read.
 
 ## What is NOT an inverted edge
 
@@ -132,7 +146,8 @@ Checked and cleared — do not "fix" these:
   — `workflow_call` only. A plugin repo calling core's reusable workflow is the intended shape.
   `plugin-build.yml` carries an explicit note that its cross-repo checkout was REMOVED and must not
   be re-added on the strength of a grep.
-- **No dispatcher.** Core sends `repository_dispatch` to no repository. `notify-dependents.yml` was
+- **No RELEASE dispatcher.** Core sends no release event to any repository (the one ledgered
+  dispatch is the candidate TEST request above). `notify-dependents.yml` was
   withdrawn on 2026-09-03 (maintainer: *"core publishes an event and finishes"*): the release wave is
   emitted by memex from the build fact core POSTs into `Hosting/PlatformBuilds`, to the repositories
   the `Hosting/Deployment` records name as registry sources. `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository`

@@ -99,7 +99,10 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "cannot detect the missed-repo case), and `cross-repo-pair` resolves the "
                 + "`Pairs-with:` pull request a surface-removing change declares (#2689 — the "
                 + "deleting half must land LAST). Both mint a scoped App installation token and "
-                + "read; neither checks anything out"),
+                + "read; neither checks anything out. `dependent-suites` (policy "
+                + "`dependent-suites-gate`, #2689's acceptance criterion) reads the verdict "
+                + "MeshWeaver.Plugins writes at refs/core-candidate/<key> after running its suites "
+                + "against this candidate — a fact about the candidate, never Plugins source"),
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),
