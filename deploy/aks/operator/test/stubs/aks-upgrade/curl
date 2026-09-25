@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# A stand-in `curl` for test/run-tests.sh — answers hosting-aks-upgrade's /health probe with the
+# status in $HOSTING_AKS_FIXTURE/health/<host>, else 200. Never touches the network.
+set -uo pipefail
+fixture="${HOSTING_AKS_FIXTURE:?the aks-upgrade curl stub needs HOSTING_AKS_FIXTURE}"
+url="${*: -1}"; host="${url#https://}"; host="${host%%/*}"
+if [ -f "$fixture/health/$host" ]; then cat "$fixture/health/$host"; else printf '200'; fi

@@ -48,6 +48,8 @@ resource_of() {
     # CRD is installed. Resolving it means this checker now CHECKS that read against the ClusterRole
     # instead of reporting `unknown` — an unresolved name is not a pass, it is an unasked question.
     crd|crds|customresourcedefinition|customresourcedefinitions) echo "apiextensions.k8s.io customresourcedefinitions" ;;
+    # hosting-aks-upgrade reads every PodDisruptionBudget before a node pool is drained.
+    pdb|pdbs|poddisruptionbudget|poddisruptionbudgets) echo "policy poddisruptionbudgets" ;;
     deployment|deployments|deploy)           echo "apps deployments" ;;
     statefulset|statefulsets|sts)            echo "apps statefulsets" ;;
     replicaset|replicasets|rs)               echo "apps replicasets" ;;
