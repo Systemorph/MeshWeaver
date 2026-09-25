@@ -172,6 +172,40 @@ fi
 #
 # The file is 0600 in the job's private /tmp, removed on exit, and NEVER printed: the adoption
 # render below holds the values in memory, and the only thing this step logs is the byte count.
+#
+# vault_top_level_keys <file> — the TOP-LEVEL KEY NAMES of the values half, one per line, and never a
+# value. The half is written by the config repo's `capture` (PyYAML safe_dump, block style), so a
+# top-level key is a line at column 0 ending its name with `:`; a JSON object (az stores what it is
+# given) is read with jq, which this image carries. Anything else — a flow mapping, a bare scalar,
+# a list — returns 1: the caller refuses what it cannot read rather than guessing it is clean.
+# Pure bash for the YAML branch, for the reason values_carry_portal_image gives above.
+vault_top_level_keys() {
+  local line key first=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|' '*|$'\t'*|'#'*|'---'*) continue ;; esac
+    first="$line"; break
+  done < "$1"
+  case "$first" in
+    '{'*) jq -er 'if type == "object" then keys[] else error("not an object") end' "$1" 2>/dev/null || return 1
+          return 0 ;;
+    '') return 0 ;;   # comments only: no keys (the families check refuses it)
+    '-'*|'['*) return 1 ;;   # the document itself is a list, which is not helm values
+  esac
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|' '*|$'\t'*|'#'*|'---'*|'...'*) continue ;;
+      # PyYAML writes a sequence under a key INDENTLESS (`extraVolumes:` then `- name: …` at column
+      # 0), so a column-0 `- ` after the first key is that key's item, not a key of its own.
+      '- '*|'-') continue ;;
+      '{'*|'['*) return 1 ;;
+    esac
+    key="${line%%:*}"
+    [ "$key" != "$line" ] || return 1   # a column-0 line with no `:` is not a mapping key
+    key="${key%\"}"; key="${key#\"}"; key="${key%\'}"; key="${key#\'}"
+    printf '%s\n' "$key"
+  done < "$1"
+}
+
 vault_values=""
 if [ -n "$vault" ]; then
   vault_values="$(mktemp)"
@@ -188,7 +222,39 @@ if [ -n "$vault" ]; then
     || hosting::die "Key Vault ${vault} holds no values half for release ${release} (helm-values-${release}): ${kv_err}. The record declares vaultValuesKeys — keys the chart's own Secret must carry — and nothing in the record renders them, so an upgrade without this file would re-render memex-portal-secrets from the chart's in-cluster defaults and every new pod would fail at silo start (MeshWeaver#3780). Run the config repo's helm-release workflow with action=capture for this release first, or clear vaultValuesKeys on the record if the chart's Secret genuinely carries nothing."
   [ -s "$vault_values" ] \
     || hosting::die "the values half helm-values-${release} in Key Vault ${vault} is EMPTY — an empty vault half is not 'no secrets', it is a capture that wrote nothing. Re-run helm-release capture for this release (MeshWeaver#3780)."
-  hosting::log "vault     helm-values-${release} ($(wc -c < "$vault_values") bytes) — layered FIRST; the record's render wins on every key it declares"
+  # 🚨 THE HALF CARRIES SECRET FAMILIES ONLY — STRUCTURE IS REFUSED, NEVER LAYERED (Memex#295).
+  # "The record's render wins on every key it declares" is true only for keys the render DECLARES.
+  # helm REPLACES a list the later file names and LEAVES one it omits, and HelmValues omits an empty
+  # list (no `extraVolumes:` at all when the record mounts nothing) — so a legacy list sitting in the
+  # half DEPLOYS alongside whatever the record renders for the same wiring. Measured 2026-09-25 on
+  # memex, the V58 Reconcile:
+  #     Job.batch "memex-migration-62" is invalid: … Duplicate value: "kv-secrets"
+  # — the half still carried extraVolumes/extraVolumeMounts/extraEnvFrom for the SecretProviderClass
+  # the record declares under keyVaultSecretClasses, and the chart rendered the volume twice. The
+  # same shape failed memex-cloud's helm revision 42 on 2026-09-12 through the config repo's lane.
+  # A map merges instead, so a structural map in the half silently supplies every leaf the render
+  # does not name — configuration nobody reviews, decided by a capture of whatever was live.
+  # The families are an ALLOW-list, the same one the config repo's `capture` stores and its lane's
+  # guard reads (scripts/vault-values.py VAULT_FAMILIES): `secrets`, `parameters`, `pgbackrest`.
+  # Everything else is structure and has one home, the record. Only the KEY NAMES are read — never
+  # a value — and the refusal names them, with the one remedy: re-capture the half filtered to its
+  # families (the previous version stays in the vault as the rollback).
+  if ! vault_keys="$(vault_top_level_keys "$vault_values")"; then
+    hosting::die "the values half helm-values-${release} in Key Vault ${vault} is not a block-style YAML mapping or a JSON object — its top-level keys cannot be read, so whether it carries structure is unknown and it is refused rather than layered (Memex#295). Re-capture it: a governed HelmRelease action with helmAction: capture stores the families as block YAML."
+  fi
+  structural="" families=0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    case "$key" in
+      secrets|parameters|pgbackrest) families=$((families+1)) ;;
+      *) structural="${structural} ${key}" ;;
+    esac
+  done <<< "$vault_keys"
+  [ -z "$structural" ] \
+    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} carries STRUCTURE — top-level key(s):${structural}. The half holds secret families only (secrets, parameters, pgbackrest); structure lives on the Deployment record. Layered first, a structural list the record's render omits DEPLOYS beside the record's own wiring (memex 2026-09-25: Job memex-migration-62 invalid, duplicate volume \"kv-secrets\"), and a structural map supplies every leaf the render does not name. Refused before helm, nothing changed. Remedy: a governed HelmRelease action for ${release} with helmAction: capture — it re-stores the half filtered to its families and keeps the previous version as the rollback. Before capturing, confirm every leaf the half alone supplies is inert or declared on the record (Memex#295)."
+  [ "$families" -gt 0 ] \
+    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} holds none of the families (secrets, parameters, pgbackrest) — a record that declares vaultValuesKeys needs the chart's Secrets fed from it, so this half would deploy no secrets at all (MeshWeaver#3780). Re-run the HelmRelease capture for this release."
+  hosting::log "vault     helm-values-${release} ($(wc -c < "$vault_values") bytes, families only) — layered FIRST; the record's render wins on every key it declares"
   hosting::say vault_values_bytes "$(wc -c < "$vault_values" | tr -d ' ')"
 fi
 
