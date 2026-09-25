@@ -64,6 +64,24 @@ Two properties of `dotnet-test.yml` matter for the queue and were checked rather
   context can be absent ejects entries with nothing to point at (`CI_TIMEOUT`), which is what the
   missing `merge_group` trigger looked like before #2799.
 
+### 🚨 The dependent's suites lengthen a queue build — and the table above has drifted
+
+Every queue entry now also runs **`Dependent suites (MeshWeaver.Plugins)`** (policy
+[`dependent-suites-gate`](../PolicyNotProse); [The Cross-Repo Pair Gate](../CrossRepoPairGate) §
+"The dependent's suites run against the candidate"): MeshWeaver.Plugins builds its reachable suites
+against the entry's commit and core waits for the verdict AFTER its own tests. A queue build is
+therefore core's run (~20 min) plus a waiter of up to 45 — about 65 minutes end to end, with each
+JOB still under the fleet's 45-minute cap. `check_response_timeout_minutes` must cover that: the
+45 in the table above would eject every entry whose Plugins run is slow.
+
+Measured live on 2026-09-25 (`gh api repos/Systemorph/MeshWeaver/rulesets/2128472`), the ruleset is
+NOT the table above: `max_entries_to_build: 8`, `max_entries_to_merge: 8`,
+`check_response_timeout_minutes: 120`. The 120 covers the gate. The 8 means up to eight entries —
+eight Plugins candidate runs, each up to ~12 legs on `aks-silos-dind` — can build at once, which that
+pool (≈24 runners) cannot serve alongside Plugins' own CI. Whether to return to a small
+`max_entries_to_build` is a maintainer's ruleset edit; `merge-queue-steward.py status` prints the
+drift.
+
 ### Enabling it
 
 The rule is added to ruleset `2128472` (`main pr protection`) with the REST rulesets API. `PUT`
