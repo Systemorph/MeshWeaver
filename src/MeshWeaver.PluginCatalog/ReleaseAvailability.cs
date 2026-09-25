@@ -141,6 +141,9 @@ public static class ReleaseAvailability
                     : new[] { BootCompileAdvisory(bootCompiles, target) },
                 .. evaluated.Select(e => e.LinkAdvisory).OfType<string>(),
                 .. required.Select(p => FloorAdvisory(p, target)).OfType<string>(),
+                .. OlderCompatibleSetAdvisory(required, verdicts, target, artifacts) is { } older
+                    ? new[] { older }
+                    : [],
             ],
             BootCompiles = bootCompiles,
         };
@@ -155,6 +158,32 @@ public static class ReleaseAvailability
     private static string BootCompileAdvisory(ImmutableArray<string> packages, ReleaseTarget target) =>
         $"would recompile at boot on {Describe(target)} (no sealed content bake for framework "
         + $"identity {target.FrameworkIdentity}): {string.Join(", ", packages)}";
+
+    /// <summary>
+    /// The ladder, said out loud (policy <c>platform-backwards-compatibility</c>): the packages the
+    /// target serves from a publication sealed under ITS compatibility key by an EARLIER platform
+    /// build — the install adopts the older compatible set across the roll, with no rebuild and no
+    /// re-seal for the target build. Null when there is none. A statement, never a hold: it names
+    /// the rung (platform 2 + plugin 1) so a reader never mistakes it for a boot compile.
+    /// </summary>
+    private static string? OlderCompatibleSetAdvisory(
+        ImmutableArray<RequiredPackage> required, ImmutableArray<PackageAvailability> verdicts,
+        ReleaseTarget target, ReleaseArtifacts artifacts)
+    {
+        var older = required
+            .Where(p => p.HasContent && artifacts.SealedBundles.Contains(p.BundleName))
+            .Where(p => verdicts.Any(v => v.Package == p.Name && v.Kind == PackageAvailabilityKind.Available))
+            .Select(p => (p.Name, Floor: artifacts.BundleRanges.TryGetValue(p.BundleName, out var r) ? r.Floor : null))
+            .Where(x => x.Floor is not null && PlatformCompatibility.ProducerIsNewer(target.Version, x.Floor))
+            .ToList();
+        return older.Count == 0
+            ? null
+            : $"adopts the older compatible set on {Describe(target)}: {older.Count} package(s) sealed under "
+              + $"compatibility key {target.FrameworkIdentity} by an earlier build ("
+              + string.Join(", ", older.Take(5).Select(x => $"{x.Name} @ {x.Floor}"))
+              + (older.Count > 5 ? $", +{older.Count - 5} more" : "")
+              + ") — no rebuild and no re-seal for this build (policy platform-backwards-compatibility)";
+    }
 
     /// <summary>
     /// The declared-floor ADVISORY for one package against the target (#3648): the sentence naming

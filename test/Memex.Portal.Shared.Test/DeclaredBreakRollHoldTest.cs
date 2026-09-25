@@ -72,6 +72,21 @@ public class DeclaredBreakRollHoldTest
         verdict.BootCompiles.Should().Contain("Plugins/Store");
     }
 
+    /// <summary>
+    /// A target whose key carries the package sealed by an EARLIER build of the same key: the roll
+    /// ADOPTS the older compatible set — said as such, never as "would recompile at boot".
+    /// </summary>
+    [Fact]
+    public void ASetSealedByAnEarlierBuildOfTheKey_ReadsAsAdopted_NotRecompiled()
+    {
+        var verdict = Gate(new ReleaseTarget(Target, Key1), Store(), Replacement(floor: "3.0.0-ci.9321"));
+
+        verdict.IsUpdatable.Should().BeTrue();
+        verdict.BootCompiles.Should().BeEmpty("the key's publication is adopted — nothing recompiles");
+        verdict.Advisories.Should().Contain(a => a.Contains("adopts the older compatible set")
+                                                 && a.Contains("Plugins/Store @ 3.0.0-ci.9321"));
+    }
+
     /// <summary>A legacy installed identity states no epoch, so it declares no range — the first
     /// roll onto the keyed platform is an ordinary roll, not a held one.</summary>
     [Fact]
