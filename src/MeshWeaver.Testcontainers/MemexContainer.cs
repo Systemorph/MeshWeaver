@@ -147,6 +147,7 @@ public sealed class MemexBuilder : ContainerBuilder<MemexBuilder, MemexContainer
                 .UntilHttpRequestIsSucceeded(request => request.ForPort(HttpPort).ForPath(HealthPath)));
 
     /// <inheritdoc />
+    // Dependent-suites CONTROL (positive arm): a comment-only change — reaches one Plugins suite, breaks nothing.
     protected override void Validate()
     {
         base.Validate();
