@@ -4666,6 +4666,14 @@ public static class DataExtensions
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>().ToArray();
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
+        // 🚨 Resolved HERE, while the handler runs on a live hub — never inside the answer callback.
+        // The answer arrives whenever the slowest provider settles, which can be after this hub has
+        // been disposed; a resolve from its Autofac scope then throws ObjectDisposedException out
+        // of a Subscribe(onNext) body, Rx rethrows it on the completing thread, and the process dies
+        // (exit 134, no failing test). ILoggerFactory is the root singleton, so the instance held
+        // here does not die with the hub. Posting the response during disposal is fine.
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Data.Autocomplete");
 
         // Which providers have not yet honoured the completion contract. Concurrent because the
         // provider streams complete on whatever thread their I/O landed on; per-REQUEST and local,
@@ -4702,8 +4710,6 @@ public static class DataExtensions
             .Subscribe(
                 answer =>
                 {
-                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger("MeshWeaver.Data.Autocomplete");
                     if (answer.Fault is not null)
                         logger?.LogWarning(answer.Fault,
                             "Autocomplete aggregation faulted for query {Query} on {Address}",
@@ -4726,10 +4732,8 @@ public static class DataExtensions
                 },
                 ex =>
                 {
-                    hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger("MeshWeaver.Data.Autocomplete")
-                        .LogWarning(ex, "Autocomplete failed for query {Query} on {Address}",
-                            query, hub.Address);
+                    logger?.LogWarning(ex, "Autocomplete failed for query {Query} on {Address}",
+                        query, hub.Address);
                     PostAutocompleteResponse(
                         hub, request, AutocompleteSnapshots.Empty, isComplete: false);
                 });

@@ -394,7 +394,17 @@ reactive/callback continuation. Those 204 grade as:
 | **T2** | ~104 | same shape on a per-node, layout-area or probe hub — plausibly reachable after the scope closes |
 | **T3** | ~68 | lexically deferred but structurally safe: hub-construction and configuration lambdas, delivery-pipeline and message-handler lambdas, and receivers that are the process-lifetime root hub |
 
-Fixed so far: the three delete-pipeline sites and the lease-release arm. **The rest is known,
+Fixed so far: the three delete-pipeline sites, the lease-release arm, and the autocomplete answer
+callback. `DataExtensions.HandleAutocompleteRequest` resolved its `ILoggerFactory` inside the
+single-argument `Subscribe(onNext)` that posts the answer. That answer fires only when the slowest
+`IAutocompleteProvider` settles, which can be after the hub is gone. Rx then rethrew the
+`ObjectDisposedException` on the pool thread that completed the provider, and the host died with
+exit 134 while every test passed (MeshWeaver.Plugins core-candidate run 36163381618). The logger
+factory is a root singleton, so the hoist is the complete fix. Posting the response during
+disposal is allowed and needs no resolve.
+`AutocompleteSettlesOnConvergenceTest.AProviderSettlingAfterTheHubIsDisposedDoesNotThrow`
+completes the provider on the test thread after `DisposalCompleted`. Without the fix it fails
+every time with that exception. **The rest is known,
 sized, mechanical work, not a mystery** — the fix is the same hoist at every site. Three adjacent
 classes the lexical sweep deliberately does not cover, and which a future pass must:
 
