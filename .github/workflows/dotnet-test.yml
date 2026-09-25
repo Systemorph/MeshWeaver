@@ -1957,6 +1957,91 @@ jobs:
     # artifact — it is what made that regression invisible for a whole release train. The bundles
     # pods actually adopt are baked by main-cd INSIDE the shipped image.
 
+  # ─────────────────── PLATFORM COMPATIBILITY — the ladder's rung 2, on every platform PR ───────────────────
+  # Policy platform-backwards-compatibility (Doc/Architecture/PlatformCompatibilityLadder): platform N+1
+  # must run the plugin bytes built against platform N, unchanged, within a compatibility epoch. This job
+  # takes the plugin module bundles the fleet runs NOW (the newest main-cd set) and links them — types,
+  # assembly versions and every MEMBER, by signature — against THIS pull request's core build, with the one
+  # probe (ModulePlatformLink, `mw-plugin-test platform-link`). A platform change that removes or re-signs
+  # a member a deployed plugin calls is a MissingMethodException in a portal; here it is a red check on the
+  # pull request that made it, BEFORE anything deploys.
+  #
+  # 🚨 A red here is answered by FIXING COMPATIBILITY — restore the member / add an [Obsolete] forwarder /
+  # fix the binder — or, only for a deliberate break, by bumping "epoch" in
+  # src/MeshWeaver.Compiler/platform-compatibility.json and declaring every broken member there. It is
+  # NEVER answered by a seal, a pin, an identity gate or a rebuild-everything fallback. An epoch bump with
+  # no break is red too (a gratuitous bump forces the whole fleet to rebuild).
+  #
+  # It is a NEEDS of `Consolidate test results` (the required check) with an explicit fail step there, so a
+  # red ladder blocks the merge. The plugin set is fetched with the run's own token (actions: read) — no
+  # secret, so fork pull requests run it too, and there is no input-shaped `if:`: a missing plugin set is
+  # RED (fetch-deployed-plugin-set.sh), never a skip.
+  platform-compat:
+    name: "Platform compatibility: deployed plugin set links against this platform (ladder)"
+    needs: [build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.0.x
+    - name: "Download artifact: build output (shard 0)"
+      uses: actions/download-artifact@v8
+      with:
+        name: build-output-0
+    - name: Extract build output
+      run: |
+        set -euo pipefail
+        tar -I 'zstd --long=27' -xf build-output-0.tar.zst
+        rm -f build-output-0.tar.zst
+    - name: "Fetch the deployed plugin set (the newest main-cd module bundles)"
+      id: plugins
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bash .github/scripts/fetch-deployed-plugin-set.sh "${RUNNER_TEMP}/deployed-plugins"
+    - name: "Read the compatibility epoch at the base"
+      id: epoch
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+      run: |
+        set -euo pipefail
+        base=""
+        if [ -n "${BASE_SHA:-}" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if git cat-file -e "${BASE_SHA}:src/MeshWeaver.Compiler/platform-compatibility.json" 2>/dev/null; then
+            base=$(git show "${BASE_SHA}:src/MeshWeaver.Compiler/platform-compatibility.json" | jq -er '.epoch')
+          fi
+        fi
+        echo "base=$base" >> "$GITHUB_OUTPUT"
+        echo "compatibility epoch at the base ($BASE_SHA): ${base:-none declared}"
+    - name: "Link the deployed plugins against this platform — types, versions, members"
+      env:
+        BASE_EPOCH: ${{ steps.epoch.outputs.base }}
+        PLUGIN_RUN: ${{ steps.plugins.outputs.run }}
+      run: |
+        set -euo pipefail
+        TESTER_DIR="$(dirname "$(find . -path '*/MeshWeaver.PluginTester/bin/*/mw-plugin-test.dll' | head -1)")"
+        [ -f "$TESTER_DIR/mw-plugin-test.dll" ] || { echo "::error::mw-plugin-test.dll not in the build output — the compatibility gate cannot run."; exit 1; }
+        # setup-dotnet exports DOTNET_ROOT; its shared/ holds the frameworks this runner binds.
+        shared="${DOTNET_ROOT:?setup-dotnet exports DOTNET_ROOT}/shared"
+        [ -d "$shared/Microsoft.NETCore.App" ] || { echo "::error::cannot locate the runner's shared frameworks (got '$shared')"; exit 1; }
+        args=(platform-link "$TESTER_DIR" --host directory --shared-frameworks "$shared"
+              --judge-from "$TESTER_DIR" --bundles-dir "${RUNNER_TEMP}/deployed-plugins"
+              --declaration src/MeshWeaver.Compiler/platform-compatibility.json)
+        [ -n "${BASE_EPOCH:-}" ] && args+=(--base-epoch "$BASE_EPOCH")
+        # The candidate platform is THIS build's core closure (the tester's bin — the canonical content
+        # surface, the assemblies a plugin compiles against). A plugin's reference into an assembly the
+        # portal host ships from ANOTHER repository cannot be moved by a core pull request and is
+        # reported unchecked (--judge-from), never refused as absent.
+        echo "plugin set: main-cd run ${PLUGIN_RUN}; candidate platform: this build ($GITHUB_SHA)"
+        dotnet "$TESTER_DIR/mw-plugin-test.dll" "${args[@]}"
+
   licence-gate:
     name: "Dependency licences"
     # MeshWeaver ships dual-licensed Apache-2.0 / MIT. A copyleft (AGPL/GPL/LGPL) or
@@ -3525,7 +3610,12 @@ jobs:
     # #5190→#2299 again, 57 minutes after a deliberate reopen), and a `sev:H` reading closed leaves
     # the release readiness count satisfied on evidence nobody has. A gate that could not fail the
     # required check would be a notification, and a notification is what this had.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
+    # platform-compat is a NEEDS on the same principle, applied to the plugins the fleet already RUNS
+    # (policy platform-backwards-compatibility): a platform change that removes or re-signs a member a
+    # compiled plugin calls compiles clean everywhere in this repo and throws MissingMethodException in a
+    # portal. The ladder's rung 2 — deployed plugin bytes on this platform — must be able to fail the
+    # required check, or it is a notification.
+    needs: [precheck, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -3844,6 +3934,16 @@ jobs:
         else
           echo "::error::The doc gate failed — see the 'Doc content compiles and runs' job for the failing check (install / compile / render / tests) and the node(s) it failed on."
         fi
+        exit 1
+
+    # ── …and the platform-compatibility ladder decides it too ──────────────────────────────
+    # Same shape as the doc gate: skipped/cancelled is not a pass; the reuse path (the tree was
+    # already tested green, so `build` and this job did not run) is the one exemption.
+    - name: Fail if the platform-compatibility ladder failed
+      if: needs.precheck.outputs.skip != 'true' && needs.platform-compat.result != 'success'
+      run: |
+        echo "::error::A deployed plugin cannot run on this platform (or the check could not measure) — see the 'Platform compatibility: deployed plugin set links against this platform (ladder)' job for the member/type it names."
+        echo "::error::Fix compatibility (restore the member, add an [Obsolete] forwarder, fix the binder) or declare a deliberate break by bumping \"epoch\" in src/MeshWeaver.Compiler/platform-compatibility.json with every broken member listed. Never a seal, a pin or a rebuild-everything fallback. Doc/Architecture/PlatformCompatibilityLadder."
         exit 1
 
     # ── …and a licensing defect decides it too ──────────────────────────────────────────────
