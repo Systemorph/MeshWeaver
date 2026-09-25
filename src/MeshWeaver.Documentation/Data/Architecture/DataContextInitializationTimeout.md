@@ -212,6 +212,13 @@ loop. It does not, for four reasons that each hold on their own:
 - `AHotCallerOnAPermanentlyStuckAddress_CostsOneActivationPerTimeBox_AndNothingRetriesOnItsOwn` —
   25 concurrent requests cost one activation, three time-boxes with no access create none, and the
   next burst costs exactly one more.
+- `ALiveStreamSubscriberOnAStuckAddress_DoesNotReCreateItOnItsOwn` covers a held synchronization
+  stream, the caller with its own re-ask machinery. Its `SubscribeRequest` waits behind the stuck
+  gate, so the owner never registers a client subscription and its recycle announcement has nobody
+  to notify. With the terminal answer, the stream re-creates nothing for three time-boxes.
+  **Sensitivity control:** if the retirement answers with the transient `ShuttingDown` banner
+  instead, this test fails. The stream re-asks by itself and re-creates the address, which is the
+  loop the terminal answer exists to prevent.
 
 ## What this does not change
 

@@ -202,6 +202,47 @@ public class DataContextInitTimeoutRetiresTheActivationTest(ITestOutputHelper ou
         Volatile.Read(ref attempts).Should().Be(2, "one initialization per activation, none per request");
     }
 
+    /// <summary>
+    /// The storm guard for a LIVE DATA-STREAM subscriber, not only request/response. A synchronization
+    /// stream has its own re-ask machinery (the resubscribe latch, the recycle re-arm a
+    /// <c>StreamEndedEvent</c> triggers), so it is the caller most able to turn a retirement into a
+    /// loop. Its <c>SubscribeRequest</c> parks behind the stuck activation's gate, which means the
+    /// owner never registers it as a client subscription and has nobody to announce a recycle to.
+    /// The terminal answer does not make the stream re-ask either. Held open for three time-boxes
+    /// after the retirement, the stream re-creates nothing.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ALiveStreamSubscriberOnAStuckAddress_DoesNotReCreateItOnItsOwn()
+    {
+        neverRecovers = true;
+        var ct = TestContext.Current.CancellationToken;
+        var client = GetClient(c => ConfigureClient(c)
+            .WithTypes(typeof(Item))
+            .AddData()
+            .WithPostingIdentity(PostingIdentity.System));
+
+        var stream = client.GetWorkspace().GetRemoteStream<InstanceCollection, CollectionReference>(
+            CreateHostAddress(), new CollectionReference(nameof(Item)));
+        var outcome = "(none)";
+        using var held = stream.Subscribe(
+            _ => { },
+            ex => outcome = $"errored: {ex.GetType().Name}: {ex.Message}",
+            () => outcome = "completed");
+
+        // The subscribe itself activates the address; that activation then times out and retires.
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Where(_ => !activations.IsEmpty)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await activations[0].DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        await activated.Should().NotEmit(TimeBox * 3,
+            "a live stream subscriber must not re-create a retired address by itself", ct);
+        Output.WriteLine($"stream outcome while held: {outcome}");
+        activations.Should().HaveCount(1,
+            "the held stream did not re-ask its way into a second activation");
+        Volatile.Read(ref attempts).Should().Be(1);
+    }
+
     private async Task AssertBurstIsRefused(IMessageHub client, int burst, CancellationToken ct)
     {
         var answers = await Task.WhenAll(Enumerable.Range(0, burst).Select(async _ =>

@@ -141,8 +141,12 @@ public sealed record DataContext : IDisposable
     /// <summary>
     /// The bound actually consumed by <see cref="OpenInitializationGate"/>. A data-source init that
     /// HANGS (a dependency that never initialises, a storage read that never comes back) trips this
-    /// and drives the hub to a terminal FAILED state instead of leaving
-    /// <see cref="InitializationGateName"/> closed forever (the 2026-06-26 prod wedge).
+    /// instead of leaving <see cref="InitializationGateName"/> closed forever (the 2026-06-26 prod
+    /// wedge). What it trips depends on the hub. A hub that demand routing re-creates
+    /// (<c>WithReactivationOnDemand</c>, i.e. every per-node hub) is RETIRED: its backlog is answered
+    /// terminally, it is disposed, it records no <see cref="InitializationError"/>, and the next
+    /// access re-creates it (policy <c>init-timeout-retires-activation</c>). Any other hub enters
+    /// the terminal FAILED state. See <see cref="SettleInitializationGate"/>.
     ///
     /// <para>🚨 It is the owning hub's <c>NestedInitializationBudget</c> — rung 2 of the ladder in
     /// <c>HubInitializationBudget</c> — never a constant of its own. This wait ENCLOSES the
