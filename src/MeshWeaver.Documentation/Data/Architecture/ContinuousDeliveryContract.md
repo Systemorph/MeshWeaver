@@ -864,6 +864,16 @@ five attempts with backoff, then a loud error naming it a REGISTRY/INFRA failure
 sibling jobs in the same run reached the same registry fine. `alert-on-failure` still files the red
 on the `ci-failure` issue, so a genuinely broken bake is never silent.
 
+**`platform-ladder-compat` — the deployed plugin BYTES on the promoted image.** Where
+`satellite-compat` recompiles satellite SOURCE, this job takes the four module bundles the fleet ran
+before this promote (the same baseline bundles `satellite-compat-image` verified) and links them,
+unchanged, against the portal image this run promoted — types, assembly versions and every member by
+signature (`mw-plugin-test platform-link`). It is rung 2 of the
+[Platform Compatibility Ladder](/Doc/Architecture/PlatformCompatibilityLadder) measured on the image
+that ships; the same check already blocks every core pull request (`Platform compatibility: deployed
+plugin set links against this platform (ladder)`, a need of `Consolidate test results`). Additive
+here: it gates no later job.
+
 **`satellite-compat` (2026-09-12) — every core build MEASURES every satellite, none of them blocks
 it.** The fleet assumes the platform is backwards compatible within a major, so the satellites
 (SocialMedia, Crm, Reinsurance, Education, Manufacturing; Plugins is built inside this run) rebuild
@@ -1088,4 +1098,5 @@ green lane red.
 - [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) — where the version number comes from.
 - [Deployment](/Doc/Architecture/Deployment) — the route router (AKS vs Container Apps).
 - [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges) — what the `mw-plugin-test` leg is for.
+- [The Platform Compatibility Ladder](/Doc/Architecture/PlatformCompatibilityLadder) — why a platform roll never needs the plugins rebuilt, and the checks that prove it on every platform build (policy `platform-backwards-compatibility`).
 - [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) — which releases an install can take by itself, and the three conditions a tag must clear before it is a safe helm target.
