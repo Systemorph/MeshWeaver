@@ -1,7 +1,7 @@
 ---
 Name: Dynamic Content Type Registration
 Category: Architecture
-Description: A dynamic NodeType's content CLR type registers only as a side effect of one of its instances activating in THIS process — so a type whose few instances live on another replica is untypeable here, with a usable assembly, a clean bake and a clean census. The mechanism, the measurements that separate it from a declined bundle, and why the obvious on-demand fix must not ship. NOT yet closed.
+Description: A dynamic NodeType's content CLR type registers only as a side effect of one of its instances activating in THIS process — so a type whose few instances live on another replica is untypeable here, with a usable assembly, a clean bake and a clean census. The mechanism, the measurements that separate it from a declined bundle, why the obvious on-demand fix must not ship, and the paced registration-only pass that closes it off the readiness path.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7"/><path d="M17.5 14v7"/></svg>
 ---
 
@@ -25,11 +25,12 @@ cold-activates**. Three consequences follow, and none of them is obvious from an
 2. **Every other replica reads the same nodes through its own `MeshNodeStreamCache`**, receives
    the payload as JSON, asks its own registry for the `$type`, and is told nothing. The content
    stays a bare `JsonElement`.
-3. **Nothing at boot closes the gap.** `DynamicTypePreWarmer`'s adopt-only pass *asks, never
+3. **The boot passes did not close the gap.** `DynamicTypePreWarmer`'s adopt-only pass *asks, never
    builds*, and it is the default path for every deployment. Where the compiling sweep does run, a
    type the shared assembly store already holds is reported `AlreadyBaked` and — in the warmer's
    own words — *"never activated"*. That is the normal case for **every replica after the first**,
-   and for every replica of a roll onto an identity that is already baked.
+   and for every replica of a roll onto an identity that is already baked. The
+   registration-only pass described below now runs after them.
 
 So the exposure is precisely: **a dynamic NodeType with FEW instances, all of whose instances
 happen to activate elsewhere.** A type with many instances gets activated on most replicas sooner
@@ -168,28 +169,66 @@ wrong root cause gets published.
 **So registration belongs with the component already sanctioned to activate dynamic types on this
 replica: the pre-warmer.** Its `AlreadyBaked` branch is where the skip happens, it runs once per
 process, it is sequenced after bundle seeding, and it already holds the bake's verdict that the
-type has usable bytes here. The shape that fits the two original objections is a **registration-only
-pass over the `AlreadyBaked` types, as a paced background trickle AFTER the sweep settles** — off
-the readiness path, so the per-NodeType boot cost the content bake removed stays removed, and after
-the bake has settled, so no probe meets an adopted-but-not-yet-loadable bundle. That pass covers
-every adopted type rather than only the ones somebody read, which also closes the blind spot below.
+type has usable bytes here.
 
-The cost is real and is a judgement call, not a detail: it is the ~13.5 s of assembly opening that
-#1660 removed from boot, moved to a background trickle. That trade wants the maintainer's decision,
-which is why this page describes the shape rather than shipping it.
+## The registration-only pass
+
+The shape approved for the fix (policy
+[`dynamic-content-type-registration-pass`](../PolicyNotProse)) is a **paced, registration-only pass
+over the already-baked dynamic types, after the bake settles, off the readiness path.** It is
+`DynamicContentTypeRegistrar`, run once per process by `DynamicContentTypeRegistrationHostedService`,
+which `AddDynamicTypePreWarming` registers beside the pre-warmer.
+
+**When.** After `PreWarmCompletion` settles — any settlement: completed, faulted or not applicable
+all mean the compile queue has drained and the adopted bundles have landed. So no probe meets an
+adopted-but-not-yet-loadable bundle. Nothing gates on the pass: a replica serves while it runs.
+
+**What, per dynamic type**, in path order:
+
+| step | what it reads | what it skips on, named |
+|---|---|---|
+| already resolvable here? | `IMeshContentTypeRegistry.TryResolveByNodeType` | `AlreadyRegistered` — an instance activated here first |
+| a usable build for this framework? | the record alone (`HasUsableBuild` — no store probe) | `NotBaked` — first access compiles it, as before |
+| the bytes in this process's store | `IAssemblyStore.TryGetAssemblyPath(path, LastCompiledVersion)` | `BytesMissing` |
+| are they the published build? | `ServedBuildIdentity.Mismatch(LatestAssemblyMvid, the file's MVID)` | `StaleBytes` — registering would bind a type family the activations will not use |
+| load the configuration | `GetConfigurationsFromExistingAssembly` (reflection over the existing file) | `Faulted` — the recorded build did not load |
+| build it once | `ContentTypeRegistration.ProbeRegister` — a transient probe, nothing started | `DeclaresNoContentType` when the build registered nothing |
+
+That is the enrichment hot path with every write removed. **No compile is driven, no NodeType record
+is written** (no stale-`Ok` self-heal, no `Pending` flip) and no rebind watcher is armed. That is why
+it may run on every replica, where a read seam must not.
+
+**Pacing.** Each assembly load is blocking file I/O plus reflection, so it runs through the
+`FileSystem` `IIoPool`. The types run one at a time (`Concat`), with a pause between two types that
+each did real work: `PreWarm:RegistrationBetweenTypes`, default 200 ms. Skips pause for nothing. The
+~13.5 s of assembly opening #1660 removed from boot is paid here instead, in the background, spread
+over the pass. `PreWarm:RegisterContentTypes=false` turns the pass off.
+
+**What it says.** One Information line per pass with the count per outcome and the elapsed time. One
+Warning names every type that stayed unregistered (`BytesMissing`, `StaleBytes`, `Faulted`) and why:
+those are the types whose content can still render empty on this replica.
+
+**Pinned by** `ABakedTypeRegistersWithoutAnInstanceTest` (MeshWeaver.Hosting.Test). The batch bake
+compiles a type with a content type **without activating a hub**, which is the `AlreadyBaked` replica
+state, and the control asserts the registry does not know it. The pass then registers it from the
+existing bytes and leaves the record's build stamp unchanged. A type with no build is skipped and not
+compiled. With the probe call removed, the first case fails (`DeclaresNoContentType`).
 
 ## What this does not establish
 
-- **No fix is shipped and neither issue is closed.** What is established is the mechanism, the
-  measurements that separate it from a declined bundle, and that the cheap fix is unsafe.
-- **No production verification.** The acceptance measurement for any fix is positive, not an
+- **The pass is shipped; production verification is not.** What is established is the mechanism,
+  the measurements that separate it from a declined bundle, that the cheap fix is unsafe, and — in
+  a test mesh — that the pass registers a baked type without compiling or writing.
+- **No production verification of the pass.** The acceptance measurement for any fix is positive, not an
   absence: on a replica reporting a type under `content-types`, that entry disappears from the next
   `/health` probe while `bake-report` is unchanged, and the type's record still reads
   `buildProvenance: AdoptedVerified` afterwards — a fix that heals by compiling has re-stamped the
   shared record and is the unsafe shape wearing a green tick.
-- **The residual population is not bounded.** Every dynamic NodeType this replica adopted rather
-  than compiled is unregistered here until something reads one; the measurement can name only the
-  ones that HAVE been read. On the control instance that is 229 of 230 types adopted, and 2 named.
+- **The residual population, after the pass, is the pass's own Warning line**: the types whose
+  bytes are missing, stale or unloadable on this replica. Before the pass it was unbounded — on the
+  control instance 229 of 230 types were adopted and only the 2 that had been read were named.
+- **The time the pass takes on a live replica** was not measured. The ~13.5 s figure is #1660's
+  boot measurement of opening every assembly; the pass adds its pacing on top of that.
 - **Whether a type also fails to register after a genuine local compile** was not tested; every
   case measured was an adoption.
 
