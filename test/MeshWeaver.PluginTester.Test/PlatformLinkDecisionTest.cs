@@ -82,6 +82,33 @@ public class PlatformLinkDecisionTest
         Assert.Contains(decision.Findings, f => f.Contains("gratuitous", StringComparison.Ordinal));
     }
 
+    /// <summary>A declaration that names the member under ANOTHER assembly does not cover it — both
+    /// halves of an entry must match.</summary>
+    [Fact]
+    public void ADeclarationNamingTheWrongAssembly_DoesNotCoverTheBreak()
+    {
+        var elsewhere = new PlatformLink.DeclaredBreak(2, [("MeshWeaver.Graph", "MeshWeaver.Mesh.MeshNode::Frobnicate")]);
+
+        Assert.False(PlatformLink.Decide([Broken()], 1, 2, [elsewhere]).Green);
+    }
+
+    /// <summary>🚨 The declaration may not be REMOVED: the base declares an epoch, the candidate
+    /// carries none — red even with a clean plugin set.</summary>
+    [Fact]
+    public void RemovingTheDeclaration_IsRed()
+    {
+        var decision = PlatformLink.Decide([Clean()], 1, null, []);
+
+        Assert.False(decision.Green);
+        Assert.Contains(decision.Findings, f => f.Contains("may not be removed", StringComparison.Ordinal));
+    }
+
+    /// <summary>No declaration at the base or the head (the file does not exist yet) is not a
+    /// removal.</summary>
+    [Fact]
+    public void NoDeclarationAnywhere_IsNotARemoval() =>
+        Assert.True(PlatformLink.Decide([Clean()], null, null, []).Green);
+
     /// <summary>An epoch only ever increases.</summary>
     [Fact]
     public void AnEpochMovedBackwards_IsRed() =>
@@ -124,6 +151,10 @@ public class PlatformLinkDecisionTest
             Assert.Equal("MeshWeaver.Mesh.MeshNode::Frobnicate", Assert.Single(Assert.Single(breaks).Members).Member);
 
             File.WriteAllText(path, """{ "breaks": [] }""");
+            Assert.Throws<InvalidDataException>(() => PlatformLink.ReadDeclaration(path));
+
+            // A present "breaks" that is not an array is malformed, never "no breaks".
+            File.WriteAllText(path, """{ "epoch": 1, "breaks": {} }""");
             Assert.Throws<InvalidDataException>(() => PlatformLink.ReadDeclaration(path));
         }
         finally

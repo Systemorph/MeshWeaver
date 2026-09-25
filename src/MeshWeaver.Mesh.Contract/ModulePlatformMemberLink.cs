@@ -97,10 +97,14 @@ public static partial class ModulePlatformLink
                 tally.Missing.Add($"{typeName} ({assemblyName}) — no longer public: TypeAccessException at first use");
         }
 
+        // The platform classes the module's own types DERIVE from (transitively) — the only
+        // context in which a protected member is reachable from this module's code.
+        var derivedFrom = PlatformBasesOf(module, surface);
+
         // ── What the module's OWN types owe the platform types they derive from or implement: a
         // new abstract/interface member the plugin type does not implement, or a base class that
         // became sealed, is a TypeLoadException the moment the plugin type loads.
-        MeasureObligations(module, surface, InScope, tally);
+        MeasureObligations(module, surface, InScope, provider, tally);
 
         foreach (var handle in module.MemberReferences)
         {
@@ -130,7 +134,7 @@ public static partial class ModulePlatformLink
 
             var described = $"{typeName}::{memberName}{DescribeSignature(signature, reference.GetKind())} ({assemblyName})";
             switch (FindMember(surface, assemblyName, typeName, memberName, signature,
-                        reference.GetKind() == MemberReferenceKind.Field, provider, pluginName))
+                        reference.GetKind() == MemberReferenceKind.Field, provider, pluginName, derivedFrom))
             {
                 case MemberLookup.Found:
                     tally.Checked++;
@@ -181,7 +185,8 @@ public static partial class ModulePlatformLink
     /// </summary>
     private static MemberLookup FindMember(
         ModulePlatformSurface surface, string assemblyName, string typeName, string memberName,
-        string signature, bool isField, CanonicalSignatureProvider provider, string pluginName)
+        string signature, bool isField, CanonicalSignatureProvider provider, string pluginName,
+        IReadOnlySet<string> derivedFrom)
     {
         if (Locate(surface, assemblyName, typeName, depth: 0) is not { } start)
             return surface.MetadataOf(assemblyName) is null ? MemberLookup.Unverifiable : MemberLookup.TypeAbsent;
@@ -204,7 +209,8 @@ public static partial class ModulePlatformLink
                     var field = reader.GetFieldDefinition(fieldHandle);
                     if (reader.StringComparer.Equals(field.Name, memberName)
                         && field.DecodeSignature(provider, null) == signature)
-                        return IsAccessible((int)(field.Attributes & System.Reflection.FieldAttributes.FieldAccessMask), reader, pluginName)
+                        return IsAccessible((int)(field.Attributes & System.Reflection.FieldAttributes.FieldAccessMask), reader, pluginName,
+                                derivedFrom.Contains(FullNameOf(reader, handle)))
                             ? MemberLookup.Found
                             : MemberLookup.Inaccessible;
                 }
@@ -216,7 +222,8 @@ public static partial class ModulePlatformLink
                     var method = reader.GetMethodDefinition(methodHandle);
                     if (reader.StringComparer.Equals(method.Name, memberName)
                         && MethodSignature(method.DecodeSignature(provider, null)) == signature)
-                        return IsAccessible((int)(method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask), reader, pluginName)
+                        return IsAccessible((int)(method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask), reader, pluginName,
+                                derivedFrom.Contains(FullNameOf(reader, handle)))
                             ? MemberLookup.Found
                             : MemberLookup.Inaccessible;
                 }
@@ -306,12 +313,52 @@ public static partial class ModulePlatformLink
     /// protected-internal — or internal / private-protected, when the platform assembly grants
     /// <c>InternalsVisibleTo</c> to the plugin.
     /// </summary>
-    private static bool IsAccessible(int access, MetadataReader platform, string pluginName) => access switch
+    /// <param name="access">The member's access mask value.</param>
+    /// <param name="platform">The assembly declaring the member.</param>
+    /// <param name="pluginName">The referencing module's assembly name.</param>
+    /// <param name="derives">Whether a type of the referencing module derives from the member's
+    /// declaring type — the only context a <c>protected</c> member is reachable from.</param>
+    private static bool IsAccessible(int access, MetadataReader platform, string pluginName, bool derives) => access switch
     {
-        6 or 4 or 5 => true,                                // Public, Family, FamORAssem
-        3 or 2 => GrantsInternalsTo(platform, pluginName),  // Assembly, FamANDAssem
-        _ => false,                                         // Private, PrivateScope
+        6 => true,                                                    // Public
+        4 => derives,                                                 // Family (protected)
+        5 => derives || GrantsInternalsTo(platform, pluginName),      // FamORAssem (protected internal)
+        3 => GrantsInternalsTo(platform, pluginName),                 // Assembly (internal)
+        2 => derives && GrantsInternalsTo(platform, pluginName),      // FamANDAssem (private protected)
+        _ => false,                                                   // Private, PrivateScope
     };
+
+    /// <summary>Full names of every platform class a type the module defines derives from,
+    /// transitively along base-class edges (module-local bases walked through, platform bases
+    /// resolved on the surface).</summary>
+    private static IReadOnlySet<string> PlatformBasesOf(MetadataReader module, ModulePlatformSurface surface)
+    {
+        var bases = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var typeHandle in module.TypeDefinitions)
+        {
+            var reader = module;
+            var baseType = module.GetTypeDefinition(typeHandle).BaseType;
+            for (var depth = 0; depth < 64 && !baseType.IsNil; depth++)
+            {
+                TypeDefinitionHandle next;
+                if (baseType.Kind == HandleKind.TypeDefinition)
+                    next = (TypeDefinitionHandle)baseType;
+                else if (ParentTypeReference(reader, baseType) is { } referenceHandle
+                         && reader.GetTypeReference(referenceHandle) is var reference
+                         && ResolveScope(reader, reference) is { } scope
+                         && Locate(surface, scope, FullName(reader, reference), depth: 0) is { } located)
+                {
+                    (reader, next) = located;
+                }
+                else
+                    break;
+                if (!ReferenceEquals(reader, module))
+                    bases.Add(FullNameOf(reader, next));
+                baseType = reader.GetTypeDefinition(next).BaseType;
+            }
+        }
+        return bases;
+    }
 
     /// <summary>Whether a platform type is visible to the plugin: public (nested: public or
     /// protected inside a visible declaring type), or internal to an assembly that grants the plugin
@@ -392,7 +439,7 @@ public static partial class ModulePlatformLink
     /// </summary>
     private static void MeasureObligations(
         MetadataReader module, ModulePlatformSurface surface, Func<string, bool> inScope,
-        MemberTally tally)
+        CanonicalSignatureProvider provider, MemberTally tally)
     {
         foreach (var typeHandle in module.TypeDefinitions)
         {
@@ -436,14 +483,23 @@ public static partial class ModulePlatformLink
                 foreach (var methodHandle in current.GetMethods())
                 {
                     var method = module.GetMethodDefinition(methodHandle);
-                    if ((method.Attributes & System.Reflection.MethodAttributes.Abstract) == 0)
-                        implemented.Add(module.GetString(method.Name) + "/" + Arity(module, method));
+                    if ((method.Attributes & System.Reflection.MethodAttributes.Abstract) != 0)
+                        continue;
+                    var methodName = module.GetString(method.Name);
+                    implemented.Add(methodName + "/" + Arity(module, method));
+                    implemented.Add(methodName + "|" + MethodSignature(method.DecodeSignature(provider, null)));
                 }
                 foreach (var implHandle in current.GetMethodImplementations())
                 {
                     var declaration = module.GetMethodImplementation(implHandle).MethodDeclaration;
-                    if (declaration.Kind == HandleKind.MemberReference)
-                        explicitly.Add(module.GetString(module.GetMemberReference((MemberReferenceHandle)declaration).Name));
+                    if (declaration.Kind != HandleKind.MemberReference)
+                        continue;
+                    // An explicit implementation names the member it implements WITH the member's own
+                    // signature, in the declaring type's generic terms (!0) — exactly the form the
+                    // owed member's definition decodes to, generic interface or not.
+                    var declared = module.GetMemberReference((MemberReferenceHandle)declaration);
+                    explicitly.Add(module.GetString(declared.Name) + "|"
+                                   + MethodSignature(declared.DecodeMethodSignature(provider, null)));
                 }
                 foreach (var implementation in current.GetInterfaceImplementations())
                     AddPlatformSupertype(module.GetInterfaceImplementation(implementation).Interface, isDirectBase: false);
@@ -476,7 +532,16 @@ public static partial class ModulePlatformLink
                 {
                     var name = ownerReader.GetString(method.Name);
                     var arity = Arity(ownerReader, method);
-                    if (implemented.Contains(name + "/" + arity) || explicitly.Contains(name)
+                    var signature = MethodSignature(method.DecodeSignature(provider, null));
+                    // An IMPLICIT implementation is matched by exact signature when the owner is not
+                    // generic; a generic owner's signature is written in its own !0 terms, which a
+                    // concrete implementation does not share, so there name + arity is what can be
+                    // compared without substitution.
+                    var ownerIsGeneric = ownerReader.GetTypeDefinition(method.GetDeclaringType()).GetGenericParameters().Count > 0;
+                    var implicitly = ownerIsGeneric
+                        ? implemented.Contains(name + "/" + arity)
+                        : implemented.Contains(name + "|" + signature);
+                    if (implicitly || explicitly.Contains(name + "|" + signature)
                         || ImplementedByPlatformBase(surface, platformSupertypes, name, arity))
                         continue;
                     tally.Missing.Add(
@@ -531,7 +596,9 @@ public static partial class ModulePlatformLink
                     concrete.Add(key);
                     continue;
                 }
-                if ((method.Attributes & System.Reflection.MethodAttributes.Static) == 0 && !concrete.Contains(key))
+                // Static abstract interface members are owed too: adding one breaks every compiled
+                // implementer exactly like an instance member does.
+                if (!concrete.Contains(key))
                     owed.Add((name, currentReader, method));
             }
             foreach (var next in Supertypes(surface, currentReader, definition))

@@ -78,6 +78,8 @@ names it. The pull-request check holds the declaration to the measurement, both 
 | a break, some member NOT listed | bumped | 🔴 red — naming the undeclared members |
 | no break | bumped | 🔴 red — a gratuitous bump forces the whole fleet to rebuild |
 | anything | moved backwards | 🔴 red |
+| anything | the base declares an epoch, the candidate carries no declaration | 🔴 red — the declaration may not be removed |
+| a declared member under a different assembly than the break | bumped | 🔴 red — both halves of an entry must match |
 | an assembly **binding conflict** (a higher version than the platform carries) | any | 🔴 red — not declarable; it is the loader refusing the bind |
 
 🚨 A red here is answered by **fixing compatibility or declaring the break** — never by a seal, a
@@ -91,7 +93,7 @@ pin, an identity gate or a rebuild-everything fallback.
 fail step there, so a red ladder blocks the merge (skipped or cancelled is not a pass; the one
 exemption is the already-green-tree reuse path, as for every gate on that check).
 
-- **Plugin side:** the newest `main-cd` run on `main` that still holds all four module bundles
+- **Plugin side:** the newest COMPLETED `main-cd` run on `main` whose `promote` job succeeded and that still holds all four module bundles
   (`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps`, `.Payments.Stripe`) —
   `.github/scripts/fetch-deployed-plugin-set.sh`. Those are the bytes the fleet self-rolled to. No
   such run ⇒ **red**, never "nothing to check".
@@ -131,6 +133,7 @@ load context and executed. The static column may never be greener than the runti
 | changed return type | member half (signature) | Unlinkable | MissingMethodException |
 | static ↔ instance | member half (signature header) | Unlinkable | MissingMethodException |
 | member made non-public | member half (accessibility) | Unlinkable, "no longer accessible" | MethodAccessException |
+| member made `protected` (still reachable from a DERIVED plugin type, which stays Linkable) | member half (accessibility, in the caller's derivation context) | Unlinkable | MethodAccessException |
 | type made non-public | type accessibility | Unlinkable, "no longer public" | TypeAccessException |
 | field turned into a property | member half | Unlinkable | MissingFieldException |
 | `init` setter turned into `set` | member half (`IsExternalInit` modreq) | Unlinkable | MissingMethodException |
@@ -138,6 +141,8 @@ load context and executed. The static column may never be greener than the runti
 | member of a generic type re-signed | member half (via the instantiation) | Unlinkable | MissingMethodException |
 | enum → string constants, no forwarder | member half (the enum-typed signature) | Unlinkable | MissingMethodException |
 | interface member added **without** a default, on an interface a plugin implements | obligation half | Unlinkable, "does not implement" | TypeLoadException when the plugin type loads |
+| interface member re-signed (same name and arity) on an interface a plugin implements | obligation half (exact signature) | Unlinkable | TypeLoadException |
+| `static abstract` interface member added | obligation half | Unlinkable | TypeLoadException |
 | abstract member added to a class a plugin derives from | obligation half | Unlinkable | TypeLoadException |
 | base class a plugin derives from made `sealed` | obligation half | Unlinkable | TypeLoadException |
 | member / overload / type added | — | Linkable | runs |
@@ -174,9 +179,14 @@ never "no breaks").
   There is no `MemberRef` to walk.
 - **The base class library** — member checks cover the platform's own `MeshWeaver.*` assemblies;
   BCL compatibility is the runtime's contract, third-party drift is the version half's.
-- **An implementation gap that differs only in a parameter type** — the obligation half matches
-  implementations by name and parameter count (no generic substitution), so it can miss one; it never
-  reports an implementation that exists.
+- **An implementation gap on a GENERIC interface or base that differs only in a type** — the
+  obligation half matches an implementation by exact signature where the owner is not generic (and for
+  every explicit implementation), but by name and parameter count where it is: a generic owner's
+  signature is written in its own `!0` terms, and substitution is not attempted. It never reports an
+  implementation that exists.
+- **A type moved between assemblies WITHOUT a forwarder, inside a signature** — the member half
+  compares signature types by full name; the move itself is still caught, by the type half, on the
+  plugin's own type reference.
 - **The NodeType prebuilt-bundle adoption decision** — whether a pod ADOPTS p1's compiled NodeType
   bytes on P2 is the compatibility key's decision (MeshWeaver#5672), not this surface check's.
 

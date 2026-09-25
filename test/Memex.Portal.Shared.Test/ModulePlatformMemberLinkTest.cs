@@ -70,7 +70,7 @@ public class ModulePlatformMemberLinkTest : IDisposable
         public enum Kind { A, B }
         public static class Describer { public static string Describe(Kind kind) => kind.ToString(); }
         public interface IHook { string Name(); }
-        public abstract class ViewBase { public abstract string Render(); }
+        public abstract class ViewBase { public abstract string Render(); protected string Frame(string s) => "[" + s + "]"; }
         public class Panel { }
         public class Greeter { public string Greet() => "hello"; }
         """;
@@ -82,7 +82,7 @@ public class ModulePlatformMemberLinkTest : IDisposable
     private const string PluginSource = """
         using MeshWeaver.Test.Ladder;
         public sealed class MyHook : IHook { public string Name() => "hook"; }
-        public sealed class MyView : ViewBase { public override string Render() => "view"; }
+        public sealed class MyView : ViewBase { public override string Render() => Frame("view"); }
         public sealed class MyPanel : Panel { }
         public static class LadderPlugin
         {
@@ -162,9 +162,17 @@ public class ModulePlatformMemberLinkTest : IDisposable
         // IMPLEMENTS — TypeLoadException when the plugin type loads (#3465's shape at run time).
         { "interface member added", "public interface IHook { string Name(); }", "public interface IHook { string Name(); string Describe(); }", "MyHook does not implement MeshWeaver.Test.Ladder.IHook::Describe" },
         // An abstract member added to a class a plugin derives from.
-        { "abstract member added", "public abstract class ViewBase { public abstract string Render(); }", "public abstract class ViewBase { public abstract string Render(); public abstract string Title(); }", "MyView does not implement MeshWeaver.Test.Ladder.ViewBase::Title" },
+        { "abstract member added", "public abstract class ViewBase { public abstract string Render(); protected string Frame(string s) => \"[\" + s + \"]\"; }", "public abstract class ViewBase { public abstract string Render(); protected string Frame(string s) => \"[\" + s + \"]\"; public abstract string Title(); }", "MyView does not implement MeshWeaver.Test.Ladder.ViewBase::Title" },
         // A base class a plugin derives from made sealed.
         { "base class sealed", "public class Panel { }", "public sealed class Panel { }", "MyPanel derives from MeshWeaver.Test.Ladder.Panel" },
+        // public → protected: still exists, reachable only from a DERIVED type — the plugin's
+        // ordinary call throws MethodAccessException.
+        { "member made protected", "public int Compute(int x) => x + 1;", "protected int Compute(int x) => x + 1;", "Calculator::Compute" },
+        // An interface member RE-SIGNED with the same name and arity (return type): the plugin's
+        // implementation no longer implements it.
+        { "interface member re-signed", "public interface IHook { string Name(); }", "public interface IHook { object Name(); }", "MyHook does not implement MeshWeaver.Test.Ladder.IHook::Name" },
+        // A STATIC ABSTRACT interface member added — owed by every implementer just the same.
+        { "static abstract member added", "public interface IHook { string Name(); }", "public interface IHook { string Name(); static abstract string Kind(); }", "MyHook does not implement MeshWeaver.Test.Ladder.IHook::Kind" },
     };
 
     /// <summary>
@@ -213,7 +221,7 @@ public class ModulePlatformMemberLinkTest : IDisposable
         // An interface member added WITH a default implementation.
         { "default interface member added", "public interface IHook { string Name(); }", "public interface IHook { string Name(); string Describe() => Name(); }" },
         // A virtual (non-abstract) member added to a class a plugin derives from.
-        { "virtual member added", "public abstract class ViewBase { public abstract string Render(); }", "public abstract class ViewBase { public abstract string Render(); public virtual string Title() => \"\"; }" },
+        { "virtual member added", "public abstract class ViewBase { public abstract string Render(); protected string Frame(string s) => \"[\" + s + \"]\"; }", "public abstract class ViewBase { public abstract string Render(); protected string Frame(string s) => \"[\" + s + \"]\"; public virtual string Title() => \"\"; }" },
         // A rename that keeps an [Obsolete] FORWARDER under the old signature — the sanctioned way
         // to retire a member inside a major.
         { "renamed with an [Obsolete] forwarder", "public int Compute(int x) => x + 1;", "public int Calculate(int x) => x + 1;\n    [System.Obsolete(\"Use Calculate.\")] public int Compute(int x) => Calculate(x);" },

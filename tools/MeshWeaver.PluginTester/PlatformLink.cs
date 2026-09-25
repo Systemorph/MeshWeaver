@@ -65,6 +65,12 @@ internal static class PlatformLink
         var epochMoved = baseEpoch is { } b && headEpoch is { } h && h != b;
         var green = true;
 
+        if (baseEpoch is not null && headEpoch is null)
+        {
+            findings.Add($"platform-link: the base declares compatibility epoch {baseEpoch}, but this candidate carries NO declaration (src/MeshWeaver.Compiler/platform-compatibility.json is missing or has no epoch). The declaration may not be removed; restore it.");
+            green = false;
+        }
+
         if (epochMoved && headEpoch < baseEpoch)
         {
             findings.Add($"platform-link: the compatibility epoch moved BACKWARDS ({baseEpoch} → {headEpoch}). An epoch only ever increases.");
@@ -87,8 +93,8 @@ internal static class PlatformLink
         var listed = declared
             .Where(d => headEpoch is { } e && d.Epoch == e)
             .SelectMany(d => d.Members)
-            .Select(m => m.Member.Trim())
-            .Where(m => m.Length > 0)
+            .Select(m => (Assembly: m.Assembly.Trim(), Member: m.Member.Trim()))
+            .Where(m => m.Member.Length > 0 && m.Assembly.Length > 0)
             .ToImmutableArray();
 
         foreach (var result in refused)
@@ -102,8 +108,12 @@ internal static class PlatformLink
             }
             // A declared break: every missing reference must be named by the declaration.
             var undeclared = verdict.MissingTypes.Concat(verdict.MissingMembers)
-                .Where(m => !listed.Any(l => m.StartsWith(l + " ", StringComparison.Ordinal)
-                                             || m.Contains(" " + l + " ", StringComparison.Ordinal)))
+                // Both halves of a declared entry must match the verdict line: the member (at the
+                // start, or after "implement " for an obligation line) AND its assembly.
+                .Where(m => !listed.Any(l =>
+                    (m.StartsWith(l.Member + " ", StringComparison.Ordinal)
+                     || m.Contains(" " + l.Member + " ", StringComparison.Ordinal))
+                    && m.Contains("(" + l.Assembly + ")", StringComparison.Ordinal)))
                 .ToArray();
             if (undeclared.Length > 0)
             {
@@ -129,16 +139,22 @@ internal static class PlatformLink
         if (!root.TryGetProperty("epoch", out var epochElement) || !epochElement.TryGetInt32(out var epoch))
             throw new InvalidDataException($"{path}: no integer \"epoch\"");
         var breaks = ImmutableArray.CreateBuilder<DeclaredBreak>();
-        if (root.TryGetProperty("breaks", out var breaksElement) && breaksElement.ValueKind == JsonValueKind.Array)
+        if (root.TryGetProperty("breaks", out var breaksElement))
         {
+            if (breaksElement.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException($"{path}: \"breaks\" is not an array");
             foreach (var entry in breaksElement.EnumerateArray())
             {
                 if (!entry.TryGetProperty("epoch", out var e) || !e.TryGetInt32(out var breakEpoch))
                     throw new InvalidDataException($"{path}: a break entry carries no integer \"epoch\"");
                 var members = ImmutableArray.CreateBuilder<(string, string)>();
-                if (entry.TryGetProperty("members", out var membersElement) && membersElement.ValueKind == JsonValueKind.Array)
+                if (entry.TryGetProperty("members", out var membersElement))
+                {
+                    if (membersElement.ValueKind != JsonValueKind.Array)
+                        throw new InvalidDataException($"{path}: a break entry's \"members\" is not an array");
                     foreach (var member in membersElement.EnumerateArray())
                         members.Add((member.GetProperty("assembly").GetString() ?? "", member.GetProperty("member").GetString() ?? ""));
+                }
                 breaks.Add(new DeclaredBreak(breakEpoch, members.ToImmutable()));
             }
         }

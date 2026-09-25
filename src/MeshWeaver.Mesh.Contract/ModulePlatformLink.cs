@@ -814,7 +814,8 @@ public sealed class ModulePlatformSurface
         try
         {
             var image = File.ReadAllBytes(path);
-            var peReader = new PEReader(System.Collections.Immutable.ImmutableArray.Create(image));
+            // No copy: the image array is handed over as-is (ImmutableCollectionsMarshal), typed ImmutableArray<byte>.
+            var peReader = new PEReader(System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(image));
             return peReader.HasMetadata ? peReader.GetMetadataReader() : null;
         }
         catch (Exception exception) when (exception is IOException or BadImageFormatException

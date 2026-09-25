@@ -20,7 +20,11 @@ repo="${2:-${GITHUB_REPOSITORY:-Systemorph/MeshWeaver}}"
 modules=(MeshWeaver.AI MeshWeaver.Markdown.Collaboration MeshWeaver.Maps MeshWeaver.Payments.Stripe)
 
 mkdir -p "$out"
-runs=$(gh api "repos/$repo/actions/workflows/main-cd.yml/runs?branch=main&per_page=40" --jq '.workflow_runs[].id') \
+# COMPLETED runs only — an in-progress run may already carry the bundles of a set it has not
+# finished promoting — and below, only one whose `promote` job SUCCEEDED: those bundles shipped with a
+# promoted set, which is what the fleet rolls to. (A run can be red for other reasons — a satellite
+# leg, an arm64 bake — and still have promoted; the promote job, not the run's colour, is the fact.)
+runs=$(gh api "repos/$repo/actions/workflows/main-cd.yml/runs?branch=main&status=completed&per_page=40" --jq '.workflow_runs[].id') \
   || { echo "::error::could not list main-cd.yml runs on $repo — the deployed plugin set cannot be located"; exit 1; }
 
 chosen=""
@@ -31,10 +35,13 @@ for run in $runs; do
   for m in "${modules[@]}"; do
     case " $names " in *" module-bundle-$m "*) ;; *) complete=0 ;; esac
   done
-  if [ "$complete" -eq 1 ]; then chosen="$run"; break; fi
+  [ "$complete" -eq 1 ] || continue
+  promoted=$(gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" \
+    --jq '[.jobs[] | select(.name | startswith("Promote:")) | .conclusion] | first // empty') || continue
+  if [ "$promoted" = "success" ]; then chosen="$run"; break; fi
 done
 
-[ -n "$chosen" ] || { echo "::error::none of the last 40 main-cd runs on main still holds all four module-bundle-* artifacts (${modules[*]}) — the deployed plugin set is not available, so no compatibility verdict can be given. Re-run main-cd on main (it re-packs them); do NOT waive this check."; exit 1; }
+[ -n "$chosen" ] || { echo "::error::none of the last 40 COMPLETED main-cd runs on main both PROMOTED its set and still holds all four module-bundle-* artifacts (${modules[*]}) — the deployed plugin set is not available, so no compatibility verdict can be given. Re-run main-cd on main (it re-packs them); do NOT waive this check."; exit 1; }
 
 for m in "${modules[@]}"; do
   gh run download "$chosen" -R "$repo" -n "module-bundle-$m" -D "$out/$m" \

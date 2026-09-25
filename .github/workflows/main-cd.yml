@@ -3575,7 +3575,12 @@ jobs:
   platform-ladder-compat:
     name: "Compatibility: newest deployed plugin set runs on this platform (ladder)"
     needs: [preflight, gate, promote, plugins-bake-image, satellite-compat-image]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    # 🚨 `always()` so a FAILED input need does not SKIP this job into silence — a promoted image with no
+    # rung-2 verdict and nothing red would be exactly the skip-trapdoor. Paid for: every need whose output
+    # is consumed is asserted in the first step below, so a failed need turns this job RED, naming it.
+    if: >-
+      always() && !cancelled() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
+      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -3592,12 +3597,16 @@ jobs:
       # 🚨 No baseline = no verdict = RED, with the reason satellite-compat-image recorded. The satellite
       # legs treat a missing baseline as "refuse to judge" because there the baseline is a CONTROL; here the
       # baseline IS the subject (the plugin bytes the fleet runs), so a run without it has measured nothing.
-      - name: "The deployed plugin set must be established"
+      - name: "The inputs must exist: the deployed plugin set and the promoted images"
         env:
+          IMAGES_RESULT: ${{ needs.plugins-bake-image.result }}
+          BASELINE_RESULT: ${{ needs.satellite-compat-image.result }}
           BASELINE_DIGEST: ${{ needs.satellite-compat-image.outputs.baseline_digest }}
           BASELINE_REASON: ${{ needs.satellite-compat-image.outputs.baseline_reason }}
         run: |
           set -euo pipefail
+          [ "$IMAGES_RESULT" = "success" ] || { echo "::error::plugins-bake-image ended '$IMAGES_RESULT' — the promoted portal and tester digests are unknown, so there is nothing to link the deployed plugins against."; exit 1; }
+          [ "$BASELINE_RESULT" = "success" ] || { echo "::error::satellite-compat-image ended '$BASELINE_RESULT' — the plugin set the fleet ran before this promote was not verified."; exit 1; }
           [ -n "${BASELINE_DIGEST:-}" ] || { echo "::error::the plugin set the fleet ran before this promote could not be established — ${BASELINE_REASON:-no reason recorded}. Rung 2 of the compatibility ladder measured NOTHING on this build."; exit 1; }
       - name: "Download the deployed plugin set (the baseline bundles)"
         uses: actions/download-artifact@v8
@@ -3638,6 +3647,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$PORTAL" in *@sha256:*) ;; *) echo "::error::plugins-bake-image resolved no portal digest — nothing to link against"; exit 1 ;; esac
+          case "$TESTER" in *@sha256:*) ;; *) echo "::error::plugins-bake-image resolved no tester digest — no platform-link to run"; exit 1 ;; esac
           n=$(find "$RUNNER_TEMP/deployed-plugins" -name '*.module.nupkg' | wc -l | tr -d ' ')
           [ "$n" -gt 0 ] || { echo "::error::the baseline artifact carried no module bundle"; exit 1; }
           STAGE="$RUNNER_TEMP/portal-image"
