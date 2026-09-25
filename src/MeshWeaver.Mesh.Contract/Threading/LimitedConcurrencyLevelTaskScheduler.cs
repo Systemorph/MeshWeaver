@@ -6,26 +6,26 @@ namespace MeshWeaver.Mesh.Threading;
 
 /// <summary>
 /// A <see cref="TaskScheduler"/> that runs at most <c>maxDegreeOfParallelism</c>
-/// tasks concurrently on top of the shared .NET <see cref="ThreadPool"/>.
-/// Adapted from the Microsoft Docs sample "How to: Create a Task Scheduler That
+/// tasks concurrently. Adapted from the Microsoft Docs sample "How to: Create a Task Scheduler That
 /// Limits Concurrency"
 /// (https://learn.microsoft.com/dotnet/standard/parallel-programming/how-to-create-a-task-scheduler-that-limits-concurrency).
 ///
 /// <para>Used by <see cref="IoPool.InvokeBlocking{T}"/> for sync-blocking / CPU
-/// leaves (e.g. <c>File.ReadAllBytes</c>, Roslyn compile, <c>Process</c>). It
-/// borrows ThreadPool threads — it never spawns its own — but caps how many it
-/// occupies at once, so a burst of blocking work cannot trigger runaway thread
-/// injection and starve the ThreadPool that the Orleans grain schedulers rely
-/// on. This is the "compatible with how Orleans wants us to pool" property:
-/// reuse the framework's pool, just govern it.</para>
+/// leaves (e.g. <c>File.ReadAllBytes</c>, Roslyn compile, <c>Process</c>). It caps how many run at
+/// once, so a burst of blocking work QUEUES behind the cap instead of fanning out.</para>
 ///
-/// <para>🚨 <b>Except for CPU-bound work, where borrowing is the defect.</b> A capped borrower still
-/// HOLDS up to <c>maxDegreeOfParallelism</c> pool workers for as long as each leaf computes, and the
-/// pool's minimum is <c>ProcessorCount</c> — so a CPU pool capped at the processor count occupies
-/// every worker the grain turns need. With <c>dedicatedThreads</c> the same cap is enforced over
-/// threads this scheduler starts itself (one per concurrent drain loop, exiting when the queue is
-/// empty): the bound is identical, and the ThreadPool is not touched at all
-/// (<c>IoPoolNames.CompileCpu</c>, <c>Doc/Architecture/CompileOffTheThreadPool</c>).</para>
+/// <para>🚨 <b>The drain loops run on threads this scheduler starts itself</b> — one per concurrent
+/// drain loop, each exiting when the queue is empty, so an idle pool holds no thread. The Docs sample
+/// this was adapted from BORROWS ThreadPool workers, and for a blocking leaf that is the defect: the
+/// leaf holds its worker for as long as it blocks, the pool's minimum is <c>ProcessorCount</c> (6 on a
+/// portal pod), and most caps are far above that (<c>FileSystem</c> 256, <c>Http</c> 16). A burst of
+/// network-volume reads, bundle reads or <c>git</c> waits could therefore hold every worker the grain
+/// turns and routing legs need, and the silo then waited on the ThreadPool's slow thread injection —
+/// Orleans' ".NET Thread Pool execution stalled". The CPU lane went first
+/// (<c>IoPoolNames.CompileCpu</c>, <c>Doc/Architecture/CompileOffTheThreadPool</c>); the same argument
+/// holds for anything that holds a thread without yielding it
+/// (<c>Doc/Architecture/BlockingLeavesOffTheThreadPool</c>). A <c>null</c> thread name keeps the
+/// borrowing behaviour; it exists so a test can show the difference.</para>
 ///
 /// <para>The <c>_tasks</c> queue is an INSTANCE field guarded by <c>lock(_tasks)</c>
 /// — not static, so it dies with the owning <see cref="IoPool"/> and never bleeds
@@ -41,21 +41,30 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
 
     private readonly int _maxDegreeOfParallelism;
 
-    // Number of ThreadPool work items currently dispatched (running or queued to run).
+    // Number of drain loops currently dispatched (running, or started and about to run).
     private int _delegatesQueuedOrRunning;
 
-    // True: each drain loop runs on a thread started here, never a ThreadPool worker.
-    private readonly bool _dedicatedThreads;
+    // Non-null: each drain loop runs on a thread started here, under this name, never a ThreadPool
+    // worker. Null: the drain loops borrow ThreadPool workers (kept for the contrast tests only).
+    private readonly string? _dedicatedThreadName;
 
-    /// <summary>Name of the threads a dedicated-thread scheduler starts — visible in dumps.</summary>
+    /// <summary>Name of the threads the CPU lane (<c>IoPoolNames.CompileCpu</c>) starts — visible in dumps.</summary>
     internal const string DedicatedThreadName = "mw-cpu-lane";
 
-    public LimitedConcurrencyLevelTaskScheduler(int maxDegreeOfParallelism, bool dedicatedThreads = false)
+    /// <summary>Name of the threads every other pool's blocking leaves run on — visible in dumps.</summary>
+    internal const string BlockingThreadName = "mw-io-lane";
+
+    /// <param name="maxDegreeOfParallelism">How many tasks may run at once; at least 1.</param>
+    /// <param name="dedicatedThreadName">
+    /// The name of the threads the drain loops run on; <c>null</c> borrows ThreadPool workers instead.
+    /// </param>
+    public LimitedConcurrencyLevelTaskScheduler(
+        int maxDegreeOfParallelism, string? dedicatedThreadName = BlockingThreadName)
     {
         if (maxDegreeOfParallelism < 1)
             throw new ArgumentOutOfRangeException(nameof(maxDegreeOfParallelism));
         _maxDegreeOfParallelism = maxDegreeOfParallelism;
-        _dedicatedThreads = dedicatedThreads;
+        _dedicatedThreadName = dedicatedThreadName;
     }
 
     protected override void QueueTask(Task task)
@@ -89,7 +98,7 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
 
     private void NotifyThreadPoolOfPendingWork()
     {
-        if (_dedicatedThreads)
+        if (_dedicatedThreadName is { } name)
         {
             // A drain loop of its own: the same loop, on a thread the pool never lends out. Background
             // so an idle-but-draining loop can never hold the process open; UnsafeStart because each
@@ -97,7 +106,7 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
             new Thread(_ => DrainQueue(), maxStackSize: 0)
             {
                 IsBackground = true,
-                Name = DedicatedThreadName,
+                Name = name,
             }.UnsafeStart();
             return;
         }

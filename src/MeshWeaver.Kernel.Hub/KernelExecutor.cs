@@ -98,6 +98,13 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
             ?? IoPool.Unbounded;
 
+    // The CPU lane: a cell's Roslyn build + emit + load runs here, on the lane's own threads, never
+    // a ThreadPool worker (#5388, Doc/Architecture/CompileOffTheThreadPool). A leaf on it does
+    // nothing but compute — ScriptSession.Compile — so it cannot nest under the Compile pool's gate.
+    private readonly IIoPool cpuLane =
+        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.CompileCpu)
+            ?? IoPool.Unbounded;
+
     // NuGet restore (#r "nuget:...") is a genuine network + file-system I/O leaf —
     // route it through the bounded Http pool, never a bare Observable.FromAsync.
     private readonly IIoPool nugetPool =
@@ -431,17 +438,32 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // embedded areas the submitting user may NOT read (DocumentExportAreaAccessTest).
             // A null delivery context leaves the ambient untouched — background flows that
             // impersonate explicitly keep their identity; nothing is invented.
-            scope => compilePool.Invoke(async t =>
+            //
+            // 🚨 TWO leaves, not one (#5388). The Roslyn half — build the submission, emit, load —
+            // is pure computation and runs on the CPU lane's own threads (`cpuLane`), never a
+            // ThreadPool worker; only the script's EXECUTION, which is user code that awaits, runs
+            // as the Compile pool's async leaf. As one async leaf the whole emit ran on a pool
+            // worker before its first await (Doc/Architecture/CompileOffTheThreadPool).
+            scope => Observable.Defer(() =>
                 {
-                    using (accessContext is null
-                               ? null
-                               : publicHub.ServiceProvider.GetService<AccessService>()
-                                   ?.SwitchAccessContext(accessContext))
-                        return await (session ??= new ScriptSession(
-                                scriptGlobals!,
-                                name => cellSurfaceBindings?.GetValueOrDefault(name)))
-                            .RunAsync(cleaned, scriptOptions, typeof(MeshScriptGlobals), t)
-                            .ConfigureAwait(false);
+                    var current = session ??= new ScriptSession(
+                        scriptGlobals!,
+                        name => cellSurfaceBindings?.GetValueOrDefault(name));
+                    var options = scriptOptions;
+                    return cpuLane
+                        .InvokeBlocking(t => current.Compile(cleaned, options, typeof(MeshScriptGlobals), t))
+                        .SelectMany(compiled => compilePool.Invoke(t =>
+                        {
+                            // The scope is held only while the submission STARTS: its first await
+                            // captures the ExecutionContext with the identity set, and the scope is
+                            // then restored on THIS thread (the restore is thread-affine). Awaiting
+                            // inside the using would dispose it on whichever thread resumed.
+                            using (accessContext is null
+                                       ? null
+                                       : publicHub.ServiceProvider.GetService<AccessService>()
+                                           ?.SwitchAccessContext(accessContext))
+                                return current.ExecuteAsync(compiled, t);
+                        }));
                 })
                 .Select(returnValue =>
                 {
