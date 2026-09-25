@@ -859,6 +859,10 @@ public static class PreWarmServiceCollectionExtensions
         services.TryAddSingleton<PreWarmCompletion>();
         services.AddPrebuiltAssemblyConsumption();
         services.AddHostedService<DynamicTypePreWarmerHostedService>();
+        // Behind the same barrier: once the bake has settled, register — without compiling or
+        // writing anything — the content type of every already-baked dynamic NodeType this replica
+        // has not activated (Systemorph/MeshWeaver.Plugins#2180). Off the readiness path.
+        services.AddHostedService<DynamicContentTypeRegistrationHostedService>();
         return services;
     }
 
