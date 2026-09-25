@@ -310,6 +310,15 @@ def extract_step(root: Path, step_id: str) -> str:
     import yaml
 
     doc = yaml.safe_load((root / WORKFLOW).read_text())
+    # 🚨 ONE step per id, across EVERY job. Two steps sharing an id would hand this harness
+    # whichever it met first — silently, and the cases would then test a step the workflow does
+    # not run where the reader thinks it does.
+    owners = [name for name, job in (doc.get("jobs") or {}).items()
+              for step in (job.get("steps") or [])
+              if isinstance(step, dict) and step.get("id") == step_id]
+    if len(owners) > 1:
+        die(f"step id `{step_id}` appears in {len(owners)} steps of {WORKFLOW} (jobs: {', '.join(owners)}) — "
+            "the harness cannot tell which one it is testing. Give each step a distinct id.")
     for job in (doc.get("jobs") or {}).values():
         for step in job.get("steps") or []:
             if isinstance(step, dict) and step.get("id") == step_id:

@@ -4256,7 +4256,10 @@ jobs:
       issues: write
     steps:
       - name: A DUE Plugins seal must have RUN its legs
-        id: seal
+        # 🚨 `seal_legs`, NOT `seal`: `gate` owns a step called `seal`, and `test-cd-steps.py`
+        # extracts a step by `id:` across EVERY job — a second `seal` would hand the harness
+        # whichever it met first, silently.
+        id: seal_legs
         env:
           PUBLISH: ${{ needs.gate.outputs.publish }}
           PROMOTE_RESULT: ${{ needs.promote.result }}
@@ -4288,14 +4291,14 @@ jobs:
           fi
           echo "the due Plugins seal ran and succeeded: $SEAL_LEGS"
       - name: Record a failed seal on the cd-plugins-seal ledger
-        if: failure() && steps.seal.outcome == 'failure'
+        if: failure() && steps.seal_legs.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHORT: ${{ needs.gate.outputs.short_sha }}
           PSHORT: ${{ needs.gate.outputs.plugins_short }}
-          BAD: ${{ steps.seal.outputs.bad }}
+          BAD: ${{ steps.seal_legs.outputs.bad }}
         run: |
           set -euo pipefail
           gh label create cd-plugins-seal --repo "$REPO" \
