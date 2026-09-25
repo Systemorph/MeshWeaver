@@ -27,6 +27,14 @@ case "${1:-}" in
     echo active > "$fixture/job-state"
     echo "job.batch/created" ;;
   get)
+    if [ "${2:-}" = "deployment" ]; then
+      # `get deployment memex-portal-deployment -o jsonpath=…release-name` (the --tag form's release
+      # read): $FIXTURE/release-name, else NotFound; "forbidden" in it plays a refused read.
+      r="$(cat "$fixture/release-name" 2>/dev/null || true)"
+      [ "$r" = "forbidden" ] && { echo "Error from server (Forbidden): deployments.apps is forbidden" >&2; exit 1; }
+      [ -n "$r" ] || { echo "Error from server (NotFound): deployments.apps \"memex-portal-deployment\" not found" >&2; exit 1; }
+      printf '%s' "$r"; exit 0
+    fi
     s="$(state)"
     case "$s" in
       absent)    echo "Error from server (NotFound): jobs.batch \"${3:-}\" not found" >&2; exit 1 ;;

@@ -252,7 +252,12 @@ Plugins/control-plane half, and it has a precise shape:
   `ExpectedDbVersion` readable from outside an image — a release-marker field — and both halves can
   refuse (or clear) by comparing two numbers, which is strictly better than refusing on a missing
   capability. It also lets the fleet answer the question at the end of "Why it is structural" without
-  rolling anything.
+  rolling anything. **Taken** (policy `db-migration-planned`): every release publishes
+  `_releases/_db/<version>` (and `expectedDbVersion` in the OCI marker), and the self-updater and
+  the Updates tab compare the running and target numbers — `NotSupported` across a published bump
+  is now REFUSED naming both, `Forbidden` on a target that keeps the schema rolls. The operator
+  `run.sh` interlock makes (b1) hold for every plan whatever Hosting generation composed it. The
+  whole process is [Planning a Database Migration](../PlanningADatabaseMigration).
 
 Two constraints any answer has to respect, both standing directives:
 

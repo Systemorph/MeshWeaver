@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for run.sh's interlock tests: the plan's `set image` step only needs to be
+# RECORDED, in order, in $HOSTING_INTERLOCK_LOG — so the tests can prove the migration came first.
+set -uo pipefail
+log="${HOSTING_INTERLOCK_LOG:?the kubectl stub needs HOSTING_INTERLOCK_LOG}"
+printf 'kubectl %s\n' "$*" >> "$log"
