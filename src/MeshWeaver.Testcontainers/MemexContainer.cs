@@ -153,7 +153,7 @@ public sealed class MemexBuilder : ContainerBuilder<MemexBuilder, MemexContainer
         base.Validate();
         if (string.IsNullOrWhiteSpace(DockerResourceConfiguration.MemexConnectionString))
             throw new ArgumentException(
-                "a memex needs a Postgres: call WithPostgres(<connection string reachable from inside "
+                "a memex needs a database: call the Postgres method(<connection string reachable from inside "
                 + "the container>) — the portal image runs Memex.Portal.Distributed, whose data lives "
                 + "in ConnectionStrings:memex, and an instance without it does not start.",
                 nameof(MemexConfiguration.MemexConnectionString));
