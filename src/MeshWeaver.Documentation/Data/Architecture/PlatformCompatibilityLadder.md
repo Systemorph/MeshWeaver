@@ -172,7 +172,11 @@ never "no breaks").
   name a plugin reads. The bytes link and run. Only EXECUTING the deployed plugin set on the candidate
   platform can see it — the runtime rung of the ladder (a mesh stepping through the five rungs with
   the compatibility key, typing every NodeType and serving it) lands with the key change
-  (MeshWeaver#5672), not here.
+  (MeshWeaver#5672), not here. For MeshWeaver.Plugins' own SUITES, the rung-3 half of that question
+  — the plugin rebuilt from source against the candidate and its tests run — is asked on every
+  merge-queue entry by `Dependent suites (MeshWeaver.Plugins)` (policy `dependent-suites-gate`,
+  [The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's suites run against the
+  candidate"); the DEPLOYED bytes on the candidate stay the runtime rung's.
 - **Source-only breaks** (CS0419 on an added overload, a new ambiguity) — they bite at the plugin's
   own rebuild, rung 3, in the plugin repository's CI; the binary is fine.
 - **Reflection and string-named calls** — `Type.GetType("…")`, `GetMethod("…")`, dynamic dispatch.

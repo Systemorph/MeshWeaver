@@ -346,14 +346,17 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   contains `searched: false` is refused (#2741: no embedding provider, nothing was searched —
   #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
   positive marker is refused too.
-- **Core dispatches NOTHING to a plugin repository.** A dispatcher that asked MeshWeaver.Plugins to
-  build against a core pull request (`dependent-suites.yml`, #3103, 2026-09-03) was withdrawn the same
-  day by the maintainer: *"none of the top-level repos should have any dependency to anyone else"*.
-  The break a removed member causes downstream surfaces in the plugin repo's own CI when its
-  `platform-ref` moves — that is where it is fixed, by the plugin repo.
+- **Core dispatches ONE thing to a plugin repository: a request to test a CANDIDATE** (policy
+  `dependent-suites-gate`). `Dependent suites (MeshWeaver.Plugins)` in `dotnet-test.yml` runs on every
+  merge-queue entry (and a PR labelled `dependent-suites`), sends `core-candidate-suites`, and waits
+  for the verdict Plugins writes at `refs/core-candidate/<key>` — green only when no suite that
+  passes at the base fails at the candidate. It is a `needs:` of `Consolidate test results`. The
+  same shape was withdrawn on 2026-09-03 (no receiver existed, every core PR went red); it came back
+  after #5635/#5647/#5655 held Plugins' main red for hours, with the receiver landed FIRST. The
+  release wave is still memex's; `PlatformReleaseNotifyGuard.DispatchLedger` admits this one sender.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
-  its `ApiReadLedger` enumerates the two reads on that side of it.
+  its `ApiReadLedger` enumerates the reads on that side of it (the dependent-suites verdict is one).
 - **The `none` escape is a declaration, not a skip** — printed into the log, and refused without a
   reason. Core cannot see a private repo's callers; what the gate removes is nobody being asked.
 
