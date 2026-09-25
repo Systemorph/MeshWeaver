@@ -210,13 +210,17 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
             TestContext.Current.CancellationToken);
         onIt.LastSyncCommitSha.Should().Be(UnsealedSha, "the premise: the Space holds a tree the seal does not cover");
 
-        // A negative with no positive signal to wait on — a bounded window is the sanctioned shape.
-        var neverRolledBack = repoClient.FetchedRefs.Where(r => r == SealedSha)
-            .Should().NotEmit(within: TestTimeouts.Convergence,
-                cancellationToken: TestContext.Current.CancellationToken);
-        await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
-        await neverRolledBack;
+        // STRUCTURAL, never a silence window: the webhook's decision for this source, read off the
+        // gate it asks with the seal this instance runs on disk. The seal is at an OLDER commit, and
+        // the plan lands the built commit — the source already holds it, so nothing is imported.
+        var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        var plan = SealedSyncGate.DecideBuild(
+            new RepoIdentity("test", "held-source"), UnsealedSha, onIt.LastSyncCommitSha,
+            SealedPublicationIndex.ReadFor(publishedRoot, identity), identity, null);
+        plan.Commit.Should().Be(UnsealedSha, "the seal never redirects a green build onto the sealed commit");
+        plan.Redirected.Should().BeFalse();
 
+        await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
         var after = await ConfigWhenOrCurrent(space, _ => true, TestContext.Current.CancellationToken);
         after.LastSyncCommitSha.Should().Be(UnsealedSha, "moving it to the older sealed commit would go backwards");
         after.LastSyncOutcome.Should().NotBe(GitHubSyncService.HeldOutcome, "nothing is held any more");
@@ -312,6 +316,10 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     /// request is ANONYMOUS — its authorization is the HMAC signature — so the processor's own
     /// System impersonation must be what carries the lookups and the writes.</summary>
     private async Task Deliver(string headSha, CancellationToken cancellationToken)
+        => await DeliverCounting(headSha, cancellationToken);
+
+    /// <summary>Delivers a green build and answers how many imports it dispatched.</summary>
+    private async Task<int> DeliverCounting(string headSha, CancellationToken cancellationToken)
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.ClearHostIdentity();
@@ -319,7 +327,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         accessService.SetContext(null);
         try
         {
-            await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
+            return await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
                 .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         }
         finally

@@ -189,20 +189,31 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
         (await landed).Should().Be(LaterSha);
         census.Holds().Should().BeEmpty("the seal holds no source, so nothing is ever reported frozen");
 
-        // ── an announcement while the seal is at an OLDER commit must not roll the source back ──
-        var neverBack = repoClient.FetchedRefs.Where(r => r == SealedSha)
-            .Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
-        await AnnouncePublication();
-        await neverBack;
+        // ── a seal at an OLDER commit must not roll the source back ────────────────────────
+        // STRUCTURAL, never a silence window: the reconciler an announcement drives answers how many
+        // imports it dispatched, and every one it dispatches is decided inside that answer.
+        var fetchedSoFar = repoClient.Count;
+        (await Reconcile()).Should().Be(0, "the source is AHEAD of the older seal; moving it would go backwards");
 
         // ── the seal catches up to the commit the source holds: the steady state, nothing moves ──
-        var fetchedSoFar = repoClient.Count;
-        var nothingMore = repoClient.FetchedRefs.Skip(fetchedSoFar)
-            .Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
         StageSeal(LaterSha);
-        await AnnouncePublication();
-        await nothingMore;
+        (await Reconcile()).Should().Be(0, "the source is at the seal and nothing was declined");
+        repoClient.Count.Should().Be(fetchedSoFar, "no reconcile fetched anything");
         census.Holds().Should().BeEmpty();
+    }
+
+    /// <summary>One reconcile of this identity's sealed publications — exactly what a publication
+    /// announcement runs — answering the number of imports it dispatched.</summary>
+    private Task<int> Reconcile()
+    {
+        var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        var sealedForThisIdentity = SealedPublicationIndex.ReadFor(publishedRoot, identity);
+        sealedForThisIdentity.Should().ContainSingle(s => s.IsSealed,
+            "the reconcile must be asked about the seal this test staged, or a zero proves nothing");
+        return Mesh.ServiceProvider.GetRequiredService<IPublicationSyncReconciler>()
+            .Reconcile(identity, sealedForThisIdentity, [])
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
