@@ -1788,6 +1788,54 @@ if [ "$_vh_rc" -eq 0 ] && ! grep -q '^az ' "$_vh_log" && [ "$_vh_fs" = "1" ]; th
 else
   bad "without --vault the record is the only layer" "rc=${_vh_rc} -f count=${_vh_fs} log: $(cat "$_vh_log")"
 fi
+# 🚨 Memex#295: the half carries secret FAMILIES only. A structural key in it is refused BEFORE helm
+# and named — never layered, because a list the render omits deploys beside the record's own wiring
+# (memex 2026-09-25, Job memex-migration-62: duplicate volume "kv-secrets"). Names only, never values.
+printf 'extraVolumes:\n- name: kv-secrets\n  csi:\n    driver: secrets-store.csi.k8s.io\npgbackrest:\n  enabled: false\nsecrets:\n  memex_portal:\n    ConnectionStrings__orleans: "SENTINEL-NEVER-PRINTED"\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+if [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'STRUCTURE' && printf '%s' "$_vh_out" | grep -q ' extraVolumes' \
+   && printf '%s' "$_vh_out" | grep -q 'helmAction: capture' && ! grep -q '^helm ' "$_vh_log"; then
+  ok "a half carrying a structural key is refused before helm, naming the key and the capture remedy (Memex#295)"
+else
+  bad "a structural half is refused before helm" "rc=${_vh_rc} out: ${_vh_out} log: $(cat "$_vh_log")"
+fi
+case "$_vh_out" in *SENTINEL-NEVER-PRINTED*|*secrets-store.csi*) bad "the structural refusal names keys, never values" "a value reached the log: ${_vh_out}" ;;
+  *) ok "the structural refusal names keys, never values" ;; esac
+printf 'config:\n  memex_portal:\n    Foo: "bar"\nsecrets:\n  memex_portal: {}\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q ' config' && ! grep -q '^helm ' "$_vh_log" \
+  && ok "a structural MAP is refused too — it would silently supply every leaf the render omits" \
+  || bad "a structural map is refused" "rc=${_vh_rc} out: ${_vh_out}"
+# All three families, quoted keys and comments: accepted and layered.
+printf '# captured\n"parameters": {}\npgbackrest:\n  enabled: false\nsecrets:\n  memex_portal:\n    X: "y"\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -eq 0 ] && grep -q '^helm upgrade' "$_vh_log" \
+  && ok "a half holding only secrets/parameters/pgbackrest is layered" \
+  || bad "a families-only half is layered" "rc=${_vh_rc} out: ${_vh_out}"
+# A JSON object is read by its keys (jq): families pass, structure is refused.
+printf '{"secrets":{"memex_portal":{"X":"y"}}}\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -eq 0 ] && ok "a JSON half holding only a family is layered" || bad "a JSON families-only half is layered" "rc=${_vh_rc} out: ${_vh_out}"
+printf '{"secrets":{},"ingress":{"host":"h"}}\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q ' ingress' && ! grep -q '^helm ' "$_vh_log" \
+  && ok "a JSON half carrying structure is refused" || bad "a JSON structural half is refused" "rc=${_vh_rc} out: ${_vh_out}"
+# What cannot be read is refused, never assumed clean; a half with no family at all is refused.
+printf -- '- secrets\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'cannot be read' && ! grep -q '^helm ' "$_vh_log" \
+  && ok "a half whose top level is not a mapping is refused as unreadable" || bad "an unreadable half is refused" "rc=${_vh_rc} out: ${_vh_out}"
+printf '# nothing but a comment\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'none of the families' && ! grep -q '^helm ' "$_vh_log" \
+  && ok "a half holding none of the families is refused" || bad "a family-less half is refused" "rc=${_vh_rc} out: ${_vh_out}"
 refuses_hard "a vault name that is not a plain name is refused before anything runs" "not a plain name" \
   env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault 'kv;rm -rf /'
 rm -rf "$_vh_dir"

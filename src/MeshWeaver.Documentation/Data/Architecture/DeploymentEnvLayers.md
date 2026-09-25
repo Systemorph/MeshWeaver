@@ -387,6 +387,31 @@ Three things changed, so that neither path can produce that render again:
    host (invariant 16) that simply did not exist — so `check-chart-invariants.sh` now carries a
    **refusal control**: a fixture of exactly the #3780 render that must fail to template.
 
+### The half carries secret families only — structure is refused (Memex#295)
+
+"The record wins on every key it declares" holds only for keys the render DECLARES. helm REPLACES a
+list the later `-f` file names and LEAVES one it omits, and `HelmValues` omits an empty list — a
+record that mounts nothing renders no `extraVolumes:` key at all, where a committed overlay may
+write `extraVolumes: []`. So a legacy list left in the half by an old whole-release capture deploys
+BESIDE whatever the record renders for the same wiring. Measured on memex, 2026-09-25, the V58
+migration Reconcile: the half still carried `extraVolumes`/`extraVolumeMounts`/`extraEnvFrom` for
+the SecretProviderClass the record declares under `keyVaultSecretClasses`, the chart rendered the
+volume twice, and `helm upgrade` refused with
+`Job memex-migration-62 invalid: duplicate volume "kv-secrets"`. A structural MAP fails the other
+way — silently: it merges, supplying every leaf the render does not name.
+
+`hosting-deploy` therefore reads the half's top-level KEY NAMES (never a value) before anything
+else runs and refuses, naming them, any key outside the allow-list `secrets`, `parameters`,
+`pgbackrest` — the same list the config repo's `capture` stores and its lane's guard reads
+(`scripts/vault-values.py`, `VAULT_FAMILIES`). A half it cannot read as a mapping, and a half with
+none of the families, are refused too. The remedy it names is a governed `HelmRelease` action with
+`helmAction: capture`, which re-stores the half filtered to its families and keeps the previous
+version as the rollback. Before capturing, check that every leaf the half ALONE supplies is inert
+or declared on the record: on memex-cloud (measured 2026-09-25 against a local `HelmValues.Render`
+of the live record) those leaves were `image.*`, `ingress.tls.*`, `portal.image` and
+`migration.image` — the chart reads neither of the first two, and `hosting-deploy` `--set`s the
+last two — so nothing the portal reads left the render.
+
 What is deliberately *not* gated the same way: the mesh string's chart-side copy on a record-driven
 instance is a shadowed placeholder by design (layer 3 supplies the real one), so `helm template`
 still accepts it. That left one known consequence for the first operator image carrying the #4173
