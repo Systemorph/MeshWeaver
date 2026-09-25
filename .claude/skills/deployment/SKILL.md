@@ -44,6 +44,20 @@ machine, dev Macs included: `--bake-output` exists only in CI scripts, never in 
 `.targets`/`.props`/`.csproj`. The commands below are a quick reference, not a substitute for the
 doc.
 
+## 🚨 The ladder: which image and which plugins, and when a roll is HELD
+
+Policy `platform-backwards-compatibility`: a portal rolls to the newest promoted image its update
+policy admits and on which no installed plugin is held — and on a normal build nothing is held, with
+NOTHING sealed for the new build. It keeps its plugin bytes across the roll, and adopts a newer plugin
+publication later, independently, when that publication's floor is ≤ the running platform. The one
+roll hold is a DECLARED break (another compatibility key, or a ceiling an installed build declares)
+with no replacement sealed for the target: the self-updater's candidate is declined as
+`PlatformRangeExceeded`, naming the plugin and both versions, and the portal lands on the newest
+release its plugins still cover. A routed Roll runs unattended under a `Continuous` record whose
+pattern admits the tag; it carries the target's migration Job first. 🚨 **Never pin an image tag in a
+record or a chart value** — not to unblock a roll, not ever (`PlatformDeliveryNeverWaitsOnPluginsGuard`
+refuses one under `deploy/`). Full procedure and decision table: [Deploying Across Platform Versions](../../../src/MeshWeaver.Documentation/Data/Architecture/DeployingAcrossPlatformVersions.md).
+
 ## 🚨 First: the memex API, not the cluster
 
 **Maintainer directive, 2026-09-08: every operation goes through the memex API — no direct `az` /

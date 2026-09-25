@@ -190,6 +190,18 @@ Mechanism:
 Full protocol: the `/code` Skill node shipped by the AI engine (MeshWeaver.Plugins, `#2276`) →
 "In-mesh source is NEVER compiled by CI" + "The pre-prod sweep".
 
+## 🚨 CD delivers the PLATFORM alone — a Plugins job is never on its critical path
+
+Policy `platform-backwards-compatibility`. In core `main-cd.yml` the platform set (image legs,
+`promote`, `verify-images`, `publish-bake`, `notify-platform-update`) is judged by `delivery-verdict`,
+which needs NO `plugins-*` / `satellite-compat*` job, directly or transitively; the `handoff` step's
+`DELIVERY_LEGS` carry platform legs only; `alert-on-failure` keys on a DIRECT need failing
+(`contains(needs.*.result, 'failure')`) — never `failure()`, which is true when any ANCESTOR failed.
+The Plugins re-seal is `report-plugins-seal`: red on a due seal that did not succeed, recorded on the
+`cd-plugins-seal` issue, re-attempted by the reconcile's seal probe — never failing, holding or
+re-publishing the platform. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds all of it with negative
+controls. Adding a job: if it is Plugins-side, it must not become a need of a platform job.
+
 ## 🚨 Runs on `main` are never cancelled — load-bearing, not a tuning choice
 
 `dotnet-test.yml` sets `cancel-in-progress` to
