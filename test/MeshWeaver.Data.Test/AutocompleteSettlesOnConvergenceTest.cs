@@ -157,4 +157,47 @@ public class AutocompleteSettlesOnConvergenceTest(ITestOutputHelper output) : Hu
             .Should().Contain(PromptItem.InsertText,
                 "the best snapshot so far is still the answer");
     }
+
+    /// <summary>
+    /// 🚨 A provider that settles AFTER the answering hub has been disposed must not crash the
+    /// process. The answer callback used to resolve its logger from <c>hub.ServiceProvider</c> at
+    /// ANSWER time; by then the hub's Autofac scope was gone, the resolve threw
+    /// <see cref="ObjectDisposedException"/> inside a single-argument <c>Subscribe(onNext)</c> body,
+    /// Rx rethrew it on whatever thread completed the provider, and the test host died with exit 134
+    /// and no failing test (MeshWeaver.Plugins core-candidate run 36163381618,
+    /// <c>DataExtensions.HandleAutocompleteRequest</c>). Here the provider is completed on the test
+    /// thread, so the old shape throws straight out of <c>OnCompleted</c> — deterministic, no race.
+    /// </summary>
+    [HubFact]
+    public async Task AProviderSettlingAfterTheHubIsDisposedDoesNotThrow()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var ct = TestContext.Current.CancellationToken;
+
+        // Only the request matters here: the answer, if any, cannot outlive the host.
+        _ = AnswerTo(client, host, out var subscription);
+        using var request = subscription;
+
+        // The handler has subscribed to the late provider once the subject has an observer — the
+        // answer is now pending on it, which is the state the crash needs.
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Select(_ => lateSnapshots.HasObservers)
+            .Should().Within(TestTimeouts.Quick)
+            .Match(has => has, "the host's autocomplete handler must be waiting on the late provider",
+                cancellationToken: ct);
+
+        host.Dispose();
+        await host.DisposalCompleted.Should().Within(TestTimeouts.Convergence)
+            .Emit("the answering hub must finish its teardown", cancellationToken: ct);
+
+        var settleAfterDisposal = () =>
+        {
+            lateSnapshots.OnNext([LateItem]);
+            lateSnapshots.OnCompleted();
+        };
+        settleAfterDisposal.Should().NotThrow(
+            "an answer that settles after its hub is gone must not resolve services from the "
+            + "disposed scope — on a pool thread that exception is unhandled and kills the process");
+    }
 }
