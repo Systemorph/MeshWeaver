@@ -211,6 +211,47 @@ public class ModuleSyncDecisionTest
     }
 
     [Fact]
+    public void TheCensus_ReplacesASpacesModules_SoADeclineCannotOutliveItsModule()
+    {
+        var census = new SealedSyncCensus();
+        var t0 = System.DateTimeOffset.UtcNow;
+        census.RecordSpaceModules("Plugins",
+        [
+            new ModuleOutcomeReading("Plugins", "Store", ModuleSyncOutcomeKind.Declined, "s1", "floor above running", t0),
+            new ModuleOutcomeReading("Plugins", "Hosting", ModuleSyncOutcomeKind.Synced, "h1", "changed", t0),
+            new ModuleOutcomeReading("Other", "Agent", ModuleSyncOutcomeKind.Unchanged, "a1", "unchanged", t0),
+        ]);
+        census.ModuleOutcomes().Should().Contain(m => m.IsDeclined);
+
+        // The next import of the Space no longer carries Store.
+        census.RecordSpaceModules("Plugins",
+            [new ModuleOutcomeReading("Plugins", "Hosting", ModuleSyncOutcomeKind.Unchanged, "h1", "unchanged", t0)]);
+        var after = census.ModuleOutcomes();
+        after.Should().NotContain(m => m.Module == "Store", "a module the tree dropped leaves the census");
+        after.Should().NotContain(m => m.IsDeclined);
+        SealedSyncCensus.IsModuleDeclineIndicted(after, t0.AddHours(2)).Should().BeFalse();
+
+        // A tree that states no module clears the Space.
+        census.RecordSpaceModules("Plugins", []);
+        census.ModuleOutcomes().Select(m => m.Space).Should().NotContain("Plugins");
+    }
+
+    [Fact]
+    public void ADeclineThatPersists_KeepsWhenItWasFirstSeen_AndIsIndictedPastTheJobCap()
+    {
+        var census = new SealedSyncCensus();
+        var t0 = System.DateTimeOffset.UtcNow;
+        census.RecordSpaceModules("Plugins",
+            [new ModuleOutcomeReading("Plugins", "Store", ModuleSyncOutcomeKind.Declined, "s1", "floor", t0)]);
+        census.RecordSpaceModules("Plugins",
+            [new ModuleOutcomeReading("Plugins", "Store", ModuleSyncOutcomeKind.Declined, "s2", "floor", t0.AddMinutes(50))]);
+        var declined = census.ModuleOutcomes().Single();
+        declined.FirstObservedAt.Should().Be(t0);
+        SealedSyncCensus.IsModuleDeclineIndicted(census.ModuleOutcomes(), t0.AddMinutes(50)).Should().BeTrue();
+        SealedSyncCensus.IsModuleDeclineIndicted(census.ModuleOutcomes(), t0.AddMinutes(10)).Should().BeFalse();
+    }
+
+    [Fact]
     public void ATreeWithNoManifest_StatesNoModule()
         => ModuleSyncDecision.Read([("index.json", "{}"), ("Doc/Page.md", "# hi")])
             .Should().BeEmpty("a course or content repo imports exactly as before");

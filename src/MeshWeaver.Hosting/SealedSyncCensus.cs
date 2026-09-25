@@ -254,6 +254,30 @@ public sealed class SealedSyncCensus
                 : reading);
     }
 
+    /// <summary>
+    /// Replaces EVERY module outcome of one Space with the given set (review on #5701): a module the
+    /// Space's tree no longer carries is removed, so the census stays bounded by the modules that
+    /// currently exist and a stale decline cannot keep the replica Degraded. A decline that persists
+    /// keeps the time it was first seen (<see cref="RecordModuleOutcome"/>). An empty set clears the
+    /// Space. Entries of a Space whose sync source is deleted are not observed here and live until
+    /// the process restarts.
+    /// </summary>
+    /// <param name="space">The Space the import wrote.</param>
+    /// <param name="readings">Every module outcome of that import; all must name <paramref name="space"/>.</param>
+    public void RecordSpaceModules(string space, IReadOnlyList<ModuleOutcomeReading> readings)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(space);
+        ArgumentNullException.ThrowIfNull(readings);
+        var keep = readings
+            .Select(r => r.Space + "#" + r.Module)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in modules.Keys)
+            if (key.StartsWith(space + "#", StringComparison.OrdinalIgnoreCase) && !keep.Contains(key))
+                modules.TryRemove(key, out _);
+        foreach (var reading in readings)
+            RecordModuleOutcome(reading);
+    }
+
     /// <summary>Every module outcome recorded, declined first, then by Space and module.</summary>
     /// <returns>The outcomes.</returns>
     public ImmutableList<ModuleOutcomeReading> ModuleOutcomes() =>

@@ -563,10 +563,12 @@ public sealed class GitHubSyncService
                                 // declined), and the manifest hashes the Space now HOLDS — advanced
                                 // only when the import's nodes all landed, so a module that did not
                                 // fully land is never read as unchanged next time (#2229 item C).
+                                // A landed tree that states NO module records an EMPTY map, which
+                                // clears the old hashes (review on #5701): a module that returns
+                                // later must never be read as unchanged against a hash recorded
+                                // before it left.
                                 modules: x.Modules,
-                                moduleVersions: landed && !x.Modules.IsEmpty
-                                    ? ModuleSyncDecision.Recorded(x.Modules)
-                                    : null)
+                                moduleVersions: landed ? ModuleSyncDecision.Recorded(x.Modules) : null)
                             .Do(_ => RecordModuleCensus(spacePath, x.Modules))
                             .Select(_ => x.Result);
                     });
@@ -1358,7 +1360,10 @@ public sealed class GitHubSyncService
                     // (null clears them: a conclusion that judged no module describes none), and
                     // the hashes the Space holds, which only an import that landed moves.
                     ModuleOutcomes = modules is { IsEmpty: false } judged ? judged : null,
-                    ModuleVersions = moduleVersions ?? cur.ModuleVersions,
+                    // null keeps what the Space holds (nothing landed); an empty map CLEARS it.
+                    ModuleVersions = moduleVersions is null
+                        ? cur.ModuleVersions
+                        : moduleVersions.IsEmpty ? null : moduleVersions,
                 },
             };
         });
@@ -1396,12 +1401,14 @@ public sealed class GitHubSyncService
     /// </summary>
     private void RecordModuleCensus(string spacePath, ImmutableList<ModuleSyncOutcome> modules)
     {
-        if (modules.IsEmpty || hub.ServiceProvider.GetService<SealedSyncCensus>() is not { } census)
+        if (hub.ServiceProvider.GetService<SealedSyncCensus>() is not { } census)
             return;
         var now = DateTimeOffset.UtcNow;
-        foreach (var m in modules)
-            census.RecordModuleOutcome(new ModuleOutcomeReading(
-                spacePath, m.Module, m.Outcome, m.IncomingVersion, m.Reason, now));
+        // The Space's WHOLE module set is replaced (review on #5701): a module the tree no longer
+        // carries — or every module, when the tree states none — leaves the census with it, so a
+        // decline cannot outlive the module it was about.
+        census.RecordSpaceModules(spacePath, [.. modules.Select(m => new ModuleOutcomeReading(
+            spacePath, m.Module, m.Outcome, m.IncomingVersion, m.Reason, now))]);
     }
 
     /// <summary>
