@@ -2327,6 +2327,15 @@ else
   bad "an unreadable deprecated-API metric is carried as UNREAD" "${_au_facts}"
 fi
 
+_au_new; touch "$_au_fix/versions-forbidden"
+_au_facts="$(_au facts | sed -n 's/.*::hosting:: aks_facts=//p' | base64 -d 2>/dev/null)"
+if [ "$(jq -r '.versionsRead' <<<"$_au_facts")" = "false" ] && jq -r '.versionsError' <<<"$_au_facts" | grep -q AuthorizationFailed \
+   && [ "$(jq -r '.versions | length' <<<"$_au_facts")" = "0" ] && [ "$(jq -r '.controlPlaneUpgrades[-1]' <<<"$_au_facts")" = "1.35.7" ]; then
+  ok "an unreadable REGION version graph (a subscription-scope read) is carried as UNREAD — the cluster's own upgrades still read"
+else
+  bad "an unreadable region version graph is carried as UNREAD" "${_au_facts}"
+fi
+
 _au_new; touch "$_au_fix/forbidden"
 refuses_hard "an ARM read the identity may not make is REFUSED by name, not 'nothing to upgrade'" "REFUSED, not absent" \
   env PATH="$AU_STUBS:$PATH" HOSTING_AKS_FIXTURE="$_au_fix" HOSTING_AKS_STATE="$_au_state" HOSTING_UPGRADE_STATE="$_au_state" \
