@@ -72,6 +72,12 @@ public static class LateReleaseAdoption
     /// Emits the stamped <see cref="NodeTypeDefinition.UnreleasedBuildPath"/> once the node at that
     /// path EXISTS. The path is re-derived whenever the own record changes, and a new path supersedes
     /// the watch on the old one (<c>Switch</c>). No stamp means nothing is subscribed.
+    ///
+    /// <para>🚨 ONE synced query per NodeType, never one per stamped path (review on #5694). The
+    /// stream cache keeps each distinct query set's connection for the life of the process, so a
+    /// query keyed on the path would grow a resident connection per late release. The listing of the
+    /// type's <c>Release</c> children, projected to <c>path</c>, is stable for the type and is
+    /// filtered for the stamp in hand.</para>
     /// </summary>
     /// <param name="workspace">The NodeType hub's workspace, which hosts the synced query.</param>
     /// <param name="ownStream">The NodeType's own MeshNode stream.</param>
@@ -86,7 +92,9 @@ public static class LateReleaseAdoption
         AccessService? accessService,
         string hubPath,
         JsonSerializerOptions options)
-        => ownStream
+    {
+        var releaseNamespace = $"{hubPath}/{GraphNodeTypeNames.ReleaseSegment}";
+        return ownStream
             .Select(node => node.ContentAs<NodeTypeDefinition>(options)?.UnreleasedBuildPath)
             .DistinctUntilChanged()
             .Select(path => string.IsNullOrEmpty(path)
@@ -94,16 +102,26 @@ public static class LateReleaseAdoption
                 // RunAsSystem, never Observable.Using(ImpersonateAsSystem, …): that shape leaves the
                 // subscriber impersonated (#1790).
                 : accessService.RunAsSystem(() => workspace
-                    .GetQuery($"nodetype-late-release:{hubPath}:{path}", $"path:{path}")
+                    .GetQuery($"nodetype-releases:{hubPath}",
+                        $"path:{releaseNamespace} scope:children select:path")
                     .Where(items => items.Any(n =>
                         string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
                     .Take(1)
                     .Select(_ => path!)))
             .Switch();
+    }
 
     /// <summary>
     /// Installs the watch on a per-NodeType hub, next to the compile and release-request watchers.
     /// Returns the subscription so the caller can register it for disposal with the hub.
+    ///
+    /// <para>🚨 The owner write is PART of the watched chain, not a side subscription in the
+    /// callback (review on #5694). A faulted write then faults the watcher, whose re-establish
+    /// re-derives the stamp and the listing and retries the adoption. A write subscribed from the
+    /// callback could only log: the landing had already been consumed, the stamp had not changed,
+    /// and nothing would ever ask again. And the write runs under SYSTEM, captured at the write
+    /// boundary: the callback thread of a synced-query emission carries no identity, and
+    /// <c>PostPipeline</c> fails closed without one.</para>
     /// </summary>
     /// <param name="hub">The per-NodeType hub.</param>
     /// <param name="workspace">Its workspace.</param>
@@ -118,26 +136,23 @@ public static class LateReleaseAdoption
 
         return ActivityControlPlaneExtensions.SubscribeHubWatcher(
             hub,
-            () => Landings(workspace, ownStream, accessService, hubPath, options),
-            landed => workspace.GetMeshNodeStream()
-                .Update(current =>
-                {
-                    var adopted = Adopt(current.ContentAs<NodeTypeDefinition>(options), landed);
-                    if (adopted is null)
-                        return current;
-                    logger?.LogInformation(
-                        "[ReleasePostCondition] {HubPath}: the release at {ReleasePath} landed after "
-                        + "the settle stopped waiting for it. Adopted: latestReleasePath now names it "
-                        + "and unreleasedBuildPath is cleared (#5057).",
-                        hubPath, landed);
-                    return current with { Content = adopted };
-                })
-                .Subscribe(
-                    _ => { },
-                    ex => logger?.LogWarning(ex,
-                        "[ReleasePostCondition] {HubPath}: adopting the late release at {ReleasePath} "
-                        + "failed. The node keeps unreleasedBuildPath, which is the report, and the "
-                        + "next activation of this hub reads the stamp again", hubPath, landed)),
+            () => Landings(workspace, ownStream, accessService, hubPath, options)
+                .SelectMany(landed => accessService.RunAsSystem(() => workspace.GetMeshNodeStream()
+                    .Update(current =>
+                        Adopt(current.ContentAs<NodeTypeDefinition>(options), landed) is { } adopted
+                            ? current with { Content = adopted }
+                            : current))
+                    .Take(1)
+                    // Report only a write that ADOPTED — a no-op write (the stamp moved on) is silent.
+                    .Where(node => string.Equals(
+                        node.ContentAs<NodeTypeDefinition>(options)?.LatestReleasePath, landed,
+                        StringComparison.Ordinal))
+                    .Select(_ => landed)),
+            landed => logger?.LogInformation(
+                "[ReleasePostCondition] {HubPath}: the release at {ReleasePath} landed after the "
+                + "settle stopped waiting for it. Adopted: latestReleasePath names it and "
+                + "unreleasedBuildPath is cleared (#5057).",
+                hubPath, landed),
             logger,
             $"[LateReleaseAdoption] {hubPath}");
     }

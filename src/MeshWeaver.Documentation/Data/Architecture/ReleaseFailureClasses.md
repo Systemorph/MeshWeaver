@@ -394,9 +394,11 @@ new one.
 
 `LateReleaseAdoption` is installed on every NodeType hub beside the compile and release-request
 watchers (`MeshDataSource`). While the hub's own record carries an `unreleasedBuildPath`, the hub
-watches that one path through a synced `path:` query. The query is empty while the node is absent and
-holds the node once it lands. It is never a point read of an absent path, which is the storm shape.
-When the node is there, one owner write moves `latestReleasePath` to it and clears
+watches for that path in ONE synced listing per type (`path:{type}/Release scope:children
+select:path`), which is never a point read of an absent path, the storm shape. The listing is not
+keyed per stamped path, because the stream cache keeps every distinct query set's connection for the
+life of the process. When the path is listed, one owner write, issued as System and composed INTO
+the watched chain, moves `latestReleasePath` to it and clears
 `unreleasedBuildPath`, `unreleasedBuildReason` and the spent `releaseNotes`. The write re-checks that
 the stamp still names that path, and that check is the whole guard:
 
@@ -405,6 +407,8 @@ the stamp still names that path, and that check is the whole guard:
 - every later settle rewrites or clears the stamp, so a stamp that still names the path still describes
   the current build.
 
+A faulted write therefore faults the watcher. The hub-watcher re-establish then re-derives the
+stamp and the listing and retries the adoption, rather than logging once and never asking again.
 No bound is widened, and no timer or poll is added. A release that never lands leaves the stamp
 standing, and the stamp is the report. The watch is re-derived from the record, so a landing that
 happened while no activation was alive is adopted by the next activation, whose first listing already

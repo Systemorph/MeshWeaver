@@ -95,7 +95,7 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
         // Reading the node through the stream activates its owner, and with it the watchers.
         await Mesh.GetMeshNodeStream(typePath)
             .Should().Within(TestTimeouts.CrossSilo)
-            .Match(n => n?.Content is NodeTypeDefinition d
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && string.Equals(d.UnreleasedBuildPath, unreleased, StringComparison.Ordinal),
                 "the owner serves the stamped state");
     }
@@ -118,12 +118,12 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
 
         var adopted = await Mesh.GetMeshNodeStream(typePath)
             .Should().Within(TestTimeouts.CrossSilo)
-            .Match(n => n?.Content is NodeTypeDefinition d
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && string.Equals(d.LatestReleasePath, unreleased, StringComparison.Ordinal),
                 "a release that landed after the settle stopped waiting must become the type's "
                 + "release when it lands. Nothing else ever writes the pointer again (#5057)");
 
-        var def = (NodeTypeDefinition)adopted!.Content!;
+        var def = adopted.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
         def.UnreleasedBuildPath.Should().BeNull("the build has a release now");
         def.UnreleasedBuildReason.Should().BeNull("the reason never outlives the path");
         def.ReleaseNotes.Should().BeNull("the notes were written for this release and are spent on it");
@@ -146,7 +146,7 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
             .Emit("an unrelated release lands", cancellationToken: TestContext.Current.CancellationToken);
 
         await Mesh.GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
+            .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && (d.UnreleasedBuildPath is null
                             || !string.Equals(d.LatestReleasePath, $"{typePath}/{PreviousRelease}",
                                 StringComparison.Ordinal)))
