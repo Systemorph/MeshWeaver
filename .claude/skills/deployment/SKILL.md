@@ -73,6 +73,7 @@ Reach for the commands further down ONLY when the control plane itself is what i
 | what is it running, per replica (image, ready, restarts, started, its own `/health` + detail) | `{ "requestedAction": "Sample" }` | `Ops/Status/<id>` (`replicas[]`, `warnings[]`), the Deployment page's status strip |
 | the last hour's error lines | `{ "requestedAction": "Logs", "query": "fail:\|crit:\|Exception", "sinceMinutes": 60, "limit": 300 }` | the action node's `logQl` / `entryCount` / `truncated`; lines under `Ops/Logs`, `@Deployments/<id>/area/Logs` |
 | what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
+| upgrade the cluster's Kubernetes version (control plane + every pool) | plan: `{ "requestedAction": "UpgradeCluster", "dryRun": true }`; then `{ "requestedAction": "UpgradeCluster", "upgradePlan": "<plan node path>", "confirmation": "<id>" }` + ONE mesh approval — never `az aks upgrade` (policy `cluster-upgrade-governed`) | the plan on the dry-run node; the run's `log`, `aks_versions`; a stuck portal roll refuses it by name. Manual: `Hosting/ClusterUpgrade` (Plugins) · [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) "Kubernetes version upgrades" |
 
 All nodes are `nodeType: Hosting/InstanceAction`, `content.$type: InstanceActionContent`,
 `content.deployment: "Deployments/<id>"`. The full table — including what each action does and

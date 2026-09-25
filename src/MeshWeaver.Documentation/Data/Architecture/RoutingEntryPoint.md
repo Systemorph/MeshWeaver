@@ -76,6 +76,48 @@ fail: Orleans.Messaging[100071]
 messages — `RouteMessage(IMessageDelivery)`, with incrementing ids, so 331 distinct deliveries and
 not one message retried. They never reached a turn: *"failed to address"* is upstream of the grain.
 
+## 🚨 Why a stateless worker's placement could wait 30 s at all: it asked the grain directory
+
+The obvious reading of failure mode 2 — and the one issue #5037 carried for days — is that a
+`[StatelessWorker]` placement is purely local ("no directory lookup and no remote hop"), so a timeout
+there can only mean the local silo was not running work. **The Orleans 10.3.1 source says otherwise.**
+`PlacementService.PlacementWorker.ExecutePlacementAsync` begins EVERY placement with
+`GrainLocator.Lookup(grainId)`, stateless worker or not. On the portal's default directory that is
+`LocalGrainDirectory.LookupAsync`, which forwards to **the silo that owns the grain id's hash on the
+directory ring**. Only after that answer does `StatelessWorkerDirector` pick the calling silo.
+
+So reaching `routing/default` waited on *some other silo's* directory partition, for an answer that
+can only ever be "not registered": Orleans itself declares `StatelessWorkerPlacement.IsUsingGrainDirectory
+= false` and never registers a stateless-worker activation. The address cache normally hides this, but
+it is dropped on every membership change for grains whose partition owner changed — i.e. on every roll,
+exactly when an owner is most likely to be a silo that is booting, starved or gone. The lookup is retried
+as transient until the 30 s `Orleans.Placement` budget expires, and every message queued on that one
+placement work item is rejected together — which is why the failure arrives as a burst of hundreds inside
+milliseconds.
+
+**Measured on memex-cloud, 2026-09-23** (image `9a61fed964`, before #5571): the 18:11:19Z burst (26
+placements timing out at the same millisecond on `7d7f4d84f9-wl8mv`, more on `-mvzb5`) follows twelve
+minutes in which a THIRD silo, `-n7g6b`, logged `LocalSiloHealthMonitor` warnings every 10–13 s
+(17:58:43 → 18:10:27Z) and then went silent. The pods that dropped traffic were not the pod that was
+stalled — they were waiting on its directory partition.
+
+**Fixed for stateless workers (#5037):** `ConfigureMeshWeaverServer` registers
+`StatelessWorkerGrainDirectoryResolver`, which resolves every type whose manifest declares
+`placement-strategy = StatelessWorkerPlacement` to an in-process directory that answers "not registered"
+itself. A resolver rather than a `[GrainDirectory]` attribute because the attribute travels in the
+cluster manifest, and a silo still on the previous image would then look for a keyed directory it never
+registered; the resolver is consulted only by the silo that registered it, so a mixed-version roll is safe.
+`StatelessWorkerPlacementSkipsTheDirectoryTest` reproduces the failure on a real `TestCluster` (a
+directory stand-in that cannot answer for marked grain ids; negative control: without the registration
+the routing grain cannot be placed).
+
+**What it does not fix:** a single-activation grain (`messagehub/*`, `podhub/*`, `pubsubrendezvous/*`)
+genuinely needs the directory, so its placement still depends on the owning partition answering. Those
+timeouts are downstream of the stalled silo, not of placement — see #5388 for the thread-pool stalls.
+Also note the in-process `TestCluster` runs Orleans' *distributed* directory (TestingHost adds
+`ConfigureDistributedGrainDirectory`), whereas the portal runs the DHT `LocalGrainDirectory`; the test
+therefore stands in for "the owner cannot answer" rather than reproducing the DHT's own timing.
+
 ## 🚨 The observation this page exists for
 
 Read the sender in that line. It is `sys.client/hosted-10.244.9.229:11111` — the Orleans **hosted

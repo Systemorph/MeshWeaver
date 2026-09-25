@@ -1,0 +1,56 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "memex-portal-deployment",
+    "namespace": "memex",
+    "generation": 45
+   },
+   "spec": {
+    "replicas": 2,
+    "selector": {
+     "matchLabels": {
+      "app": "memex-portal"
+     }
+    },
+    "template": {
+     "spec": {
+      "containers": [
+       {
+        "name": "memex-portal",
+        "image": "cr.example.test/memex-portal-ai:3.0.0-ci.9270",
+        "startupProbe": {
+         "periodSeconds": 10,
+         "failureThreshold": 1080
+        }
+       }
+      ]
+     }
+    }
+   },
+   "status": {
+    "replicas": 2,
+    "updatedReplicas": 2,
+    "readyReplicas": 2,
+    "availableReplicas": 2,
+    "observedGeneration": 45,
+    "conditions": [
+     {
+      "type": "Progressing",
+      "status": "True",
+      "reason": "NewReplicaSetAvailable"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "some-other-deployment",
+    "namespace": "memex",
+    "generation": 1
+   },
+   "spec": {},
+   "status": {}
+  }
+ ]
+}

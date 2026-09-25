@@ -296,6 +296,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             if (provider is null)
                 return;
             var unloads = provider.GetService<CollectibleContextUnloads>();
+            await TearDownMeshAsync(provider);
             try { (provider as IDisposable)?.Dispose(); }
             catch (Exception ex)
             {
@@ -314,6 +315,81 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 : outcome.Retained ? "DISPOSE_SHARED_ALC_RETAINED"
                 : !outcome.Measured ? "DISPOSE_SHARED_UNLOADS_NOT_MEASURED"
                 : "DISPOSE_SHARED_UNLOADS_COLLECTED", 0, outcome.ToString());
+        }
+        /// <summary>
+        /// The hosted services started on this shared mesh — once, by the first case that joined it
+        /// (see <see cref="TryClaimHostedServiceStart"/>) — so its teardown stops exactly those.
+        /// </summary>
+        private System.Collections.Immutable.ImmutableList<Microsoft.Extensions.Hosting.IHostedService> startedHostedServices = [];
+
+        /// <summary>
+        /// Records one hosted service the claiming case started, atomically — the list is immutable
+        /// and swapped whole, so a reader never observes a partial update.
+        /// </summary>
+        public void RecordStarted(Microsoft.Extensions.Hosting.IHostedService hosted) =>
+            System.Collections.Immutable.ImmutableInterlocked.Update(ref startedHostedServices, list => list.Add(hosted));
+
+        private int hostedServicesClaimed;
+
+        /// <summary>
+        /// True for exactly ONE caller: the first case of the class, which starts the mesh's hosted
+        /// services. Every later case joins a mesh whose services are already running — starting a
+        /// singleton hosted service again per <c>[Fact]</c> would run N copies of its loop.
+        /// </summary>
+        public bool TryClaimHostedServiceStart() =>
+            Interlocked.Exchange(ref hostedServicesClaimed, 1) == 0;
+
+        /// <summary>
+        /// 🚨 <b>The mesh goes down BEFORE its container, exactly as on the per-test path (Plugins#2362).</b>
+        /// This holder used to dispose the provider with the shared mesh still LIVE. Autofac marks a
+        /// scope disposed before it disposes anything in it, so from that first instant every resolve
+        /// throws — while every hub in the mesh (the mesh itself, and each hosted hub under it) still
+        /// read <c>IsShuttingDown == false</c>, because nothing had told any of them. Their callbacks
+        /// then resolved from the dead scope believing they were live: measured over
+        /// <c>MeshWeaver.AI.Test</c>, 10 of 11 such callbacks read the flag as false. The mesh's
+        /// shutdown cascade (<c>HostedHubsCollection.CloseCreation</c>) was never missing — it was never
+        /// STARTED. So: stop the hosted services this mesh started, then <c>TeardownAsync</c> (activity
+        /// quiesce → <c>Dispose()</c> → <c>DisposalCompleted</c> → I/O and async-dispose drain), and only
+        /// then does the caller dispose the provider. Pinned by
+        /// <c>EveryHubShutsDownBeforeItsContainerTest</c> (Graph.Test).
+        /// </summary>
+        private async Task TearDownMeshAsync(IServiceProvider provider)
+        {
+            var sw = Stopwatch.StartNew();
+            // Taken exactly once: the teardown owns the snapshot it swapped out.
+            var started = Interlocked.Exchange(
+                ref startedHostedServices,
+                System.Collections.Immutable.ImmutableList<Microsoft.Extensions.Hosting.IHostedService>.Empty);
+            for (var i = started.Count - 1; i >= 0; i--)
+            {
+                using var stopCts = new CancellationTokenSource(DisposeTimeout);
+                var hosted = started[i];
+                try { await hosted.StopAsync(stopCts.Token).WaitAsync(stopCts.Token); }
+                catch (Exception ex)
+                {
+                    TestPhaseTrace(testClassName, "DISPOSE_SHARED_HOSTED_STOP_ERROR", sw.ElapsedMilliseconds,
+                        $"{hosted.GetType().Name}: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            var mesh = provider.GetService<IMessageHub>();
+            if (mesh is null || mesh.IsDisposing)
+                return;
+            try
+            {
+                var report = await mesh.TeardownAsync(DisposeTimeout);
+                TestPhaseTrace(testClassName,
+                    report.Clean ? "DISPOSE_SHARED_MESH_DONE" : "DISPOSE_SHARED_DIRTY_TEARDOWN",
+                    sw.ElapsedMilliseconds, report.ToString());
+            }
+            catch (Exception ex)
+            {
+                string diagnostics;
+                try { diagnostics = mesh.GetDisposalDiagnostics(); }
+                catch (Exception diagEx) { diagnostics = $"<failed to gather diagnostics: {diagEx.Message}>"; }
+                TestPhaseTrace(testClassName, "DISPOSE_SHARED_MESH_ERROR", sw.ElapsedMilliseconds,
+                    $"{ex.GetType().Name}: {ex.Message} | {diagnostics}");
+            }
         }
     }
 
@@ -725,6 +801,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     // leaked-callback guard (CI run 29197199611, InstanceSyncPushTest).
     private readonly List<Microsoft.Extensions.Hosting.IHostedService> _startedHostedServices = new();
 
+    // The collection-scoped holder of this class's shared mesh, or null on the per-test path. It owns
+    // the shared mesh's teardown — hosted services, then the mesh, then the container (Plugins#2362).
+    private SharedMeshProvider? _sharedMesh;
+
     // Watchdog: track when the test method actually started so DisposeAsync
     // can fail loudly on silent deadlocks. xUnit v3's [Fact(Timeout=N)] is
     // cooperative cancellation — if a test ignores the ct, the await blocks
@@ -876,11 +956,22 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // AddPartitionedPostgreSqlPersistence (PostgreSqlChangeListener) etc.
             // are constructed by DI but never activated — pg_notify never
             // reaches IDataChangeNotifier and synced queries freeze at Initial.
-            foreach (var hosted in Mesh.ServiceProvider
-                .GetServices<Microsoft.Extensions.Hosting.IHostedService>())
+            //
+            // A SHARED mesh starts them ONCE — on the first case that joins it — and its
+            // collection teardown stops them (SharedMeshProvider.TearDownMeshAsync). Every later
+            // case joins services that are already running; starting the same singletons again
+            // per [Fact] ran one more copy of each loop per case, none of which was ever stopped.
+            if (_sharedMesh is null || _sharedMesh.TryClaimHostedServiceStart())
             {
-                await hosted.StartAsync(TestContext.Current.CancellationToken);
-                _startedHostedServices.Add(hosted);
+                foreach (var hosted in Mesh.ServiceProvider
+                    .GetServices<Microsoft.Extensions.Hosting.IHostedService>())
+                {
+                    await hosted.StartAsync(TestContext.Current.CancellationToken);
+                    if (_sharedMesh is null)
+                        _startedHostedServices.Add(hosted);
+                    else
+                        _sharedMesh.RecordStarted(hosted);
+                }
             }
             TestPhaseTrace(name, "INIT_HOSTED_SERVICES_STARTED", sw.ElapsedMilliseconds);
 
@@ -935,11 +1026,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         if (SharesMeshAcrossTests)
         {
-            ServiceProvider = TestCollectionScope.Current!.GetOrCreate(GetType(), () =>
+            _sharedMesh = TestCollectionScope.Current!.GetOrCreate(GetType(), () =>
             {
                 base.Initialize();              // builds SP from this instance's Services
                 return new SharedMeshProvider(ServiceProvider, GetType().Name);
-            }).ServiceProvider;
+            });
+            ServiceProvider = _sharedMesh.ServiceProvider;
             // Per-instance buildup of [Inject] members on `this` — even when SP
             // is shared, the test instance's fields need filling.
             Configuration = ServiceProvider.GetRequiredService<IConfiguration>();

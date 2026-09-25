@@ -182,9 +182,11 @@ public static class IoPoolNames
 /// <c>AddIoPools(o =&gt; o with { ... })</c> (or future appsettings binding)
 /// without any API change at the call sites.
 ///
-/// <para>The caps govern a bounded slice of the shared ThreadPool — they do not
-/// allocate dedicated threads. See <see cref="IoPool"/> for the two governor
-/// mechanisms (async semaphore gate vs. limited-concurrency scheduler).</para>
+/// <para>The caps bound how much runs at once; they are resource caps, not thread budgets. Async
+/// leaves run on the shared ThreadPool and yield it at every await; blocking leaves run on at most
+/// <em>cap</em> threads the pool starts itself, never ThreadPool workers
+/// (<c>Doc/Architecture/BlockingLeavesOffTheThreadPool</c>). See <see cref="IoPool"/> for the two
+/// governor mechanisms (async semaphore gate vs. limited-concurrency scheduler).</para>
 /// </summary>
 public sealed record IoPoolOptions
 {

@@ -364,7 +364,7 @@ What the helper guarantees, and what a bare `AutoConnect(1)` cannot:
 |---|---|---|
 | The owner's `Dispose()` | cannot reach the upstream | unsubscribes it (`hub.RegisterForDisposal` → ShutDown phase, strictly before any scope closes) |
 | A connect still **queued** on the pool | runs later, against whatever is left | is **cancelled** before the pool dequeues it — the registration lands in a disposed `CompositeDisposable`, whose `Add` disposes on the spot |
-| A subscriber arriving **after** the release | gets the replay buffer, then silence forever ("burst then dead silence") | is **refused** with `ObjectDisposedException(ownerName)` — terminates, attributable |
+| A subscriber arriving **after** the release | gets the replay buffer, then silence forever ("burst then dead silence") | is **refused** with `ObjectDisposedException(ownerName)` — terminates, attributable, delivered on the owner's release lane (never on the subscribing thread — see below) |
 | A subscriber **already attached** when the release happens, the one-shot still in flight | silence forever — releasing a connection unsubscribes the replay subject from its upstream and emits nothing to its observers | **terminates** with the same `ObjectDisposedException(ownerName)`, delivered on the ThreadPool (never on the disposing hub's turn), ONE AT A TIME on the owner's release lane — see below |
 | A chain that **terminates** (a settled promise) | — | drops its handle, so the owner tracks *live* connections only and a faulted-then-rebuilt promise never accumulates dead handles |
 
@@ -406,6 +406,46 @@ which is exactly the concurrent shape. Pinned by
 `OwnedConnectionTest.ReleasingTwoConnectionsAConsumerComposes_NeverDeliversTheirTerminalsConcurrently`,
 which forces the two releases to meet inside their first gates (red with one work item per
 release; green on a shared lane).
+
+**A refusal is a release terminal too, so it goes on the same lane.** Serialising release
+against release left one terminal off the lane: the REFUSAL a subscriber gets when it arrives after
+its owner was released. It was an `Observable.Throw`, delivered synchronously on the subscribing
+thread — and a consumer that composes several connections receives releases for the ones it already
+holds and refusals for the ones it is still subscribing, at the same time. Measured on
+MeshWeaver.Plugins scheduled run 36090164894 (job 107933985813, platform set 3.0.0-ci.9321):
+`SendDocumentIdentityPanelTest.StampingARecheckOnTheDraft_ReprobesAndReplacesThePanel` passed its
+body in 442 ms and then reported `teardown DIRTY — 1 pooled I/O leaf(s) … CANCELLED after the drain
+grace [Layout=1 [Defer<EntityStoreAndUpdates>]]` after the whole 38 s drain. Reproduced in a Linux
+container on 2 CPUs (1 run in 400 of that class) with `dotnet-stack` on the hung host: the layout
+render's pooled subscribe leaf was subscribing the permission fold — a `SelectMany` whose inners are
+`Zip`s of `MeshNodeStreamCache` queries — when the mesh tore down. The **lane** was delivering one
+query's release: it held that inner's `Zip` gate and was entering the `SelectMany` gate. The
+**render thread** was subscribing the next inner, whose query refused synchronously: it held the
+`SelectMany` gate forwarding that error and was disposing the first `Zip`, which takes the `Zip`
+gate. Neither returned, the leaf never left the Layout pool, and `IoPool.Drain` could only report it.
+
+So every terminal an owned connection produces is delivered on the lane: `AutoConnectOwnedBy`
+refuses through `ReleaseLane.Refuse<T>`, the release signal refuses a subscriber that attaches after
+it fired on the lane too (a terminated `Subject` would replay its error synchronously on the
+subscriber's thread — the same race one line later), and `MeshNodeStreamCache`'s disposed-cache
+query guards refuse through the mesh's lane instead of `Observable.Throw`. A subscriber is therefore
+never told anything on its own thread by a released owner, and the terminals that reach one consumer
+are serialised with each other whichever kind they are. Pinned by
+`OwnedConnectionTest.ARefusalAndAReleaseMeetingInOneConsumer_NeverDeadlock`, which parks the lane
+inside the first `Zip`'s gate and lets the subscriber meet it in the order the CI stacks show (the
+subscriber thread never returns with the refusal restored to `Observable.Throw`), and by
+`ASubscriptionAfterTheRelease_IsRefusedNamingTheOwner_OnTheLane`.
+
+**The lane drains on pooled work items, never on a dedicated thread.** `ObserveOn(TaskPoolScheduler.Default)`
+takes Rx's long-running path when the scheduler offers `ISchedulerLongRunning`, which starts ONE
+dedicated thread on the lane's first post and parks it in `Monitor.Wait` for as long as the
+subscription lives — and the lane's subscription is never disposed. Every lane that ever delivered a
+release therefore kept a thread (and, through it, itself) alive for the rest of the process: one per
+torn-down mesh in a test host, visible as an `ObserveOnObserverLongRunning.Drain` frame per mesh in
+any stack capture. The lane now observes on
+`TaskPoolScheduler.Default.DisableOptimizations(typeof(ISchedulerLongRunning))`, which keeps the
+same serial order on pooled work items. Pinned by
+`OwnedConnectionTest.AReleaseRunsOnAPooledThread_NeverOnADedicatedOne`.
 
 **Choosing the owner.** A hub-scoped service registers with its hub; a DI singleton owns a
 `CompositeDisposable` field it disposes in its own `Dispose()` (the container disposes

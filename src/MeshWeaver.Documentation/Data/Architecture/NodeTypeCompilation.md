@@ -672,8 +672,12 @@ only when all of these hold** —
 
 1. `LatestAssemblyCollection` is populated (only a *successful* compile write-back sets it)
 2. `LatestAssemblyPath` is populated
-3. `CompiledFrameworkVersion` equals the **current** framework identity
-   (`FrameworkBuildIdentity.FrameworkVersion` in `MeshWeaver.Compiler`)
+3. `CompiledFrameworkVersion` equals the **current** platform compatibility key
+   (`FrameworkBuildIdentity.FrameworkVersion` in `MeshWeaver.Compiler`, `c<major>e<epoch>` —
+   policy `platform-backwards-compatibility`, see [Module Versioning](../ModuleVersioning) →
+   "The compatibility LADDER") **and** the running platform build lies in the record's range:
+   `CompiledPlatformVersion` (the producing build — the floor) ≤ running ≤ `PlatformCeiling`
+   (open when absent)
 4. the dependency clause holds — **record-first** (#1707 slice 2): when the
    definition carries a per-type `CompiledDependencies` record (referenced
    assembly name → surface-id, read off the EMITTED assembly's AssemblyRef
@@ -2018,9 +2022,22 @@ at compile time. When MeshWeaver is **redeployed at a new version**, those
 assemblies change and the cached DLL may be ABI-incompatible — so a release is
 only usable while the framework version matches.
 
+> 🚨 **The key is the platform COMPATIBILITY KEY now** (policy `platform-backwards-compatibility`).
+> `RunCompile` stamps `CompiledFrameworkVersion` with `c<major:D3>e<epoch:D3>` (e.g. `c003e001`) —
+> stable across every platform build of one major and one declared epoch — and
+> `CompiledPlatformVersion` with the producing platform build (the floor). A platform roll within
+> the epoch therefore recompiles NOTHING; bytes a NEWER build produced are refused by an older
+> replica, which YIELDS rather than re-keying the record backwards. The per-build identity the rest
+> of this section describes is still resolved — as `FrameworkBuildIdentity.BuildProvenance`,
+> provenance only, logged and recorded but never deciding. 🚨 **A developer who changes the skeleton
+> generator or any toolchain-generated compile input in a way that must invalidate compiled bytes
+> BUMPS THE EPOCH** in `src/MeshWeaver.Compiler/platform-compatibility.json` and declares the break
+> there (see [Module Versioning](../ModuleVersioning) → "A DECLARED BREAK") — the per-build MVID no
+> longer does it for them.
+
 `RunCompile` stamps `NodeTypeDefinition.CompiledFrameworkVersion` with
-`NodeTypeCompilationHelpers.FrameworkVersion` on every success. That value is
-resolved once per process (`FrameworkBuildIdentity`,
+`NodeTypeCompilationHelpers.FrameworkVersion` on every success. The PROVENANCE identity described
+below is resolved once per process (`FrameworkBuildIdentity.BuildProvenance`,
 [#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3):
 
 - **Hosts with a surface manifest** (the portals and the CI bake host, which

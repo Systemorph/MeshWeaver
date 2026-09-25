@@ -180,9 +180,12 @@ defect it names: read-then-append, a rank read placed before the claim write, a 
 
 `delivery-verdict`'s every-leg check was `publish == 'true'`-only, and its reconcile branch fires
 only on an *incomplete* set — while `bake_only` is by definition the *complete*-set branch. So a
-bake-only tick was judged by nothing. It now carries its own arm: `publish-bake` always, and the
-three `plugins-*` legs when `plugins_seal_due` was `true`. A leg that skipped is red there, on the
-path that now performs repairs.
+bake-only tick was judged by nothing. It now carries its own arm for `publish-bake`, always. The
+three `plugins-*` legs — on a publishing run and on a reconcile whose `plugins_seal_due` was `true`
+— are judged by `report-plugins-seal`, a job no platform job needs: a due leg that skipped or failed
+is red THERE, and recorded on the `cd-plugins-seal` issue, and never on the platform verdict
+(policy `platform-backwards-compatibility`; see
+[Continuous Delivery Contract → The ladder](../ContinuousDeliveryContract)).
 
 ## What this does not cover
 

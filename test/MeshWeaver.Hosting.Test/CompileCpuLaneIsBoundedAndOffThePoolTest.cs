@@ -83,16 +83,16 @@ public class CompileCpuLaneIsBoundedAndOffThePoolTest
     }
 
     /// <summary>
-    /// NEGATIVE CONTROL — the ordinary <see cref="IoPoolNames.Compile"/> pool, same cap, same leaves:
-    /// bounded, but ON the ThreadPool. This is what the NodeType emit and the language service's
-    /// diagnostics would have ridden without the lane; without the control the zero above could be an
-    /// instrument that counts nothing.
+    /// NEGATIVE CONTROL — a pool that BORROWS ThreadPool workers, same cap, same leaves: bounded, but ON
+    /// the ThreadPool. This is what every pool did before its blocking leaves moved off the pool
+    /// (<see cref="BlockingLeavesStayOffTheThreadPoolTest"/>); without the control the zero above could
+    /// be an instrument that counts nothing.
     /// </summary>
     [Fact(Timeout = 60_000)]
-    public async Task Control_AnOrdinaryPool_BoundsTheLeaves_ButRunsThemOnThePool()
+    public async Task Control_ABorrowingPool_BoundsTheLeaves_ButRunsThemOnThePool()
     {
-        using var registry = new IoPoolRegistry(new IoPoolOptions { Compile = Cap });
-        var probe = await RunParked(registry.Get(IoPoolNames.Compile), TestContext.Current.CancellationToken);
+        using var pool = new IoPool(Cap, IoPool.DefaultDrainTimeout, IoPool.DefaultDrainGrace, dedicatedThreads: false);
+        var probe = await RunParked(pool, TestContext.Current.CancellationToken);
 
         probe.MaxRunning.Should().Be(Cap);
         probe.OnPool.Should().Be(Leaves, "control: a borrowing pool runs every blocking leaf on a pool worker");

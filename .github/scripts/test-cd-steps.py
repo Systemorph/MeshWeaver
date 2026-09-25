@@ -310,6 +310,15 @@ def extract_step(root: Path, step_id: str) -> str:
     import yaml
 
     doc = yaml.safe_load((root / WORKFLOW).read_text())
+    # 🚨 ONE step per id, across EVERY job. Two steps sharing an id would hand this harness
+    # whichever it met first — silently, and the cases would then test a step the workflow does
+    # not run where the reader thinks it does.
+    owners = [name for name, job in (doc.get("jobs") or {}).items()
+              for step in (job.get("steps") or [])
+              if isinstance(step, dict) and step.get("id") == step_id]
+    if len(owners) > 1:
+        die(f"step id `{step_id}` appears in {len(owners)} steps of {WORKFLOW} (jobs: {', '.join(owners)}) — "
+            "the harness cannot tell which one it is testing. Give each step a distinct id.")
     for job in (doc.get("jobs") or {}).values():
         for step in job.get("steps") or []:
             if isinstance(step, dict) and step.get("id") == step_id:
@@ -928,7 +937,7 @@ def run_handoff_cases(root, case) -> None:
     BUILT = "bbbb222" + "0" * 33         # what the terminating run targeted
     ME = 9000
     REQUIRED = "Consolidate test results"
-    CLEAN_LEGS = "success skipped skipped skipped success success success success success success"
+    CLEAN_LEGS = "success skipped skipped skipped success success success"
 
     def chk(status: str, concl, started: str, name: str = REQUIRED) -> dict:
         return {"name": name, "status": status, "conclusion": concl, "started_at": started}
@@ -1006,10 +1015,13 @@ def run_handoff_cases(root, case) -> None:
     case("a run that PUBLISHED main's HEAD hands nothing on",
          rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
 
-    # 🚨 PROMOTE IS ONLY PHASE A. Run 35257430439 tagged nothing wrong and then died in
-    # `plugins-modules`; keyed on promote alone this step would have called that HEAD's publication
-    # and handed nothing on, in the exact case it exists for.
-    for leg, why in ((4, "plugins-modules"), (6, "publish-bake"), (5, "verify-images")):
+    # 🚨 PROMOTE IS ONLY PHASE A. A run can tag the set and then fail its platform bake or its
+    # verification; keyed on promote alone this step would have called that HEAD's publication and
+    # handed nothing on, in the exact case it exists for. (The legs are the step's DELIVERY_LEGS in
+    # order: portal-image, mirror, migration, plugin-test, promote, verify-images, publish-bake.
+    # No `plugins-*` leg is among them — policy `platform-backwards-compatibility`; the structural
+    # half of that is `PlatformDeliveryNeverWaitsOnPluginsGuard`.)
+    for leg, why in ((6, "publish-bake"), (5, "verify-images")):
         legs = CLEAN_LEGS.split()
         legs[leg] = "failure"
         rc, log, dispatched, _ = drive(
@@ -1028,7 +1040,7 @@ def run_handoff_cases(root, case) -> None:
     # failure would dispatch a publisher after every ordinary quiet tick.
     rc, log, dispatched, _ = drive(
         handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success",
-                DELIVERY_LEGS="success skipped skipped skipped success success skipped skipped skipped skipped"), [me])
+                DELIVERY_LEGS="success skipped skipped skipped success success skipped"), [me])
     case("a SKIPPED leg is not a failure — an ordinary publication still hands nothing on",
          not dispatched, f"dispatched={dispatched} log={log}")
 
@@ -1037,7 +1049,7 @@ def run_handoff_cases(root, case) -> None:
     # `COMPLETE` arm it would hand ITSELF on, and the dispatched run would do the same, forever.
     rc, log, dispatched, _ = drive(
         handoff(SHA=HEAD, PUBLISH="false", COMPLETE="true", PROMOTE_RESULT="skipped",
-                DELIVERY_LEGS="skipped skipped skipped skipped skipped skipped skipped skipped skipped skipped"),
+                DELIVERY_LEGS="skipped skipped skipped skipped skipped skipped skipped"),
         [me])
     case("a BAKE-ONLY run on HEAD hands nothing on (it would otherwise dispatch itself forever)",
          rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")

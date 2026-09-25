@@ -1,0 +1,4 @@
+# HELP apiserver_requested_deprecated_apis Gauge of deprecated APIs that have been requested
+# TYPE apiserver_requested_deprecated_apis gauge
+apiserver_requested_deprecated_apis{group="flowcontrol.apiserver.k8s.io",removed_release="1.32",resource="flowschemas",subresource="",version="v1beta3"} 1
+apiserver_request_total{code="200"} 5

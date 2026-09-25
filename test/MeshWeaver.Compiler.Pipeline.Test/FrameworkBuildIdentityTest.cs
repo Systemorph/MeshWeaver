@@ -378,8 +378,20 @@ public class FrameworkBuildIdentityTest
     [Fact]
     public void FrameworkVersion_IsTheProcessIdentityOfTheCompilerAssembly()
     {
-        var expected = FrameworkBuildIdentity.ResolveProcessIdentity(
-            AppContext.BaseDirectory, AnchorAssembly);
+        // 🚨 The KEY is the platform compatibility key (policy platform-backwards-compatibility):
+        // the anchor's AssemblyVersion major and its stamped epoch — which must be the epoch the
+        // checked-in declaration states (Directory.Build.props reads it from there).
+        var expected = PlatformCompatibility.KeyOf(
+            AnchorAssembly.GetName().Version!.Major, PlatformCompatibility.Declaration.Epoch);
+        FrameworkBuildIdentity.ResolveCompatibilityKey(AnchorAssembly).Should().Be((expected, (string?)null),
+            "the anchor carries the epoch stamp, so the key resolves without degradation");
+        FrameworkBuildIdentity.CompatibilityKey.Should().Be(expected);
+        FrameworkBuildIdentity.ProducerStatedIdentity.Should().Be(expected,
+            "a module packer states the same key the runtime keys on");
+        // The per-build identity survives — as PROVENANCE, resolved exactly as before.
+        FrameworkBuildIdentity.BuildProvenance.Should().Be(
+            FrameworkBuildIdentity.ResolveProcessIdentity(AppContext.BaseDirectory, AnchorAssembly));
+        FrameworkBuildIdentity.BuildProvenance.Should().NotBe(expected);
 
         FrameworkBuildIdentity.FrameworkVersion.Should().Be(expected,
             "there is exactly one identity resolution; every consumer flows from it");
@@ -499,7 +511,34 @@ public class FrameworkBuildIdentityTest
     // ---- resolving ANOTHER host's identity from its binaries (the CI address check) --------------
 
     [Fact]
-    public void ResolveIdentityForDirectory_MatchesTheProcessComputationForTheSameInputs()
+    public void ResolveIdentityForDirectory_IsTheCompatibilityKeyOfTheHostsAnchor()
+    {
+        // The CI address check compares the KEY now (policy platform-backwards-compatibility): read
+        // off the host's own MeshWeaver.Compiler.dll, it must equal what that host resolves for
+        // itself — and it needs no surface manifest.
+        var dir = StageAppDirectory(FrameworkBuildIdentity.ContentSurfaceAssemblies);
+        try
+        {
+            File.Delete(Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName));
+            var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            problem.Should().BeNull();
+            identity.Should().Be(FrameworkBuildIdentity.FrameworkVersion);
+            PlatformCompatibility.IsKey(identity).Should().BeTrue();
+
+            // Negative control: without the anchor there is no key, and the diagnostic names it.
+            File.Delete(Path.Combine(dir, FrameworkBuildIdentity.AnchorAssemblyName + ".dll"));
+            var (none, missing) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            none.Should().BeNull();
+            missing.Should().Contain(FrameworkBuildIdentity.AnchorAssemblyName);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveBuildProvenanceForDirectory_MatchesTheProcessComputationForTheSameInputs()
     {
         // The verb CI runs (`mw-plugin-test framework-identity <app-dir>`) must answer for a FOREIGN
         // /app exactly what that host answers for itself — otherwise the guard compares its own
@@ -507,7 +546,7 @@ public class FrameworkBuildIdentityTest
         var dir = StageAppDirectory(FrameworkBuildIdentity.ContentSurfaceAssemblies);
         try
         {
-            var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            var (identity, problem) = FrameworkBuildIdentity.ResolveBuildProvenanceForDirectory(dir);
             problem.Should().BeNull();
             identity.Should().NotBeNull().And.MatchRegex("^s[0-9a-f]{32}$");
 
@@ -527,7 +566,7 @@ public class FrameworkBuildIdentityTest
     }
 
     [Fact]
-    public void ResolveIdentityForDirectory_ForksWhenOneCanonicalAssemblyIsUnrecorded()
+    public void ResolveBuildProvenanceForDirectory_ForksWhenOneCanonicalAssemblyIsUnrecorded()
     {
         // #1814 in miniature: same binaries, one manifest missing a canonical name. The two hosts
         // MUST resolve different identities (that is the mechanism working correctly) and the
@@ -541,8 +580,8 @@ public class FrameworkBuildIdentityTest
             FrameworkBuildIdentity.ContentSurfaceAssemblies.Where(n => n != dropped));
         try
         {
-            var (whole, _) = FrameworkBuildIdentity.ResolveIdentityForDirectory(complete);
-            var (partial, _) = FrameworkBuildIdentity.ResolveIdentityForDirectory(reduced);
+            var (whole, _) = FrameworkBuildIdentity.ResolveBuildProvenanceForDirectory(complete);
+            var (partial, _) = FrameworkBuildIdentity.ResolveBuildProvenanceForDirectory(reduced);
             whole.Should().NotBeNull();
             partial.Should().NotBeNull().And.NotBe(whole,
                 "a host that does not record a canonical assembly is a different surface reality — "
@@ -565,7 +604,7 @@ public class FrameworkBuildIdentityTest
     }
 
     [Fact]
-    public void ResolveIdentityForDirectory_RefusesToAnswerWithoutAUsableManifest()
+    public void ResolveBuildProvenanceForDirectory_RefusesToAnswerWithoutAUsableManifest()
     {
         // 🚨 A guard that cannot fail is not a guard. If a manifest-less directory degraded to the
         // stamp/MVID fallback, two manifest-less hosts of one commit would resolve the SAME value and
@@ -575,13 +614,13 @@ public class FrameworkBuildIdentityTest
         Directory.CreateDirectory(dir);
         try
         {
-            var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            var (identity, problem) = FrameworkBuildIdentity.ResolveBuildProvenanceForDirectory(dir);
             identity.Should().BeNull();
             problem.Should().Contain(FrameworkBuildIdentity.SurfaceManifestFileName);
 
             File.WriteAllText(
                 Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName), "not-a-pair\n\n");
-            var (stillNone, unusable) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            var (stillNone, unusable) = FrameworkBuildIdentity.ResolveBuildProvenanceForDirectory(dir);
             stillNone.Should().BeNull();
             unusable.Should().NotBeNullOrEmpty();
         }

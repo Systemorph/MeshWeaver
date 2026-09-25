@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# A stand-in `az` for test/run-tests.sh — answers hosting-aks-upgrade's ARM reads from a fixture
+# directory ($HOSTING_AKS_FIXTURE) and records every call in $HOSTING_AKS_STATE/log. What is asserted
+# is the command's DECISIONS (what it issues, when it waits, pauses, refuses) — never what AKS does.
+#
+#   aks show …                  → show.json; after `aks upgrade`, show.after.json when present
+#   aks get-upgrades …          → upgrades.json
+#   aks get-versions -l …       → versions.json
+#   aks nodepool list …         → pools.json
+#   aks nodepool show … -n P    → P from pools.json; after `aks nodepool upgrade -n P`, from pools.after.json when present
+#   aks upgrade …               → records, marks $STATE/cp-issued
+#   aks nodepool upgrade … -n P → records, marks $STATE/pool-P
+#   $FIXTURE/forbidden present  → every READ answers AuthorizationFailed on stderr, exit 1
+set -uo pipefail
+fixture="${HOSTING_AKS_FIXTURE:?the aks-upgrade az stub needs HOSTING_AKS_FIXTURE}"
+state="${HOSTING_AKS_STATE:?the aks-upgrade az stub needs HOSTING_AKS_STATE}"
+printf '%s\n' "az $*" >> "$state/log"
+name_arg() { local prev="" a; for a in "$@"; do [ "$prev" = "-n" ] && { printf '%s' "$a"; return; }; prev="$a"; done; }
+read_guard() {
+  if [ -f "$fixture/forbidden" ]; then
+    echo "(AuthorizationFailed) The client 'x' does not have authorization to perform action 'Microsoft.ContainerService/managedClusters/read'" >&2
+    exit 1
+  fi
+}
+case "$*" in
+  "aks show "*)
+    read_guard
+    if [ -f "$state/cp-issued" ] && [ -f "$fixture/show.after.json" ]; then cat "$fixture/show.after.json"; else cat "$fixture/show.json"; fi ;;
+  "aks get-upgrades "*)  read_guard; cat "$fixture/upgrades.json" ;;
+  "aks get-versions "*)  read_guard; cat "$fixture/versions.json" ;;
+  "aks nodepool list "*) read_guard; cat "$fixture/pools.json" ;;
+  "aks nodepool show "*)
+    read_guard
+    p="$(name_arg "$@")"; src="$fixture/pools.json"
+    if [ -f "$state/pool-$p" ] && [ -f "$fixture/pools.after.json" ]; then src="$fixture/pools.after.json"; fi
+    jq -e --arg p "$p" '.[] | select(.name == $p)' "$src" ;;
+  "aks upgrade "*)          touch "$state/cp-issued"; echo '{}' ;;
+  "aks nodepool upgrade "*) touch "$state/pool-$(name_arg "$@")"; echo '{}' ;;
+  *) echo "az stub (aks-upgrade): unexpected invocation: $*" >&2; exit 1 ;;
+esac

@@ -1,0 +1,50 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "memex-portal-a"
+   },
+   "spec": {
+    "nodeName": "aks-silos-2-vmss000000",
+    "containers": [
+     {
+      "name": "memex-portal",
+      "image": "cr.example.test/memex-portal-ai:3.0.0-ci.9270"
+     }
+    ]
+   },
+   "status": {
+    "startTime": "2026-09-25T08:00:00Z",
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "memex-portal-b"
+   },
+   "spec": {
+    "nodeName": "aks-silos-2-vmss000001",
+    "containers": [
+     {
+      "name": "memex-portal",
+      "image": "cr.example.test/memex-portal-ai:3.0.0-ci.9270"
+     }
+    ]
+   },
+   "status": {
+    "startTime": "2026-09-25T08:00:00Z",
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  }
+ ]
+}

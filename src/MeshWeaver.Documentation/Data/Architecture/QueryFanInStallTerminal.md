@@ -412,6 +412,77 @@ The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
   `QueryProviderStalledException` lines within 15 minutes of pod start, at `[ACTIVATE]` and at
   `Sources watcher faulted`, against the 2026-09-23 counts above.
 
+## One request of many exact paths: one read, not one per query (2026-09-25)
+
+The coalescing above was live on memex-cloud (image `3.0.0-ci.9291`, core #5615 + Plugins#2337) and
+the terminal fired again: 12 lines on pod `589ff8f895-ghgjt`, 2026-09-24 14:17:44Z–14:30:51Z, in
+four bursts of three, each naming only `StorageAdapterMeshQueryProvider` and a query of the shape
+`path:AppleMaps/_Entitlements/{user} select:path` for a different user (`iser.steinmetz`,
+`kalpesh.patel`, `beat`, `rbuergi`, `goedel`, …), run as `system-security`.
+
+**Who issues it.** The bursts of three are `StandardPacks.MaxUserConcurrency` (3): the Store's
+all-users standard-pack sweep (`StandardPacks.EnsureForAllUsers`, MeshWeaver.Plugins). Its per-user
+`Prefetch` asks ONE `MeshQueryRequest` for the viewer's entitlement records over every free pack —
+`Entitlements.BatchQueries`, two exact `path:` queries per pack (the `_Entitlements` marker and the
+`_Access` grant). With about fifteen free packs that is about thirty queries in one request. The
+fan-in's message names only `request.Query`, the FIRST of them, and `AppleMaps` sorts first.
+
+**Why it misses 15 s.** `StorageAdapterMeshQueryProvider.CollectMatched` ran the request's queries
+one after the other (`Concat`), and each exact query issued its OWN `ReadMany`. So one request of
+thirty exact paths was thirty SEQUENTIAL storage round-trips. On partitioned Postgres each one first
+waits for a slot on the process-wide `pg-read:Postgres` pool (cap 16; mean queue wait 342 ms in the
+one reading of it, see *What the Initial queues behind*). Thirty waits in series is the 15 s budget,
+with nothing stuck. The same pod logged the load around it: routing back-pressure at 14:44:12Z with
+63 legs waiting for a pool slot, the latest dispatch targets `{plugin}/_Entitlements/{user}` and
+`{user}/_Install/{pack}` — the per-pack owner reads the sweep falls back to when its prefetch fails.
+A failed prefetch therefore made the sweep MORE expensive, which is the wrong direction for a fault
+caused by load.
+
+**A second defect in the same read.** The provider applied its result exclusions
+(`IsExcludedFromResults`: satellite rows, partition roots) once, over the union, judged against the
+FIRST query's parse. The first query targets `_Entitlements`, which is not a configured satellite
+segment, so every `_Access` row the second half of the request asked for was excluded as if nobody
+had asked. The prefetch read every viewer's grants as absent, so a pack entitled by grant alone was
+never settled from the listing and always took the per-pack owner reads.
+
+**The fix (core, `StorageAdapterMeshQueryProvider`).**
+
+- `CollectMatched` collects the exact-path probes of EVERY query in the request and reads their
+  union with ONE `ReadMany` (`ReadProbes`). Each query then picks the paths it asked for out of that
+  one read and applies its own filter. Walk scopes are unchanged.
+- The exclusions run per query, against the query that found the node.
+- A fault keeps its isolation. One batched read has one terminal, so a fault on one path would end
+  the whole batch and empty every query's answer. When the batch faults, its paths are read again
+  one at a time, each with its own catch. Paths that read cleanly keep their rows. Only a path whose
+  own read faults is dropped, and that sets `SnapshotIncomplete`. The per-path cost is paid only
+  when a fault happens.
+
+`ExactProbeBatchingTest` (`test/MeshWeaver.Hosting.Test`) pins both. Thirty exact queries reach the
+store as one `ReadMany` carrying all thirty paths, and the Initial holds every record that exists,
+grants included. Negative control, run against the unfixed provider: the Initial lacks all three
+grants, and a two-query request makes 2 `ReadMany` calls where the fix makes 1. A second case pins
+per-query attribution: a node probed by a query whose `nodeType:` does not match stays out. A third case pins
+the fault isolation: with one query's path poisoned, the other two queries keep their rows and the
+frame is marked incomplete. Its negative control is the batch without the per-path re-read, which
+answers with an empty Initial.
+
+The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
+
+**Not established.**
+
+- The count of free packs on memex-cloud, and so the exact query count per prefetch, is inferred
+  from the `…/_Entitlements/morenocaro` writes one onboarding logged, not read from the catalogue.
+- On Postgres the one `ReadMany` still becomes one pooled point read per path, in parallel:
+  `PostgreSqlPathRoutingAdapter` (MeshWeaver.Plugins) has no `ReadMany` override, so the interface
+  default fans out to `Read`. The per-schema adapter's batched `ReadMany` (one statement per table)
+  is not reached. The core change turns thirty serial round-trips into thirty parallel ones; a
+  routing override would make them one per schema and table.
+- Whether this ends the terminal on memex-cloud. A `Logs` reading over every pod
+  (`|~ "did not emit an Initial"`, 885 minutes to 05:05Z on 2026-09-25,
+  `Ops/logs-memexcloud-20260925-entstall-f-allstall`) read 18 lines, none after 14:30:51Z on
+  2026-09-24. The sweep that stalls runs rarely, so a quiet window says little; the next reading has
+  to cover a sweep on an image carrying this change.
+
 ## See also
 
 - [Access Control](../AccessControl) → "The fold can produce NO answer, and that is a third outcome",

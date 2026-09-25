@@ -236,9 +236,16 @@ public static class NodeTypeBuildIdentity
     /// </summary>
     public static CompilationStatus? ReportedStatus(
         NodeTypeDefinition? definition, string liveFrameworkVersion)
+        => ReportedStatus(definition, liveFrameworkVersion, NodeTypeCompilationHelpers.LivePlatformVersion);
+
+    /// <summary><see cref="ReportedStatus(NodeTypeDefinition?, string)"/> with the running platform
+    /// BUILD explicit — a record whose platform range excludes it reports
+    /// <see cref="CompilationStatus.Foreign"/> (policy <c>platform-backwards-compatibility</c>).</summary>
+    public static CompilationStatus? ReportedStatus(
+        NodeTypeDefinition? definition, string liveFrameworkVersion, string? livePlatformVersion)
         => definition?.CompilationStatus is not CompilationStatus.Ok
             ? definition?.CompilationStatus
-            : RefusalReason(definition, liveFrameworkVersion) is null
+            : RefusalReason(definition, liveFrameworkVersion, livePlatformVersion) is null
                 ? CompilationStatus.Ok
                 : CompilationStatus.Foreign;
 

@@ -83,6 +83,11 @@ Its leaves:
   proposal (`SpeculativeCompilation.Diagnose`) and a script cell. The IO half of each (NuGet refs,
   `Project.GetCompilationAsync`) stays on the `Compile` pool; only the bind moves. The script
   workspace now also binds with `ConcurrentBuild` off.
+- a kernel code cell's build + emit + load (`ScriptSession.Compile`, #5388). The kernel used to run a
+  cell as ONE async leaf of the `Compile` pool, so the whole Roslyn half ran on a ThreadPool worker
+  before the leaf's first await, with Roslyn's default `ConcurrentBuild` fanning it out further. Now
+  the compile is its own lane leaf with `ConcurrentBuild` off, and only the cell's EXECUTION — user
+  code that awaits — stays an async leaf of the `Compile` pool.
 
 🚨 **The lane is separate from the `Compile` pool on purpose.** `Compile` also runs kernel SCRIPTS — user
 code that may activate a NodeType and wait for its compile — and cell-surface assembly loads. An emit
@@ -94,9 +99,15 @@ a leaf that needs IO splits it off, as the three diagnostics arms do.
 Tests, each with a negative control that fails on the unfixed code:
 
 - `CompileCpuLaneIsBoundedAndOffThePoolTest` (Hosting.Test) — six parked leaves on a cap-2 lane: at
-  most 2 run at once, all 6 run, none on a pool worker; the control, the ordinary `Compile` pool with
-  the same cap, runs all 6 on pool workers. With the registry building the lane without dedicated
-  threads the first test fails.
+  most 2 run at once, all 6 run, none on a pool worker; the control, a pool that borrows ThreadPool
+  workers with the same cap, runs all 6 on pool workers. With the registry building the lane without
+  dedicated threads the first test fails. (Every other pool's blocking leaves now run on threads of
+  their own too — [Blocking Leaves Off the ThreadPool](../BlockingLeavesOffTheThreadPool); the lane
+  keeps its own name, `mw-cpu-lane`, so the two tests below can still tell it from the `Compile` pool.)
+- `KernelCellCompileStaysOffTheThreadPoolTest` — a code cell's compile (`ScriptSession.Compile`, the
+  CPU half the kernel now runs on the lane) hands no work to the pool and emits with `ConcurrentBuild`
+  off; the control, the same cell's compilation with Roslyn's script default, fans out onto the pool.
+  Fails when the compile is built without `WithoutConcurrentBuild`.
 - `ServiceCompileStaysOffTheThreadPoolTest` — a real compile through the service reaches Roslyn on an
   `mw-cpu-lane` thread with `ConcurrentBuild` off. Fails when the emit is routed through the `Compile` pool.
 - `LanguageServiceDiagnosticsRunOnTheCpuLaneTest` — all three diagnostics arms bind on `mw-cpu-lane`

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for test/run-tests.sh — answers hosting-aks-upgrade's reads from
+# $HOSTING_AKS_FIXTURE and records every call in $HOSTING_AKS_STATE/log.
+#
+#   get nodes -o json                              → nodes.json
+#   get deployments --all-namespaces -o json       → deployments.json
+#   -n <ns> get pods -l … -o json                  → pods-<ns>.json
+#   -n <ns> get ingress -o json                    → ingress-<ns>.json, else no items
+#   get pdb --all-namespaces -o json               → pdbs.json, else no items
+#   get --raw /metrics                             → metrics.txt; $FIXTURE/metrics-forbidden → Forbidden, exit 1
+#   get pods --all-namespaces --field-selector …   → runner.json, else no items
+set -uo pipefail
+fixture="${HOSTING_AKS_FIXTURE:?the aks-upgrade kubectl stub needs HOSTING_AKS_FIXTURE}"
+state="${HOSTING_AKS_STATE:?the aks-upgrade kubectl stub needs HOSTING_AKS_STATE}"
+printf '%s\n' "kubectl $*" >> "$state/log"
+or_empty() { if [ -f "$1" ]; then cat "$1"; else echo '{"items":[]}'; fi; }
+case "$*" in
+  "get nodes -o json")                        cat "$fixture/nodes.json" ;;
+  "get deployments --all-namespaces -o json") cat "$fixture/deployments.json" ;;
+  "-n "*" get pods -l "*)                      cat "$fixture/pods-$2.json" ;;
+  "-n "*" get ingress -o json")                or_empty "$fixture/ingress-$2.json" ;;
+  "get pdb --all-namespaces -o json")         or_empty "$fixture/pdbs.json" ;;
+  "get --raw /metrics")
+    if [ -f "$fixture/metrics-forbidden" ]; then
+      echo 'Error from server (Forbidden): forbidden: User cannot get path "/metrics"' >&2; exit 1
+    fi
+    cat "$fixture/metrics.txt" ;;
+  "get pods --all-namespaces --field-selector "*) or_empty "$fixture/runner.json" ;;
+  *) echo "kubectl stub (aks-upgrade): unexpected invocation: $*" >&2; exit 1 ;;
+esac

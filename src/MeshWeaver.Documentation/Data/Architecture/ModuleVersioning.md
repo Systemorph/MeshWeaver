@@ -29,6 +29,81 @@ runtime it is advisory and loadability is measured, never declared
 ([issue #3648](https://github.com/Systemorph/MeshWeaver/issues/3648)). Getting it wrong therefore
 fails your build; it is not a knob for keeping a module off a deployment.
 
+## 🚨 The compatibility LADDER — what keys compiled bytes (policy `platform-backwards-compatibility`)
+
+> Policy [`platform-backwards-compatibility`](../PolicyNotProse): platform builds are **backwards
+> compatible within a major and a declared compatibility epoch**. This section is the manual for it;
+> every older section below that speaks of "the framework identity" moving on a platform roll
+> describes the scheme this one replaced and is kept as the record of why.
+
+**The ladder.** `platform1+plugin1 → platform2+plugin1 → platform2+plugin2 → platform3+plugin2 → …`.
+A platform roll keeps the OLD plugin bytes — **no rebuild, no re-seal**. A plugin rolls independently,
+built against the platform that is RUNNING. Only a **declared break** (an epoch bump, or a major bump)
+steps off the ladder, and it does so on purpose.
+
+**The key.** Compiled NodeType bytes and module bundles are keyed on the platform **compatibility
+key** `c<major:D3>e<epoch:D3>` — e.g. `c003e001` — never on a per-build identity:
+
+| what | where |
+|---|---|
+| the key | `FrameworkBuildIdentity.FrameworkVersion` (== `CompatibilityKey` == `PrebuiltAssemblySeeder.LiveFrameworkMvid` == `ProducerStatedIdentity`), computed by `PlatformCompatibility.KeyOf(major, epoch)` |
+| `major` | the `AssemblyVersion` major, derived from `$(PlatformVersion)` |
+| `epoch` | `src/MeshWeaver.Compiler/platform-compatibility.json` → `"epoch"` — the ONE source: `Directory.Build.props` reads it into `$(PlatformCompatibilityEpoch)` and stamps `AssemblyMetadata("MeshWeaverCompatibilityEpoch")` into every assembly, and the runtime reads the same file embedded (`PlatformCompatibility.Declaration`) |
+| read off a foreign host | `FrameworkBuildIdentity.ResolveIdentityForDirectory(/app)` — the anchor `MeshWeaver.Compiler.dll`'s metadata, no manifest needed (`mw-plugin-test framework-identity … --expect` compares this) |
+| the store tag | the whole 8-char key (`v<version>-c003e001-<hash>.dll`), so every build of an epoch hits the previous build's bytes |
+| a dependency record's platform entries | `compat:c003e001` (`CompiledDependencies.CreateCompatibilityIdResolver`, `ToolchainIdOf`) — a platform build moves no record; a MODULE entry is still its `min:` floor |
+
+The per-build surface/commit identity (`s<hash>` / `g<sha>`) is **provenance only** —
+`FrameworkBuildIdentity.BuildProvenance`, `ProducerStatedProvenance`,
+`ResolveBuildProvenanceForDirectory`, `FrameworkIdentity.ReadProvenance`. It is logged (the pre-warmer
+names key, platform build and provenance together) and recorded, and it NEVER decides a cache miss,
+an adoption, a load or a roll. `PlatformCompatibilityRatchetGuard` reds any statement that compares
+one of those members.
+
+**The RANGE: floor and ceiling.** Within one key, bytes carry a platform range:
+
+| field | bundle manifest | NodeType record | meaning |
+|---|---|---|---|
+| FLOOR | `producerPlatformVersion` | `CompiledPlatformVersion` | the platform build that PRODUCED the bytes (`PlatformBuildInfo.PlatformVersion` of the compiling/baking process; `mw-plugin-test` images carry `MESHWEAVER_PLATFORM_VERSION` for it) |
+| CEILING | `platformCeiling` | `PlatformCeiling` | the highest platform build the bytes claim, **open when absent** |
+
+The one rule, `PlatformCompatibility.DeclineReason(producedKey, floor, ceiling, liveKey, running)`:
+**same key AND floor ≤ running ≤ ceiling ⇒ adopt and bind to the running platform; anything else ⇒
+declined LOUDLY, both versions named.** There is no other version gate. An absent floor is "unknown
+producer = older" — accepted, so every record written before the field existed stays adoptable.
+Ordering is `PlatformReleaseOrder` (the `ci.<n>` run ordinal); a release against a continuous build is
+unordered and therefore never a "newer" reading.
+
+**Binding.** A plugin/NodeType assembly compiled against platform `3.0.0.0` binds on a platform
+stamped `3.1.0.0`: `PlatformBinding.MayBind(compiledAgainst, running)` is `running >= compiledAgainst`,
+applied by the module link probe (`ModulePlatformLink`: lower ⇒ linkable with an advisory, higher ⇒
+`BindingConflict`, i.e. floor not met), and the NodeType load context and `ModulesAssemblyLoadContext`
+resolve every platform name through the default context (TPA roll-forward) — never a private copy,
+never an exact-version hard link.
+
+**What a mixed roll does.** Two builds of one epoch serving one mesh (`P2` draining, `P3` new): `P3`
+adopts every record `P2` wrote (older floor ⇒ in range) and recompiles nothing. A record `P3` writes
+(a source change) carries floor `P3`; `P2` reads it as out of range and — because the ORDER is known
+from the run ordinal — **yields unconditionally** (`NodeTypeBuildIdentity.OwnedByANewerPlatformBuild`
+→ `DecideFrameworkStale` = `Yield`), overlaying that one type instead of re-keying it backwards. No
+re-key war. The census (`bake-report`'s LIVE RECORD CENSUS) counts those records as foreign on `P2`
+by the same reader. The ONE roll that crosses from the per-build scheme to the key (old image `s…`,
+new image `c003e001`) behaves exactly as every roll did before this change: records re-key once
+(the #5353 leaving-yield keeps the draining replica from fighting it), and from then on rolls within
+the epoch re-key nothing.
+
+**A DECLARED BREAK.** When compiled bytes must be invalidated — a public API removal or signature
+change compiled content can bind, or a change to the skeleton generator
+(`DynamicMeshNodeAttributeGenerator`) or any toolchain-generated compile input whose old output is no
+longer loadable or correct — bump `"epoch"` in `platform-compatibility.json` and append a `breaks`
+entry: `{ "epoch": <new>, "previousEpochCeiling": "<last platform build of the old epoch>",
+"reason": "…", "declaredIn": "#<PR>", "members": [...], "affected": [...] }`. Everything built
+against the old epoch then declines (its effective ceiling is `previousEpochCeiling`,
+`CompatibilityDeclaration.CeilingForEpoch`), and ONLY then does a coordinated rebuild and seal of the
+affected plugins sit on the path. Never gate on an exact build identity, never seal or pin an image
+around a break: fix compatibility (an `[Obsolete]` forwarder, an API restore, the binder) or declare
+the break.
+
 ## The three numbers, and who owns each
 
 | number | lives in | owned by |
@@ -245,6 +320,11 @@ always wins over the environment default.
 > effect of the strictness default.
 
 ## Full rebuild when the platform updates
+
+> 🚨 **Superseded for every platform build within one epoch** — see "The compatibility LADDER" above
+> (policy `platform-backwards-compatibility`). A platform release no longer moves the key a module is
+> declined on, so it no longer obliges a rebuild; the table below still describes what the lanes
+> COMPILE, and a full rebuild is owed only behind a DECLARED break.
 
 A module is built against a platform pin. **When the platform releases, the pin moves and EVERY
 module must be rebuilt and republished** — not only the ones whose source changed — or every portal

@@ -74,14 +74,33 @@ internal sealed class ScriptSession(object globals, Func<string, Assembly?>? ext
     /// <c>CSharpScript.RunAsync</c>. A submission that throws at RUNTIME does not advance the
     /// chain (its variables are discarded), matching <c>ScriptState</c> semantics.
     /// </summary>
-    public async Task<object?> RunAsync(string code, ScriptOptions options, Type globalsType, CancellationToken ct)
+    public Task<object?> RunAsync(string code, ScriptOptions options, Type globalsType, CancellationToken ct)
+        => ExecuteAsync(Compile(code, options, globalsType, ct), ct);
+
+    /// <summary>
+    /// The CPU-bound half of <see cref="RunAsync"/>: builds the next submission of the chain,
+    /// emits it and loads it into the session's collectible context — and runs NONE of it.
+    /// Compilation errors throw <see cref="CompilationErrorException"/>; the chain does not advance
+    /// until <see cref="ExecuteAsync"/> succeeds.
+    ///
+    /// <para>🚨 <b>Split out so it can run on the CPU lane, off the ThreadPool</b> (#5388,
+    /// <c>Doc/Architecture/CompileOffTheThreadPool</c>). A cell's compile is the same Roslyn
+    /// parse + bind + emit a NodeType compile is — hundreds of milliseconds to seconds of pure
+    /// computation — and it ran inside the Compile pool's ASYNC leaf, i.e. on a ThreadPool worker,
+    /// before the leaf's first await. And the emit ran with Roslyn's default
+    /// <c>ConcurrentBuild</c>, which fans the work out onto <see cref="System.Threading.Tasks.TaskScheduler.Default"/>
+    /// from whatever thread starts it. Both put a code-cell run on the pool the grain turns need, so
+    /// the compilation is built with <c>ConcurrentBuild</c> off and this method does nothing but
+    /// compute: no pool call, no mesh read, no wait — the CPU lane's contract.</para>
+    /// </summary>
+    public CompiledSubmission Compile(string code, ScriptOptions options, Type globalsType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
 
         var script = previousScript is null
             ? CSharpScript.Create(code, options, globalsType)
             : previousScript.ContinueWith(code, options);
-        var compilation = script.GetCompilation();
+        var compilation = WithoutConcurrentBuild(script.GetCompilation());
 
         using var peStream = new MemoryStream();
         using var pdbStream = new MemoryStream();
@@ -101,6 +120,33 @@ internal sealed class ScriptSession(object globals, Func<string, Assembly?>? ext
         }
 
         var assembly = loadContext.LoadSubmission(compilation.AssemblyName!, peStream, pdbStream);
+        return new CompiledSubmission(script, compilation, assembly);
+    }
+
+    /// <summary>
+    /// The submission compilation with Roslyn's <c>ConcurrentBuild</c> switched off — a scheduling
+    /// choice that does not change the emitted bytes, and the one that keeps the emit on the thread
+    /// that runs it. Internal so the test that pins it can read the same compilation.
+    /// </summary>
+    internal static Compilation WithoutConcurrentBuild(Compilation compilation)
+        => compilation.WithOptions(compilation.Options.WithConcurrentBuild(false));
+
+    /// <summary>
+    /// Runs a submission <see cref="Compile"/> produced, and advances the chain only if it succeeds
+    /// — a throwing submission's variables are discarded, matching <c>ScriptState</c> semantics.
+    /// Must be the next submission compiled on this session: the executor's serial pump guarantees it.
+    /// </summary>
+    /// <param name="submission">What <see cref="Compile"/> produced for this session.</param>
+    /// <param name="ct">
+    /// Observed BEFORE the submission starts — a pool drained while the leaf was queued never starts
+    /// user code. Once running, a submission is not abandoned mid-flight (parity with
+    /// <c>ScriptState.RunAsync</c>); cancellation reaches it through its own globals' token.
+    /// </param>
+    public async Task<object?> ExecuteAsync(CompiledSubmission submission, CancellationToken ct)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ct.ThrowIfCancellationRequested();
+        var (script, compilation, assembly) = submission;
 
         // The scripting host's submission protocol: the generated static
         // Task<object> <Factory>(object[] submissionStates) reads predecessors from the array
@@ -149,6 +195,15 @@ internal sealed class ScriptSession(object globals, Func<string, Assembly?>? ext
         submissionStates.Clear();
         loadContext.Unload();
     }
+
+    /// <summary>
+    /// A submission <see cref="Compile"/> built and loaded, not yet run: the chain link, its
+    /// compilation (for the submission protocol's script class) and the loaded assembly.
+    /// </summary>
+    /// <param name="Script">The chain link — becomes the session's previous script once it runs.</param>
+    /// <param name="Compilation">The emitted compilation.</param>
+    /// <param name="Assembly">The submission assembly, loaded into the session's collectible context.</param>
+    internal sealed record CompiledSubmission(Script<object> Script, Compilation Compilation, Assembly Assembly);
 
     private sealed class SessionLoadContext(Func<string, Assembly?>? externalResolver)
         : AssemblyLoadContext(LoadContextName, isCollectible: true)

@@ -346,6 +346,24 @@ public static class NodeTypeBakeStatus
         Func<string, string?>? liveDependencyIdOf = null,
         string? liveToolchainId = null,
         string? liveGeneratedInputDigest = null)
+        => ClassifyAgainst(
+            definition, storeHasBytes, liveFrameworkVersion, NodeTypeCompilationHelpers.LivePlatformVersion,
+            liveDependencyIdOf, liveToolchainId, liveGeneratedInputDigest);
+
+    /// <summary>
+    /// <see cref="ClassifyDetailed"/> with the running platform BUILD explicit — the seam a test
+    /// stages a mixed roll through (policy <c>platform-backwards-compatibility</c>): within one
+    /// compatibility key, a record produced by a NEWER build than <paramref name="livePlatformVersion"/>
+    /// is <see cref="BakeState.FrameworkStale"/> even when the store holds its bytes.
+    /// </summary>
+    internal static (BakeState State, string? DependencyMismatch) ClassifyAgainst(
+        NodeTypeDefinition definition,
+        bool storeHasBytes,
+        string liveFrameworkVersion,
+        string? livePlatformVersion,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null,
+        string? liveGeneratedInputDigest = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
@@ -368,7 +386,7 @@ public static class NodeTypeBakeStatus
         var outOfRange = string.Equals(
                 definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal)
             && NodeTypeBuildIdentity.RefusalReason(
-                definition, liveFrameworkVersion, NodeTypeCompilationHelpers.LivePlatformVersion) is not null;
+                definition, liveFrameworkVersion, livePlatformVersion) is not null;
         var frameworkMoved = outOfRange || !string.Equals(
             definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal);
 

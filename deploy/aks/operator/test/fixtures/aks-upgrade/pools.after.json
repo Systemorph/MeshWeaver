@@ -1,0 +1,68 @@
+[
+ {
+  "name": "cibuildv6",
+  "mode": "User",
+  "count": 1,
+  "minCount": null,
+  "maxCount": null,
+  "enableAutoScaling": true,
+  "currentOrchestratorVersion": "1.35.7",
+  "orchestratorVersion": "1.35.7",
+  "provisioningState": "Succeeded",
+  "powerState": {
+   "code": "Running"
+  },
+  "upgradeSettings": {
+   "maxSurge": "10%"
+  }
+ },
+ {
+  "name": "cidind",
+  "mode": "User",
+  "count": 3,
+  "minCount": null,
+  "maxCount": null,
+  "enableAutoScaling": true,
+  "currentOrchestratorVersion": "1.35.7",
+  "orchestratorVersion": "1.35.7",
+  "provisioningState": "Succeeded",
+  "powerState": {
+   "code": "Running"
+  },
+  "upgradeSettings": {}
+ },
+ {
+  "name": "silos",
+  "mode": "User",
+  "count": 4,
+  "minCount": null,
+  "maxCount": null,
+  "enableAutoScaling": true,
+  "currentOrchestratorVersion": "1.35.7",
+  "orchestratorVersion": "1.35.7",
+  "provisioningState": "Succeeded",
+  "powerState": {
+   "code": "Running"
+  },
+  "upgradeSettings": {
+   "maxSurge": "10%"
+  }
+ },
+ {
+  "name": "system",
+  "mode": "System",
+  "count": 2,
+  "minCount": null,
+  "maxCount": null,
+  "enableAutoScaling": false,
+  "currentOrchestratorVersion": "1.35.7",
+  "orchestratorVersion": "1.35.7",
+  "provisioningState": "Succeeded",
+  "powerState": {
+   "code": "Running"
+  },
+  "upgradeSettings": {
+   "maxSurge": "10%"
+  }
+ }
+]
