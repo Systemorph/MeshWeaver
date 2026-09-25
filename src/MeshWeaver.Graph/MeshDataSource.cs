@@ -1213,6 +1213,11 @@ public static class MeshDataSourceExtensions
                 var releaseReqSub = NodeTypeCompilationHelpers
                     .InstallReleaseRequestWatcher(hub, workspace);
                 hub.RegisterForDisposal(releaseReqSub);
+                // #5057 — a release that landed after the settle stopped waiting for it is
+                // adopted when it lands: while the own record names an UnreleasedBuildPath, that
+                // one path is watched through a synced path: query and the pointer follows it.
+                var lateReleaseSub = LateReleaseAdoption.Install(hub, workspace);
+                hub.RegisterForDisposal(lateReleaseSub);
                 // Sources / IsDirty watcher — discovers source paths via the
                 // shared NodeSources synced query (Initial only), then binds
                 // to each source path's own MeshNode stream
