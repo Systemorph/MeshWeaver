@@ -679,7 +679,8 @@ public static class PublishedBundleCatalogue
                 "ReleaseAvailability: sealed bundle {Bundle} carries no readable manifest — it counts "
                 + "for presence, and its dependency records cannot be checked for consistency",
                 bundlePath);
-            return ([], null);
+            // 🚨 Unreadable, never "no range declared": an open range would clear a declared break.
+            return ([], new BundlePlatformRange(null, null) { Unreadable = $"{ex.GetType().Name}: {ex.Message}" });
         }
         var records = new List<BundleDependencyRecord>();
         foreach (var assembly in manifest?.Assemblies ?? [])
@@ -717,17 +718,18 @@ public static class PublishedBundleCatalogue
     /// <param name="publishedRoot">The published bundle root.</param>
     /// <param name="identity">The identity (compatibility key) whose publications to read.</param>
     /// <param name="logger">Diagnostics.</param>
-    public static ImmutableDictionary<string, BundlePlatformRange> RangesForIdentity(
+    public static (ImmutableDictionary<string, BundlePlatformRange> Ranges, string? Refusal) RangesForIdentity(
         string? publishedRoot, string? identity, ILogger? logger = null)
     {
         var ranges = ImmutableDictionary.CreateBuilder<string, BundlePlatformRange>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
-            return ranges.ToImmutable();
+            return (ranges.ToImmutable(), null);
         var identityDirectory = Path.Combine(publishedRoot, identity);
         try
         {
-            if (!Directory.Exists(identityDirectory))
-                return ranges.ToImmutable();
+            // 🚨 THE ENUMERATION DECIDES, never `Directory.Exists` — which answers false for an
+            // absent directory (nothing published for this key: an answer) AND for an unreachable
+            // share (no answer at all). Only DirectoryNotFoundException is the absence.
             foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory).OrderBy(d => d, StringComparer.Ordinal))
             {
                 var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
@@ -738,13 +740,18 @@ public static class PublishedBundleCatalogue
                         ranges[StripZip(bundle)] = range;
             }
         }
+        catch (DirectoryNotFoundException) when (!Path.Exists(identityDirectory))
+        {
+            return (ranges.ToImmutable(), null);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             logger?.LogWarning(ex,
                 "ReleaseAvailability: could not read the declared platform ranges under {Directory} — "
-                + "every installed build reads as OPEN (no ceiling), which is the ordinary path", identityDirectory);
+                + "the installed builds' ceilings are UNKNOWN, never open", identityDirectory);
+            return (ranges.ToImmutable(), $"{ex.GetType().Name}: {ex.Message}");
         }
-        return ranges.ToImmutable();
+        return (ranges.ToImmutable(), null);
     }
 
     private static IEnumerable<string> SealedBundleNames(string identityDirectory, ILogger? logger)

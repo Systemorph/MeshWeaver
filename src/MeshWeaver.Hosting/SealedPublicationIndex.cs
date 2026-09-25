@@ -462,13 +462,21 @@ public static class SealedPublicationIndex
                 .Where(l => l.Length > 0)
                 .ToList();
             var missing = listed.FirstOrDefault(name => !File.Exists(Path.Combine(publication, name)));
-            return (missing is null
-                ? new SealedSource(source, repository, commit, true, null)
-                {
-                    ProducerPlatformVersion = ProducerOf(publication, listed, logger),
-                }
-                : new SealedSource(source, repository, commit, false,
+            if (missing is not null)
+                return (new SealedSource(source, repository, commit, false,
                     $"the seal lists '{missing}', which is not on disk"), publication, false);
+            // 🚨 An UNREADABLE manifest is not an absent field. "Unknown producer = older" is the
+            // rule for a producer that predates the field; a manifest that could not be READ may
+            // belong to a newer publication, and treating it as older would let this instance
+            // advance onto the forbidden rung. So it makes the reading UNREADABLE — the gate holds.
+            var (producer, manifestFault) = ProducerOf(publication, listed, logger);
+            return manifestFault is null
+                ? (new SealedSource(source, repository, commit, true, null) { ProducerPlatformVersion = producer },
+                    publication, false)
+                : (new SealedSource(source, repository, commit, false,
+                    $"a bundle manifest could not be read ({manifestFault}) — its producing platform build "
+                    + "is unknown, so whether it may run on this platform cannot be established"),
+                    publication, true);
         }
         catch (Exception ex)
         {
@@ -513,11 +521,12 @@ public static class SealedPublicationIndex
 
     /// <summary>
     /// The newest producing platform build any listed bundle's manifest records
-    /// (<c>ProducerPlatformVersion</c>), by sealed-publication lineage — or null when none records
-    /// one. A manifest that cannot be read contributes nothing (unknown = older = accepted); the
-    /// seal's completeness was already judged by presence, and the floor is a refinement of it.
+    /// (<c>ProducerPlatformVersion</c>), by sealed-publication lineage — null when none records one
+    /// (a producer that predates the field: unknown = older = accepted) — and the FAULT when a
+    /// manifest could not be read at all, which the caller turns into an unreadable reading.
     /// </summary>
-    private static string? ProducerOf(string publication, IReadOnlyList<string> listed, ILogger? logger)
+    private static (string? Producer, string? Fault) ProducerOf(
+        string publication, IReadOnlyList<string> listed, ILogger? logger)
     {
         string? newest = null;
         foreach (var name in listed.Where(n => n.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)))
@@ -532,14 +541,15 @@ public static class SealedPublicationIndex
             {
                 logger?.LogWarning(ex,
                     "SealedPublicationIndex: the manifest of {Bundle} could not be read — its producing "
-                    + "platform build is unknown (read as older)", Path.Combine(publication, name));
-                continue;
+                    + "platform build is unknown, so this reading is UNREADABLE and the gate holds",
+                    Path.Combine(publication, name));
+                return (null, $"{name}: {ex.GetType().Name}: {ex.Message}");
             }
             if (string.IsNullOrWhiteSpace(producer))
                 continue;
             if (newest is null || Plugin.Packaging.PlatformReleaseOrder.Newest.Compare(producer, newest) > 0)
                 newest = producer;
         }
-        return newest;
+        return (newest, null);
     }
 }

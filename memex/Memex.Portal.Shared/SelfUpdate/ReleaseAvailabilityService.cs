@@ -554,7 +554,7 @@ public class ReleaseAvailabilityService(
         // are what the declared-break hold compares a target against; on the ordinary path the
         // target carries the same key and no ceiling is declared, so nothing here can hold a roll.
         var liveKey = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        var installedRanges = PublishedBundleCatalogue.RangesForIdentity(PublishedRoot, liveKey, logger);
+        var (installedRanges, rangeRefusal) = PublishedBundleCatalogue.RangesForIdentity(PublishedRoot, liveKey, logger);
         var required = installed
             .Select(manifest => new RequiredPackage(
                 manifest.Id,
@@ -572,6 +572,8 @@ public class ReleaseAvailabilityService(
                 LandedModulePath = LandedPathOf(moduleRoot, manifest.Module, landed),
                 InstalledKey = liveKey,
                 InstalledCeiling = installedRanges.TryGetValue(manifest.Id, out var range) ? range.Ceiling : null,
+                InstalledRangeUnreadable = rangeRefusal
+                    ?? (installedRanges.TryGetValue(manifest.Id, out var read) ? read.Unreadable : null),
             })
             .ToImmutableArray();
         // 🚨 PRINT THE DENOMINATOR. A completeness gate whose expected count nobody can

@@ -1,5 +1,6 @@
 #pragma warning disable CS1591
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -116,6 +117,41 @@ public class SealedSyncFollowsTheLadderTest
 
         var torn = sealedNewer with { IsSealed = false, Refusal = "no completion sentinel" };
         SealedPublicationIndex.ApplyLadder(torn, Running).Should().Be(torn, "an unsealed reading keeps its own refusal");
+    }
+
+    [Fact]
+    public void AHeldNewerSibling_HoldsTheRepository_EvenBesideASealAtTheBuiltCommit()
+    {
+        IReadOnlyList<SealedSource> sources =
+        [
+            new("plugins", "Systemorph/MeshWeaver.Plugins", Head, true, null) { ProducerPlatformVersion = "3.0.0-ci.9100" },
+            SealedPublicationIndex.ApplyLadder(
+                new SealedSource("plugins-extra", "Systemorph/MeshWeaver.Plugins", Head, true, null)
+                {
+                    ProducerPlatformVersion = "3.0.0-ci.9321",
+                }, Running),
+        ];
+
+        var verdict = SealedSyncGate.Decide(Plugins, Head, OldSync, sources, Key);
+
+        verdict.Proceed.Should().BeFalse(
+            "part of the repository's bytes are for a newer platform — the matching sibling must not open the gate");
+        verdict.HoldReason.Should().Contain("plugins-extra").And.Contain("PLATFORM roll");
+    }
+
+    [Fact]
+    public void AnUnreadableManifest_MakesTheReadingUnreadable_NeverAnOlderProducer()
+    {
+        using var root = new TempRoot();
+        Publish(root.Path, Head, producer: "3.0.0-ci.9321");
+        // A bundle whose bytes are not a zip — the manifest cannot be read.
+        File.WriteAllText(Path.Combine(root.Path, Key, "plugins", "Store.zip"), "not a zip");
+
+        var (sources, outcome) = SealedPublicationIndex.ReadingForRunning(root.Path, Key, Running);
+
+        outcome.Should().Be(SealedReadOutcome.Unreadable,
+            "an unreadable manifest may belong to a NEWER publication; 'unknown = older' is only for a missing field");
+        sources.Should().ContainSingle().Which.IsSealed.Should().BeFalse();
     }
 
     // ───────────────────────────────────────────── helpers

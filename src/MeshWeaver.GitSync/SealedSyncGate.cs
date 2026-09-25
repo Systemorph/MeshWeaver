@@ -470,12 +470,19 @@ public static class SealedSyncGate
             .ToList();
         if (mine.Count == 0)
             return Verdict.Go;
+        // 🚨 THE LADDER FIRST (policy platform-backwards-compatibility): a publication of this
+        // repository produced by a platform build NEWER than the running one holds the source, even
+        // beside a sibling sealed at the built commit — part of the repository's bytes would be for
+        // a platform this instance does not run. Judged before the matching-seal shortcut, and it is
+        // the witness, so the note names the platform roll rather than a generic "not sealed".
+        if (mine.FirstOrDefault(s => s.HeldForNewerPlatform) is { } newer)
+            return new Verdict(false, WithLine(
+                $"built at {Short(headSha)}; this instance's publication of '{newer.Source}' is {newer.Refusal}",
+                newerLine));
         if (mine.Any(s => s.IsSealed && SameCommit(s.SourceCommit, headSha)))
             return Verdict.Go;
         var witness = mine.OrderByDescending(s => s.IsSealed).ThenBy(s => s.Source, StringComparer.Ordinal).First();
-        var reason = witness.HeldForNewerPlatform
-            ? $"built at {Short(headSha)}; this instance's publication of '{witness.Source}' is {witness.Refusal}"
-            : witness.IsSealed
+        var reason = witness.IsSealed
             ? $"built at {Short(headSha)}, not sealed for this instance (identity {identity}: "
               + $"'{witness.Source}' is sealed at {(witness.SourceCommit is null ? "an unknown commit" : Short(witness.SourceCommit))})"
             : $"built at {Short(headSha)}, and this instance's publication of '{witness.Source}' is not sealed "

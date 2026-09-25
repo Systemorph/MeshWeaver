@@ -162,6 +162,35 @@ public class DeclaredBreakRollHoldTest
             .Contain("3.0.0-ci.9410").And.Contain("does not admit the target");
     }
 
+    /// <summary>An unreadable replacement manifest is never an open range: behind a break it holds,
+    /// as indeterminate (could not look), not as cleared.</summary>
+    [Fact]
+    public void AnUnreadableReplacementRange_HoldsAsIndeterminate()
+    {
+        var artifacts = ReleaseArtifacts.Of(["Store.zip"]) with
+        {
+            BundleRanges = ImmutableDictionary<string, BundlePlatformRange>.Empty
+                .WithComparers(StringComparer.OrdinalIgnoreCase)
+                .Add("Store", new BundlePlatformRange(null, null) { Unreadable = "InvalidDataException" }),
+        };
+
+        var verdict = Gate(new ReleaseTarget(Target, Key2), Store(), artifacts);
+
+        verdict.IsUpdatable.Should().BeFalse();
+        verdict.IsIndeterminate.Should().BeTrue();
+    }
+
+    /// <summary>An installed range nobody could read is never an open ceiling.</summary>
+    [Fact]
+    public void AnUnreadableInstalledRange_HoldsAsIndeterminate_ButALegacyIdentityIsNotAffected()
+    {
+        var unreadable = Store() with { InstalledRangeUnreadable = "IOException: share unreachable" };
+        Gate(new ReleaseTarget(Target, Key1), unreadable, NothingSealed()).IsIndeterminate.Should().BeTrue();
+
+        var legacy = Store(installedKey: "s47313cc0000000000000000000000000") with { InstalledRangeUnreadable = "IOException" };
+        Gate(new ReleaseTarget(Target, Key1), legacy, NothingSealed()).IsUpdatable.Should().BeTrue();
+    }
+
     // ─────────────────────────────── the walk: a held newest release is walked past
 
     /// <summary>

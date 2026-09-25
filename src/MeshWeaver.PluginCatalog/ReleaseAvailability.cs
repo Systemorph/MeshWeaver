@@ -173,7 +173,7 @@ public static class ReleaseAvailability
         var older = required
             .Where(p => p.HasContent && artifacts.SealedBundles.Contains(p.BundleName))
             .Where(p => verdicts.Any(v => v.Package == p.Name && v.Kind == PackageAvailabilityKind.Available))
-            .Select(p => (p.Name, Floor: artifacts.BundleRanges.TryGetValue(p.BundleName, out var r) ? r.Floor : null))
+            .Select(p => (p.Name, Floor: artifacts.BundleRanges.TryGetValue(p.BundleName, out var r) && r.Unreadable is null ? r.Floor : null))
             .Where(x => x.Floor is not null && PlatformCompatibility.ProducerIsNewer(target.Version, x.Floor))
             .ToList();
         return older.Count == 0
@@ -309,6 +309,13 @@ public static class ReleaseAvailability
             return null;
         var targetKey = target.FrameworkIdentity;
         var installedKey = package.InstalledKey;
+        // An installed range nobody could READ is not an open one — "cannot tell" is never clear to
+        // proceed. Only for a keyed build: a legacy identity declares no range to read.
+        if (package.InstalledRangeUnreadable is { } rangeFault && PlatformCompatibility.IsKey(installedKey))
+            return new PackageAvailability(package.Name, PackageAvailabilityKind.Indeterminate,
+                $"the platform range the installed build declares could not be read ({rangeFault}) — "
+                + $"whether it covers target {target.Version} cannot be established, which is not "
+                + "clearance to roll");
         var keyBreak = PlatformCompatibility.TryParseKey(installedKey, out _, out var installedEpoch)
                        && PlatformCompatibility.IsKey(targetKey)
                        && !string.Equals(installedKey, targetKey, StringComparison.Ordinal);
@@ -330,6 +337,10 @@ public static class ReleaseAvailability
         if (contentSealed && moduleSealed && !string.IsNullOrWhiteSpace(targetKey))
         {
             var range = artifacts.BundleRanges.TryGetValue(package.BundleName, out var r) ? r : null;
+            if (range?.Unreadable is { } unreadable)
+                return new PackageAvailability(package.Name, PackageAvailabilityKind.Indeterminate,
+                    $"a replacement is sealed under {targetKey}, but its manifest could not be read "
+                    + $"({unreadable}) — whether it covers target {target.Version} cannot be established");
             var replacementDecline = PlatformCompatibility.DeclineReason(
                 targetKey, range?.Floor, range?.Ceiling, targetKey, target.Version);
             if (replacementDecline is null)
@@ -629,6 +640,13 @@ public sealed record RequiredPackage(
     /// or null — open, the default. Set only behind a declared break.
     /// </summary>
     public string? InstalledCeiling { get; init; }
+
+    /// <summary>
+    /// Why the installed build's declared range could not be read (the running key's publication
+    /// was unreachable, or a manifest unreadable), or null. Never read as an OPEN ceiling: the
+    /// declared-break hold answers <see cref="PackageAvailabilityKind.Indeterminate"/> instead.
+    /// </summary>
+    public string? InstalledRangeUnreadable { get; init; }
 }
 
 /// <summary>
@@ -639,7 +657,14 @@ public sealed record RequiredPackage(
 /// or null — unknown producer = older = accepted.</param>
 /// <param name="Ceiling">The highest platform build the bytes claim (<c>BundleReader.Manifest.PlatformCeiling</c>),
 /// or null — open.</param>
-public sealed record BundlePlatformRange(string? Floor, string? Ceiling);
+public sealed record BundlePlatformRange(string? Floor, string? Ceiling)
+{
+    /// <summary>
+    /// Why the range could not be READ (an unreadable manifest), or null when it was. An unreadable
+    /// range is never an open one: behind a declared break it HOLDS the roll as indeterminate.
+    /// </summary>
+    public string? Unreadable { get; init; }
+}
 
 /// <summary>
 /// The instance's gate policy (#3651): what a missing content bake MEANS on this deployment.
