@@ -131,8 +131,10 @@ public sealed record ReleaseSchemaStep(
     /// unless the target's migration demonstrably ran first.</summary>
     public bool MovesSchema => Known && TargetExpected > InstalledExpected;
 
-    /// <summary>The target expects no newer schema than the one the database already has: the image
-    /// may move whatever the migration step answered, because there is nothing for it to establish.</summary>
+    /// <summary>The target expects no newer schema than the one the database already has, so a
+    /// migration step that could not RUN (no mechanism, no grant) has nothing to establish. It is
+    /// NOT sufficient on its own: a migration that ran and failed or timed out still refuses — the
+    /// shared <c>SelfUpdateVerdict.MayPatchAfter(outcome, step)</c> predicate is authoritative.</summary>
     public bool KeepsSchema => Known && TargetExpected <= InstalledExpected;
 
     /// <summary>One machine-readable clause for a verdict or a log line.</summary>

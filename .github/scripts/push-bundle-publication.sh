@@ -217,10 +217,18 @@ publish_release_identity() {
   [ -n "$RELEASE" ] || return 0
   # ExpectedDbVersion (#4764 (b3)) rides the same config when the caller knows it — an integer or
   # nothing, never a guess; absent means UNKNOWN to every reader.
-  local schema=""
-  if [ -n "${EXPECTED_DB_VERSION:-}" ]; then
-    case "$EXPECTED_DB_VERSION" in *[!0-9]*) fail "EXPECTED_DB_VERSION '$EXPECTED_DB_VERSION' is not an integer" ;; esac
-    schema=",\"expectedDbVersion\":$EXPECTED_DB_VERSION"
+  local schema="" expected="${EXPECTED_DB_VERSION:-}"
+  # 🚨 A caller that does not KNOW the number (a bake-only reconcile) must not ERASE one an earlier
+  # run published: this push REWRITES plugins/releases:<version>, so the existing config's
+  # expectedDbVersion is carried over when the input is empty. Absent there too stays absent.
+  if [ -z "$expected" ] \
+      && "$ORAS" manifest fetch-config "${OFLAGS[@]}" "$REGISTRY/plugins/releases:$RELEASE" > "$WORK/existing-release.json" 2>/dev/null; then
+    expected=$(tr -d '\n' < "$WORK/existing-release.json" | sed -n 's/.*"expectedDbVersion":\([0-9]\{1,\}\).*/\1/p')
+    [ -z "$expected" ] || echo "bundle-publication: release=$RELEASE keeps the published expectedDbVersion=$expected (this run was given none)"
+  fi
+  if [ -n "$expected" ]; then
+    case "$expected" in *[!0-9]*) fail "EXPECTED_DB_VERSION '$expected' is not an integer" ;; esac
+    schema=",\"expectedDbVersion\":$expected"
   fi
   printf '{"identity":"%s","version":"%s"%s}' "$(json_escape "$IDENTITY")" "$(json_escape "$RELEASE")" "$schema" > "$WORK/release.json"
   local release_digest

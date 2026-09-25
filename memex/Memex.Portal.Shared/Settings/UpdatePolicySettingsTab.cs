@@ -199,7 +199,9 @@ public static class UpdatePolicySettingsTab
                                 h.Hub.ServiceProvider.GetService<IConfiguration>()?[
                                     MeshWeaver.Hosting.ShippedPrebuiltBundles.PublishedRootConfigKey],
                                 ShippedReleaseSeed.InstalledPlatformVersion, tag)
-                            .Catch((Exception _) => Observable.Return(ReleaseSchemaStep.Unknown(tag)))
+                            // No Catch: a fault on this read is NOT an absent marker (Read already
+                            // answers absent/garbled/unreadable files as UNKNOWN, logged) — it
+                            // reaches the error arm below and nothing is applied.
                             .SelectMany(step => pool.Invoke(ct => updater!.RunMigrationAsync(tag, ct))
                                 .Select(outcome => (outcome, step)))
                             .Subscribe(
