@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -35,7 +36,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     private const string Workflow = ".github/workflows/main-cd.yml";
 
     /// <summary>The platform delivery jobs — the set that must never wait on a Plugins job.</summary>
-    private static readonly string[] PlatformJobs =
+    private static readonly ImmutableArray<string> PlatformJobs =
         ["promote", "verify-images", "publish-bake", "notify-platform-update", "delivery-verdict"];
 
     /// <summary>The job that judges the Plugins seal — the only place a Plugins red may land.</summary>
@@ -242,8 +243,10 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
         return Directory.EnumerateFiles(deploy, "*.*", SearchOption.AllDirectories)
             .Where(f => f.EndsWith(".yaml", StringComparison.Ordinal) || f.EndsWith(".yml", StringComparison.Ordinal)
                         || f.EndsWith(".json", StringComparison.Ordinal))
-            .Where(f => !f.Contains($"{sep}test{sep}", StringComparison.Ordinal)
-                        && !f.Contains($"{sep}templates{sep}", StringComparison.Ordinal)
+            // Only the operator's TEST FIXTURES are out of scope — recorded cluster state, not
+            // configuration. Chart TEMPLATES are shipped configuration and are in scope: a
+            // hard-coded tag there would pin every install the chart renders.
+            .Where(f => !f.Contains($"{sep}test{sep}fixtures{sep}", StringComparison.Ordinal)
                         && !f.Contains($"{sep}node_modules{sep}", StringComparison.Ordinal));
     }
 
