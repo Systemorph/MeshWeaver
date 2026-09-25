@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Reactive.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using MeshWeaver.ContentCollections;
@@ -41,8 +40,9 @@ namespace MeshWeaver.Compiler;
 ///
 /// <para><b>Synchronous on purpose.</b> This runs in a build process at its console boundary, never
 /// on a hub scheduler, and every leaf it touches is pure CPU or a local file write. The one
-/// reactive helper it reuses (<see cref="NodeCompileShaping.ResolveCodeIncludes"/>) is driven with
-/// an in-memory reader, so its chain completes on subscribe.</para>
+/// reactive helper it reuses (<see cref="NodeCompileShaping.ResolveCodeIncludes"/>) is driven
+/// through <see cref="NodeCompileShaping.ResolveCodeIncludesInMemory"/> with a synchronous reader,
+/// so its chain completes inside <c>Subscribe</c> and no thread ever blocks on it.</para>
 /// </summary>
 public static class NodeSetCompiler
 {
@@ -170,7 +170,8 @@ public static class NodeSetCompiler
 
         // @@ includes, resolved against the SAME node set. The runtime reads them through the mesh
         // under System impersonation with a bounded timeout; here the read is a dictionary lookup,
-        // so the reactive chain completes on subscribe.
+        // handed over as a SYNCHRONOUS reader, so the same walk completes inside Subscribe and
+        // nothing ever blocks on it (it used to be driven with Rx's blocking .Wait()).
         //
         // 🚨 #2948 — the walk also RECORDS what it pulled in. An include target is a Code node no
         // source query matched, so it is in the bytes and absent from `matchedPaths`; without this
@@ -181,12 +182,10 @@ public static class NodeSetCompiler
         var resolvedFiles = new List<CodeConfiguration>(codeFiles.Count);
         foreach (var codeFile in codeFiles)
         {
-            var resolvedCode = NodeCompileShaping
-                .ResolveCodeIncludes(
-                    codeFile.Code!, new HashSet<string>(StringComparer.Ordinal), nodePath,
-                    (anchored, authored) => Observable.Return(ReadInclude(nodes, anchored, authored)),
-                    logger, closure)
-                .Wait();
+            var resolvedCode = NodeCompileShaping.ResolveCodeIncludesInMemory(
+                codeFile.Code!, nodePath,
+                (anchored, authored) => ReadInclude(nodes, anchored, authored),
+                logger, closure);
             resolvedFiles.Add(
                 ReferenceEquals(resolvedCode, codeFile.Code)
                     ? codeFile

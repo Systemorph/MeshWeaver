@@ -165,6 +165,55 @@ public static class NodeCompileShaping
     }
 
     /// <summary>
+    /// <see cref="ResolveCodeIncludes"/> for a caller whose include read is SYNCHRONOUS — an
+    /// in-memory node set (the tree bake, <see cref="NodeSetCompiler.ResolveInputs"/>) — returning
+    /// the substituted text directly.
+    ///
+    /// <para>🚨 <b>It runs the SAME walk, and it cannot block.</b> The reader's TYPE is a plain
+    /// function returning the hit, not an <see cref="IObservable{T}"/>, so an asynchronous reader
+    /// cannot be handed in: each hit is lifted with <see cref="Observable.Return{TResult}(TResult)"/>
+    /// (the immediate scheduler) and the whole chain therefore completes INSIDE
+    /// <c>Subscribe</c>. The value is taken from the subscription — never through
+    /// <c>.Wait()</c>, which is what this replaced: a blocking bridge that was correct only while
+    /// the reader happened to be synchronous, and would have parked the calling thread the moment
+    /// anyone changed that. If the chain ever did NOT complete during <c>Subscribe</c>, this throws
+    /// naming the broken invariant rather than waiting — a named failure, never a park.</para>
+    /// </summary>
+    /// <param name="code">The source text to resolve includes in.</param>
+    /// <param name="anchorPath">The path mount-relative includes rebase onto.</param>
+    /// <param name="readInclude">The synchronous include read: anchored path, authored fallback
+    /// (null when identical) → the node found (or null) and the path that produced it.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="closure">Optional accumulator: resolved include path → its code text.</param>
+    internal static string ResolveCodeIncludesInMemory(
+        string code,
+        string? anchorPath,
+        Func<string, string?, (MeshNode? Node, string Path)> readInclude,
+        ILogger logger,
+        IDictionary<string, string>? closure = null)
+    {
+        string? result = null;
+        Exception? fault = null;
+        var completed = false;
+        // Disposed on every exit, so the failure path below tears down a walk that did NOT finish
+        // inside Subscribe instead of leaving it running with callbacks nobody reads.
+        using var subscription = ResolveCodeIncludes(
+                code, new HashSet<string>(StringComparer.Ordinal), anchorPath,
+                (anchored, authored) => Observable.Return(readInclude(anchored, authored)),
+                logger, closure)
+            .Subscribe(value => result = value, ex => fault = ex, () => completed = true);
+
+        if (fault is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(fault);
+        if (!completed || result is null)
+            throw new InvalidOperationException(
+                $"The @@-include walk for '{anchorPath}' did not complete during Subscribe although "
+                + "every read was synchronous. The walk must stay a pure composition of the "
+                + "caller's reads; something in it now schedules asynchronously.");
+        return result;
+    }
+
+    /// <summary>
     /// The <c>@@</c>-include CLOSURE of a compile's source set — <c>resolved path → code text</c>
     /// for every Code node the substitution would pull in, transitively (#2948).
     ///

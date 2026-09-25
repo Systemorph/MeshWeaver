@@ -1167,8 +1167,14 @@ halves now resolve includes first (#2948):
   `NodeCompileShaping.ResolveCodeIncludes` takes an optional collector and records
   `resolved path → code text` at the point it consumes each include; `ResolveInputs` hands that back
   on `CompileInputs.ResolvedIncludes`, and `TreeBake` / `CascadeBuild` fold it straight into the
-  fingerprint. **No second walk, no second read, and no new blocking bridge** at a synchronous build
-  step.
+  fingerprint. **No second walk, no second read, and no blocking bridge** at a synchronous build
+  step: the tree bake calls the walk through `NodeCompileShaping.ResolveCodeIncludesInMemory`, whose
+  reader is typed as a plain synchronous function over the in-memory `NodeSet`. Each hit is lifted
+  with `Observable.Return`, so the one reactive walk completes inside `Subscribe` and the value is
+  taken from the subscription. It used to be collected with Rx's blocking `.Wait()`, which was correct
+  only while the reader happened to be synchronous, and would have parked the build thread as soon as
+  anyone changed that. The reader's type now rules an asynchronous reader out, and a chain that ever
+  stops completing inside `Subscribe` throws instead of waiting.
 - **The consumer** resolves it through the mesh, in the one place that already holds the live source
   nodes: the sources watcher (`NodeTypeCompilationHelpers.InstallSourcesWatcher`). Resolving a closure
   means mesh READS, which a pure `Update` lambda cannot make — so the fingerprint moved *out* of that
