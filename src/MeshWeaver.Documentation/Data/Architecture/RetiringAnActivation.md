@@ -24,10 +24,17 @@ Two sites retire an activation, one per initialization seam:
 |---|---|---|
 | A `BuildupAction` faulted | `MessageHub.TryRetireAfterTransientInitializationFault` | the hub's own action block (inside the `InitializeHubRequest` turn) |
 | A data source's initial load faulted | `DataContext.SettleInitializationGate` | the **thread pool** (`OpenInitializationGate` ends with `ObserveOn(TaskPoolScheduler.Default)`) |
+| A data source's initial load TIMED OUT | `DataContext.SettleInitializationGate` (same method, its own branch) | the thread pool, as above |
 
-Both do the same two things: answer everything parked behind the initialization gate with the
-**cause** ("ask again — the database was unreachable"), and dispose so the next delivery activates a
-fresh hub against a dependency that has come back.
+The two fault sites do the same two things: answer everything parked behind the initialization
+gate with the **cause** ("ask again — the database was unreachable"), and dispose so the next
+delivery activates a fresh hub against a dependency that has come back.
+
+The time-out site (policy `init-timeout-retires-activation`) keeps the same order — `FailGate`
+first, classification stated, `Dispose()` second — but states **`ErrorType.Failed`**, not
+`ShuttingDown`: a stall is not known to clear, and a transient answer would be re-asked by every
+resubscribe latch, re-creating the address with nobody asking. Only the next access re-creates it.
+Why that cannot storm: [What the DataContext Init Time-Box Bounds](../DataContextInitializationTimeout).
 
 ## Why the order is load-bearing
 
