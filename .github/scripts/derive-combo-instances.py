@@ -205,7 +205,10 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
 
 def derive_sources(scans) -> tuple[str, list[str]]:
     """(space-separated --source pairs, blockers) from deployment-record registry mounts."""
-    sources: dict[str, tuple[str, str]] = {}
+    # Match ComboAssemblyOptions.SourceRepositories, whose comparer is OrdinalIgnoreCase. The
+    # verifier would otherwise collapse differently-cased names after this check and could silently
+    # keep whichever URL happened to be passed last.
+    sources: dict[str, tuple[str, str, str]] = {}
     blockers: list[str] = []
     for scan in scans:
         for path, error in scan.source_errors:
@@ -213,19 +216,26 @@ def derive_sources(scans) -> tuple[str, list[str]]:
                 f"{scan.gh_repo}/{path}: registry sources could not be read ({error}); refusing "
                 "to run combo verification with a partial source map.")
         for name, url, path in scan.sources:
-            previous = sources.get(name)
-            if previous is not None and previous[0] != url:
+            key = name.casefold()
+            previous = sources.get(key)
+            if previous is not None and previous[1] != url:
                 blockers.append(
-                    f"registry source `{name}` maps to conflicting repositories: "
-                    f"{previous[0]} ({previous[1]}) and {url} ({scan.gh_repo}/{path}).")
+                    f"case-insensitive registry source `{name}` conflicts with "
+                    f"`{previous[0]}`: {previous[1]} ({previous[2]}) and {url} "
+                    f"({scan.gh_repo}/{path}).")
             else:
-                sources[name] = (url, f"{scan.gh_repo}/{path}")
+                provenance = f"{scan.gh_repo}/{path}"
+                if previous is None or name < previous[0]:
+                    # Keep one deterministic spelling while preserving the actual name expected by
+                    # installations; the assembler resolves it with OrdinalIgnoreCase too.
+                    sources[key] = (name, url, provenance)
     if not sources and not blockers:
         blockers.append(
             "the deployment records declare ZERO registry-source plugin repositories. The source "
             "map is derived from DeploymentContent.PluginRepos; an empty map cannot verify the "
             "installed modules and is not treated as a successful empty set.")
-    return " ".join(f"{name}={sources[name][0]}" for name in sorted(sources)), blockers
+    ordered = sorted(sources.values(), key=lambda source: source[0].casefold())
+    return " ".join(f"{name}={url}" for name, url, _ in ordered), blockers
 
 
 def extractor_control() -> list[str]:
@@ -362,15 +372,24 @@ def self_test() -> int:
     _, source_blockers = derive_sources([_scan("Systemorph/Memex", [])])
     check(any("ZERO registry-source" in blocker for blocker in source_blockers),
           "an empty registry-source map is a RED, not a successful empty set")
+    same_source, source_blockers = derive_sources([
+        _scan("Systemorph/Memex", [], sources=[
+            ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
+        _scan("Systemorph/PartnerRe.Memex", [], sources=[
+            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/partnerre.json")]),
+    ])
+    check(not source_blockers and same_source ==
+          "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
+          "source names differing only by case, with one URL, deduplicate like the verifier")
     _, source_blockers = derive_sources([
         _scan("Systemorph/Memex", [], sources=[
             ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
         _scan("Systemorph/PartnerRe.Memex", [], sources=[
-            ("Plugins", "https://github.com/Systemorph/Other.Plugins", "Deployments/memex.json")]),
+            ("plugins", "https://github.com/Systemorph/Other.Plugins", "Deployments/memex.json")]),
     ])
-    check(any("conflicting repositories" in blocker and "Plugins" in blocker
+    check(any("case-insensitive registry source" in blocker and "Plugins" in blocker
               for blocker in source_blockers),
-          "the same source name pointing at different repositories is a RED naming both records")
+          "source names differing only by case and pointing at different repositories are a RED")
     _, source_blockers = derive_sources([_scan(
         "Systemorph/Memex", [], source_errors=[("mesh/Deployments/memex.json", "bad pluginRepos")])])
     check(any("partial source map" in blocker and "bad pluginRepos" in blocker

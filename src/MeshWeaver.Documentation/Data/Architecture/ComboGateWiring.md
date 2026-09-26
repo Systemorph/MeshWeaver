@@ -464,10 +464,12 @@ stamped on installed modules, and its URL is the repository `InstanceComboAssemb
 materialize those modules (`ComboAssembly.SourceRepositories`, consumed at
 `InstanceComboAssembler.cs:310`).
 
-The roster and source map use the same record scan. Identical source-name/URL pairs across records
-are deduplicated; a source name mapped to different URLs, malformed registry-source data, an
-unreadable deployment record, or a fleet with no registry-source mounts fails the preflight. No
-repository variable can silently omit a source or point the verifier at a stale repository. In
+The roster and source map use the same record scan. Source names are compared case-insensitively,
+matching `SourceRepositories` in the assembler: casing variants that point to the same URL collapse
+to one stable spelling, while the same name mapped to different URLs, malformed registry-source
+data, an unreadable deployment record, or a fleet with no registry-source mounts fails the
+preflight. No repository variable can silently omit a source or point the verifier at a stale
+repository. In
 `Systemorph/Memex`, `check-record-renders-overlay.py` also checks that registry-source records and
 `pluginCatalog.sources` agree by name, URL and ref in both directions.
 
