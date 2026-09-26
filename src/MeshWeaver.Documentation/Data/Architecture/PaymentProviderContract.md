@@ -54,6 +54,7 @@ processor mandatory on portals that sell nothing.
 | `Unavailable` | the reason a payment cannot be taken right now, in the viewer's language — `null` when one can |
 | `CreateCheckout(PaymentCheckoutRequest)` | open a hosted checkout; `Recurrence` non-null makes it recurring |
 | `CancelAtPeriodEnd(subscriptionId)` | stop renewing at the end of the paid period, never immediately |
+| `OffersBillingPortal` / `OpenBillingPortal(PaymentBillingPortalRequest)` | can the subscriber be sent to the processor's own hosted billing page (card, invoices, cancel) — and where; defaults to *no portal*, so an older provider still compiles |
 | `ReadDelivery(signature, body, now)` | verify a webhook delivery **and** parse it, in one answer |
 | `DescribeDeliveryPath(hookUrl)` | can the processor actually reach this portal? |
 | `SecretSettingName` / `WebhookSecretSettingName` / `DeliverySignatureHeader` | the names an operator finding has to quote |
@@ -67,6 +68,22 @@ mesh-compiled content that stamps them must bind something present in every imag
 `PaymentSettings.BaseUrlConfig` (`Commerce:BaseUrl`) is the portal's own public URL. It is
 provider-neutral on purpose: a deployment states it once, and swapping providers does not restate
 it.
+
+### What a subscription delivery can say
+
+`PaymentSubscriptionEvent.Change` is one of `Renewed` (a period was paid — the plan is topped up),
+`Ended` (the processor stopped billing — the plan ends) and `PaymentFailed` (a charge failed — the
+plan goes past-due while the processor retries; the next `Renewed` clears it, and a processor that
+gives up reports `Ended`). A delivery also carries what makes those facts safe to act on more than
+once: `InvoiceId`, and **`PaidThrough`** — the end of the period the invoice paid for. A renewal
+applied as *"paid through T"* is the same answer however often the same payment is delivered, where
+*"one more period from now"* grants a second period for every duplicate
+([Plugins#2405](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2405)). `CustomerId` on both
+event kinds is the handle a billing portal is opened for.
+
+A portal-side cancellation needs nothing new: the subscriber cancels on the processor's page, the
+processor stops billing at the period end, and the ordinary `Ended` delivery ends the plan — the same
+rule `CancelAtPeriodEnd` follows, so the portal never revokes access on a guess.
 
 ### Verify and parse come back together
 

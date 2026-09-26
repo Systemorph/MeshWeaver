@@ -39,7 +39,7 @@ public sealed record PaymentDelivery
 
     /// <summary>
     /// Whether this delivery names work the portal would actually DO — a checkout naming an order,
-    /// or a subscription event that renews or ends a plan. The predicate the retention decision
+    /// or a subscription event that renews a plan, ends it, or reports a failed charge on it. The predicate the retention decision
     /// turns on: a renewal discarded as noise is a subscriber whose plan silently lapses next month
     /// with nothing anywhere to say why. Pure.
     /// </summary>
@@ -74,6 +74,13 @@ public sealed record PaymentCheckoutEvent(
 {
     /// <summary>The subscription the completed session created, when it created one.</summary>
     public string? SubscriptionId { get; init; }
+
+    /// <summary>
+    /// The processor's CUSTOMER the session was paid by, when it names one — the handle a hosted
+    /// billing portal is opened for (<see cref="IPaymentProvider.OpenBillingPortal"/>). Recorded at
+    /// fulfilment so "Manage billing" needs no second lookup.
+    /// </summary>
+    public string? CustomerId { get; init; }
 
     /// <summary>The order this purchase is for.</summary>
     public string? OrderPath => Meta(PaymentMetadata.OrderPath);
@@ -123,14 +130,24 @@ public enum PaymentSubscriptionChange
 
     /// <summary>The provider has stopped billing the subscription. This is what ends the plan.</summary>
     Ended = 2,
+
+    /// <summary>
+    /// A charge for the subscription FAILED — the card was declined, expired, or needs the
+    /// subscriber's action. The plan is NOT ended: the processor retries, and the paid-through
+    /// period still stands. It marks the plan past-due so the subscriber can be told to fix the
+    /// card; the next <see cref="Renewed"/> clears it, and a processor that gives up reports
+    /// <see cref="Ended"/>.
+    /// </summary>
+    PaymentFailed = 3,
 }
 
 /// <summary>
-/// One parsed SUBSCRIPTION-LIFECYCLE delivery — the renewals and the ending, which arrive long
-/// after the checkout that started them and carry their facts on the SUBSCRIPTION's own metadata.
+/// One parsed SUBSCRIPTION-LIFECYCLE delivery — a renewal, a FAILED charge (the plan goes past-due
+/// while the processor retries) or the ending — which arrive long after the checkout that started
+/// them and carry their facts on the SUBSCRIPTION's own metadata.
 /// </summary>
 /// <param name="Change">What this delivery does to the plan; <see cref="PaymentSubscriptionChange.None"/>
-/// when it names no viewer and no plan, or is not one of the two the portal acts on.</param>
+/// when it names no viewer and no plan, or is not one the portal acts on.</param>
 /// <param name="SubscriptionId">The subscription this is about.</param>
 /// <param name="Metadata">The subscription's metadata as this payload carries it.</param>
 public sealed record PaymentSubscriptionEvent(
@@ -138,6 +155,27 @@ public sealed record PaymentSubscriptionEvent(
     string? SubscriptionId,
     ImmutableDictionary<string, string> Metadata)
 {
+    /// <summary>The processor's CUSTOMER the subscription belongs to, when the payload names one.</summary>
+    public string? CustomerId { get; init; }
+
+    /// <summary>
+    /// The processor's handle for the INVOICE this delivery is about (renewal and failed-payment
+    /// deliveries), when it names one — the identity of ONE billing period's charge.
+    /// </summary>
+    public string? InvoiceId { get; init; }
+
+    /// <summary>
+    /// The end of the billing period this delivery's invoice PAID FOR, when the payload states it.
+    ///
+    /// <para>🚨 This is what makes a renewal idempotent BY VALUE. "Extend by one period from the
+    /// current expiry" grants a second period each time the same payment is delivered twice (a
+    /// redelivery, a duplicate queue entry); "the plan is paid through this instant" is the same
+    /// answer however often it arrives. A caller extends the plan TO this instant — never beyond
+    /// what is already stamped — whenever it is present, and falls back to the cadence arithmetic
+    /// only when the processor did not say.</para>
+    /// </summary>
+    public DateTimeOffset? PaidThrough { get; init; }
+
     /// <summary>The viewer whose plan it is.</summary>
     public string? Buyer => Meta(PaymentMetadata.Buyer);
 
@@ -153,8 +191,11 @@ public sealed record PaymentSubscriptionEvent(
     /// <summary>Whether this event ENDS the plan. Pure.</summary>
     public bool Ends => Change is PaymentSubscriptionChange.Ended;
 
+    /// <summary>Whether this event reports a FAILED charge — the plan goes past-due. Pure.</summary>
+    public bool FailsPayment => Change is PaymentSubscriptionChange.PaymentFailed;
+
     /// <summary>Whether this event is one the portal acts on at all. Pure.</summary>
-    public bool IsActionable => Renews || Ends;
+    public bool IsActionable => Renews || Ends || FailsPayment;
 
     /// <summary>One metadata value, or null when absent or blank. Pure.</summary>
     public string? Meta(string key) =>
