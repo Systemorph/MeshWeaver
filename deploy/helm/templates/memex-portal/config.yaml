@@ -899,6 +899,16 @@ data:
   # ---- Observability (OTLP collector) — optional ----------------------------
   OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_ENDPOINT | default "" }}"
   OTEL_EXPORTER_OTLP_PROTOCOL: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_PROTOCOL | default "" }}"
+  # ---- Anonymous access (instance-level switch) -----------------------------
+  # Access__DenyAnonymous=true closes the instance to logged-OUT callers: every permission check
+  # for the Anonymous subject resolves to no access whatever _Access grants, PublicRead policies or
+  # NodeTypeGate surfaces the mesh carries, and a logged-out caller's query answers nothing. Signed-in
+  # users (incl. their inherited Public grants), sign-in, /health, static assets and the signed
+  # webhook inbox are unaffected. Doc/Architecture/AccessControl → "Closing an instance to anonymous
+  # callers". Emitted only when a deployment states it; absent = the image default (off).
+  {{- if hasKey .Values.config.memex_portal "Access__DenyAnonymous" }}
+  Access__DenyAnonymous: "{{ .Values.config.memex_portal.Access__DenyAnonymous }}"
+  {{- end }}
   # ---- Sign-in (non-secret: provider client ids + mode) ---------------------
   # A provider's button shows iff its ClientId is non-empty (AuthenticationBuilder
   # no-ops on empty). Set a ClientId to "" to DISABLE that provider even when the

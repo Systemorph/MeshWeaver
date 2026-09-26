@@ -176,6 +176,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithModuleUpdatePolicy(policy)` | `ModuleUpdatePolicy` | — (rendered into the portal's config) | `PluginCatalog__DefaultUpdatePolicy` |
 | `WithMinRollInterval(interval)` | `MinRollInterval` | `config.memex_portal.SelfUpdate__MinRollInterval` | `SelfUpdate__MinRollInterval` |
 | `WithAutoRecycleOnStaleBuild(enabled)` | `AutoRecycleOnStaleBuild` | `config.memex_portal.Modules__AutoRecycleOnStaleBuild` | `Modules__AutoRecycleOnStaleBuild` |
+| `WithDenyAnonymous(enabled)` | `DenyAnonymous` | `config.memex_portal.Access__DenyAnonymous` | `Access__DenyAnonymous` |
 | `WithSelfPatch(enabled)` | `SelfPatch` | `selfUpdate.canPatch` (one value for the self-patch Role and `SelfUpdate__CanPatch`, rendered by the chart — the control instance's own declaration, [SelfUpdateControlLane](../SelfUpdateControlLane)) | — |
 | `WithPluginRepo(name, url, gitRef, isRegistrySource, secretName)` | `PluginRepos[].Name`, `PluginRepos[].Url`, `PluginRepos[].Ref`, `PluginRepos[].IsRegistrySource`, `PluginRepos[].SecretName` | `pluginCatalog.sources` (the operator's catalog file) | `PluginCatalog__*` (Aspire only) |
 | `ClearPluginRepos()` | `PluginRepos` | `pluginCatalog.sources` | — |
@@ -317,6 +318,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `OrleansClustering` | Orleans clustering — blank derives it from the replica count | Orleans-Clustering — leer leitet es aus der Replikatzahl ab |
 | `DeploymentContent` | `MinRollInterval` | Minimum interval between self-update rolls | Mindestabstand zwischen Selbst-Update-Rollouts |
 | `DeploymentContent` | `AutoRecycleOnStaleBuild` | Auto-recycle on a stale NodeType build | Bei veraltetem NodeType-Build automatisch neu laden |
+| `DeploymentContent` | `DenyAnonymous` | Deny all anonymous (logged-out) access | Jeden anonymen (nicht angemeldeten) Zugriff verweigern |
 | `DeploymentContent` | `SelfPatch` | Self-patch the portal Deployment on a detected release (renders selfUpdate.canPatch) | Portal-Deployment bei erkanntem Release selbst patchen (rendert selfUpdate.canPatch) |
 | `DeploymentContent` | `RequiredModuleSlots` | Boot modules at explicit slots (by-index override) | Boot-Module an expliziten Slots (Überschreiben nach Index) |
 | `DeploymentContent` | `RequiredModulesAuthoritative` | The required-module list is the complete set (the image's own list does not apply) | Die Liste der erforderlichen Module ist der vollständige Satz (die Liste des Images gilt nicht) |
