@@ -184,7 +184,9 @@ case from a stuck one and nothing naming the case. It now streams:
   with `{status: "Dispatched", activityPath}`; poll `get @{activityPath}`, which starts nothing.
   `memex tests @<node>` is that loop in a terminal (`POST api/mesh/run-tests`, then the activity every
   two seconds), exiting `0` (passed), `1` (failed) or `4` (no terminal status within `--timeout`). The
-  portal route and the MCP `run_tests` tool live with the portal in MeshWeaver.Plugins.
+  route is `Memex.Portal.Shared`'s `MeshApiEndpoints` (Bearer-only, it executes); agents reach the
+  same operation through the MCP `run_tests` tool, which lives with the MCP surface in
+  MeshWeaver.Plugins.
 
 ## The Canonical Test Base
 
