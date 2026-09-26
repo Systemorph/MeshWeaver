@@ -628,9 +628,10 @@ data:
   # (MeshWeaver#4476, Doc/Architecture/RequiredModuleAuthority).
   #
   # 🚨 Un-templated, an override is silently dropped and the health check wins anyway — the #1925
-  # defect, third occurrence. Not cosmetic here: `required_modules` reports Unhealthy, /health
-  # answers 503, the startup probe never passes and the ROLLOUT TIMES OUT with the portal never
-  # serving. That is memex-local on 2026-08-23, once the Blazor view packs and Speech became
+  # defect, third occurrence. Not cosmetic here: `required_modules` reports Unhealthy, readiness
+  # (/ready) refuses, and the ROLLOUT TIMES OUT with the new portal never serving. (It is a roll
+  # gate — policy required-modules-readiness-only — so it no longer fails the startup probe; when
+  # the incident below happened it did, and the portal never started at all.) That is memex-local on 2026-08-23, once the Blazor view packs and Speech became
   # modules (#1974/#2018/#2081/#2085): the image stopped shipping five DLLs its own Required list
   # still named, and a laptop has no registry to land them from.
   #
