@@ -68,10 +68,15 @@ public static partial class MeshTestRunner
     /// <param name="Time">Title of the time column.</param>
     /// <param name="Output">Title of the output column.</param>
     /// <param name="ProgressTitle">The progress title format: suite, done, total, seconds.</param>
-    public sealed record ColumnTitles(string Class, string Case, string Result, string Time, string Output, string ProgressTitle)
+    /// <param name="Passed">The word beside ✅ in a verdict row.</param>
+    /// <param name="Failed">The word beside ❌ in a verdict row.</param>
+    /// <param name="Skipped">The word beside ⏭ in a verdict row.</param>
+    public sealed record ColumnTitles(string Class, string Case, string Result, string Time, string Output, string ProgressTitle,
+        string Passed, string Failed, string Skipped)
     {
         /// <summary>The English titles, for a render with no viewer.</summary>
-        public static readonly ColumnTitles English = new("Class", "Case", "Result", "Time", "Output", "{0} tests — {1} of {2} done, running for {3}s");
+        public static readonly ColumnTitles English = new("Class", "Case", "Result", "Time", "Output",
+            "{0} tests — {1} of {2} done, running for {3}s", "pass", "FAIL", "skipped");
 
         /// <summary>The titles in the viewer's language.</summary>
         public static ColumnTitles For(LayoutAreaHost host) => new(
@@ -80,7 +85,17 @@ public static partial class MeshTestRunner
             host.Localize("tests.column.result"),
             host.Localize("tests.column.time"),
             host.Localize("tests.column.output"),
-            host.Localize("tests.progress", "{0}", "{1}", "{2}", "{3}"));
+            host.Localize("tests.progress", "{0}", "{1}", "{2}", "{3}"),
+            host.Localize("tests.result.passed"),
+            host.Localize("tests.result.failed"),
+            host.Localize("tests.result.skipped"));
+
+        // The verdict word in the viewer's language; the GLYPH is the contract every reader matches.
+        internal string Display(string result) =>
+            result.StartsWith("✅", StringComparison.Ordinal) ? $"✅ {Passed}"
+            : result.StartsWith("❌", StringComparison.Ordinal) ? $"❌ {Failed}"
+            : result.StartsWith("⏭", StringComparison.Ordinal) ? $"⏭ {Skipped}"
+            : result;
     }
 
     /// <summary>
@@ -126,35 +141,60 @@ public static partial class MeshTestRunner
             var bound = c.Timeout ?? deadline;
             var started = DateTimeOffset.UtcNow;
             var output = new OutputLines(onLine);
+            var bodyReturned = 0;
             onStarted();
             var work = c.Synchronous is { } body
-                ? pool.InvokeBlocking(_ => { body(output.Add); return Unit.Default; })
+                ? pool.InvokeBlocking(_ =>
+                {
+                    try { body(output.Add); }
+                    finally { Volatile.Write(ref bodyReturned, 1); }
+                    return Unit.Default;
+                })
                 : Observable.Defer(() => c.Reactive is { } live
                     ? live(output.Add)
                     : Observable.Throw<Unit>(new InvalidOperationException($"the case '{c.Name}' has no body")));
-            CaseResult Verdict(string? failure) => failure is null
-                ? new CaseResult(suite, c.Name, "✅ pass", output.Joined, DateTimeOffset.UtcNow - started)
-                : new CaseResult(suite, c.Name, "❌ FAIL", failure + (output.Joined.Length > 0 ? " · " + output.Joined : ""), DateTimeOffset.UtcNow - started);
+            // 🚨 A synchronous body takes no token, so the bound can fail it but not STOP it: it keeps
+            // its Tests-pool slot until it returns. Say so in the verdict instead of letting a later
+            // case's "not run"/timeout be the first anyone hears of it.
+            string TimedOut() =>
+                $"{TimedOutPrefix}no verdict within {bound.TotalSeconds:F0}s"
+                + (c.Synchronous is not null && Volatile.Read(ref bodyReturned) == 0
+                    ? " — the synchronous body is still running and holds a Tests-pool slot until it returns"
+                    : "");
+            CaseResult Verdict(string? failure)
+            {
+                // Terminal: whatever the body writes from here on belongs to no row.
+                output.Close();
+                return failure is null
+                    ? new CaseResult(suite, c.Name, "✅ pass", output.Joined, DateTimeOffset.UtcNow - started)
+                    : new CaseResult(suite, c.Name, "❌ FAIL", failure + (output.Joined.Length > 0 ? " · " + output.Joined : ""), DateTimeOffset.UtcNow - started);
+            }
             return work
                 .Select(_ => (string?)null)
                 .Take(1)
                 .DefaultIfEmpty("the case completed without an outcome")
-                .Timeout(bound, Observable.Return<string?>($"{TimedOutPrefix}no verdict within {bound.TotalSeconds:F0}s"))
+                .Timeout(bound, Observable.Defer(() => Observable.Return<string?>(TimedOut())))
                 .Catch<string?, Exception>(ex => Observable.Return<string?>(Unwrap(ex).Message))
                 .Select(Verdict);
         });
 
     // A case's output lines: kept for its verdict, and forwarded to the progress frame as written.
     // Lines may arrive from any thread the case happens to run on, hence the interlocked swap.
+    // Once the case has its verdict the writer is CLOSED: a body that outlived its bound and keeps
+    // writing must not land its lines on the next case's row.
     private sealed class OutputLines(Action<string> forward)
     {
         private ImmutableList<string> lines = ImmutableList<string>.Empty;
+        private int closed;
 
         public void Add(string line)
         {
+            if (Volatile.Read(ref closed) != 0) return;
             ImmutableInterlocked.Update(ref lines, l => l.Add(line));
             forward(line);
         }
+
+        public void Close() => Volatile.Write(ref closed, 1);
 
         public string Joined => string.Join(" · ", lines);
     }
@@ -280,7 +320,7 @@ public static partial class MeshTestRunner
     public static UiControl Render(string suite, IReadOnlyList<CaseResult> results, ColumnTitles titles) =>
         Controls.Stack.WithWidth("100%")
             .WithView(Controls.Title(Summary(suite, results), 2), "Title")
-            .WithView(Grid(results.Select(r => Row(r, r.Result, r.Detail)), titles), "Cases");
+            .WithView(Grid(results.Select(r => Row(r, titles.Display(r.Result), r.Detail)), titles), "Cases");
 
     /// <summary>
     /// A progress frame: <see cref="AreaFrameClassifier.TestsRunningId"/>, a title that counts the
@@ -299,7 +339,9 @@ public static partial class MeshTestRunner
             .WithId(AreaFrameClassifier.TestsRunningId);
 
     private static CaseRow Row(CaseResult r, string result, string detail) =>
-        new(r.Class, r.Name, result, IsUnfinished(r) && r.Result == PendingResult ? "" : $"{r.Elapsed.TotalSeconds:0.0}s", detail);
+        new(r.Class, r.Name, result,
+            r.Result == PendingResult ? "" : r.Elapsed.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "s",
+            detail);
 
     private static DataGridControl Grid(IEnumerable<CaseRow> rows, ColumnTitles titles) =>
         Controls.DataGrid(rows.ToImmutableArray())

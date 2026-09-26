@@ -53,6 +53,8 @@ public sealed class MemexClient : IDisposable
     public Task<string> Compile(string path, CancellationToken ct) => Post("api/mesh/compile", new { path }, ct);
     public Task<string> Diagnostics(string path, CancellationToken ct) => Post("api/mesh/diagnostics", new { path }, ct);
     public Task<string> ExecuteScript(string path, int timeoutSeconds, CancellationToken ct) => Post("api/mesh/execute-script", new { path, timeoutSeconds }, ct);
+    /// <summary>Runs a node's Tests area as an activity (<c>MeshOperations.RunTests</c>); answers <c>{status, activityPath}</c>.</summary>
+    public Task<string> RunTests(string path, int timeoutSeconds, CancellationToken ct) => Post("api/mesh/run-tests", new { path, timeoutSeconds }, ct);
     public Task<string> NavigateTo(string path, CancellationToken ct) => Post("api/mesh/navigate-to", new { path }, ct);
     public Task<string> BaseUrl(CancellationToken ct) => Post("api/mesh/base-url", new { }, ct);
 

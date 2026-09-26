@@ -28,6 +28,12 @@ public static class ActivityCategory
     public const string WriteConflict = nameof(WriteConflict);
 
     /// <summary>
+    /// Activity carrying a run of a node's <c>Tests</c> area: one line per case as it starts,
+    /// writes output and reaches its verdict (<c>run_tests</c> / <c>memex tests</c>).
+    /// </summary>
+    public const string TestRun = nameof(TestRun);
+
+    /// <summary>
     /// Activity whose category is unknown or unclassified.
     /// </summary>
     public const string Unknown = nameof(Unknown);

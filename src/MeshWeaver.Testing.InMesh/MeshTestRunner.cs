@@ -101,9 +101,19 @@ public static partial class MeshTestRunner
         return Observable.Defer(() =>
         {
             var output = new List<string>();
+            var gate = new CaseGate();
             // Every line a case writes lands in its verdict's detail AND streams to the progress
             // frame the moment it is written — a slow case shows what it is doing while it does it.
-            var context = host is null ? null : new MeshTestContext(host, partition, line => { output.Add(line); onLine(line); }, deadline);
+            // 🚨 Only the RUNNING case's lines: the writer is shared by the class, and a case that
+            // outlived its bound can still write after the next case started. Its lines carry its own
+            // token (the AsyncLocal flows into its continuations) and are dropped, never pinned on the
+            // next case's row.
+            var context = host is null ? null : new MeshTestContext(host, partition, line =>
+            {
+                if (!gate.Admits()) return;
+                output.Add(line);
+                onLine(line);
+            }, deadline);
             object? instance;
             MeshTestContext.Current = context;
             try
@@ -120,8 +130,37 @@ public static partial class MeshTestRunner
             // the leaf's token to the subscription, which is what lets the bound below CANCEL a case
             // rather than abandon it. Host-less runs (the runner's own tests) have no registry.
             var pool = requestedPool ?? host?.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Tests) ?? IoPool.Unbounded;
-            return cases.Select(c => RunCase(instance, cls, c, output, deadline, context, pool, leaked, onStarted)).Concat();
+            return cases.Select(c => RunCase(instance, cls, c, output, deadline, context, pool, leaked, onStarted, gate)).Concat();
         });
+    }
+
+    // Which case's writes the class-wide writer currently admits. A case's continuations carry its
+    // token through the ExecutionContext; a line with a token that is not the running case's is a
+    // late write from a case that already has its verdict. A line with NO token (a thread that did
+    // not flow the context) is attributed to the running case — the best the writer can know.
+    private sealed class CaseGate
+    {
+        private static readonly AsyncLocal<object?> caseToken = new();
+        private object? running;
+
+        public object Open()
+        {
+            var token = new object();
+            Volatile.Write(ref running, token);
+            return token;
+        }
+
+        public static void Enter(object token) => caseToken.Value = token;
+
+        public void Close(object token) => Interlocked.CompareExchange(ref running, null, token);
+
+        public bool Admits()
+        {
+            var current = Volatile.Read(ref running);
+            if (current is null) return false;
+            var mine = caseToken.Value;
+            return mine is null || ReferenceEquals(mine, current);
+        }
     }
 
     /// <summary>
@@ -133,12 +172,17 @@ public static partial class MeshTestRunner
     /// </summary>
     public static readonly TimeSpan CancellationGrace = TimeSpan.FromSeconds(2);
 
-    private static IObservable<CaseResult> RunCase(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline, MeshTestContext? context, IIoPool pool, List<string> leaked, Action onStarted) =>
+    private static IObservable<CaseResult> RunCase(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline, MeshTestContext? context, IIoPool pool, List<string> leaked, Action onStarted, CaseGate gate) =>
         // Deferred so the clock, the leak check and the "running" signal all belong to the moment
         // the case actually STARTS — not to the moment Concat asked for the observable.
-        Observable.Defer(() => RunCaseNow(instance, cls, c, output, deadline, context, pool, leaked, onStarted));
+        Observable.Defer(() =>
+        {
+            var token = gate.Open();
+            return RunCaseNow(instance, cls, c, output, deadline, context, pool, leaked, onStarted, token)
+                .Finally(() => gate.Close(token));
+        });
 
-    private static IObservable<CaseResult> RunCaseNow(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline, MeshTestContext? context, IIoPool pool, List<string> leaked, Action onStarted)
+    private static IObservable<CaseResult> RunCaseNow(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline, MeshTestContext? context, IIoPool pool, List<string> leaked, Action onStarted, object token)
     {
         if (c.Skip is not null)
             return Observable.Return(new CaseResult(cls.Name, c.Name, "⏭ skipped", c.Skip, TimeSpan.Zero));
@@ -162,6 +206,7 @@ public static partial class MeshTestRunner
         {
             try
             {
+                CaseGate.Enter(token);
                 if (context is not null)
                     context.CancellationToken = ct;
                 var result = c.Method.Invoke(instance, Arguments(c, ct));

@@ -1717,10 +1717,14 @@
   "ui.threadQueueStateRetried": "Neu gestartet",
   "ui.threadQueueStateActionFailed": "Nicht ausführbar",
   "ui.threadQueueStateFailed": "Fehlgeschlagen",
-  "tests.progress": "{0}-Tests — {1} von {2} erledigt, seit {3}s in Arbeit",
+  "activity.tests.title": "Tests von {path} ausführen",
+  "tests.progress":"{0}-Tests — {1} von {2} erledigt, seit {3}s in Arbeit",
   "tests.column.class": "Klasse",
   "tests.column.case": "Fall",
   "tests.column.result": "Ergebnis",
   "tests.column.time": "Zeit",
-  "tests.column.output": "Ausgabe"
+  "tests.column.output": "Ausgabe",
+  "tests.result.passed": "bestanden",
+  "tests.result.failed": "FEHLER",
+  "tests.result.skipped": "übersprungen"
 }

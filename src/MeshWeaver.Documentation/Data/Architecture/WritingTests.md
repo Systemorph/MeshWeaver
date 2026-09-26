@@ -170,16 +170,21 @@ case from a stuck one and nothing naming the case. It now streams:
   Static methods: `MeshTestRunner.Area(host, suite, cases)` over `MeshTestCase.Of(name, method)`
   (synchronous) and `MeshTestCase.Live(name, () => observable, timeout)` (hosted, passes on first
   emission); either overload hands the body a line writer whose output streams into the row.
-- **From a terminal or an agent:** `memex tests @<node>` reads the area every two seconds, prints each
-  case as its state or output changes, and exits `0` (all passed), `1` (a failure) or `4` (no verdict
-  within `--timeout`, naming the case still running). An agent does the same with
-  `get @<node>/area/Tests`, which answers with the frame the area has reached. 🚨 Rendering RUNS the
-  suite, so what a second read shows depends on whether it reuses the first read's subscription:
-  measured once on memex.meshweaver.cloud, a read of `Admin/Maintenance/…/Tests` answered the
-  finished verdict in 0.9 s for a suite whose live cases alone take 18 s or more — i.e. it reused a
-  subscription that had already run. A read that opens a NEW subscription (another replica, an
-  evicted stream) renders the area anew and so runs the suite — live cases included — again; that
-  half is inferred from the render path, not measured. Treat each fresh subscription as a fresh run.
+- **From a terminal or an agent — run it as an ACTIVITY, never by polling the area.** 🚨 Rendering
+  the area RUNS the suite, and every one-shot `get @<node>/area/Tests` opens a fresh subscription.
+  Measured on memex.meshweaver.cloud (`Admin/Maintenance/refresh-app-tiles-20260828-mainnode-3`): two
+  `get` reads 34 s apart each filed a new pair of the Maintenance suite's live request nodes
+  (`Admin/Maintenance/mnt-…`, 10:51:00Z and 10:51:34Z), and the second read answered in 0.9 s with the
+  verdict an EARLIER subscription had cached while its own run had only just begun. So a poll of the
+  area re-runs every live case and still does not show the run it started.
+  `MeshOperations.RunTests(path)` holds ONE subscription for the whole run and writes it to an
+  activity in the caller's own partition (category `TestRun`): a line per case as it runs and as it
+  lands, with its output; `Succeeded` when every counted case passed, `Failed` otherwise, or when no
+  verdict arrived within the bound (the last line names the case still running). It answers at once
+  with `{status: "Dispatched", activityPath}`; poll `get @{activityPath}`, which starts nothing.
+  `memex tests @<node>` is that loop in a terminal (`POST api/mesh/run-tests`, then the activity every
+  two seconds), exiting `0` (passed), `1` (failed) or `4` (no terminal status within `--timeout`). The
+  portal route and the MCP `run_tests` tool live with the portal in MeshWeaver.Plugins.
 
 ## The Canonical Test Base
 
