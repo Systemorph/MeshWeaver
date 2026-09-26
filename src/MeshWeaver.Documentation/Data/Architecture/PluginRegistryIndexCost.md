@@ -155,6 +155,61 @@ one lane — but none of them POSTed a module to the shelf, and the registry's o
 was not read. The mesh-read costs above and the entitlement evaluation are untouched, and nobody has
 profiled the stages against each other.
 
+## The stages measured against each other — and the index's activation list made a maintained snapshot
+
+The paragraph above ended on "nobody has profiled the stages against each other". That has now been
+done, live, on the fleet registry itself. A read-only script
+(`rbuergi/Script/bundle-index-stage-timing` on memex.meshweaver.cloud, activity
+`rbuergi/_Activity/89bbc75a3e4f45e09b4e513ac3c061f6`, pod
+`memex-portal-deployment-7777cfc77-slvwl`, 2026-09-26 18:15Z, core `4c8530d7dd`) timed each stage
+the index runs, in the running process, against the real `/data` share:
+
+| stage | per index request | measured |
+|---|---|---|
+| `ModuleLandingService.GetActivation()` — derive the list from every module's record directory (44 modules) | **twice** | **7,266 ms**, then **8,725 ms** |
+| `ModuleBundleSource.CollectVersion` for every declaring package | once per package | 991 ms total over 44 (15–60 ms each) |
+| `InstalledPackages` query (`namespace:Plugins nodeType:Package`, 94 rows) | once | 278 ms |
+| `HeldPartitions` query (127 rows) | once | 228 ms |
+| `PackageOriginAnchor.Read()` | once | 0 ms (cached, `Authoritative`, 104 origins) |
+| `IPublicationArtifacts.Read()` | once | 0 ms (`NoPublicationArtifacts`) |
+
+Sum: **~17.5 s**, against the **17.8 s** `ModulePinAudit` measured for one index read from the same
+portal at 10:53Z the same day (triage finding `rbuergi/Feedback/self-registry-bundle-index-18s-20260926T1108Z`).
+**The mesh queries are not the cost; the activation derivation is — about 90% of it.** Each
+derivation lists four record kinds per module, reads every record, probes the unloadable marker and
+each generation directory, one SMB round trip each; and nothing about the list had changed between
+any two requests. N consumers polling at once ran N such scans of the same share, which is how a
+busy registry reached the zero-byte 180 s stalls of #4963.
+
+**Fixed: the index reads a MAINTAINED list, not a scan.**
+`ModuleLandingService.GetServedActivation()` holds the last derivation and answers from it:
+
+- a landing, shelving, uninstall or removal made by **this** process invalidates the snapshot
+  **before** it is announced, so the replica that took a publish serves it on its very next index
+  read;
+- a record **another replica** wrote on the shared volume is absorbed within
+  `ServedActivationFreshness` (30 s): the first read past the bound still answers at once from the
+  snapshot and starts ONE re-derivation that every concurrent reader shares (a `PromiseSlot`, so a
+  failed derivation is reported and never cached);
+- a derivation that started before a local write is never published over it (a write generation
+  guards the store).
+
+The index therefore costs one snapshot read — the two reads per request collapse into it — and at
+most one derivation is in flight per replica, whatever the poll rate. **The bundle download keeps
+the authoritative `GetActivation()`**: it decides which bytes a consumer lands, so it must resolve a
+version another replica published a moment ago; the index lagging by one freshness bound only means
+the consumer sees that version on its next poll. `ServedActivationIsMaintainedNotScannedTest` pins
+all three rules with two landing services on one root standing in for two replicas and a test
+clock for the bound: a record the other replica wrote is on the volume (the authoritative read
+sees it) and the served read does not report it while fresh — so it did not rescan; the own-replica
+landing is served at once; and once due, the re-derivation lands the other replica's module.
+
+What this does **not** change: `CollectVersion`'s per-package directory listings (~1 s) and the two
+mesh queries (~0.5 s) are still per request; and the download route still derives the list twice
+(`Servable` and `ModuleFiles`), so a single bundle download on this registry still costs ~16 s of
+activation derivation. Both are the next candidates if the index or the download is still slow
+after this rolls — measure first, with the same script.
+
 ## The second defect: exhaustion leaves no readable mark
 
 When the attempts do exhaust, nothing an operator can see records it:

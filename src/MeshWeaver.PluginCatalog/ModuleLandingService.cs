@@ -757,6 +757,107 @@ public sealed class ModuleLandingService : IDisposable
     public IIoPool ReadPool { get; init; } = IoPool.Unbounded;
 
     /// <summary>
+    /// The activation list as the registry's SERVING routes read it (MeshWeaver#4963): a
+    /// maintained snapshot, not a scan per request.
+    ///
+    /// <para>🚨 <b>Why it exists.</b> <see cref="GetActivation"/> DERIVES the list from every
+    /// module's record directory on the volume — per module, four listings plus one read per
+    /// record, a marker probe and a generation-presence probe. On the fleet registry's Azure Files
+    /// share that is one SMB round trip each, and with 44 modules it measured <b>7.3 s and 8.7 s</b>
+    /// for two consecutive reads (memex.meshweaver.cloud, 2026-09-26, pod
+    /// <c>memex-portal-deployment-7777cfc77-slvwl</c>). <c>/api/plugins/bundles/index.json</c>
+    /// read it TWICE per request, so every consumer's poll paid ~16 s of the ~17.8 s the
+    /// <c>ModulePinAudit</c> case measured against its 20 s budget — and N concurrent pollers ran
+    /// N concurrent scans of the same share, which is how a busy registry reached the 180 s,
+    /// zero-byte stalls. Nothing about the list had changed between any two of those reads.</para>
+    ///
+    /// <para><b>How it stays true.</b> The list changes only when a landing, shelving, uninstall
+    /// or removal writes a record. A write THIS process makes invalidates the snapshot before it
+    /// is announced, so the next served read derives afresh and the replica that took a publish
+    /// serves it immediately. A write made by ANOTHER replica on the shared volume is not
+    /// announced here; the snapshot absorbs it within <see cref="ServedActivationFreshness"/>:
+    /// the first read after that bound still answers from the snapshot (it is a poll surface —
+    /// the consumer asks again) and starts ONE re-derivation that every concurrent reader shares.
+    /// So the served list is at most one freshness bound plus one derivation behind the volume,
+    /// never a read-per-request, and never more than one scan in flight.</para>
+    ///
+    /// <para>🚨 <b>Serving routes only.</b> Anything that DECIDES from the record — a landing,
+    /// the boot, the self-updater's restart check — keeps reading <see cref="GetActivation"/>,
+    /// which is authoritative by construction.</para>
+    /// </summary>
+    /// <returns>The served list; emits once and completes. A failed derivation faults this read
+    /// and is not cached — the next read derives again.</returns>
+    public IObservable<ModuleActivationList> GetServedActivation() => Observable.Defer(() =>
+    {
+        var known = Volatile.Read(ref servedActivation);
+        if (known is not null && known.Generation == Interlocked.Read(ref servedGeneration))
+        {
+            if (ServedActivationClock.GetUtcNow() - known.ReadAt >= ServedActivationFreshness)
+                // Revalidate in the background, sharing the one in-flight derivation; the fault
+                // is reported, never cached (PromiseSlot evicts it), and the next read tries again.
+                RefreshServedActivation().Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "Modules: re-deriving the served activation list failed — the registry keeps "
+                        + "serving the list read at {ReadAt:O} and the next read tries again",
+                        known.ReadAt));
+            return Observable.Return(known.List);
+        }
+        return RefreshServedActivation().Select(served => served.List);
+    });
+
+    /// <summary>How long a served snapshot answers before the next read re-derives it — the bound
+    /// on how late ANOTHER replica's landing reaches this replica's index (see
+    /// <see cref="GetServedActivation"/>). This process's own writes invalidate it at once.</summary>
+    public TimeSpan ServedActivationFreshness { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>The clock <see cref="ServedActivationFreshness"/> is measured on — a seam for
+    /// tests; the system clock in production.</summary>
+    internal TimeProvider ServedActivationClock { get; init; } = TimeProvider.System;
+
+    /// <summary>One derivation of the list, when it was taken, and the local-write generation it
+    /// was taken in (a snapshot from before this process's latest write is never served).</summary>
+    private sealed record ServedActivation(ModuleActivationList List, DateTimeOffset ReadAt, long Generation);
+
+    private ServedActivation? servedActivation;
+    private long servedGeneration;
+    private readonly PromiseSlot<ServedActivation> servedRefresh = new();
+
+    /// <summary>The one in-flight derivation every served reader shares.</summary>
+    private IObservable<ServedActivation> RefreshServedActivation() =>
+        servedRefresh.GetOrCreate(() =>
+        {
+            var generation = Interlocked.Read(ref servedGeneration);
+            return ReadPool.RunBlocking(_ =>
+            {
+                var served = new ServedActivation(
+                    ModuleActivationSidecar.ReadFor(baseDirectory,
+                        msg => logger?.LogError("{Message}", msg), platform),
+                    ServedActivationClock.GetUtcNow(),
+                    generation);
+                // Published only if no local write happened while it was being read: a list
+                // derived before a write must not become the answer after it.
+                // A local write since the start has already let this derivation's slot go
+                // (MarkServedActivationStale), so only a derivation still current releases it —
+                // and releasing it makes the next refresh a NEW derivation, never a replay.
+                if (Interlocked.Read(ref servedGeneration) == generation)
+                {
+                    Volatile.Write(ref servedActivation, served);
+                    servedRefresh.Invalidate();
+                }
+                return served;
+            });
+        });
+
+    /// <summary>This process wrote the record: the served snapshot is stale from now on, and a
+    /// derivation already in flight was started before the write, so it is let go too.</summary>
+    private void MarkServedActivationStale()
+    {
+        Interlocked.Increment(ref servedGeneration);
+        servedRefresh.Invalidate();
+    }
+
+    /// <summary>
     /// Proposes the module set the deployment's activation record now describes — the coordination
     /// step that ENDS a landing wave (#3395), and the only thing that moves what the mesh runs.
     ///
@@ -1576,7 +1677,13 @@ public sealed class ModuleLandingService : IDisposable
         }
     }
 
-    private void AnnounceActivationChanged() => Announce(subject => subject.OnNext(Unit.Default));
+    private void AnnounceActivationChanged()
+    {
+        // The served snapshot goes stale FIRST, so a subscriber that reacts to the announcement by
+        // asking for the served list is answered from a read taken after this write.
+        MarkServedActivationStale();
+        Announce(subject => subject.OnNext(Unit.Default));
+    }
 
     /// <summary>The <see cref="ModuleSetProposed"/> emission, contained exactly like
     /// <see cref="Announce"/>: a faulting subscriber never turns a proposal that landed into a
