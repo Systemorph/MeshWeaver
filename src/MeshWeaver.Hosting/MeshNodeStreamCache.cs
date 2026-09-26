@@ -86,7 +86,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// dead — <see cref="TryTouch"/>/<see cref="TryAddSubscriber"/> fail and the
     /// caller transparently re-creates a fresh entry (same lifecycle as write-queue
     /// eviction — invisible to callers).</summary>
-    private sealed class Entry(MeshNodeStreamHandle handle, IObservable<MeshNode> replay, IDisposable hydrationSub)
+    private sealed class Entry(
+        MeshNodeStreamHandle handle,
+        IObservable<MeshNode> replay,
+        IDisposable hydrationSub,
+        IObserver<MeshNode> readers)
     {
         private readonly object gate = new();
         private int subscribers;
@@ -182,6 +186,33 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     return false;
                 evicted = true;
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// Ends every reader still subscribed to this entry with <paramref name="reason"/>. Called
+        /// by the two FORCED teardowns that ignore the subscriber count — a committed node delete
+        /// (<see cref="Invalidate"/>) and the cache's own <see cref="Dispose"/> — AFTER they have
+        /// disposed the hydration and the upstream sync stream.
+        ///
+        /// <para>🚨 Issue #5011. Those teardowns stop the upstream's heartbeat, and nothing else
+        /// ever writes this entry's replay subject again, so a reader left subscribed holds a
+        /// stream that keeps nothing alive and never says so: no value, no error, no completion.
+        /// A process-lifetime holder (the Hosting package's inbox anchor, which is what keeps the
+        /// fleet watch's owner activated) then reads as holding while it holds nothing. The
+        /// terminal is what lets a holder report the loss instead of wearing it silently.</para>
+        ///
+        /// <para>The storm-breaker bookkeeping observer is part of the hydration composite, which
+        /// the caller has already disposed, so this terminal can never be recorded as a negative
+        /// or a transient failure for the path.</para>
+        /// </summary>
+        public void EndReaders(Exception reason)
+        {
+            try { readers.OnError(reason); }
+            catch (Exception)
+            {
+                // A reader that throws from OnError must not abort the teardown that called us —
+                // the entry is already unlinked and its upstream released either way.
             }
         }
 
@@ -997,6 +1028,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             {
                 lazyEntry.Value.MarkEvicted();
                 lazyEntry.Value.HydrationSub.Dispose();
+                // Told, not abandoned (#5011): the upstream dies with the cache hub's workspace.
+                lazyEntry.Value.EndReaders(new ObjectDisposedException(
+                    nameof(MeshNodeStreamCache),
+                    $"The mesh-node cache was disposed; the read of '{path}' ended with it."));
             }
             catch (Exception ex)
             {
@@ -1192,7 +1227,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // replays a terminal to late subscribers, so an error landing between
             // the hydration subscribe above and this attach is still observed.
             var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub);
-            var entry = new Entry(handle, inner.AsObservable(), disposal);
+            var entry = new Entry(handle, inner.AsObservable(), disposal, synced);
             var bookkeeping = inner.AsObservable().Subscribe(
                 node =>
                 {
@@ -3508,6 +3543,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     var detached = entry.Handle.DetachUpstreams();
                     entry.MarkEvicted();
                     var released = TearDownEntry(path, entry, detached);
+                    // Its readers are told, never left holding a subject nothing writes again
+                    // (#5011). "No node found" is the text the missing-node classifiers match.
+                    entry.EndReaders(new InvalidOperationException(
+                        $"No node found at '{path}': the node was deleted, and this read of it ended "
+                        + "with the delete. Read the path again if it is re-created."));
                     readStreamEvictions.OnNext(new ReadStreamEviction(path, released, "invalidate"));
                 }
                 catch (Exception ex)
