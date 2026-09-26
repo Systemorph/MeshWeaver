@@ -40,7 +40,8 @@ The picture is a `NodeImageUploadControl(nodePath)` — a platform control, usab
 
 - **Upload / Replace** — the file is written into the node's **default `content` collection** under the managed folder `picture/` with a fresh, server-generated name, then `Icon` is set to `content:picture/{name}`. The user's file name is never used, so nothing in it can traverse or collide, and the new URL defeats a browser cache that still holds the old picture. The previous managed picture is deleted.
 - **Remove** — `Icon` is cleared and the managed file is deleted.
-- **Accepted:** PNG, JPEG, GIF, WebP, up to 5 MB. SVG is refused: an uploaded SVG is served from the portal's own origin and can carry script. The ceiling is enforced on the bytes actually read, not on the length the client declared — a stream that runs past it fails and its partial file is deleted.
+- **Accepted:** PNG, JPEG, GIF, WebP, up to 5 MB. SVG is refused: an uploaded SVG is served from the portal's own origin and can carry script. Both rules are checked on the **bytes**, inside the collection's pool leaf and before anything is written: the upload is read bounded by the ceiling (the declared length is only a pre-check), and the bytes must carry the image signature the extension promises — an HTML file renamed to `.png` is refused.
+- **Refusals are typed:** `NodeImageUploadException.Reason` is a `NodeImageUploadFailure` value (`unsupportedType`, `tooLarge`, `notAnImage`, `noCollection` — an open vocabulary); the picture view shows the catalog message `profile.pictureError.{reason}` in the viewer's language, and the generic `profile.pictureFailed` for a reason it does not know.
 - **Order of effects:** bytes first, then the node update (which enforces `Update` on the node). If the save or the update fails, the file just written is deleted again before the error surfaces. The caller's identity is captured when the upload is called and restored around every write, so no pool or reply hop drops it.
 - **Hand-set icons are safe:** only a file whose name the server generated (`picture/` + 32 hex digits + an accepted extension) is ever deleted — the folder alone is not the marker. An icon the owner pointed at any other file (via *Settings → Metadata*), even one inside `picture/`, is cleared on Remove but its file is left alone.
 
@@ -50,7 +51,7 @@ The picture is a `NodeImageUploadControl(nodePath)` — a platform control, usab
 
 # Adding a section from a module
 
-A module adds a section **without core referencing the module**, the same way it adds a settings tab ([Settings Page](/Doc/GUI/SettingsPage)): a provider carried on the **user hub's configuration**, contributed onto the User node type with `AddNodeHubContribution`.
+A **compiled** module adds a section **without core referencing the module**, the same way it adds a settings tab (a module compiled from mesh content uses the data lane in the next section instead) ([Settings Page](/Doc/GUI/SettingsPage)): a provider carried on the **user hub's configuration**, contributed onto the User node type with `AddNodeHubContribution`.
 
 ```csharp
 // In the module's own configuration (e.g. its ConfigureDefaultNodeHub).
@@ -81,10 +82,46 @@ The rules the page applies:
 
 ---
 
+# Adding a section from mesh content
+
+A module **compiled from mesh content** (an in-mesh NodeType, such as the Store) cannot reach the User hub's configuration, so it contributes the section as **data**: a `UiContribution` node — the same mesh-data lane menus and settings tabs use — with `context: "Profile"`. The profile page reads the contribution catalog **live** (a new or edited node shows without a recycle), projects it through the closed gate vocabulary in compiled code, and embeds the declared layout area with the platform's `LayoutAreaControl`, rendered in the viewer's own context.
+
+```json
+// Store/ProfileSections/subscription
+{
+  "nodeType": "UiContribution",
+  "content": {
+    "context": "Profile",
+    "address": "Store",
+    "area": "MyPlan",
+    "label": "Subscription",
+    "labelKey": "store.profileSubscription",
+    "icon": "Payment",
+    "order": 100,
+    "requiredPermission": "Update"
+  }
+}
+```
+
+| Field | Meaning on the profile page |
+|---|---|
+| `context` | `Profile` (`UiContribution.ProfileContext`) — anything else is another surface |
+| `address` | The hub whose area is embedded. Unset ⇒ the user node itself. **Must lie in the contribution's own partition** (`Store/ProfileSections/x` → `Store` or `Store/…`); anything else drops the entry, because the catalog is read as system and a contribution must not point every viewer at a hub its author does not control |
+| `area` | The layout area to embed. Required — an entry without one is dropped |
+| `label` / `labelKey` | The section heading; the key is resolved per viewer |
+| `icon` | Beside the heading (Fluent name, emoji, SVG or URL) |
+| `order` | Sort order among contributed sections (compiled and content alike) |
+| `requiredPermission` | Held on the USER node; never less than `Read` |
+| `gates` | The closed gate vocabulary (`adminOnly`, `nodeTypes`, …) — can only narrow |
+
+The node's id (its last path segment) is the section id, so the section's DOM id is `profile-section-subscription`. On an id clash a compiled `AddProfileSections` registration wins. The embedded area renders with its own access checks — the contribution decides only *where* it appears.
+
+---
+
 # Source
 
 - Page and sections: `src/MeshWeaver.Graph/UserActivityLayoutAreas.cs` (`EditProfile`, `BuildProfileEditor`)
-- Extension point: `src/MeshWeaver.Mesh.Contract/ProfileSectionDefinition.cs`, `src/MeshWeaver.Graph/Configuration/ProfileSectionsExtensions.cs`
+- Extension point: `src/MeshWeaver.Mesh.Contract/ProfileSectionDefinition.cs`, `src/MeshWeaver.Graph/Configuration/ProfileSectionsExtensions.cs`; content lane: `UiContribution.ProfileContext` / `UiContribution.Address` and `UiContributionProjection.ProjectProfileSections`
 - Picture: `src/MeshWeaver.Graph/NodeImageUploadControl.cs`, `src/MeshWeaver.ContentCollections/NodeImageUpload.cs`
 - Tests: `test/MeshWeaver.Graph.Test/UserProfilePageTest.cs`, `test/MeshWeaver.Graph.Test/ProfilePictureRoundTripTest.cs`
 - The Blazor views (the picture control's view, the avatar menu) live in MeshWeaver.Plugins.

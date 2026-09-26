@@ -210,9 +210,95 @@ public class UserProfilePageTest
         var section = new ProfileSectionDefinition("s", "Subscription", (_, _) => Controls.Markdown("x"))
         { TitleKey = "profile.picture" };
 
-        section.Localized(null).Title.Should().Be("Picture",
-            "a null AccessService resolves the key in English rather than throwing");
+        section.Localized(null).Title.Should().Be("Subscription",
+            "with no AccessService the declared English title is kept, as documented");
     }
+
+    // ── content-driven sections (UiContribution, Context = Profile) ─────────────────────────────
+
+    private static (MeshNode, UiContribution) Contribution(string id, UiContribution content)
+        => (MeshNode.FromPath($"Store/ProfileSections/{id}") with { NodeType = UiContributionNodeType.NodeType, Content = content }, content);
+
+    [Fact]
+    public void ContentSection_EmbedsTheDeclaredAreaOfTheDeclaredAddress()
+    {
+        var sections = UiContributionProjection.ProjectProfileSections(
+            [Contribution("subscription", new UiContribution
+            {
+                Context = UiContribution.ProfileContext,
+                Address = "Store",
+                Area = "MyPlan",
+                Label = "Subscription",
+                LabelKey = "profile.picture",
+                Order = 7,
+                RequiredPermission = Permission.Update,
+            })],
+            NodePath, UserNode(new User()), isAdmin: false, viewerId: NodePath);
+
+        var section = sections.Should().ContainSingle().Subject;
+        section.Id.Should().Be("subscription", "the contribution node's id is the stable section id");
+        section.Title.Should().Be("Subscription");
+        section.TitleKey.Should().Be("profile.picture");
+        section.Order.Should().Be(7);
+        section.RequiredPermission.Should().Be(Permission.Update);
+
+        var embed = section.ContentBuilder(null!, null).Should().BeOfType<LayoutAreaControl>().Subject;
+        embed.Address.ToString().Should().Be("Store");
+        embed.Reference.Area.Should().Be("MyPlan");
+    }
+
+    [Fact]
+    public void ContentSection_OnlyTheProfileContext_WithAnArea_PassingItsGates()
+    {
+        var sections = UiContributionProjection.ProjectProfileSections(
+            [
+                Contribution("menu", new UiContribution { Context = UiContribution.NodeContext, Area = "X" }),
+                Contribution("noarea", new UiContribution { Context = UiContribution.ProfileContext }),
+                Contribution("admin", new UiContribution
+                {
+                    Context = UiContribution.ProfileContext, Area = "Y",
+                    Gates = new UiContributionGates { AdminOnly = true },
+                }),
+                Contribution("ok", new UiContribution { Context = UiContribution.ProfileContext, Area = "Z" }),
+            ],
+            NodePath, UserNode(new User()), isAdmin: false, viewerId: NodePath);
+
+        sections.Select(s => s.Id).Should().Equal("ok");
+        sections[0].RequiredPermission.Should().Be(Permission.Read, "a contribution never demands less than Read");
+    }
+
+    [Fact]
+    public void ContentSection_MayOnlyEmbedAnAddressInItsOwnPartition()
+    {
+        var sections = UiContributionProjection.ProjectProfileSections(
+            [
+                Contribution("own", new UiContribution
+                    { Context = UiContribution.ProfileContext, Address = "Store/Billing", Area = "A" }),
+                Contribution("foreign", new UiContribution
+                    { Context = UiContribution.ProfileContext, Address = "Acme", Area = "B" }),
+                Contribution("prefix", new UiContribution
+                    { Context = UiContribution.ProfileContext, Address = "StoreFront", Area = "C" }),
+            ],
+            NodePath, UserNode(new User()), isAdmin: false, viewerId: NodePath);
+
+        sections.Select(s => s.Id).Should().Equal(["own"],
+            "a contribution under Store/ may point viewers only at Store's own hubs");
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0 }, ".png", true)]
+    [InlineData(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }, ".jpg", true)]
+    [InlineData(new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61 }, ".gif", true)]
+    [InlineData(new byte[] { 0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50 }, ".webp", true)]
+    [InlineData(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }, ".png", false)]
+    [InlineData(new byte[] { 0x3C, 0x68, 0x74, 0x6D, 0x6C }, ".png", false)]
+    public void ImageSignature_MustMatchTheExtension(byte[] bytes, string extension, bool expected)
+        => ContentCollections.NodeImageUpload.HasImageSignature(bytes, extension).Should().Be(expected);
+
+    [Fact]
+    public void SeedValidation_KnowsTheProfileContext()
+        => UiContributionSeedValidation.PlatformContexts.Should().Contain(UiContribution.ProfileContext,
+            "a Profile contribution must not be reported as rendering nowhere");
 
     private static IEnumerable<UiControl> Descendants(UiControl root)
     {
