@@ -404,7 +404,23 @@ factory is a root singleton, so the hoist is the complete fix. Posting the respo
 disposal is allowed and needs no resolve.
 `AutocompleteSettlesOnConvergenceTest.AProviderSettlingAfterTheHubIsDisposedDoesNotThrow`
 completes the provider on the test thread after `DisposalCompleted`. Without the fix it fails
-every time with that exception. **The rest is known,
+every time with that exception.
+
+The layout render's error arm is the same crash through a **lazy accessor**. A nested area's
+generator faulted, `LayoutAreaHost.FailRendering` ran off the hub (on the `ReleaseLane`, from an
+owned connection's release signal), and localised its placeholder through
+`LayoutAreaLocalizationExtensions.Localize` → `host.Hub.ServiceProvider.GetService<AccessService>()`.
+Another thread disposed the host hub's scope in between, so the resolve threw out of the Rx error
+arm onto a pool thread: `MeshWeaver.AI.Test` exit 134 with every test green (MeshWeaver.Plugins
+core-candidate run 36267738287). #2679's `IsServiceScopeDisposed()` probe sits in front of the
+placeholder but cannot close this window, because it is a check-then-act on a scope that another
+thread disposes. `AccessService` and `IPooledSubscribeScheduler` are both registered on the mesh
+root, so the complete fix is to hoist them. The host captures both in its constructor
+(`LayoutAreaHost.ViewerAccess`), and `Localize`/`LocalizePlural`/`ViewerLocale` read the captured
+instance, so no late path in the host asks a container again. The only remaining late call is the
+probe itself, which catches. `RenderFaultAcrossScopeTeardownTest` disposes the scope from inside
+the host's own `Rendering failed for area` log call, which falls between the probe and the
+placeholder. Without the fix it reproduces the CI stack every time. **The rest is known,
 sized, mechanical work, not a mystery** — the fix is the same hoist at every site. Three adjacent
 classes the lexical sweep deliberately does not cover, and which a future pass must:
 
