@@ -4077,10 +4077,19 @@ public class MeshOperations
         "Compile could not be authorized because the permission check did not complete — this is "
         + "not a statement about your access. Try again in a moment.";
 
+    /// <summary>
+    /// What <see cref="Recycle(string)"/> says on a definitive denial. It names who CAN act, and
+    /// deliberately no longer offers "a platform admin": a global admin is a platform admin, not a
+    /// data superuser, so it holds no standing Update on a space or on a system-owned partition
+    /// such as <c>Hosting</c> — sending the caller there sent them to someone who is refused the
+    /// same way. The platform's own recycles for those types are named instead.
+    /// </summary>
     internal const string RecycleDeniedMessage =
         "Recycle requires Update permission on the target node — it disposes the node's hub and "
-        + "forces re-initialization. Ask someone with write access to the node (or a platform "
-        + "admin) to do it.";
+        + "forces re-initialization. Ask someone with write access to the node to do it. A platform "
+        + "admin holds no standing write on a space or a system-owned partition (e.g. Hosting): "
+        + "types there are recycled by the platform itself — on a package install or update, and "
+        + "on a roll. See Doc/Architecture/StaleStateUntilRecycle.";
 
     /// <summary>
     /// What <see cref="Recycle(string)"/> says when the permission check reached NO verdict. Says the
