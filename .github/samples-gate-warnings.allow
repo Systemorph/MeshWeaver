@@ -60,8 +60,9 @@
 #
 # Both ratchets were already enforcing against ZERO entries before the trim — `WarningBaseline.For`
 # excludes a retired code — so nothing this file used to say was being relied on by anything. The
-# trees themselves REPORT no warnings at all: 27 of 28 NodeTypes compile (PensionFund/BalanceSheet
-# is the samples-gate.allow known-debt `#r "nuget:…"` that cannot resolve on a gate host) and the
+# trees themselves REPORT no warnings at all: at the time of that measurement 27 of 28
+# NodeTypes compiled; the 28th, PensionFund/BalanceSheet, carried a legacy `#r "nuget:…"` that cannot
+# resolve on a gate host and has since been removed, so the tree now holds 27 of 27) and the
 # bake's inventory over those 27 is 0 occurrences over 0 sites. The suppressed codes are not part of
 # that zero — they are still emitted, and still not measured.
 #
