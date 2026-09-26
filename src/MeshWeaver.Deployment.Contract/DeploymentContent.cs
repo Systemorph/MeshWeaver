@@ -131,6 +131,22 @@ public record DeploymentContent
     /// <summary>Prefix its Key Vault secrets share (e.g. "memex-"). A prefix, never a value.</summary>
     public string? KeyVaultSecretPrefix { get; init; }
 
+    /// <summary>
+    /// Key Vault secret NAME of this deployment's OWN announcement key (MeshWeaver.Plugins#1913) —
+    /// e.g. <c>pearl-Hosting-AnnouncementKey</c>. A NAME, never a value. The same vault object is
+    /// mounted twice: into this deployment's pod as <c>Hosting__ControlInbox__Secret</c> (so its
+    /// self-updater signs with it) and into the control instance as
+    /// <c>Hosting__PlatformWebhookSecret__{deploymentId}</c> (so the inbox can verify it).
+    ///
+    /// <para>🚨 Declaring it is also a BINDING: the control plane then accepts a self-update
+    /// announcement naming this record ONLY when it verifies with this record's own key — never with
+    /// the fleet-wide inbox secret — and that key authorises nothing but this record's self-update
+    /// events (never a build fact, a triage event or an operations callback). Blank keeps the
+    /// fleet-secret path this record used before (Doc/Architecture/SelfUpdateAnnouncementKey).</para>
+    /// </summary>
+    [Description("Key Vault secret NAME of this deployment's own self-update announcement key")]
+    public string? AnnouncementKeySecret { get; init; }
+
     /// <summary>Grafana base URL for this deployment's logs. Empty → no logs link in the overview.</summary>
     public string? GrafanaBaseUrl { get; init; }
 
