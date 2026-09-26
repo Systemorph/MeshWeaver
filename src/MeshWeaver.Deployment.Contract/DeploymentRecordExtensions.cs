@@ -128,6 +128,24 @@ public static class DeploymentRecordExtensions
         d with { UpdatePattern = string.IsNullOrWhiteSpace(pattern) ? null : pattern.Trim() };
 
     /// <summary>
+    /// Gate WHEN this deployment takes a build: only after every deployment in
+    /// <paramref name="after"/> has converged on it and soaked <paramref name="soakMinutes"/>
+    /// without a StuckRoll or Critical issue, and always with an approval
+    /// (<see cref="DeploymentContent.RollGate"/>). Names no tag — the update pattern is untouched.
+    /// Rendered nowhere: the CONTROL instance reads it about this deployment.
+    /// </summary>
+    public static DeploymentContent WithRollGate(this DeploymentContent d, IEnumerable<string> after, int soakMinutes) =>
+        d with
+        {
+            RollGate = new RollGate
+            {
+                After = after.Select(id => id.Trim()).Where(id => id.Length > 0).ToImmutableList(),
+                SoakMinutes = soakMinutes,
+                Approval = "required",
+            },
+        };
+
+    /// <summary>
     /// The default update policy every package installed on this instance is SEEDED with —
     /// <c>Auto</c>, <c>Notify</c> or <c>None</c> (<c>PluginCatalog:DefaultUpdatePolicy</c>); a package
     /// re-stamped later keeps its own. Independent of <see cref="WithUpdatePolicy"/>, which moves the
