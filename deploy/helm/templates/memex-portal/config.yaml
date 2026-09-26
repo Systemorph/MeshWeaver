@@ -568,6 +568,14 @@ data:
   {{- if .Values.config.memex_portal.Hosting__Builds__Concurrency }}
   Hosting__Builds__Concurrency: "{{ .Values.config.memex_portal.Hosting__Builds__Concurrency }}"
   {{- end }}
+  # ---- The triage scope (MeshWeaver.Plugins Hosting/Triage → "The scope") ----------------------
+  # Binds Hosting:Triage:Repositories: the ONLY repositories the control instance's periodic issue
+  # sweep lists and its org-webhook issue intake triages (one comma-separated value). Absent = the
+  # code's default, the active fleet. Rendered only when set, so a portal that is not the triage
+  # inbox carries nothing (config-key-coverage).
+  {{- if .Values.config.memex_portal.Hosting__Triage__Repositories }}
+  Hosting__Triage__Repositories: "{{ .Values.config.memex_portal.Hosting__Triage__Repositories }}"
+  {{- end }}
   # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713) -----------------
   # The URL of the control instance's signed inbox that the Feedback plugin hands a technical
   # submission (bug / idea / technical question) to after Submit — for the fleet that is
