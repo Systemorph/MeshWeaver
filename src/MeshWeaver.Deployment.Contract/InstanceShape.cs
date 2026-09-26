@@ -1022,3 +1022,35 @@ public sealed record GateSpec
     [Description("Mesh address — blank means the chart's default")]
     public string? Address { get; init; }
 }
+
+/// <summary>
+/// A precondition on WHEN a Continuous deployment takes a candidate image — never on WHICH tags it
+/// may take. Declared on the control instance's record (Systemorph/Memex
+/// <c>docs/control-instance.md</c> §4, decided by the maintainer 2026-09-26):
+/// <c>"rollGate": { "after": ["memex-cloud", "memex"], "soakMinutes": 120, "approval": "required" }</c>.
+///
+/// <para>A gated deployment rolls onto a platform build only once every deployment named in
+/// <see cref="After"/> has converged on that build (or a newer one) and gone
+/// <see cref="SoakMinutes"/> without a <c>StuckRoll</c> or a <c>Critical</c> issue, and its Roll
+/// then ALWAYS waits for a human approval — the unattended routed-roll lane is refused for it. It
+/// names no tag, no image and no ceiling, so it is not a pin: the record keeps
+/// <c>updatePolicy: Continuous</c> and the fleet pattern, and the Memex repository's
+/// <c>scripts/check-no-pins.py</c> (rule 6) refuses any other key in it.</para>
+///
+/// <para>Absent (the default, and every record before this type existed) ⇒ no gate at all, and the
+/// deployment rolls exactly as before.</para>
+/// </summary>
+public sealed record RollGate
+{
+    /// <summary>The deployment ids that must have converged and soaked on a build before this one takes it.</summary>
+    [Description("Deployments that must converge and soak on a build first")]
+    public ImmutableList<string> After { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>How long each of <see cref="After"/> must have run the build without a StuckRoll or Critical issue.</summary>
+    [Description("Soak time, in minutes, without a StuckRoll or Critical issue")]
+    public int SoakMinutes { get; init; }
+
+    /// <summary>Always <c>required</c>: every roll of a gated deployment waits for a global administrator's approval.</summary>
+    [Description("Approval — always 'required'")]
+    public string? Approval { get; init; }
+}
