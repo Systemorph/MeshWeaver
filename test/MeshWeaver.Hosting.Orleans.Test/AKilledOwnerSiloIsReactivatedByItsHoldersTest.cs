@@ -86,7 +86,7 @@ public class AKilledOwnerSiloIsReactivatedByItsHoldersTest(AKilledOwnerSiloIsRea
             .FirstAsync().Await(ct);
         await accessB.RunAsSystem(() => hubB.NodeOperationIssuingHub()
                 .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
-            .Should().Within(TimeSpan.FromSeconds(30))
+            .Should().Within(TestTimeouts.Convergence)
             .Emit("the owner answers a ping on silo B — the precondition for the rest", ct);
         hubB.GetHostedHub(new Address(path), HostedHubCreation.Never).Should().NotBeNull(
             "the owner must be activated on silo B, the silo that dies — otherwise this test measures nothing");
@@ -97,7 +97,7 @@ public class AKilledOwnerSiloIsReactivatedByItsHoldersTest(AKilledOwnerSiloIsRea
         var cache = siloA.GetRequiredService<IMeshNodeStreamCache>();
         var held = accessA.RunAsSystem(() => cache.GetStream(path, hubA.JsonSerializerOptions)).Replay(1);
         using var holding = held.Connect();
-        await held.Should().Within(TimeSpan.FromSeconds(30))
+        await held.Should().Within(TestTimeouts.Convergence)
             .Emit("silo A's held stream receives the owner's node", ct);
         hubA.GetHostedHub(new Address(path), HostedHubCreation.Never).Should().BeNull(
             "silo A holds the stream of the activation on silo B rather than its own");
