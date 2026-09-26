@@ -102,6 +102,39 @@ public interface IPaymentProvider
     IObservable<Unit> CancelAtPeriodEnd(string subscriptionId);
 
     /// <summary>
+    /// Whether this provider can hand a subscriber its own HOSTED BILLING PORTAL — the processor's
+    /// page where they update the card, read their invoices and cancel
+    /// (<see cref="OpenBillingPortal"/>). A caller offers a "Manage billing" control only when
+    /// this is true.
+    ///
+    /// <para>Defaults to <c>false</c>, so an implementation written before this member existed
+    /// keeps compiling and simply offers no portal — a state, not an error.</para>
+    /// </summary>
+    bool OffersBillingPortal => false;
+
+    /// <summary>
+    /// Opens a hosted billing-portal session for one subscriber and answers where to send them.
+    /// Cold; emits once. Errors carry a viewer-language message.
+    ///
+    /// <para>🚨 The portal is the PROCESSOR's surface, and so is what happens on it. A subscriber
+    /// who cancels there is not cancelled HERE by this call: the processor reports the actual
+    /// ending as a delivery (<see cref="PaymentSubscriptionChange.Ended"/>), and that is what ends
+    /// the plan — exactly the rule <see cref="CancelAtPeriodEnd"/> follows.</para>
+    ///
+    /// <para>The subscriber is named by <see cref="PaymentBillingPortalRequest.CustomerId"/> when
+    /// the caller has it, else by <see cref="PaymentBillingPortalRequest.SubscriptionId"/>, which
+    /// the provider resolves to its customer — a subscription sold before the customer handle was
+    /// recorded still gets a portal.</para>
+    ///
+    /// <para>The default refuses: a provider that does not override it offers no portal
+    /// (<see cref="OffersBillingPortal"/> is false), and a caller that asks anyway gets an error
+    /// rather than a silence.</para>
+    /// </summary>
+    IObservable<PaymentBillingPortal> OpenBillingPortal(PaymentBillingPortalRequest request) =>
+        System.Reactive.Linq.Observable.Throw<PaymentBillingPortal>(new NotSupportedException(
+            $"{DisplayName} offers no hosted billing portal on this portal."));
+
+    /// <summary>
     /// Reads one stored webhook delivery: VERIFIES its signature and PARSES what it is about, in
     /// one answer.
     ///
