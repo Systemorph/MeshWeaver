@@ -15,6 +15,8 @@ the source against the current platform and installed dependencies. A different 
 alone is a cache miss, not proof of an incompatible feature and not a reason to pin the running
 platform. Diagnose concrete missing types, changed member contracts and compiler/load failures.
 The explicit `Modules:RequirePrebuilt` policy remains a separate operational choice.
+A process can also serve NO dynamic NodeType at all — only the types its image registers in
+code — with `Mesh:ClosedTypeSet=true`: see [Closed Type Set](/Doc/Architecture/ClosedTypeSet).
 
 A **dynamic NodeType** carries its behaviour as C# source (`Source/*.cs`) plus a
 `configuration` lambda — and that source is compiled **at runtime, on demand**.
