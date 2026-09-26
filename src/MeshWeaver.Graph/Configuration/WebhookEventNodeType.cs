@@ -139,6 +139,15 @@ public static class WebhookInbox
         /// — every module compiled against the platform image — calls a constructor that no longer
         /// exists. `Public surface (binary compatibility)` refuses that, correctly.</summary>
         public bool SignatureVerified { get; init; }
+
+        /// <summary>
+        /// The SENDER key that verified the delivery — the child name under the target's
+        /// <see cref="WebhookTarget.SecretConfigKey"/> (<see cref="SenderKeyOf"/>) — or null when
+        /// the target's own shared secret did, or nothing was verified. The inbox only STORES on
+        /// it; what a sender key is allowed to cause is the CONSUMER's decision, made again over
+        /// the stored body (MeshWeaver.Plugins#1913).
+        /// </summary>
+        public string? SenderKey { get; init; }
     }
 
     /// <summary>
@@ -193,6 +202,37 @@ public static class WebhookInbox
         return CryptographicOperations.FixedTimeEquals(
             Encoding.ASCII.GetBytes(expected.ToLowerInvariant()),
             Encoding.ASCII.GetBytes(provided.ToLowerInvariant()));
+    }
+
+    /// <summary>
+    /// The per-SENDER key a delivery verifies against when the target's own shared secret does not:
+    /// the name of the first child of <paramref name="secretConfigKey"/>'s configuration section
+    /// whose value verifies <paramref name="signatureHeader"/> over <paramref name="body"/> — e.g.
+    /// <c>Hosting:PlatformWebhookSecret:pearl</c> (env
+    /// <c>Hosting__PlatformWebhookSecret__pearl</c>) answers <c>pearl</c>. Null when none does.
+    ///
+    /// <para>🚨 The same shape <c>Hosting:ModuleReportSecret:{deployment}</c> already has, and for
+    /// the same reason: a secret held by every sender proves possession, not identity
+    /// (MeshWeaver.Plugins#1913). A sender with its OWN key can be told apart from every other,
+    /// so the consumer can decide what that one sender may cause. This inbox decides only whether
+    /// the bytes are worth storing — it never widens what a delivery is allowed to do.</para>
+    ///
+    /// <para>Deterministic (children in configuration order); a blank child is no key. Pure over
+    /// the configuration.</para>
+    /// </summary>
+    public static string? SenderKeyOf(
+        IConfiguration? configuration, string secretConfigKey, string? signatureHeader, string body)
+    {
+        if (configuration is null || string.IsNullOrWhiteSpace(signatureHeader))
+            return null;
+        foreach (var child in configuration.GetSection(secretConfigKey).GetChildren())
+        {
+            if (string.IsNullOrWhiteSpace(child.Value))
+                continue;
+            if (VerifyHmacSha256(signatureHeader, body, child.Value))
+                return child.Key;
+        }
+        return null;
     }
 
     /// <summary>Registers the WebhookEvent node type on the mesh builder.</summary>
@@ -276,16 +316,24 @@ public static class WebhookInbox
                 StringComparer.OrdinalIgnoreCase);
 
         var signatureVerified = false;
+        string? senderKey = null;
         if (matched.SecretConfigKey is { Length: > 0 } secretConfigKey)
         {
             // Resolved per delivery, not captured once: the secret is rotatable configuration, and
             // a value read at startup would keep verifying against the retired one.
-            var secret = hub.ServiceProvider.GetService<IConfiguration>()?[secretConfigKey];
+            var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+            var secret = configuration?[secretConfigKey];
             if (string.IsNullOrWhiteSpace(secret))
                 return Observable.Return(new DeliveryResult(DeliveryStatus.SecretUnavailable));
             kept.TryGetValue(SignatureHeader, out var provided);
             if (!VerifyHmacSha256(provided, body, secret))
-                return Observable.Return(new DeliveryResult(DeliveryStatus.SignatureInvalid));
+            {
+                // Not the shared secret — a sender holding its OWN key under this one (Plugins#1913)?
+                // Stored, and marked, so the consumer can hold it to what that sender may cause.
+                senderKey = SenderKeyOf(configuration, secretConfigKey, provided, body);
+                if (senderKey is null)
+                    return Observable.Return(new DeliveryResult(DeliveryStatus.SignatureInvalid));
+            }
             signatureVerified = true;
         }
 
@@ -328,6 +376,7 @@ public static class WebhookInbox
                             .Select(_ => new DeliveryResult(DeliveryStatus.Accepted, node.Path)
                             {
                                 SignatureVerified = signatureVerified,
+                                SenderKey = senderKey,
                             });
                     }));
     }

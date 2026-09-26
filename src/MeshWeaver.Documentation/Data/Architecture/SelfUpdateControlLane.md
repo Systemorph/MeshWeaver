@@ -227,6 +227,16 @@ the pinned tag is unattended but rate-limited (3 per deployment per hour) and re
 reviewed PR already declared. The control plane must still refuse an event whose `deployment` names
 no record it holds.
 
+**A deployment that must not hold the fleet secret announces with its OWN key** (MeshWeaver.Plugins#1913).
+A customer-administered pod (`pearl`) handed the fleet secret could also sign build facts and triage
+events. Instead its record names a vault object of its own (`announcementKeySecret`), the pod mounts
+it as `Hosting__ControlInbox__Secret` — so the self-updater above signs with it unchanged — and the
+control instance mounts the same object as `Hosting__PlatformWebhookSecret__<deployment>`, which the
+inbox accepts as a **per-sender key** (`WebhookInbox.SenderKeyOf`). What such a key may cause is the
+consumer's decision: its own record's self-update events only, never a build or control event, and a
+record that declares one no longer accepts the fleet secret for itself. Full design, rollout and the
+owner commands: [Self-Update Announcement Key](/Doc/Architecture/SelfUpdateAnnouncementKey).
+
 ## The chart — one declaration, one `helm upgrade`
 
 | | default (`selfUpdate.canPatch: false`) | `selfUpdate.canPatch: true` |
@@ -268,8 +278,10 @@ is handed to https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds; the 
    package's pre-install of `MeshWeaver.SelfUpdate.Aks` keeps the ACR tag lister (detection on an
    ACR-based instance needs it) and its `KubernetesDeploymentUpdater` becomes inert by the chart's
    declaration; retiring the patcher half is that repo's call.
-3. **Systemorph/Memex — declarations, then the roll.** `Deployments/build` and `Deployments/pearl`
-   gain the `Hosting__ControlInbox__Secret` vault mapping (and, for #4093,
+3. **Systemorph/Memex — declarations, then the roll.** `Deployments/build` gains the
+   `Hosting__ControlInbox__Secret` vault mapping to the fleet secret (Memex#567); `Deployments/pearl`
+   gains the same KEY mapped to its OWN announcement key instead, because a customer-administered pod
+   must not hold the fleet secret ([Self-Update Announcement Key](/Doc/Architecture/SelfUpdateAnnouncementKey)) (and, for #4093,
    `SelfUpdate__RegistryValidationUrl` — see below); the chart pin moves to a core commit carrying
    this change; the maintainer Reconciles each namespace, which deletes the Role and renders the
    key. Order: the router (2) first, or accept that `Continuous` deliveries on the switched
