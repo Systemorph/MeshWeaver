@@ -111,6 +111,29 @@ open and the probe answers `404` (the correct answer for a removed identity) and
 a `500`. In the opposite order — present at the probe, removed after — the caller gets `503` and
 its next read gets `404`; the consumer contract is built to re-read, so that converges.
 
+🚨 **The same shape a fourth time — on the per-package BUNDLE route, off the assembly store
+(#3876, reopened 2026-09-26).** `GET /api/plugins/bundles/{plugin}/{version}` resolves each
+NodeType's bytes to a PATH (`IAssemblyStore.TryGetAssemblyPath`) and each module file to a shelf
+path, and opens them only when `NuGetPackageWriter.Write` builds the archive. Between the two, the
+store's own housekeeping can remove the file: `FileSystemAssemblyStore` evicts every version of a
+type beyond the newest three on each write, so a type recompiled a few times while a consumer
+downloads loses the version the route resolved. Measured on memex-cloud 2026-09-26 17:38Z (pod
+`memex-portal-deployment-6c7669df84-9b4rz`, six occurrences; the frames' line numbers match `main`
+and the image memex-cloud served that day, `4c8530d7dd`, line for line):
+`FileNotFoundException` for `/data/assembly-cache/Collaboration_Review/v1172-….dll` out of the
+route's `File.OpenRead`, an unhandled 500. The type's record has moved on by then, so the answer is
+the transient one: the route maps a missing file or directory at the open to **`503` +
+`Retry-After: 30`** (`PluginBundleEndpoints.TransientWhenServedBytesMoved`), and the consumer's
+re-read resolves the version that now exists. Any other I/O fault still surfaces.
+`BundleServeRaceIsTransientTest` writes a real archive whose entry opens a real file deleted after
+it was resolved (file, and whole directory), asserts the `503` and its header, pins that the
+unmapped write really does fault with `FileNotFoundException`, and that a different `IOException`
+passes through untouched. `BundleServeRaceOnTheRouteTest` pins it on the WIRE, through the real
+authenticated route: a healthy bundle is served `200` first (positive control), then a DANGLING
+symbolic link in the landed generation's `wwwroot` — listed by the walk, unopenable at the archive
+write, no seam and no timing — must answer `503` with `Retry-After: 30`. With the operator removed
+from the route the same request throws the production `FileNotFoundException`.
+
 🚨 **The bytes are served under the SEAL's spelling, never the request's.** The name match is
 case-insensitive and the share is not, so composing the requested name served `store.zip` out of a
 publication that sealed `Store.zip`: an open that fails on Linux for a permanent client mistake,
