@@ -153,11 +153,14 @@ partition), in order of preference:
    activation on the pods it replaces. If a fix to a Hosting type is merged, the path is the
    module's publish → seal → roll, never a hand recycle.
 2. **If the running activation is stuck and no install or roll is due**, the operator action is a
-   governed `Hosting/InstanceAction` on the control instance. The fleet's rule is that cluster and
-   instance operations go through that API. There is **no `Recycle` action kind today**. A
-   `Restart` (a pod restart, which ends every activation on that pod) is the coarse governed
-   equivalent. A targeted recycle action, run by the operator as system with the requester and
-   `Reason` recorded, is the missing piece if this is needed more than rarely.
+   governed `Hosting/InstanceAction`. The fleet's rule is that cluster and instance operations go
+   through that API. Its **`Recycle`** kind (MeshWeaver.Plugins, `Hosting/RecycleAction`) recycles
+   ONE address, a NodeType with its dependency network or any node, as system. It runs behind one
+   approval on the action node, which binds the target, and it records the requester, the approver
+   and the required `Reason` on the `DisposeRequest`. It runs in-process on the instance it
+   targets. No lane reaches another instance's mesh, so a recycle there is filed on that
+   instance's own mesh. A `Restart` (a pod restart, which ends every activation on that pod)
+   remains the coarse governed equivalent.
 3. **Break-glass elevation** — audited and time-boxed, a person's call — is the only way to hold a
    write on a system-owned partition. It is described, not built. Granting a standing Update on
    `Hosting/_Access` to a person is exactly the standing access the Admin model rules out.
