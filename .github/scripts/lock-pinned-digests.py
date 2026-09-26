@@ -5501,12 +5501,16 @@ ingress:
     # one line) and `mw-plugin-test` DISAPPEARS — so the host's presence proves nothing about
     # continuations and the REPOSITORY SET is what this arm has to assert. An arm whose subject is
     # decided elsewhere passes having checked nothing.
+    # `memex-control` is the dedicated control instance's image (Memex docs/control-instance.md,
+    # Route A): `control-promote` mirrors the accepted image here, and — like `mw-plugin-test` — its
+    # destinations sit on CONTINUATION lines, so it is a second repository the join must not drop.
     check(_targets.get("cr.meshweaver.cloud") == {"memex-portal-ai", "memex-migration",
-                                                  "mw-plugin-test"},
+                                                  "mw-plugin-test", "memex-control"},
           f"ARM 34: the fleet's own registry was derived with "
-          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all three repositories. "
-          f"`mw-plugin-test` reaches it through a mirror call whose destinations are on the "
-          f"CONTINUATION line, and it is the one repository that vanishes when the join stops")
+          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all four repositories. "
+          f"`mw-plugin-test` and `memex-control` reach it through mirror calls whose destinations "
+          f"are on the CONTINUATION line, and they are the repositories that vanish when the join "
+          f"stops")
 
     # 🚨 A WORKFLOW SPELLS ONE COMMAND ACROSS LINES TWO WAYS, AND ONLY ONE HAS A BACKSLASH
     # (#4362 review). `main-cd.yml:1260` and `:1416` mirror the portal and migration staging tags to

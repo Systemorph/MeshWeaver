@@ -1987,6 +1987,287 @@ jobs:
   # renders, and its `Tests` layout area executes green. The plugins repo's ci.yml `test-repos`
   # job runs INSIDE this image (repo variable MW_TEST_IMAGE), so every main build must refresh
   # it — `latest` is the stable tag that variable pins.
+  # ─────────────────────────── THE CONTROL IMAGE (Route A) ───────────────────────────
+  # The dedicated control instance's image (Memex docs/control-instance.md §3): the SAME portal host,
+  # built from the same commits in the same run as memex-portal-ai, published with
+  # `-p:MemexControlImage=true` — which seeds MeshWeaver.Fleet.Control (the Hosting types compiled into
+  # the image and registered in code) and closes the type set (Mesh__ClosedTypeSet, core
+  # Doc/Architecture/ClosedTypeSet). Its readiness must depend on nothing but its own bytes (P2), and
+  # `control-acceptance` proves that before `control-promote` gives it a tag anyone can select.
+  #
+  # 🚨 ITS OWN LANE, DELIBERATELY OUTSIDE THE FLEET'S DELIVERY. None of these jobs is in the
+  # `needs` of promote, verify-images, delivery-verdict or alert-on-failure, and check-image-set.sh
+  # does not list memex-control — so a defect in the control lane (first runs included) can neither
+  # block nor re-trigger the delivery of memex-portal-ai, and a reconcile never "heals" it. Its red is
+  # its own and it REPORTS itself (`control-lane-report`: one open `control-image` issue, closed by
+  # the next promotion). Folding it into the verdict is a later, separate decision.
+  control-image:
+    name: "Build + push control image (staging tag)"
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # Same measured shape as `portal-image` (build + multi-arch push ~21 min) without its mirror.
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Check out MeshWeaver.Plugins (holds the portal host and the control module)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ needs.gate.outputs.plugins_sha }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      # The same computed version as `portal-image` — the control image is not a separately
+      # versioned product (design §3.2), it is the same build under another repository name.
+      - name: Compute image version
+        id: vars
+        run: |
+          set -euo pipefail
+          VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
+            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not resolve Version from the platform checkout. Refusing to invent one."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
+      # The variant must exist in the Plugins commit this run resolved; a checkout without it would
+      # publish an ordinary portal under the control name, which is exactly what must never happen.
+      - name: The Plugins commit carries the control image variant
+        run: |
+          set -euo pipefail
+          host=plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          grep -q "'\$(MemexControlImage)' == 'true'" "$host" || { echo "::error::$host has no MemexControlImage variant at Plugins ${{ needs.gate.outputs.plugins_sha }} — the control image cannot be built from this commit"; exit 1; }
+          [ -f plugins-repo/src/MeshWeaver.Fleet.Control/MeshWeaver.Fleet.Control.csproj ] || { echo "::error::MeshWeaver.Fleet.Control is absent at Plugins ${{ needs.gate.outputs.plugins_sha }}"; exit 1; }
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      # The staging tag only — a name no consumer selects. The retry is `portal-image`'s: the blob
+      # upload is the transient; a compiler diagnostic is deterministic and fails at once.
+      - name: Build + push control (staging tag)
+        run: |
+          set -euo pipefail
+          LOG="${RUNNER_TEMP:-/tmp}/control-publish.log"
+          for attempt in 1 2 3; do
+            echo "::group::control publish attempt $attempt of 3"
+            if dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+                 -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
+                 -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
+                 -p:MemexControlImage=true \
+                 -p:CIRun=true \
+                 -p:Version=${{ steps.vars.outputs.version }} \
+                 -p:MeshWeaverRoot=${{ github.workspace }} \
+                 -p:ContainerRegistry=${{ env.ACR }} \
+                 -p:ContainerRepository=memex-control \
+                 -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 2>&1 | tee "$LOG"; then
+              echo "::endgroup::"
+              echo "control published on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            if grep -qE 'error (CS|MSB)[0-9]{4}' "$LOG"; then
+              echo "::error::control publish failed with COMPILER diagnostics (attempt $attempt) — deterministic, not retried."
+              exit 1
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "attempt $attempt failed without compiler diagnostics — re-authenticating and retrying in 30s"
+              az acr login --name meshweaver || true
+              sleep 30
+            fi
+          done
+          echo "::error::control publish failed on all 3 attempts with no compiler diagnostics — read the last attempt's output."
+          exit 1
+      - name: The published control image must identify itself as this run's version
+        run: >
+          .github/scripts/check-image-build-identity.sh
+          "${{ needs.gate.outputs.staging_tag }}"
+          "${{ steps.vars.outputs.version }}"
+          memex-control
+
+  # 🚦 THE ACCEPTANCE TEST (design §3.1, P1/P2): the STAGED image, pulled like any consumer would,
+  # booted on the runner beside a throwaway Postgres — (a) empty database, (b) a broken NodeType row
+  # in a user-shaped partition, (c) the previous memex-control against the database this run's
+  # migration produced. Every leg must pass /health then /ready inside the chart's startup budget.
+  #
+  # 🚨 FIRST-RUN BOOTSTRAP. Leg (c) needs a previous control VERSION tag, which only
+  # `control-promote` creates, which needs this job green — so the very first run has none. That run
+  # is recognised by ONE fact: memex-control carries no version-shaped tag at all (staging tags do
+  # not count). It then runs (a) and (b), and declares (c) not applicable with a ::notice:: in the
+  # log. Every later run finds a version tag and must pass (c); an absent version tag after one
+  # exists is impossible without a registry purge, and a purge that emptied the line is for a person
+  # to see — the notice names the rule it applied.
+  control-acceptance:
+    name: "Control image acceptance (empty DB · broken NodeType · N−1)"
+    needs: [gate, control-image, migration-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # Three boots of ≤5 min each (the startup budget) + pulls + the migration: stuck, not slow, at 30.
+    timeout-minutes: 30
+    env:
+      STAGING: ${{ needs.gate.outputs.staging_tag }}
+      V_CONTROL: ${{ needs.control-image.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Resolve the previous control image (or declare the first run)
+        id: previous
+        run: |
+          set -euo pipefail
+          # Version-shaped tags only (3.0.0-…); staging-<sha>-<run> and the sha/main pointers are not
+          # releases. The listing failing is RED — "could not read" must never become "first run".
+          tags=$(az acr repository show-tags -n meshweaver --repository memex-control --orderby time_desc --top 200 -o tsv)
+          versions=$(printf '%s\n' "$tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || true)
+          prev=$(printf '%s\n' "$versions" | grep -vxF "$V_CONTROL" | grep -v '^$' | head -n 1 || true)
+          if [ -n "$prev" ]; then
+            echo "previous control image: $prev"
+            echo "args=--previous ${{ env.ACR }}/memex-control:$prev" >> "$GITHUB_OUTPUT"
+          elif [ -n "$versions" ]; then
+            # Only THIS run's version is tagged: a promotion of this very version got as far as the
+            # ACR tag and failed afterwards (e.g. in the mirror), and this is a re-run. That is not a
+            # first run — skipping N−1 here would bypass it for a version that is already tagged.
+            # Fail closed; the next commit's run has this version as its previous and proceeds.
+            echo "::error::memex-control carries only this run's own version ($V_CONTROL) — a partial promotion of this version, not a first run. Refusing to skip leg (c); the next commit's run will judge against $V_CONTROL."
+            exit 1
+          else
+            echo "::notice::memex-control carries no version tag yet — this is the FIRST control image, so leg (c) (previous image against this run's migrated database) is not applicable. Every later run resolves a previous version and must pass it."
+            echo "args=--first-run" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Acceptance — (a) empty DB, (b) broken NodeType row, (c) N−1 on the migrated DB
+        run: >
+          bash .github/scripts/control-image-acceptance.sh
+          --control "${{ env.ACR }}/memex-control:${{ env.STAGING }}"
+          --migration "${{ env.ACR }}/memex-migration:${{ env.STAGING }}"
+          ${{ steps.previous.outputs.args }}
+
+  # Tags the accepted image — `memex-control:<version>`, `:<sha>`, `:main` — on ACR and the fleet
+  # registry (digest verified). Only after `control-acceptance` is green: an image that failed it
+  # never receives a name a record or an operator could select.
+  control-promote:
+    name: "Promote the control image (after its acceptance test)"
+    needs: [gate, control-image, control-acceptance]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # ~3× the measured cr copy of a portal-sized manifest (portal-image-mirror: 7.5–11.5 min).
+    timeout-minutes: 25
+    env:
+      STAGING: ${{ needs.gate.outputs.staging_tag }}
+      SHA: ${{ needs.gate.outputs.short_sha }}
+      V_CONTROL: ${{ needs.control-image.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Tag memex-control:<version>, :<sha>, :main (ACR, then the fleet registry)
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${{ env.ACR }}/memex-control:$V_CONTROL" \
+            --tag "${{ env.ACR }}/memex-control:$SHA" \
+            --tag "${{ env.ACR }}/memex-control:main" \
+            "${{ env.ACR }}/memex-control:$STAGING"
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" \
+            "${{ env.REGISTRY }}/memex-control:$V_CONTROL" \
+            "${{ env.REGISTRY }}/memex-control:$SHA" \
+            "${{ env.REGISTRY }}/memex-control:main"
+          echo "- memex-control \`$V_CONTROL\`, \`$SHA\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted" >> "$GITHUB_STEP_SUMMARY"
+
+  # 📣 THE CONTROL LANE REPORTS ITSELF. It is outside `alert-on-failure` on purpose (its red must
+  # not read as "the fleet did not ship"), so without this job a failure here would leave nothing
+  # but a red run page — and since reconcile re-attempts only an INCOMPLETE fleet image set, nothing
+  # would ever retry or remind. One open `control-image` issue carries every failure (a comment per
+  # run); the first run that promotes a control image closes it.
+  control-lane-report:
+    name: "Control lane: file or clear its alert"
+    needs: [gate, control-image, control-acceptance, control-promote]
+    if: always() && needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File, append to, or close the control-image issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ needs.gate.outputs.sha }}
+          R_IMAGE: ${{ needs.control-image.result }}
+          R_ACCEPT: ${{ needs.control-acceptance.result }}
+          R_PROMOTE: ${{ needs.control-promote.result }}
+          VERSION: ${{ needs.control-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label control-image --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ "$R_PROMOTE" = success ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "✅ [run ${GITHUB_RUN_ID}](${RUN_URL}) built, accepted and promoted \`memex-control:${VERSION}\` (commit \`${HEAD_SHA}\`). Closing."
+              gh issue close "$existing" --repo "$GITHUB_REPOSITORY"
+            fi
+            echo "control lane green: memex-control:${VERSION} promoted"
+            exit 0
+          fi
+          # Not promoted. A cancelled or skipped lane (a superseded run) is not a failure to report.
+          case "$R_IMAGE/$R_ACCEPT/$R_PROMOTE" in
+            *failure*) ;;
+            *) echo "control lane not promoted and not failed (image=$R_IMAGE acceptance=$R_ACCEPT promote=$R_PROMOTE) — nothing to report"; exit 0 ;;
+          esac
+          gh label create control-image --repo "$GITHUB_REPOSITORY" \
+            --description "The control-instance image lane (main-cd control-*) failed" \
+            --color D93F0B --force || echo "::warning::could not ensure the control-image label (continuing)"
+          body="The control image lane failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}), commit \`${HEAD_SHA}\` — control-image=\`${R_IMAGE}\`, control-acceptance=\`${R_ACCEPT}\`, control-promote=\`${R_PROMOTE}\`.
+
+          No new \`memex-control\` version was promoted. The fleet's own delivery (memex-portal-ai) is NOT affected — this lane is outside it by design. A red \`control-acceptance\` names its leg and carries the pod's /health body and log tail: (a) empty DB, (b) broken NodeType row, (c) the previous control version on this run's migrated DB. This issue closes itself when a run promotes a control image."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Control image lane failed on main: run ${GITHUB_RUN_ID}" \
+              --label control-image --body "$body"
+          fi
+
   plugin-test-image:
     name: "Build + push mw-plugin-test image"
     needs: gate
