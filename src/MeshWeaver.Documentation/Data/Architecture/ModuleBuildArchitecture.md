@@ -827,6 +827,37 @@ is a different check (`MESHWEAVER_PLATFORM_VERSION` in the image config) and is 
 portal's `/app` is ~300 MB) and a larger reference set for Roslyn to map lazily. Unchanged: what is
 compiled, how the publication is sealed, every caller's other inputs.
 
+### The compile-check joins them — `platform-image` on `node-repo-compile-check.yml`
+
+The node-repo **compile-check** was the one gate still judging against the **tester's** `/app`, so
+it and the gate disagreed about the same source on the same identity. Measured on
+MeshWeaver.SocialMedia#184 (tester `sha256:40480c3d…`, portal `sha256:2d1649e8…`, identity
+`c003e001`): the tester's `/app` carries 27 `MeshWeaver.*` assemblies, the portal's 47 — and the
+portal-only ones include `MeshWeaver.Testing.InMesh` and `MeshWeaver.Reactive.Assertions`, which
+no project in the tester's closure references. So an in-mesh `Tests` NodeType (`MeshTestRunner`,
+`MeshTestContext`) compiled in the gate and failed `compile-check` with `CS0234 'InMesh' does not
+exist in the namespace 'MeshWeaver.Testing'` — a required red over source the real host compiles
+fine.
+
+The lane now takes **`platform-image` + `platform-image-digest`** (optional, a pair: one without the
+other is red). With them the reference set is the **portal's** `/app` plus its shared frameworks,
+the tester supplies the framework identity, and the lane asserts the two are **one build** with the
+same `framework-identity /portal --expect <tester>` the gate runs; a platform image that ships
+`mw-plugin-test.dll` (the tester handed in twice) is refused by name. Without them the lane is
+unchanged — the platform's own `satellite-compat` caller keeps the tester's set. Satellites pass the
+portal digest their `preflight` already resolves for the gate, so both required gates read one
+surface by construction. The alternatives were rejected: adding the two testing assemblies to the
+tester's closure re-keys the framework identity of every bake host, and packing them into a module
+bundle ships test infrastructure in a runtime module while leaving the two gates on different sets.
+
+**A repository's in-mesh tests compile against its OWN modules the way the gate composes them —
+from this run's `module` job.** A satellite that builds a module (MeshWeaver.SocialMedia builds
+`MeshWeaver.Social`) passes `module-artifacts: module-bundle-<Module>` to both gates, lists the
+module in the module-pack call's `always-modules` so a narrowed run still produces the bundle, and
+makes both gates `needs:` the module job — the same shape MeshWeaver.Plugins uses for its own
+bundles. Never `registry-modules` for your own module: that composes the LAST PUBLISHED build, so a
+PR changing the module and its tests together would judge the tests against yesterday's module.
+
 ## CI is silent — warn/error plus verdicts
 
 Per-item narration (resource names, per-package resolutions) sits behind `--verbose`; the
