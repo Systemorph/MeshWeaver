@@ -142,6 +142,28 @@ internal static class NodeTypeEnrichmentHelpers
                 node, hubCfg, nodeType, meshConfiguration));
         }
 
+        // 🚨 THE CLOSED TYPE SET (ClosedTypeSet, P1 of the control instance). Everything below this
+        // line resolves a type from the DATABASE — the existence probe, the NodeType row's stream,
+        // its compile or its adopted bundle. A closed mesh activates only what its image registered
+        // in code (the fast path above), so a type that missed it is refused HERE, named, before
+        // any of that runs: no probe, no subscription, no self-heal watching for a row to appear —
+        // a row appearing can never change the answer. The refusal is terminal for this activation
+        // and says what would change it (an image that registers the type).
+        if (meshHub.ServiceProvider.IsClosedTypeSet())
+        {
+            var refusal = ClosedTypeSet.RefusalFor(nodeType, node.Path);
+            logger?.LogWarning(
+                "EnrichWithNodeType: {Refusal}", refusal);
+            // Not "a compilation error … please correct the code" (the overlay's default copy):
+            // nothing was compiled and the code may be fine — this image simply does not carry
+            // the type. Same baked-English shape as the other enrichment-time causes (#641).
+            return Observable.Return(WithCompilationErrorOverlay(
+                node, nodeType, refusal,
+                guidance: "A recycle cannot change this: only an image that registers the type can.",
+                intro: "This item's type is **not part of this portal's closed type set**, so its page couldn't be built.",
+                callToAction: "**Open it on a portal that serves this type.** "));
+        }
+
         // Fast existence probe: before opening the slow-path subscription
         // (which waits SlowPathTimeout = 30s for the NodeType's stream to
         // emit), do a one-shot query for path:{nodeType}. If nothing comes

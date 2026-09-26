@@ -423,6 +423,18 @@ public static class DynamicTypePreWarmer
             logger?.LogDebug("DynamicTypePreWarmer: no IMeshService registered — nothing to warm");
             return Observable.Empty<PreWarmOutcome>();
         }
+        // A CLOSED type set (ClosedTypeSet) has no dynamic types by definition: its types are the
+        // image's code registrations, which ship their assembly with the process. So the sweep
+        // enumerates NOTHING — not "every NodeType row, then filters": the rows are exactly the
+        // input a closed mesh must not read, and a broken one in a user partition must not be able
+        // to occupy, slow or fail this pass.
+        if (mesh.ServiceProvider.IsClosedTypeSet())
+        {
+            logger?.LogInformation(
+                "DynamicTypePreWarmer: {Key}=true — the type set is closed, no database NodeType is warmed",
+                ClosedTypeSet.ConfigKey);
+            return Observable.Empty<PreWarmOutcome>();
+        }
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         var workspace = mesh.GetWorkspace();
 
@@ -614,6 +626,11 @@ public static class DynamicTypePreWarmer
             return Observable.Return(
                 NodeTypeBakeReport.Empty(NodeTypeCompilationHelpers.FrameworkVersion));
         }
+        // Closed type set: nothing in the database is a type this process could adopt or compile,
+        // so there is nothing to probe — the empty report is the true one, not a failure to read.
+        if (mesh.ServiceProvider.IsClosedTypeSet())
+            return Observable.Return(
+                NodeTypeBakeReport.Empty(NodeTypeCompilationHelpers.FrameworkVersion));
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
 
         // System-scoped for the same reason the sweep is: enumerating NodeType definitions across
