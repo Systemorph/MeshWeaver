@@ -89,6 +89,7 @@ jobs:
     outputs:
       instances: ${{ steps.roster.outputs.instances }}
       count: ${{ steps.roster.outputs.count }}
+      sources: ${{ steps.roster.outputs.sources }}
     steps:
       # STEP ONE OF TWO ASSERTIONS, and the split is not cosmetic. This one asks whether the inputs
       # that come from OUTSIDE the tree exist at all; it runs FIRST, before the checkout and before
@@ -98,7 +99,8 @@ jobs:
       # instances exist is derived two steps below, not declared.
       #
       # 🚨 WHAT IS ASSERTED HERE IS EXACTLY WHAT IS NEEDED TO REACH THE DERIVATION, AND NOTHING
-      # ELSE. All three `COMBO_*` inputs are asserted in the `roster` step, after the roster exists.
+      # ELSE. The two `COMBO_VERIFY_*` credential maps are asserted in `roster`, after the roster
+      # exists; the module-source map is derived from deployment records, not configured here.
       # Measured over this workflow's whole history: because they were asserted HERE, every run died
       # one step above the derivation and the derivation had NEVER ONCE EXECUTED in CI — so the
       # lane's red named absent inputs while the state that has to change first (whatever the
@@ -111,9 +113,9 @@ jobs:
       # roster that may not derive) and kept `COMBO_VERIFY_SOURCES` here on the reasoning that it is
       # plain data, free to provision and free to correct. Measured on the first run that reached
       # this step afterwards: the preflight still died HERE, naming `vars.COMBO_VERIFY_SOURCES` and
-      # nothing else, and the derivation still did not run. Any unprovisioned input in this step
-      # defeats the whole reorder, whatever it costs to provision — so the test is reachability, and
-      # only `AZURE_*` (the login) and `FLEET_READER_*` (the token the derivation reads with) pass it.
+      # nothing else. That mapping is now derived from each deployment record's `pluginRepos`, so
+      # there is no external source-map input to assert. Any remaining unprovisioned input here
+      # defeats the reorder — only `AZURE_*` and `FLEET_READER_*` pass the reachability test.
       #
       # This is NOT a skip-trapdoor and nothing here became conditional: no `if:` asks whether a
       # secret is set, no step carries `continue-on-error:`, both maps are still asserted
@@ -179,16 +181,17 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/derive-combo-instances.py --discover
 
-      # STEP TWO OF TWO. The roster now exists, so this asks the questions the first step could not:
-      # are the two credential MAPS present at all, and does every instance the fleet ACTUALLY has
-      # carry both? A name present in the roster but absent from either map would otherwise fail deep
-      # inside the verify job wearing an HTTP 401 that names no secret — the shape that made an
-      # absent MW_REGISTRY_KEY read as a script bug (Reinsurance#128).
-      - name: Every derived instance has both credentials, or a red naming which
+      # STEP TWO OF TWO. The roster now exists, so this asks whether the two credential MAPS are
+      # present and whether every instance the fleet ACTUALLY has carries both. It also requires the
+      # source map derived from DeploymentContent.PluginRepos to reach this step intact. A name
+      # missing from either credential map would otherwise fail deep inside verification wearing an
+      # HTTP 401 that names no secret — the shape that made an absent MW_REGISTRY_KEY read as a
+      # script bug (Reinsurance#128).
+      - name: Every derived instance has credentials and registry sources
         id: roster
         env:
           INSTANCES: ${{ steps.derive.outputs.instances }}
-          COMBO_VERIFY_SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
+          SOURCES: ${{ steps.derive.outputs.sources }}
           COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
           COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
         run: |
@@ -208,6 +211,12 @@ jobs:
             echo "::error::every derived instance needs a name and a baseUrl: $INSTANCES"
             exit 1
           fi
+          if [ -z "${SOURCES:-}" ]; then
+            echo "::error::the deployment records derived no registry sources. The verifier needs the" >&2
+            echo "  source-name to module-repository mapping from DeploymentContent.PluginRepos;" >&2
+            echo "  refusing to verify with an empty or missing source list." >&2
+            exit 1
+          fi
 
           # 🚨 THE TWO CREDENTIAL MAPS ARE ASSERTED HERE, not in the step above, and only now that
           # the roster exists — see that step's comment. Both are SPENT rather than fetched, so an
@@ -217,7 +226,6 @@ jobs:
           # these two lines carry the PROVISIONING guidance that names what to mint and why it
           # cannot be read back, so no information moved out of the preflight — only its order.
           absent=()
-          [ -n "${COMBO_VERIFY_SOURCES:-}" ] || absent+=("vars.COMBO_VERIFY_SOURCES    space-separated name=url for --source, e.g. Plugins=https://github.com/Systemorph/MeshWeaver.Plugins. It maps a registry SOURCE NAME an install record stamps to the repository that source's modules come from. Plain data, not a credential. 🚨 IT IS DERIVABLE and should stop being a variable: the fleet's own overlays carry the table as pluginCatalog.sources, whose name field is exactly the PackageCoordinate.SourceName an install record stamps and whose repoPath field is exactly the url --source wants, and Systemorph/Memex's check-record-renders-overlay.py already holds that block to the deployment record by index, name, url and ref in both directions. Deriving it through the extractor the roster above already uses is the remaining step of #3848 problem 2; until then a stale map fails LOUD (the assembler refuses by name and the verdict is NotVerifiable, which reds this lane) rather than verifying a short set")
           [ -n "${COMBO_VERIFY_KEYS:-}" ]   || absent+=("secrets.COMBO_VERIFY_KEYS      JSON object {instance name: mwi_… instance-registry key}, one entry per instance in the roster printed above — the roster is DERIVED from the fleet's deployment overlays, never listed, so the names come from it and not from a variable. 🚨 ISSUED, never recovered: InstanceKeys persists Hash(raw) alone, so an existing key cannot be read back — issue a NEW one per instance, additive and separately revocable, and never a rotation of a key something else is using")
           [ -n "${COMBO_VERIFY_TOKENS:-}" ] || absent+=("secrets.COMBO_VERIFY_TOKENS    JSON object {instance name: mw_… API token of a GLOBAL ADMIN on that instance}, one per instance in the roster above, like the keys. Removable only by the diff that moves .github/scripts/combo-verify-instance.sh off POST /api/mesh/patch and onto /api/plugins/combo-verification, and only once the verify:combo grant (#3891) exists per instance")
           if [ ${#absent[@]} -gt 0 ]; then
@@ -239,6 +247,7 @@ jobs:
           {
             echo "instances=$(jq -c '.' <<<"$INSTANCES")"
             echo "count=$count"
+            echo "sources=$SOURCES"
           } >>"$GITHUB_OUTPUT"
           echo "Every derived instance carries both credentials; $count instance(s) will be verified."
 
@@ -294,7 +303,7 @@ jobs:
           BASE_URL: ${{ matrix.instance.baseUrl }}
           COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
           COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
-          SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
+          SOURCES: ${{ needs.preflight.outputs.sources }}
           GITHUB_TOKEN: ${{ steps.repo-token.outputs.token }}
           WORK_ROOT: ${{ runner.temp }}/combo
         run: |
