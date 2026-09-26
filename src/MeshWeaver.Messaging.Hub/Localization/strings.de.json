@@ -1729,5 +1729,6 @@
   "tests.column.output": "Ausgabe",
   "tests.result.passed": "bestanden",
   "tests.result.failed": "FEHLER",
-  "tests.result.skipped": "übersprungen"
+  "tests.result.skipped": "übersprungen",
+  "store.profileSubscription": "Abo"
 }

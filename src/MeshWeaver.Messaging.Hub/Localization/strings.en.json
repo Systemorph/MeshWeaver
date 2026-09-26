@@ -1729,5 +1729,6 @@
   "tests.column.output": "Output",
   "tests.result.passed": "pass",
   "tests.result.failed": "FAIL",
-  "tests.result.skipped": "skipped"
+  "tests.result.skipped": "skipped",
+  "store.profileSubscription": "Subscription"
 }
