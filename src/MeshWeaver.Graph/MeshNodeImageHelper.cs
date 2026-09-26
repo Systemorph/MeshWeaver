@@ -346,6 +346,21 @@ public static class MeshNodeImageHelper
         => !string.IsNullOrEmpty(icon) && icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The node's PICTURE as an <c>&lt;img src&gt;</c>-ready URL, or null when its icon is not a
+    /// picture. A <c>content:</c> reference — what the profile page's upload writes
+    /// (<c>NodeImageUpload</c>) — resolves to its access-controlled <c>/api/content</c> URL; an
+    /// absolute URL or data URI is returned as-is; an emoji, inline SVG or glyph name is not a
+    /// picture and yields null, so an avatar falls back to initials instead of a broken image.
+    /// </summary>
+    /// <param name="icon">The node's <see cref="MeshNode.Icon"/>.</param>
+    /// <param name="nodePath">The node's path — a <c>content:</c> reference is relative to it.</param>
+    public static string? ResolvePictureUrl(string? icon, string? nodePath)
+    {
+        var resolved = ResolveContentPath(icon, nodePath);
+        return IsImageUrl(resolved) && !IsInlineSvg(resolved) ? resolved : null;
+    }
+
+    /// <summary>
     /// Returns true if the icon value is a URL or data URI (renderable as img src).
     /// </summary>
     public static bool IsImageUrl(string? icon)

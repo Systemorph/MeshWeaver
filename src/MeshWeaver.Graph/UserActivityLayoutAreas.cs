@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -1343,43 +1344,125 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// The owner-only profile editor (<see cref="EditProfileArea"/>) — node-bound markdown editors for
-    /// the bio and links plus inline showcase curation, gated on <see cref="Permission.Update"/>
-    /// (self-edit → the owner only; visitors get access-denied). Mirrors <see cref="EditHome"/>.
+    /// The owner's profile page (<see cref="EditProfileArea"/>, <c>/{user}/EditProfile</c>) — picture,
+    /// basics (display name, sign-in email, language, time zone), bio, links and showcase, followed by
+    /// every section a module contributed through
+    /// <see cref="ProfileSectionsExtensions.AddProfileSections(MessageHubConfiguration, ProfileSectionProvider[])"/>.
+    /// Gated on <see cref="Permission.Update"/> (self-edit → the owner only; visitors get
+    /// access-denied). Mirrors <see cref="EditHome"/>.
+    ///
+    /// <para>Every field is bound DIRECTLY to the user node, so the page itself only re-renders when
+    /// its SHAPE changes (the node appears, or the showcase pins change) — never on an edit, which
+    /// is what keeps a field the owner is typing in from being rebuilt under them.</para>
     /// </summary>
-    public static IObservable<UiControl?> EditProfile(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> EditProfile(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
         var options = host.Hub.JsonSerializerOptions;
-        return host.Workspace.GetMeshNodeStream().CombineLatest(
-            host.Hub.GetEffectivePermissions(hubPath),
-            (node, permissions) => !permissions.HasFlag(Permission.Update)
-                ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
-                : (UiControl?)BuildProfileEditor(node, hubPath, options, locale: host.ViewerLocale()));
+        var locale = host.ViewerLocale();
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.UserActivityLayoutAreas");
+        var contributed = host.Hub.Configuration.ObserveProfileSections(host, ctx);
+
+        return host.Workspace.GetMeshNodeStream()
+            .DistinctUntilChanged(node => ProfileEditorShape(node, options))
+            .CombineLatest(
+                host.Hub.GetEffectivePermissions(hubPath),
+                contributed,
+                (node, permissions, sections) => !permissions.HasFlag(Permission.Update)
+                    ? (UiControl?)MeshNodeLayoutAreas.BuildAccessDenied(hubPath)
+                    : BuildProfileEditor(node, hubPath, options, locale,
+                        RenderContributedSections(host, node,
+                            ProfileSectionsExtensions.FilterByPermission(sections, permissions),
+                            access, locale, logger)));
     }
 
     /// <summary>
-    /// The profile editor body: a back link, node-bound <see cref="MarkdownEditorControl"/>s for the
-    /// bio and links (each edit is a per-field read-modify-write straight to the User node — the same
-    /// node-bound DataContext pattern as <see cref="BuildHomeBodyEditor"/>: ONE source of truth, no
-    /// <c>/data</c> replica, no save subscription), and the showcase rendered with the inline unpin
-    /// overlay so the owner curates pins in place. Built from layout-area controls only.
+    /// What makes the editor's control TREE differ: whether the node exists, and the pinned paths
+    /// the showcase band queries. Every other field is node-bound inside the tree.
     /// </summary>
-    internal static UiControl BuildProfileEditor(MeshNode? node, string hubPath, JsonSerializerOptions options, string? locale = null)
+    private static string ProfileEditorShape(MeshNode? node, JsonSerializerOptions options)
+        => node is null
+            ? "\u0000"
+            : string.Join('\n', node.ContentAs<User>(options)?.PinnedPaths ?? []);
+
+    /// <summary>
+    /// Renders each contributed section's body. A module whose builder throws gets its failure
+    /// SHOWN in place of its section (and logged) — one broken module must not take the whole
+    /// profile page down, and it must not silently vanish either.
+    /// </summary>
+    internal static IReadOnlyList<(ProfileSectionDefinition Section, UiControl Body)> RenderContributedSections(
+        LayoutAreaHost host, MeshNode? node, IReadOnlyList<ProfileSectionDefinition> sections,
+        AccessService? access, string? locale, ILogger? logger)
+    {
+        var rendered = new List<(ProfileSectionDefinition, UiControl)>(sections.Count);
+        foreach (var section in sections)
+        {
+            var localized = section.Localized(access);
+            UiControl body;
+            try
+            {
+                body = localized.ContentBuilder(host, node);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "[Profile] contributed section {Section} failed to build for {Node}",
+                    section.Id, node?.Path);
+                body = Controls.Markdown(
+                    LocalizationCatalog.Get("profile.sectionUnavailable", locale, ex.Message));
+            }
+            rendered.Add((localized, body));
+        }
+        return rendered;
+    }
+
+    /// <summary>Stable id prefix of every profile-page section (<c>profile-section-{id}</c>).</summary>
+    internal const string ProfileSectionIdPrefix = "profile-section-";
+
+    /// <summary>Built-in section ids, in render order.</summary>
+    internal const string PictureSectionId = "picture";
+    internal const string BasicsSectionId = "basics";
+    internal const string BioSectionId = "bio";
+    internal const string LinksSectionId = "links";
+    internal const string ShowcaseSectionId = "showcase";
+
+    /// <summary>
+    /// The profile page body. Every field is node-bound — the same node-bound DataContext pattern as
+    /// <see cref="BuildHomeBodyEditor"/>: ONE source of truth (the user node), no <c>/data</c>
+    /// replica, no save subscription, no Save button.
+    /// <list type="bullet">
+    /// <item><b>Picture</b> — <see cref="NodeImageUploadControl"/>: upload/replace/remove, stored in
+    /// the node's own <c>content</c> collection and referenced from <see cref="MeshNode.Icon"/>.</item>
+    /// <item><b>Basics</b> — the display name (<see cref="MeshNode.Name"/>, which is what the header,
+    /// mentions and cards show), the sign-in email read-only, and the language + time zone.</item>
+    /// <item><b>Bio</b>, <b>Links</b> — node-bound markdown editors.</item>
+    /// <item><b>Showcase</b> — pinned cards with the inline unpin overlay.</item>
+    /// <item>Then every contributed section, already rendered and permission-filtered.</item>
+    /// </list>
+    /// Built from layout-area controls only.
+    /// </summary>
+    internal static UiControl BuildProfileEditor(
+        MeshNode? node, string hubPath, JsonSerializerOptions options, string? locale = null,
+        IReadOnlyList<(ProfileSectionDefinition Section, UiControl Body)>? contributed = null)
     {
         if (node is null)
             return Controls.Markdown(LocalizationCatalog.Get("ui.mdProfileNotFound", locale));
 
+        string L(string key, params object?[] args) => LocalizationCatalog.Get(key, locale, args);
+
         var userPath = node.Path ?? hubPath;
         var ownerId = OwnerIdOf(userPath);
+        var displayName = string.IsNullOrWhiteSpace(node.Name) ? ownerId : node.Name!;
         var contentCtx = LayoutAreaReference.GetMeshNodeDataContext(userPath, bindContent: true);
+        var nodeCtx = LayoutAreaReference.GetMeshNodeDataContext(userPath, bindContent: false);
         var pins = node.ContentAs<User>(options)?.PinnedPaths;
 
         var container = Controls.Stack
             .WithWidth("100%")
             .WithStyle("gap: 20px; width: 100%; padding: 0 4px 24px;");
 
-        // Header: back to the profile + auto-save hint (Label controls, never raw HTML).
+        // Header: back to the public profile + auto-save hint (Label controls, never raw HTML).
         container = container.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithVerticalAlignment(VerticalAlignment.Center)
@@ -1388,63 +1471,88 @@ public static class UserActivityLayoutAreas
             .WithView(Controls.Button("")
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithAppearance(Appearance.Stealth)
+                .WithLabel(L("menu.viewPublicProfile"))
                 .WithNavigateToHref($"/{userPath}/{ProfileArea}"))
-            .WithView(Controls.H3(LocalizationCatalog.Get("ui.editYourProfile", locale)).WithStyle("margin: 0; flex: 1;"))
-            .WithView(Controls.Label(LocalizationCatalog.Get("ui.autoSaved", locale))
+            .WithView(Controls.H3(L("ui.editYourProfile")).WithStyle("margin: 0; flex: 1;"))
+            .WithView(Controls.Label(L("ui.autoSaved"))
                 .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;")));
 
+        // Picture — upload / replace / remove, straight onto MeshNode.Icon.
+        container = container.WithView(BuildProfileSection(L("profile.picture"),
+            new NodeImageUploadControl(userPath)
+            {
+                CanEdit = true,
+                DisplayName = displayName,
+                UploadLabel = L("profile.pictureUpload"),
+                ReplaceLabel = L("profile.pictureReplace"),
+                RemoveLabel = L("profile.pictureRemove"),
+                HintText = L("profile.pictureHint", NodeImageUpload.MaxBytes / (1024 * 1024)),
+                AltText = L("profile.pictureAlt", displayName),
+            }, PictureSectionId));
+
+        // Basics — display name (the node's own Name), sign-in email (read-only), language + zone.
+        container = container.WithView(BuildProfileSection(L("profile.basics"),
+            Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("gap: 12px; width: 100%;")
+                // Node-level field, bound like Settings → Metadata binds it. Not Immediate: a rename
+                // lands on blur, not once per keystroke — every write of Name re-indexes the node.
+                .WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
+                {
+                    Label = L("profile.displayName"),
+                    Immediate = false,
+                    DataContext = nodeCtx,
+                }.WithWidth("100%"))
+                // The sign-in email comes from the identity provider; shown, never edited here.
+                .WithView(new MeshNodeContentEditorControl(userPath)
+                {
+                    CanEdit = false,
+                    Fields = ImmutableList.Create(new MeshNodeEditorField(
+                        nameof(User.Email).ToCamelCase()!, L("profile.email"), MeshNodeEditorFieldKind.Text)),
+                })
+                .WithView(Controls.Label(L("profile.emailHint"))
+                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;"))
+                // Language + time zone — the SAME fields, control and node the Settings →
+                // Preferences tab binds, so the two surfaces can never drift apart.
+                .WithView(new MeshNodeContentEditorControl(userPath)
+                {
+                    CanEdit = true,
+                    Fields = UserNodeType.PreferenceFields(key => L(key)),
+                }),
+            BasicsSectionId));
+
         // Bio — node-bound markdown editor (JsonPointer "bio" against the User content context).
-        container = container.WithView(BuildProfileSection("Bio", new MarkdownEditorControl
+        container = container.WithView(BuildProfileSection(L("profile.bio"), new MarkdownEditorControl
         {
             Value = new JsonPointerReference("bio"),
             DataContext = contentCtx,
             Height = "160px",
             MaxHeight = "none",
-            Placeholder = "A sentence or two about what you do…"
-        }));
+            Placeholder = L("profile.bioPlaceholder"),
+        }, BioSectionId));
 
         // Links — node-bound markdown editor (one markdown link per line).
-        container = container.WithView(BuildProfileSection("Links", new MarkdownEditorControl
+        container = container.WithView(BuildProfileSection(L("profile.links"), new MarkdownEditorControl
         {
             Value = new JsonPointerReference("links"),
             DataContext = contentCtx,
             Height = "140px",
             MaxHeight = "none",
-            Placeholder = "One link per line, e.g. [GitHub](https://github.com/you)"
-        }));
-
-        // Language — the UI language, editable HERE on the profile and not only buried in
-        // Settings → Preferences, which is where a user actually looks for "my language".
-        // Node-bound like every other field on this page: MeshNodeContentEditorControl reads and
-        // writes User.Locale straight on the node stream (IMeshNodeStreamCache), so there is ONE
-        // source of truth and no /data replica + save-subscription. The same control and the same
-        // field back the Preferences tab, so the two can never drift apart.
-        container = container.WithView(BuildProfileSection(
-            LocalizationCatalog.Get("settings.language", locale),
-            new MeshNodeContentEditorControl(userPath)
-            {
-                CanEdit = true,
-                Fields = ImmutableList.Create(
-                    new MeshNodeEditorField(
-                        nameof(User.Locale).ToCamelCase()!,
-                        LocalizationCatalog.Get("settings.language", locale),
-                        MeshNodeEditorFieldKind.Enum)
-                    {
-                        // Stores the BCP-47 tag ("de") but shows the endonym ("Deutsch") — a German
-                        // speaker looks for "Deutsch", not "German" or a raw tag.
-                        Options = Locales.Supported,
-                        OptionLabels = Locales.DisplayNames
-                    })
-            }));
+            Placeholder = L("profile.linksPlaceholder"),
+        }, LinksSectionId));
 
         // Showcase — pinned cards with the inline unpin overlay; a note on how to add more.
-        container = container.WithView(BuildProfileSection("Showcase",
+        container = container.WithView(BuildProfileSection(L("profile.showcase"),
             Controls.Stack
                 .WithStyle("gap: 8px; width: 100%;")
-                .WithView(Controls.Markdown(
-                    "Pin any space, doc, agent, or example from its menu to feature it here — " +
-                    "hover a card to unpin it."))
-                .WithView(BuildShowcase(ownerId, pins, ownerView: true))));
+                .WithView(Controls.Markdown(L("profile.showcaseHint")))
+                .WithView(BuildShowcase(ownerId, pins, ownerView: true)),
+            ShowcaseSectionId));
+
+        // Module-contributed sections (subscription, integrations, …), already permission-filtered
+        // and sorted by their declared order.
+        foreach (var (section, body) in contributed ?? [])
+            container = container.WithView(BuildProfileSection(section.Title, body, section.Id));
 
         return container;
     }
@@ -1493,10 +1601,13 @@ public static class UserActivityLayoutAreas
 
         // Header card (avatar + name; email only for owner/admin). Bio renders as its own markdown
         // section below, so it is NOT passed to the header — no duplication.
+        // The picture as a renderable URL: a `content:` reference (what the profile page's upload
+        // writes) resolves to its access-controlled /api/content URL; an emoji/SVG/glyph is not a
+        // picture and leaves the header on initials.
         profile = profile.WithView(new UserProfileControl()
             .WithNodePath(nodePath)
             .WithDisplayName(ownerName)
-            .WithIcon(ownerNode?.Icon)
+            .WithIcon(MeshNodeImageHelper.ResolvePictureUrl(ownerNode?.Icon, nodePath))
             .WithEmail(email)
             .WithBio(null));
 
@@ -1536,12 +1647,19 @@ public static class UserActivityLayoutAreas
         return profile;
     }
 
-    /// <summary>A titled profile section — an <c>H3</c> heading (Label control, not HTML) over its body.</summary>
-    private static UiControl BuildProfileSection(string title, UiControl body) =>
-        Controls.Stack
+    /// <summary>
+    /// A titled profile section — an <c>H3</c> heading (Label control, not HTML) over its body.
+    /// With <paramref name="id"/> the section carries the stable id
+    /// <c>profile-section-{id}</c> (<see cref="ProfileSectionIdPrefix"/>).
+    /// </summary>
+    private static UiControl BuildProfileSection(string title, UiControl body, string? id = null)
+    {
+        var section = Controls.Stack
             .WithStyle("gap: 8px; width: 100%; padding-top: 16px;")
             .WithView(Controls.H3(title).WithStyle("margin: 0; font-size: 1.15rem;"))
             .WithView(body);
+        return id is { Length: > 0 } ? section.WithId(ProfileSectionIdPrefix + id) : section;
+    }
 
     /// <summary>Recent activity by the owner — visibility-filtered so a visitor sees only public nodes.</summary>
     private static UiControl BuildRecentActivity(string ownerId) =>
