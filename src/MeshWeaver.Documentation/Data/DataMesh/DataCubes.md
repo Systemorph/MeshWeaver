@@ -48,13 +48,12 @@ PensionFund/
 ├── Year.json · Year/2024.json …    ← reporting years
 ├── Currency.json · Currency/CHF.json …
 ├── BalanceSheetEntry.json
-├── BalanceSheetEntry/2024-Cash.json …   ← 30 facts — one node per Position × Year
-├── BalanceSheet.json               ← "config => config.ConfigureBalanceSheet()"
-│   └── BalanceSheet/Source/        ← scopes, data loader, layout areas
-└── Statement.json                  ← the report INSTANCE (nodeType PensionFund/BalanceSheet)
+└── BalanceSheetEntry/2024-Cash.json …   ← 30 facts — one node per Position × Year
 ```
 
-There is **no Id property anywhere** — a mesh node's identity is its **path**. A fact references its dimensions by *their* paths, and a formula references its operand positions by path. The views attach to **instances** of the BalanceSheet type, not to the type definition itself: open `PensionFund/Statement` in a portal with the samples loaded and the views below are its layout areas.
+There is **no Id property anywhere** — a mesh node's identity is its **path**. A fact references its dimensions by *their* paths, and a formula references its operand positions by path.
+
+The core sample ships the dimensions and the facts only. The scope-computed report — statement, key figures, asset allocation — needs the business-rules scope generator, which ships with the BusinessRules plugin in MeshWeaver.Plugins rather than with the platform, so a core sample cannot compile it. The sections below show that part as runnable code on this page instead.
 
 ## 1. Dimension types host their instances
 
@@ -254,7 +253,7 @@ Mesh.Edit(new BalanceSheetEntryDraft(), "pensionDraft")
 
 ## 6. The picker in a dialog
 
-Opening the same form as a **modal dialog** is one click action — build the dialog, write it to the dialog area. In the sample this is the `NewEntryDialog` view, whose draft uses the real `[MeshNode]` pickers over the Position / Year / Currency nodes:
+Opening the same form as a **modal dialog** is one click action — build the dialog, write it to the dialog area. With the real `[MeshNode]` pickers over the Position / Year / Currency nodes, the draft offers node pickers instead of selects:
 
 ```csharp
 Controls.Button("New balance sheet entry…")
@@ -324,7 +323,7 @@ entries
     .WithTitle("Assets by Year and Position (CHF m)")
 ```
 
-And the 2025 asset allocation as a pie — the same chart the sample's `AssetAllocation` view renders from the scopes:
+And the 2025 asset allocation as a pie — evaluated from the scopes, this is the report's asset-allocation view:
 
 ```csharp --render PensionPieDemo --show-code
 using MeshWeaver.Layout.Chart;
@@ -345,7 +344,7 @@ assets2025
 
 ## 9. The numbers — pinned by tests
 
-Every figure this page shows is asserted by the business-rules plugin's tests — evaluated through the **real generated scopes**, the same node-native engine the sample's Code nodes compile against:
+Every figure this page shows is asserted by the business-rules plugin's tests — evaluated through the **real generated scopes**, the same node-native engine a Code node compiles against when the plugin is installed:
 
 | Figure | 2024 | 2025 |
 |---|---:|---:|
