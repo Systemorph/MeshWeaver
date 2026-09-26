@@ -129,6 +129,64 @@ public class TheBakeGateCannotTakeAnInstanceDownTest
     }
 
     [Fact(Timeout = 60000)]
+    public void AnAdmittedImageWhoseOnlyWorkingBuildsAnOlderImageProduced_DoesNotRefuseItself()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // The review finding on the first cut (#5725): an image that served while compiling nothing
+        // (ordinary roll, or prebuilt adoption, which keeps the PRODUCER's version) leaves no record
+        // naming itself. Its restart then saw only an older producer and, on a BytesMissing type
+        // that fails, refused — the only serving image. The durable admission marker is what says
+        // it served, independent of per-type provenance.
+        var served = Report(Old, Entry("Crm/Contact", BakeState.BytesMissing, "3.0.0-ci.9100"))
+            with { ServedBefore = true };
+
+        var (gate, outcome) = Bake(served, "Crm/Contact");
+
+        outcome.HasRegressionBaseline.Should().BeFalse();
+        gate.ReadinessGranted.Should().BeTrue();
+        served.GateRelevant.Should().BeEmpty();
+
+        // The negative control: the SAME report without the marker is a first boot of that image,
+        // and an older image built this type — it still refuses.
+        var (strictGate, _) = Bake(served with { ServedBefore = false }, "Crm/Contact");
+        strictGate.ReadinessGranted.Should().BeFalse();
+    }
+
+    [Fact(Timeout = 60000)]
+    public void AFaultedSweep_OnAnImageThatHasServed_DoesNotRefuseReadiness()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // The last path to a full outage: the enumeration errors on a restarted pod of the serving
+        // image. There is no per-type evidence for the stamp to judge, so the served-build
+        // witness is read on the gate itself.
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        gate.MarkRunning("enumerating dynamic NodeTypes");
+        gate.MarkFaulted("enumeration timed out");
+        gate.ReadinessGranted.Should().BeFalse("the negative control: an unproven bake on an image that never served refuses");
+
+        gate.MarkServedBefore();
+
+        gate.Phase.Should().Be(BakePhase.Faulted, "the record is unchanged — only the verdict relaxes");
+        gate.ReadinessGranted.Should().BeTrue("the image the rollout falls back on must always be able to come back");
+        gate.Admission.Should().Be(MeshAdmission.Admitted);
+    }
+
+    [Fact(Timeout = 60000)]
+    public void AMeasuredRegression_IsNotRelaxedByTheGateFlagAlone()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // ServedBefore on the gate relaxes ONLY Faulted. A regression that reached the gate was
+        // stamped regressable by a report that did not know the image had served; the gate does not
+        // second-guess that verdict.
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        gate.MarkServedBefore();
+        gate.MarkRunning("enumerating dynamic NodeTypes");
+        gate.MarkOutcome(new PreWarmOutcome("Crm/Contact", PreWarmStatus.CompileError, "CS0246"));
+        gate.MarkComplete("baked");
+        gate.ReadinessGranted.Should().BeFalse();
+    }
+
+    [Fact(Timeout = 60000)]
     public void ABuildProducedByANewerImage_IsNotABaselineForTheOldOne()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();

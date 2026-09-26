@@ -123,6 +123,12 @@ public sealed class DynamicTypePreWarmerHostedService(
     private IDisposable? _liveCensus;
 
     /// <summary>
+    /// The served-build witness offer (#5544): held by the publication gate until this pod is
+    /// admitted, written then, discarded if refused. Disposed with the service.
+    /// </summary>
+    private IDisposable? _servedWitness;
+
+    /// <summary>
     /// One recovery watch per RECORDED REGRESSION (#1214) — each observes its type until it
     /// reaches a usable build on this image and then retracts the regression. They outlive the
     /// sweep by design (the content that tore the compile converges after it), so they are owned
@@ -276,6 +282,33 @@ public sealed class DynamicTypePreWarmerHostedService(
                 + "(#3478).",
                 gate.Admission);
         admission?.Reconsider();
+
+        // 🚨 #5544 — offer the durable "this platform build is admitted here" marker. The
+        // publication gate holds it while the bake measures, writes it when this pod is admitted
+        // and discards it if the pod is refused, so the marker only ever records a build that
+        // SERVED. It is the witness a later restart of this image reads to know it is the image
+        // the rollout falls back on, and therefore never refuses itself (ServedBuildWitness).
+        // Only where the gate is ARMED: an unarmed host refuses nothing, so there is nothing for
+        // the marker to relax, and a dev host or test mesh should not write it.
+        if (sweepEnabled && gate is { GatesReadiness: true })
+            _servedWitness = ServedBuildWitness
+                // Read FIRST: a build that has served here relaxes a Faulted sweep too (it has no
+                // per-type evidence for the stamp to judge), and the gate re-reads it live.
+                .HasServed(mesh, ServedBuildWitness.LivePlatformVersion, logger)
+                .Do(served =>
+                {
+                    if (!served)
+                        return;
+                    gate.MarkServedBefore();
+                    admission?.Reconsider();
+                })
+                .SelectMany(_ => ServedBuildWitness.Record(mesh, ServedBuildWitness.LivePlatformVersion, logger))
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogWarning(ex,
+                        "DynamicTypePreWarmer: could not record the served-build witness — a later "
+                        + "restart of this image will not know it has served, and keeps the bake "
+                        + "gate's strict reading (#5544)"));
 
         // Pacing: explicit config wins; otherwise a readiness-GATED pod sweeps at full speed (it
         // serves nobody while it bakes — the initial-bake case) and an ungated pod keeps the
@@ -761,6 +794,8 @@ public sealed class DynamicTypePreWarmerHostedService(
         _warmSubscription = null;
         _liveCensus?.Dispose();
         _liveCensus = null;
+        _servedWitness?.Dispose();
+        _servedWitness = null;
         _recoveryWatches.Dispose();
     }
 

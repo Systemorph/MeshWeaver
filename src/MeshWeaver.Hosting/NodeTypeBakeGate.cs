@@ -166,9 +166,28 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     {
         BakePhase.NotStarted => true,
         BakePhase.Complete => true,
-        BakePhase.Faulted => AllowUnprovenBake,
+        // #5544: a sweep that errored proved nothing about THIS image, but when this image has
+        // already served here it is the image the rollout falls back on. Refusing it can only
+        // take the instance down, which is what happened to memex.systemorph.com.
+        BakePhase.Faulted => AllowUnprovenBake || ServedBefore,
         _ => false,
     };
+
+    /// <summary>
+    /// 🚨 #5544: this process's platform build has already been ADMITTED to this mesh (the durable
+    /// <c>ServedBuildWitness</c>), so this pod is a restart of a serving image, not a candidate in a
+    /// roll. It relaxes exactly one verdict, a <see cref="BakePhase.Faulted"/> sweep, which has no
+    /// per-type evidence to judge. A measured regression never reaches here on such a pod, because
+    /// the sweep's own stamp already reads the same witness
+    /// (<c>NodeTypeBakeReport.ThisBuildHasServed</c>). Like <see cref="AllowUnprovenBake"/>, it
+    /// changes only the verdict, never the recorded phase or detail.
+    /// </summary>
+    public bool ServedBefore => Volatile.Read(ref servedBefore);
+
+    private bool servedBefore;
+
+    /// <summary>Records that the durable witness says this build has served here. See <see cref="ServedBefore"/>.</summary>
+    public void MarkServedBefore() => Volatile.Write(ref servedBefore, true);
 
     /// <summary>
     /// 🚨 <b>Whether this process may PARTICIPATE in the mesh — issue #3478.</b> Readiness gates

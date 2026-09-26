@@ -63,26 +63,44 @@ of a roll, and refusing it only removes the replicas the rollout falls back on. 
 producer stamp keeps the strict reading.
 
 **Rule 2: an image that has already served this mesh never refuses itself.**
-`NodeTypeBakeReport.ThisBuildHasServed` is true when some record names a working build that this
-very platform build produced. That is proof, not a guess. Such a stamp is a publication, and a
-publication is released only once the stamping process was admitted (or on a host that never armed
-the gate). A pod that reads it is a restart of a serving image, not a roll candidate, so nothing it
-reports may gate. `NodeTypeBakeReport.GateRelevant`, which the witness-unreadable path refuses on,
-applies the same two rules.
+`NodeTypeBakeReport.ThisBuildHasServed` is true when either of two witnesses says so. Both are
+admission-gated publications, so a refused pod can write neither:
 
-**Together:** the only pod that can still refuse on a regression is one strictly newer than the
-build that produced the working build it failed to reproduce, while no replica of it has been
-admitted. The older image's own pods never meet that condition, so the old ReplicaSet can always
-come back. Failures that no longer gate are still recorded and named in the health payload
+- **The durable admission marker (`ServedBuildWitness`).** When the gate is armed, the sweep offers a
+  row at `Admin/ServedPlatformBuilds/<build>` to `MeshPublicationGate`. The gate holds the offer
+  while the bake measures, writes the row when the pod is admitted, and discards it when the pod is
+  refused. It is read and written straight through `IStorageAdapter`, the same pattern as the build
+  claim lock. There is no hub and no point read of a missing node. A read that fails counts as "not
+  served", which is the strict reading. The report carries the answer as `ServedBefore`.
+- **A record whose working build this very build produced.** A compile stamp carrying this build's
+  identity is released only once the stamping process was admitted.
+
+The marker is the witness that matters in the ordinary case. The first cut of this fix relied on
+record provenance alone, and review showed why that is not enough. An ordinary roll compiles
+nothing, because the compatibility key is equal across builds of one epoch. Prebuilt adoption keeps
+the PRODUCER's platform version on purpose. So a serving image can leave no record naming itself,
+and a restart of it would read as a stranger. A pod that finds either witness is a restart of a
+serving image, not a roll candidate, so nothing it reports may gate. `NodeTypeBakeReport.GateRelevant`,
+which the witness-unreadable path refuses on, applies the same two rules.
+
+**Together:** a pod can still refuse on a regression only if both hold:
+
+- its build is strictly newer than the build that produced the working build it failed to reproduce;
+- no replica of its build has ever been admitted here.
+
+Once a build has been admitted with this code, its own pods never meet the second condition, so
+the old ReplicaSet can always come back. Before that, rule 1 still holds: a type is never a
+regression of an image that is not newer than the image that built it. Failures that no longer gate are still recorded and named in the health payload
 (`WithoutBaseline`). Once the pod is admitted, the held `Error` stamp is released, and the record
 finally says `Error`. That ends the loop in defect 2.
 
 ## What this does not cover
 
-- **A `Faulted` sweep still refuses readiness** unless `PreWarm:AllowUnprovenBake` is set, and that
-  includes a restarted pod of the serving image whose enumeration errors. The pod has no per-type
-  evidence, so rule 2 cannot apply. This is a remaining path to a full outage and is not addressed
-  here.
+- **A `Faulted` sweep on an image that has NOT served here still refuses readiness** unless
+  `PreWarm:AllowUnprovenBake` is set. That is deliberate: an unproven new image is exactly what the
+  gate exists to hold back. On an image that HAS served (the marker exists), a `Faulted` sweep no
+  longer refuses. The gate reads the same witness directly (`NodeTypeBakeGateState.ServedBefore`),
+  because a sweep that errored has no per-type evidence for rule 1 to judge.
 - **The startup probe is still the gate's only reader.** The gate is wired to `/health` on the
   startup probe (the chart's `probes.startup.path`). A startup probe answers "has the process
   started", and a failing one KILLS the pod after `failureThreshold × periodSeconds`. It does not
@@ -93,6 +111,9 @@ finally says `Error`. That ends the loop in defect 2.
   (MeshWeaver.Plugins and the deployment record), not core.
 - **Legacy records** that carry no `CompiledPlatformVersion` get the strict reading until they are
   next stamped.
+- **The first armed boot after this ships writes no marker for the images already serving.** A
+  marker exists only once a pod of that build is admitted with the gate armed. Until then, a
+  restart falls back on rule 1 and the provenance witness.
 
 ## Related
 

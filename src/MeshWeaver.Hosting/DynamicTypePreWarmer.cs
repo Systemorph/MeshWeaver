@@ -493,6 +493,9 @@ public static class DynamicTypePreWarmer
                         {
                             ClassifiedFromLocalAdoption = overlay.Applied.Count,
                         })
+                        // #5544: whether a replica of this build has served here decides whether
+                        // anything this sweep finds may refuse readiness — read BEFORE the stamp.
+                        .SelectMany(report => ServedBuildWitness.Annotate(mesh, report, logger))
                         .Do(report => PublishReport(
                             mesh, report, NodeTypeBakeReportRegistry.CompilingSweep))
                         .SelectMany(report => BakeOrFollow(

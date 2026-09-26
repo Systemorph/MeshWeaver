@@ -225,20 +225,33 @@ public sealed record NodeTypeBakeReport(
     public string? LivePlatformVersion { get; init; }
 
     /// <summary>
-    /// 🚨 <b>A replica of THIS platform build has already been admitted to this mesh</b> — at
-    /// least one record names a working build this very build produced (#5544).
+    /// 🚨 <b>A replica of THIS platform build has already been admitted to this mesh</b> (#5544).
+    /// When this is true, the pod is a RESTART of an image that has served, not a candidate in a roll.
+    /// The gate's whole justification, "refuse so the rollout stalls with the previous image still
+    /// serving", does not apply to it, because this image IS the one the rollout falls back on.
+    /// Refusing it is what took memex.systemorph.com fully down when the last serving pod of the
+    /// previous image restarted (2026-09-26).
     ///
-    /// <para>It is PROOF, not a guess: a compile or adoption stamp carrying this process's build
-    /// identity is a <c>MeshPublicationGate</c> publication, which is released only once the
-    /// stamping process was admitted (or on a host that never armed the gate, where nothing is
-    /// refused anyway). So a pod that reads this is a RESTART of an image that has served, not a
-    /// candidate in a roll — and the gate's whole justification, "refuse so the rollout stalls with
-    /// the previous image still serving", does not apply to it: this image IS the one the rollout
-    /// falls back on. Refusing it is what took memex.systemorph.com fully down when the last
-    /// serving pod of the previous image restarted (2026-09-26).</para>
+    /// <para>Two witnesses, either one sufficient, and both are admission-gated publications:</para>
+    /// <list type="bullet">
+    /// <item><see cref="ServedBefore"/>: the durable admission marker (the host's
+    /// <c>ServedBuildWitness</c>). It is the witness that works in the ORDINARY case. An ordinary
+    /// roll compiles nothing, and prebuilt adoption keeps the producer's version, so a serving image
+    /// may leave no record naming itself.</item>
+    /// <item>A record whose working build this very build produced. A compile stamp carrying this
+    /// build's identity is released only once the stamping process was admitted.</item>
+    /// </list>
     /// </summary>
+    /// <summary>
+    /// Set from the durable admission marker: a replica of <see cref="LivePlatformVersion"/> has
+    /// been admitted to this mesh before. <c>false</c> when unread or unknown, which is the strict
+    /// reading. See <see cref="ThisBuildHasServed"/>.
+    /// </summary>
+    public bool ServedBefore { get; init; }
+
     public bool ThisBuildHasServed =>
-        !string.IsNullOrWhiteSpace(LivePlatformVersion)
+        ServedBefore
+        || !string.IsNullOrWhiteSpace(LivePlatformVersion)
         && Entries.Any(e => e.HadWorkingBuild
                             && string.Equals(
                                 e.ProducedByPlatformBuild, LivePlatformVersion, StringComparison.Ordinal));
