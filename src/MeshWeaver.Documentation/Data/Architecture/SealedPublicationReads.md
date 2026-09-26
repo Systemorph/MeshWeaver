@@ -118,7 +118,8 @@ path, and opens them only when `NuGetPackageWriter.Write` builds the archive. Be
 store's own housekeeping can remove the file: `FileSystemAssemblyStore` evicts every version of a
 type beyond the newest three on each write, so a type recompiled a few times while a consumer
 downloads loses the version the route resolved. Measured on memex-cloud 2026-09-26 17:38Z (pod
-`memex-portal-deployment-6c7669df84-9b4rz`, six occurrences, core `4c8530d7dd`):
+`memex-portal-deployment-6c7669df84-9b4rz`, six occurrences; the frames' line numbers match `main`
+and the image memex-cloud served that day, `4c8530d7dd`, line for line):
 `FileNotFoundException` for `/data/assembly-cache/Collaboration_Review/v1172-….dll` out of the
 route's `File.OpenRead`, an unhandled 500. The type's record has moved on by then, so the answer is
 the transient one: the route maps a missing file or directory at the open to **`503` +
