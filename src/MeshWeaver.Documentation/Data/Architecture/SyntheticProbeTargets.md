@@ -1,7 +1,7 @@
 ---
 Name: What a synthetic probe may assert
 Category: Architecture
-Description: A probe that names one deployment's installed content is broken the moment the fleet has two portals — it went red for eight days for a true statement. The three things a probe may assert (the platform floor, a negative control, the deployment's own declaration), why a probe without a control cannot tell "absent" from "down", and why an empty denominator has to be louder than a failure.
+Description: A probe that names one deployment's installed content is broken the moment the fleet has two portals — it went red for eight days for a true statement. The three things a probe may assert (the platform floor, a negative control, the deployment's own declaration), why a probe without a control cannot tell "absent" from "down", how instance-level deny-anonymous policy overrides a partition's public grant, and why an empty denominator has to be louder than a failure.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
 ---
 
@@ -49,20 +49,27 @@ stop guessing.
 
 ## The three things a probe may assert
 
-Everything the probe checks is now either **shipped by the platform image** or **read from the
-deployment at probe time**. Nothing is hard-coded about what a named portal contains.
+Every content target is either **shipped by the platform image** or **read from the deployment at
+probe time**. The matrix is limited to app hosts whose deployment policy permits anonymous reads; it
+does not guess which packages or pages they contain. Keep that target set aligned with each
+deployment's `DenyAnonymous` policy.
 
 ### 1. The platform floor — a constant that cannot drift
 
 `/api/content/Doc/Architecture/content/platform-overview.svg`.
 
-Present on every deployment by construction, and each link in that chain is load-bearing: the bytes
-are an `EmbeddedResource` in `MeshWeaver.Documentation`, `AddDocumentation` gives every `Doc/*` child
-a `content` collection with `isStatic: true` (which is what publishes a collection on this route at
-all — the default is *not publishable, and the route answers 404*), and `Doc/_Policy` sets
-`PublicRead` so an unauthenticated probe may read it. It resolves through `ContentFileResolver` with
-the same longest-node-prefix match and the same collection-config request to the owning hub as any
-package asset, so it crosses the hop being watched while depending on no install decision.
+The bytes ship in every portal image, and `AddDocumentation` gives every `Doc/*` child a `content`
+collection with `isStatic: true` (which publishes it on this route; the default is not publishable).
+`Doc/_Policy` also sets `PublicRead`, but that is not sufficient on an instance configured with
+`Access:DenyAnonymous`: the instance-level switch overrides partition grants, so both the platform
+asset and an impossible path correctly answer 404 there. That answer cannot diagnose route health.
+
+The anonymous route probe therefore targets only deployments whose effective access policy permits
+anonymous reads. On those targets the file resolves through `ContentFileResolver` with the same
+longest-node-prefix match and collection-config request to the owning hub as any package asset,
+crossing the hop under test without depending on an install decision. A deployment that denies
+anonymous access is not a content-route target; its liveness/readiness belongs to deployment health
+monitoring.
 
 This is the **only** assertion that can answer *"is the route healthy"*, because it is the only one
 whose expected value is known without asking the deployment anything.
@@ -82,12 +89,14 @@ With a control the two separate cleanly:
 | platform asset | control | verdict |
 |---|---|---|
 | 200 | 404 | route healthy, target present — **green** |
-| 404 | 404 | the route *discriminates*, so the asset is genuinely absent — a **content** red |
+| 404 | 404 | on an anonymously readable target, the route *discriminates*, so the asset is genuinely absent — a **content** red |
 | 5xx / timeout | any | a **route** red |
 | any | not 404 | the route answers the same thing for everything — a **route** red |
 
 The route verdict outranks the content verdict, because a wedged route makes every content answer
 meaningless. Only once the control has proved the route discriminates does a 404 mean what it says.
+On a `DenyAnonymous` instance, `404/404` is expected and proves only that anonymous access stayed
+closed; it cannot be used as a route-health verdict.
 
 ### 3. The deployment's own declaration — `/sitemap.xml`
 
@@ -99,21 +108,23 @@ that passes `AnonymousGate`, applied per node and fail-closed. Measured 2026-09-
 the difference the matrix used to guess at — **79** roots on `memex.systemorph.com` (no
 `AgenticPrimer`), **101** on `memex.meshweaver.cloud` (with it).
 
-The probe reads that list, samples roots from it by index (first, middle, last — deterministic so a
-red is reproducible, spread so the sample is not the same three alphabetically-first names on every
-portal), and requires 200. A portal is therefore only ever failed for contradicting **itself**, and
-content installed later is covered with no edit here.
+For a public target, the probe reads that list, samples roots from it by index (first, middle, last —
+deterministic so a red is reproducible, spread so the sample is not the same three
+alphabetically-first names on every portal), and requires 200. A portal is therefore only ever
+failed for contradicting **itself**, and content installed later is covered with no edit here.
 
 ## An empty denominator must be louder than a failure
 
-A loop over an empty list exits 0 having asserted nothing, and GitHub paints that green. So the
-count is asserted **before** the loop and printed either way — a zero has to be readable rather than
-silent. Three distinct reds come out of reading the declaration, and they are deliberately not one
-message:
+A loop over an empty list exits 0 having asserted nothing, and GitHub paints that green. On a public
+target, the count is asserted **before** the loop and printed either way — a zero has to be readable
+rather than silent. Three distinct reds come out of reading that declaration, and they are
+deliberately not one message:
 
 - **the sitemap could not be fetched** — the declaration was not read, so nothing was checked;
 - **the response was 200 but is not a sitemap** — see below;
-- **a well-formed sitemap declaring zero roots** — the portal genuinely publishes nothing anonymously.
+- **a well-formed sitemap declaring zero roots on a public target** — the portal genuinely publishes
+  nothing anonymously. A `DenyAnonymous` instance is not in this probe's target set; an empty sitemap
+  is expected there and is not evidence that the public content route works.
 
 ### 🚨 A 200 is not a sitemap
 

@@ -103,7 +103,9 @@ on:
 permissions: {}
 
 env:
-  # Shipped in the portal image, published on the content route, anonymous-readable. Never a package.
+  # Shipped in the portal image and published on the content route. The anonymous probe matrix
+  # below includes only deployments that permit anonymous reads; Access:DenyAnonymous overrides
+  # the partition's PublicRead policy.
   PLATFORM_ASSET: /api/content/Doc/Architecture/content/platform-overview.svg
   # Same route, cannot exist. The node segment is what makes it unresolvable, so this stays a 404
   # even if the Doc partition itself is healthy.
@@ -117,13 +119,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # HOSTS ONLY, and only APP hosts — the address the fleet is reached at. Anything
+        # Publicly readable APP hosts only — the address the fleet is reached at. Anything
         # content-shaped here is the #3578 defect coming back, and a PUBLIC host pinned here would
         # be the same shape (a per-deployment decision frozen in the platform repo): each portal
-        # names its own, and the probe reads it. See assertion 4.
+        # names its own, and the probe reads it. Do not add a deployment with Access:DenyAnonymous;
+        # its 404s are the intended privacy boundary, not evidence about route health. See assertion 4.
         portal:
           - memex.meshweaver.cloud
-          - memex.systemorph.com
     steps:
       - name: Content route — platform floor, with a negative control
         env:
