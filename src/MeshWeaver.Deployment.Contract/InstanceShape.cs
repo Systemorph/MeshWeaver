@@ -1026,7 +1026,7 @@ public sealed record GateSpec
 /// <summary>
 /// A precondition on WHEN a Continuous deployment takes a candidate image — never on WHICH tags it
 /// may take. Declared on the control instance's record (Systemorph/Memex
-/// <c>docs/control-instance.md</c> §4, decided by the maintainer 2026-09-26):
+/// <c>docs/control-instance.md</c> §4):
 /// <c>"rollGate": { "after": ["memex-cloud", "memex"], "soakMinutes": 120, "approval": "required" }</c>.
 ///
 /// <para>A gated deployment rolls onto a platform build only once every deployment named in
