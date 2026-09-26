@@ -373,7 +373,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${IMAGE_DIGEST:-}" ]; then
-            IMAGE="${TEST_IMAGE%%:*}@${IMAGE_DIGEST}"
+            # Strip a tag from the LAST path component only — a registry host may carry a port
+            # (`host:5000/repo:tag`), and `%%:*` would cut it there. Same idiom as the module-pack lane.
+            case "${TEST_IMAGE##*/}" in *:*) TNOTAG="${TEST_IMAGE%:*}" ;; *) TNOTAG="$TEST_IMAGE" ;; esac
+            IMAGE="${TNOTAG}@${IMAGE_DIGEST}"
           elif [ "${{ inputs.allow-unpinned }}" = "true" ]; then
             IMAGE="$TEST_IMAGE"
             echo "checking against ${TEST_IMAGE} verbatim (allow-unpinned — runs are not reproducible)"
@@ -392,7 +395,10 @@ jobs:
             [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the portal image the digest belongs to."; exit 1; }
             [ -n "${PLATFORM_IMAGE_DIGEST:-}" ] || { echo "::error::platform-image is '$PLATFORM_IMAGE' but platform-image-digest is empty — pin the portal of the SAME sealed set as image-digest; this lane does not follow a portal tag."; exit 1; }
             [ "${PLATFORM_IMAGE%%/*}" = "${TEST_IMAGE%%/*}" ] || { echo "::error::platform-image registry '${PLATFORM_IMAGE%%/*}' differs from test-image registry '${TEST_IMAGE%%/*}' — this lane logs in to ONE registry."; exit 1; }
-            REF_IMAGE="${PLATFORM_IMAGE%%:*}@${PLATFORM_IMAGE_DIGEST##*@}"; PORTAL_REFS=1
+            # Strip a tag from the LAST path component only — a registry host may carry a port
+            # (`host:5000/repo:tag`), and `%%:*` would cut it there. Same idiom as the module-pack lane.
+            case "${PLATFORM_IMAGE##*/}" in *:*) PNOTAG="${PLATFORM_IMAGE%:*}" ;; *) PNOTAG="$PLATFORM_IMAGE" ;; esac
+            REF_IMAGE="${PNOTAG}@${PLATFORM_IMAGE_DIGEST##*@}"; PORTAL_REFS=1
             docker pull -q "$REF_IMAGE"
           fi
           id=$(docker create "$REF_IMAGE")
