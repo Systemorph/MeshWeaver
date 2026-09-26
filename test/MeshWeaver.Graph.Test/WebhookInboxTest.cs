@@ -49,7 +49,13 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 {
                     [SecretKey] = InstanceSecret,
                     [UnprovisionedKey] = "",
+                    [$"{SecretKey}:{SenderId}"] = SenderSecret,
+                    [$"{SecretKey}:blank"] = "",
                 }).Build()));
+
+    /// <summary>A sender holding its OWN key under the shared one (Plugins#1913).</summary>
+    private const string SenderId = "pearl";
+    private const string SenderSecret = "pearls-own-announcement-key";
 
     /// <summary>The GitHub-style header a sender computes with <paramref name="secret"/>.</summary>
     private static KeyValuePair<string, string> Sign(string body, string secret)
@@ -292,6 +298,83 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             .Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
 
         (await InboxCount("Malformed", TestContext.Current.CancellationToken)).Should().Be(0);
+    }
+
+    /// <summary>
+    /// 🚨 Plugins#1913: a sender with its OWN key (a child of the target's shared key) is stored
+    /// and MARKED with that key's name, so the consumer can hold it to what that one sender may
+    /// cause. The shared-secret delivery above carries no sender key — the pair is the whole point:
+    /// if a change makes them agree, a per-deployment key is indistinguishable from the fleet secret
+    /// again and the consumer's scoping is judging a constant.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task SignedTarget_WithASendersOwnKey_IsAccepted_AndNamesTheSender()
+    {
+        await CreateTarget("PerSender", TestContext.Current.CancellationToken);
+        var target = new WebhookInbox.WebhookTarget("PerSender", SecretKey);
+
+        var own = await Post(target, "PerSender",
+            [Sign(BuildFact, SenderSecret)], BuildFact, TestContext.Current.CancellationToken);
+        own.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        own.SignatureVerified.Should().BeTrue();
+        own.SenderKey.Should().Be(SenderId,
+            "the consumer decides what a sender key may cause, so the inbox must say WHICH one verified");
+
+        var shared = await Post(target, "PerSender",
+            [Sign(BuildFact, InstanceSecret)], BuildFact, TestContext.Current.CancellationToken);
+        shared.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        shared.SenderKey.Should().BeNull("the target's own shared secret is not a sender key");
+
+        (await InboxCount("PerSender", TestContext.Current.CancellationToken)).Should().Be(2);
+    }
+
+    /// <summary>
+    /// A sender key widens NOTHING for a signature that verifies with no key: a drifted signature,
+    /// one computed with the EMPTY string (which a blank child would admit if blank counted as a
+    /// key), and a sender key's signature over a different body are all still refused, and nothing
+    /// is stored.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task SenderKeys_AdmitNothingThatVerifiesWithNoKey()
+    {
+        await CreateTarget("PerSenderNo", TestContext.Current.CancellationToken);
+        var target = new WebhookInbox.WebhookTarget("PerSenderNo", SecretKey);
+
+        (await Post(target, "PerSenderNo", [Sign(BuildFact, SenderSecret + "x")], BuildFact,
+                TestContext.Current.CancellationToken))
+            .Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
+        (await Post(target, "PerSenderNo", [Sign(BuildFact, "")], BuildFact,
+                TestContext.Current.CancellationToken))
+            .Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
+        (await Post(target, "PerSenderNo", [Sign("{}", SenderSecret)], BuildFact,
+                TestContext.Current.CancellationToken))
+            .Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
+
+        (await InboxCount("PerSenderNo", TestContext.Current.CancellationToken)).Should().Be(0);
+    }
+
+    /// <summary>The pure selector: which child verifies, blank children skipped, null when none.</summary>
+    [Fact]
+    public void SenderKeyOf_NamesTheChildThatVerifies()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["K"] = "shared",
+                ["K:build"] = "builds-key",
+                ["K:pearl"] = "pearls-key",
+                ["K:empty"] = "",
+            }).Build();
+
+        WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "pearls-key").Value, "{}")
+            .Should().Be("pearl");
+        WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "builds-key").Value, "{}")
+            .Should().Be("build");
+        WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "shared").Value, "{}")
+            .Should().BeNull("the shared secret itself is the target's key, not a sender's");
+        WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "").Value, "{}")
+            .Should().BeNull("a blank child is no key");
+        WebhookInbox.SenderKeyOf(configuration, "K", null, "{}").Should().BeNull();
     }
 
     /// <summary>

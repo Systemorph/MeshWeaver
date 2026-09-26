@@ -95,7 +95,14 @@ public static class WebhookInboxEndpoints
         switch (result.Status)
         {
             case WebhookInbox.DeliveryStatus.Accepted:
-                logger?.LogInformation("Webhook stored at {Path}", result.NodePath);
+                // The sender key is a NAME (e.g. a deployment id), never a value: it says which
+                // per-sender key verified, so the consumer's attribution can be read from the log.
+                if (result.SenderKey is { } senderKey)
+                    logger?.LogInformation(
+                        "Webhook stored at {Path} — verified with the per-sender key '{SenderKey}'",
+                        result.NodePath, senderKey);
+                else
+                    logger?.LogInformation("Webhook stored at {Path}", result.NodePath);
                 // 🚨 The body, not the status, is what a signing sender must read. Both branches
                 // are 200: "verified" means this instance checked the HMAC, "not-required" means
                 // the target declares no SecretConfigKey here and the signature was never looked
