@@ -1620,6 +1620,9 @@ public static class PluginBundleEndpoints
                         state.Anchor.Describe());
                 return Observable.Return(NoSuchBundle());
             })
+            // Bytes the resolution located and the archive then could not open are a serve RACE,
+            // not a defect of the request: 503 + Retry-After (#3876).
+            .TransientWhenServedBytesMoved(http, plugin, version, lateFaultLogger)
             // See Index: a stalled catalogue read is 503 + Retry-After (#5345).
             .UnavailableOnAStalledRead(http, lateFaultLogger)
             .FirstAsync()
@@ -1752,6 +1755,51 @@ public static class PluginBundleEndpoints
                 });
             });
     }
+
+    /// <summary>
+    /// 🚨 Maps a file the bundle archive could not OPEN — after the resolution had located it — to
+    /// <b>503 + <c>Retry-After</c></b> (MeshWeaver#3876), and lets every other fault through
+    /// unchanged.
+    ///
+    /// <para><b>Why this is a race and not a defect of the request.</b> The route resolves each
+    /// NodeType's bytes to a PATH (<see cref="IAssemblyStore.TryGetAssemblyPath"/>) and each module
+    /// file to a shelf path, and the archive opens them only when it is written. Between the two, the
+    /// store's own housekeeping can remove the file: <c>FileSystemAssemblyStore</c> evicts every
+    /// version of a type beyond the newest three on each write, so a type recompiled a few times
+    /// while a consumer is downloading loses the version the route resolved. Measured on
+    /// memex-cloud 2026-09-26 17:38Z (pod <c>memex-portal-deployment-6c7669df84-9b4rz</c>, six
+    /// occurrences): <c>FileNotFoundException</c> for
+    /// <c>/data/assembly-cache/Collaboration_Review/v1172-….dll</c> out of
+    /// <c>NuGetPackageWriter.Write</c> → the route's <c>File.OpenRead</c>, answered by ASP.NET's
+    /// exception middleware as an unhandled 500. The type's record has moved on by then, so the
+    /// consumer's re-read resolves the version that now exists — which is exactly what 503 +
+    /// <c>Retry-After</c> tells it to do, and the same answer the prebuilt routes give a removal
+    /// between their seal read and their open (#3957).</para>
+    ///
+    /// <para>Only a MISSING file or directory is mapped: a permission fault, a torn read or anything
+    /// else is a real defect and keeps surfacing as one.</para>
+    /// </summary>
+    internal static IObservable<IResult> TransientWhenServedBytesMoved(
+        this IObservable<IResult> answer, HttpContext http, string plugin, string version,
+        ILogger? logger) =>
+        answer.Catch<IResult, IOException>(ex =>
+        {
+            if (ex is not (FileNotFoundException or DirectoryNotFoundException))
+                return Observable.Throw<IResult>(ex);
+            logger?.LogWarning(ex,
+                "Plugin bundles: {Plugin}@{Version} — a file the bundle resolved was removed before "
+                + "the archive could open it (the store replaced it meanwhile); answering 503 + "
+                + "Retry-After so the consumer re-reads and resolves what exists now",
+                plugin, version);
+            http.Response.Headers.RetryAfter = "30";
+            return Observable.Return(Results.Json(
+                new
+                {
+                    error = $"The bytes for {plugin}@{version} were replaced while the bundle was "
+                            + "being assembled — retry shortly.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable));
+        });
 
     /// <summary>How many per-type misses the warning names before it truncates — enough to diagnose,
     /// bounded so a wholesale lane mismatch cannot write a log line per type.</summary>
