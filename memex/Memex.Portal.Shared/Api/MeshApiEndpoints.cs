@@ -146,6 +146,12 @@ public static class MeshApiEndpoints
         group.MapPost("/execute-script", (HttpContext http, IMessageHub rootHub, ExecuteScriptBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.ExecuteScript(body.Path, body.TimeoutSeconds ?? 120)));
 
+        // Runs a node's Tests area as an ACTIVITY (one area subscription for the whole run) and
+        // answers {status, activityPath} at once — `memex tests` polls the activity, never the area,
+        // because every render of a Tests area runs the suite again.
+        group.MapPost("/run-tests", (HttpContext http, IMessageHub rootHub, ExecuteScriptBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.RunTests(body.Path, body.TimeoutSeconds ?? MeshOperations.DefaultRunTestsSeconds)));
+
         // First-full-frame render of a layout area — the SSR seeding verb (portal-next):
         // returns {areas, data} EXACTLY as the sync-stream wire delivers it. Read-only, and
         // on the cookie-or-Bearer policy: this is the verb an SSR page render is FOR.

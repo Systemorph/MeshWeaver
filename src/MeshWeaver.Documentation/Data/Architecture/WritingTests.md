@@ -144,6 +144,50 @@ are counted as `needs-mesh` and run by the gate, seeded from the build's output.
 `MeshWeaver.Fixture` and the two TestBase assemblies are this repo's OWN test support: they live
 under `test/` and are never packed or published.
 
+### A `Tests` area streams its progress — and `memex tests` is its console
+
+Rendering a node's `Tests` area RUNS its cases (`MeshWeaver.Testing.InMesh.MeshTestRunner`). The
+area used to emit **one frame, at the end**, so a case that called an external service live — or a
+case that hung — left the page on *"Rendering …"* for the whole suite, with nothing to tell a slow
+case from a stuck one and nothing naming the case. It now streams:
+
+| Frame | Shows | Carries |
+|---|---|---|
+| first, at once | every case ⏳ pending | `Id = tests-running` |
+| once a second while a case runs | the running case ▶ with its ticking elapsed time and every output line it has written so far; finished cases ✔ / ✖ | `Id = tests-running` |
+| last | the verdict: title `<suite> tests — N/M passed`, rows ✅ / ❌ / ⏭ with time and output | no id |
+
+- **Every case is bounded.** A case past its bound fails as `timed out: no verdict within Ns` and the
+  run moves on; a synchronous case runs as one leaf on the mesh's `Tests` I/O pool, so a body that
+  never returns costs its own bound, never the render thread.
+- **The verdict glyphs are reserved for the verdict frame.** A progress frame shows ✔ / ✖ and counts
+  cases *done*, never ✅ / ❌ or *"N/M passed"* — and it carries
+  `AreaFrameClassifier.TestsRunningId`, which the plugin gate (`AreaProbe`) and
+  `AreaFrameClassifier.IsTransientFrame` treat as *keep waiting*. A gate that latched a progress frame
+  would green a suite whose later cases had not run yet; a run cut off by the gate's timeout reports
+  the last progress it saw.
+- **Two ways to list cases.** `[MeshFact]` classes: `MeshTestRunner.Area(host, suite, assembly)`.
+  Static methods: `MeshTestRunner.Area(host, suite, cases)` over `MeshTestCase.Of(name, method)`
+  (synchronous) and `MeshTestCase.Live(name, () => observable, timeout)` (hosted, passes on first
+  emission); either overload hands the body a line writer whose output streams into the row.
+- **From a terminal or an agent — run it as an ACTIVITY, never by polling the area.** 🚨 Rendering
+  the area RUNS the suite, and every one-shot `get @<node>/area/Tests` opens a fresh subscription.
+  Measured on memex.meshweaver.cloud (`Admin/Maintenance/refresh-app-tiles-20260828-mainnode-3`): two
+  `get` reads 34 s apart each filed a new pair of the Maintenance suite's live request nodes
+  (`Admin/Maintenance/mnt-…`, 10:51:00Z and 10:51:34Z), and the second read answered in 0.9 s with the
+  verdict an EARLIER subscription had cached while its own run had only just begun. So a poll of the
+  area re-runs every live case and still does not show the run it started.
+  `MeshOperations.RunTests(path)` holds ONE subscription for the whole run and writes it to an
+  activity in the caller's own partition (category `TestRun`): a line per case as it runs and as it
+  lands, with its output; `Succeeded` when every counted case passed, `Failed` otherwise, or when no
+  verdict arrived within the bound (the last line names the case still running). It answers at once
+  with `{status: "Dispatched", activityPath}`; poll `get @{activityPath}`, which starts nothing.
+  `memex tests @<node>` is that loop in a terminal (`POST api/mesh/run-tests`, then the activity every
+  two seconds), exiting `0` (passed), `1` (failed) or `4` (no terminal status within `--timeout`). The
+  route is `Memex.Portal.Shared`'s `MeshApiEndpoints` (Bearer-only, it executes); agents reach the
+  same operation through the MCP `run_tests` tool, which lives with the MCP surface in
+  MeshWeaver.Plugins.
+
 ## The Canonical Test Base
 
 Every monolith test inherits `MonolithMeshTestBase`. The shape is always the same:

@@ -2,6 +2,7 @@ using MeshWeaver.Messaging;
 using System.Threading;
 using System;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Testing.InMesh;
@@ -114,6 +115,66 @@ public class MeshTestRunnerTests
         Assert.Contains("Leaky.AIgnoresItsToken", blocked.Detail);
         Assert.DoesNotContain("no verdict within", blocked.Detail);
         Assert.Equal(TimeSpan.Zero, blocked.Elapsed);
+    }
+
+    /// <summary>
+    /// The area STREAMS: all cases pending at once, the running case with its output while it runs,
+    /// a hung synchronous case failed by its bound instead of freezing the run, and exactly ONE
+    /// verdict snapshot — the last. The page that sat on "Rendering …" for a whole live suite is the
+    /// defect this pins.
+    /// </summary>
+    [Fact]
+    public async Task Progress_streams_pending_running_output_and_one_verdict_last()
+    {
+        var cases = new[]
+        {
+            MeshTestCase.Live("slow", log =>
+            {
+                log("contacted the service");
+                return Observable.Timer(TimeSpan.FromMilliseconds(400)).Select(_ => Unit.Default);
+            }),
+            MeshTestCase.Of("hangs", () => Thread.Sleep(TimeSpan.FromSeconds(1)), timeout: TimeSpan.FromMilliseconds(150)),
+            MeshTestCase.Of("fails", () => throw new InvalidOperationException("the assertion message")),
+            MeshTestCase.Live("never answers", () => Observable.Empty<Unit>()),
+        };
+
+        var snapshots = await MeshTestRunner
+            .Progress(null, "Streams", cases, TestTimeouts.Quick, interval: TimeSpan.FromMilliseconds(50))
+            .ToList().Await();
+
+        var first = snapshots[0];
+        Assert.False(first.Complete);
+        Assert.All(first.Cases, c => Assert.Equal(MeshTestRunner.PendingResult, c.Result));
+        Assert.Equal(4, first.Cases.Count);
+
+        Assert.Contains(snapshots, s => !s.Complete
+            && s.Cases[0].Result == MeshTestRunner.RunningResult
+            && s.Cases[0].Detail.Contains("contacted the service", StringComparison.Ordinal));
+
+        Assert.Single(snapshots, s => s.Complete);
+        var verdict = snapshots[^1];
+        Assert.True(verdict.Complete, "the verdict is the LAST snapshot");
+        Assert.True(verdict.Cases[0].Passed, verdict.Cases[0].Detail);
+        Assert.Contains("contacted the service", verdict.Cases[0].Detail);
+        Assert.StartsWith("❌", verdict.Cases[1].Result);
+        Assert.StartsWith(MeshTestRunner.TimedOutPrefix, verdict.Cases[1].Detail);
+        Assert.Contains("the assertion message", verdict.Cases[2].Detail);
+        Assert.Contains("completed without an outcome", verdict.Cases[3].Detail);
+
+        // A progress frame is transient and can never be read as a verdict, even by a consumer that
+        // ignores the id: no ✅ / ❌ and no "N/M passed" anywhere in it.
+        var midRun = snapshots.First(s => !s.Complete && s.Done > 0);
+        var progress = MeshTestRunner.RenderProgress("Streams", midRun, MeshTestRunner.ColumnTitles.English);
+        Assert.True(MeshWeaver.Layout.AreaFrameClassifier.IsTestsRunning(progress));
+        Assert.True(MeshWeaver.Layout.AreaFrameClassifier.IsTransientFrame(progress));
+        var progressJson = System.Text.Json.JsonSerializer.Serialize<object>(progress);
+        Assert.DoesNotContain("✅", progressJson);
+        Assert.DoesNotContain("❌", progressJson);
+        Assert.DoesNotMatch(@"\d+\s*/\s*\d+\s+passed", progressJson);
+
+        var final = MeshTestRunner.Render("Streams", verdict.Cases, MeshTestRunner.ColumnTitles.English);
+        Assert.False(MeshWeaver.Layout.AreaFrameClassifier.IsTransientFrame(final));
+        Assert.Equal("Streams tests — 1/4 passed", MeshTestRunner.Summary("Streams", verdict.Cases));
     }
 
     [Fact]
