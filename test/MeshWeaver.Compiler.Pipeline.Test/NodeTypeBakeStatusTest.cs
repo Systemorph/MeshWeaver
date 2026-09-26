@@ -355,6 +355,35 @@ public class NodeTypeBakeStatusTest
         store.MaxConcurrent.Should().Be(1);
     }
 
+    /// <summary>
+    /// 🚨 #5544: the probe carries WHO built each recorded build and which build is asking, so the
+    /// gate can tell "an older image built this" (a regression when it fails here) from "this image
+    /// or a newer one built this" (never this image's regression). Only states that name a build
+    /// carry a producer.
+    /// </summary>
+    [Fact]
+    public void Probe_CarriesTheProducingPlatformBuild_AndTheLiveOne()
+    {
+        var store = new FakeStore();
+        store.Add("Crm/Contact", 845);
+        var report = Probe(store,
+            ("Crm/Contact", Healthy() with { CompiledPlatformVersion = "3.0.0-ci.9218" }),
+            ("Binary/Toggle", new NodeTypeDefinition
+            {
+                Configuration = "config => config",
+                CompilationStatus = CompilationStatus.Ok,
+                CompiledPlatformVersion = "3.0.0-ci.9218",
+            }));
+
+        report.LivePlatformVersion.Should().Be(NodeTypeCompilationHelpers.LivePlatformVersion);
+        report.Entries.Single(e => e.TypePath == "Crm/Contact").ProducedByPlatformBuild
+            .Should().Be("3.0.0-ci.9218");
+        var neverBuilt = report.Entries.Single(e => e.TypePath == "Binary/Toggle");
+        neverBuilt.State.Should().Be(BakeState.NeverBuilt);
+        neverBuilt.ProducedByPlatformBuild.Should().BeNull("a record that names no build has no producer");
+        neverBuilt.HadWorkingBuild.Should().BeFalse();
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
     private static NodeTypeBakeReport Report(params NodeTypeBakeEntry[] entries) =>

@@ -774,8 +774,11 @@ public static class BuildProtocolDriver
         IAssemblyStore store,
         ILogger? logger)
         => NodeTypeBakeStatus.Probe(definitions, store, logger: logger,
-            liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
-            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
+                liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
+            // #5544: this report decides refusals too (GateRelevant, OutcomesOf), so it carries
+            // the same served-build witness the sweep's report does.
+            .SelectMany(report => ServedBuildWitness.Annotate(mesh, report, logger));
 
     /// <summary>
     /// One probe report as pre-warm outcomes. A type the share still needs is
