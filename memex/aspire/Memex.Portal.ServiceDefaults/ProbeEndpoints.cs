@@ -147,8 +147,11 @@ public static class ProbeEndpoints
     ///
     /// <para>🚨 It is a ROLL GATE (<see cref="RollGateTag"/>, policy
     /// <c>required-modules-readiness-only</c>): <c>ServiceDefaults.RollGateChecks</c> tags it by this
-    /// name, so a missing required module holds READINESS only — the roll stalls, the pod stays out of
-    /// the Service, and neither the startup probe nor liveness ever kills a container for it. A host
+    /// name, so the host's Unhealthy verdicts (a module the image should ship is absent, or a present
+    /// one did not install against this platform) hold READINESS only — the roll stalls, the pod stays
+    /// out of the Service, and neither the startup probe nor liveness ever kills a container for it.
+    /// A store-delivered module not yet here is reported Degraded, which is a 200 and holds nothing,
+    /// as it never did. A host
     /// should register the check under this constant rather than a literal, so the two cannot drift
     /// apart and silently put the check back on the startup probe.</para>
     /// </summary>

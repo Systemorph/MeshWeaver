@@ -194,8 +194,10 @@ restarted pod of the serving image had to pass the same probe. The control insta
   paths the chart ships. A refusing `nodetype_bake` must leave the startup probe at 200, turn
   readiness to 503, leave liveness at 200, and still print on `/health`. An ordinary Unhealthy check
   must still fail the startup probe. The same test holds an Unhealthy `required_modules` to the
-  same three answers, and pins `ProbeEndpoints.RequiredModulesCheckName` to the literal the host
-  registers. Invariant 10b of `check-chart-invariants.sh` refuses an armed
+  same three answers, shows that its Degraded verdict (a store-delivered module still expected)
+  holds nothing, and pins `ProbeEndpoints.RequiredModulesCheckName` to the literal the host
+  registers today. That pin sees the core side only: the host still registers a literal, so a rename
+  there would not turn it red. Invariant 10b of `check-chart-invariants.sh` refuses an armed
   gate whose readiness probe is not on `/ready`, and any render whose rollout deadline does not
   cover a cold bake. `PreWarmGateReadinessGuard` holds the chart's own prose and prerequisites to the same rule.
 
@@ -209,7 +211,7 @@ the check belongs on readiness.
 |---|---|---|---|
 | `nodetype_bake` | Plugins host, `if (gateBake)` | **No: roll gate, `/ready` only** | Its verdict is about the image. A restart reaches the same verdict, and killing a previous-image pod removes the roll's fallback. |
 | `db_version` (+ `DbVersionGate`) | Plugins host | Yes | A portal ahead of its schema must not serve. A restart is the right retry once the migration Job has run. `DbVersionGate` stops the process itself at startup. |
-| `required_modules` | Plugins host | **No: roll gate, `/ready` only** (policy [`required-modules-readiness-only`](../PolicyNotProse)) | A declared-required module missing from the pod's shelf. If the registry cannot serve it, it is missing for every image, so on the startup probe it would kill the previous image's restarted pods too, the same failure as the bake gate. As a roll gate a missing module stalls the roll and keeps the pod out of the Service. The cost: a restart no longer re-runs the bundle-fetch init container by itself. A pod whose modules arrive later needs a governed `Restart`. |
+| `required_modules` | Plugins host | **No: roll gate, `/ready` only** (policy [`required-modules-readiness-only`](../PolicyNotProse)) | A declared-required module that the image should ship is absent from the pod's shelf, or a present one did not install against this platform (both Unhealthy). A store-delivered module not here yet is Degraded, a 200 that holds nothing, as before. If the registry cannot serve a module, it is missing for every image, so on the startup probe it would kill the previous image's restarted pods too, the same failure as the bake gate. As a roll gate a missing module stalls the roll and keeps the pod out of the Service. The cost: a restart no longer re-runs the bundle-fetch init container by itself. A pod whose modules arrive later needs a governed `Restart`. |
 | `process_progress` (`live`) | Plugins host | Yes, and it restarts via `/alive` | A GC-bound process is fixed by a restart. |
 | `PostgreSql` | Plugins host | Yes | No database, no portal. |
 | `self` (`live`, `ready`) | core | Never fails | The process can run a delegate. |

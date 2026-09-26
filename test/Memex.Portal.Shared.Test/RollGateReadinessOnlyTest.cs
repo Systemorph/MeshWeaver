@@ -170,11 +170,40 @@ public class RollGateReadinessOnlyTest
     }
 
     /// <summary>
-    /// The host registers the check by a LITERAL today; this pins the constant to that literal, so
-    /// a rename on either side cannot silently take the check off the roll-gate list.
+    /// 🚨 A STORE-DELIVERED module that has not arrived yet (<c>RequiredModuleStatus.ExpectedLater</c>)
+    /// is reported <c>Degraded</c> by the host, and Degraded is a 200 on every probe — so it holds
+    /// NOTHING, before this change and after it. Only the host's <c>Unhealthy</c> verdicts (a module
+    /// the image should ship is absent, or a present module did not install against this platform)
+    /// hold readiness. This pins that boundary so the policy's scope cannot be read wider than it is.
     /// </summary>
     [Fact]
-    public void TheRequiredModulesCheckName_IsTheNameTheHostRegisters() =>
+    public async Task ARequiredModuleStillExpectedFromTheStore_HoldsNothing()
+    {
+        var probes = ChartProbePaths();
+        Action<IServiceCollection> expectedLater = services => services.AddHealthChecks()
+            .AddCheck(ProbeEndpoints.RequiredModulesCheckName, () => HealthCheckResult.Degraded(
+                "1 required module(s) are store-delivered and not here yet: Demo.Module"));
+
+        var (startup, _) = await ProbeAsync(probes.Startup, expectedLater);
+        var (readiness, readinessBody) = await ProbeAsync(probes.Readiness, expectedLater);
+
+        Assert.True(startup.StatusCode == HttpStatusCode.OK,
+            $"startup answered {(int)startup.StatusCode} for a Degraded required_modules");
+        Assert.True(readiness.StatusCode == HttpStatusCode.OK,
+            $"readiness answered {(int)readiness.StatusCode} for a Degraded required_modules. Only the "
+            + "host's Unhealthy verdicts are meant to hold a roll; a module the store lane has yet to "
+            + $"deliver never did. Body was:\n{readinessBody}");
+    }
+
+    /// <summary>
+    /// Pins the CORE side only: the roll-gate allow-list names the literal the Plugins host
+    /// registers today (<c>AddCheck&lt;RequiredModulesHealthCheck&gt;("required_modules")</c> in
+    /// Memex.Portal.Distributed). It cannot see that host — if the host renames its registration,
+    /// this stays green while <c>TagRollGates</c> stops matching. Closing that needs the host to
+    /// register under <see cref="ProbeEndpoints.RequiredModulesCheckName"/>.
+    /// </summary>
+    [Fact]
+    public void TheRollGateAllowList_NamesTheLiteralThePluginsHostRegistersToday() =>
         Assert.Equal("required_modules", ProbeEndpoints.RequiredModulesCheckName);
 
     /// <summary>
