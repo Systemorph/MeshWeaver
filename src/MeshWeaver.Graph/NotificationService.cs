@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -8,6 +9,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Unit = System.Reactive.Unit;
 
 namespace MeshWeaver.Graph;
@@ -229,6 +231,25 @@ public static class NotificationService
         string? icon = null,
         string? recipient = null,
         string? identity = null)
+        => CreateAddressed(nodeFactory, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
+            recipient, identity, type.ToFeature());
+
+    /// <summary>
+    /// The one implementation behind <see cref="CreateLocalizableNotification"/> and
+    /// <see cref="Raise"/>: the addressed bell row, stamped with its <paramref name="feature"/>.
+    /// </summary>
+    private static IObservable<MeshNode> CreateAddressed(
+        IMeshService nodeFactory,
+        string mainNodePath,
+        LocalizableText title,
+        LocalizableText message,
+        NotificationType type,
+        string? targetNodePath,
+        string? createdBy,
+        string? icon,
+        string? recipient,
+        string? identity,
+        string feature)
     {
         // The two concepts compose: `recipient` decides WHERE the notification is delivered, and
         // `identity` decides WHETHER a repeat is a new row or the same one refreshed.
@@ -266,6 +287,7 @@ public static class NotificationService
             IsRead = false,
             CreatedAt = DateTimeOffset.UtcNow,
             NotificationType = type,
+            Feature = feature,
             CreatedBy = createdBy
         };
 
@@ -294,8 +316,10 @@ public static class NotificationService
 
     /// <summary>
     /// Preference-aware notification dispatch — the single entry point every emitter should use.
-    /// Reads the <paramref name="recipient"/>'s <see cref="NotificationSettings"/> and, per the
-    /// notification's <see cref="NotificationCategory"/>, delivers to the enabled channels:
+    /// Forwards to <see cref="Raise"/> with the feature the <paramref name="type"/> implies
+    /// (<see cref="NotificationFeatures.ToFeature"/>), so the <paramref name="recipient"/>'s
+    /// per-feature channel preference decides — by default the bell and Teams, plus email where
+    /// their legacy <see cref="NotificationSettings"/> row had it on:
     /// <list type="bullet">
     ///   <item><b>In-app</b> → creates the bell <see cref="Notification"/> satellite (as
     ///     <see cref="CreateNotification"/> does).</item>
@@ -377,22 +401,63 @@ public static class NotificationService
         string? icon = null,
         LocalizableText? emailCtaLabel = null,
         LocalizableText? emailFooterNote = null)
+        => Raise(hub, new NotificationRequest
+            {
+                Recipient = recipient,
+                MainNodePath = mainNodePath,
+                Title = title,
+                Message = message,
+                Type = type,
+                TargetNodePath = targetNodePath,
+                CreatedBy = createdBy,
+                Icon = icon,
+                EmailCtaLabel = emailCtaLabel,
+                EmailFooterNote = emailFooterNote,
+            })
+            .Select(_ => Unit.Default);
+
+    /// <summary>
+    /// The FEATURE-aware dispatch — what <see cref="Dispatch"/> and <see cref="DispatchLocalizable"/>
+    /// run, and the entry point for an emitter that raises its own feature
+    /// (<see cref="NotificationRequest.Feature"/>). The recipient's channel preference for that
+    /// feature (<see cref="NotificationChannelPreferences.Resolve"/>: their own
+    /// <c>{user}/_Settings/Notifications/{feature}</c> node, else the bell and Teams) decides where
+    /// it goes, and each channel is one independent leg:
+    /// <list type="bullet">
+    ///   <item><b>Bell</b> (<c>InApp</c>) → the addressed <see cref="Notification"/> row, stamped with the feature.</item>
+    ///   <item><b>Email</b> → the recipient's profile address, exactly as before — including the
+    ///     deferral to the AI triage when the recipient authored routing rules.</item>
+    ///   <item><b>Any other channel</b> (Teams, a module's own) → every registered
+    ///     <see cref="INotificationChannelDeliverer"/> for it, with the text rendered in the
+    ///     recipient's language. None registered, or the recipient not reachable on it, is a SKIP
+    ///     logged at Debug — never an error to the raiser.</item>
+    /// </list>
+    /// A <c>null</c> recipient addresses the platform operators' bell and reaches no other channel:
+    /// it has no person, so no preference and no mailbox.
+    ///
+    /// <para>Runs under the system identity (it reads another person's settings and writes into
+    /// their partition). Cold; emits ONE list of what each channel did and completes. A failing
+    /// leg is logged and reported as a skip, so it cannot suppress the others.</para>
+    /// </summary>
+    /// <param name="hub">The hub the dispatch runs on.</param>
+    /// <param name="request">What to raise, for whom, and for which feature.</param>
+    /// <returns>A cold observable of one result per channel the preference named.</returns>
+    public static IObservable<ImmutableList<NotificationChannelResult>> Raise(IMessageHub hub, NotificationRequest request)
     {
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return Observable.Return(Unit.Default);
+            return Observable.Return(ImmutableList<NotificationChannelResult>.Empty);
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var category = type.ToCategory();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NotificationService));
+        var feature = request.EffectiveFeature();
 
-        // 🚨 ONE resolved addressee, used by BOTH channels. The bell writes into
+        // 🚨 ONE resolved addressee, used by EVERY channel. The bell writes into
         // `{addressee}/_Notification`, and the addressee is also whose PREFERENCES are read and
-        // whose mailbox is used — a `recipient` given as a path (`rbuergi/Documents/spec`) would
-        // otherwise deliver to `rbuergi` while looking up settings at
-        // `rbuergi/Documents/spec/_NotificationSettings` and emailing a document. `person` is null
-        // exactly when `recipient` is: a platform notification has no mailbox and no preferences,
-        // which is why the email leg stays gated on it rather than on `addressee`.
-        var addressee = ResolveAddressee(recipient);
-        var person = string.IsNullOrWhiteSpace(recipient) ? null : addressee;
+        // whose mailbox and Teams are used — a `recipient` given as a path (`rbuergi/Documents/spec`)
+        // would otherwise deliver to `rbuergi` while looking up settings under the document.
+        // `person` is null exactly when `recipient` is: a platform notification has no person.
+        var addressee = ResolveAddressee(request.Recipient);
+        var person = string.IsNullOrWhiteSpace(request.Recipient) ? null : addressee;
 
         // 🚨 RunAsSystem, never Observable.Using (#1790): impersonation is an AsyncLocal
         // store/restore pair, and Observable.Using splits the two across threads — the caller who
@@ -400,25 +465,148 @@ public static class NotificationService
         // caller's identity. RunAsSystem opens the scope across the cold writes' Subscribe (where
         // each eager-captures its identity) and closes it on the way out of that same Subscribe.
         return access.RunAsSystem(
-            () => ReadSettings(hub, person).SelectMany(settings =>
+            () => ReadPreference(hub, person, feature).SelectMany(preference =>
             {
-                // The two channels are independent — isolate each with Catch so a transient email
-                // fault can't suppress the bell write (or vice versa).
-                var ops = new List<IObservable<Unit>>(2);
-                if (settings.InApp(category))
-                    // Passed explicitly, so the compatibility fallback in CreateNotification (derive
-                    // the addressee from the main node path) is never the thing that decides here.
-                    ops.Add(CreateLocalizableNotification(
-                            meshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
-                            recipient: addressee)
-                        .Select(_ => Unit.Default)
-                        .Catch(Observable.Return(Unit.Default)));
-                if (person is not null && settings.Email(category))
-                    ops.Add(MaybeSendEmail(hub, person, title, message, targetNodePath, emailCtaLabel, emailFooterNote)
-                        .Select(_ => Unit.Default)
-                        .Catch(Observable.Return(Unit.Default)));
-                return ops.Count == 0 ? Observable.Return(Unit.Default) : Observable.Merge(ops);
+                var channels = person is null
+                    ? preference.Channels().Intersect([NotificationChannelKind.InApp])
+                    : preference.Channels();
+                var legs = channels
+                    .OrderBy(c => c, StringComparer.Ordinal)
+                    .Select(channel => Leg(hub, meshService, request, feature, addressee, person, channel, logger))
+                    .ToList();
+                return legs.Count == 0
+                    ? Observable.Return(ImmutableList<NotificationChannelResult>.Empty)
+                    : legs.Merge().ToList().Select(results => results.ToImmutableList());
             }));
+    }
+
+    /// <summary>One channel's leg of <see cref="Raise"/> — isolated, so its failure is a reported skip.</summary>
+    private static IObservable<NotificationChannelResult> Leg(
+        IMessageHub hub, IMeshService meshService, NotificationRequest request, string feature,
+        string addressee, string? person, string channel, ILogger? logger)
+    {
+        IObservable<NotificationChannelResult> leg;
+        if (channel == NotificationChannelKind.InApp)
+            // Passed explicitly, so the compatibility fallback in CreateNotification (derive the
+            // addressee from the main node path) is never the thing that decides here.
+            leg = CreateAddressed(
+                    meshService, request.MainNodePath, request.Title, request.Message, request.Type,
+                    request.TargetNodePath, request.CreatedBy, request.Icon, addressee, identity: null, feature)
+                .Take(1)
+                .Select(_ => NotificationChannelResult.Sent(channel));
+        else if (channel == NotificationChannelKind.Email)
+            leg = MaybeSendEmail(hub, person!, request.Title, request.Message, request.TargetNodePath,
+                    request.EmailCtaLabel, request.EmailFooterNote)
+                .Select(sent => sent
+                    ? NotificationChannelResult.Sent(channel)
+                    : NotificationChannelResult.Skipped(channel,
+                        "not sent — no address on the profile, no mail sender, or the recipient's routing rules defer email to triage"));
+        else
+            leg = DeliverViaModule(hub, request, feature, person!, channel);
+
+        return leg
+            .Take(1)
+            .DefaultIfEmpty(NotificationChannelResult.Skipped(channel, "the channel answered nothing"))
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "Notification {Feature} for {Recipient}: the {Channel} leg failed",
+                    feature, addressee, channel);
+                return Observable.Return(NotificationChannelResult.Skipped(channel, ex.Message));
+            })
+            .Do(result =>
+            {
+                if (!result.Delivered)
+                    logger?.LogDebug("Notification {Feature} for {Recipient}: {Channel} skipped — {Reason}",
+                        feature, addressee, channel, result.Detail);
+            });
+    }
+
+    /// <summary>
+    /// A channel the platform cannot deliver itself — handed to the module that registered an
+    /// <see cref="INotificationChannelDeliverer"/> for it, with the text rendered for the recipient.
+    /// </summary>
+    private static IObservable<NotificationChannelResult> DeliverViaModule(
+        IMessageHub hub, NotificationRequest request, string feature, string person, string channel)
+    {
+        var deliverers = hub.ServiceProvider.GetServices<INotificationChannelDeliverer>()
+            .Where(d => string.Equals(d.Channel, channel, StringComparison.Ordinal))
+            .ToList();
+        if (deliverers.Count == 0)
+            return Observable.Return(NotificationChannelResult.Skipped(channel,
+                $"no {channel} delivery is installed on this portal"));
+        return RenderFor(hub, person, request, feature)
+            .SelectMany(message => deliverers
+                .Select(d => d.Deliver(hub, message).Take(1))
+                .Merge()
+                .ToList()
+                // Several deliverers for one channel: delivered when ANY delivered.
+                .Select(results => results.FirstOrDefault(r => r.Delivered)
+                    ?? results.FirstOrDefault()
+                    ?? NotificationChannelResult.Skipped(channel, "the channel answered nothing")));
+    }
+
+    /// <summary>
+    /// The notification in its recipient's language, with an absolute link — a message outside the
+    /// bell has exactly ONE reader and cannot be re-rendered, so it is resolved here off their own
+    /// profile locale, the same rule as the email leg.
+    /// </summary>
+    private static IObservable<NotificationChannelMessage> RenderFor(
+        IMessageHub hub, string person, NotificationRequest request, string feature)
+        => hub.GetMeshNode(person, LookupTimeout)
+            .Select(n => n?.ContentAs<User>(hub.JsonSerializerOptions)?.Locale)
+            .Catch(Observable.Return<string?>(null))
+            .DefaultIfEmpty(null)
+            .Take(1)
+            .Select(profileLocale =>
+            {
+                var locale = Locales.Resolve(profileLocale);
+                return new NotificationChannelMessage(
+                    person, feature, request.Type,
+                    request.Title.Localize(locale), request.Message.Localize(locale),
+                    request.TargetNodePath ?? request.MainNodePath,
+                    LinkTo(hub, request.TargetNodePath ?? request.MainNodePath));
+            });
+
+    /// <summary>The absolute URL of <paramref name="path"/> on this portal, or null when its public base URL is not configured.</summary>
+    private static string? LinkTo(IMessageHub hub, string? path)
+    {
+        var baseUrl = ResolveBaseUrl(hub);
+        return string.IsNullOrEmpty(baseUrl) || string.IsNullOrWhiteSpace(path)
+            ? null
+            : $"{baseUrl!.TrimEnd('/')}/{path!.TrimStart('/')}";
+    }
+
+    /// <summary>
+    /// The recipient's EFFECTIVE preference for <paramref name="feature"/> — their per-feature node
+    /// and their legacy per-category settings, folded by <see cref="NotificationChannelPreferences.Resolve"/>.
+    /// A platform notification (no person) resolves to the defaults.
+    /// </summary>
+    private static IObservable<NotificationFeaturePreference> ReadPreference(IMessageHub hub, string? person, string feature)
+    {
+        if (string.IsNullOrEmpty(person))
+            return Observable.Return(NotificationChannelPreferences.Resolve(feature, null, null));
+        return ReadSettings(hub, person)
+            .Zip(ReadFeaturePreference(hub, person, feature),
+                (legacy, own) => NotificationChannelPreferences.Resolve(feature, own, legacy));
+    }
+
+    /// <summary>
+    /// The recipient's own node for <paramref name="feature"/>, or null. A synced <c>GetQuery</c>
+    /// (empty-on-absent), never a point read — the node usually does NOT exist, for the reason on
+    /// <see cref="ReadSettings"/>.
+    /// </summary>
+    private static IObservable<NotificationFeaturePreference?> ReadFeaturePreference(IMessageHub hub, string person, string feature)
+    {
+        var path = NotificationFeaturePreferencePaths.PathFor(person, feature);
+        return hub.GetWorkspace()
+            .GetQuery($"{NotificationFeaturePreferenceNodeType.NodeType}|{path}",
+                $"path:{path} nodeType:{NotificationFeaturePreferenceNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
+            .Take(1)
+            .Select(nodes => nodes
+                .Select(n => n.ContentAs<NotificationFeaturePreference>(hub.JsonSerializerOptions))
+                .FirstOrDefault(p => p is not null))
+            .Timeout(LookupTimeout, Observable.Return<NotificationFeaturePreference?>(null))
+            .Catch(Observable.Return<NotificationFeaturePreference?>(null));
     }
 
     /// <summary>

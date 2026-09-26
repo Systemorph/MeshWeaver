@@ -1,7 +1,7 @@
 ---
 Name: Notifications — Satellites, the Bell, and Routing
 Category: Architecture
-Description: How completion notifications work end-to-end — Notification satellite nodes, the reactive bell, mark-as-read via stream.Update, and rule-based routing to email/Teams.
+Description: How notifications work end-to-end — addressed Notification nodes, the reactive bell, mark-as-read via stream.Update, per-feature channel preferences (bell, Teams, email) and rule-based routing.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
 ---
 
@@ -81,7 +81,36 @@ Hub.GetMeshNodeStream(node.Path)
 
 A scalar flip is race-safe across mirrors (RFC 7396 merges object keys), so the bell, the panel, and any other reader converge on the next emission.
 
-## 4. Routing beyond the bell — rules, channels, triage
+## 4. Channels per feature — where a notification goes
+
+Every notification is raised for a **feature** — a stable, open-vocabulary key (`NotificationFeatures`: `approvals`, `inbox`, `triage`, `accessGranted`, `chatReady`, `system`; a module may raise its own). A notification raised without one gets the feature its `NotificationType` implies (the three approval types → `approvals`, and so on), and the bell row records it (`Notification.Feature`; read it through `FeatureOf()`, which covers rows written before the key existed).
+
+Each person chooses, **per feature**, which channels reach them. The choice is an ordinary node in their own partition:
+
+| Node type | Lives at | Holds |
+|---|---|---|
+| `NotificationFeaturePreference` | `{user}/_Settings/Notifications/{feature}` | `bell`, `teams`, `email` — the channels for that feature |
+
+`NotificationChannelPreferences.Resolve` is the one rule, pure and unit-tested:
+
+- the person's node for the feature, when it exists, is taken **as written**;
+- otherwise the default — **the bell and Teams, for every feature**. The bell and email of a feature that had a legacy per-category row (`NotificationSettings` at `{user}/_Settings/Notifications`) keep what that row says, so a bell someone had switched off stays off and approval / access-grant emails stay on; a newer feature gets no email by default.
+
+The **Notifications** settings tab shows one section per feature (the platform's `NotificationFeatures.BuiltIn` plus every `NotificationFeatureDescriptor` a module registers) and binds the standard node-content editor straight to that feature's node. The node is created on first view **seeded with the effective preference**, so opening the tab changes no delivery.
+
+### Delivery — `NotificationService.Raise`
+
+`Raise(hub, NotificationRequest)` is the feature-aware entry point; `Dispatch` / `DispatchLocalizable` forward to it with the feature their type implies. It resolves the recipient's preference for the feature and runs one independent leg per channel, reporting what each did (`NotificationChannelResult`):
+
+- **Bell** (`InApp`) — the addressed row, stamped with the feature.
+- **Email** — the profile address, unchanged, including the deferral to triage for a person who authored routing rules.
+- **Any other channel** — handed to every registered **`INotificationChannelDeliverer`** for it, with the text rendered in the recipient's own language and an absolute link. Core cannot send to Teams itself; the Teams module (MeshWeaver.Plugins, `TeamsNotificationDeliverer`) registers the deliverer, posting through the Memex bot into the conversation the person opened by messaging it.
+
+🚨 **A channel the recipient cannot be reached on is a SKIP, logged at Debug — never an error to the raiser.** No deliverer installed, the bot not configured, or the person never having messaged the bot each come back as `Skipped` with the reason, and the other legs are unaffected. A leg that throws is logged at Warning and reported as a skip for the same reason.
+
+A notification with **no recipient** addresses the platform operators' bell and reaches no other channel — it has no person, so no preference, no mailbox and no Teams. An emitter that needs a person's attention (an approval, say) must address the people: the Hosting approval notice enumerates the eligible global administrators and raises one `approvals` notification each.
+
+## 5. Routing beyond the bell — rules, channels, triage
 
 Where a notification *also* goes is the user's data, not code:
 
@@ -100,4 +129,5 @@ This whole lane — the two node types plus the `NotificationTriageService` watc
 - [Thread Operations](/Doc/Architecture/ThreadOperations) — where completion emission sits in the round lifecycle.
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — why the bell queries but mark-as-read streams.
 - [Addressed Notifications](/Doc/Architecture/AddressedNotifications) — where notifications actually live today, and the design that lets the bell name its partition.
-- Implementation: `src/MeshWeaver.Graph/NotificationService.cs` (core) · `src/MeshWeaver.Blazor.Portal/Components/NotificationCenter.razor` / `NotificationCenterPanel.razor` and `NotificationQueries.cs` (**MeshWeaver.Plugins** — the Blazor portal shell lives there).
+- [Notification Preferences](/Doc/GUI/NotificationPreferences) — the per-feature channel choice, as a person sees it.
+- Implementation: `src/MeshWeaver.Graph/NotificationService.cs` (core) · `src/MeshWeaver.Mesh.Contract/NotificationFeature.cs` (the feature vocabulary, the preference rule and the channel seam) · `memex/Memex.Portal.Shared/Settings/NotificationsSettingsTab.cs` (the tab) · `src/MeshWeaver.Blazor.Portal/Components/NotificationCenter.razor` / `NotificationCenterPanel.razor` and `NotificationQueries.cs` (**MeshWeaver.Plugins** — the Blazor portal shell lives there).
