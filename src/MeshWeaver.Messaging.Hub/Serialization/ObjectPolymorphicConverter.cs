@@ -115,6 +115,16 @@ public class ObjectPolymorphicConverter(
     }
     private object ReadObject(ref Utf8JsonReader reader, JsonSerializerOptions options)
     {
+        // 🚨 The common shape — "$type" first, a registered type, no reference metadata — is read
+        // STRAIGHT from the reader (MeshWeaver#5555). The general path below materialises the object
+        // as a JsonDocument (a byte[] copy of the value plus its metadata database) and then as a
+        // UTF-16 string (2× the bytes) only to deserialize that string again — and it does so once
+        // PER NESTING LEVEL, because every `object`-typed member re-enters this method. That is the
+        // String ≈ 2 × Byte[] + JsonDocument signature the [HEAPSTEP] sampler found dominating every
+        // multi-hundred-MiB heap step on both portals.
+        if (TryReadRegisteredTypeFromReader(ref reader, options, out var direct))
+            return direct;
+
         using var doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement;
 
@@ -131,8 +141,7 @@ public class ObjectPolymorphicConverter(
                 {
                     // Deserialize to the specific type using cleaned JSON
                     // Normalize to ensure $type is first (required for parameterized constructor types)
-                    var json = JsonElementNormalizer.GetNormalizedRawText(cleanedElement);
-                    return JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
+                    return JsonElementNormalizer.Deserialize(cleanedElement, typeInfo!.Type, options)!;
                 }
                 catch (Exception ex) when (
                     ex is JsonException
@@ -180,6 +189,68 @@ public class ObjectPolymorphicConverter(
 
         // If no type discriminator or unknown type, return as JsonElement
         return cleanedElement.Clone();
+    }
+
+    /// <summary>
+    /// Deserializes an object whose FIRST property is a registered <c>$type</c> directly from the
+    /// reader — no <see cref="JsonDocument"/>, no string. Declines (returns false, reader untouched)
+    /// for every other shape, which the general path then handles exactly as before: <c>$type</c>
+    /// elsewhere or absent, an unregistered type (self-heal + warning), or reference metadata
+    /// (<c>$id</c>/<c>$ref</c>/…, which the general path strips).
+    /// </summary>
+    private bool TryReadRegisteredTypeFromReader(
+        ref Utf8JsonReader reader, JsonSerializerOptions options, out object result)
+    {
+        result = null!;
+        // Probe on a COPY: Utf8JsonReader is a struct, so declining leaves the caller's reader at the
+        // StartObject it was handed. A converter's reader holds the whole value (System.Text.Json
+        // reads ahead before invoking a custom converter), so TrySkip only fails on malformed input,
+        // and then the general path produces the same error it always did.
+        var probe = reader;
+        if (!probe.Read() || probe.TokenType != JsonTokenType.PropertyName
+            || !probe.ValueTextEquals(EntitySerializationExtensions.TypeProperty))
+            return false;
+        if (!probe.Read() || probe.TokenType != JsonTokenType.String)
+            return false;
+        var typeName = probe.GetString();
+        if (string.IsNullOrEmpty(typeName) || !typeRegistry.TryGetType(typeName, out var typeInfo))
+            return false;
+
+        while (probe.Read() && probe.TokenType == JsonTokenType.PropertyName)
+        {
+            // The reference-metadata names StripMetadataProperties removes: those shapes take the
+            // general path so the strip still applies.
+            if (probe.ValueTextEquals("$id") || probe.ValueTextEquals("$ref")
+                || probe.ValueTextEquals("$values") || probe.ValueTextEquals("$defs"))
+                return false;
+            if (!probe.Read() || !probe.TrySkip())
+                return false;
+        }
+        if (probe.TokenType != JsonTokenType.EndObject)
+            return false;
+
+        var start = reader;
+        try
+        {
+            result = JsonSerializer.Deserialize(ref reader, typeInfo!.Type, options)!;
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is JsonException
+            or NotSupportedException
+            or InvalidOperationException
+            or ArgumentException)
+        {
+            // Same contract as the general path: a registered type whose stored JSON no longer fits
+            // is preserved as raw JSON (a throw faults the node read → wedged grain), logged loud.
+            logger?.LogWarning(ex,
+                "Content for '{TypeName}' could not be deserialized; preserving raw JSON",
+                typeName);
+            reader = start;
+            using var doc = JsonDocument.ParseValue(ref reader);
+            result = doc.RootElement.Clone();
+            return true;
+        }
     }
 
     private static JsonElement StripMetadataProperties(JsonElement element)
