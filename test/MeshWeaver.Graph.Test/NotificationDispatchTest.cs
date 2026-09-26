@@ -95,6 +95,29 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 60000)]
+    public async Task Raise_TeamsDefaultOn_ButNoTeamsModuleInstalled_IsASkip_NotAnError()
+    {
+        const string recipient = "no_teams_module";
+        await CreateUser(recipient, "noteams@acme.com", TestContext.Current.CancellationToken);
+
+        // This mesh registers no INotificationChannelDeliverer — the Teams module is not installed.
+        var report = await NotificationService.Raise(Mesh, new NotificationRequest
+            {
+                Recipient = recipient,
+                MainNodePath = recipient,
+                Title = MeshWeaver.Data.LocalizableText.Verbatim("Approval requested"),
+                Message = MeshWeaver.Data.LocalizableText.Verbatim("please approve"),
+                Type = NotificationType.ApprovalRequired,
+            })
+            .Timeout(TestTimeouts.WriteConvergence).Await(TestContext.Current.CancellationToken);
+
+        var teams = Assert.Single(report, r => r.Channel == NotificationChannelKind.Teams);
+        Assert.False(teams.Delivered);
+        Assert.Contains("no Teams delivery is installed", teams.Detail);
+        Assert.Contains(report, r => r.Channel == NotificationChannelKind.InApp && r.Delivered);
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task NotificationSettings_OffValue_SurvivesMergePatch()
     {
         const string recipient = "prefs_user";
