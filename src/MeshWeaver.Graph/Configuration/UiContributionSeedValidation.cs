@@ -53,6 +53,7 @@ public static class UiContributionSeedValidation
         UiContribution.SettingsContext,
         UiContribution.NodeSettingsContext,
         UiContribution.TopBarContext,
+        UiContribution.ProfileContext,
         NodeMenuItemsExtensions.AiMenuContext,
         NodeMenuItemsExtensions.GitHubMenuContext,
     ];

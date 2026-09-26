@@ -1750,5 +1750,9 @@
   "profile.sectionUnavailable": "This section could not be displayed: {0}",
   "menu.profile": "Profile",
   "menu.profileTooltip": "Your picture, name and profile details",
+  "profile.pictureError.unsupportedType": "Use a PNG, JPEG, GIF or WebP picture.",
+  "profile.pictureError.tooLarge": "The picture is larger than {0} MB.",
+  "profile.pictureError.notAnImage": "The file's content is not a PNG, JPEG, GIF or WebP image.",
+  "profile.pictureError.noCollection": "This profile has no file storage to keep a picture in.",
   "store.profileSubscription": "Subscription"
 }
