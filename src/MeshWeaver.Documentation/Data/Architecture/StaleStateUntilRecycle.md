@@ -160,7 +160,11 @@ partition), in order of preference:
    and the required `Reason` on the `DisposeRequest`. It runs in-process on the instance it
    targets. No lane reaches another instance's mesh, so a recycle there is filed on that
    instance's own mesh. A `Restart` (a pod restart, which ends every activation on that pod)
-   remains the coarse governed equivalent.
+   remains the coarse governed equivalent. When the hubs keep serving a space that should not
+   exist at all — a stranded partition whose compile watcher and build queue loop on every boot —
+   recycling cannot help, because every re-activation re-reads the same rows: its **`DeleteSpace`**
+   kind (`Hosting/DeleteSpaceAction`) disposes the space's hubs and removes the space itself, behind
+   one approval of the plan it parks with.
 3. **Break-glass elevation** — audited and time-boxed, a person's call — is the only way to hold a
    write on a system-owned partition. It is described, not built. Granting a standing Update on
    `Hosting/_Access` to a person is exactly the standing access the Admin model rules out.
