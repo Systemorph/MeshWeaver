@@ -7,8 +7,9 @@
 #   (b) the same database after a deliberately BROKEN NodeType row was written into a user-shaped
 #       partition (created by the platform's own `public.ensure_partition_schema`, listed as
 #       searchable) — the 2026-09-25 incident's shape: one abandoned in-mesh type;
-#   (c) the PREVIOUS control image against the database THIS image's migration produced (N−1
-#       against an N-migrated schema — expand-only migrations).
+#   (c) the PREVIOUS control image against the database THIS image's migration and first boot
+#       produced (N−1 against an N-migrated schema — expand-only migrations). Run right after (a),
+#       BEFORE the broken-row fixture of (b) is planted, so N−1 is judged on N's database alone.
 #
 # Each leg must become Ready, or the script exits non-zero naming the leg, with the pod's /health
 # body and the tail of its log. Nothing here is skipped silently: (c) runs unless --first-run is
@@ -19,7 +20,7 @@
 # the first local run of this script passed all three legs that way and proved nothing. So each leg
 # also requires EVIDENCE from the process itself: the mesh was composed (no setup wizard), the
 # control module was loaded from the image's modules/, and the module's seed finished with no
-# failure. Leg (b) further reads the database: the broken row was never compiled.
+# failure. Leg (b) further reads the database: the broken row is byte-identical after the boot.
 #
 # usage:
 #   control-image-acceptance.sh --control IMG --migration IMG (--previous IMG | --first-run)
@@ -193,6 +194,14 @@ boot_and_wait() {
 
 boot_and_wait a-empty-db "$CONTROL"
 
+# (c) BEFORE the broken-row fixture: N−1 is judged against exactly what THIS image's migration and
+# first boot produced — never against a fixture another leg planted afterwards.
+if [ "$FIRST_RUN" = true ]; then
+  echo "::notice::leg (c) not applicable: first control image — no previous memex-control version exists yet. Every later run must pass --previous."
+else
+  boot_and_wait c-previous-image-on-migrated-db "$PREVIOUS"
+fi
+
 echo "== writing a broken NodeType row into a user-shaped partition"
 # The partition is created by the platform's OWN provisioning function (byte-faithful to the
 # runtime DDL), then listed as searchable — the shape a user's partition has. The row is a NodeType
@@ -212,20 +221,19 @@ VALUES ('AcceptanceUser', 'BrokenToggle', 'Broken toggle', 'NodeType', 2,
 SQL
 [ "$(psql_exec -c "select count(*) from acceptanceuser.mesh_nodes where node_type='NodeType'")" = 1 ] \
   || { echo "::error::the broken NodeType row is not in place — leg (b) would test nothing"; exit 1; }
+# The WHOLE row, not a chosen field list: any compile, adoption or other write — whichever field it
+# stamps — changes the content, the version or the modification time.
+ROW_SQL="select md5(content::text) || ' v' || version || ' ' || last_modified from acceptanceuser.mesh_nodes where id='BrokenToggle'"
+before="$(psql_exec -c "$ROW_SQL")"
 
 boot_and_wait b-broken-nodetype "$CONTROL"
-# P1 in the database: a closed image never compiles, adopts or stamps a database NodeType.
-stamped="$(psql_exec -c "select coalesce(content->>'compilationStatus','') || coalesce(content->>'latestAssemblyPath','') from acceptanceuser.mesh_nodes where id='BrokenToggle'")"
-if [ -n "$stamped" ]; then
-  echo "::error::leg b: the broken NodeType row was TOUCHED by the control image (compile/adoption state '$stamped') — the type set is not closed"
+# P1 in the database: a closed image never compiles, adopts or otherwise writes a database NodeType.
+after="$(psql_exec -c "$ROW_SQL")"
+if [ "$after" != "$before" ]; then
+  psql_exec -c "select content from acceptanceuser.mesh_nodes where id='BrokenToggle'" || true
+  echo "::error::leg b: the broken NodeType row was WRITTEN by the control image (before '$before', after '$after') — the type set is not closed"
   exit 1
 fi
-echo "leg b-broken-nodetype: the broken row carries no compile or adoption state — never compiled, never adopted"
-
-if [ "$FIRST_RUN" = true ]; then
-  echo "::notice::leg (c) not applicable: first control image — no previous memex-control tag exists yet. Every later run must pass --previous."
-else
-  boot_and_wait c-previous-image-on-migrated-db "$PREVIOUS"
-fi
+echo "leg b-broken-nodetype: the broken row is byte-identical after the boot (content, version, last_modified) — never compiled, adopted or written"
 
 echo "== acceptance PASSED"
