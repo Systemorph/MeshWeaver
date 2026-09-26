@@ -146,7 +146,9 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
                 "one's verdict would land on the other's `Admin/UpdatePolicy`. TWO ways out exist "
                 "TODAY, and they do not carry the same cost. (1) Rename one installation — its "
                 "`Hosting__Deployment` is its inventory identity, so this moves whichever estate "
-                "owns the one that changes. (2) Key the maps by the qualified `repo:id` and say so "
+                "owns the one that changes; this is the answer taken the first time it happened "
+                "(#3848: PartnerRe's `memex` became `partnerre-test`, see "
+                "Doc/Architecture/ComboGateWiring). (2) Key the maps by the qualified `repo:id` and say so "
                 "here — this removes the collision and then demands a credential for every "
                 "installation named, including any in an estate this fleet holds none for. "
                 "🚨 A THIRD ANSWER IS THE RIGHT ONE IN PRINCIPLE AND IS NOT IMPLEMENTED: scoping "
@@ -329,9 +331,9 @@ SOURCE_SCANS = [
     ]),
     _scan("Systemorph/PartnerRe.Memex", [], sources=[
         ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins",
-         "mesh/Deployments/partnerre.json"),
-        ("PartnerRe", "https://github.com/Systemorph/MeshWeaver.PartnerRe",
-         "mesh/Deployments/partnerre.json"),
+         "mesh/Deployments/partnerre-test.json"),
+        ("PartnerRe", "https://github.com/Systemorph/PartnerRe.Memex",
+         "mesh/Deployments/partnerre-test.json"),
     ]),
 ]
 
@@ -365,7 +367,7 @@ def self_test() -> int:
     sources, source_blockers = derive_sources(SOURCE_SCANS)
     check(source_blockers == [] and sources == (
         "FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting "
-        "PartnerRe=https://github.com/Systemorph/MeshWeaver.PartnerRe "
+        "PartnerRe=https://github.com/Systemorph/PartnerRe.Memex "
         "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins"),
         "registry sources union across deployment repositories, deduplicate identical mappings, "
         "and sort deterministically")
@@ -376,7 +378,7 @@ def self_test() -> int:
         _scan("Systemorph/Memex", [], sources=[
             ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
         _scan("Systemorph/PartnerRe.Memex", [], sources=[
-            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/partnerre.json")]),
+            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/partnerre-test.json")]),
     ])
     check(not source_blockers and same_source ==
           "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
@@ -459,14 +461,18 @@ def self_test() -> int:
           "existing flag expresses it, and still flags it as the looser direction")
 
     # …and two repositories declaring DIFFERENT names is the ordinary multi-repo fleet: no blocker.
+    # Spelled as the fleet resolved #3848: PartnerRe's installation keeps its `memex` NAMESPACE and
+    # overlay directory and changes only its `Hosting__Deployment`, which is all this lane keys on.
     rows, _, blockers = derive([
         _scan("Systemorph/Memex", [
             ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
         _scan("Systemorph/PartnerRe.Memex", [
-            ("partnerre", "partnerre.meshweaver.cloud", "deployments/aks/pr/values.pr.yaml")]),
+            ("partnerre-test", "partnerre.meshweaver.cloud",
+             "deployments/aks/memex/values.memex.yaml")]),
     ], {})
-    check(blockers == [] and [r["name"] for r in rows] == ["memex", "partnerre"],
-          "two repositories declaring different names derive both, with no blocker")
+    check(blockers == [] and [r["name"] for r in rows] == ["memex", "partnerre-test"],
+          "two repositories declaring different names derive both, with no blocker — even from "
+          "overlays in same-named directories")
 
     # Two ids, one host: the second would be verified with the first's credentials.
     rows, _, blockers = derive([_scan("Systemorph/Memex", [

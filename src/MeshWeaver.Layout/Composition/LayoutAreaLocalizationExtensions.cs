@@ -9,9 +9,14 @@ namespace MeshWeaver.Layout.Composition;
 ///
 /// <para>A <see cref="LayoutAreaHost"/> renders for ONE subscriber and restores that subscriber's
 /// <c>AccessContext</c> for the render scope, so the viewer's language is already available here.
-/// This wrapper just saves every layout area from repeating the
-/// <c>Hub.ServiceProvider.GetService&lt;AccessService&gt;()</c> lookup, keeping call sites to
-/// <c>Controls.Body(host.Localize("key"))</c>.</para>
+/// This wrapper keeps call sites to <c>Controls.Body(host.Localize("key"))</c>.</para>
+///
+/// <para>🚨 It reads the <see cref="AccessService"/> the host captured at construction
+/// (<see cref="LayoutAreaHost.ViewerAccess"/>) and NEVER resolves from <c>host.Hub.ServiceProvider</c>:
+/// these helpers are called on late paths — a render's error arm localises its placeholder off the
+/// hub — where the hub's DI scope may already have been disposed by another thread, and a resolve
+/// there threw out of an Rx error arm and killed the process. The service is mesh-lifetime, so the
+/// captured instance is the same object.</para>
 ///
 /// <para>Resolution is explicit off the AccessContext, never ambient
 /// <c>CultureInfo.CurrentUICulture</c> — see <c>LocalizeExtensions</c> for why an ambient culture
@@ -24,7 +29,7 @@ public static class LayoutAreaLocalizationExtensions
     /// <paramref name="args"/> as positional placeholders. Unknown viewer → English.
     /// </summary>
     public static string Localize(this LayoutAreaHost host, string key, params object?[] args)
-        => host.Hub.ServiceProvider.GetService<AccessService>().Localize(key, args);
+        => host.ViewerAccess.Localize(key, args);
 
     /// <summary>
     /// An ACTIVITY TRANSCRIPT entry in the viewer's language (#3236): the entry's catalog key bound
@@ -43,12 +48,12 @@ public static class LayoutAreaLocalizationExtensions
 
     /// <summary>Plural-aware overload — resolves <c>{key}.one</c> / <c>{key}.other</c>.</summary>
     public static string LocalizePlural(this LayoutAreaHost host, string key, int count)
-        => host.Hub.ServiceProvider.GetService<AccessService>().LocalizePlural(key, count);
+        => host.ViewerAccess.LocalizePlural(key, count);
 
     /// <summary>
     /// The viewer's resolved language tag, for callers that need to pass it on (e.g. into
     /// <c>MeshNodeEditorField.FromType</c>, which reads <c>[Translation]</c> attributes).
     /// </summary>
     public static string ViewerLocale(this LayoutAreaHost host)
-        => host.Hub.ServiceProvider.GetService<AccessService>().ViewerLocale();
+        => host.ViewerAccess.ViewerLocale();
 }
