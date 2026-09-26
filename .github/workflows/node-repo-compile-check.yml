@@ -66,9 +66,35 @@ on:
         type: string
         default: 'gha'
       test-image:
-        description: The platform image whose /app assemblies are the reference set.
+        description: >-
+          The tester image (mw-plugin-test). Its /app is the reference set ONLY when no
+          platform-image is given; with one, the tester supplies the framework identity and the
+          portal supplies the reference set (see platform-image).
         required: true
         type: string
+      platform-image:
+        description: >-
+          The PORTAL image (e.g. meshweaver.azurecr.io/memex-portal-ai) whose /app and shared
+          frameworks become the reference set — the surface content actually compiles against at
+          run time, and the one node-repo-gate.yml / node-repo-publish-bake.yml already compose
+          (ModuleBuildArchitecture → "The NodeType bake and its gate run AS the platform image
+          too"). Without it this lane judges against the tester's /app, a strict subset of the
+          portal's: an assembly only the portal ships (MeshWeaver.Testing.InMesh,
+          MeshWeaver.Reactive.Assertions, MeshWeaver.Maps, …) is CS0234 here and fine in the gate,
+          so the two required gates disagree about the same source on the same identity.
+          Requires platform-image-digest, from the SAME sealed set as image-digest — the lane
+          asserts the two images resolve ONE framework identity, exactly as the gate does.
+          Empty = the tester's /app, unchanged (the platform's own satellite-compat caller).
+        required: false
+        type: string
+        default: ''
+      platform-image-digest:
+        description: >-
+          Digest (sha256:…) of platform-image. Required when platform-image is set; one without
+          the other is RED by name, never a silent fall-back to the tester's reference set.
+        required: false
+        type: string
+        default: ''
       image-digest:
         description: >-
           Digest pin (tag@digest). Leaving it empty is an ERROR unless allow-unpinned is set.
@@ -338,6 +364,8 @@ jobs:
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
           IMAGE_DIGEST: ${{ inputs.image-digest }}
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          PLATFORM_IMAGE_DIGEST: ${{ inputs.platform-image-digest }}
           UPSTREAM_SEED: ${{ inputs.upstream-seed }}
         # The image already CONTAINS the built framework — the same assemblies the mesh loads at
         # run time. Copying them out costs seconds, and checking Source against what actually
@@ -354,7 +382,20 @@ jobs:
             exit 1
           fi
           docker pull -q "$IMAGE"
-          id=$(docker create "$IMAGE")
+          # 🚨 WHICH IMAGE IS THE REFERENCE SET. With platform-image set it is the PORTAL — the
+          # surface content compiles against at run time, and the one node-repo-gate.yml composes —
+          # and the tester only supplies the framework identity. Without it, the tester's /app, as
+          # before. One of the pair without the other is RED: a silent fall-back to the tester would
+          # re-open exactly the gate/compile-check disagreement this input exists to close.
+          REF_IMAGE="$IMAGE"; PORTAL_REFS=0
+          if [ -n "${PLATFORM_IMAGE:-}" ] || [ -n "${PLATFORM_IMAGE_DIGEST:-}" ]; then
+            [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the portal image the digest belongs to."; exit 1; }
+            [ -n "${PLATFORM_IMAGE_DIGEST:-}" ] || { echo "::error::platform-image is '$PLATFORM_IMAGE' but platform-image-digest is empty — pin the portal of the SAME sealed set as image-digest; this lane does not follow a portal tag."; exit 1; }
+            [ "${PLATFORM_IMAGE%%/*}" = "${TEST_IMAGE%%/*}" ] || { echo "::error::platform-image registry '${PLATFORM_IMAGE%%/*}' differs from test-image registry '${TEST_IMAGE%%/*}' — this lane logs in to ONE registry."; exit 1; }
+            REF_IMAGE="${PLATFORM_IMAGE%%:*}@${PLATFORM_IMAGE_DIGEST##*@}"; PORTAL_REFS=1
+            docker pull -q "$REF_IMAGE"
+          fi
+          id=$(docker create "$REF_IMAGE")
           mkdir -p refs
           docker cp "$id:/app/." refs/ >/dev/null
           # 🚨 The platform's SHARED FRAMEWORKS ride into the reference set too. A container-built
@@ -367,11 +408,36 @@ jobs:
           mkdir -p refs/shared-frameworks
           docker cp "$id:/usr/share/dotnet/shared/." refs/shared-frameworks/ >/dev/null
           docker rm -v "$id" >/dev/null
-          echo "framework assemblies: $(find refs -maxdepth 1 -name 'MeshWeaver.*.dll' | wc -l) from /app; $(find refs/shared-frameworks -name '*.dll' | wc -l) implementation-framework assemblies"
+          echo "framework assemblies: $(find refs -maxdepth 1 -name 'MeshWeaver.*.dll' | wc -l) from /app of $REF_IMAGE; $(find refs/shared-frameworks -name '*.dll' | wc -l) implementation-framework assemblies"
+          identity=""
+          if [ "$PORTAL_REFS" = 1 ]; then
+            [ -s refs/meshweaver-surface.manifest ] || { echo "::error::$REF_IMAGE ships no /app/meshweaver-surface.manifest — platform-image must be the PORTAL image."; exit 1; }
+            # The tester's /app is a strict subset of the portal's; handing it in again as the
+            # "platform" would pass the identity check (it IS the tester) and change nothing.
+            [ ! -f refs/mw-plugin-test.dll ] || { echo "::error::$REF_IMAGE ships /app/mw-plugin-test.dll — that is the TESTER image; platform-image must be the PORTAL (memex-portal-ai)."; exit 1; }
+            # 🚨 ONE BUILD, asserted — the same verb, --expect and refusal node-repo-gate.yml uses:
+            # the tester reads the portal's /app as files and must resolve its own identity there.
+            # A portal from another CD wave would otherwise be judged under the tester's identity
+            # (and seal) while compiling against different bytes.
+            line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$IMAGE" --print-framework-identity)
+            tester="${line#*identity=}"; tester="${tester%% *}"
+            [ -n "$tester" ] || { echo "::error::could not resolve the tester image's framework identity (got: '$line')"; exit 1; }
+            ok=0; out=$(docker run --rm --init -v "$PWD/refs:/portal:ro" --entrypoint /app/mw-plugin-test "$IMAGE" framework-identity /portal --expect "$tester") || ok=$?
+            if [ "$ok" -ne 0 ]; then
+              printf '%s\n' "$out"
+              echo "::error::the tester image and the platform image do NOT resolve one framework identity — they are not one build (the verb's output above names the canonical assemblies each side lacks). Pass image-digest and platform-image-digest from the SAME sealed set."
+              exit 1
+            fi
+            identity=$(printf '%s' "$out" | tail -1 | tr -d '[:space:]')
+            [ -n "$identity" ] || { echo "::error::framework-identity printed no identity for the portal's /app"; exit 1; }
+            echo "reference set = the PORTAL's /app ($REF_IMAGE); tester and portal resolve one framework identity: $identity"
+          fi
           # The identity that addresses an upstream's sealed publication — only when one is seeded.
           if [ -n "${UPSTREAM_SEED:-}" ]; then
-            line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$IMAGE" --print-framework-identity)
-            identity="${line#*identity=}"; identity="${identity%% *}"
+            if [ -z "$identity" ]; then
+              line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$IMAGE" --print-framework-identity)
+              identity="${line#*identity=}"; identity="${identity%% *}"
+            fi
             [ -n "$identity" ] || { echo "::error::could not resolve a framework identity from $IMAGE (got: '$line') — cannot address the upstream publication for upstream-seed."; exit 1; }
             echo "identity=$identity" >> "$GITHUB_OUTPUT"
             echo "this check resolves framework identity $identity; registry-modules come from the seal of: $UPSTREAM_SEED"
