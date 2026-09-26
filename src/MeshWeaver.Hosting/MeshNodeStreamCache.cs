@@ -206,15 +206,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         /// the caller has already disposed, so this terminal can never be recorded as a negative
         /// or a transient failure for the path.</para>
         /// </summary>
-        public void EndReaders(Exception reason)
-        {
-            try { readers.OnError(reason); }
-            catch (Exception)
-            {
-                // A reader that throws from OnError must not abort the teardown that called us —
-                // the entry is already unlinked and its upstream released either way.
-            }
-        }
+        /// <remarks>No catch here: every reader is attached through <c>SharedView</c>, which delivers
+        /// the terminal to each reader in isolation, so one throwing reader cannot cut the others
+        /// off.</remarks>
+        public void EndReaders(Exception reason) => readers.OnError(reason);
 
         /// <summary>Unconditional evict mark for the forced paths (node delete /
         /// storm-breaker stale entry / cache disposal). Idempotent.</summary>
@@ -1029,9 +1024,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 lazyEntry.Value.MarkEvicted();
                 lazyEntry.Value.HydrationSub.Dispose();
                 // Told, not abandoned (#5011): the upstream dies with the cache hub's workspace.
-                lazyEntry.Value.EndReaders(new ObjectDisposedException(
-                    nameof(MeshNodeStreamCache),
-                    $"The mesh-node cache was disposed; the read of '{path}' ended with it."));
+                lazyEntry.Value.EndReaders(DisposedRead(path));
             }
             catch (Exception ex)
             {
@@ -1106,14 +1099,41 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         while (true)
         {
+            // Read admission closes with the cache (#5011): an entry opened after Dispose's pass
+            // would be dropped by its _streams.Clear() without its readers ever being ended.
+            if (System.Threading.Volatile.Read(ref _disposed) != 0)
+                throw DisposedRead(path);
             var lazy = _streams.GetOrAdd(path, p => new Lazy<Entry>(
                 () => CreateEntry(p), LazyThreadSafetyMode.ExecutionAndPublication));
             var entry = lazy.Value;
+            if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            {
+                // The factory was already running when Dispose began, so Dispose's pass may have
+                // missed it. Retire it the way Dispose retires every other entry. MarkEvicted is the
+                // claim: an entry Dispose already ended answers false and is left alone.
+                if (entry.MarkEvicted())
+                {
+                    _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy));
+                    try { entry.HydrationSub.Dispose(); }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex,
+                            "MeshNodeStreamCache: error disposing hydration subscription for {Path}", path);
+                    }
+                    entry.EndReaders(DisposedRead(path));
+                }
+                throw DisposedRead(path);
+            }
             if (entry.TryTouch())
                 return entry;
             _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy));
         }
     }
+
+    /// <summary>The terminal a read of <paramref name="path"/> receives once the cache is disposed.</summary>
+    private static ObjectDisposedException DisposedRead(string path) =>
+        new(nameof(MeshNodeStreamCache),
+            $"The mesh-node cache was disposed; the read of '{path}' ended with it.");
 
     private Entry CreateEntry(string p)
     {
@@ -1297,7 +1317,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         {
             while (true)
             {
-                var entry = GetEntry(path); // pins: live entry, idle window refreshed
+                Entry entry;
+                try
+                {
+                    entry = GetEntry(path); // pins: live entry, idle window refreshed
+                }
+                catch (ObjectDisposedException disposed)
+                {
+                    // A read that arrives after the cache is disposed is told so (#5011).
+                    observer.OnError(disposed);
+                    return System.Reactive.Disposables.Disposable.Empty;
+                }
                 // Between GetEntry's pin and this refcount registration the sweep
                 // cannot idle-evict (the pin just reset the window), but a FORCED
                 // eviction (node delete / storm breaker) can still land — loop and
@@ -1307,7 +1337,26 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 IDisposable sub;
                 try
                 {
-                    sub = entry.Replay.Subscribe(observer);
+                    // 🚨 The TERMINAL is delivered in isolation (#5011). The entry's subject
+                    // fans an error out by calling each reader in turn, and a reader that
+                    // throws from OnError (one subscribed with no error handler rethrows) would
+                    // abort that loop. Every reader after it would then stay subscribed to a
+                    // subject nothing writes again, which is the silent corpse
+                    // EndReaders exists to prevent. The throwing reader is named, not swallowed.
+                    sub = entry.Replay.Subscribe(
+                        observer.OnNext,
+                        error =>
+                        {
+                            try { observer.OnError(error); }
+                            catch (Exception thrown)
+                            {
+                                logger.LogWarning(thrown,
+                                    "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
+                                    + "terminal ({Terminal}); the other readers of the path are still told",
+                                    path, error.Message);
+                            }
+                        },
+                        observer.OnCompleted);
                 }
                 catch
                 {

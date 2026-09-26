@@ -462,7 +462,12 @@ That is the worst shape for a **process-lifetime holder**. The Hosting package's
 
 So both teardowns now call `Entry.EndReaders(reason)` **after** releasing the hydration and the upstream. A delete ends its readers with a `No node found at '…'` error, the text the missing-node classifiers already match; a disposal ends them with an `ObjectDisposedException`. The storm-breaker bookkeeping observer belongs to the hydration composite, which is disposed first, so these terminals are never recorded as a negative or transient failure for the path. The idle sweep is unaffected, because it only releases an entry with zero subscribers. The faulted-entry evictions are unaffected too: their readers have already received the fault.
 
-Pinned by `AHeldReadIsToldWhenItsEntryIsTornDownTest`, which fails on the shipped shape: both arms waited out their budget with nothing emitted.
+Two more rules keep the terminal from leaking:
+
+- **Each reader gets the terminal in isolation.** The subject fans an error out by calling each observer in turn. A reader that throws from `OnError` (one subscribed without an error handler rethrows) used to abort that loop, and every reader after it became a corpse again. `SharedView` now delivers the terminal to each reader inside its own guard and logs the one that threw.
+- **Read admission closes with the cache.** After `Dispose`, `GetEntry` refuses new reads with the same `ObjectDisposedException`. It also retires an entry whose factory was already running when `Dispose` began, so an entry created during teardown is never dropped by `_streams.Clear()` with its readers left unended.
+
+Pinned by `AHeldReadIsToldWhenItsEntryIsTornDownTest`. On the shipped shape, both teardown arms waited out their budget with nothing emitted. The throwing-reader arm fails the same way once the isolation is removed.
 
 **What #5011 does NOT owe to this.** `AKilledOwnerSiloIsReactivatedByItsHoldersTest` (Orleans, two silos) measures the case the issue's leading hypothesis named. The owner lives on silo B, silo A holds its stream open with no other traffic, and B is killed (`KillSiloAsync`). The held stream's heartbeat re-activates the owner on A within about a second. Its negative control confirms that the heartbeat is the mechanism: push the heartbeat past the budget and the owner stays dark for the full 45 s. Two limits apply. `KillSiloAsync` still writes `Stopping`/`Dead` to the membership table (Orleans' `MembershipAgent` does so on an ungraceful stop), so the test cannot show a SIGSEGV'd silo that leaves its row `Active` for the survivors to vote out. And it says nothing about a cluster where too few live silos remain to cast the death votes.
 
