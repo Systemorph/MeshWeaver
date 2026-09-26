@@ -418,6 +418,17 @@ public static class DeploymentRecordExtensions
         d with { KeyVault = vault, KeyVaultSecretPrefix = prefix ?? d.KeyVaultSecretPrefix };
 
     /// <summary>
+    /// This deployment's OWN self-update announcement key, by vault object NAME (Plugins#1913,
+    /// Doc/Architecture/SelfUpdateAnnouncementKey). Declaring it also binds the record: the control
+    /// plane then accepts a self-update announcement for it only when signed with this key. The
+    /// mounts that deliver the value (<c>Hosting__ControlInbox__Secret</c> on this instance,
+    /// <c>Hosting__PlatformWebhookSecret__{id}</c> on the control instance) are ordinary
+    /// <see cref="Map"/> entries; this renders nothing by itself.
+    /// </summary>
+    public static DeploymentContent WithAnnouncementKeySecret(this DeploymentContent d, string? vaultSecret) =>
+        d with { AnnouncementKeySecret = vaultSecret };
+
+    /// <summary>
     /// The chart-owned Key Vault secret class: which vault objects land under which configuration
     /// keys (names only, never values). <paramref name="map"/> receives the class to extend with
     /// <see cref="Map"/>.
