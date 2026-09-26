@@ -637,7 +637,8 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
                 + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!withoutBaseline.IsEmpty)
             addenda.Add($"{withoutBaseline.Count} failed with no working build to regress from "
-                + "(already broken, or the first bake of this instance) — "
+                + "(never built, already broken, built only by this or a newer image, or this image has "
+                + "already served here) — "
                 + string.Join(", ", withoutBaseline.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         return addenda.Count == 0
             ? head
@@ -666,7 +667,8 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
                 + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!withoutBaseline.IsEmpty)
             addenda.Add($"{withoutBaseline.Count} failed with no working build to regress from "
-                + "(already broken, or the first bake of this instance) — "
+                + "(never built, already broken, built only by this or a newer image, or this image has "
+                + "already served here) — "
                 + string.Join(", ", withoutBaseline.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!retracted.IsEmpty)
             addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
@@ -700,7 +702,8 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
                 + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!withoutBaseline.IsEmpty)
             addenda.Add($"{withoutBaseline.Count} failed with no working build to regress from "
-                + "(already broken, or the first bake of this instance) — "
+                + "(never built, already broken, built only by this or a newer image, or this image has "
+                + "already served here) — "
                 + string.Join(", ", withoutBaseline.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!retracted.IsEmpty)
             addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
