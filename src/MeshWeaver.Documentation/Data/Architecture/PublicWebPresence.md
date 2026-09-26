@@ -112,6 +112,22 @@ grant plus a deny on every chapter that is not free (see `PackageInstaller.Ensur
 and a commercial plugin's cover can be public while its content is not. Asking per node is both the
 fix for the empty sitemap and the reason the body can be served.
 
+**The app-host redirect asks as the stranger.** `UsePublicHostRedirect` sits before
+`UserContextMiddleware`, so a request that only bounces never mints a guest identity. That also
+means no `AccessContext` exists yet when it decides. `SeoResolver.Resolve` takes the ambient identity
+for its owner read, so the decision is run explicitly as `UserContextMiddleware.ResolveHttpCaller`.
+Every request that reaches the decision is unauthenticated, so that identity is the well-known
+Anonymous one. This widens nothing: Anonymous reads exactly what the gate admits.
+
+Without the explicit identity, the owner read left `portal/reads-{meshId}` with none. The never-null
+guard refused it (`message=GetDataRequest, target=Store was posted with no AccessContext`). The
+resolver's fail-open then read the refusal as "not public", and the app host served every public
+page with `200` instead of redirecting it (MeshWeaver#5227, measured on memex.meshweaver.cloud:
+every synthetic-probe run logged `app host: 200 -> (no redirect)` within a second of a
+`target=Store` refusal). `PublicHostRedirectAsksAsTheStrangerTest` runs the default decision over a
+real mesh with no identity anywhere. The older `PublicSiteTest` stubs the decision, so it could not
+see this.
+
 ### The body is in the first response
 
 `SeoPageData.Body` is the page text a crawler reads: the node's current markdown (`content` for a
