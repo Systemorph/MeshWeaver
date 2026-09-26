@@ -303,7 +303,13 @@ derived roster before it asks for credentials, and names the instance any map is
 `memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
 is the failure mode a derivation removes rather than a tidiness argument.
 
-🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Re-measured
+> **RESOLVED — this paragraph and the next three record the state BEFORE the rename.** PartnerRe's
+> installation now answers to `partnerre-test`, the derivation no longer refuses, and it prints five
+> unique names: `build`, `memex`, `memex-cloud`, `partnerre-test`, `pearl`. See the
+> section *DECIDED: the rename* below. The
+> history is kept because the refusal still guards the next repository that declares a taken name.
+
+🚨 **What the derivation said THEN was a refusal, which is the mechanism working.** Measured
 2026-09-21 over all three deployments repositories, the fleet declares **five live** installations:
 `build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud), `memex`
 (memex.systemorph.com) and `pearl` (pearl.meshweaver.cloud) in `Systemorph/Memex`, **and a second
@@ -530,7 +536,11 @@ assembler refuses by name, *"no repository is known for source 'X'"*, the verdic
 worth doing and why it is not urgent — and it unblocks nothing on its own, because the refusal below
 comes first.
 
-### 🚨 MEASURED: the three inputs are necessary and NOT sufficient — the roster refuses first
+### 🚨 MEASURED: the three inputs are necessary and NOT sufficient — the roster refused first
+
+> **RESOLVED by the rename in the next section.** The roster derives now, so the three inputs are
+> once again the whole of what is missing. The text below records why the decision had to come
+> before any credential was issued.
 
 This section used to open *"provisioning the three remaining `COMBO_*` inputs makes this lane green
 today"* — **while the section above described the derivation refusing.** The page contradicted
