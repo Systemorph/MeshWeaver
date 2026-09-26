@@ -552,7 +552,7 @@ container of both images at the three-hour mark, and the control instance was do
 The mechanism, the per-check table and the guards are in
 [The Bake Gate Only Stalls a Roll](/Doc/Architecture/TheBakeGateOnlyStallsARoll). For an instance
 that arms the gate: its `probes.startup` no longer has to cover a bake; the chart adds
-`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead.
+`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render.
 
 ### The migration Job IS the evidence — so it must outlive the observer
 

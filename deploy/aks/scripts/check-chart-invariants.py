@@ -365,11 +365,10 @@ elif _probe_paths["readinessProbe"] == _probe_paths["startupProbe"]:
 #
 # 🚨 The render cannot always ANSWER whether the gate is armed: the portal's `envFrom` puts
 # `memex-portal-secrets`, every Key Vault-synced Secret and `.Values.extraEnvFrom` AFTER the
-# ConfigMap, and Kubernetes keeps the LAST source on a key clash. That used to matter here because
-# an unreadable arming could hide a startup probe off /health. It matters no more: the readiness
-# path is /ready in every render (invariant 10 holds it apart from the other two), so the gate has
-# its reader whatever the opaque sources say. Only the deadline term is lost to an invisible
-# arming, and that loss reports a stall, never kills.
+# ConfigMap, and Kubernetes keeps the LAST source on a key clash. So neither half is conditioned on
+# the render's reading of the gate: the readiness path is /ready in every render (invariant 10
+# holds it apart from the other two), and the deadline check below runs on EVERY render, because
+# the template adds the bake term unconditionally for exactly this reason.
 # ---------------------------------------------------------------------------
 checks += 1
 _gate_env = {e.get("name"): e.get("value") for e in (portal.get("env") or [])}
@@ -393,21 +392,21 @@ if _gate_armed:
             "completes as if it had passed. Point the readinessProbe at /ready, or turn the gate "
             "off so the configuration stops claiming a protection that is not there.",
         )
-    _startup = portal.get("startupProbe") or {}
-    _startup_budget = int(_startup.get("periodSeconds") or 0) * int(_startup.get("failureThreshold") or 0)
-    _deadline = int(spec.get("progressDeadlineSeconds") or 600)
-    _cold_bake = 570  # ~240 types x 2.4 s, measured 2026-08-10 (values.yaml probes.rollGate)
-    _pull_headroom = 600  # image pull + the wait-for-postgres initContainer, as the template adds
-    if _deadline < _startup_budget + _pull_headroom + _cold_bake:
-        finding(
-            f"PreWarm__GateReadiness is true but progressDeadlineSeconds is {_deadline}, less than "
-            f"the startup budget ({_startup_budget}s) plus pull headroom ({_pull_headroom}s) plus a "
-            f"cold bake ({_cold_bake}s)",
-            "an armed gate holds READINESS for the whole bake after the pod has started, so the "
-            "rollout's progress deadline must cover both. Short of that a legitimately baking pod "
-            "is reported as a failed roll. The template derives the deadline from "
-            "probes.rollGate.bakeSeconds when the gate is armed; keep that term.",
-        )
+_startup = portal.get("startupProbe") or {}
+_startup_budget = int(_startup.get("periodSeconds") or 0) * int(_startup.get("failureThreshold") or 0)
+_deadline = int(spec.get("progressDeadlineSeconds") or 600)
+_cold_bake = 570  # ~240 types x 2.4 s, measured 2026-08-10 (values.yaml probes.rollGate)
+_pull_headroom = 600  # image pull + the wait-for-postgres initContainer, as the template adds
+if _deadline < _startup_budget + _pull_headroom + _cold_bake:
+    finding(
+        f"progressDeadlineSeconds is {_deadline}, less than the startup budget ({_startup_budget}s) "
+        f"plus pull headroom ({_pull_headroom}s) plus a cold bake ({_cold_bake}s)",
+        "an armed NodeType bake gate holds READINESS for the whole bake after the pod has started, "
+        "and the gate can be armed by an env source this render cannot see — so every render's "
+        "rollout deadline must cover a cold bake. Short of that a legitimately baking pod is "
+        "reported as a failed roll. The template adds probes.rollGate.bakeSeconds unconditionally; "
+        "keep that term.",
+    )
 
 # ---------------------------------------------------------------------------
 # 11. The platform-image pull secret is on BOTH pods that pull a platform image, or on neither.

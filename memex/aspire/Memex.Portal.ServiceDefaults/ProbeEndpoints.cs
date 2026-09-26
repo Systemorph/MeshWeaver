@@ -6,18 +6,22 @@ namespace Memex.Portal.ServiceDefaults;
 ///
 /// <para><b>The questions.</b>
 /// <list type="bullet">
-/// <item><see cref="Health"/> — <i>"is everything this portal needs actually up?"</i> Every
-/// registered check, tagged or not: the database, the mesh, the NodeType bake gate. Heavy. It is
+/// <item><see cref="Health"/> — <i>"did this portal boot — is everything it needs up?"</i> Every
+/// registered check RUNS and prints here; every check except a ROLL GATE
+/// (<see cref="RollGateTag"/>) decides its status: the database, the schema, the mesh. Heavy. It is
 /// the <c>startupProbe</c>, and nothing else, because it is the only probe Kubernetes suspends the
-/// other two behind.</item>
+/// other two behind — and a failing startup probe KILLS the container, which is why a roll gate's
+/// verdict is kept off it (policy <c>bake-gate-readiness-only</c>).</item>
 /// <item><see cref="Live"/> — <i>"am I making progress?"</i> Only checks tagged
 /// <see cref="LiveTag"/>. Failing it means <b>restart me</b>, so the bar is a condition a restart
 /// actually fixes — a process spending most of its wall clock in GC pauses is the canonical one
 /// (<c>ProcessProgressHealthCheck</c>, in MeshWeaver.Plugins).</item>
-/// <item><see cref="Ready"/> — <i>"can I take a request?"</i> Only checks tagged
-/// <see cref="ReadyTag"/>. Failing it means <b>send my traffic to my siblings</b>, which is a
-/// claim about the siblings as much as about this pod, and therefore a much rarer thing to be
-/// able to say honestly.</item>
+/// <item><see cref="Ready"/> — <i>"can I take a request?"</i> Checks tagged <see cref="ReadyTag"/>,
+/// plus the ROLL GATES (<see cref="RollGateTag"/>, today the NodeType bake gate). Failing it means
+/// <b>send my traffic to my siblings</b>, which is a claim about the siblings as much as about this
+/// pod, and therefore a much rarer thing to be able to say honestly — except for a roll gate, whose
+/// "no" is about the IMAGE: the pod stays alive, out of the Service, and the roll stalls with the
+/// previous image serving.</item>
 /// </list></para>
 ///
 /// <para>🚨 <b>Why <see cref="Ready"/> exists at all — the defect it removes.</b> Until #3330 the

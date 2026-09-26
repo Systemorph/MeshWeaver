@@ -252,7 +252,8 @@ fi
 # CONDITIONAL, so it is satisfied just as well by a set of renders where nothing ever arms the gate.
 # Read the fixture by NAME and assert it actually armed it, that the readiness probe it rendered is
 # the one that reads the gate, and that the deadline carries the bake term (the chart's default
-# startup budget 300 s + probes.rollGate.bakeSeconds 1800 s + 600 s headroom).
+# startup budget 300 s + probes.rollGate.bakeSeconds 1800 s + 600 s headroom) — which it does in
+# every render, because arming can come from a source the render cannot see.
 gate_render="$(render_of "the NodeType bake gate armed (fixture)")"
 if [ -f "$gate_render" ] \
    && grep -q '^  PreWarm__GateReadiness: "true"$' "$gate_render" \

@@ -203,11 +203,12 @@ config:
     #
     # ⚠️ THREE prerequisites, all of which must be true in the LIVE namespace —
     # verify, do not assume, because two of the three portals had drifted:
-    #   1. probes.startup raised to cover a full COLD bake (below: 10 × 180 = 30 min).
-    #      Without it Kubernetes kills the pod mid-bake, every time, forever.
-    #   2. The startupProbe must actually EXIST and point at /health — that probe
-    #      is the only thing that reads this gate. A namespace with no startupProbe
-    #      (or one probing /alive, /ready or /healthz) ignores the gate completely.
+    #   1. The rollout deadline covers a cold bake — the chart adds
+    #      probes.rollGate.bakeSeconds to progressDeadlineSeconds in every render.
+    #      The startup budget does NOT (policy bake-gate-readiness-only,
+    #      MeshWeaver#5544): the gate never rides the startup probe any more.
+    #   2. The readinessProbe must actually EXIST and point at /ready — that probe
+    #      is the only thing that reads this gate. Readiness anywhere else ignores it.
     #   3. strategy.maxUnavailable MUST be 0. The gate protects a portal only by
     #      making the new pod refuse readiness; at maxUnavailable:1 with replicas:1
     #      the serving pod can be deleted first, so the gate reports and the outage
@@ -552,31 +553,22 @@ persistence:
     accessMode: "ReadWriteOnce"
     size: "128Gi"
 
-# --- Startup-probe budget (paired with the pod-side NodeType bake) ----------
-# ⚠️ PAIRED with PreWarm__GateReadiness above: the gate holds /health red while
-# the pod bakes, and a cold bake (fresh framework identity, empty cache for it)
-# is strictly sequential. The default budget (5 s × 60 = 5 min) kills the pod
-# mid-bake, on every attempt, forever.
+# --- Startup-probe budget: a plain cold boot ONLY -------------------------------
+# 🚨 NO LONGER paired with PreWarm__GateReadiness (policy bake-gate-readiness-only,
+# MeshWeaver#5544). The gate's verdict is read by /ready; a baking or refusing pod
+# stays alive and out of the Service. Until that change the gate held /health red
+# and this budget had to cover a cold bake — and when a gate REFUSED, the budget
+# ran out and killed the container, on every image (memex, 2026-09-25/26).
 #
-# ⏱️ DERIVED from the MEASURED per-type cost, 2026-08-10 (production Loki, three
-# installations on one image): ~2.4 s per NodeType, within 3% across a 10x spread
-# in mesh size — 22-36 types / 68 s at the small end, 237-241 / 567 s at the large
-# end. Per-installation figures live with the deployments they describe.
-#
-#   largest measured       ~240 types x 2.4 s  ~= 570 s  (~10 min)
-#   + plain cold boot      schema provisioning + static import
-#   worst realistic startup                    ~= 870 s  (~15 min)
-#   x2 headroom             10 s x 180          = 1800 s (30 min)
-#
-# Covers ~750 types, 3x the largest measured mesh, so growth has room.
-#
-# 🚨 Was 10 × 1080 = 3 h until 2026-08-10, sized from a "~90 s per NodeType"
-# estimate measurement showed to be 37x too high. A stuck bake now trips this in
-# 30 min instead of hiding inside a 3-hour window that detected nothing.
+# The bake's time (~2.4 s per NodeType, sequential, measured 2026-08-10 — ~570 s on
+# the largest mesh) is on progressDeadlineSeconds: startup budget + 600 s +
+# probes.rollGate.bakeSeconds (1800 s), where running out reports and kills nothing.
+# 10 s × 60 = 600 s is 2× the chart's plain-boot budget; keep it near a real boot so
+# a genuinely STUCK boot is detected.
 probes:
   startup:
     periodSeconds: 10
-    failureThreshold: 180
+    failureThreshold: 60
 
 # --- Ingress with cookie session affinity (Blazor Server is sticky) ---------
 # Blazor Server holds a per-circuit SignalR connection; without sticky sessions

@@ -184,16 +184,17 @@ restarted pod of the serving image had to pass the same probe. The control insta
   not a roll gate. The operator's instrument (`/health`, the `Sample` action's `healthDetail`) keeps
   showing the gate.
 - **The chart.** The readiness probe was already on `/ready`. The rollout's
-  `progressDeadlineSeconds` now adds `probes.rollGate.bakeSeconds` (1800 s) when the gate is armed
-  in the render, because the bake's time is spent after startup, holding readiness. Running out of
+  `progressDeadlineSeconds` now adds `probes.rollGate.bakeSeconds` (1800 s) in every render,
+  because the bake's time is spent after startup, holding readiness, and the gate can be armed by an
+  env source the render cannot see. Running out of
   it reports `ProgressDeadlineExceeded` and kills nothing. Arming the gate no longer means raising
   `probes.startup`.
 - **The guards.** `RollGateReadinessOnlyTest` drives the real endpoints over HTTP, on the probe
   paths the chart ships. A refusing `nodetype_bake` must leave the startup probe at 200, turn
   readiness to 503, leave liveness at 200, and still print on `/health`. An ordinary Unhealthy check
   must still fail the startup probe. Invariant 10b of `check-chart-invariants.sh` refuses an armed
-  gate whose readiness probe is not on `/ready`, or whose rollout deadline does not cover a cold
-  bake. `PreWarmGateReadinessGuard` holds the chart's own prose and prerequisites to the same rule.
+  gate whose readiness probe is not on `/ready`, and any render whose rollout deadline does not
+  cover a cold bake. `PreWarmGateReadinessGuard` holds the chart's own prose and prerequisites to the same rule.
 
 ### Which checks may fail the startup probe
 

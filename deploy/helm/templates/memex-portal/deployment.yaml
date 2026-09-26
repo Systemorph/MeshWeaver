@@ -395,7 +395,7 @@ spec:
             # three-hour mark, on both images, including a restarted pod of the serving one, which
             # took memex.systemorph.com down from 20:54Z to 04:07Z. So this budget covers a plain
             # cold boot and no bake; the bake's time is on progressDeadlineSeconds below
-            # (probes.rollGate.bakeSeconds). RollGateReadinessOnlyTest pins the rule over real HTTP.
+            # (probes.rollGate.bakeSeconds, added in every render). RollGateReadinessOnlyTest pins the rule over real HTTP.
             #
             # 🚨 timeoutSeconds is what this probe gives /health to ANSWER, and /health is an
             # aggregate census whose cost grows with the mesh. On 2026-09-17 one check reached
@@ -693,12 +693,14 @@ spec:
   # is exactly the signal an operator would act on by rolling back the good image.
   #
   # DERIVED, never a second free-standing number: the full startup budget, plus
-  # probes.rollGate.bakeSeconds when the gate is armed in THIS render, plus headroom for image pull
-  # + the wait-for-postgres initContainer. Running out of it kills nothing — it REPORTS a stalled
-  # roll, which is what a refusing gate is. ⚠️ A gate armed by an env source this render cannot see
-  # (a Key Vault Secret, an inline env) does not add the bake term: arm it in
-  # config.memex_portal, where the render sees it.
-  progressDeadlineSeconds: {{ add (mul .Values.probes.startup.periodSeconds .Values.probes.startup.failureThreshold) 600 (ternary ((.Values.probes.rollGate).bakeSeconds | default 0) 0 (eq (toString .Values.config.memex_portal.PreWarm__GateReadiness) "true")) }}
+  # probes.rollGate.bakeSeconds, plus headroom for image pull + the wait-for-postgres
+  # initContainer. The bake term is added UNCONDITIONALLY: the gate can be armed by an env source
+  # this render cannot see (a Key Vault-synced Secret, extraEnvFrom, an inline env — Kubernetes keeps
+  # the LAST envFrom source on a key clash), so conditioning it on config.memex_portal would render a
+  # deadline too short for exactly the deployments whose arming nobody can read here. The cost of
+  # always adding it is that an UNGATED stuck roll is reported later — and running out of this
+  # deadline only REPORTS (ProgressDeadlineExceeded); it kills nothing.
+  progressDeadlineSeconds: {{ add (mul .Values.probes.startup.periodSeconds .Values.probes.startup.failureThreshold) 600 ((.Values.probes.rollGate).bakeSeconds | default 0) }}
   strategy:
     rollingUpdate:
       maxSurge: 1

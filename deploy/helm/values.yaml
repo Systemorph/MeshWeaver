@@ -688,9 +688,9 @@ probes:
     timeoutSeconds: 5
     failureThreshold: 60
   rollGate:
-    # How long an ARMED NodeType bake gate (config.memex_portal.PreWarm__GateReadiness set to true) may
-    # hold a new pod out of the Service while it bakes, before the rollout counts as not
-    # progressing. Added to progressDeadlineSeconds only when the gate is armed in this render.
+    # How long an ARMED NodeType bake gate may hold a new pod out of the Service while it bakes,
+    # before the rollout counts as not progressing. Added to progressDeadlineSeconds in EVERY
+    # render: the gate can be armed by an env source the render cannot see.
     # Running out of it marks the Deployment ProgressDeadlineExceeded — a REPORT of a stalled roll;
     # it kills nothing and the previous image keeps serving.
     #
@@ -1052,8 +1052,8 @@ config:
     #   • The gate is read by the READINESS probe (/ready) alone and needs
     #     strategy.maxUnavailable:0 (policy bake-gate-readiness-only). It no longer rides the
     #     startup budget: a baking or refusing pod stays alive and out of the Service.
-    # An instance that wants the protection turns BOTH on; progressDeadlineSeconds then adds
-    # probes.rollGate.bakeSeconds automatically. See config.yaml for what each key does.
+    # An instance that wants the protection turns BOTH on; progressDeadlineSeconds already
+    # carries probes.rollGate.bakeSeconds. See config.yaml for what each key does.
     PreWarm__DynamicTypes: "false"
     PreWarm__GateReadiness: "false"
     # Operator escape hatch: serve even when the sweep ERRORED and therefore proved nothing.

@@ -88,9 +88,10 @@ public class PreWarmGateReadinessGuard
         // spent AFTER startup, holding readiness. A template that derived the deadline from the
         // startup budget alone would report every armed cold bake as a failed roll.
         Assert.True(Regex.IsMatch(deployment,
-                @"progressDeadlineSeconds:[^\n]*\.Values\.probes\.startup\.periodSeconds[^\n]*\.Values\.probes\.startup\.failureThreshold[^\n]*probes\.rollGate\)\.bakeSeconds[^\n]*PreWarm__GateReadiness"),
+                @"progressDeadlineSeconds:[^\n]*\.Values\.probes\.startup\.periodSeconds[^\n]*\.Values\.probes\.startup\.failureThreshold[^\n]*probes\.rollGate\)\.bakeSeconds"),
             $"{Deployment} no longer derives progressDeadlineSeconds from the startup budget PLUS "
-            + "probes.rollGate.bakeSeconds when PreWarm__GateReadiness is armed. The gate holds "
+            + "probes.rollGate.bakeSeconds (in every render — the gate can be armed by an env "
+            + "source the render cannot see). The gate holds "
             + "READINESS for the whole cold bake after the pod has started, so a deadline without the "
             + "bake term reports a legitimately baking pod as a failed roll — the signal an operator "
             + "acts on by rolling back the good image.");
