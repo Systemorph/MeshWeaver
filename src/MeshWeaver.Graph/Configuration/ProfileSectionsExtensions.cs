@@ -1,8 +1,10 @@
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -73,8 +75,6 @@ public static class ProfileSectionsExtensions
         this MessageHubConfiguration config, LayoutAreaHost host, RenderingContext ctx)
     {
         var providers = config.Get<ProfileSectionProviderCollection>()?.Providers ?? [];
-        if (providers.Count == 0)
-            return Observable.Return<IReadOnlyList<ProfileSectionDefinition>>([]);
 
         var streams = providers.Select(provider => Observable
                 .Defer(() => provider(host, ctx))
@@ -85,7 +85,49 @@ public static class ProfileSectionsExtensions
                     _ => Observable.Return<IReadOnlyList<ProfileSectionDefinition>>([])))
             .ToList();
 
+        // Data-contributed sections (UiContribution nodes with Context = Profile): the lane for a
+        // module compiled from mesh content, which cannot reach this hub's configuration. Added
+        // unconditionally and read LIVE, so a newly declared section appears without a recycle.
+        streams.Add(ContributedProfileSections(host)
+            .StartWith(NoSections)
+            .Catch<IReadOnlyList<ProfileSectionDefinition>, Exception>(
+                _ => Observable.Return<IReadOnlyList<ProfileSectionDefinition>>([])));
+
         return Observable.CombineLatest(streams).Select(Merge);
+    }
+
+    /// <summary>
+    /// The DATA-contributed profile sections: every <see cref="UiContribution"/> in the shared,
+    /// mesh-scoped <see cref="UiContributionCatalog"/> declaring
+    /// <see cref="UiContribution.ProfileContext"/>, projected through the closed gate vocabulary in
+    /// compiled code (<see cref="UiContributionProjection.ProjectProfileSections"/>). The twin of
+    /// <c>SettingsMenuItemsExtensions.ContributedSettingsTabs</c>: fails closed for an anonymous
+    /// or virtual viewer, and re-projects on every catalog change and every change of the user
+    /// node's shape.
+    /// </summary>
+    private static IObservable<IReadOnlyList<ProfileSectionDefinition>> ContributedProfileSections(
+        LayoutAreaHost host)
+    {
+        var catalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (catalog is null)
+            return Observable.Return(NoSections);
+
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = accessService?.Context ?? accessService?.CircuitContext;
+        if (string.IsNullOrEmpty(viewer?.ObjectId) || viewer.IsVirtual)
+            return Observable.Return(NoSections);
+
+        var viewerId = accessService.ViewerId();
+        var userPath = host.Hub.Address.ToString();
+        return Observable.Defer(() =>
+        {
+            var userNode = host.Workspace.GetMeshNodeStream()
+                .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
+            return catalog.Contributions
+                .CombineLatest(userNode, host.Hub.IsGlobalAdmin().StartWith(false),
+                    (contributions, node, isAdmin) => UiContributionProjection
+                        .ProjectProfileSections(contributions, userPath, node, isAdmin, viewerId));
+        });
     }
 
     /// <summary>Flattens, de-duplicates by id (first registration wins) and sorts by order.</summary>

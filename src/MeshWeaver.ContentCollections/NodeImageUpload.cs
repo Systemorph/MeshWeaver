@@ -18,19 +18,28 @@ namespace MeshWeaver.ContentCollections;
 /// already shows — the portal header avatar, the public profile, cards and mentions — with no
 /// second field and no second store.
 ///
-/// <para><b>Managed folder.</b> Pictures written here live under <see cref="Folder"/> with a fresh,
-/// server-generated file name per upload (the user's file name is never used, so nothing in it can
-/// traverse or collide, and the changed URL defeats a browser cache holding the old picture). When
-/// a picture is REPLACED or REMOVED, the previous file is deleted only if it lives in that managed
-/// folder — an icon the owner pointed at some other file of theirs is never touched.</para>
+/// <para><b>What is accepted.</b> PNG, JPEG, GIF and WebP, up to <see cref="MaxBytes"/>. Both are
+/// checked on the BYTES, not on what the client declared: the bytes are read (bounded, inside the
+/// collection's pool leaf) and must carry the image signature matching the extension, so an HTML
+/// or script file renamed to <c>.png</c> is refused before anything is written.</para>
 ///
-/// <para><b>Order of effects.</b> The bytes are saved first, then the node is updated through the
-/// one mutation API (<c>GetMeshNodeStream(path).Update</c>), which enforces the caller's
-/// <c>Update</c> permission on the node. If that update is refused or fails, the file just written
-/// is deleted again before the error propagates, so a refused change leaves nothing behind.</para>
+/// <para><b>Managed names.</b> Pictures written here live under <see cref="Folder"/> with a fresh,
+/// server-generated file name per upload (the user's file name is never used, and the changed URL
+/// defeats a browser cache holding the old picture). When a picture is REPLACED or REMOVED, the
+/// previous file is deleted only if its name has that generated shape — an icon the owner pointed
+/// at any other file of theirs is never touched.</para>
 ///
-/// <para>Everything is cold and observable end-to-end: nothing happens until Subscribe, and every
-/// I/O leaf runs on the collection's pool. Full reference: <c>Doc/GUI/ProfilePage</c>.</para>
+/// <para><b>Order of effects and identity.</b> The bytes are saved first, then the node is updated
+/// through the one mutation API (<c>GetMeshNodeStream(path).Update</c>), which enforces the caller's
+/// <c>Update</c> permission. A failed save or a refused update deletes the file just written. The
+/// caller's <see cref="AccessContext"/> is captured when the method is CALLED and every write runs
+/// under it (<c>RunAs</c> for the subscription, <c>CarryAccessContext</c> for the continuations).</para>
+///
+/// <para><b>Failures</b> are <see cref="NodeImageUploadException"/>s whose
+/// <see cref="NodeImageUploadException.Reason"/> (<see cref="NodeImageUploadFailure"/>) a GUI maps
+/// to a localized message; the exception text itself is English, for logs.</para>
+///
+/// <para>Everything is cold and observable end-to-end. Full reference: <c>Doc/GUI/ProfilePage</c>.</para>
 /// </summary>
 public static class NodeImageUpload
 {
@@ -51,9 +60,7 @@ public static class NodeImageUpload
     /// <summary>The <c>accept</c> attribute value for a file input offering exactly <see cref="AllowedExtensions"/>.</summary>
     public const string AcceptAttribute = "image/png,image/jpeg,image/gif,image/webp";
 
-    /// <summary>
-    /// Whether <paramref name="fileName"/> has an accepted image extension.
-    /// </summary>
+    /// <summary>Whether <paramref name="fileName"/> has an accepted image extension.</summary>
     /// <param name="fileName">The uploaded file's name.</param>
     public static bool IsAllowed(string? fileName)
         => !string.IsNullOrEmpty(fileName) && AllowedExtensions.Contains(Path.GetExtension(fileName));
@@ -105,13 +112,11 @@ public static class NodeImageUpload
     /// Emits the new icon reference once the node has been updated.
     /// </summary>
     /// <param name="hub">The calling hub (a portal circuit's hub or a node hub). The caller's
-    /// <see cref="AccessContext"/> is captured when this is CALLED and restored around every write
-    /// the pipeline makes, so no pool or reply hop can drop it.</param>
+    /// <see cref="AccessContext"/> is captured when this is CALLED and every write runs under it.</param>
     /// <param name="nodePath">The node whose picture this is.</param>
     /// <param name="originalFileName">The uploaded file's name — only its extension is used.</param>
-    /// <param name="length">The declared length in bytes, checked against <see cref="MaxBytes"/> up
-    /// front. It is a claim, not a limit: the bytes actually read are counted too, and a stream that
-    /// runs past <see cref="MaxBytes"/> fails the save and its partial file is deleted.</param>
+    /// <param name="length">The declared length in bytes — a fast pre-check only; the bytes actually
+    /// read are counted against <see cref="MaxBytes"/> too.</param>
     /// <param name="openStream">Opens the picture's bytes; invoked on the collection's pool.</param>
     /// <returns>A cold, single-emission observable of the new <c>content:</c> reference.</returns>
     public static IObservable<string> Replace(
@@ -120,29 +125,32 @@ public static class NodeImageUpload
         if (string.IsNullOrWhiteSpace(nodePath))
             return Observable.Throw<string>(new ArgumentException("A node path is required.", nameof(nodePath)));
         if (!IsAllowed(originalFileName))
-            return Observable.Throw<string>(new InvalidOperationException(
+            return Observable.Throw<string>(new NodeImageUploadException(NodeImageUploadFailure.UnsupportedType,
                 $"'{originalFileName}' is not a supported picture — use one of "
                 + string.Join(", ", AllowedExtensions.OrderBy(e => e, StringComparer.Ordinal)) + "."));
         if (length <= 0 || length > MaxBytes)
             return Observable.Throw<string>(TooLarge(length));
 
-        var storedFileName = $"{Guid.NewGuid():N}{Path.GetExtension(originalFileName).ToLowerInvariant()}";
+        var extension = Path.GetExtension(originalFileName).ToLowerInvariant();
+        var storedFileName = $"{Guid.NewGuid():N}{extension}";
         var storedPath = $"{Folder}/{storedFileName}";
         var newIcon = IconReference(storedFileName);
         var logger = Logger(hub);
         var caller = CallerOf(hub);
 
-        return Observable.Defer(() => ResolveCollection(hub, nodePath, caller))
-            .SelectMany(collection => collection
-                .SaveFile(Folder, storedFileName, () => new LimitedReadStream(openStream(), MaxBytes))
-                .LastOrDefaultAsync()
-                .CarryAccessContext(hub.ServiceProvider, caller)
-                // A failed save (an over-long stream included) or a refused node update must not
-                // strand the bytes it wrote.
-                .SelectMany(_ => SetIcon(hub, nodePath, newIcon).CarryAccessContext(hub.ServiceProvider, caller))
-                .Catch<string?, Exception>(ex => Discard(collection, storedPath, nodePath, logger)
+        return AsCaller(hub, caller, () => ResolveCollection(hub, nodePath, caller))
+            .SelectMany(collection => AsCaller(hub, caller, () => collection
+                    // The factory runs INSIDE the collection's pool leaf: the bounded read and the
+                    // signature check happen there, synchronously, never on the caller's thread.
+                    .SaveFile(Folder, storedFileName, () => ReadValidatedPicture(openStream, extension))
+                    .LastOrDefaultAsync())
+                .SelectMany(_ => AsCaller(hub, caller, () => SetIcon(hub, nodePath, newIcon)))
+                // A failed save or a refused node update must not strand the bytes it wrote.
+                .Catch<string?, Exception>(ex => AsCaller(hub, caller,
+                        () => Discard(collection, storedPath, nodePath, logger))
                     .SelectMany(_ => Observable.Throw<string?>(ex)))
-                .SelectMany(previousIcon => DeletePrevious(collection, previousIcon, newIcon, nodePath, logger)
+                .SelectMany(previousIcon => AsCaller(hub, caller,
+                        () => DeletePrevious(collection, previousIcon, newIcon, nodePath, logger))
                     .Select(_ => newIcon)));
     }
 
@@ -151,7 +159,7 @@ public static class NodeImageUpload
     /// picture file it pointed at, if any. Emits once the node has been updated.
     /// </summary>
     /// <param name="hub">The calling hub — the caller's access context is captured on the call and
-    /// restored around each write.</param>
+    /// every write runs under it.</param>
     /// <param name="nodePath">The node whose picture to remove.</param>
     /// <returns>A cold, single-emission observable.</returns>
     public static IObservable<Unit> Remove(IMessageHub hub, string nodePath)
@@ -160,16 +168,68 @@ public static class NodeImageUpload
             return Observable.Throw<Unit>(new ArgumentException("A node path is required.", nameof(nodePath)));
         var logger = Logger(hub);
         var caller = CallerOf(hub);
-        return Observable.Defer(() => SetIcon(hub, nodePath, null))
-            .CarryAccessContext(hub.ServiceProvider, caller)
+        return AsCaller(hub, caller, () => SetIcon(hub, nodePath, null))
             .SelectMany(previousIcon => ManagedFilePath(previousIcon) is null
                 ? Observable.Return(Unit.Default)
-                : ResolveCollection(hub, nodePath, caller)
-                    .SelectMany(collection => DeletePrevious(collection, previousIcon, null, nodePath, logger)));
+                : AsCaller(hub, caller, () => ResolveCollection(hub, nodePath, caller))
+                    .SelectMany(collection => AsCaller(hub, caller,
+                        () => DeletePrevious(collection, previousIcon, null, nodePath, logger))));
     }
 
-    private static InvalidOperationException TooLarge(long length)
-        => new($"A picture must be between 1 byte and {MaxBytes / (1024 * 1024)} MB; this one is {length} bytes.");
+    /// <summary>
+    /// Runs <paramref name="work"/> as <paramref name="caller"/> — both while it is SUBSCRIBED
+    /// (<c>RunAs</c>, so a write that snapshots the ambient identity at subscribe sees the caller)
+    /// and while it NOTIFIES (<c>CarryAccessContext</c>, so the next step's continuation does too).
+    /// </summary>
+    private static IObservable<T> AsCaller<T>(IMessageHub hub, AccessContext? caller, Func<IObservable<T>> work)
+        => hub.ServiceProvider.GetService<AccessService>()
+            .RunAs(caller, work)
+            .CarryAccessContext(hub.ServiceProvider, caller);
+
+    /// <summary>
+    /// Reads the upload into memory, BOUNDED by <see cref="MaxBytes"/> (the length that counts is
+    /// the one actually read), and checks that the bytes carry the image signature the extension
+    /// promises. Synchronous by design: it runs inside the collection's pool leaf.
+    /// </summary>
+    private static MemoryStream ReadValidatedPicture(Func<Stream> openStream, string extension)
+    {
+        var buffer = new MemoryStream();
+        using (var source = openStream())
+        {
+            var chunk = new byte[81920];
+            int read;
+            while ((read = source.Read(chunk, 0, chunk.Length)) > 0)
+            {
+                buffer.Write(chunk, 0, read);
+                if (buffer.Length > MaxBytes)
+                    throw TooLarge(buffer.Length);
+            }
+        }
+        if (!HasImageSignature(buffer.GetBuffer().AsSpan(0, (int)buffer.Length), extension))
+            throw new NodeImageUploadException(NodeImageUploadFailure.NotAnImage,
+                $"The file's content is not a {extension.TrimStart('.').ToUpperInvariant()} image.");
+        buffer.Position = 0;
+        return buffer;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="bytes"/> start with the signature of the format
+    /// <paramref name="extension"/> names — PNG, JPEG, GIF (87a/89a) or WebP (RIFF…WEBP).
+    /// </summary>
+    /// <param name="bytes">The file's bytes.</param>
+    /// <param name="extension">The lower-case extension, with the dot.</param>
+    public static bool HasImageSignature(ReadOnlySpan<byte> bytes, string extension) => extension switch
+    {
+        ".png" => bytes.StartsWith((ReadOnlySpan<byte>)[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+        ".jpg" or ".jpeg" => bytes.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xD8, 0xFF]),
+        ".gif" => bytes.StartsWith("GIF87a"u8) || bytes.StartsWith("GIF89a"u8),
+        ".webp" => bytes.Length >= 12 && bytes.StartsWith("RIFF"u8) && bytes[8..12].SequenceEqual("WEBP"u8),
+        _ => false,
+    };
+
+    private static NodeImageUploadException TooLarge(long length)
+        => new(NodeImageUploadFailure.TooLarge,
+            $"A picture must be between 1 byte and {MaxBytes / (1024 * 1024)} MB; this one is {length} bytes.");
 
     /// <summary>The identity the caller is acting as right now — request-scoped, else the circuit's.</summary>
     private static AccessContext? CallerOf(IMessageHub hub)
@@ -188,56 +248,6 @@ public static class NodeImageUpload
                     nodePath, path);
                 return Observable.Return(Unit.Default);
             });
-
-    /// <summary>
-    /// A read-only pass-through that FAILS once more than <c>limit</c> bytes have been read — the
-    /// size ceiling enforced on the bytes themselves, not on a length the caller declared.
-    /// </summary>
-    private sealed class LimitedReadStream(Stream inner, long limit) : Stream
-    {
-        private long _read;
-
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position
-        {
-            get => _read;
-            set => throw new NotSupportedException();
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-            => Count(inner.Read(buffer, offset, count));
-
-        public override int Read(Span<byte> buffer) => Count(inner.Read(buffer));
-
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-            => Count(await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false));
-
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
-
-        private int Count(int n)
-        {
-            _read += n;
-            if (_read > limit)
-                throw TooLarge(_read);
-            return n;
-        }
-
-        public override void Flush() { }
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-                inner.Dispose();
-            base.Dispose(disposing);
-        }
-    }
 
     /// <summary>
     /// Writes <paramref name="icon"/> onto the node through the one mutation API and emits the icon
@@ -290,15 +300,49 @@ public static class NodeImageUpload
                 o => ContentImportExtensions.ConfigurePost(o, address, captured))
             .SelectMany(collection => collection switch
             {
-                null => Observable.Throw<ContentCollection>(new InvalidOperationException(
+                null => Observable.Throw<ContentCollection>(new NodeImageUploadException(
+                    NodeImageUploadFailure.NoCollection,
                     $"'{nodePath}' has no '{ContentCollectionsExtensions.DefaultCollectionName}' collection to hold a picture.")),
-                { Config.IsEditable: false } => Observable.Throw<ContentCollection>(new InvalidOperationException(
+                { Config.IsEditable: false } => Observable.Throw<ContentCollection>(new NodeImageUploadException(
+                    NodeImageUploadFailure.NoCollection,
                     $"The '{ContentCollectionsExtensions.DefaultCollectionName}' collection of '{nodePath}' is read-only.")),
                 _ => Observable.Return(collection),
-            })
-            .CarryAccessContext(hub.ServiceProvider, captured);
+            });
     }
 
     private static ILogger? Logger(IMessageHub hub)
         => hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeImageUpload).FullName!);
+}
+
+/// <summary>
+/// Why a <see cref="NodeImageUpload"/> was refused — an OPEN vocabulary of string constants
+/// (policy <c>open-vocabulary-string-constants</c>). A GUI maps a reason to the catalog key
+/// <c>profile.pictureError.{reason}</c> and falls back to the generic message for a reason it does
+/// not know.
+/// </summary>
+public static class NodeImageUploadFailure
+{
+    /// <summary>The file's extension is not one of <see cref="NodeImageUpload.AllowedExtensions"/>.</summary>
+    public const string UnsupportedType = "unsupportedType";
+
+    /// <summary>The bytes exceed <see cref="NodeImageUpload.MaxBytes"/> (or the upload is empty).</summary>
+    public const string TooLarge = "tooLarge";
+
+    /// <summary>The bytes do not carry the image signature the extension promises.</summary>
+    public const string NotAnImage = "notAnImage";
+
+    /// <summary>The node has no editable default content collection to hold a picture.</summary>
+    public const string NoCollection = "noCollection";
+}
+
+/// <summary>
+/// A refused picture upload. <see cref="Reason"/> is the machine-readable cause
+/// (<see cref="NodeImageUploadFailure"/>); <see cref="Exception.Message"/> is English, for logs.
+/// </summary>
+/// <param name="reason">The <see cref="NodeImageUploadFailure"/> value.</param>
+/// <param name="message">The English description, for logs.</param>
+public sealed class NodeImageUploadException(string reason, string message) : InvalidOperationException(message)
+{
+    /// <summary>The machine-readable cause — a <see cref="NodeImageUploadFailure"/> value.</summary>
+    public string Reason { get; } = reason;
 }

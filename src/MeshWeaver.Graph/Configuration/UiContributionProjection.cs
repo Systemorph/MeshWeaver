@@ -4,6 +4,7 @@ using MeshWeaver.Graph.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -174,6 +175,77 @@ internal static class UiContributionProjection
                 { LabelKey = contribution.LabelKey, GroupKey = contribution.GroupKey });
         }
         return items;
+    }
+
+    /// <summary>
+    /// Projects the catalog's <see cref="UiContribution.ProfileContext"/> entries into profile-page
+    /// sections for the user node at <paramref name="userPath"/>. Same gates as every other
+    /// projection (the closed node-shape vocabulary against the USER node; the permission floor of
+    /// <see cref="Permission.Read"/>, applied later against the viewer's latest permissions by
+    /// <c>ProfileSectionsExtensions.FilterByPermission</c>). The body embeds
+    /// <see cref="UiContribution.Area"/> of <see cref="UiContribution.Address"/> — the user node's
+    /// own hub when no address is declared — through <see cref="LayoutAreaControl"/>, so the
+    /// contributing module renders its own view, in the viewer's context, with its own access
+    /// checks. The section id is the contribution node's id (its trailing path segment).
+    /// </summary>
+    /// <param name="contributions">The catalog snapshot.</param>
+    /// <param name="userPath">The user node the profile page edits.</param>
+    /// <param name="userNode">That node, for the node-shape gates (null while it loads).</param>
+    /// <param name="isAdmin">Whether the viewer is a platform admin.</param>
+    /// <param name="viewerId">The viewer's id, for the viewer-home gate.</param>
+    public static IReadOnlyList<ProfileSectionDefinition> ProjectProfileSections(
+        IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
+        string userPath,
+        MeshNode? userNode,
+        bool isAdmin,
+        string? viewerId)
+    {
+        var sections = new List<ProfileSectionDefinition>();
+        foreach (var (node, contribution) in contributions)
+        {
+            if (contribution.Context != UiContribution.ProfileContext)
+                continue;
+            if (contribution.Area is not { Length: > 0 } area)
+                continue;
+            if (!PassesNodeGates(contribution.Gates, userPath, userNode, isAdmin, viewerId))
+                continue;
+
+            var address = contribution.Address is { Length: > 0 } declared ? declared.Trim('/') : null;
+            if (address is not null && !IsInContributorsPartition(address, node.Path))
+                continue;
+            sections.Add(new ProfileSectionDefinition(
+                Id: node.Id is { Length: > 0 } id ? id : area,
+                Title: contribution.Label ?? area,
+                ContentBuilder: (host, _) => Controls.LayoutArea(
+                    address is null ? host.Hub.Address : (object)(Address)address, area),
+                Order: contribution.Order,
+                RequiredPermission: RequiredPermissionFloor(contribution),
+                Icon: contribution.Icon is { Length: > 0 } ? Icon.Parse(contribution.Icon) : null)
+            { TitleKey = contribution.LabelKey });
+        }
+        return sections;
+    }
+
+    /// <summary>
+    /// 🚨 The render-target authorization for an embedding contribution: a contribution may only
+    /// embed an address inside ITS OWN partition (the first segment of the contribution node's
+    /// path) — <c>Store/ProfileSections/subscription</c> may embed <c>Store</c> or
+    /// <c>Store/…</c>, never <c>Acme</c>. The catalog is read as system and a UiContribution is a
+    /// creatable node, so without this anyone able to create one anywhere could make every
+    /// viewer's profile page render an arbitrary hub's area. Tying the target to the partition the
+    /// author could WRITE the contribution into makes the target something that author already
+    /// controls. (The embedded area still runs its own access checks for the viewer.)
+    /// </summary>
+    /// <param name="address">The declared address, trimmed.</param>
+    /// <param name="contributionPath">The contribution node's path.</param>
+    internal static bool IsInContributorsPartition(string address, string? contributionPath)
+    {
+        if (string.IsNullOrEmpty(contributionPath) || address.Contains("..", StringComparison.Ordinal))
+            return false;
+        var partition = contributionPath.Split('/', 2)[0];
+        return partition.Length > 0
+               && (string.Equals(address, partition, StringComparison.OrdinalIgnoreCase)
+                   || address.StartsWith(partition + "/", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
