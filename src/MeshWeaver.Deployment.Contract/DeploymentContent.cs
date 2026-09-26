@@ -548,6 +548,17 @@ public record DeploymentContent
     public bool? AutoRecycleOnStaleBuild { get; init; }
 
     /// <summary>
+    /// Close this instance to logged-OUT callers — renders <c>Access__DenyAnonymous</c>. On, every
+    /// permission check for the Anonymous subject resolves to no access whatever <c>_Access</c>
+    /// grants, <c>PublicRead</c> policies or gate surfaces the mesh carries, and a logged-out
+    /// caller's query answers nothing; signed-in users are unaffected. Null → not stated (the image
+    /// default, off). See <c>Doc/Architecture/AccessControl</c> → "Closing an instance to anonymous
+    /// callers".
+    /// </summary>
+    [Description("Deny all anonymous (logged-out) access")]
+    public bool? DenyAnonymous { get; init; }
+
+    /// <summary>
     /// 🚨 May this instance PATCH ITS OWN portal Deployment when it detects a newer release — the
     /// chart's <c>selfUpdate.canPatch</c>, which renders the self-patch Role AND
     /// <c>SelfUpdate__CanPatch</c> from one value. The fleet default is <c>false</c>: an instance
