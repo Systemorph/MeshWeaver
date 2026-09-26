@@ -792,9 +792,9 @@ every future install writes more. The switch is instance-level and sits above ev
 
 | With the switch on | Effect |
 |---|---|
-| A permission check whose subject is `Anonymous` (empty or virtual contexts resolve to it) | `Permission.None` — no `_Access` grant, no `PartitionAccessPolicy.PublicRead`, no `NodeTypeGate` public surface is consulted |
+| A permission check for a logged-out caller — the `Anonymous` subject (an empty identity resolves to it), or the id a VIRTUAL ambient context carries (a visitor's `guest-…` circuit, which callers such as `MeshNodeStreamCache` pass straight through) | `Permission.None` — no `_Access` grant, no `PartitionAccessPolicy.PublicRead`, no `NodeTypeGate` public surface is consulted |
 | `AnonymousGate` (navigation, SEO head, sitemap, content routes) | `Denied` — a logged-out visitor goes to `/login` first, and nothing is listed publicly |
-| A query, `Select` or autocomplete whose viewer RESOLVED to the anonymous subject | one empty answer, on every backend |
+| A query, `Select` or autocomplete whose viewer RESOLVED to the anonymous subject — named so, or an ambient context that is virtual or names nobody | one empty answer, on every backend |
 | `hub.GetPublicPreview(...)` | `false` — a link preview discloses nothing, not even a name |
 | A signed-in user, including the `Public` grants every signed-in user inherits | unchanged |
 | `System`, hub credentials, the mesh-node-cache identity | unchanged |
@@ -822,11 +822,17 @@ renders it from `config.memex_portal.Access__DenyAnonymous` when a deployment se
    caller — and is left exactly as it was.
 3. **`RlsNodeValidator`** — every node operation consults a hub rule and a per-type
    `INodeTypeAccessRule` BEFORE the permission fold, and either may answer without reaching it. A
-   NAMED anonymous caller is refused ahead of that chain, so no type's own rule can admit one.
+   named anonymous caller, or any caller on a VIRTUAL context (a request's audit id such as
+   `CreatedBy` cannot override that), is refused ahead of that chain in the caller's language
+   (`access.anonymousDenied.signInRequired`), so no type's own rule can admit one.
 
 🚨 **What it does not cover.** A read that bypasses `IMeshService` and reaches a storage provider
 directly with an anonymous viewer is not refused by the boundary; it is still subject to the
-provider's own row filter over the Anonymous grants. And a direct evaluation for the `Public`
+provider's own row filter over the Anonymous grants. The cached exact-node read passes an ambient
+context that names NOBODY straight through without any check (that is the internal, unresolved
+shape, unchanged here). A permission verdict the cache already holds for `(path, user)` lives for
+its TTL, so flipping the key on a running pod takes effect on those entries only as they expire —
+the key reaches a pod through its environment, which a roll replaces anyway. And a direct evaluation for the `Public`
 pseudo-subject (`GetEffectivePermissions(path, WellKnownUsers.Public)`) is not refused — `Public` is
 the signed-in baseline, never a logged-out caller. Pinned by `DenyAnonymousSwitchTest`
 (`test/MeshWeaver.Graph.Test/`).

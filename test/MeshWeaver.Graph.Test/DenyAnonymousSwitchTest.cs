@@ -1,5 +1,7 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -61,10 +63,9 @@ public abstract class DenyAnonymousSwitchTestBase(ITestOutputHelper output, bool
                 AssignmentNodeFactory.UserRole(Owner, "Viewer", "Owned"),
                 new MeshNode("Page", "Owned") { NodeType = "Markdown" })
             .ConfigureServices(services => services.AddSingleton<IConfiguration>(
-                new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    [AnonymousAccess.DenyAnonymousConfigKey] = DenyAnonymous ? "true" : null,
-                }).Build()));
+                new ConfigurationBuilder().AddInMemoryCollection(
+                    ImmutableDictionary<string, string?>.Empty.Add(
+                        AnonymousAccess.DenyAnonymousConfigKey, DenyAnonymous ? "true" : null)).Build()));
 
     /// <summary>
     /// The effective permission a SUBJECT holds on a path — the FIRST decision, so an initial leak
@@ -95,6 +96,56 @@ public abstract class DenyAnonymousSwitchTestBase(ITestOutputHelper output, bool
             .Select(c => c.Items)
             .FirstAsync().Timeout(TestTimeouts.Quick)
             .Await(cancellationToken);
+
+    /// <summary>A logged-out visitor's circuit: VIRTUAL, and named after its guest id, not Anonymous.</summary>
+    protected const string Guest = "guest-deny-anonymous";
+
+    /// <summary>Installs <paramref name="context"/> as the ambient caller.</summary>
+    protected void ActAs(AccessContext context)
+    {
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        access.SetContext(context);
+        access.SetHostIdentity(context);
+    }
+
+    /// <summary>The virtual (logged-out) visitor context.</summary>
+    protected static AccessContext VirtualGuest(string? locale = null)
+        => new() { ObjectId = Guest, Name = Guest, IsVirtual = true, Locale = locale };
+
+    /// <summary>
+    /// Evaluates <paramref name="subject"/> with the SAME id as the ambient context — the shape
+    /// MeshNodeStreamCache and the delivery gate use (<c>GetEffectivePermissions(path, captured.ObjectId)</c>).
+    /// </summary>
+    protected Task<Permission> EffectiveUnder(AccessContext ambient, string path, CancellationToken cancellationToken)
+    {
+        ActAs(ambient);
+        return Mesh.GetEffectivePermissions(path, ambient.ObjectId!)
+            .FirstAsync().Timeout(TestTimeouts.Quick).Await(cancellationToken);
+    }
+
+    /// <summary>The exact-node read through the process-wide cache, as the ambient caller.</summary>
+    protected Task<MeshNode> ExactRead(AccessContext ambient, string path, CancellationToken cancellationToken)
+    {
+        ActAs(ambient);
+        return Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>()
+            .GetStream(path, Mesh.JsonSerializerOptions)
+            .FirstAsync().Timeout(TestTimeouts.Quick).Await(cancellationToken);
+    }
+
+    /// <summary>The RLS node validator's verdict on a READ of <paramref name="path"/> by <paramref name="caller"/>.</summary>
+    protected Task<NodeValidationResult> RlsRead(AccessContext caller, string path, CancellationToken cancellationToken)
+    {
+        var slash = path.LastIndexOf('/');
+        var node = slash < 0 ? new MeshNode(path) : new MeshNode(path[(slash + 1)..], path[..slash]);
+        var validator = Mesh.ServiceProvider.GetServices<INodeValidator>().OfType<RlsNodeValidator>().Single();
+        return validator.Validate(new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node with { NodeType = "Markdown" },
+                AccessContext = caller,
+            })
+            .FirstAsync().Timeout(TestTimeouts.Quick).Await(cancellationToken);
+    }
 
     /// <summary>
     /// Signed-in reads are identical with the switch on and off: a user's own grant, and the Public
@@ -184,6 +235,69 @@ public class DenyAnonymousSwitchTest(ITestOutputHelper output) : DenyAnonymousSw
             n => n.Path == "AnonOpen/Page", "a signed-in viewer's query is not touched by the switch");
     }
 
+    /// <summary>
+    /// A VIRTUAL caller names itself after its guest id, not Anonymous — and the exact-node read path
+    /// (MeshNodeStreamCache) and the delivery gate pass that id straight through. It is still a
+    /// logged-out caller, so the switch refuses it, both in the fold and on the cached exact read.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task VirtualCaller_IsRefused_InTheFoldAndOnTheExactRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await EffectiveUnder(VirtualGuest(), "AnonOpen/Page", ct)).Should().Be(Permission.None,
+            "a virtual ambient context is a logged-out visitor whatever id it carries — otherwise it "
+            + "would fold as a signed-in user and inherit the Public grants");
+
+        var read = () => ExactRead(VirtualGuest(), "AnonOpen/Page", ct);
+        await read.Should().ThrowAsync<UnauthorizedAccessException>(
+            "the cached exact-node read gates on the same fold, with the caller's own captured id");
+    }
+
+    /// <summary>
+    /// <c>Select</c> and <c>Autocomplete</c> carry no request viewer, so the ambient context decides:
+    /// a virtual one, or one that names nobody, is logged out and gets nothing.
+    /// </summary>
+    [Theory(Timeout = 60_000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AmbientLoggedOut_SelectAndAutocomplete_AnswerNothing(bool isVirtual)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        ActAs(isVirtual ? VirtualGuest() : new AccessContext { ObjectId = "" });
+
+        (await MeshQuery.Autocomplete("AnonOpen", "Pa")
+                .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct))
+            .Should().BeEmpty("a logged-out ambient caller is refused at the read boundary");
+        (await MeshQuery.Select<string>("AnonOpen/Page", "name")
+                .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct))
+            .Should().BeNull();
+        (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("path:AnonOpen/Page"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct))
+            .Items.Should().BeEmpty("a query that names no viewer takes the logged-out ambient one");
+    }
+
+    /// <summary>
+    /// The RLS node validator refuses a logged-out caller AHEAD of the hub and per-type rule chain
+    /// (either of which may answer without reaching the fold) — in the caller's language.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task RlsValidator_RefusesALoggedOutCaller_Localized()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var named = await RlsRead(new AccessContext { ObjectId = WellKnownUsers.Anonymous, Locale = "en" }, "AnonOpen/Page", ct);
+        named.IsValid.Should().BeFalse();
+        named.ErrorMessage.Should().Contain("does not allow anonymous access");
+
+        var virtualDe = await RlsRead(VirtualGuest("de"), "AnonOpen/Page", ct);
+        virtualDe.IsValid.Should().BeFalse("a virtual context is logged out whatever id it carries");
+        virtualDe.ErrorMessage.Should().Contain("anonymen Zugriff", "the refusal follows the viewer's language");
+
+        (await RlsRead(new AccessContext { ObjectId = SignedIn }, "AnonOpen/Page", ct)).IsValid
+            .Should().BeTrue("the control: a signed-in caller still reads through the Public grant");
+    }
+
     /// <summary>A link preview is a disclosure to a logged-out caller — none on a closed instance.</summary>
     [Fact(Timeout = 60_000)]
     public async Task PublicPreview_IsOff()
@@ -220,6 +334,21 @@ public class DenyAnonymousSwitchOffTest(ITestOutputHelper output) : DenyAnonymou
         (await CanRead("SignedInOnly/Page", WellKnownUsers.Anonymous, ct)).Should().BeFalse();
     }
 
+    /// <summary>
+    /// The controls for the virtual-caller and validator readings: with the switch off a virtual
+    /// visitor folds exactly as before (its guest id inherits the Public grant), reads the node by
+    /// exact path, and passes the RLS validator — so the on-class refusals are the switch's doing.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task VirtualCaller_FoldsAsBefore()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await EffectiveUnder(VirtualGuest(), "AnonOpen/Page", ct)).HasFlag(Permission.Read).Should().BeTrue();
+        (await ExactRead(VirtualGuest(), "AnonOpen/Page", ct)).Path.Should().Be("AnonOpen/Page");
+        (await RlsRead(new AccessContext { ObjectId = WellKnownUsers.Anonymous }, "AnonOpen/Page", ct)).IsValid
+            .Should().BeTrue("the Anonymous Viewer grant opens the node when the switch is off");
+    }
+
     /// <summary>The anonymous gate grants what the grant opens.</summary>
     [Fact(Timeout = 60_000)]
     public async Task AnonymousGate_Grants()
@@ -245,7 +374,7 @@ public class AnonymousAccessParsingTest
     public void IsDenied_OnlyForAStatedTrue(string? value, bool expected)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(
-            new Dictionary<string, string?> { [AnonymousAccess.DenyAnonymousConfigKey] = value }).Build();
+            ImmutableDictionary<string, string?>.Empty.Add(AnonymousAccess.DenyAnonymousConfigKey, value)).Build();
         AnonymousAccess.IsDenied(configuration).Should().Be(expected);
     }
 

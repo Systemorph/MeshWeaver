@@ -1,3 +1,4 @@
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -64,13 +65,28 @@ public static class AnonymousAccess
         => IsDenied(services.GetService<IConfiguration>());
 
     /// <summary>
+    /// True when <paramref name="userId"/> is a logged-out CALLER: the anonymous subject, or the id
+    /// a VIRTUAL <paramref name="ambient"/> context carries (a logged-out visitor's circuit or
+    /// delivery names itself <c>guest-…</c>, not <c>Anonymous</c>, and a caller that passes
+    /// <c>captured.ObjectId</c> straight through would otherwise evaluate it as a signed-in user).
+    /// </summary>
+    /// <param name="userId">The subject being evaluated.</param>
+    /// <param name="ambient">The caller's ambient context, when known.</param>
+    /// <returns><c>true</c> for a logged-out caller.</returns>
+    public static bool IsAnonymousCaller(string? userId, AccessContext? ambient)
+        => IsAnonymousSubject(userId)
+           || (ambient is { IsVirtual: true }
+               && string.Equals(ambient.ObjectId, userId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// True when a check or read for <paramref name="userId"/> must be refused outright because the
-    /// subject is anonymous and this deployment denies anonymous access. Configuration is consulted
-    /// only for the anonymous subject.
+    /// caller is logged out (<see cref="IsAnonymousCaller"/>) and this deployment denies anonymous
+    /// access. Configuration is consulted only for a logged-out caller.
     /// </summary>
     /// <param name="services">The service provider of the hub or mesh asking.</param>
     /// <param name="userId">The subject being evaluated.</param>
+    /// <param name="ambient">The caller's ambient context, when known.</param>
     /// <returns><c>true</c> when the answer must be "no access".</returns>
-    public static bool Refuses(IServiceProvider services, string? userId)
-        => IsAnonymousSubject(userId) && IsDenied(services);
+    public static bool Refuses(IServiceProvider services, string? userId, AccessContext? ambient = null)
+        => IsAnonymousCaller(userId, ambient) && IsDenied(services);
 }

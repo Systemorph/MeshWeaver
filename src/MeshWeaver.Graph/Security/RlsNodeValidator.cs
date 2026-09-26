@@ -80,15 +80,20 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
         // permission fold already refuses the anonymous subject, but the chain below consults a
         // hub rule and a per-type INodeTypeAccessRule FIRST, and either may answer without ever
         // reaching the fold. Refusing here keeps "no anonymous access" true for every node
-        // operation, whatever a type's own rule says. Only a NAMED anonymous caller: a null
-        // principal is an unresolved internal context, left exactly as it was.
-        if (userId is not null && AnonymousAccess.Refuses(_hub.ServiceProvider, userId))
+        // operation, whatever a type's own rule says. A NAMED anonymous caller, or any caller whose
+        // context is VIRTUAL (a logged-out visitor, whatever id it carries — and a request's audit
+        // id such as CreatedBy cannot override that). A null principal on a non-virtual context is
+        // an unresolved internal one, left exactly as it was.
+        var loggedOut = context.AccessContext?.IsVirtual == true
+                        || (userId is not null && AnonymousAccess.IsAnonymousSubject(userId));
+        if (loggedOut && AnonymousAccess.IsDenied(_hub.ServiceProvider))
         {
             _logger.LogDebug(
                 "RLS: {Operation} on {Path} refused — this instance denies anonymous access (Access:DenyAnonymous)",
                 context.Operation, context.Node.Path);
-            return Observable.Return(NodeValidationResult.Unauthorized(
-                $"Access denied: {context.Operation} on node '{context.Node.Path}' requires signing in"));
+            return Observable.Return(NodeValidationResult.Unauthorized(LocalizationCatalog.Get(
+                "access.anonymousDenied.signInRequired", context.AccessContext?.Locale,
+                context.Node.Path)));
         }
 
         // 🚨 AUTHENTICATED, never "non-empty": a pseudo-identity owns nothing. The logged-out caller

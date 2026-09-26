@@ -416,20 +416,23 @@ internal sealed class MeshService(
         var context = CaptureContext();
         if (context is null)
             return null;
-        if (context.IsVirtual)
-            return WellKnownUsers.Anonymous;
-        return string.IsNullOrEmpty(context.ObjectId) ? null : context.ObjectId;
+        // An EXISTING context that is virtual or names nobody is a logged-out one — the same reading
+        // the permission resolver gives it. Only the absence of any context is unresolved.
+        return context.IsVirtual || string.IsNullOrEmpty(context.ObjectId)
+            ? WellKnownUsers.Anonymous
+            : context.ObjectId;
     }
 
     /// <summary>
     /// The viewer a stamped read will be evaluated as, for the anonymous refusal: what
     /// <see cref="StampViewer"/> resolved — except that a read which named no viewer of its own and
-    /// picked up a VIRTUAL ambient context (a logged-out visitor's circuit) is the anonymous
-    /// subject, whatever id that context carries.
+    /// runs under a logged-out ambient context (<see cref="AmbientViewer"/>: virtual, or naming
+    /// nobody) is the anonymous subject, whatever id that context carries.
     /// </summary>
     private string? ViewerOf(MeshQueryRequest original, MeshQueryRequest stamped)
         => original.UserId is null
-           && CaptureContext()?.IsVirtual == true
+           && AmbientViewer() is { } ambient
+           && AnonymousAccess.IsAnonymousSubject(ambient)
             ? WellKnownUsers.Anonymous
             : stamped.UserId;
 

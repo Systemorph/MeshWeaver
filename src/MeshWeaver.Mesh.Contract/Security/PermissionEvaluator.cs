@@ -132,7 +132,12 @@ internal static class PermissionEvaluator
         // into goes through GetEffectivePermissionsCore, never through this entry, so a signed-in
         // user's inherited Public grants are untouched. Configuration is read only for the
         // anonymous subject — a signed-in caller's check never pays for it.
-        if (AnonymousAccess.Refuses(hub.ServiceProvider, userId))
+        // A VIRTUAL ambient context names its logged-out visitor (guest-…) rather than Anonymous,
+        // and callers such as MeshNodeStreamCache pass `captured.ObjectId` straight in — so the
+        // caller's ambient context is consulted too, or a virtual visitor would fold as signed in.
+        var ambientAccess = hub.ServiceProvider.GetService<AccessService>();
+        if (AnonymousAccess.Refuses(hub.ServiceProvider, userId,
+                ambientAccess?.Context ?? ambientAccess?.CircuitContext))
             return Observable.Return(Permission.None);
 
         // 🚨 Every service the fold needs is resolved HERE, ONCE, on the caller's thread — never
