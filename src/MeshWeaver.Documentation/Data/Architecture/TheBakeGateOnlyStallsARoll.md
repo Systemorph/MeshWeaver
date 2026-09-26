@@ -94,6 +94,64 @@ regression of an image that is not newer than the image that built it. Failures 
 (`WithoutBaseline`). Once the pod is admitted, the held `Error` stamp is released, and the record
 finally says `Error`. That ends the loop in defect 2.
 
+## What the refusal looked like from outside: a death every 3.03 hours
+
+The refusal had one more cost, and it was mistaken for a separate fault. Between 2026-09-25 ~18:00Z
+and the break-glass at 04:05Z, every memex portal container on both images died about **3.03 h after
+it booted**. There was no crash dump for these deaths. Silo departures of this kind produce the
+Orleans timeout family filed as [#5704](https://github.com/Systemorph/MeshWeaver/issues/5704)
+(folding #5709, #5730, #5705). That issue was opened from earlier, 2026-09-24 samples, so most of
+its evidence predates this window and is only related. The in-window evidence is narrower:
+`Dequeue` timeouts at 2026-09-25 18:57:39–41Z against silo `S10.244.3.247`, the incarnation of
+`56fbdcd48f-cbms9`, after that pod's 18:55:12Z SIGABRT. The in-window samples tie these
+timeouts to a crash, not to a probe kill. That the probe kills produce the same lines is
+inferred, not observed.
+
+Nothing deleted those pods. **The kubelet killed each container when its startup probe ran out of
+budget.** The readings, all taken 2026-09-26:
+
+| reading | value |
+|---|---|
+| memex `startupProbe` (from the record, `deployments/aks/memex/values.memex.public.yaml`) | `/health`, `periodSeconds: 10`, `failureThreshold: 1080`, so **10 800 s = 3 h** |
+| boots of `7bd794f9b5-ggf88` (`[PlatformStartup]`) | 17:58 → 20:59 → 00:01 → 03:03, a 3 h 01–02 m period |
+| its `[LIVENESS]` heartbeat (10 s) | reaches tick ~1085 and never 1088+, so death comes at about 10 850 s |
+| its log, once per 10 s up to its last minute (e.g. 05:51:57Z) | `Health check nodetype_bake with status Unhealthy … 1 NodeType(s) regressed on this image: BinaryClickerV2/BinaryToggle` |
+| kubelet event 05:52:27Z | `Startup probe failed: HTTP probe failed with statuscode: 503` on the same pod, 3 h into its fourth boot |
+| `56fbdcd48f-cbms9` (ci.9218) | had served for ~29 h, SIGABRTed at 18:55Z ([#4654](https://github.com/Systemorph/MeshWeaver/issues/4654)), came back 18:58Z, then died at 22:00 and 01:02 |
+
+So the loop was:
+
+1. A container starts on any image.
+2. `/health` stays red because the gate refuses.
+3. After 1080 failed probes the kubelet kills the container and restarts it in place, with the same
+   pod name and `restartCount` + 1.
+4. The next attempt reaches the same verdict.
+
+The previous image did not stay safe either. A serving pod that crashed for an unrelated reason
+(cbms9 above) had to pass the startup probe again, and could not. The replicas that the stall clause
+counts on were exactly the ones the gate turned away.
+
+The pods that looked "deleted and recreated" after 04:05Z are a different event. The break-glass
+`kubectl set env` created a new ReplicaSet, and the ordinary rollout then scaled the old ones down
+(`SuccessfulDelete … 84f4fb6dcc-wnhdr` at 05:53:47Z). Its second pod had waited `Pending` from
+04:07Z to 05:52Z on `Insufficient cpu` (silos requests at 55–91 %, autoscaler at `max node group
+size reached`), which is why that roll took 1 h 47 m.
+
+**How to recognise it:**
+
+- The cadence equals `periodSeconds × failureThreshold` of the running Deployment.
+- The pod name stays the same while its boots repeat.
+- `/health` is red on that pod for the whole window.
+
+`Sample` now records `lastTerminationReason`, `lastExitCode` and `containerStartedAt` per replica
+(Systemorph/MeshWeaver.Plugins#2397). That separates this kill from a crash (134/139) or an OOM kill
+without `kubectl`. Before that change a restart count was all it carried.
+
+**Not established:** why these kills left no `Application is shutting down` line in Loki when the
+two rollout deletions did. The `/drain` endpoint's `Drain:` lines, which would record whether
+preStop and SIGTERM ran, returned zero lines in Loki over the 14 h, including for the rollout
+deletions. So these images do not emit them, and their absence proves nothing either way.
+
 ## What this does not cover
 
 - **A `Faulted` sweep on an image that has NOT served here still refuses readiness** unless
