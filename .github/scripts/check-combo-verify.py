@@ -17,38 +17,36 @@ stated here or in the prose that describes this script: a count in a comment has
 it true, and adding a scenario has now invalidated such a sentence twice. The script's own summary
 line carries the number, and `--self-test` carries how many of them a gutted preflight must fail.
 
-🚨 THE ROSTER IS DERIVED, SO THE PREFLIGHT ASSERTS IN TWO STEPS (#3848), and this drives both.
-`vars.COMBO_VERIFY_INSTANCES` is gone: `derive-combo-instances.py` reads the fleet's deployment
-overlays between them. So `assert` asks whether the inputs that come from outside the tree exist at
-all, and `roster` — which cannot run before the derivation — asks whether every instance the fleet
-ACTUALLY has carries both credentials. Splitting the assertion split the scenarios with it:
+🚨 THE ROSTER AND SOURCE MAP ARE DERIVED, SO THE PREFLIGHT ASSERTS IN TWO STEPS (#3848), and this
+drives both. `derive-combo-instances.py` reads the fleet's deployment overlays and records between
+them. So `assert` asks whether the inputs that come from outside the tree exist at all, and `roster`
+— which cannot run before the derivation — asks whether every instance the fleet ACTUALLY has carries
+both credentials and the derived source map arrived intact. Splitting the assertion split the
+scenarios with it:
 
 🚨 AND THE SPLIT IS BY WHETHER AN INPUT IS NEEDED TO *REACH* THE DERIVATION — not by what is knowable
-yet, and NOT by whether provisioning it is reversible. All three `COMBO_*` inputs are asserted in
-`roster`, after the derivation; `assert` carries only `AZURE_*` (the login) and `FLEET_READER_*` (the
-token the derivation reads the overlays with). The workflow's own history is the argument: every run
+yet, and NOT by whether provisioning it is reversible. The two `COMBO_VERIFY_*` credential maps are
+asserted in `roster`, after the derivation; `SOURCES` is derived from `DeploymentContent.PluginRepos`.
+`assert` carries only `AZURE_*` (the login) and `FLEET_READER_*` (the token the derivation reads the
+records with). The workflow's own history is the argument: every run
 in it died in `assert`, so the derivation had NEVER ONCE executed in CI and the lane's red named
 absent inputs while the state that must change first was invisible to every reader.
 
-🚨 AN EARLIER VERSION OF THIS SPLIT GOT THE RULE WRONG, and the wrong rule was written here — that the
-two credential MAPS move because they are SPENT rather than fetched (an `mwi_` key is
-issued-never-recovered, an `mw_` admin token minted per instance, so demanding them before the roster
-exists spends them against a roster that may not derive) while `vars.COMBO_VERIFY_SOURCES` stays
-because it is plain data, free to provision and free to correct. The spend argument is TRUE and is
-still why the maps' guidance must not be emitted early; it is simply not the CRITERION. Measured on
-the first run that reached the step afterwards: the preflight still died in `assert` naming
-`vars.COMBO_VERIFY_SOURCES` and nothing else, and the derivation still did not run. Any unprovisioned
-input in the first step defeats the whole reorder, whatever it costs to provision. Do not move an
-input back on the grounds that it is cheap.
+🚨 AN EARLIER VERSION OF THIS SPLIT GOT THE RULE WRONG: it kept `vars.COMBO_VERIFY_SOURCES` in
+`assert` because it was plain data, free to provision and free to correct. That input is now removed;
+the source map is derived from deployment records. The spend argument for the two credential maps is
+still why their minting guidance must not be emitted early; it is simply not the criterion for
+whether an input belongs in `assert`. Any external input needed to reach the derivation belongs
+there, and nothing else.
 
   assert:  (only what is needed to REACH the derivation)
   1. nothing provisioned                    → RED, naming secrets.FLEET_READER_APP_ID — the input
                                               without which the derivation cannot even be attempted.
   2. ONLY what this repository actually      → GREEN, and this is the scenario that would have caught
      has provisioned                          the earlier mistake. Every other case starts from
-                                              FULLY_PROVISIONED, which holds all three COMBO_* inputs
-                                              CONSTANT at "present"; production varies them to ABSENT,
-                                              all three. So the guard was green over a preflight that
+                                              FULLY_PROVISIONED, which holds external inputs CONSTANT
+                                              at "present"; production varies the credential maps to
+                                              ABSENT. So the guard was green over a preflight that
                                               reddened one step above the derivation in the only
                                               configuration that matters. Spelled as production's own
                                               input state, it goes RED if an unprovisioned input is
@@ -56,9 +54,7 @@ input back on the grounds that it is cheap.
   3. everything provisioned                 → GREEN
 
   roster:  (what is only answerable, or only worth answering, once the installations are known)
-  3a. the source map absent                 → RED, naming vars.COMBO_VERIFY_SOURCES. Here rather than
-                                              in `assert` for the reachability reason above, not
-                                              because it is expensive to provision — it is not.
+  3a. the derived source map absent         → RED, naming the missing deployment-record output.
   4. the derivation emitted NOTHING         → RED. This is the one that matters most: an empty or
      (and the same for an EMPTY array)        absent roster yields an empty matrix, an empty matrix
                                               SKIPS the verify job, and GitHub paints a skipped job
@@ -121,6 +117,8 @@ except ImportError:  # pragma: no cover - the CI step installs PyYAML; locally `
 
 WORKFLOW = ".github/workflows/combo-verify.yml"
 LANDER = ".github/scripts/combo-verify-instance.sh"
+SOURCE_READ_LINE = "IFS=' ' read -r -a source_pairs <<<\"$SOURCES\""
+SOURCE_LOOP_LINE = 'for s in "${source_pairs[@]}"; do src_args+=(--source "$s"); done'
 
 # One sentinel per assertion step, proving we extracted THAT block and not a neighbouring step.
 SENTINELS = {"assert": "missing=()",
@@ -132,9 +130,9 @@ FULLY_PROVISIONED = {
     "AZURE_SUBSCRIPTION_ID": "sid",
     "FLEET_READER_APP_ID": "app",
     "FLEET_READER_APP_PRIVATE_KEY": "pem",
-    "COMBO_VERIFY_SOURCES": "plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
     "COMBO_VERIFY_KEYS": '{"memex":"mwi_a","memex-cloud":"mwi_b"}',
     "COMBO_VERIFY_TOKENS": '{"memex":"mw_a","memex-cloud":"mw_b"}',
+    "SOURCES": "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
 }
 
 # What the derivation step hands the roster step on a healthy fleet.
@@ -155,12 +153,10 @@ SCENARIOS = [
     (
         # 🚨 THE SCENARIO THAT WOULD HAVE CAUGHT THE FIRST ATTEMPT AT THIS REORDER, and the reason it
         # is spelled as PRODUCTION'S OWN INPUT STATE rather than as one absent name. Every other
-        # scenario starts from FULLY_PROVISIONED, which holds all three COMBO_* inputs CONSTANT at
-        # "present" — and production varies them to ABSENT, all three. So the guard was green over a
-        # preflight that, in production, still died in `assert` one step above the derivation, naming
-        # `vars.COMBO_VERIFY_SOURCES`. This asserts the property the reorder exists for: given
-        # exactly what this repository actually has provisioned, `assert` PASSES and the derivation
-        # is REACHED. If a future input is added to that step unprovisioned, this goes red.
+        # scenario starts from FULLY_PROVISIONED, which holds external inputs constant at "present"
+        # while production has the credential maps absent. This asserts the property the reorder
+        # exists for: with exactly the inputs needed to reach derivation, `assert` PASSES. If a
+        # future unprovisioned input is added to that step, this goes red.
         "assert",
         "ONLY what this repository actually has provisioned ⇒ the derivation is reached",
         {**{k: "" for k in FULLY_PROVISIONED}, "AZURE_CLIENT_ID": "cid", "AZURE_TENANT_ID": "tid",
@@ -171,10 +167,10 @@ SCENARIOS = [
     ),
     (
         "roster",
-        "the source map absent",
-        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_SOURCES": ""},
+        "the derived source map absent",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "SOURCES": ""},
         1,
-        "vars.COMBO_VERIFY_SOURCES",
+        "deployment records derived no registry sources",
     ),
     (
         "assert",
@@ -355,6 +351,24 @@ def read_preflight(root: Path) -> dict[str, str]:
             "moved and this guard did not — it would otherwise pass having checked nothing."
         ) from exc
     by_id = {step.get("id"): step for step in steps if isinstance(step, dict)}
+    roster = by_id.get("roster", {})
+    derive = by_id.get("derive", {})
+    outputs = doc["jobs"]["preflight"].get("outputs", {})
+    if outputs.get("sources") != "${{ steps.roster.outputs.sources }}":
+        raise SystemExit(
+            f"::error::{WORKFLOW}: preflight must publish steps.roster.outputs.sources; "
+            "otherwise the verifier can run without the deployment-derived source map.")
+    if roster.get("env", {}).get("SOURCES") != "${{ steps.derive.outputs.sources }}":
+        raise SystemExit(
+            f"::error::{WORKFLOW}: the roster assertion must read SOURCES from "
+            "steps.derive.outputs.sources, not an external variable.")
+    verify_steps = doc["jobs"].get("verify", {}).get("steps", [])
+    lander = next((step for step in verify_steps
+                   if "bash .github/scripts/combo-verify-instance.sh" in step.get("run", "")), None)
+    if lander is None or lander.get("env", {}).get("SOURCES") != "${{ needs.preflight.outputs.sources }}":
+        raise SystemExit(
+            f"::error::{WORKFLOW}: the verifier must consume needs.preflight.outputs.sources; "
+            "otherwise it can run with a missing or stale source map.")
     scripts: dict[str, str] = {}
     for step_id, sentinel in SENTINELS.items():
         step = by_id.get(step_id)
@@ -402,16 +416,60 @@ def check(scripts: dict[str, str]) -> int:
         elif want_code == 0 and step_id == "roster":
             # Only the roster step emits the matrix, and a matrix that is never emitted skips the
             # verify job exactly as an empty one does.
-            if "instances=" not in gh_output or "count=" not in gh_output:
+            if "instances=" not in gh_output or "count=" not in gh_output or "sources=" not in gh_output:
                 failures += 1
-                print("::error::the passing scenario emitted no matrix — an empty matrix skips the "
-                      "verify job, and a skipped job is painted green")
+                print("::error::the passing scenario did not emit the matrix, denominator and "
+                      "derived source map — the verify job could otherwise skip or run without "
+                      "its materialisation inputs")
             else:
                 print("  " + gh_output.strip().replace("\n", " | "))
+                expected_source = f"sources={overrides.get('SOURCES', '')}"
+                if expected_source not in gh_output:
+                    failures += 1
+                    print("::error::the preflight did not preserve the derived source map in its output")
     return failures
 
 
-def self_test() -> int:
+def check_source_split(root: Path) -> int:
+    """Assert the shipped source parser preserves glob characters from record URLs."""
+    path = root / LANDER
+    if not path.is_file():
+        print(f"::error::{LANDER} does not exist under {root}")
+        return 1
+    text = path.read_text(encoding="utf-8")
+    read_at = text.find(SOURCE_READ_LINE)
+    loop_at = text.find(SOURCE_LOOP_LINE)
+    if read_at < 0 or loop_at < read_at:
+        print("::error::the verifier must split derived SOURCES with read -a and pass each literal "
+              "pair to --source; unquoted word splitting can pathname-expand deployment data")
+        return 1
+    split_lines = SOURCE_READ_LINE + "\n" + SOURCE_LOOP_LINE
+    with tempfile.TemporaryDirectory() as tmp:
+        temp_root = Path(tmp)
+        for parent, leaf in (("Plugins=https:", "repo-shadow"),
+                             ("Education=https:", "sourceX")):
+            folder = temp_root / parent / "example.org"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / leaf).touch()
+        sources = "Plugins=https://example.org/repo* Education=https://example.org/source?"
+        expected = ("--source\nPlugins=https://example.org/repo*\n"
+                    "--source\nEducation=https://example.org/source?\n")
+        script = ("src_args=()\n" + split_lines + "\n"
+                  + "printf '%s\\n' \"${src_args[@]}\"\n")
+        env = dict(os.environ)
+        env["SOURCES"] = sources
+        proc = subprocess.run(["bash", "-c", script], cwd=temp_root, env=env,
+                              capture_output=True, text=True, check=False)
+    ok = proc.returncode == 0 and proc.stdout == expected
+    print(f"[{'PASS' if ok else 'FAIL'}] verifier source arguments remain literal; no pathname expansion")
+    if not ok:
+        print(f"::error::the verifier source split changed derived inputs: exit={proc.returncode}; "
+              f"stdout={proc.stdout!r}; stderr={proc.stderr!r}")
+        return 1
+    return 0
+
+
+def self_test(root: Path) -> int:
     """Each part must be shown to FIRE on its own defect. An unproven guard is no guard."""
     gutted = {"assert": 'echo "Every external input is present"; exit 0',
               "roster": ('echo "instances=[]" >>"$GITHUB_OUTPUT"; '
@@ -440,6 +498,9 @@ def self_test() -> int:
               "every shape, so part two proves nothing about the real one.")
         return 1
     print(f"--self-test: the un-hardened merge failed {merge_failures} shape(s) — part two can fail.")
+    source_failures = check_source_split(root)
+    if source_failures:
+        return source_failures
     return 0
 
 
@@ -450,11 +511,12 @@ def main() -> int:
                         help="prove the guard detects a preflight that asserts nothing")
     args = parser.parse_args()
 
-    if args.self_test:
-        return self_test()
-
     root = Path(args.root).resolve()
-    failures = check(read_preflight(root)) + check_merge(read_merge_program(root))
+    if args.self_test:
+        return self_test(root)
+
+    failures = (check(read_preflight(root)) + check_merge(read_merge_program(root))
+                + check_source_split(root))
     if failures:
         print(f"::error::{failures} combo-verify check(s) behaved wrongly.")
         return 1
@@ -463,14 +525,12 @@ def main() -> int:
           "0 violation(s).")
     # 🚨 WHAT THIS GREEN DOES NOT COVER, said by the gate rather than left to a reader.
     # Every `roster` scenario feeds a SUCCESSFUL derivation (`INSTANCES=DERIVED`), because that is
-    # the only state in which the step it exercises is reachable. So this green proves the relocated
-    # credential assertion behaves GIVEN a derived roster; it says nothing about whether the live
-    # fleet produces one. That dimension is held CONSTANT here and VARIES in production — and today
-    # it varies to a refusal (#3848: two live installations both named `memex`), so in production
-    # the block these scenarios cover is not currently reached at all. A gate that cannot vary a
-    # dimension must not let its green be read as coverage of it.
-    print("  NOT COVERED by the above: whether the live fleet derives a roster at all. Every "
-          "`roster` scenario assumes one (INSTANCES=DERIVED). That question belongs to "
+    # the only state in which the step it exercises is reachable. This green proves the credential
+    # assertion behaves GIVEN derived inputs; it says nothing about whether the live repositories
+    # produce those inputs. A gate that holds a dimension constant must not let its green be read as
+    # coverage of that dimension.
+    print("  NOT COVERED by the above: whether the live fleet derives its roster and sources. Every "
+          "`roster` scenario assumes derived inputs (INSTANCES=DERIVED). That question belongs to "
           "derive-combo-instances.py — run its --self-test beside this, and read the LANE's own "
           "run for the live answer.")
     return 0

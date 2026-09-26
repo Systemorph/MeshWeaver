@@ -77,7 +77,10 @@ note "combo: $(jq -r '.modules | length' <"$combo") module(s), readAt=$(jq -r '.
 # ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
 verdict=$out_dir/combo-verdict-$INSTANCE_NAME.json
 src_args=()
-for s in $SOURCES; do src_args+=(--source "$s"); done
+# The source list is deployment-record data. Split its validated space-delimited pairs without
+# pathname expansion, so a URL containing shell glob characters stays one literal argument.
+IFS=' ' read -r -a source_pairs <<<"$SOURCES"
+for s in "${source_pairs[@]}"; do src_args+=(--source "$s"); done
 
 set +e
 dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj \

@@ -127,6 +127,7 @@ import sys
 import tempfile
 import textwrap
 import urllib.request
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -309,6 +310,57 @@ def is_deployment_record_path(path: str) -> bool:
     if len(parts) < 2 or parts[-2] != RECORD_DIR_SEGMENT:
         return False
     return parts[-1] not in RECORD_FILE_EXCLUDE and bool(RECORD_FILE_RE.match(parts[-1]))
+
+
+def extract_record_sources(text: str) -> tuple[list[tuple[str, str]], str | None]:
+    """(source name, repository URL) pairs from one record's registry-source plugin mounts.
+
+    Consumer mounts are deliberately excluded: their URL is a registry endpoint, not a source
+    repository. Match DeploymentContent.PluginRepos' normalized name and URL, and refuse malformed
+    registry mounts rather than allowing the verifier to run with a partial source map.
+    """
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return [], f"deployment record is not valid JSON: {exc}"
+    if not isinstance(doc, dict):
+        return [], "deployment record root is not an object"
+    content = doc.get("content", doc)
+    if not isinstance(content, dict):
+        return [], "deployment record content is not an object"
+    mounts = content.get("pluginRepos", [])
+    if not isinstance(mounts, list):
+        return [], "deployment record pluginRepos is not an array"
+
+    sources: list[tuple[str, str]] = []
+    for index, mount in enumerate(mounts):
+        if not isinstance(mount, dict):
+            return [], f"pluginRepos[{index}] is not an object"
+        is_registry_source = mount.get("isRegistrySource", False)
+        if type(is_registry_source) is not bool:
+            return [], f"pluginRepos[{index}].isRegistrySource is not a boolean"
+        if not is_registry_source:
+            continue
+        name = mount.get("name")
+        url = mount.get("url")
+        if not isinstance(name, str) or not name.strip():
+            return [], f"pluginRepos[{index}] registry source has no name"
+        name = name.strip()
+        if any(character.isspace() for character in name) or "=" in name:
+            return [], f"pluginRepos[{index}] registry source name is not a valid --source name"
+        if not isinstance(url, str) or not url.strip():
+            return [], f"pluginRepos[{index}] registry source '{name}' has no URL"
+        url = url.strip().rstrip("/")
+        try:
+            parsed_url = urlsplit(url)
+            valid_url = (parsed_url.scheme.lower() == "https" and parsed_url.netloc
+                         and parsed_url.path.strip("/"))
+        except ValueError:
+            valid_url = False
+        if any(character.isspace() for character in url) or not valid_url:
+            return [], f"pluginRepos[{index}] registry source '{name}' has an invalid HTTPS URL"
+        sources.append((name, url))
+    return sources, None
 
 
 def extract_record_pins(text: str, registry: str) -> tuple[list[tuple[str, str]],
@@ -507,6 +559,9 @@ class OverlayScan:
     # (registry host, repo, tag, where) — images pinned in a registry this lane does NOT lock.
     # Never locked; carried so "pins nothing" and "pins elsewhere" stay different answers.
     foreign: list[tuple[str, str, str, str]] = field(default_factory=list)
+    # (registry source name, module repository URL, record path) for combo verification.
+    sources: list[tuple[str, str, str]] = field(default_factory=list)
+    source_errors: list[tuple[str, str]] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -561,6 +616,11 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
+            sources, source_error = extract_record_sources(text)
+            if source_error:
+                scan.source_errors.append((path, source_error))
+            else:
+                scan.sources.extend((name, url, path) for name, url in sources)
         scan.pins.extend((repo, tag, path) for repo, tag in pins)
         scan.floating.extend((repo, tag, path) for repo, tag in floating)
         scan.instances.extend((ident, host, path)
@@ -595,6 +655,11 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
+            sources, source_error = extract_record_sources(text)
+            if source_error:
+                scan.source_errors.append((rel, source_error))
+            else:
+                scan.sources.extend((name, url, rel) for name, url in sources)
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
         scan.floating.extend((repo, tag, rel) for repo, tag in floating)
         scan.instances.extend((ident, host, rel) for ident, host in extract_overlay_instances(text))
@@ -4704,6 +4769,11 @@ def self_test() -> int:
         "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
         "pinnedImageTag": "3.0.0-ci.8080",
         "operator": {"image": "meshweaver.azurecr.io/hosting-operator:1979979"},
+        "pluginRepos": [
+            {"name": "Plugins", "url": "https://portal.example", "isRegistrySource": False},
+            {"name": "FundReporting", "url": "https://github.com/Systemorph/MeshWeaver.FundReporting/",
+             "isRegistrySource": True},
+        ],
     })
     pins, floating = extract_record_pins(pearl_record, "meshweaver")
     check(pins == [("memex-portal-ai", "3.0.0-ci.8080")] and not floating,
@@ -4713,6 +4783,24 @@ def self_test() -> int:
     inline, _ = extract_overlay_pins(pearl_record, "meshweaver")
     check(("hosting-operator", "1979979") in inline,
           f"ARM 13b: the record's inline operator image was not extracted by the overlay rules: {inline!r}")
+
+    sources, source_error = extract_record_sources(pearl_record)
+    check(source_error is None and sources == [
+        ("FundReporting", "https://github.com/Systemorph/MeshWeaver.FundReporting")],
+        f"ARM 13c: only registry-source mounts should produce a normalized source mapping: "
+        f"{sources!r} {source_error!r}")
+    for malformed, reason in (
+        ("{ not json", "valid JSON"),
+        ("[]", "root is not an object"),
+        (json.dumps({"pluginRepos": "not-an-array"}), "not an array"),
+        (json.dumps({"pluginRepos": [{"name": "Plugins", "url": "https://x",
+                                      "isRegistrySource": "true"}]}), "not a boolean"),
+        (json.dumps({"pluginRepos": [{"name": "Plugins", "url": "http://x",
+                                      "isRegistrySource": True}]}), "invalid HTTPS URL"),
+    ):
+        sources, source_error = extract_record_sources(malformed)
+        check(not sources and source_error is not None and reason in source_error,
+              f"ARM 13c: malformed source data did not fail closed: {sources!r} {source_error!r}")
 
     # An EMPTY pinnedImageTag is FLOATING, not a pin — `memex-cloud` is exactly this today, and
     # reporting it as a pin would ask the registry to lock a tag that does not exist.
@@ -4756,6 +4844,25 @@ def self_test() -> int:
           f"ARM 13b: the scan did not surface the record's split pin — the axis is not WIRED: {sorted(found)}")
     check(("hosting-operator", "1979979") in found,
           f"ARM 13b: the scan did not surface the record's inline operator image: {sorted(found)}")
+    check(scan.sources == [(
+        "FundReporting", "https://github.com/Systemorph/MeshWeaver.FundReporting",
+        "mesh/Deployments/pearl.json")] and not scan.source_errors,
+        f"ARM 13c: registry sources were not wired through the record scanner: "
+        f"{scan.sources!r} errors={scan.source_errors!r}")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        record_dir = root / "mesh" / "Deployments"
+        record_dir.mkdir(parents=True)
+        (record_dir / "broken.json").write_text(json.dumps({"pluginRepos": [
+            {"name": "Plugins", "url": "http://invalid", "isRegistrySource": True}]}),
+            encoding="utf-8")
+        broken_scan = scan_overlays_local(str(root), "Systemorph/Fixture", "meshweaver")
+    check(broken_scan.source_errors == [(
+        "mesh/Deployments/broken.json",
+        "pluginRepos[0] registry source 'Plugins' has an invalid HTTPS URL")]
+        and not broken_scan.sources,
+        f"ARM 13c: malformed registry source data did not reach the scan blocker: "
+        f"{broken_scan.source_errors!r}")
 
 
     # ══ AXIS 3 and the TAG half — MeshWeaver#3438 / #3858 / #3859 / #3860 ═══════════════════════
