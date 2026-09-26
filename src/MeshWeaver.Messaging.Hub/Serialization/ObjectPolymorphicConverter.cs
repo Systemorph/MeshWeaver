@@ -191,8 +191,6 @@ public class ObjectPolymorphicConverter(
         return cleanedElement.Clone();
     }
 
-    private static readonly string[] MetadataPropertyNames = ["$id", "$ref", "$values", "$defs"];
-
     /// <summary>
     /// Deserializes an object whose FIRST property is a registered <c>$type</c> directly from the
     /// reader — no <see cref="JsonDocument"/>, no string. Declines (returns false, reader untouched)
@@ -220,9 +218,11 @@ public class ObjectPolymorphicConverter(
 
         while (probe.Read() && probe.TokenType == JsonTokenType.PropertyName)
         {
-            foreach (var metadata in MetadataPropertyNames)
-                if (probe.ValueTextEquals(metadata))
-                    return false;
+            // The reference-metadata names StripMetadataProperties removes: those shapes take the
+            // general path so the strip still applies.
+            if (probe.ValueTextEquals("$id") || probe.ValueTextEquals("$ref")
+                || probe.ValueTextEquals("$values") || probe.ValueTextEquals("$defs"))
+                return false;
             if (!probe.Read() || !probe.TrySkip())
                 return false;
         }

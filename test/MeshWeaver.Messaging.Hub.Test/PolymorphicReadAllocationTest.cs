@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Domain;
@@ -107,6 +107,26 @@ public class PolymorphicReadAllocationTest(ITestOutputHelper output) : HubTestBa
         allocated.Should().BeLessThan((Depth + 2) * leafBytes,
             "without the UTF-16 round trip each level costs about one UTF-8 copy (half the leaf's "
             + "UTF-16 size) plus a reorder buffer, not the ~3× the string round trip cost");
+    }
+
+    /// <summary>
+    /// A <c>$type</c>-first object that also carries reference metadata must NOT take the direct
+    /// path: the general path strips <c>$id</c>/<c>$ref</c>/<c>$values</c>/<c>$defs</c> before the
+    /// typed read, and the direct path does not.
+    /// </summary>
+    [Theory]
+    [InlineData("$id")]
+    [InlineData("$ref")]
+    [InlineData("$values")]
+    [InlineData("$defs")]
+    public void TypeFirstWithReferenceMetadata_IsStrippedAndTyped(string metadata)
+    {
+        var options = RegisteredOptions();
+        var json = $"{{\"$type\":\"{nameof(AllocLeaf)}\",\"{metadata}\":\"1\",\"text\":\"kept\"}}";
+
+        var result = JsonSerializer.Deserialize<object>(json, options);
+
+        result.Should().BeOfType<AllocLeaf>().Which.Text.Should().Be("kept");
     }
 
     /// <summary>A registered type whose JSON no longer fits is preserved as raw JSON, not thrown.</summary>
