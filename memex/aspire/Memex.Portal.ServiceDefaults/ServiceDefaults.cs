@@ -417,7 +417,45 @@ public static class ServiceDefaults
             .AddCheck<SealedSyncHealthCheck>(
                 SealedSyncCensus.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
 
+        // 🚨 A roll gate holds READINESS only (policy bake-gate-readiness-only, #5544). The host
+        // registers the NodeType bake gate by NAME, in another repository, and until this change it
+        // carried no tag at all — so it landed on /health, the startup probe read it, and a refusal
+        // killed every container of every image at the end of the startup budget. Tagging it HERE,
+        // after every host's own registration (PostConfigure runs after all Configure calls), makes
+        // the rule hold whatever tags the host gave it: no host can put a roll gate back on the
+        // startup probe by forgetting a tag.
+        builder.Services.PostConfigure<HealthCheckServiceOptions>(TagRollGates);
+
         return builder;
+    }
+
+    /// <summary>
+    /// The health checks that are ROLL GATES by name (see <see cref="ProbeEndpoints.RollGateTag"/>):
+    /// their verdict is read by <see cref="ProbeEndpoints.Ready"/> alone, never by the startup
+    /// probe on <see cref="ProbeEndpoints.Health"/>.
+    ///
+    /// <para>Today that is the NodeType bake gate only. The other checks a portal registers stay on
+    /// the startup probe deliberately — the per-check decision and its reasoning are in
+    /// Doc/Architecture/TheBakeGateOnlyStallsARoll ("Which checks may fail the startup probe").</para>
+    /// </summary>
+    internal static readonly ImmutableHashSet<string> RollGateChecks =
+        ImmutableHashSet.Create(StringComparer.Ordinal, NodeTypeBakeGateExtensions.HealthCheckName);
+
+    /// <summary>
+    /// Adds <see cref="ProbeEndpoints.RollGateTag"/> to every registration named in
+    /// <see cref="RollGateChecks"/>, and removes <see cref="ProbeEndpoints.LiveTag"/> from it: a
+    /// roll gate that restarted the pod would be the same container death on a different probe.
+    /// </summary>
+    /// <param name="options">The health-check options every host registration has configured.</param>
+    internal static void TagRollGates(HealthCheckServiceOptions options)
+    {
+        foreach (var registration in options.Registrations)
+        {
+            if (!RollGateChecks.Contains(registration.Name))
+                continue;
+            registration.Tags.Add(ProbeEndpoints.RollGateTag);
+            registration.Tags.Remove(ProbeEndpoints.LiveTag);
+        }
     }
 
     /// <summary>
@@ -438,14 +476,71 @@ public static class ServiceDefaults
     /// </summary>
     internal static Task WriteHealthWithDetail(HttpContext context, HealthReport report)
     {
+        // 🚨 The status CODE and the word on line one are the STARTUP verdict: every check EXCEPT
+        // a roll gate (policy bake-gate-readiness-only, #5544). The middleware set the code from
+        // the aggregate, which includes the roll gates; the response has not started yet, so the
+        // code is corrected here, before the first byte.
+        var startup = StartupStatus(report);
+        context.Response.StatusCode = startup == HealthStatus.Unhealthy
+            ? StatusCodes.Status503ServiceUnavailable
+            : StatusCodes.Status200OK;
         context.Response.ContentType = "text/plain; charset=utf-8";
-        var lines = new List<string> { report.Status.ToString(), TimingLine(report) };
+        return context.Response.WriteAsync(string.Join('\n', HealthBodyLines(report, startup)));
+    }
+
+    /// <summary>
+    /// The startup verdict: the worst status over every entry that is NOT a roll gate. A roll
+    /// gate's verdict belongs to readiness; on the startup probe it would kill the container.
+    /// </summary>
+    /// <param name="report">The report the probe just produced.</param>
+    /// <returns>The status the startup probe reads.</returns>
+    internal static HealthStatus StartupStatus(HealthReport report) =>
+        report.Entries.Values
+            .Where(e => !e.Tags.Contains(ProbeEndpoints.RollGateTag))
+            .Select(e => e.Status)
+            .DefaultIfEmpty(HealthStatus.Healthy)
+            .Min();
+
+    /// <summary>
+    /// The <see cref="ProbeEndpoints.Health"/> body. Pure, so a test can pin it without a socket.
+    /// A roll gate's reading ALWAYS prints, Healthy or not, marked as read by readiness only: the
+    /// operator still reads the gate on <c>/health</c>, and "armed and green" reads differently
+    /// from "not registered".
+    /// </summary>
+    /// <param name="report">The report the probe just produced.</param>
+    /// <param name="startup">The startup verdict, printed on line one.</param>
+    /// <returns>The body's lines, in order.</returns>
+    internal static ImmutableList<string> HealthBodyLines(HealthReport report, HealthStatus startup)
+    {
+        var lines = ImmutableList.Create(startup.ToString(), TimingLine(report));
         foreach (var (name, entry) in report.Entries)
         {
-            if (entry.Status == HealthStatus.Healthy && !entry.Tags.Contains(ProbeEndpoints.CensusTag))
+            var rollGate = entry.Tags.Contains(ProbeEndpoints.RollGateTag);
+            if (entry.Status == HealthStatus.Healthy && !rollGate && !entry.Tags.Contains(ProbeEndpoints.CensusTag))
                 continue;
-            lines.Add($"{name}: {entry.Status}" + (string.IsNullOrEmpty(entry.Description) ? "" : $" — {entry.Description}"));
+            lines = lines.Add($"{name}: {entry.Status}"
+                + (string.IsNullOrEmpty(entry.Description) ? "" : $" — {entry.Description}")
+                + (rollGate ? $" [roll gate: read by {ProbeEndpoints.Ready} only, never by the startup probe]" : ""));
         }
+        return lines;
+    }
+
+    /// <summary>
+    /// The <see cref="ProbeEndpoints.Ready"/> body: the status word, then one line per check that
+    /// is not Healthy. A pod held out of the Service by a roll gate then says WHY in the kubelet's
+    /// probe-failure event, instead of a bare <c>Unhealthy</c>.
+    /// </summary>
+    /// <param name="context">The probe request.</param>
+    /// <param name="report">The report over the readiness predicate.</param>
+    /// <returns>The write.</returns>
+    internal static Task WriteReadyWithDetail(HttpContext context, HealthReport report)
+    {
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        var lines = ImmutableList.Create(report.Status.ToString())
+            .AddRange(report.Entries
+                .Where(e => e.Value.Status != HealthStatus.Healthy)
+                .Select(e => $"{e.Key}: {e.Value.Status}"
+                    + (string.IsNullOrEmpty(e.Value.Description) ? "" : $" — {e.Value.Description}")));
         return context.Response.WriteAsync(string.Join('\n', lines));
     }
 
@@ -533,8 +628,9 @@ public static class ServiceDefaults
     {
         app.UseRequestTimeouts();
 
-        // All health checks must pass for app to be considered ready. The body names every check
-        // that is not Healthy (WriteHealthWithDetail) — the status word stays on line one.
+        // Every check RUNS here; every check except a roll gate decides the startup verdict. The
+        // body names every check that is not Healthy, plus every census and roll-gate reading
+        // (WriteHealthWithDetail) — the startup status word stays on line one.
         app.MapHealthChecks(ProbeEndpoints.Health,
             new HealthCheckOptions { ResponseWriter = WriteHealthWithDetail });
 
@@ -542,9 +638,16 @@ public static class ServiceDefaults
         app.MapHealthChecks(ProbeEndpoints.Live,
             new HealthCheckOptions { Predicate = r => r.Tags.Contains(ProbeEndpoints.LiveTag) });
 
-        // Only health checks tagged with "ready" decide whether this pod stays in the Service.
+        // Only health checks tagged with "ready" decide whether this pod stays in the Service —
+        // plus the ROLL GATES, whose verdict is read here and nowhere else (policy
+        // bake-gate-readiness-only): refusing readiness stalls a roll with the previous image
+        // serving and kills nothing.
         app.MapHealthChecks(ProbeEndpoints.Ready,
-            new HealthCheckOptions { Predicate = r => r.Tags.Contains(ProbeEndpoints.ReadyTag) });
+            new HealthCheckOptions
+            {
+                Predicate = r => r.Tags.Contains(ProbeEndpoints.ReadyTag) || r.Tags.Contains(ProbeEndpoints.RollGateTag),
+                ResponseWriter = WriteReadyWithDetail,
+            });
 
         app.MapVersionEndpoint();
         app.MapDrainEndpoint();

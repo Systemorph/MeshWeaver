@@ -48,9 +48,11 @@ Managed envs run the sweep ON — an env with it off has no deploy-time compile 
 channel.
 
 **✅ The self-update waits for the compile.** The companion readiness gate
-(`PreWarm__GateReadiness`) holds the new pod's `/health` red until every NodeType is built against
-ITS image; with the `startupProbe` on `/health` and `maxUnavailable: 0` keeping the old pod serving,
-a regressed type STALLS the roll instead of surfacing as user-facing errors.
+(`PreWarm__GateReadiness`) holds the new pod's READINESS (`/ready`) red until every NodeType is built
+against ITS image; with `maxUnavailable: 0` keeping the old pod serving, a regressed type STALLS the
+roll instead of surfacing as user-facing errors. It never rides the startup probe (policy
+`bake-gate-readiness-only`, MeshWeaver#5544): a refusing pod stays alive and out of the Service,
+and nothing is killed.
 
 It was enabled on 2026-08-02 and reverted the same day. The first gated roll on memex-cloud stalled
 with `7 NodeType(s) regressed on this image`, and those were **false** regressions: the pod log
@@ -76,7 +78,7 @@ still open; the gate simply no longer depends on it being closed:
 Non-blocking is not invisible — unevaluated types are named in the `/health` payload, so a swallowed
 timeout still surfaces instead of hiding a genuine regression.
 
-⚠️ The gate is only as real as the namespace it runs in: it needs a `startupProbe` **on `/health`**
+⚠️ The gate is only as real as the namespace it runs in: it needs a `readinessProbe` **on `/ready`**
 (nothing else reads it) and `strategy.maxUnavailable: 0` (otherwise the serving pod can be deleted
 before the replacement is ready). Verify both before trusting it — see README.md, "Operating it". And if
 a roll DOES stall, investigate it: the old image keeps serving, so there is no outage, but

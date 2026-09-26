@@ -8,25 +8,22 @@ using Xunit;
 namespace MeshWeaver.Documentation.Test;
 
 /// <summary>
-/// 🚨 <b>The chart stated its own startup budget in prose, and the prose was wrong</b> (#2787).
+/// 🚨 <b>The chart stated its own startup budget in prose, and the prose was wrong</b> (#2787) — and
+/// <b>the NodeType bake gate is read by READINESS, never by the startup probe</b> (policy
+/// <c>bake-gate-readiness-only</c>, #5544).
 ///
-/// <para><c>PreWarm__GateReadiness</c> holds <c>/health</c> red until the NodeType bake is green,
-/// which is only safe with three paired settings — the chart's own comment lists them, numbered,
-/// and warns that missing one "means Kubernetes kills the pod mid-bake, every time, forever".
-/// Prerequisite 2 is a budget: <c>probes.startup.periodSeconds × failureThreshold</c> must cover a
-/// full cold bake.</para>
+/// <para><b>#2787.</b> The deployment template asserted "values.yaml (probes.startup) — 10 × 180 =
+/// 30 min" while <c>values.yaml</c> shipped <c>5 × 60</c>, and memex-cloud was measured live on
+/// 2026-08-30 running exactly that. A chart that describes a budget it does not have is how an
+/// operator believes a prerequisite satisfied when it is not. So the first test reads the numbers
+/// the chart ships and fails when the chart TALKS about a startup budget it does not have.</para>
 ///
-/// <para><b>What was actually there.</b> The deployment template asserted "values.yaml
-/// (probes.startup) — 10 × 180 = 30 min" and, forty lines down, "which managed envs set to
-/// 10 × 180 = 30 MINUTES". `values.yaml` shipped <c>5 × 60</c>, and memex-cloud was measured live
-/// on 2026-08-30 running exactly that. So an operator arming the gate would read prerequisite 2,
-/// believe it already satisfied, and walk straight into the failure the same comment warns about.
-/// That is the <i>prose asserts a guard that does not exist</i> shape, in the one file where being
-/// wrong costs a rollout.</para>
-///
-/// <para>So the coupling stops being a paragraph. This guard reads the numbers the chart actually
-/// ships and fails when the chart TALKS about a budget it does not have, or when the gate is armed
-/// without every prerequisite moving in the same change.</para>
+/// <para><b>#5544.</b> <c>PreWarm__GateReadiness</c> used to hold <c>/health</c> red, the startup
+/// probe read it, and "arming the gate" meant raising the startup budget to cover a cold bake. A
+/// refusal then killed every container at the end of that budget (three hours on memex), restarted
+/// pods of the serving image included. The gate's verdict now reaches <c>/ready</c> only, so the
+/// prerequisites the second test holds are: the sweep it reads, <c>maxUnavailable: 0</c>, a
+/// readiness probe on <c>/ready</c>, and a rollout deadline that carries the bake's time.</para>
 /// </summary>
 public class PreWarmGateReadinessGuard
 {
@@ -36,12 +33,9 @@ public class PreWarmGateReadinessGuard
     /// <summary>
     /// The cold-bake ceiling the chart itself derives, from production Loki on 2026-08-10:
     /// ~2.4 s per NodeType, strictly sequential, ~240 types on the largest mesh we run ⇒ ~570 s.
-    /// Plus the plain cold boot (schema provisioning + static import) the ungated budget covers.
-    /// A gated environment needs BOTH, which is why arming the gate is never a one-key change.
+    /// It is spent holding READINESS after startup, so it belongs on the rollout deadline.
     /// </summary>
     private const int ColdBakeSeconds = 570;
-
-    private const int PlainColdBootSeconds = 300;
 
     [Fact]
     public void TheChart_NeverStatesAStartupBudgetItDoesNotShip()
@@ -87,56 +81,60 @@ public class PreWarmGateReadinessGuard
     {
         var root = FindRepoRoot();
         var values = File.ReadAllText(Path.Combine(root, Values));
+        var deployment = File.ReadAllText(Path.Combine(root, Deployment));
+
+        // 🚦 Unconditional half (policy bake-gate-readiness-only, #5544): whether or not THIS chart
+        // arms the gate, the rollout deadline must carry the bake term, because the gate's time is
+        // spent AFTER startup, holding readiness. A template that derived the deadline from the
+        // startup budget alone would report every armed cold bake as a failed roll.
+        Assert.True(Regex.IsMatch(deployment,
+                @"progressDeadlineSeconds:[^\n]*\.Values\.probes\.startup\.periodSeconds[^\n]*\.Values\.probes\.startup\.failureThreshold[^\n]*probes\.rollGate\)\.bakeSeconds"),
+            $"{Deployment} no longer derives progressDeadlineSeconds from the startup budget PLUS "
+            + "probes.rollGate.bakeSeconds (in every render — the gate can be armed by an env "
+            + "source the render cannot see). The gate holds "
+            + "READINESS for the whole cold bake after the pod has started, so a deadline without the "
+            + "bake term reports a legitimately baking pod as a failed roll — the signal an operator "
+            + "acts on by rolling back the good image.");
+        Assert.True(RollGateBakeSeconds(values) >= ColdBakeSeconds,
+            $"{Values} probes.rollGate.bakeSeconds is {RollGateBakeSeconds(values)}s, below the "
+            + $"{ColdBakeSeconds}s a cold bake of the largest mesh we run takes.");
 
         if (!BoolKey(values, "PreWarm__GateReadiness"))
             // 🚦 The gate is OFF in this chart, which is the fleet's setting and the safe default.
-            // This is a CONDITIONAL invariant, and its unconditional half — the one that fails
-            // today if the chart's prose drifts — is the test above. Both must exist: a guard that
-            // only fires once someone arms the gate would have caught nothing on the day the prose
-            // went wrong.
+            // The rest is a CONDITIONAL invariant; the unconditional halves are the assertions above
+            // and the prose test before this one.
             return;
-
-        var (period, threshold) = StartupBudget(values);
-        var required = ColdBakeSeconds + PlainColdBootSeconds;
-        Assert.True(period * threshold >= required,
-            $"PreWarm__GateReadiness is armed, but probes.startup is {period} × {threshold} = "
-            + $"{period * threshold}s and a gated boot needs at least {required}s "
-            + $"({ColdBakeSeconds}s cold bake + {PlainColdBootSeconds}s plain boot). Kubernetes "
-            + "kills the pod mid-bake, every time, forever — prerequisite 2 of the chart's own list.");
 
         Assert.True(BoolKey(values, "PreWarm__DynamicTypes"),
             "PreWarm__GateReadiness is armed without PreWarm__DynamicTypes: the gate reads state "
             + "only the sweep writes, so gate-without-sweep is permanently GREEN — a gate that "
             + "certifies nothing. Prerequisite 1 of the chart's own list.");
 
-        var deployment = File.ReadAllText(Path.Combine(root, Deployment));
         Assert.True(Regex.IsMatch(deployment, @"maxUnavailable:\s*0\b"),
             "PreWarm__GateReadiness is armed without strategy.maxUnavailable: 0. The gate works by "
             + "making the NEW pod refuse readiness, which protects nothing if the serving pod was "
             + "already deleted. Prerequisite 3 of the chart's own list.");
 
-        // 🚨 Read the path the chart SHIPS, not a literal in the template. Since MeshWeaver#4588
-        // the startup path is `probes.startup.path` — a value, so that an environment which must
-        // move it does so in the repository rather than as a live `kubectl patch` — and a guard
-        // matching the old literal would have failed on the template's own comment or, worse,
-        // matched a `/health` that no longer had anything to do with this probe.
+        // 🚨 The gate's ONE reader is the readiness probe on /ready (policy
+        // bake-gate-readiness-only). It is NOT the startup probe any more: a startup probe that
+        // never records a success KILLS the container, and on 2026-09-25/26 that killed every
+        // container of both images, restarted pods of the serving image included.
         Assert.True(Regex.IsMatch(deployment,
-                @"startupProbe:(?s).*?httpGet:[^\n]*?path:[^\n]*?\.Values\.probes\.startup\.path"),
-            "PreWarm__GateReadiness is armed, and this guard can no longer see how the startupProbe "
-            + "gets its path. It reads probes.startup.path out of the values; if the template now "
-            + "states the path some other way, update this assertion DELIBERATELY — a guard that "
-            + "stops matching its subject passes having checked nothing.");
+                @"readinessProbe:(?s)(?:(?!livenessProbe:).)*?httpGet:\s*\{\s*path:\s*/ready\b"),
+            "PreWarm__GateReadiness is armed but the readinessProbe does not read /ready — the only "
+            + "endpoint that reads the gate (checks tagged `ready` plus the roll gates). The gate is "
+            + "then registered, never read, and every rollout completes as if it had passed.");
+    }
 
-        var startupPath = StartupPath(values);
-        Assert.True(startupPath == "/health",
-            $"PreWarm__GateReadiness is armed but probes.startup.path is '{startupPath}', not "
-            + "/health — the only endpoint that reads the gate. nodetype_bake is deliberately "
-            + "tagged neither `live` nor `ready`, so it lands on /health alone and the startup probe "
-            + "is its only reader: a namespace probing /ready, /alive or /healthz ignores the gate "
-            + "entirely while it goes on being configured and goes on reporting healthy. If the "
-            + "startup probe has to move because /health cannot answer inside its timeout, fix what "
-            + "is spending the budget (/health's own `timing:` line names it) rather than trading "
-            + "the rollout gate away as a side effect.");
+    /// <summary>The bake budget <c>probes.rollGate.bakeSeconds</c> the chart ships.</summary>
+    private static int RollGateBakeSeconds(string values)
+    {
+        var m = Regex.Match(values, @"^  rollGate:\s*$(?:\n(?:\s*#.*|\s*))*?\n\s+bakeSeconds:\s*(?<n>\d+)",
+            RegexOptions.Multiline);
+        Assert.True(m.Success,
+            $"{Values} declares no probes.rollGate.bakeSeconds — the template adds it to the rollout "
+            + "deadline when the gate is armed, and a guard that cannot find it checks nothing.");
+        return int.Parse(m.Groups["n"].Value, CultureInfo.InvariantCulture);
     }
 
     private static bool MentionsStartupBudget(string line) =>
@@ -166,26 +164,6 @@ public class PreWarmGateReadinessGuard
             $"{Values} probes.startup no longer declares both periodSeconds and failureThreshold.");
         return (int.Parse(period.Groups[1].Value, CultureInfo.InvariantCulture),
                 int.Parse(threshold.Groups[1].Value, CultureInfo.InvariantCulture));
-    }
-
-    /// <summary>
-    /// The path <c>probes.startup.path</c> ships. Read out of the probes block, like the budget
-    /// beside it, and asserted rather than defaulted: a missing key would make the template's own
-    /// <c>default</c> the path, which is the one state where the chart says it twice.
-    /// </summary>
-    private static string StartupPath(string values)
-    {
-        var block = Regex.Match(values, @"^probes:\s*$(?<body>(?:\n(?:[ \t].*)?)+)",
-            RegexOptions.Multiline);
-        Assert.True(block.Success,
-            $"{Values} no longer has a top-level 'probes:' block — this guard reads the startup "
-            + "path from it, and a guard that cannot find its subject passes having checked nothing.");
-        var path = Regex.Match(block.Groups["body"].Value, @"^\s+path:\s*(?<p>\S+)\s*$",
-            RegexOptions.Multiline);
-        Assert.True(path.Success,
-            $"{Values} probes.startup declares no path. The template reads it and falls back to its "
-            + "own default, so the path would be stated in two places at once.");
-        return path.Groups["p"].Value.Trim('"', '\'');
     }
 
     private static bool BoolKey(string values, string key) =>
