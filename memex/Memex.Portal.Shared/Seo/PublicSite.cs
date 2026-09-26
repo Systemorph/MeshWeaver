@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -274,11 +275,29 @@ public static class PublicSite
     // from. A page the gate refuses — or a mesh that does not answer — is "not public", and the
     // request continues to the app's own handling (sign-in redirect), never to a redirect that
     // would name a page on the public host. Cold, reactive; bridged once by the caller.
+    //
+    // 🪪 ASKED AS THE STRANGER (MeshWeaver#5227). This middleware runs BEFORE UserContextMiddleware
+    // on purpose (a request that only bounces must never mint a guest identity), so no
+    // AccessContext exists for the request yet. SeoResolver.Resolve captures the AMBIENT identity
+    // for its authoritative owner read, and it captured null: the read left portal/reads-{meshId}
+    // with no identity, the never-null guard refused it ("hub=portal/reads-…,
+    // message=GetDataRequest, target=Store was posted with no AccessContext"), the resolver's
+    // fail-open read the refusal as "not public", and the app host SERVED every public page
+    // instead of redirecting it. The decision is literally "may a signed-out visitor read this?",
+    // so it runs as the identity the portal gives that visitor — ResolveHttpCaller, the one
+    // resolver for surfaces that run outside UserContextMiddleware; every request that reaches
+    // this line is unauthenticated, so that is the well-known Anonymous identity. It widens
+    // nothing: Anonymous reads exactly what the anonymous gate admits.
     private static IObservable<bool> DefaultIsPublicPage(HttpContext http, string nodePath)
     {
         var hub = http.RequestServices.GetService<IMessageHub>();
-        return hub is null
-            ? Observable.Return(false)
-            : SeoResolver.Resolve(hub, nodePath).Select(data => data is not null && data.Remainder is null);
+        if (hub is null)
+            return Observable.Return(false);
+        var stranger = UserContextMiddleware.ResolveHttpCaller(
+            http.User, http.RequestServices,
+            http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(PublicSite)));
+        return hub.ServiceProvider.GetService<AccessService>()
+            .RunAs(stranger, () => SeoResolver.Resolve(hub, nodePath))
+            .Select(data => data is not null && data.Remainder is null);
     }
 }
