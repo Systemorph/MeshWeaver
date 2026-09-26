@@ -82,7 +82,7 @@ public class SelfUpdateHandover
     /// <summary>The control inbox URL — the fleet's <c>https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds</c>. The same key the Feedback hand-over binds.</summary>
     public const string UrlKey = "Hosting:ControlInbox:Url";
 
-    /// <summary>The HMAC secret the control inbox verifies — byte-identical to the control instance's <c>Hosting:PlatformWebhookSecret</c>. Never read except to sign.</summary>
+    /// <summary>The HMAC secret the control inbox verifies — either byte-identical to the control instance's <c>Hosting:PlatformWebhookSecret</c> (the fleet secret), or this deployment's OWN announcement key, which the control instance holds as <c>Hosting:PlatformWebhookSecret:{deployment}</c> (MeshWeaver.Plugins#1913, Doc/Architecture/SelfUpdateAnnouncementKey). Never read except to sign.</summary>
     public const string SecretKey = "Hosting:ControlInbox:Secret";
 
     /// <summary>The control instance's base URL (the inventory report's destination); the inbox URL is derived from it when <see cref="UrlKey"/> is absent.</summary>

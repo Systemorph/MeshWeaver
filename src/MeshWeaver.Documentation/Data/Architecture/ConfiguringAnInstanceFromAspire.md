@@ -205,6 +205,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithStorageAccount(account, connectionSecret)` | `StorageAccount`, `StorageConnectionSecret` | `keyVaultSecrets` (the connection string's vault object) | — |
 | `WithGate(language, image, address, enabled)` | `Gates[].Language`, `Gates[].Image`, `Gates[].Address`, `Gates[].Enabled` | `grpc` | — |
 | `WithKeyVault(vault, prefix)` | `KeyVault`, `KeyVaultSecretPrefix` | `keyVaultSecrets.vaultName` | — |
+| `WithAnnouncementKeySecret(vaultSecret)` | `AnnouncementKeySecret` | — (a binding the control plane reads; the value arrives through ordinary `keyVaultSecrets` mappings — [Self-Update Announcement Key](../SelfUpdateAnnouncementKey)) | — |
 | `WithKeyVaultSecrets(map, vaultName, tenantId, identityClientId, className, syncedSecret, volumeName, mountPath)` | `KeyVaultSecrets.VaultName`, `KeyVaultSecrets.TenantId`, `KeyVaultSecrets.IdentityClientId`, `KeyVaultSecrets.Name`, `KeyVaultSecrets.SyncedSecret`, `KeyVaultSecrets.VolumeName`, `KeyVaultSecrets.MountPath`, `KeyVaultSecrets.Secrets[].Key`, `KeyVaultSecrets.Secrets[].VaultSecret` | `keyVaultSecrets` | — (the keys are the secrets' own; values never touch the record) |
 | `WithKeyVaultSecretClass(secretClass)` | `KeyVaultSecretClasses` | `keyVaultSecretClasses` | — |
 | `WithVaultValuesKeys(keys)` | `VaultValuesKeys` | `extraEnvFrom` | — |
