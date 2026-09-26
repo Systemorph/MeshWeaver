@@ -1699,6 +1699,16 @@ assemblies, an intact object graph, and a **managed** fault site with a full sta
 taken twice, by the JIT helper's layout off the core and by the DAC, agreeing. That is materially
 better evidence than sixteen GC-thread dumps, and it is what an upstream report should be built on.
 
+🚨 **The mechanism was named on 2026-09-26, and it has a deterministic repro.** See
+[Collectible Thread-Static Handle Reuse](../CollectibleThreadStaticHandleReuse). When a thread exits,
+the runtime frees its collectible thread-static handles against the allocator of whichever type
+*currently* owns each TLS index. An index cleared by an unloaded context and reused by a live one
+therefore frees an arbitrary slot of the live allocator's `m_slots`. Here that slot was V's
+GC-statics box. The next `AllocateHandle` refills the slot, which is why `m_slots` shows no gap. This
+dump's own allocator holds a collectible thread-static block
+(`SharedArrayPool<LineOfBusiness>.t_tlsBuckets`, `m_slots[214]`), so the preconditions are present. The
+repro corrupts a static in every run and the control in none, on `10.0.11` and `10.0.12`.
+
 #### Comparison with the production crash, Systemorph/MeshWeaver#4654 — NOT established as the same defect
 
 #4654 (`memex.systemorph.com`, both portal containers, 2026-09-17, exit 139) exposes exactly three
