@@ -26,13 +26,15 @@
 # THE FOUR ASSERTIONS, and what each is honestly worth:
 #
 #   1. PLATFORM FLOOR — /api/content/Doc/Architecture/content/platform-overview.svg.
-#      Present on every deployment BY CONSTRUCTION: the bytes are an EmbeddedResource in
-#      MeshWeaver.Documentation, AddDocumentation maps every Doc/* child a `content` collection with
-#      isStatic: true (which is what publishes it on this route at all), and Doc/_Policy sets
-#      PublicRead. It resolves through ContentFileResolver exactly like a package asset — the same
-#      longest-node-prefix match and the same collection-config GetDataRequest to the owning hub —
-#      so it crosses the hop this probe exists to watch, while depending on no install decision.
-#      This is the only assertion that can answer "is the route healthy".
+#      The bytes are present in every portal image BY CONSTRUCTION: they are an EmbeddedResource in
+#      MeshWeaver.Documentation, and AddDocumentation maps every Doc/* child a `content` collection
+#      with isStatic: true (which is what publishes it on this route at all). Doc/_Policy sets
+#      PublicRead, but Access:DenyAnonymous overrides partition grants. Therefore the assertion is
+#      made only for deployments whose effective policy permits anonymous reads; on those targets,
+#      the route resolves through ContentFileResolver exactly like a package asset — the same
+#      longest-node-prefix match and collection-config GetDataRequest to the owning hub — crossing
+#      the hop this probe exists to watch without depending on an install decision. This is the only
+#      assertion that can answer "is the route healthy" for an eligible target.
 #
 #   2. NEGATIVE CONTROL — a path under the same route that cannot exist, which must answer 404.
 #      🚨 This is the assertion whose absence made #3578 unreadable. The old probe sampled ONE url
@@ -84,15 +86,18 @@
 #      public host and is then held to it, exactly as assertion 3 holds it to its own sitemap.
 #
 # HOW it fails (no skip-trapdoors, per AGENTS "a gate never tests its own inputs"):
-#   - no secrets, no `if:` on configuration, no credential — the probe always runs, on every portal;
+#   - no secrets, no `if:` on configuration, no credential — every configured public-readable
+#     target is probed; deployments that deny anonymous reads are explicitly outside this probe's
+#     target set because its 404 response cannot distinguish a privacy boundary from a broken route;
 #   - every input it reads is asserted before it is used, and a read that fails is a FAILURE, never
 #     an absence of findings;
 #   - each verdict names what it means: a route wedge, a portal contradicting its own sitemap, and
 #     an unreadable declaration are three different reds with three different messages, so the next
 #     reader does not start where #3578's reader had to.
 #   A failed scheduled run e-mails the workflow's last committer; the run summary carries the
-#   evidence. Silence == all portals healthy, and (unlike a log-based watcher) a probe that
-#   cannot reach the portal at all is a FAILURE, never a skip.
+#   evidence. Silence means all configured public-readable targets passed, and (unlike a log-based
+#   watcher) a probe that cannot reach one of those targets is a FAILURE, never a skip. Deployments
+#   that deny anonymous reads remain under deployment health monitoring, not this anonymous probe.
 name: Prod synthetic probe
 
 on:
@@ -103,7 +108,9 @@ on:
 permissions: {}
 
 env:
-  # Shipped in the portal image, published on the content route, anonymous-readable. Never a package.
+  # Shipped in the portal image and published on the content route. The anonymous probe matrix
+  # below includes only deployments that permit anonymous reads; Access:DenyAnonymous overrides
+  # the partition's PublicRead policy.
   PLATFORM_ASSET: /api/content/Doc/Architecture/content/platform-overview.svg
   # Same route, cannot exist. The node segment is what makes it unresolvable, so this stays a 404
   # even if the Doc partition itself is healthy.
@@ -117,13 +124,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # HOSTS ONLY, and only APP hosts — the address the fleet is reached at. Anything
+        # Publicly readable APP hosts only — the address the fleet is reached at. Anything
         # content-shaped here is the #3578 defect coming back, and a PUBLIC host pinned here would
         # be the same shape (a per-deployment decision frozen in the platform repo): each portal
-        # names its own, and the probe reads it. See assertion 4.
+        # names its own, and the probe reads it. Do not add a deployment with Access:DenyAnonymous;
+        # its 404s are the intended privacy boundary, not evidence about route health. See assertion 4.
         portal:
           - memex.meshweaver.cloud
-          - memex.systemorph.com
     steps:
       - name: Content route — platform floor, with a negative control
         env:
