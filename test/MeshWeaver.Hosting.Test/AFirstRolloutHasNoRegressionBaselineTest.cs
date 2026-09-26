@@ -273,7 +273,10 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
             .OutcomesOf(established, bakedDetail: "on the share", pendingDetail: "still pending")
             .ToList();
 
-        strict.Should().OnlyContain(o => o.HasRegressionBaseline);
+        strict.Single(o => o.TypePath == "Crm/Contact").HasRegressionBaseline.Should().BeTrue();
+        // #5544: the baseline is now also asked per TYPE — a type with no working build on record
+        // has nothing to regress from, on an established instance as much as on a fresh one.
+        strict.Single(o => o.TypePath == "Kmu/Abandoned").HasRegressionBaseline.Should().BeFalse();
         strict.Single(o => o.TypePath == "Kmu/Abandoned").WasHealthyBeforeBake.Should().BeFalse();
         strict.Single(o => o.TypePath == "Crm/Contact").WasHealthyBeforeBake.Should().BeTrue();
     }

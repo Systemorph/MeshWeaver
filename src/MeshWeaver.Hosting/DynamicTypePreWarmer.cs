@@ -190,14 +190,25 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
     public bool WasHealthyBeforeBake { get; init; } = true;
 
     /// <summary>
-    /// Whether this instance had ANY previous build to regress from — <c>false</c> only on the first
-    /// bake of a brand-new instance, where every type in the report is
-    /// <see cref="BakeState.NeverBuilt"/> (see <see cref="DynamicTypePreWarmer.IsFirstBake"/>).
+    /// Whether a failure of this type on this process would be a REGRESSION OF THIS IMAGE — i.e.
+    /// there is a working build to regress FROM, and a previous image this refusal would protect.
+    /// <c>false</c> in three cases, each of which means refusing readiness protects nobody:
+    /// <list type="bullet">
+    /// <item>the first bake of a brand-new instance, where every type in the report is
+    /// <see cref="BakeState.NeverBuilt"/> (see <see cref="DynamicTypePreWarmer.IsFirstBake"/>) —
+    /// there is no previous image and no previous pod;</item>
+    /// <item>🚨 #5544: this process's platform build has ALREADY SERVED this mesh
+    /// (<see cref="NodeTypeBakeReport.ThisBuildHasServed"/>) — it is a restart of the image the
+    /// rollout falls back on, and refusing it is how the gate took memex.systemorph.com fully
+    /// down;</item>
+    /// <item>🚨 #5544: THIS TYPE has no working build produced by another, not-newer image
+    /// (<see cref="NodeTypeBakeEntry.IsRegressionBaselineFor"/>) — it never built (a type whose
+    /// source never compiled refused every pod), or only this build or a newer one built it.</item>
+    /// </list>
     ///
-    /// <para>A report-level fact carried per outcome so a gate need not re-read the report. It is
-    /// the reason a first rollout does not gate itself: refusing readiness stalls the rollout "with
-    /// the previous image still serving", and on a first rollout there is no previous image and no
-    /// previous pod, so refusing protects nobody.</para>
+    /// <para>The first two are report-level facts carried per outcome so a gate need not re-read
+    /// the report; the third is per type. All three are read off the SAME report by
+    /// <see cref="DynamicTypePreWarmer.BaselineStamp"/>.</para>
     ///
     /// <para>Kept apart from <see cref="WasHealthyBeforeBake"/> because the two answer different
     /// questions — "was THIS TYPE working?" and "is there anything here to protect?" — and only
@@ -482,6 +493,9 @@ public static class DynamicTypePreWarmer
                         {
                             ClassifiedFromLocalAdoption = overlay.Applied.Count,
                         })
+                        // #5544: whether a replica of this build has served here decides whether
+                        // anything this sweep finds may refuse readiness — read BEFORE the stamp.
+                        .SelectMany(report => ServedBuildWitness.Annotate(mesh, report, logger))
                         .Do(report => PublishReport(
                             mesh, report, NodeTypeBakeReportRegistry.CompilingSweep))
                         .SelectMany(report => BakeOrFollow(
@@ -961,11 +975,22 @@ public static class DynamicTypePreWarmer
     public static Func<PreWarmOutcome, PreWarmOutcome> BaselineStamp(NodeTypeBakeReport report)
     {
         var healthyBefore = RegressionBaseline(report);
-        var hasBaseline = !IsFirstBake(report);
+        // 🚨 #5544 — "is there anything to protect?" is asked per TYPE, not only per report. A
+        // failure regresses this image only when a working build of the type is on record and was
+        // produced by another, not-newer platform build, and only while this build has not already
+        // served here. A never-built type counted as "healthy" (true — it is not damaged goods) and
+        // therefore as regressable (false — it has nothing to regress FROM), and that one conflation
+        // refused every portal pod on memex.systemorph.com, the serving image's included.
+        var regressable = report.ThisBuildHasServed || IsFirstBake(report)
+            ? ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase)
+            : report.Entries
+                .Where(e => e.IsRegressionBaselineFor(report.LivePlatformVersion))
+                .Select(e => e.TypePath)
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         return outcome => outcome with
         {
             WasHealthyBeforeBake = healthyBefore.Contains(outcome.TypePath),
-            HasRegressionBaseline = hasBaseline,
+            HasRegressionBaseline = regressable.Contains(outcome.TypePath),
         };
     }
 

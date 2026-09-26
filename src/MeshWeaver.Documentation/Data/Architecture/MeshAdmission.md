@@ -247,6 +247,7 @@ See [Build Identity Admission](/Doc/Architecture/BuildIdentityAdmission) for the
 
 ## Related
 
+[The Bake Gate Only Stalls a Roll](/Doc/Architecture/TheBakeGateOnlyStallsARoll) ·
 [Build Identity Admission](/Doc/Architecture/BuildIdentityAdmission) ·
 [Module Set Convergence](/Doc/Architecture/ModuleSetConvergence) ·
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation) ·

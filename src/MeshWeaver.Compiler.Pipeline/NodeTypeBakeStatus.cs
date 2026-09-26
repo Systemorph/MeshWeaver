@@ -104,6 +104,54 @@ public sealed record NodeTypeBakeEntry(string TypePath, BakeState State, string?
     /// moment. Such a type is logged loudly and skipped by the gate.</para>
     /// </summary>
     public bool WasHealthy => State is not BakeState.PreviouslyBroken;
+
+    /// <summary>
+    /// The platform build (<see cref="NodeTypeDefinition.CompiledPlatformVersion"/>) that produced
+    /// the build this record names, or <c>null</c> when the record names none or predates the
+    /// field. Read by <see cref="IsRegressionBaselineFor"/>: WHO built the working build decides
+    /// whether a failure here can be this image's regression.
+    /// </summary>
+    public string? ProducedByPlatformBuild { get; init; }
+
+    /// <summary>
+    /// 🚨 Whether a WORKING BUILD of this type is on record at all — the thing a regression
+    /// regresses FROM (#5544).
+    ///
+    /// <para>Deliberately NOT <see cref="WasHealthy"/>. That property answers "was this type
+    /// known to be broken?" and counts <see cref="BakeState.NeverBuilt"/> as healthy because a type
+    /// nobody has built is not damaged goods. But a type nobody has built cannot REGRESS either, and
+    /// reading "not known broken" as "working" is how <c>BinaryClickerV2/BinaryToggle</c> — whose
+    /// source has failed CS1929 on every image since it was authored — was filed as a regression on
+    /// every new pod AND on a restarted pod of the image that was serving, which refused readiness
+    /// on memex.systemorph.com until nothing served (2026-09-25/26).</para>
+    ///
+    /// <para>It also closes the loop that kept that type's record reading <c>Ok</c>: the Error
+    /// stamp a failing compile writes goes through <c>MeshPublicationGate</c>, which DISCARDS it on
+    /// a refused pod — so as long as the failure refused the pod, the record could never learn the
+    /// type was broken, and the next pod read it as healthy again. A never-built type no longer
+    /// refuses, the pod is admitted, and the held Error stamp is released.</para>
+    /// </summary>
+    public bool HadWorkingBuild => State is not (BakeState.PreviouslyBroken or BakeState.NeverBuilt);
+
+    /// <summary>
+    /// 🚨 Whether a failure of this type on a process running <paramref name="livePlatformVersion"/>
+    /// is evidence that THIS IMAGE broke it — the per-type half of the regression question (#5544).
+    ///
+    /// <para>True only when a working build is on record (<see cref="HadWorkingBuild"/>) AND it was
+    /// produced by a DIFFERENT, not-newer platform build. A working build produced by this same
+    /// build proves this image CAN build the type, so a failure now is a content or environment
+    /// change, not an image regression; one produced by a NEWER build means this process is the
+    /// OLD image of a roll — refusing it protects nothing, it only takes away the replicas the
+    /// rollout is falling back on. An unknown producer (a record from before the field, or no live
+    /// build stamp) keeps the strict reading.</para>
+    /// </summary>
+    /// <param name="livePlatformVersion">The running platform build, or <c>null</c> when unknown.</param>
+    public bool IsRegressionBaselineFor(string? livePlatformVersion)
+        => HadWorkingBuild
+           && !(ProducedByPlatformBuild is { Length: > 0 } producer
+                && !string.IsNullOrWhiteSpace(livePlatformVersion)
+                && (string.Equals(producer, livePlatformVersion, StringComparison.Ordinal)
+                    || Compiler.PlatformCompatibility.ProducerIsNewer(producer, livePlatformVersion)));
 }
 
 /// <summary>
@@ -158,12 +206,55 @@ public sealed record NodeTypeBakeReport(
         Entries.Where(e => e.State is BakeState.BytesMissing).ToImmutableList();
 
     /// <summary>
-    /// The types the rollout gate is allowed to fail on: they must be baked AND they were healthy
-    /// before this image, so a compile failure is a genuine regression. See
-    /// <see cref="NodeTypeBakeEntry.WasHealthy"/>.
+    /// The types the rollout gate is allowed to fail on: they must be baked AND a working build of
+    /// them was produced by another, older image, so a compile failure is a genuine regression —
+    /// and nothing at all when <see cref="ThisBuildHasServed"/>. See
+    /// <see cref="NodeTypeBakeEntry.IsRegressionBaselineFor"/> (#5544).
     /// </summary>
     public ImmutableList<NodeTypeBakeEntry> GateRelevant =>
-        Entries.Where(e => e.NeedsBake && e.WasHealthy).ToImmutableList();
+        ThisBuildHasServed
+            ? ImmutableList<NodeTypeBakeEntry>.Empty
+            : Entries.Where(e => e.NeedsBake && e.IsRegressionBaselineFor(LivePlatformVersion))
+                .ToImmutableList();
+
+    /// <summary>
+    /// The platform build of the process that produced this report, or <c>null</c> when unknown.
+    /// The reference point for <see cref="NodeTypeBakeEntry.IsRegressionBaselineFor"/> and
+    /// <see cref="ThisBuildHasServed"/>.
+    /// </summary>
+    public string? LivePlatformVersion { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>A replica of THIS platform build has already been admitted to this mesh</b> (#5544).
+    /// When this is true, the pod is a RESTART of an image that has served, not a candidate in a roll.
+    /// The gate's whole justification, "refuse so the rollout stalls with the previous image still
+    /// serving", does not apply to it, because this image IS the one the rollout falls back on.
+    /// Refusing it is what took memex.systemorph.com fully down when the last serving pod of the
+    /// previous image restarted (2026-09-26).
+    ///
+    /// <para>Two witnesses, either one sufficient, and both are admission-gated publications:</para>
+    /// <list type="bullet">
+    /// <item><see cref="ServedBefore"/>: the durable admission marker (the host's
+    /// <c>ServedBuildWitness</c>). It is the witness that works in the ORDINARY case. An ordinary
+    /// roll compiles nothing, and prebuilt adoption keeps the producer's version, so a serving image
+    /// may leave no record naming itself.</item>
+    /// <item>A record whose working build this very build produced. A compile stamp carrying this
+    /// build's identity is released only once the stamping process was admitted.</item>
+    /// </list>
+    /// </summary>
+    /// <summary>
+    /// Set from the durable admission marker: a replica of <see cref="LivePlatformVersion"/> has
+    /// been admitted to this mesh before. <c>false</c> when unread or unknown, which is the strict
+    /// reading. See <see cref="ThisBuildHasServed"/>.
+    /// </summary>
+    public bool ServedBefore { get; init; }
+
+    public bool ThisBuildHasServed =>
+        ServedBefore
+        || !string.IsNullOrWhiteSpace(LivePlatformVersion)
+        && Entries.Any(e => e.HadWorkingBuild
+                            && string.Equals(
+                                e.ProducedByPlatformBuild, LivePlatformVersion, StringComparison.Ordinal));
 
     /// <summary>
     /// One-line summary for logs and the health-check payload.
@@ -498,7 +589,10 @@ public static class NodeTypeBakeStatus
             : probes
                 .Concat()
                 .ToList()
-                .Select(entries => new NodeTypeBakeReport(entries.ToImmutableList(), framework));
+                .Select(entries => new NodeTypeBakeReport(entries.ToImmutableList(), framework)
+                {
+                    LivePlatformVersion = NodeTypeCompilationHelpers.LivePlatformVersion,
+                });
     }
 
     private static IObservable<NodeTypeBakeEntry> ProbeOne(
@@ -579,7 +673,13 @@ public static class NodeTypeBakeStatus
                     ? $": {drift}"
                     : " (a bound module/toolchain dependency changed)"),
             _ => null,
-        });
+        })
+        {
+            // Who built what this record names — only meaningful where it names a build.
+            ProducedByPlatformBuild = verdict.State is BakeState.NeverBuilt or BakeState.PreviouslyBroken
+                ? null
+                : definition.CompiledPlatformVersion,
+        };
 
     private static string Short(string? version) =>
         string.IsNullOrEmpty(version) ? "(none)" : version[..Math.Min(8, version.Length)];
