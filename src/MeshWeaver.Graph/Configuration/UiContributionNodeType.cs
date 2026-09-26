@@ -100,6 +100,20 @@ public record UiContribution
     public const string TopBarContext = "TopBar";
 
     /// <summary>
+    /// The PROFILE-PAGE context (<c>/{user}/EditProfile</c>): a contribution here adds a SECTION to
+    /// every user's profile page — the content-driven twin of the compiled
+    /// <c>AddProfileSections</c>, for a module compiled from mesh content (which cannot reach the
+    /// User hub's configuration). The section is headed by Label/LabelKey (and Icon), sorted by
+    /// <see cref="Order"/> among the contributed sections, gated by
+    /// <see cref="RequiredPermission"/> on the USER node and the closed <see cref="Gates"/>, and
+    /// its body EMBEDS the layout area <see cref="Area"/> of the hub at <see cref="Address"/>
+    /// (unset ⇒ the user node itself) through the platform's <c>LayoutAreaControl</c>, rendered in
+    /// the viewer's own context. Projects into <c>ProfileSectionDefinition</c>; see
+    /// <c>Doc/GUI/ProfilePage</c>.
+    /// </summary>
+    public const string ProfileContext = "Profile";
+
+    /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
     /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>
     /// or any key a <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
@@ -128,6 +142,15 @@ public record UiContribution
     /// area-not-found placeholder renders if it is missing, exactly like any dangling area link.
     /// </summary>
     public string? Area { get; init; }
+
+    /// <summary>
+    /// The hub address whose <see cref="Area"/> an EMBEDDING context renders — today only
+    /// <see cref="ProfileContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
+    /// puts the Store's own plan view on every profile page. Unset ⇒ the anchoring node's own hub
+    /// (for a profile section, the user node). Menu and settings contexts ignore it: they open
+    /// <see cref="Area"/> on the anchoring node, or navigate to <see cref="Href"/>.
+    /// </summary>
+    public string? Address { get; init; }
 
     /// <summary>
     /// Optional explicit navigation URL, overriding the URL derived from <see cref="Area"/> on the

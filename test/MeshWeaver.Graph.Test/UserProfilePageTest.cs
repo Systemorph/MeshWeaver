@@ -214,6 +214,64 @@ public class UserProfilePageTest
             "a null AccessService resolves the key in English rather than throwing");
     }
 
+    // ── content-driven sections (UiContribution, Context = Profile) ─────────────────────────────
+
+    private static (MeshNode, UiContribution) Contribution(string id, UiContribution content)
+        => (MeshNode.FromPath($"Store/ProfileSections/{id}") with { NodeType = UiContributionNodeType.NodeType, Content = content }, content);
+
+    [Fact]
+    public void ContentSection_EmbedsTheDeclaredAreaOfTheDeclaredAddress()
+    {
+        var sections = UiContributionProjection.ProjectProfileSections(
+            [Contribution("subscription", new UiContribution
+            {
+                Context = UiContribution.ProfileContext,
+                Address = "Store",
+                Area = "MyPlan",
+                Label = "Subscription",
+                LabelKey = "profile.picture",
+                Order = 7,
+                RequiredPermission = Permission.Update,
+            })],
+            NodePath, UserNode(new User()), isAdmin: false, viewerId: NodePath);
+
+        var section = sections.Should().ContainSingle().Subject;
+        section.Id.Should().Be("subscription", "the contribution node's id is the stable section id");
+        section.Title.Should().Be("Subscription");
+        section.TitleKey.Should().Be("profile.picture");
+        section.Order.Should().Be(7);
+        section.RequiredPermission.Should().Be(Permission.Update);
+
+        var embed = section.ContentBuilder(null!, null).Should().BeOfType<LayoutAreaControl>().Subject;
+        embed.Address.ToString().Should().Be("Store");
+        embed.Reference.Area.Should().Be("MyPlan");
+    }
+
+    [Fact]
+    public void ContentSection_OnlyTheProfileContext_WithAnArea_PassingItsGates()
+    {
+        var sections = UiContributionProjection.ProjectProfileSections(
+            [
+                Contribution("menu", new UiContribution { Context = UiContribution.NodeContext, Area = "X" }),
+                Contribution("noarea", new UiContribution { Context = UiContribution.ProfileContext }),
+                Contribution("admin", new UiContribution
+                {
+                    Context = UiContribution.ProfileContext, Area = "Y",
+                    Gates = new UiContributionGates { AdminOnly = true },
+                }),
+                Contribution("ok", new UiContribution { Context = UiContribution.ProfileContext, Area = "Z" }),
+            ],
+            NodePath, UserNode(new User()), isAdmin: false, viewerId: NodePath);
+
+        sections.Select(s => s.Id).Should().Equal("ok");
+        sections[0].RequiredPermission.Should().Be(Permission.Read, "a contribution never demands less than Read");
+    }
+
+    [Fact]
+    public void SeedValidation_KnowsTheProfileContext()
+        => UiContributionSeedValidation.PlatformContexts.Should().Contain(UiContribution.ProfileContext,
+            "a Profile contribution must not be reported as rendering nowhere");
+
     private static IEnumerable<UiControl> Descendants(UiControl root)
     {
         yield return root;
