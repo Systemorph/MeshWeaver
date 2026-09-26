@@ -2769,6 +2769,15 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-asset-landing.py
 
+    # node-repo-compile-check.yml takes its reference set from the tester's /app, or — with the
+    # optional platform-image pair — from the PORTAL's, asserting the two are one build. The lane
+    # is workflow_call only, so this is the one place its reference-set step EXECUTES before a
+    # satellite's required gate does: extracted by `id: image`, run against stub images that record
+    # every docker call, every refusal a case, and three falsification arms that mutate the step.
+    - name: "Execute the compile-check lane's reference-set step against stub images"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-compile-check-reference-set.py
+
     # The same composition step now also asserts ONE BUILD PER ASSEMBLY NAME across the whole set
     # (#3732). A module-owned MeshWeaver.* sibling RIDES every bundle that references it and 19 of
     # MeshWeaver.Plugins' 37 ride an assembly another package DECLARES as its module — a decision,
