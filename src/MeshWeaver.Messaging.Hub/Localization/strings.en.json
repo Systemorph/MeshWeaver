@@ -761,6 +761,7 @@
   "ui.mdLoading": "_Loading…_",
   "ui.mdLoadingHistory": "_Loading history…_",
   "ui.mdLoadingNotifPrefs": "_Loading notification preferences…_",
+  "ui.mdNotifPrefsUnavailable": "_These channels could not be loaded right now, so nothing was changed. Please reopen this tab in a moment._",
   "ui.mdLoadingPrivacy": "_Loading privacy statement…_",
   "ui.mdLoadingRepoSettings": "_Loading repository settings…_",
   "ui.mdLoadingUpdatePolicy": "_Loading update policy…_",

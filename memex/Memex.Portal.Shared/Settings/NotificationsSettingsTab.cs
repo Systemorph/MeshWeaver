@@ -53,6 +53,9 @@ public static class NotificationsSettingsTab
     internal static IReadOnlyList<NotificationFeatureDescriptor> Features(IServiceProvider services)
         => NotificationFeatures.BuiltIn
             .Concat(services.GetServices<NotificationFeatureDescriptor>())
+            // A key that could not name a preference node (NotificationFeatures.IsValidKey) gets
+            // no row: Raise refuses such a feature, so there is nothing to choose channels for.
+            .Where(d => NotificationFeatures.IsValidKey(d.Feature))
             .GroupBy(d => d.Feature, StringComparer.Ordinal)
             .Select(g => g.First())
             .OrderBy(d => d.Order)
@@ -85,6 +88,10 @@ public static class NotificationsSettingsTab
             stack = stack.WithView((h, _) => NotificationFeaturePreferenceNodeType
                 .EnsureExists(h.Hub, userId!, key)
                 .Select(path => (UiControl?)MeshNodeContentEditorControl.ForType(path, typeof(NotificationFeaturePreference)))
+                // A seed refused because the legacy settings could not be read is shown, not
+                // swallowed — and nothing was written, so the person's choice is intact.
+                .Catch((Exception _) => Observable.Return<UiControl?>(
+                    Controls.Markdown(host.Localize("ui.mdNotifPrefsUnavailable"))))
                 .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingNotifPrefs"))));
         }
 

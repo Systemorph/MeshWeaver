@@ -761,6 +761,7 @@
   "ui.mdLoading": "_Wird geladen…_",
   "ui.mdLoadingHistory": "_Verlauf wird geladen…_",
   "ui.mdLoadingNotifPrefs": "_Benachrichtigungseinstellungen werden geladen…_",
+  "ui.mdNotifPrefsUnavailable": "_Diese Kanäle konnten gerade nicht geladen werden, daher wurde nichts geändert. Bitte öffnen Sie diesen Tab gleich noch einmal._",
   "ui.mdLoadingPrivacy": "_Datenschutzerklärung wird geladen…_",
   "ui.mdLoadingRepoSettings": "_Repository-Einstellungen werden geladen…_",
   "ui.mdLoadingUpdatePolicy": "_Update-Richtlinie wird geladen…_",

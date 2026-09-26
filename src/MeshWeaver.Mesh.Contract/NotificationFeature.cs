@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 
@@ -18,9 +19,12 @@ namespace MeshWeaver.Mesh;
 /// nobody has a preference node for resolves to the platform default (the bell and Teams), so an
 /// unknown feature is delivered, never dropped. Never validate a feature against these members.</para>
 ///
-/// <para>A feature key is used verbatim as a node id under the person's settings
-/// (<see cref="NotificationFeaturePreferencePaths.PathFor"/>), so it stays a plain identifier —
-/// letters, digits, <c>-</c> and <c>_</c>.</para>
+/// <para>🚨 <b>Open, but not free-form.</b> A feature key is used VERBATIM as the node id of the
+/// person's preference (<see cref="NotificationFeaturePreferencePaths.PathFor"/>), so it must be a
+/// plain camel-case identifier — <see cref="IsValidKey"/>, <c>^[a-z][a-zA-Z0-9]*$</c>, the shape
+/// of every constant below. A key outside that alphabet is REJECTED where it enters (the raise, the
+/// path), never slugged: a lossy slug would make two distinct features share one preference node, so
+/// changing the channels of one would silently change the other.</para>
 /// </summary>
 public static class NotificationFeatures
 {
@@ -41,6 +45,28 @@ public static class NotificationFeatures
 
     /// <summary>A finding was routed to you for triage.</summary>
     public const string Triage = "triage";
+
+    private static readonly Regex KeyShape = new("^[a-z][a-zA-Z0-9]*$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Whether <paramref name="feature"/> is a legal feature key: a camel-case identifier,
+    /// <c>^[a-z][a-zA-Z0-9]*$</c>. Pure.
+    /// </summary>
+    /// <param name="feature">The candidate key.</param>
+    /// <returns>True when it may name a feature.</returns>
+    public static bool IsValidKey(string? feature) => feature is not null && KeyShape.IsMatch(feature);
+
+    /// <summary>Returns <paramref name="feature"/> unchanged, or throws naming the rule it broke.</summary>
+    /// <param name="feature">The candidate key.</param>
+    /// <returns>The key.</returns>
+    /// <exception cref="ArgumentException">When the key is not a legal feature key.</exception>
+    public static string RequireValidKey(string? feature)
+        => IsValidKey(feature)
+            ? feature!
+            : throw new ArgumentException(
+                $"'{feature}' is not a notification feature key — a key is a camel-case identifier "
+                + "(^[a-z][a-zA-Z0-9]*$), because it is the node id of each person's preference for it",
+                nameof(feature));
 
     /// <summary>
     /// The feature every notification raised WITHOUT an explicit feature belongs to — derived from
@@ -200,6 +226,78 @@ public static class NotificationChannelPreferences
             Email = category is { } e && settings.Email(e),
         };
     }
+
+    /// <summary>
+    /// The FAIL-CLOSED preference: the bell only. Used when a person's preference could not be read —
+    /// an external channel (Teams, email) is never opened on a choice we could not see, while the
+    /// bell, which stays inside the person's own partition, still tells them.
+    /// </summary>
+    /// <param name="feature">The feature key.</param>
+    /// <returns>Bell on, every external channel off.</returns>
+    public static NotificationFeaturePreference FailClosed(string feature)
+        => new() { Feature = feature, Bell = true, Teams = false, Email = false };
+
+    /// <summary>
+    /// The effective preference from the two READS (the person's node for the feature, and their
+    /// legacy per-category settings), keeping absent and unreadable apart: the feature node found →
+    /// taken as written; either read UNREADABLE (and not overridden by a found feature node) →
+    /// <see cref="FailClosed"/>; otherwise <see cref="Resolve"/> over what was read. Pure.
+    /// </summary>
+    /// <param name="feature">The feature key.</param>
+    /// <param name="own">The read of the person's node for the feature.</param>
+    /// <param name="legacy">The read of their legacy settings.</param>
+    /// <returns>The effective preference.</returns>
+    public static NotificationFeaturePreference Fold(
+        string feature, PreferenceRead<NotificationFeaturePreference> own, PreferenceRead<NotificationSettings> legacy)
+    {
+        if (own.Kind == PreferenceReadKind.Found && own.Value is not null)
+            return Resolve(feature, own.Value, null);
+        if (own.IsUnreadable || legacy.IsUnreadable)
+            return FailClosed(feature);
+        return Resolve(feature, null, legacy.Value);
+    }
+}
+
+/// <summary>How a read of one preference node ended — the three answers kept apart.</summary>
+public static class PreferenceReadKind
+{
+    /// <summary>The node does not exist — the defaults apply.</summary>
+    public const string Absent = "Absent";
+
+    /// <summary>The node exists and was read from its authoritative stream.</summary>
+    public const string Found = "Found";
+
+    /// <summary>The node could not be read (timeout, fault, untypable content) — NOT the same as absent.</summary>
+    public const string Unreadable = "Unreadable";
+}
+
+/// <summary>
+/// One read of a preference node, with ABSENT and UNREADABLE kept apart. The difference is the
+/// privacy property: absent means "the person chose nothing, the defaults apply", unreadable means
+/// "the person may have chosen something we cannot see" — and reading that as absent would turn on
+/// the default Teams channel for someone who had switched it off.
+/// </summary>
+/// <typeparam name="T">The node's content type.</typeparam>
+/// <param name="Kind">A <see cref="PreferenceReadKind"/> value.</param>
+/// <param name="Value">The content, when <see cref="PreferenceReadKind.Found"/>.</param>
+/// <param name="Reason">Why it was unreadable, for the log.</param>
+public sealed record PreferenceRead<T>(string Kind, T? Value = null, string? Reason = null) where T : class
+{
+    /// <summary>The node does not exist.</summary>
+    public static PreferenceRead<T> Absent() => new(PreferenceReadKind.Absent);
+
+    /// <summary>The node was read.</summary>
+    /// <param name="value">Its content.</param>
+    /// <returns>The read.</returns>
+    public static PreferenceRead<T> Found(T value) => new(PreferenceReadKind.Found, value);
+
+    /// <summary>The node could not be read.</summary>
+    /// <param name="reason">Why.</param>
+    /// <returns>The read.</returns>
+    public static PreferenceRead<T> Unreadable(string reason) => new(PreferenceReadKind.Unreadable, null, reason);
+
+    /// <summary>True when the node could not be read.</summary>
+    public bool IsUnreadable => Kind == PreferenceReadKind.Unreadable;
 }
 
 /// <summary>Well-known paths of the per-feature preference nodes.</summary>
@@ -210,17 +308,13 @@ public static class NotificationFeaturePreferencePaths
     /// <returns><c>{userId}/_Settings/Notifications</c>.</returns>
     public static string NamespaceFor(string userId) => NotificationSettingsPaths.PathFor(userId);
 
-    /// <summary>The node id for <paramref name="feature"/> — the key, with anything but letters, digits, <c>-</c> and <c>_</c> replaced.</summary>
-    /// <param name="feature">The feature key.</param>
-    /// <returns>A path-safe id.</returns>
-    public static string IdFor(string feature)
-        => string.Concat(feature.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '-'));
-
     /// <summary>The full path of <paramref name="userId"/>'s preference for <paramref name="feature"/>.</summary>
     /// <param name="userId">The person.</param>
     /// <param name="feature">The feature key.</param>
     /// <returns><c>{userId}/_Settings/Notifications/{feature}</c>.</returns>
-    public static string PathFor(string userId, string feature) => $"{NamespaceFor(userId)}/{IdFor(feature)}";
+    /// <exception cref="ArgumentException">When <paramref name="feature"/> is not a legal key (<see cref="NotificationFeatures.IsValidKey"/>).</exception>
+    public static string PathFor(string userId, string feature)
+        => $"{NamespaceFor(userId)}/{NotificationFeatures.RequireValidKey(feature)}";
 }
 
 /// <summary>

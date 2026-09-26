@@ -147,12 +147,17 @@ public class NotificationFeatureDeliveryTest(ITestOutputHelper output) : Monolit
             .Where(n => n.ContentAs<NotificationFeaturePreference>(Json) is { Teams: false, Bell: true })
             .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
 
-        // Wait until the dispatcher's own read sees the override, then assert on that raise.
-        var approvals = await Observable.Interval(200.Milliseconds()).StartWith(0L)
-            .SelectMany(_ => NotificationService.Raise(Mesh, Approval(recipient)))
-            .Where(r => !r.Any(x => x.Channel == NotificationChannelKind.Teams))
-            .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
+        // The dispatcher takes EXISTENCE from the index (a node that may not exist is never
+        // point-read) and the CONTENT from the authoritative stream. So wait only for the index to
+        // list the node — a read, not a retried side effect — then raise ONCE: the flipped value
+        // must be what it reads, however stale the index's own copy of the content is.
+        await WaitIndexed(path);
+        var handedBefore = teams.Handed.Count(m => m.Recipient == recipient && m.Feature == NotificationFeatures.Approvals);
+        var approvals = await Raise(Approval(recipient), ct);
+        Assert.DoesNotContain(approvals, r => r.Channel == NotificationChannelKind.Teams);
         Assert.Contains(approvals, r => r.Channel == NotificationChannelKind.InApp && r.Delivered);
+        Assert.Equal(handedBefore,
+            teams.Handed.Count(m => m.Recipient == recipient && m.Feature == NotificationFeatures.Approvals));
 
         // Another feature, with no node of its own, still reaches Teams.
         var chat = await Raise(Approval(recipient) with
@@ -163,6 +168,55 @@ public class NotificationFeatureDeliveryTest(ITestOutputHelper output) : Monolit
         }, ct);
         Assert.Contains(chat, r => r.Channel == NotificationChannelKind.Teams && r.Delivered);
         Assert.Contains(teams.Handed, m => m.Recipient == recipient && m.Feature == NotificationFeatures.ChatReady);
+    }
+
+    /// <summary>Waits until the index lists <paramref name="path"/> — existence, not content.</summary>
+    private Task WaitIndexed(string path)
+        => Mesh.GetWorkspace()
+            .GetQuery($"test-indexed|{path}", $"path:{path} select:path,id,nodeType")
+            .Where(nodes => (nodes ?? []).Any(n => n.Path == path))
+            .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
+
+    [Fact(Timeout = 90000)]
+    public async Task AnUnreadablePreference_FailsClosed_BellOnly_NeverTeams()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string recipient = "teams_connected_unreadable";
+        await CreateUser(recipient);
+
+        // A preference node that EXISTS but whose content does not read as a preference — the
+        // person may have chosen something we cannot see, so Teams must not open on the default.
+        var path = NotificationFeaturePreferencePaths.PathFor(recipient, NotificationFeatures.Approvals);
+        using (Access.ImpersonateAsSystem())
+            await MeshService.CreateNode(new MeshNode(NotificationFeatures.Approvals,
+                    NotificationFeaturePreferencePaths.NamespaceFor(recipient))
+                {
+                    NodeType = NotificationFeaturePreferenceNodeType.NodeType,
+                    Name = "unreadable",
+                    Content = "not a preference",
+                }).Should().Emit(cancellationToken: ct);
+        await WaitIndexed(path);
+
+        var report = await Raise(Approval(recipient), ct);
+
+        var only = Assert.Single(report);
+        Assert.Equal(NotificationChannelKind.InApp, only.Channel);
+        Assert.True(only.Delivered);
+        Assert.DoesNotContain(teams.Handed, m => m.Recipient == recipient);
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task AFeatureKeyOutsideTheAlphabet_IsRejected_AndNothingIsDelivered()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string recipient = "teams_connected_badkey";
+        await CreateUser(recipient);
+
+        var raise = () => NotificationService.Raise(Mesh, Approval(recipient) with { Feature = "ops/a" })
+            .Timeout(TestTimeouts.WriteConvergence).Await(ct);
+
+        await Assert.ThrowsAsync<ArgumentException>(raise);
+        Assert.DoesNotContain(teams.Handed, m => m.Recipient == recipient);
     }
 
     [Fact(Timeout = 60000)]
@@ -192,5 +246,79 @@ public class NotificationFeatureDeliveryTest(ITestOutputHelper output) : Monolit
         var only = Assert.Single(report);
         Assert.Equal(NotificationChannelKind.InApp, only.Channel);
         Assert.DoesNotContain(teams.Handed, m => m.Recipient == NotificationService.PlatformAddressee);
+    }
+}
+
+/// <summary>
+/// Two deliverers for ONE channel, the first of which throws — synchronously in <c>Deliver</c>.
+/// Each deliverer is isolated before the merge, so the other's success still delivers the channel.
+/// </summary>
+public class NotificationDelivererIsolationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private sealed class Throwing : INotificationChannelDeliverer
+    {
+        public string Channel => NotificationChannelKind.Teams;
+        public IObservable<NotificationChannelResult> Deliver(IMessageHub hub, NotificationChannelMessage message)
+            => throw new InvalidOperationException("this deliverer is broken");
+    }
+
+    private sealed class Faulting : INotificationChannelDeliverer
+    {
+        public string Channel => NotificationChannelKind.Teams;
+        public IObservable<NotificationChannelResult> Deliver(IMessageHub hub, NotificationChannelMessage message)
+            => Observable.Throw<NotificationChannelResult>(new InvalidOperationException("this one faults later"));
+    }
+
+    private sealed class Working : INotificationChannelDeliverer
+    {
+        public int Calls;
+        public string Channel => NotificationChannelKind.Teams;
+        public IObservable<NotificationChannelResult> Deliver(IMessageHub hub, NotificationChannelMessage message)
+            => Observable.Defer(() =>
+            {
+                Interlocked.Increment(ref Calls);
+                return Observable.Return(NotificationChannelResult.Sent(Channel));
+            });
+    }
+
+    // Field initializers run before the base constructor calls ConfigureMesh. Instance, never static.
+    private readonly Working working = new();
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services
+                .AddSingleton<INotificationChannelDeliverer>(new Throwing())
+                .AddSingleton<INotificationChannelDeliverer>(new Faulting())
+                .AddSingleton<INotificationChannelDeliverer>(working));
+
+    [Fact(Timeout = 60000)]
+    public async Task OneThrowingDeliverer_CannotMaskAnothersSuccess()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string recipient = "isolation_user";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        using (access.ImpersonateAsSystem())
+            await mesh.CreateNode(new MeshNode(recipient)
+            {
+                NodeType = "User",
+                Name = recipient,
+                Content = new User { Email = $"{recipient}@acme.com", FullName = recipient },
+            }).Should().Emit(cancellationToken: ct);
+
+        var report = await NotificationService.Raise(Mesh, new NotificationRequest
+            {
+                Recipient = recipient,
+                MainNodePath = recipient,
+                Title = LocalizableText.Verbatim("Approval requested"),
+                Message = LocalizableText.Verbatim("please approve"),
+                Type = NotificationType.ApprovalRequired,
+            })
+            .Timeout(TestTimeouts.WriteConvergence).Await(ct);
+
+        var teamsLeg = Assert.Single(report, r => r.Channel == NotificationChannelKind.Teams);
+        Assert.True(teamsLeg.Delivered, $"the working deliverer delivered; got: {teamsLeg.Detail}");
+        Assert.Equal(1, working.Calls);
     }
 }

@@ -450,6 +450,12 @@ public static class NotificationService
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NotificationService));
         var feature = request.EffectiveFeature();
+        // 🚨 Rejected at the boundary, never slugged: the key is the node id of each person's
+        // preference, so aliasing two keys onto one id would couple their channel choices.
+        if (!NotificationFeatures.IsValidKey(feature))
+            return Observable.Throw<ImmutableList<NotificationChannelResult>>(new ArgumentException(
+                $"'{feature}' is not a notification feature key — a key is a camel-case identifier "
+                + "(^[a-z][a-zA-Z0-9]*$)", nameof(request)));
 
         // 🚨 ONE resolved addressee, used by EVERY channel. The bell writes into
         // `{addressee}/_Notification`, and the addressee is also whose PREFERENCES are read and
@@ -465,7 +471,7 @@ public static class NotificationService
         // caller's identity. RunAsSystem opens the scope across the cold writes' Subscribe (where
         // each eager-captures its identity) and closes it on the way out of that same Subscribe.
         return access.RunAsSystem(
-            () => ReadPreference(hub, person, feature).SelectMany(preference =>
+            () => ReadPreference(hub, person, feature, logger).SelectMany(preference =>
             {
                 var channels = person is null
                     ? preference.Channels().Intersect([NotificationChannelKind.InApp])
@@ -502,7 +508,7 @@ public static class NotificationService
                     : NotificationChannelResult.Skipped(channel,
                         "not sent — no address on the profile, no mail sender, or the recipient's routing rules defer email to triage"));
         else
-            leg = DeliverViaModule(hub, request, feature, person!, channel);
+            leg = DeliverViaModule(hub, request, feature, person!, channel, logger);
 
         return leg
             .Take(1)
@@ -526,7 +532,7 @@ public static class NotificationService
     /// <see cref="INotificationChannelDeliverer"/> for it, with the text rendered for the recipient.
     /// </summary>
     private static IObservable<NotificationChannelResult> DeliverViaModule(
-        IMessageHub hub, NotificationRequest request, string feature, string person, string channel)
+        IMessageHub hub, NotificationRequest request, string feature, string person, string channel, ILogger? logger)
     {
         var deliverers = hub.ServiceProvider.GetServices<INotificationChannelDeliverer>()
             .Where(d => string.Equals(d.Channel, channel, StringComparison.Ordinal))
@@ -536,7 +542,19 @@ public static class NotificationService
                 $"no {channel} delivery is installed on this portal"));
         return RenderFor(hub, person, request, feature)
             .SelectMany(message => deliverers
-                .Select(d => d.Deliver(hub, message).Take(1))
+                // 🚨 Each deliverer is ISOLATED before the merge: one that throws (synchronously in
+                // Deliver, or through its observable) is its own skip and cannot terminate the
+                // merge and mask another deliverer's success.
+                .Select(d => Observable.Defer(() => d.Deliver(hub, message))
+                    .Take(1)
+                    .DefaultIfEmpty(NotificationChannelResult.Skipped(channel, $"{d.GetType().Name} answered nothing"))
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex, "Notification {Feature} for {Recipient}: {Deliverer} failed on {Channel}",
+                            feature, person, d.GetType().Name, channel);
+                        return Observable.Return(NotificationChannelResult.Skipped(channel,
+                            $"{d.GetType().Name} failed — {ex.Message}"));
+                    }))
                 .Merge()
                 .ToList()
                 // Several deliverers for one channel: delivered when ANY delivered.
@@ -578,59 +596,33 @@ public static class NotificationService
 
     /// <summary>
     /// The recipient's EFFECTIVE preference for <paramref name="feature"/> — their per-feature node
-    /// and their legacy per-category settings, folded by <see cref="NotificationChannelPreferences.Resolve"/>.
+    /// and their legacy per-category settings, each read AUTHORITATIVELY (existence by query,
+    /// content from the node stream), folded by <see cref="NotificationChannelPreferences.Fold"/>.
     /// A platform notification (no person) resolves to the defaults.
+    ///
+    /// <para>🚨 <b>Fail CLOSED.</b> A preference that exists but could not be read is not treated as
+    /// absent: that would switch the default Teams channel on for a person who had switched it off.
+    /// It resolves to the bell only, and says so at Warning.</para>
     /// </summary>
-    private static IObservable<NotificationFeaturePreference> ReadPreference(IMessageHub hub, string? person, string feature)
+    private static IObservable<NotificationFeaturePreference> ReadPreference(
+        IMessageHub hub, string? person, string feature, ILogger? logger)
     {
         if (string.IsNullOrEmpty(person))
             return Observable.Return(NotificationChannelPreferences.Resolve(feature, null, null));
-        return ReadSettings(hub, person)
-            .Zip(ReadFeaturePreference(hub, person, feature),
-                (legacy, own) => NotificationChannelPreferences.Resolve(feature, own, legacy));
-    }
-
-    /// <summary>
-    /// The recipient's own node for <paramref name="feature"/>, or null. A synced <c>GetQuery</c>
-    /// (empty-on-absent), never a point read — the node usually does NOT exist, for the reason on
-    /// <see cref="ReadSettings"/>.
-    /// </summary>
-    private static IObservable<NotificationFeaturePreference?> ReadFeaturePreference(IMessageHub hub, string person, string feature)
-    {
-        var path = NotificationFeaturePreferencePaths.PathFor(person, feature);
-        return hub.GetWorkspace()
-            .GetQuery($"{NotificationFeaturePreferenceNodeType.NodeType}|{path}",
-                $"path:{path} nodeType:{NotificationFeaturePreferenceNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
-            .Take(1)
-            .Select(nodes => nodes
-                .Select(n => n.ContentAs<NotificationFeaturePreference>(hub.JsonSerializerOptions))
-                .FirstOrDefault(p => p is not null))
-            .Timeout(LookupTimeout, Observable.Return<NotificationFeaturePreference?>(null))
-            .Catch(Observable.Return<NotificationFeaturePreference?>(null));
-    }
-
-    /// <summary>
-    /// Reads a user's deterministic notification preferences (defaults when absent/unreadable).
-    /// Uses a synced <c>GetQuery</c> (empty-on-absent) rather than a <c>GetMeshNodeStream</c> point-read:
-    /// the settings node usually does NOT exist (a user only has one once they visit the Notifications
-    /// tab), and a point-read of a not-yet-present node NotFound-resubscribe-storms the owner's partition
-    /// hub — which would wedge the very hub a completing thread needs. Same rationale as
-    /// <c>NotificationSettingsNodeType.EnsureExists</c> / the AiSettings/UpdatePolicy nodes.
-    /// </summary>
-    private static IObservable<NotificationSettings> ReadSettings(IMessageHub hub, string? recipient)
-    {
-        if (string.IsNullOrEmpty(recipient))
-            return Observable.Return(new NotificationSettings());
-        var path = NotificationSettingsPaths.PathFor(recipient);
-        return hub.GetWorkspace()
-            .GetQuery($"{NotificationSettingsNodeType.NodeType}|{path}",
-                $"path:{path} nodeType:{NotificationSettingsNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
-            .Take(1)
-            .Select(nodes => nodes
-                .Select(n => n.ContentAs<NotificationSettings>(hub.JsonSerializerOptions))
-                .FirstOrDefault(s => s is not null) ?? new NotificationSettings())
-            .Timeout(LookupTimeout, Observable.Return(new NotificationSettings()))
-            .Catch(Observable.Return(new NotificationSettings()));
+        var legacy = NotificationFeaturePreferenceNodeType.ReadAuthoritative<NotificationSettings>(
+            hub, NotificationSettingsPaths.PathFor(person), NotificationSettingsNodeType.NodeType);
+        var own = NotificationFeaturePreferenceNodeType.ReadAuthoritative<NotificationFeaturePreference>(
+            hub, NotificationFeaturePreferencePaths.PathFor(person, feature), NotificationFeaturePreferenceNodeType.NodeType);
+        return legacy.Zip(own, (l, o) =>
+        {
+            var effective = NotificationChannelPreferences.Fold(feature, o, l);
+            if (o.Kind != PreferenceReadKind.Found && (o.IsUnreadable || l.IsUnreadable))
+                logger?.LogWarning(
+                    "Notification {Feature} for {Recipient}: the channel preference could not be read ({Reason}) — "
+                    + "delivering to the bell only, never to an external channel on a choice we cannot see",
+                    feature, person, o.Reason ?? l.Reason);
+            return effective;
+        });
     }
 
     /// <summary>

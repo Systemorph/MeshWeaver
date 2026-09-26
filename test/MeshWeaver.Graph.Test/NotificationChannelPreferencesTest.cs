@@ -114,10 +114,92 @@ public class NotificationChannelPreferencesTest
 
     [Fact]
     public void ThePreferenceNode_LivesUnderThePersonsNotificationSettings()
-    {
-        Assert.Equal("alice/_Settings/Notifications/approvals",
+        => Assert.Equal("alice/_Settings/Notifications/approvals",
             NotificationFeaturePreferencePaths.PathFor("alice", NotificationFeatures.Approvals));
-        Assert.Equal("alice/_Settings/Notifications/odd-key-",
-            NotificationFeaturePreferencePaths.PathFor("alice", "odd/key!"));
+
+    public static TheoryData<string> EveryBuiltInKey()
+    {
+        var data = new TheoryData<string>();
+        foreach (var d in NotificationFeatures.BuiltIn)
+            data.Add(d.Feature);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryBuiltInKey))]
+    public void EveryBuiltInFeature_IsALegalKey(string feature)
+        => Assert.True(NotificationFeatures.IsValidKey(feature), feature);
+
+    [Theory]
+    [InlineData("ops/a")]
+    [InlineData("ops!a")]
+    [InlineData("ops-a")]
+    [InlineData("OpsA")]
+    [InlineData("1ops")]
+    [InlineData("")]
+    [InlineData(" approvals")]
+    [InlineData(null)]
+    public void AKeyOutsideTheAlphabet_IsRejected_NeverSlugged(string? feature)
+    {
+        Assert.False(NotificationFeatures.IsValidKey(feature));
+        // Rejected at the path — two such keys can never alias one preference node.
+        Assert.Throws<ArgumentException>(() => NotificationFeaturePreferencePaths.PathFor("alice", feature!));
+    }
+
+    [Fact]
+    public void TheKeysThatUsedToCollide_NowNeitherResolve()
+    {
+        Assert.Throws<ArgumentException>(() => NotificationFeaturePreferencePaths.PathFor("alice", "ops/a"));
+        Assert.Throws<ArgumentException>(() => NotificationFeaturePreferencePaths.PathFor("alice", "ops!a"));
+    }
+
+    private static readonly NotificationFeaturePreference TeamsOff = new() { Bell = true, Teams = false, Email = false };
+
+    [Fact]
+    public void Fold_AFoundPreference_IsTakenAsWritten_WhateverTheLegacyRead()
+    {
+        var effective = NotificationChannelPreferences.Fold(NotificationFeatures.Approvals,
+            PreferenceRead<NotificationFeaturePreference>.Found(TeamsOff),
+            PreferenceRead<NotificationSettings>.Unreadable("legacy timed out"));
+        Assert.False(effective.Teams);
+        Assert.True(effective.Bell);
+    }
+
+    [Fact]
+    public void Fold_AnUnreadablePreference_FailsClosed_BellOnly()
+    {
+        var effective = NotificationChannelPreferences.Fold(NotificationFeatures.Approvals,
+            PreferenceRead<NotificationFeaturePreference>.Unreadable("timed out"),
+            PreferenceRead<NotificationSettings>.Absent());
+        Assert.Equal(new[] { NotificationChannelKind.InApp }, effective.Channels());
+    }
+
+    [Fact]
+    public void Fold_AnUnreadableLegacyRow_WithNoFeatureNode_FailsClosed_BellOnly()
+    {
+        var effective = NotificationChannelPreferences.Fold(NotificationFeatures.Approvals,
+            PreferenceRead<NotificationFeaturePreference>.Absent(),
+            PreferenceRead<NotificationSettings>.Unreadable("timed out"));
+        Assert.Equal(new[] { NotificationChannelKind.InApp }, effective.Channels());
+    }
+
+    [Fact]
+    public void Fold_BothAbsent_IsTheDefault_BellAndTeams()
+    {
+        var effective = NotificationChannelPreferences.Fold(NotificationFeatures.Inbox,
+            PreferenceRead<NotificationFeaturePreference>.Absent(),
+            PreferenceRead<NotificationSettings>.Absent());
+        Assert.True(effective.Bell);
+        Assert.True(effective.Teams);
+    }
+
+    [Fact]
+    public void Fold_AbsentFeatureNode_UsesTheLegacyRowThatWasRead()
+    {
+        var effective = NotificationChannelPreferences.Fold(NotificationFeatures.ChatReady,
+            PreferenceRead<NotificationFeaturePreference>.Absent(),
+            PreferenceRead<NotificationSettings>.Found(new NotificationSettings { ChatReadyInApp = false }));
+        Assert.False(effective.Bell);
+        Assert.True(effective.Teams);
     }
 }

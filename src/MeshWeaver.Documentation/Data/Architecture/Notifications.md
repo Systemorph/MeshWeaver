@@ -83,7 +83,7 @@ A scalar flip is race-safe across mirrors (RFC 7396 merges object keys), so the 
 
 ## 4. Channels per feature — where a notification goes
 
-Every notification is raised for a **feature** — a stable, open-vocabulary key (`NotificationFeatures`: `approvals`, `inbox`, `triage`, `accessGranted`, `chatReady`, `system`; a module may raise its own). A notification raised without one gets the feature its `NotificationType` implies (the three approval types → `approvals`, and so on), and the bell row records it (`Notification.Feature`; read it through `FeatureOf()`, which covers rows written before the key existed).
+Every notification is raised for a **feature** — a stable, open-vocabulary key (`NotificationFeatures`: `approvals`, `inbox`, `triage`, `accessGranted`, `chatReady`, `system`; a module may raise its own). 🚨 Open, but not free-form: the key is the node id of each person's preference, so it must be a camel-case identifier (`^[a-z][a-zA-Z0-9]*$`, `NotificationFeatures.IsValidKey`). A key outside that alphabet is **rejected** where it enters (`Raise` errors, `PathFor` throws, the settings tab gives it no row) — never slugged, because a lossy slug would make two features share one preference node. A notification raised without one gets the feature its `NotificationType` implies (the three approval types → `approvals`, and so on), and the bell row records it (`Notification.Feature`; read it through `FeatureOf()`, which covers rows written before the key existed).
 
 Each person chooses, **per feature**, which channels reach them. The choice is an ordinary node in their own partition:
 
@@ -91,12 +91,14 @@ Each person chooses, **per feature**, which channels reach them. The choice is a
 |---|---|---|
 | `NotificationFeaturePreference` | `{user}/_Settings/Notifications/{feature}` | `bell`, `teams`, `email` — the channels for that feature |
 
-`NotificationChannelPreferences.Resolve` is the one rule, pure and unit-tested:
+`NotificationChannelPreferences.Resolve` (and `Fold`, over the two reads) is the one rule, pure and unit-tested:
 
 - the person's node for the feature, when it exists, is taken **as written**;
 - otherwise the default — **the bell and Teams, for every feature**. The bell and email of a feature that had a legacy per-category row (`NotificationSettings` at `{user}/_Settings/Notifications`) keep what that row says, so a bell someone had switched off stays off and approval / access-grant emails stay on; a newer feature gets no email by default.
 
-The **Notifications** settings tab shows one section per feature (the platform's `NotificationFeatures.BuiltIn` plus every `NotificationFeatureDescriptor` a module registers) and binds the standard node-content editor straight to that feature's node. The node is created on first view **seeded with the effective preference**, so opening the tab changes no delivery.
+🚨 **Absent is not unreadable, and the difference is the privacy property.** Both preference nodes are read AUTHORITATIVELY — existence from a synced query (they usually do not exist, and a point read of an absent path NotFound-storms the owner), content from `GetMeshNodeStream(path)`, never from the query's possibly-trailing snapshot (`NotificationFeaturePreferenceNodeType.ReadAuthoritative`, a `PreferenceRead<T>` of `Absent` / `Found` / `Unreadable`). A node that exists but cannot be read — a timeout, a fault, content that will not type — **fails closed**: the bell only, never Teams or email on a choice we could not see (`NotificationChannelPreferences.FailClosed`), logged at Warning. Reading it as absent would switch the default Teams channel on for a person who had switched it off.
+
+The **Notifications** settings tab shows one section per feature (the platform's `NotificationFeatures.BuiltIn` plus every `NotificationFeatureDescriptor` a module registers) and binds the standard node-content editor straight to that feature's node. The node is created on first view **seeded with the effective preference** — the legacy row read from its authoritative stream — so opening the tab changes no delivery; a legacy row that exists but cannot be read refuses the seed (the tab says so) rather than persisting a value nobody saw.
 
 ### Delivery — `NotificationService.Raise`
 
@@ -104,7 +106,7 @@ The **Notifications** settings tab shows one section per feature (the platform's
 
 - **Bell** (`InApp`) — the addressed row, stamped with the feature.
 - **Email** — the profile address, unchanged, including the deferral to triage for a person who authored routing rules.
-- **Any other channel** — handed to every registered **`INotificationChannelDeliverer`** for it, with the text rendered in the recipient's own language and an absolute link. Core cannot send to Teams itself; the Teams module (MeshWeaver.Plugins, `TeamsNotificationDeliverer`) registers the deliverer, posting through the Memex bot into the conversation the person opened by messaging it.
+- **Any other channel** — handed to every registered **`INotificationChannelDeliverer`** for it (each ISOLATED: one that throws is its own skip and cannot mask another's delivery), with the text rendered in the recipient's own language and an absolute link. Core cannot send to Teams itself; the Teams module (MeshWeaver.Plugins, `TeamsNotificationDeliverer`) registers the deliverer, posting through the Memex bot into the conversation the person opened by messaging it.
 
 🚨 **A channel the recipient cannot be reached on is a SKIP, logged at Debug — never an error to the raiser.** No deliverer installed, the bot not configured, or the person never having messaged the bot each come back as `Skipped` with the reason, and the other legs are unaffected. A leg that throws is logged at Warning and reported as a skip for the same reason.
 
