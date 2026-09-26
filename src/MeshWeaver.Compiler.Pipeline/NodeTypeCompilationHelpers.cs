@@ -373,7 +373,9 @@ internal static class NodeTypeCompilationHelpers
                     // faults all fall through to the behaviour that existed before — "the
                     // release pipeline compiles, as it would have anyway".
                     var prebuiltConsumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
-                    if (prebuiltConsumer is null)
+                    // A CLOSED type set adopts no database NodeType either — not only "compiles
+                    // none": straight to the park below, before any bundle is asked.
+                    if (prebuiltConsumer is null || hub.ServiceProvider.IsClosedTypeSet())
                     {
                         DispatchOrPark();
                         return;
@@ -523,7 +525,7 @@ internal static class NodeTypeCompilationHelpers
                                 ? ClosedTypeSet.RefusalFor(hubPath)
                                 : PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
                             logger?.LogError(
-                                "Compile watcher: {HubPath} has no adopted assembly and this mesh sets {Key} — " +
+                                "Compile watcher: {HubPath} is refused by {Key} — " +
                                 "PARKING with a named refusal instead of compiling. {Reason}",
                                 hubPath,
                                 closedTypeSet ? ClosedTypeSet.ConfigKey : PrebuiltAssemblySeeder.RequirePrebuiltConfigKey,
@@ -540,7 +542,9 @@ internal static class NodeTypeCompilationHelpers
                             var pendingDef = pendingNode!.ContentAs<NodeTypeDefinition>(
                                 hub.JsonSerializerOptions, logger);
                             // #3583 — a type that still holds a build is HELD, not parked dead.
-                            if (pendingDef is not null && SettleAsHold(pendingDef, reason))
+                            // Never on a closed set: there a held build is exactly what must not
+                            // keep serving, so the refusal always settles the type at Error.
+                            if (!closedTypeSet && pendingDef is not null && SettleAsHold(pendingDef, reason))
                                 return;
                             registry?.OnCompileFailed(
                                 hub, hubPath, reason, deterministic: true,

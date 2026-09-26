@@ -1,7 +1,7 @@
 ---
 Name: Closed Type Set
 Category: Architecture
-Description: A process that activates only the NodeTypes its image registers in code — no type definition read from the database, compiled, or adopted. The switch (Mesh:ClosedTypeSet), the three places it acts, what it deliberately does not change, and why the control instance needs it.
+Description: A process that activates only the NodeTypes its image registers in code — no type definition read from the database, compiled, or adopted. The switch (Mesh:ClosedTypeSet), the four places it acts, what it deliberately does not change, and why the control instance needs it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
 ---
 
@@ -38,17 +38,22 @@ container environment variable, next to the module that registers its types.
    runs first, unchanged: a static node whose `Path` equals the instance's `nodeType` and that carries
    a `HubConfiguration` is applied directly, with no database read and no compile — which is already
    true on an open mesh. On a closed mesh a type that misses it is **refused at that point**, before
-   the existence probe, the row's stream subscription or any compile/adoption: the instance activates
-   onto an overlay whose typed requests are NACKed with the reason. No self-heal watches for a row
-   to appear, because a row appearing can never change the answer.
-2. **The pre-warm sweep and the bake probe** — `DynamicTypePreWarmer.WarmDynamicTypes` /
-   `ProbeDynamicTypes`. Both normally enumerate every NodeType row in every partition. On a closed
-   mesh they enumerate **nothing** (not "everything, then filter"): the rows are exactly the input a
-   closed mesh must not read, and a broken one must not be able to occupy, slow or fail the pass that
-   the readiness gate reads.
-3. **Compile dispatch** — the compile watcher's `DispatchOrPark`, beside `Modules:RequirePrebuilt`.
-   A compile asked of a row itself (its Compile button, a release request, a self-heal kick) is
-   **parked** at `Error` with the closed-set reason instead of reaching Roslyn.
+   the existence probe, the row's stream subscription or any compile or adoption. The instance
+   activates onto an overlay (copy localized at render time) whose typed requests are NACKed with
+   `ErrorType.Rejected` and the reason — never `CompilationFailed`, since nothing was compiled, and
+   never `Unavailable`, since retrying cannot change the answer. No self-heal watches for a row to
+   appear, because a row appearing can never change the answer.
+2. **The pre-warm sweep, the bake probe and the boot seeders** — `DynamicTypePreWarmer.WarmDynamicTypes`
+   / `ProbeDynamicTypes`, and the hosted service's `SeedAll` / `SeedPublishedRoot` ahead of them. All
+   normally enumerate every NodeType row in every partition. On a closed mesh they enumerate
+   **nothing** (not "everything, then filter"): the rows are exactly the input a closed mesh must not
+   read, and a broken one must not be able to occupy, slow or fail the pass the readiness gate reads.
+3. **Adoption** — `PrebuiltAssemblySeeder.SeedDetailed`, the one write every bundle adoption goes
+   through (boot seeders, published root, on demand). A closed mesh answers `NotSeeded`.
+4. **Compile dispatch** — the compile watcher, beside `Modules:RequirePrebuilt`. A compile asked of a
+   row itself (its Compile button, a release request, a self-heal kick) skips on-demand adoption and
+   is **parked** at `Error` with the closed-set reason instead of reaching Roslyn — and, unlike the
+   prebuilt gate, is never *held* on a build the row already carries.
 
 Every surface reports one sentence, `ClosedTypeSet.RefusalFor(type, instance)`.
 
@@ -62,8 +67,6 @@ Every surface reports one sentence, `ClosedTypeSet.RefusalFor(type, instance)`.
 - **The readiness gate is not re-armed.** On the control image the sweep is off anyway
   (`PreWarm:DynamicTypes=false`), so `nodetype_bake` is never registered; the closed set is what
   makes that safe rather than merely quiet — nothing that is off can be turned back on by content.
-- **A prebuilt adoption onto a row is not blocked.** It cannot bind: no instance of that type ever
-  activates (1).
 
 ## Moving a type from the mesh into the image
 

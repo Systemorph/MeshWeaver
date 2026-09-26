@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Diagnostics;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -455,11 +456,18 @@ public sealed class DynamicTypePreWarmerHostedService(
             ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
         if (importSettled is { IsSettled: false })
             progress?.Invoke("waiting for the static repo import to settle before enumerating");
+        // A CLOSED type set (ClosedTypeSet) seeds nothing: the seeders enumerate the NodeType
+        // catalog and write adopted builds onto its rows, which is the database input a closed
+        // process must not read. The probe/sweep behind this then report the empty set themselves.
+        var closedTypeSet = services.IsClosedTypeSet();
         var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
-            .Do(_ => progress?.Invoke(
-                "adopting the prebuilt bundles shipped for this framework before enumerating"))
-            .SelectMany(_ => ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
-            .SelectMany(_ => ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
+            .Do(_ => progress?.Invoke(closedTypeSet
+                ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"
+                : "adopting the prebuilt bundles shipped for this framework before enumerating"))
+            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
+                : ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
+            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
+                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
 
         if (!sweepEnabled)
         {

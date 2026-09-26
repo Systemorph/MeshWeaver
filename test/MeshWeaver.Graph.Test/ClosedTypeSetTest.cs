@@ -99,7 +99,9 @@ public class ClosedTypeSetTest(ITestOutputHelper output) : MonolithMeshTestBase(
         nack.Should().NotBeNull(
             "the instance must still ACTIVATE — with a refusal — so callers get a terminal verdict "
             + "instead of parking on a hub that never comes up");
-        nack!.ErrorType.Should().Be(ErrorType.CompilationFailed);
+        nack!.ErrorType.Should().Be(ErrorType.Rejected,
+            "a policy refusal — not CompilationFailed (nothing was compiled) and not Unavailable "
+            + "(retrying cannot change the answer)");
         nack.Reason.Should().Contain("closed type set",
             "the refusal names the cause, not a compile error the source never had");
         nack.Reason.Should().Contain(rowPath, "and the type it refused");
@@ -182,6 +184,30 @@ public class ClosedTypeSetTest(ITestOutputHelper output) : MonolithMeshTestBase(
         warmed.Should().BeEmpty("and none to warm");
     }
 
+    /// <summary>
+    /// 🚨 P1, the adoption half. Every bundle adoption writes through
+    /// <see cref="PrebuiltAssemblySeeder.SeedDetailed(IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string}, string)"/>;
+    /// on a closed mesh it writes nothing — the row keeps no adopted build — whatever the bytes are.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ABundleAdoption_OntoADatabaseRow_IsNotSeeded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rowPath = $"{TestPartition}/AdoptTarget";
+        await CreateAsSystem(Mesh, BrokenRow(TestPartition, "AdoptTarget"), ct);
+
+        var outcome = await PrebuiltAssemblySeeder.SeedDetailed(
+                Mesh, rowPath, [1, 2, 3], null, PrebuiltAssemblySeeder.LiveFrameworkMvid, null,
+                dependencies: null, sourceFingerprint: null)
+            .FirstAsync().Timeout(Budget).Await(ct);
+        outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.NotSeeded);
+
+        var row = await Mesh.GetMeshNodeStream(rowPath)
+            .Where(n => n is not null).FirstAsync().Timeout(Budget).Await(ct);
+        row!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.LatestAssemblyPath
+            .Should().BeNull("nothing was adopted onto the row");
+    }
+
     internal static async Task<MessageHubConfiguration> Enrich(
         IMessageHub mesh, MeshNode instance, CancellationToken ct)
     {
@@ -197,7 +223,7 @@ public class ClosedTypeSetTest(ITestOutputHelper output) : MonolithMeshTestBase(
     internal static Task CreateAsSystem(IMessageHub mesh, MeshNode node, CancellationToken ct)
     {
         var meshService = mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var access = mesh.ServiceProvider.GetService<AccessService>();
+        var access = mesh.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => meshService.CreateNode(node))
             .FirstAsync().Timeout(Budget).Await(ct);
     }
@@ -245,5 +271,38 @@ public class OpenTypeSetControlTest(ITestOutputHelper output) : MonolithMeshTest
 
         (applied.Get<UnhandledMessageNack>()?.Reason ?? "").Should().NotContain("closed type set",
             "the refusal belongs to a closed mesh only");
+    }
+}
+
+/// <summary>
+/// The CONFIGURATION opt-in — the form the control image uses (<c>Mesh__ClosedTypeSet=true</c> in
+/// its environment). The other classes close the set with <see cref="ClosedTypeSetExtensions.WithClosedTypeSet"/>;
+/// this one sets only the key on the host's own <see cref="Microsoft.Extensions.Configuration.IConfiguration"/>
+/// and checks the same refusals, so a wiring regression in the fallback cannot leave the control
+/// instance silently open.
+/// </summary>
+public class ClosedTypeSetByConfigurationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    /// <summary>The key alone closes the set: activation refused, probe empty.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TheConfigurationKey_ClosesTheSet()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Mesh.ServiceProvider.IsClosedTypeSet().Should().BeFalse("open until the key is set");
+        Mesh.ServiceProvider.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()
+            [ClosedTypeSet.ConfigKey] = "true";
+        Mesh.ServiceProvider.IsClosedTypeSet().Should().BeTrue($"{ClosedTypeSet.ConfigKey}=true closes the set");
+
+        await ClosedTypeSetTest.CreateAsSystem(Mesh, ClosedTypeSetTest.BrokenRow(TestPartition, "ByConfig"), ct);
+        var applied = await ClosedTypeSetTest.Enrich(
+            Mesh, new MeshNode("c1", TestPartition) { NodeType = $"{TestPartition}/ByConfig" }, ct);
+        var nack = applied.Get<UnhandledMessageNack>();
+        nack.Should().NotBeNull();
+        nack!.ErrorType.Should().Be(ErrorType.Rejected);
+        nack.Reason.Should().Contain("closed type set");
+
+        var report = await DynamicTypePreWarmer.ProbeDynamicTypes(Mesh)
+            .FirstAsync().Timeout(ClosedTypeSetTest.Budget).Await(ct);
+        report.Entries.Should().BeEmpty();
     }
 }

@@ -154,14 +154,7 @@ internal static class NodeTypeEnrichmentHelpers
             var refusal = ClosedTypeSet.RefusalFor(nodeType, node.Path);
             logger?.LogWarning(
                 "EnrichWithNodeType: {Refusal}", refusal);
-            // Not "a compilation error … please correct the code" (the overlay's default copy):
-            // nothing was compiled and the code may be fine — this image simply does not carry
-            // the type. Same baked-English shape as the other enrichment-time causes (#641).
-            return Observable.Return(WithCompilationErrorOverlay(
-                node, nodeType, refusal,
-                guidance: "A recycle cannot change this: only an image that registers the type can.",
-                intro: "This item's type is **not part of this portal's closed type set**, so its page couldn't be built.",
-                callToAction: "**Open it on a portal that serves this type.** "));
+            return Observable.Return(WithClosedTypeSetOverlay(node, nodeType, refusal));
         }
 
         // Fast existence probe: before opening the slow-path subscription
@@ -3199,6 +3192,52 @@ internal static class NodeTypeEnrichmentHelpers
             HubConfiguration = config => overlay(config).Set(nack)
         };
     }
+
+    /// <summary>
+    /// The CLOSED-TYPE-SET overlay (<see cref="ClosedTypeSet"/>): the instance activates onto a page
+    /// that says its type is not part of this image's type set, and every typed request is NACKed
+    /// with <see cref="ErrorType.Rejected"/> naming the type — a deliberate policy refusal, never
+    /// <see cref="ErrorType.CompilationFailed"/> (nothing was compiled, and the source may be fine)
+    /// and never <c>Unavailable</c> (retrying cannot change the answer; only another image can).
+    /// A sibling of <see cref="WithExecutionRefusedOverlay"/> for the same reasons: its own NACK
+    /// classification, and copy resolved through <c>host.Localize</c> at render time.
+    /// </summary>
+    internal static MeshNode WithClosedTypeSetOverlay(MeshNode node, string nodeType, string refusal)
+    {
+        Func<MessageHubConfiguration, MessageHubConfiguration> overlay =
+            config => config.AddLayout(layout =>
+                layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
+                    Observable.Return<UiControl?>(Controls.Stack
+                        .WithStyle(CompilationErrorCardStyle)
+                        .WithView(Controls.Markdown(BuildClosedTypeSetMarkdown(
+                            (key, args) => host.Localize(key, args), nodeType)))),
+                    ClosedTypeSetProvenance));
+        var nack = new UnhandledMessageNack(refusal, ErrorType.Rejected, nodeType);
+        return node with { HubConfiguration = config => overlay(config).Set(nack) };
+    }
+
+    /// <summary>Localization key for the closed-set overlay's headline — takes the NodeType path as <c>{0}</c>.</summary>
+    internal const string ClosedTypeSetSummaryKey = "ui.closedTypeSetSummary";
+
+    /// <summary>Localization key for the closed-set overlay's lead-in.</summary>
+    internal const string ClosedTypeSetIntroKey = "ui.closedTypeSetIntro";
+
+    /// <summary>Localization key for the closed-set overlay's guidance paragraph.</summary>
+    internal const string ClosedTypeSetGuidanceKey = "ui.closedTypeSetGuidance";
+
+    /// <summary>The closed-set page's markdown, every user-visible string from the catalog.</summary>
+    internal static string BuildClosedTypeSetMarkdown(Func<string, object?[], string> localize, string nodeType)
+        => BuildCompilationErrorMarkdownText(
+            errorMessage: localize(ClosedTypeSetSummaryKey, [nodeType]),
+            guidance: localize(ClosedTypeSetGuidanceKey, []),
+            intro: localize(ClosedTypeSetIntroKey, []),
+            callToAction: localize(NoCodeChangeNeededKey, []));
+
+    /// <summary>Why the closed-set overlay carries no provenance line — the card names the one fact a
+    /// reader is chasing (the type is not in this image), which the node's own stamps do not describe.</summary>
+    private static readonly NodePageProvenance ClosedTypeSetProvenance = NodePageProvenance.Declined(
+        "The card names the refused type and why this image does not serve it; the node's own "
+        + "Created/Updated stamps describe the instance, not the image's type set.");
 
     /// <summary>Localization key for the refusal overlay's headline sentence — takes the NodeType
     /// path, the bundle's source fingerprint and the live one as <c>{0}</c>/<c>{1}</c>/<c>{2}</c>.</summary>
