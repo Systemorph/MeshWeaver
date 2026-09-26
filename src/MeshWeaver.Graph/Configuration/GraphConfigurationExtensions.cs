@@ -72,6 +72,7 @@ public static class GraphConfigurationExtensions
                 // approval data deserializing and routing wherever the package is not installed.
                 .AddNotificationType()
                 .AddNotificationSettingsType()
+                .AddNotificationFeaturePreferenceType()
                 .AddCompletionMemoryType()
                 // NotificationRule/NotificationChannel ride the MeshWeaver.Notifications.Channels
                 // MODULE (Modules:Assemblies / AddNotificationChannels()) together with the triage
