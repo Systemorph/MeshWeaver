@@ -336,7 +336,8 @@ differently. Conflating them is the main way this design goes wrong.
 
 `PluginGateRunner` + `AreaProbe`: stands up a mesh, imports content, renders each type's `Tests`
 layout area over the ordinary client sync stream, and classifies the frames
-(`AreaProbe.ClassifyTestsFrame`): compile-progress and *"Area not found"* are transient; `❌` is red;
+(`AreaProbe.ClassifyTestsFrame`): compile-progress, a streamed Tests progress frame
+(`tests-running`, see [Writing Tests](../WritingTests)) and *"Area not found"* are transient; `❌` is red;
 `N/M passed` is green iff `N == M`; **no verdict inside the timeout is RED** — *"a Tests area that
 reports nothing is a broken gate, never a silent pass."*
 

@@ -88,6 +88,22 @@ public static class AreaFrameClassifier
     /// </summary>
     public const string StorageUnavailableId = "storage-unavailable";
 
+    /// <summary>
+    /// <see cref="UiControl.Id"/> of every PROGRESS frame a <c>Tests</c> area serves while its
+    /// cases are still running (<c>MeshTestRunner.Area</c>): the table shows each case pending,
+    /// running or finished, with its elapsed time and its output so far. TRANSIENT.
+    ///
+    /// <para>The SIXTH state. A Tests area used to emit exactly ONE frame, at the end, so a case
+    /// that called a slow external service kept the page on "Rendering …" for its whole budget,
+    /// indistinguishable from a hung one. Streaming the progress fixes the page, and this id is
+    /// what keeps the stream safe for a consumer that reads a VERDICT off the first frame it can
+    /// classify (the plugin gate's <c>AreaProbe</c>): a progress frame is a promise that the
+    /// verdict frame follows, never a verdict of its own — its rows already carry ✔ for a case
+    /// that passed so far, and read as a verdict that would green a suite whose later cases have
+    /// not run yet.</para>
+    /// </summary>
+    public const string TestsRunningId = "tests-running";
+
     // The pre-id signal, kept as a fallback so a frame that lost its id on the way here (an
     // older peer, a control rebuilt from partial JSON) is still recognised. Never localize:
     // BuildNotFoundControl is deliberately English — it is a framework diagnostic, not UI copy.
@@ -142,15 +158,25 @@ public static class AreaFrameClassifier
         => HasFrameId(control, StorageUnavailableId);
 
     /// <summary>
+    /// True for a PROGRESS frame of a <c>Tests</c> area whose cases are still running — the
+    /// verdict frame replaces it once the last case finished or timed out.
+    /// </summary>
+    /// <param name="control">The rendered control, or <c>null</c>.</param>
+    public static bool IsTestsRunning(UiControl? control)
+        => HasFrameId(control, TestsRunningId);
+
+    /// <summary>
     /// True for a frame that is not the area's content and will be REPLACED without anyone
-    /// acting: the compile-progress page, and the <see cref="RedirectControl"/> it emits once
-    /// the build settles. The single predicate a waiter needs — "keep waiting, this is not the
-    /// answer". A genuinely missing area (<see cref="IsAreaNotFound"/>) is deliberately NOT
-    /// transient: nothing is going to replace it.
+    /// acting: the compile-progress page, the <see cref="RedirectControl"/> it emits once
+    /// the build settles, and a Tests area's progress frame, which its verdict frame replaces.
+    /// The single predicate a waiter needs — "keep waiting, this is not the answer". A genuinely
+    /// missing area (<see cref="IsAreaNotFound"/>) is deliberately NOT transient: nothing is
+    /// going to replace it.
     /// </summary>
     /// <param name="control">The rendered control, or <c>null</c>.</param>
     public static bool IsTransientFrame(UiControl? control)
-        => IsCompileProgress(control) || IsHubRecycling(control) || control is RedirectControl;
+        => IsCompileProgress(control) || IsHubRecycling(control) || IsTestsRunning(control)
+           || control is RedirectControl;
 
     // UiControl.Id is `object?`, so a frame that came back over the sync stream carries it as
     // whatever the deserializer produced for a JSON string (a JsonElement, not a string). Compare

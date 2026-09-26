@@ -1716,5 +1716,11 @@
   "ui.threadQueueStateWoken": "Woken",
   "ui.threadQueueStateRetried": "Relaunched",
   "ui.threadQueueStateActionFailed": "Could not act",
-  "ui.threadQueueStateFailed": "Failed"
+  "ui.threadQueueStateFailed": "Failed",
+  "tests.progress": "{0} tests — {1} of {2} done, running for {3}s",
+  "tests.column.class": "Class",
+  "tests.column.case": "Case",
+  "tests.column.result": "Result",
+  "tests.column.time": "Time",
+  "tests.column.output": "Output"
 }
