@@ -2200,19 +2200,22 @@ jobs:
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      - name: Tag memex-control:<version>, :<sha>, :main (ACR, then the fleet registry)
+      - name: Tag memex-control:<version>, :<sha>, :main and the line pointers (ACR, then the fleet registry)
         run: |
           set -euo pipefail
-          docker buildx imagetools create \
-            --tag "${{ env.ACR }}/memex-control:$V_CONTROL" \
-            --tag "${{ env.ACR }}/memex-control:$SHA" \
-            --tag "${{ env.ACR }}/memex-control:main" \
-            "${{ env.ACR }}/memex-control:$STAGING"
-          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" \
-            "${{ env.REGISTRY }}/memex-control:$V_CONTROL" \
-            "${{ env.REGISTRY }}/memex-control:$SHA" \
-            "${{ env.REGISTRY }}/memex-control:main"
-          echo "- memex-control \`$V_CONTROL\`, \`$SHA\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted" >> "$GITHUB_STEP_SUMMARY"
+          # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as Phase D moves them
+          # for memex-portal-ai: a NEW instance seeds from the line pointer, never a specific build
+          # (Memex AGENTS.md "NO PINS"; Plugins#2034). Without them the shadow Provision of control
+          # (Memex docs/control-instance.md §8 step 4) planned "selected tag (none)" on 2026-09-26 —
+          # memex-control carried only <version>, <sha> and main.
+          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          args=(); margs=()
+          for t in "$V_CONTROL" "$SHA" main $(line_tags "$V_CONTROL"); do
+            args+=(--tag "${{ env.ACR }}/memex-control:$t"); margs+=("${{ env.REGISTRY }}/memex-control:$t")
+          done
+          docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
+          echo "- memex-control \`$V_CONTROL\`, \`$SHA\`, \`main\`, $(line_tags "$V_CONTROL") — accepted (empty DB · broken NodeType · N−1) and promoted" >> "$GITHUB_STEP_SUMMARY"
 
   # 📣 THE CONTROL LANE REPORTS ITSELF. It is outside `alert-on-failure` on purpose (its red must
   # not read as "the fleet did not ship"), so without this job a failure here would leave nothing

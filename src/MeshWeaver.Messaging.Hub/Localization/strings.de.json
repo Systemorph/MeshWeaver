@@ -1753,5 +1753,6 @@
   "profile.pictureError.unsupportedType": "Verwenden Sie ein PNG-, JPEG-, GIF- oder WebP-Bild.",
   "profile.pictureError.tooLarge": "Das Bild ist größer als {0} MB.",
   "profile.pictureError.notAnImage": "Der Inhalt der Datei ist kein PNG-, JPEG-, GIF- oder WebP-Bild.",
-  "profile.pictureError.noCollection": "Dieses Profil hat keinen Dateispeicher für ein Bild."
+  "profile.pictureError.noCollection": "Dieses Profil hat keinen Dateispeicher für ein Bild.",
+  "store.profileSubscription": "Abo"
 }
