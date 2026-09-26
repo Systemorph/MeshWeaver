@@ -189,10 +189,16 @@ busy registry reached the zero-byte 180 s stalls of #4963.
   read;
 - a record **another replica** wrote on the shared volume is absorbed within
   `ServedActivationFreshness` (30 s): the first read past the bound still answers at once from the
-  snapshot and starts ONE re-derivation that every concurrent reader shares (a `PromiseSlot`, so a
-  failed derivation is reported and never cached);
+  snapshot and starts ONE re-derivation that every concurrent reader shares;
 - a derivation that started before a local write is never published over it (a write generation
-  guards the store).
+  guards the store);
+- the in-flight derivation is OWNED by the service, not by the request that started it: its slot is
+  claimed by compare-and-swap before the work starts, its result is an `AsyncSubject` fed by the
+  service's own subscription, and it releases the slot pair-exactly on success and on fault. So an
+  aborted request can never leave a fault cached for every later reader, and a derivation that
+  finishes late can never evict its successor (both raised in review on #5768; the second is
+  pinned by `ALateDerivationDoesNotEvictItsSuccessor`, red at three derivations instead of two
+  when the release is made unconditional).
 
 The index therefore costs one snapshot read — the two reads per request collapse into it — and at
 most one derivation is in flight per replica, whatever the poll rate. **The bundle download keeps

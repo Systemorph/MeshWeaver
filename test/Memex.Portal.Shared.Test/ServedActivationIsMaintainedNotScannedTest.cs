@@ -1,7 +1,10 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Plugin.Packaging;
@@ -134,6 +137,81 @@ public class ServedActivationIsMaintainedNotScannedTest : IDisposable
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the re-derivation the due read started must reach the served list",
                 cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 A derivation that finishes LATE never evicts its successor (Copilot's review of #5768):
+    /// generation 0's derivation is parked, a local landing moves to generation 1 and a reader
+    /// starts generation 1's derivation (parked too); generation 0 then finishes. A reader arriving
+    /// now must SHARE generation 1's derivation — exactly two derivations in all — and gets the
+    /// landed module.
+    /// </summary>
+    [Fact]
+    public async Task ALateDerivationDoesNotEvictItsSuccessor()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var derivations = 0;
+        var releaseFirst = 0;
+        var releaseSecond = 0;
+        var firstParked = new AsyncSubject<Unit>();
+        var secondParked = new AsyncSubject<Unit>();
+        using var registry = new ModuleLandingService(baseDirectory: root)
+        {
+            BeforeServedPublish = generation =>
+            {
+                Interlocked.Increment(ref derivations);
+                // The deliberate parks — the subject of this test. Bounded, and released in the
+                // finally below, so a failing assertion can never strand a pool thread.
+                if (generation == 0)
+                {
+                    firstParked.OnNext(Unit.Default);
+                    firstParked.OnCompleted();
+                    SpinWait.SpinUntil(() => Volatile.Read(ref releaseFirst) == 1, TestTimeouts.Convergence);
+                }
+                else
+                {
+                    secondParked.OnNext(Unit.Default);
+                    secondParked.OnCompleted();
+                    SpinWait.SpinUntil(() => Volatile.Read(ref releaseSecond) == 1, TestTimeouts.Convergence);
+                }
+            },
+        };
+
+        try
+        {
+            var first = new ReplaySubject<ModuleActivationList>();
+            using var firstRead = registry.GetServedActivation().Subscribe(first);
+            await firstParked.Should().Within(TestTimeouts.Convergence)
+                .Emit("generation 0's derivation must reach its publish point", cancellationToken: ct);
+
+            await Shelve(registry, "1.0.0").Should().Within(TestTimeouts.Convergence)
+                .Emit("the local landing must complete", cancellationToken: ct);
+
+            var second = new ReplaySubject<ModuleActivationList>();
+            using var secondRead = registry.GetServedActivation().Subscribe(second);
+            await secondParked.Should().Within(TestTimeouts.Convergence)
+                .Emit("generation 1's derivation must reach its publish point", cancellationToken: ct);
+
+            // Generation 0 finishes while generation 1 is still in flight.
+            Volatile.Write(ref releaseFirst, 1);
+            await first.Should().Within(TestTimeouts.Convergence)
+                .Emit("generation 0's reader is answered", cancellationToken: ct);
+
+            // 🚨 THE ASSERTION. A reader arriving now shares generation 1's derivation.
+            var third = new ReplaySubject<ModuleActivationList>();
+            using var thirdRead = registry.GetServedActivation().Subscribe(third);
+            Volatile.Write(ref releaseSecond, 1);
+
+            var served = await third.Should().Within(TestTimeouts.Convergence)
+                .Emit("the late reader is answered by generation 1", cancellationToken: ct);
+            Assert.Contains(served.Entries, IsTheModule);
+            Assert.Equal(2, Volatile.Read(ref derivations));
+        }
+        finally
+        {
+            Volatile.Write(ref releaseFirst, 1);
+            Volatile.Write(ref releaseSecond, 1);
+        }
     }
 
     private static bool IsTheModule(ModuleActivationEntry entry) =>

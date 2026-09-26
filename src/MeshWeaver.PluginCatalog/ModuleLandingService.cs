@@ -793,8 +793,9 @@ public sealed class ModuleLandingService : IDisposable
         if (known is not null && known.Generation == Interlocked.Read(ref servedGeneration))
         {
             if (ServedActivationClock.GetUtcNow() - known.ReadAt >= ServedActivationFreshness)
-                // Revalidate in the background, sharing the one in-flight derivation; the fault
-                // is reported, never cached (PromiseSlot evicts it), and the next read tries again.
+                // Revalidate beside the answer, sharing the one in-flight derivation. The
+                // derivation is owned by the service (see RefreshServedActivation), so this
+                // subscription only REPORTS its outcome; nothing is cached from a fault.
                 RefreshServedActivation().Subscribe(
                     _ => { },
                     ex => logger?.LogWarning(ex,
@@ -815,47 +816,82 @@ public sealed class ModuleLandingService : IDisposable
     /// tests; the system clock in production.</summary>
     internal TimeProvider ServedActivationClock { get; init; } = TimeProvider.System;
 
+    /// <summary>Seam for the interleaving pins (InternalsVisibleTo): runs on the derivation's own
+    /// thread once the list has been read and before it is published, with the write generation
+    /// the derivation belongs to. Null in production.</summary>
+    internal Action<long>? BeforeServedPublish { get; init; }
+
     /// <summary>One derivation of the list, when it was taken, and the local-write generation it
     /// was taken in (a snapshot from before this process's latest write is never served).</summary>
     private sealed record ServedActivation(ModuleActivationList List, DateTimeOffset ReadAt, long Generation);
 
+    /// <summary>One in-flight derivation: the write generation it serves and the result every
+    /// reader of that generation shares. An <see cref="AsyncSubject{T}"/> fed by a subscription the
+    /// SERVICE holds, so a reader that cancels (an aborted HTTP request) never decides whether the
+    /// derivation's outcome is observed or its slot released.</summary>
+    private sealed class ServedRefresh(long generation)
+    {
+        public long Generation { get; } = generation;
+        public AsyncSubject<ServedActivation> Result { get; } = new();
+    }
+
     private ServedActivation? servedActivation;
     private long servedGeneration;
-    private readonly PromiseSlot<ServedActivation> servedRefresh = new();
+    private ServedRefresh? servedRefresh;
 
-    /// <summary>The one in-flight derivation every served reader shares.</summary>
-    private IObservable<ServedActivation> RefreshServedActivation() =>
-        servedRefresh.GetOrCreate(() =>
+    /// <summary>
+    /// The one in-flight derivation every served reader of the current write generation shares —
+    /// started when there is none. A lock-free install: the slot is claimed by compare-and-swap
+    /// BEFORE the work starts, so a derivation can never finish ahead of its own installation; and
+    /// the derivation releases it pair-exactly (never "whatever is in the slot now"), so one that
+    /// finishes late cannot evict its successor (Copilot's review of #5768).
+    /// </summary>
+    private IObservable<ServedActivation> RefreshServedActivation()
+    {
+        while (true)
         {
             var generation = Interlocked.Read(ref servedGeneration);
-            return ReadPool.RunBlocking(_ =>
-            {
-                var served = new ServedActivation(
-                    ModuleActivationSidecar.ReadFor(baseDirectory,
-                        msg => logger?.LogError("{Message}", msg), platform),
-                    ServedActivationClock.GetUtcNow(),
-                    generation);
-                // Published only if no local write happened while it was being read: a list
-                // derived before a write must not become the answer after it.
-                // A local write since the start has already let this derivation's slot go
-                // (MarkServedActivationStale), so only a derivation still current releases it —
-                // and releasing it makes the next refresh a NEW derivation, never a replay.
-                if (Interlocked.Read(ref servedGeneration) == generation)
-                {
-                    Volatile.Write(ref servedActivation, served);
-                    servedRefresh.Invalidate();
-                }
-                return served;
-            });
-        });
-
-    /// <summary>This process wrote the record: the served snapshot is stale from now on, and a
-    /// derivation already in flight was started before the write, so it is let go too.</summary>
-    private void MarkServedActivationStale()
-    {
-        Interlocked.Increment(ref servedGeneration);
-        servedRefresh.Invalidate();
+            var current = Volatile.Read(ref servedRefresh);
+            if (current is not null && current.Generation == generation)
+                return current.Result;
+            var mine = new ServedRefresh(generation);
+            if (!ReferenceEquals(Interlocked.CompareExchange(ref servedRefresh, mine, current), current))
+                continue; // another reader installed one first — go round and share it
+            // Service-owned: the outcome reaches every reader, and the slot is released, whether
+            // or not any reader is still subscribed.
+            ReadPool.InvokeBlocking(_ => DeriveServedActivation(mine)).Subscribe(mine.Result);
+            return mine.Result;
+        }
     }
+
+    private ServedActivation DeriveServedActivation(ServedRefresh refresh)
+    {
+        try
+        {
+            var served = new ServedActivation(
+                ModuleActivationSidecar.ReadFor(baseDirectory,
+                    msg => logger?.LogError("{Message}", msg), platform),
+                ServedActivationClock.GetUtcNow(),
+                refresh.Generation);
+            BeforeServedPublish?.Invoke(refresh.Generation);
+            // Published only if no local write happened while it was being read: a list derived
+            // before a write must not become the answer after it.
+            if (Interlocked.Read(ref servedGeneration) == refresh.Generation)
+                Volatile.Write(ref servedActivation, served);
+            return served;
+        }
+        finally
+        {
+            // Pair-exact release, on success AND on a fault: the next refresh is a NEW derivation,
+            // never a replay of this one's outcome.
+            Interlocked.CompareExchange(ref servedRefresh, null, refresh);
+        }
+    }
+
+    /// <summary>This process wrote the record: the served snapshot is stale from now on. A
+    /// derivation already in flight belongs to the previous generation, so the next served read
+    /// starts one for this generation instead of sharing it.</summary>
+    private void MarkServedActivationStale() => Interlocked.Increment(ref servedGeneration);
 
     /// <summary>
     /// Proposes the module set the deployment's activation record now describes — the coordination
