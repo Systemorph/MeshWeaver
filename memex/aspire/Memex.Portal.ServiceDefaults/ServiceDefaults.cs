@@ -434,12 +434,20 @@ public static class ServiceDefaults
     /// their verdict is read by <see cref="ProbeEndpoints.Ready"/> alone, never by the startup
     /// probe on <see cref="ProbeEndpoints.Health"/>.
     ///
-    /// <para>Today that is the NodeType bake gate only. The other checks a portal registers stay on
-    /// the startup probe deliberately — the per-check decision and its reasoning are in
+    /// <para>Two checks: the NodeType bake gate (policy <c>bake-gate-readiness-only</c>) and the
+    /// required-modules check (policy <c>required-modules-readiness-only</c>). Its Unhealthy verdict
+    /// (a required module absent or not installable here) is a property of what the pod's shelf was
+    /// given, and when the registry cannot serve the module it is missing for every image — so on
+    /// the startup probe it would kill the previous image's restarted pods too. As a roll gate it
+    /// stalls the roll and keeps the pod out of the Service instead. (Its Degraded verdict — a
+    /// store-delivered module not here yet — is a 200 on every probe and holds nothing.) The other checks a portal registers stay on the startup probe deliberately
+    /// — the per-check decision and its reasoning are in
     /// Doc/Architecture/TheBakeGateOnlyStallsARoll ("Which checks may fail the startup probe").</para>
     /// </summary>
     internal static readonly ImmutableHashSet<string> RollGateChecks =
-        ImmutableHashSet.Create(StringComparer.Ordinal, NodeTypeBakeGateExtensions.HealthCheckName);
+        ImmutableHashSet.Create(StringComparer.Ordinal,
+            NodeTypeBakeGateExtensions.HealthCheckName,
+            ProbeEndpoints.RequiredModulesCheckName);
 
     /// <summary>
     /// Adds <see cref="ProbeEndpoints.RollGateTag"/> to every registration named in
