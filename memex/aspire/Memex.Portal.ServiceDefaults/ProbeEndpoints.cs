@@ -57,6 +57,11 @@ public static class ProbeEndpoints
     /// <c>/health</c> — every registered check. The <c>startupProbe</c>'s path, and nothing else's:
     /// as a post-startup probe it is the 2026-07-21 death spiral (a heavy check times out under
     /// load, the pod is yanked from the Service, and the survivors inherit its traffic).
+    ///
+    /// <para>🚨 Its HTTP status is the STARTUP verdict — "did the process boot" — and a check
+    /// tagged <see cref="RollGateTag"/> never contributes to it. Such a check is still RUN here and
+    /// its reading always PRINTS in the body, so the instrument an operator reads is unchanged; it
+    /// just cannot fail the one probe whose failure kills the container.</para>
     /// </summary>
     public const string Health = "/health";
 
@@ -67,8 +72,9 @@ public static class ProbeEndpoints
     public const string Live = "/alive";
 
     /// <summary>
-    /// <c>/ready</c> — the READINESS path. Checks tagged <see cref="ReadyTag"/> only, which today
-    /// is the trivial process-up check and deliberately nothing else.
+    /// <c>/ready</c> — the READINESS path. Checks tagged <see cref="ReadyTag"/> or
+    /// <see cref="RollGateTag"/>: the trivial process-up check, plus any roll gate the host
+    /// registered (the NodeType bake gate, <c>nodetype_bake</c>).
     /// </summary>
     public const string Ready = "/ready";
 
@@ -104,4 +110,25 @@ public static class ProbeEndpoints
     /// aggregate word on line one does not turn Degraded for a clean census.</para>
     /// </summary>
     public const string CensusTag = "census";
+
+    /// <summary>
+    /// 🚨 <b>A ROLL GATE: the check holds READINESS only — it never fails the startup probe and
+    /// never restarts anything</b> (policy <c>bake-gate-readiness-only</c>, MeshWeaver#5544).
+    ///
+    /// <para>A roll gate answers "may this image take traffic here?", which is a question about the
+    /// ROLL, not about whether the process booted. The only safe consequence of "no" is that the
+    /// pod stays alive and out of the Service, so the roll stalls with the previous image serving.
+    /// On the startup probe the same "no" KILLS the container once
+    /// <c>periodSeconds × failureThreshold</c> runs out, and a restarted pod of the PREVIOUS image
+    /// must pass the same probe: that is how the <c>nodetype_bake</c> verdict took
+    /// memex.systemorph.com down from 20:54Z to 04:07Z on 2026-09-25/26 (three-hour container
+    /// deaths, Doc/Architecture/TheBakeGateOnlyStallsARoll).</para>
+    ///
+    /// <para>So a check carrying this tag is read by <see cref="Ready"/> (it joins that endpoint's
+    /// allow-list) and is excluded from <see cref="Health"/>'s STATUS, while its reading still
+    /// prints in <see cref="Health"/>'s body whatever it says. It must not also carry
+    /// <see cref="LiveTag"/>. <c>ServiceDefaults.RollGateChecks</c> applies it by name to the
+    /// NodeType bake gate, so the rule holds for a host that registered that check untagged.</para>
+    /// </summary>
+    public const string RollGateTag = "roll-gate";
 }

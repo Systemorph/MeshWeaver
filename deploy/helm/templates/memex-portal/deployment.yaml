@@ -386,15 +386,16 @@ spec:
             # Generous window for a cold boot (schema provisioning + static import). While this is
             # failing, readiness/liveness are suspended, so a slow boot is never flagged unhealthy.
             #
-            # ⚠️ This budget is what bounds a NodeType BAKE (PreWarm__GateReadiness). A cold compile
-            # is ~2.4 s per NodeType and the sweep is strictly sequential (measured 2026-08-10), so
-            # the largest mesh we run (~240 types) needs ~10 min of bake on top of a plain cold boot.
-            # periodSeconds × failureThreshold is the ceiling. What this chart SHIPS, and what
-            # every environment in the fleet runs today, is the ungated default — right for a plain
-            # boot and far too small for a cold bake, so turning the gate on without raising it in
-            # the SAME change kills the pod mid-bake, every time, for ever. The paired setting and
-            # the full derivation live in values.yaml (probes.startup); PreWarmGateReadinessGuard
-            # enforces the coupling, so this comment can no longer drift away from what ships.
+            # 🚨 This probe proves ONLY that the process booted. It does NOT read the NodeType bake
+            # gate (PreWarm__GateReadiness) — policy bake-gate-readiness-only, MeshWeaver#5544. The
+            # gate's check is a ROLL GATE (ProbeEndpoints.RollGateTag): /health still RUNS it and
+            # PRINTS its reading, but its verdict is excluded from /health's status and read by the
+            # readinessProbe on /ready below. Until that change the gate rode THIS probe, and a
+            # refusal killed every container at the end of this budget — on 2026-09-25/26, at the
+            # three-hour mark, on both images, including a restarted pod of the serving one, which
+            # took memex.systemorph.com down from 20:54Z to 04:07Z. So this budget covers a plain
+            # cold boot and no bake; the bake's time is on progressDeadlineSeconds below
+            # (probes.rollGate.bakeSeconds). RollGateReadinessOnlyTest pins the rule over real HTTP.
             #
             # 🚨 timeoutSeconds is what this probe gives /health to ANSWER, and /health is an
             # aggregate census whose cost grows with the mesh. On 2026-09-17 one check reached
@@ -406,9 +407,8 @@ spec:
             #
             # The PATH is a value (probes.startup.path, default /health) so a deployment that must
             # move it does so where it is reviewed and where chart drift can see it, rather than as
-            # a live patch the next `helm upgrade` silently undoes. Moving it has two costs, both
-            # named in values.yaml: the bake gate loses its only reader, and a booting pod stops
-            # being held out of the Service.
+            # a live patch the next `helm upgrade` silently undoes. Moving it has a cost, named in
+            # values.yaml: a booting pod stops being held out of the Service on the heavy path.
             httpGet: { path: {{ .Values.probes.startup.path | default "/health" }}, port: 8080 }
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
@@ -422,6 +422,15 @@ spec:
             # on /health until the mesh is up (so no 502 to a booting pod); once up, /ready keeps a
             # serving pod in rotation and never flaps it out.
             # (Fixed live 2026-07-21; it regressed because the fix wasn't in this chart.)
+            #
+            # 🚦 /ready is also the ONE reader of the NodeType bake gate (policy
+            # bake-gate-readiness-only). The endpoint's allow-list is checks tagged `ready` PLUS the
+            # ROLL GATES (tag `roll-gate`), so an armed gate that refuses keeps the new pod alive and
+            # out of the Service — the roll stalls with the previous image serving (maxUnavailable: 0
+            # below) and nothing is killed. A roll gate's verdict is a property of the IMAGE, fixed
+            # once its bake settles, so it cannot flap a serving pod out under load the way a heavy
+            # check would. Invariant 10b in check-chart-invariants.py refuses an armed gate whose
+            # readiness probe is not on /ready.
             #
             # 🚨 THIS PATH MUST NEVER BE THE LIVENESS PATH. That is not style — it is #3330, and the
             # chart carried the hazard here as an open warning until it fired.
@@ -676,17 +685,20 @@ spec:
   revisionHistoryLimit: 3
   # ⏱️ How long a rollout may be "not progressing" before k8s marks it ProgressDeadlineExceeded.
   #
-  # 🚨 The k8s DEFAULT IS 600s, and against this deployment that default is simply WRONG: the
-  # startupProbe budget above is periodSeconds × failureThreshold, which an environment running a
-  # gated cold NodeType bake must raise to tens of minutes. A legitimately-baking pod would then be
-  # declared failed after 10 minutes — and `kubectl rollout status` would report a perfectly healthy
-  # long bake as a failed rollout, which is exactly the signal an operator would act on by
-  # rolling back the good image.
+  # 🚨 The k8s DEFAULT IS 600s, and against this deployment that default is simply WRONG: a pod may
+  # spend the whole startup budget booting and then, with the NodeType bake gate armed, hold
+  # READINESS for the length of a cold bake (the gate is read by /ready only — policy
+  # bake-gate-readiness-only). A legitimately-baking pod would then be declared failed — and
+  # `kubectl rollout status` would report a perfectly healthy long bake as a failed rollout, which
+  # is exactly the signal an operator would act on by rolling back the good image.
   #
-  # DERIVED, never a second free-standing number: it is the full startup budget plus headroom for
-  # image pull + the wait-for-postgres initContainer. Tying it to the same two values means raising
-  # probes.startup can never silently leave the deadline behind it.
-  progressDeadlineSeconds: {{ add (mul .Values.probes.startup.periodSeconds .Values.probes.startup.failureThreshold) 600 }}
+  # DERIVED, never a second free-standing number: the full startup budget, plus
+  # probes.rollGate.bakeSeconds when the gate is armed in THIS render, plus headroom for image pull
+  # + the wait-for-postgres initContainer. Running out of it kills nothing — it REPORTS a stalled
+  # roll, which is what a refusing gate is. ⚠️ A gate armed by an env source this render cannot see
+  # (a Key Vault Secret, an inline env) does not add the bake term: arm it in
+  # config.memex_portal, where the render sees it.
+  progressDeadlineSeconds: {{ add (mul .Values.probes.startup.periodSeconds .Values.probes.startup.failureThreshold) 600 (ternary ((.Values.probes.rollGate).bakeSeconds | default 0) 0 (eq (toString .Values.config.memex_portal.PreWarm__GateReadiness) "true")) }}
   strategy:
     rollingUpdate:
       maxSurge: 1

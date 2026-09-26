@@ -54,10 +54,12 @@ data:
   #   Off (the default, and now the fleet's setting too) → whatever adoption did not cover
   #   compiles on first access, i.e. when a user reaches that type — ~2.4 s once, for that type's
   #   first visitor, instead of a boot-time sweep of everything nobody asked for.
-  # PreWarm__GateReadiness: hold /health RED until that bake is green. With the
-  #   startupProbe on /health and maxUnavailable:0, a NodeType that REGRESSED on the new
+  # PreWarm__GateReadiness: hold READINESS (/ready) red until that bake is green. With the
+  #   readinessProbe on /ready and maxUnavailable:0, a NodeType that REGRESSED on the new
   #   image stalls the rollout with the previous image still serving, instead of erroring
-  #   in front of users. Only a type that WAS working can gate — a pre-existing broken type
+  #   in front of users. The verdict never touches the startup probe (policy
+  #   bake-gate-readiness-only, MeshWeaver#5544): a refusing pod stays alive, out of the
+  #   Service, and nothing is killed. Only a type that WAS working can gate — a pre-existing broken type
   #   is logged and skipped, so one abandoned NodeType can't freeze every future deploy.
   #   And only a real VERDICT gates: a compile error, or a dependent blocked by one. A type
   #   the sweep could not evaluate (a timeout — or a dependent of something that timed out)
@@ -69,11 +71,11 @@ data:
   #    1. PreWarm__DynamicTypes must ALSO be true — the gate reads state only the sweep
   #       writes, so gate-without-sweep is permanently green. The portal logs that
   #       combination at Critical on startup.
-  #    2. A startupProbe ON /health with a budget covering a full COLD bake (~2.4 s per
-  #       NodeType, sequential, measured 2026-08-10 — ~10 min on the largest mesh we run).
-  #       See probes.startup in values — turning the gate on without raising it means
-  #       Kubernetes kills the pod mid-bake, every time, forever. Nothing else reads the
-  #       gate: a namespace probing /alive, /ready or /healthz ignores it entirely.
+  #    2. A readinessProbe ON /ready — the gate's ONE reader (checks tagged `ready` plus the
+  #       roll gates). The startup probe must NOT read it: until MeshWeaver#5544 it did, and a
+  #       refusal killed every container at the end of the startup budget, restarted pods of
+  #       the serving image included. The bake's time (~2.4 s per NodeType, sequential,
+  #       measured 2026-08-10) is on progressDeadlineSeconds via probes.rollGate.bakeSeconds.
   #    3. strategy.maxUnavailable: 0 — the gate works by making the NEW pod refuse
   #       readiness, which protects nothing if the serving pod was already deleted.
   # PreWarm__AllowUnprovenBake: the escape hatch for the one condition that is NOT a verdict —

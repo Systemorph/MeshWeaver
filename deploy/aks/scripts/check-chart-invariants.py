@@ -337,89 +337,76 @@ elif _probe_paths["readinessProbe"] == _probe_paths["startupProbe"]:
         "2026-07-21 death spiral. Shared on /ready — which probes.startup.path now makes "
         "expressible, and which a live `kubectl patch` reached for during the 2026-09-17 incident — "
         "the startup probe stops asking whether the portal is UP at all: the pod is 'started' the "
-        "instant the process accepts a socket, joins the Service while the mesh is still booting, "
-        "and the NodeType bake gate (PreWarm__GateReadiness) loses its only reader. Startup asks "
-        "'is everything I need up yet', readiness asks 'can I take a request': separate paths.",
+        "instant the process accepts a socket and joins the Service while the mesh is still booting. "
+        "Startup asks 'did the process boot', readiness asks 'can I take a request' (and carries "
+        "the NodeType bake gate's verdict, policy bake-gate-readiness-only): separate paths.",
     )
 
 # ---------------------------------------------------------------------------
-# 10b. An ARMED NodeType bake gate must have a reader.
+# 10b. An ARMED NodeType bake gate is read by READINESS — and by nothing that can kill the pod.
 #
-# 🚨 PreWarm__GateReadiness holds /health RED until this pod's NodeTypes are built against ITS
-# image, and the startupProbe is the ONLY probe that reads /health — so a gate that is armed while
-# the startup probe reads some other path is registered, permanently unread, and protects nothing.
-# It does not fail: it reports healthy on every rollout, which is exactly the outcome the gate
-# exists to prevent. Memex.Portal.Distributed already says this at Critical for the sibling case
-# (GateReadiness=true with DynamicTypes=false), and deploy/aks/values.aks.yaml has stated the rule
-# in PROSE for months — "the startupProbe must actually EXIST and point at /health".
+# 🚨 Policy bake-gate-readiness-only (MeshWeaver#5544). The gate's check (nodetype_bake) is a ROLL
+# GATE: the portal's service defaults tag it `roll-gate`, /ready's allow-list includes roll gates,
+# and /health RUNS it and prints it but excludes it from its STATUS. So its one reader is the
+# readinessProbe, and a refusal keeps the new pod alive and out of the Service — the roll stalls
+# with the previous image serving (invariant 7's maxUnavailable: 0) and nothing is killed.
 #
-# A rule stated in a comment is not a gate (#3330's lesson, one probe over). It became reachable by
-# an overlay the moment probes.startup.path stopped being a literal in the template, and the live
-# `kubectl patch` of 2026-09-17 — startupProbe → /ready, applied as break-glass while the control
-# instance was down — is precisely the render this refuses to let anyone commit by accident.
+# Until that change the gate rode the STARTUP probe on /health, and a startup probe that never
+# records a success KILLS the container at periodSeconds × failureThreshold. On 2026-09-25/26 that
+# killed every memex container of both images at the three-hour mark, restarted pods of the serving
+# image included, and memex.systemorph.com was down from 20:54Z to 04:07Z.
 #
-# 🚨 And the render cannot always ANSWER whether the gate is armed. The portal's `envFrom` list puts
+# What this invariant can still get wrong on a render, and refuses:
+#   * an armed gate whose readinessProbe is not on /ready — the gate then has NO reader: it is
+#     registered, never read, and every rollout completes as if it had passed;
+#   * an armed gate whose rollout deadline does not cover a cold bake — a legitimately baking pod
+#     is reported as a failed roll, which is the signal an operator acts on by rolling back the
+#     good image.
+#
+# 🚨 The render cannot always ANSWER whether the gate is armed: the portal's `envFrom` puts
 # `memex-portal-secrets`, every Key Vault-synced Secret and `.Values.extraEnvFrom` AFTER the
-# ConfigMap, and Kubernetes keeps the LAST source on a key clash — so a source whose contents this
-# render does not contain can set PreWarm__GateReadiness to anything. Reading the ConfigMap and
-# concluding "not armed" would then be a guard answering confidently from evidence it does not have.
-# So the unprovable case is a FINDING, scoped to the one combination where it matters: a startup
-# probe that is NOT on /health. With the probe on /health (the default) nothing can be silently
-# disarmed and the question does not arise.
+# ConfigMap, and Kubernetes keeps the LAST source on a key clash. That used to matter here because
+# an unreadable arming could hide a startup probe off /health. It matters no more: the readiness
+# path is /ready in every render (invariant 10 holds it apart from the other two), so the gate has
+# its reader whatever the opaque sources say. Only the deadline term is lost to an invisible
+# arming, and that loss reports a stall, never kills.
+# ---------------------------------------------------------------------------
 checks += 1
 _gate_env = {e.get("name"): e.get("value") for e in (portal.get("env") or [])}
 # Precedence, lowest first: the ConfigMap, then the chart's own Secret (both rendered here, so both
-# READABLE), then whatever the opaque sources below carry, then the container's inline `env`.
+# READABLE), then the container's inline `env`.
 _gate_secret = ((secret or {}).get("stringData") or {}).get("PreWarm__GateReadiness")
 _gate_stated = _gate_env.get(
     "PreWarm__GateReadiness",
     _gate_secret if _gate_secret is not None else cfg_data.get("PreWarm__GateReadiness"))
 _gate_armed = str(_gate_stated or "false").strip().lower() == "true"
 
-# The env sources whose CONTENTS are not in this render — a Key Vault-synced Secret or an
-# extraEnvFrom entry. The chart's own two are excluded because they are rendered above and read.
-_opaque_env_sources = [
-    (src.get("secretRef") or src.get("configMapRef") or {}).get("name")
-    for src in (portal.get("envFrom") or [])
-    if (src.get("configMapRef") or {}).get("name") != "memex-portal-config"
-    and (src.get("secretRef") or {}).get("name") != "memex-portal-secrets"
-]
-
-if not _gate_armed and _probe_paths["startupProbe"] and _probe_paths["startupProbe"] != "/health" \
-        and _opaque_env_sources:
-    finding(
-        f"the startupProbe reads {_probe_paths['startupProbe']} and this render cannot prove the "
-        f"NodeType bake gate is off (env source(s) {sorted(n for n in _opaque_env_sources if n)} "
-        f"are layered after the ConfigMap and their contents are not in this render)",
-        "PreWarm__GateReadiness reads 'false' in memex-portal-config, but Kubernetes keeps the LAST "
-        "envFrom source on a key clash, so a Key Vault-synced Secret or an extraEnvFrom entry can "
-        "arm the gate without appearing here. Armed plus a startup probe off /health is a gate that "
-        "is registered, never read, and permanently green — silently. This is a fail-closed on an "
-        "UNPROVABLE state, not a claim that the gate IS armed: keep the startup probe on /health "
-        "(the chart default, and the path that reads the gate), and the question does not arise.",
-    )
-
 if _gate_armed:
-    if not _probe_paths["startupProbe"]:
+    if _probe_paths["readinessProbe"] != "/ready":
         finding(
-            "PreWarm__GateReadiness is true but the portal container has no startupProbe httpGet path",
-            "the bake gate withholds /health, and the startup probe is its only reader. With no "
-            "startup probe the gate is registered, never read, and every rollout completes as if it "
-            "had passed. Render a startupProbe on /health, or turn the gate off so the "
-            "configuration stops claiming a protection that is not there.",
+            f"PreWarm__GateReadiness is true but the readinessProbe reads "
+            f"{_probe_paths['readinessProbe'] or 'nothing'}, not /ready",
+            "the bake gate's check (nodetype_bake) is a ROLL GATE: its verdict is read by /ready "
+            "alone (checks tagged `ready` plus the roll gates) and excluded from /health's status, "
+            "so it can never kill a container (policy bake-gate-readiness-only, MeshWeaver#5544). "
+            "With readiness elsewhere the gate is registered, never read, and every rollout "
+            "completes as if it had passed. Point the readinessProbe at /ready, or turn the gate "
+            "off so the configuration stops claiming a protection that is not there.",
         )
-    elif _probe_paths["startupProbe"] != "/health":
+    _startup = portal.get("startupProbe") or {}
+    _startup_budget = int(_startup.get("periodSeconds") or 0) * int(_startup.get("failureThreshold") or 0)
+    _deadline = int(spec.get("progressDeadlineSeconds") or 600)
+    _cold_bake = 570  # ~240 types x 2.4 s, measured 2026-08-10 (values.yaml probes.rollGate)
+    _pull_headroom = 600  # image pull + the wait-for-postgres initContainer, as the template adds
+    if _deadline < _startup_budget + _pull_headroom + _cold_bake:
         finding(
-            f"PreWarm__GateReadiness is true but the startupProbe reads "
-            f"{_probe_paths['startupProbe']}, not /health",
-            "the bake gate's check (nodetype_bake) is deliberately tagged neither `live` nor "
-            "`ready` — a long bake, a missing module and an unreachable registry are all wrong "
-            "answers to a restart AND to an eviction — so it lands on /health alone and the startup "
-            "probe is its only reader. Pointing the startup probe elsewhere disarms the gate "
-            "silently: it goes on being configured and goes on reporting healthy. If the startup "
-            "probe has to move because /health cannot answer inside its timeout, fix what is "
-            "spending the budget (its `timing:` line names it) — moving the probe trades a rollout "
-            "gate for a faster boot, and that is a decision, not a side effect.",
+            f"PreWarm__GateReadiness is true but progressDeadlineSeconds is {_deadline}, less than "
+            f"the startup budget ({_startup_budget}s) plus pull headroom ({_pull_headroom}s) plus a "
+            f"cold bake ({_cold_bake}s)",
+            "an armed gate holds READINESS for the whole bake after the pod has started, so the "
+            "rollout's progress deadline must cover both. Short of that a legitimately baking pod "
+            "is reported as a failed roll. The template derives the deadline from "
+            "probes.rollGate.bakeSeconds when the gate is armed; keep that term.",
         )
 
 # ---------------------------------------------------------------------------

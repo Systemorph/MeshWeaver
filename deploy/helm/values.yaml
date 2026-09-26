@@ -636,27 +636,20 @@ migration:
 # before Kubernetes kills it. Defaults (5 × 60) = 5 minutes: right for a plain cold boot (schema
 # provisioning + static import).
 #
-# ⚠️ If you enable config.memex_portal.PreWarm__GateReadiness, raise failureThreshold in the SAME
-# change — the gate holds /health red for the whole bake. Suggested paired setting:
-#   periodSeconds: 10, failureThreshold: 180   →  1800 s = 30 min
+# 🚨 The NodeType bake gate does NOT ride this budget any more (policy bake-gate-readiness-only,
+# MeshWeaver#5544). Its verdict is read by the readiness probe on /ready alone, so a baking or
+# refusing pod stays ALIVE and out of the Service instead of being killed at the end of this
+# budget. That is the whole fix: from 2026-09-25 ~18:00Z the gate held /health red on memex, the
+# startup probe (a 3 h budget there: period 10 s, failureThreshold 1080) killed every container
+# of BOTH images at the three-hour mark, and a restarted pod of the serving image could not pass
+# it either — the instance was down from 20:54Z to 04:07Z. So arming the gate NO LONGER means
+# raising this budget; the bake's time is accounted for by probes.rollGate.bakeSeconds below, on
+# the rollout's progress deadline, where running out of it reports a stalled roll and kills nothing.
 #
-# ⏱️ DERIVED from the MEASURED per-type bake cost (2026-08-10, production Loki):
-#   ~2.4 s per NodeType, sequential — memex-cloud 237-241 types / 567 s, memex 72-81 / 179 s.
-#
-#   largest production mesh   ~240 types x 2.4 s  ~= 570 s   (~10 min)
-#   + plain cold boot         schema provisioning + static import (the ungated 5 min budget)
-#   worst realistic startup                       ~= 870 s   (~15 min)
-#   x2 headroom                                    = 1800 s  (30 min)
-#
-# 1800 s also covers ~750 types — 3x the largest mesh we run — so growth has room without another
-# resize. Under-budgeting here is not a slow rollout: it is a pod killed mid-bake that never
-# converges, on every single attempt.
-#
-# 🚨 The suggestion here was 10 x 1080 (3 h) until 2026-08-10, sized from a "~90 s per NodeType"
-# estimate that measurement showed to be 37x too high. The point of this budget is that a genuinely
-# STUCK bake is DETECTED, and at 3 h it could not be: every real bake finishes inside 10 min, so the
-# remaining 2h50m distinguished nothing — a wedged pod and a healthy one are indistinguishable for
-# the rest of that window. See deploy/CHANGE-PROPAGATION.md#the-bake-tax.
+# 🚨 A genuinely STUCK boot must still be DETECTED, so keep this budget close to a real cold boot:
+# the old gated budget of 3 h (period 10 s, failureThreshold 1080) distinguished nothing for most
+# of its window — a wedged pod and a healthy one looked the same for hours.
+# See deploy/CHANGE-PROPAGATION.md#the-bake-tax.
 #
 # 🚨 timeoutSeconds is the OTHER half of this budget, it is the one an environment must NOT quietly
 # raise, and on 2026-09-17 it took memex.systemorph.com down for 27 minutes. The startup probe reads
@@ -676,12 +669,12 @@ migration:
 # of the body) names the check that is spending the budget.
 probes:
   startup:
-    # The endpoint the startup probe reads. `/health` is the default and the only path that carries
-    # the NodeType bake gate (PreWarm__GateReadiness): the untagged checks land there and the
-    # startup probe is their ONLY reader, so an environment that points this elsewhere turns that
-    # gate off — silently, because the gate goes on being configured and goes on reporting healthy.
-    # It also gives up "no traffic to a booting pod": the startup probe is what holds readiness on
-    # the heavy path until the mesh is up.
+    # The endpoint the startup probe reads. `/health` is the default: every check RUNS there and
+    # every check EXCEPT a roll gate decides its status — the database schema, the mesh, the
+    # required modules. It no longer carries the NodeType bake gate's verdict (that is read by
+    # /ready, policy bake-gate-readiness-only), though the gate's reading still PRINTS in its body.
+    # Moving this elsewhere gives up "no traffic to a booting pod": the startup probe is what holds
+    # readiness on the heavy path until the mesh is up.
     #
     # 🚨 It must never be the READINESS path. Invariant 10 in check-chart-invariants.py refuses that
     # render: the two probes would answer one question, the pod would join the Service the instant
@@ -694,6 +687,18 @@ probes:
     periodSeconds: 5
     timeoutSeconds: 5
     failureThreshold: 60
+  rollGate:
+    # How long an ARMED NodeType bake gate (config.memex_portal.PreWarm__GateReadiness set to true) may
+    # hold a new pod out of the Service while it bakes, before the rollout counts as not
+    # progressing. Added to progressDeadlineSeconds only when the gate is armed in this render.
+    # Running out of it marks the Deployment ProgressDeadlineExceeded — a REPORT of a stalled roll;
+    # it kills nothing and the previous image keeps serving.
+    #
+    # ⏱️ DERIVED from the MEASURED per-type bake cost (2026-08-10, production Loki):
+    #   ~2.4 s per NodeType, sequential — memex-cloud 237-241 types / 567 s, memex 72-81 / 179 s.
+    #   largest production mesh   ~240 types x 2.4 s  ~= 570 s   (~10 min)
+    #   x3 headroom                                    = 1800 s  (30 min, ~750 types)
+    bakeSeconds: 1800
 
 grpc:
   enabled: true
@@ -1044,13 +1049,11 @@ config:
     #   • Correctness never needs it: types compile lazily on first access. The sweep buys
     #     deploy-time latency and a gateable signal, which is an operational trade a MANAGED
     #     env makes knowingly (see deploy/aks/values.aks.yaml, where both are "true").
-    #   • The gate additionally needs a startupProbe on /health with a budget covering a full
-    #     cold bake (~2.4 s per type, sequential — ~10 min on the largest mesh we run;
-    #     measured 2026-08-10) and strategy.maxUnavailable:0. Defaulting it on with the
-    #     chart's 5-minute startup budget would kill every pod mid-bake, forever.
-    # An instance that wants the protection turns BOTH on and raises probes.startup in the
-    # same change; progressDeadlineSeconds follows probes.startup automatically. See
-    # config.yaml for what each key does.
+    #   • The gate is read by the READINESS probe (/ready) alone and needs
+    #     strategy.maxUnavailable:0 (policy bake-gate-readiness-only). It no longer rides the
+    #     startup budget: a baking or refusing pod stays alive and out of the Service.
+    # An instance that wants the protection turns BOTH on; progressDeadlineSeconds then adds
+    # probes.rollGate.bakeSeconds automatically. See config.yaml for what each key does.
     PreWarm__DynamicTypes: "false"
     PreWarm__GateReadiness: "false"
     # Operator escape hatch: serve even when the sweep ERRORED and therefore proved nothing.
