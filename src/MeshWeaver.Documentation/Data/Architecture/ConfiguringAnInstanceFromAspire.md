@@ -173,6 +173,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithPinnedImageTag(tag)` | `PinnedImageTag` | `portal.image` (the tag; the pin IS the roll) | — |
 | `WithUpdatePolicy(policy)` | `UpdatePolicy` | `config.memex_portal.SelfUpdate__DefaultPolicy` (seeds a NEW install's `Admin/UpdatePolicy`; the self-updater reads the record thereafter) | `SelfUpdate__DefaultPolicy` |
 | `WithUpdatePattern(pattern)` | `UpdatePattern` | `config.memex_portal.SelfUpdate__DefaultPattern` (seeds a NEW install's pattern under Continuous, e.g. `3.0.0-ci*`) | `SelfUpdate__DefaultPattern` |
+| `WithRollGate(after, soakMinutes)` | `RollGate.After`, `RollGate.SoakMinutes`, `RollGate.Approval` | — (never rendered; names no tag, so it is not a pin) | — (the CONTROL instance holds a routed roll of this deployment until the named deployments converged and soaked, and always asks for an approval) |
 | `WithModuleUpdatePolicy(policy)` | `ModuleUpdatePolicy` | — (rendered into the portal's config) | `PluginCatalog__DefaultUpdatePolicy` |
 | `WithMinRollInterval(interval)` | `MinRollInterval` | `config.memex_portal.SelfUpdate__MinRollInterval` | `SelfUpdate__MinRollInterval` |
 | `WithAutoRecycleOnStaleBuild(enabled)` | `AutoRecycleOnStaleBuild` | `config.memex_portal.Modules__AutoRecycleOnStaleBuild` | `Modules__AutoRecycleOnStaleBuild` |

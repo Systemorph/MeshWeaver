@@ -83,6 +83,16 @@ public record DeploymentContent
     public string? UpdatePattern { get; init; }
 
     /// <summary>
+    /// A precondition on WHEN this deployment takes a candidate image — see <see cref="MeshWeaver.Deployment.RollGate"/>.
+    /// Null (the default) ⇒ no gate: the deployment rolls exactly as it did before the field existed.
+    /// It names no tag, so it never narrows <see cref="UpdatePattern"/>; the control plane reads it
+    /// to hold a routed roll until the named deployments have converged and soaked, and to refuse
+    /// that roll the unattended lane.
+    /// </summary>
+    [Description("Roll gate — take a build only after the named deployments converged and soaked, always with approval")]
+    public RollGate? RollGate { get; init; }
+
+    /// <summary>
     /// The DEFAULT per-package (module) update policy this instance seeds onto every install
     /// record it creates — <c>Auto</c> (track the registry unattended), <c>Notify</c> (remind,
     /// a person clicks Update) or <c>None</c> (pinned). Renders as
