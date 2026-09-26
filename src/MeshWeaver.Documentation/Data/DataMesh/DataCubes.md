@@ -9,7 +9,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 A **data cube** is the simplest useful analytics shape: facts keyed by a handful of **dimensions**, carrying one or more **measures**. In MeshWeaver the whole cube is mesh content — the dimension *types* are NodeType nodes, the dimension *members* are mesh nodes, the facts are mesh nodes, and even the *formulas* are data on dimension nodes.
 
-This page builds a complete one: the balance sheet of **Helvetia Vorsorge**, a fictional Swiss pension fund — **Position × Year × Currency → Amount**, with computed positions like *Total Assets* and the *Funding Ratio* modelled **out of** the atomic positions and evaluated by business-rules scopes. The working node set ships in `samples/Graph/Data/PensionFund/` — including the scopes themselves as node-native Code nodes (`BalanceSheet/Source/BalanceSheetScopes.cs`). Business rules / scopes ship as a plugin, which carries the scope engine and its tests that pin every number below.
+This page builds a complete one: the balance sheet of **Helvetia Vorsorge**, a fictional Swiss pension fund — **Position × Year × Currency → Amount**, with computed positions like *Total Assets* and the *Funding Ratio* modelled **out of** the atomic positions and evaluated by business-rules scopes. The dimensions and facts ship as nodes in `samples/Graph/Data/PensionFund/`. The scope evaluation is shown on this page as runnable code: business rules / scopes ship as a plugin, which carries the scope engine, its generator and the tests that pin every number below.
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif">
   <defs>
@@ -48,13 +48,12 @@ PensionFund/
 ├── Year.json · Year/2024.json …    ← reporting years
 ├── Currency.json · Currency/CHF.json …
 ├── BalanceSheetEntry.json
-├── BalanceSheetEntry/2024-Cash.json …   ← 30 facts — one node per Position × Year
-├── BalanceSheet.json               ← "config => config.ConfigureBalanceSheet()"
-│   └── BalanceSheet/Source/        ← scopes, data loader, layout areas
-└── Statement.json                  ← the report INSTANCE (nodeType PensionFund/BalanceSheet)
+└── BalanceSheetEntry/2024-Cash.json …   ← 30 facts — one node per Position × Year
 ```
 
-There is **no Id property anywhere** — a mesh node's identity is its **path**. A fact references its dimensions by *their* paths, and a formula references its operand positions by path. The views attach to **instances** of the BalanceSheet type, not to the type definition itself: open `PensionFund/Statement` in a portal with the samples loaded and the views below are its layout areas.
+There is **no Id property anywhere** — a mesh node's identity is its **path**. A fact references its dimensions by *their* paths, and a formula references its operand positions by path.
+
+The core sample ships the dimensions and the facts only. The scope-computed report — statement, key figures, asset allocation — needs the business-rules scope generator, which ships with the BusinessRules plugin in MeshWeaver.Plugins rather than with the platform, so a core sample cannot compile it. The sections below show that part as runnable code on this page instead.
 
 ## 1. Dimension types host their instances
 
@@ -254,7 +253,7 @@ Mesh.Edit(new BalanceSheetEntryDraft(), "pensionDraft")
 
 ## 6. The picker in a dialog
 
-Opening the same form as a **modal dialog** is one click action — build the dialog, write it to the dialog area. In the sample this is the `NewEntryDialog` view, whose draft uses the real `[MeshNode]` pickers over the Position / Year / Currency nodes:
+Opening the same form as a **modal dialog** is one click action — build the dialog, write it to the dialog area. With the real `[MeshNode]` pickers over the Position / Year / Currency nodes, the draft offers node pickers instead of selects:
 
 ```csharp
 Controls.Button("New balance sheet entry…")
@@ -324,7 +323,7 @@ entries
     .WithTitle("Assets by Year and Position (CHF m)")
 ```
 
-And the 2025 asset allocation as a pie — the same chart the sample's `AssetAllocation` view renders from the scopes:
+And the 2025 asset allocation as a pie — the asset-allocation view a report built on the scopes would render:
 
 ```csharp --render PensionPieDemo --show-code
 using MeshWeaver.Layout.Chart;
@@ -345,7 +344,7 @@ assets2025
 
 ## 9. The numbers — pinned by tests
 
-Every figure this page shows is asserted by the business-rules plugin's tests — evaluated through the **real generated scopes**, the same node-native engine the sample's Code nodes compile against:
+Every figure this page shows is asserted by the business-rules plugin's tests — evaluated through the **real generated scopes**, the same node-native engine a Code node compiles against when the plugin is installed:
 
 | Figure | 2024 | 2025 |
 |---|---:|---:|
