@@ -1015,7 +1015,7 @@ public static class EditorExtensions
     /// and one user's UI could pick up another user's language.
     /// </summary>
     private static string? ViewerLocaleOf(LayoutAreaHost host)
-        => host.Hub.ServiceProvider.GetService<AccessService>().ViewerLocale();
+        => host.ViewerAccess.ViewerLocale();
 
     private static string GetToggleableDisplayName(PropertyInfo property, LayoutAreaHost host)
     {
