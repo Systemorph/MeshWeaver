@@ -205,6 +205,41 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
     return rows, excluded, blockers
 
 
+def derive_sources(scans) -> tuple[str, list[str]]:
+    """(space-separated --source pairs, blockers) from deployment-record registry mounts."""
+    # Match ComboAssemblyOptions.SourceRepositories, whose comparer is OrdinalIgnoreCase. The
+    # verifier would otherwise collapse differently-cased names after this check and could silently
+    # keep whichever URL happened to be passed last.
+    sources: dict[str, tuple[str, str, str]] = {}
+    blockers: list[str] = []
+    for scan in scans:
+        for path, error in scan.source_errors:
+            blockers.append(
+                f"{scan.gh_repo}/{path}: registry sources could not be read ({error}); refusing "
+                "to run combo verification with a partial source map.")
+        for name, url, path in scan.sources:
+            key = name.casefold()
+            previous = sources.get(key)
+            if previous is not None and previous[1] != url:
+                blockers.append(
+                    f"case-insensitive registry source `{name}` conflicts with "
+                    f"`{previous[0]}`: {previous[1]} ({previous[2]}) and {url} "
+                    f"({scan.gh_repo}/{path}).")
+            else:
+                provenance = f"{scan.gh_repo}/{path}"
+                if previous is None or name < previous[0]:
+                    # Keep one deterministic spelling while preserving the actual name expected by
+                    # installations; the assembler resolves it with OrdinalIgnoreCase too.
+                    sources[key] = (name, url, provenance)
+    if not sources and not blockers:
+        blockers.append(
+            "the deployment records declare ZERO registry-source plugin repositories. The source "
+            "map is derived from DeploymentContent.PluginRepos; an empty map cannot verify the "
+            "installed modules and is not treated as a successful empty set.")
+    ordered = sorted(sources.values(), key=lambda source: source[0].casefold())
+    return " ".join(f"{name}={url}" for name, url, _ in ordered), blockers
+
+
 def extractor_control() -> list[str]:
     """🚨 THE INSTRUMENT BEFORE THE MEASUREMENT.
 
@@ -232,31 +267,38 @@ def read_scans(repos: list[str], root: str | None):
     return [lock.scan_overlays_remote(repo, REGISTRY_FOR_SCAN) for repo in repos]
 
 
-def report(rows, excluded, blockers, repos: list[str]) -> int:
+def report(rows, excluded, blockers, repos: list[str], sources: str) -> int:
     for identifier, state, reason in excluded:
         print(f"excluded  {identifier}: declared {state} — {reason[:160]}")
     if blockers:
-        print("::error::the combo-verification roster could not be derived:")
+        print("::error::the combo-verification roster and sources could not be derived:")
         for blocker in blockers:
             print(f"  • {blocker}")
         print(f"  Scanned {len(repos)} repository(ies): {', '.join(repos)}")
         return 1
     for row in rows:
         print(f"derived   {row['name']}: {row['baseUrl']}")
+    for source in sources.split():
+        print(f"source    {source}")
     payload = json.dumps(rows, separators=(",", ":"))
-    print(f"{len(rows)} live installation(s) derived from {len(repos)} repository(ies); "
+    print(f"{len(rows)} live installation(s) and {len(sources.split())} registry source(s) derived "
+          f"from {len(repos)} repository(ies); "
           f"{len(excluded)} declared not-live.")
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as handle:
             handle.write(f"instances={payload}\n")
             handle.write(f"count={len(rows)}\n")
+            handle.write(f"sources={sources}\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write("## Combo-verification roster (derived)\n\n")
             for row in rows:
                 handle.write(f"- `{row['name']}` → {row['baseUrl']}\n")
+            handle.write("\n## Registry sources (derived from DeploymentContent.PluginRepos)\n\n")
+            for source in sources.split():
+                handle.write(f"- `{source}`\n")
             for identifier, state, _ in excluded:
                 handle.write(f"- ~~`{identifier}`~~ — declared `{state}`\n")
     return 0
@@ -265,10 +307,13 @@ def report(rows, excluded, blockers, repos: list[str]) -> int:
 # ── Falsification ──────────────────────────────────────────────────────────────────────────────
 
 
-def _scan(gh_repo: str, instances, unreadable: str | None = None):
+def _scan(gh_repo: str, instances, unreadable: str | None = None,
+          sources=None, source_errors=None):
     scan = lock.OverlayScan(gh_repo=gh_repo, files=len(instances))
     scan.instances = list(instances)
     scan.unreadable = unreadable
+    scan.sources = list(sources or [])
+    scan.source_errors = list(source_errors or [])
     return scan
 
 
@@ -277,6 +322,20 @@ TWO_LIVE = [_scan("Systemorph/Memex", [
     ("memex-cloud", "memex.meshweaver.cloud",
      "deployments/aks/memex-cloud/values.memexcloud.public.yaml"),
 ])]
+SOURCE_SCANS = [
+    _scan("Systemorph/Memex", [], sources=[
+        ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins",
+         "mesh/Deployments/memex-cloud.json"),
+        ("FundReporting", "https://github.com/Systemorph/MeshWeaver.FundReporting",
+         "mesh/Deployments/memex.json"),
+    ]),
+    _scan("Systemorph/PartnerRe.Memex", [], sources=[
+        ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins",
+         "mesh/Deployments/partnerre-test.json"),
+        ("PartnerRe", "https://github.com/Systemorph/PartnerRe.Memex",
+         "mesh/Deployments/partnerre-test.json"),
+    ]),
+]
 
 
 def self_test() -> int:
@@ -304,6 +363,40 @@ def self_test() -> int:
         {"name": "memex", "baseUrl": "https://memex.systemorph.com"},
         {"name": "memex-cloud", "baseUrl": "https://memex.meshweaver.cloud"},
     ] and excluded == [], "two live overlays derive two instances, sorted, with no blocker")
+
+    sources, source_blockers = derive_sources(SOURCE_SCANS)
+    check(source_blockers == [] and sources == (
+        "FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting "
+        "PartnerRe=https://github.com/Systemorph/PartnerRe.Memex "
+        "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins"),
+        "registry sources union across deployment repositories, deduplicate identical mappings, "
+        "and sort deterministically")
+    _, source_blockers = derive_sources([_scan("Systemorph/Memex", [])])
+    check(any("ZERO registry-source" in blocker for blocker in source_blockers),
+          "an empty registry-source map is a RED, not a successful empty set")
+    same_source, source_blockers = derive_sources([
+        _scan("Systemorph/Memex", [], sources=[
+            ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
+        _scan("Systemorph/PartnerRe.Memex", [], sources=[
+            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/partnerre-test.json")]),
+    ])
+    check(not source_blockers and same_source ==
+          "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
+          "source names differing only by case, with one URL, deduplicate like the verifier")
+    _, source_blockers = derive_sources([
+        _scan("Systemorph/Memex", [], sources=[
+            ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
+        _scan("Systemorph/PartnerRe.Memex", [], sources=[
+            ("plugins", "https://github.com/Systemorph/Other.Plugins", "Deployments/memex.json")]),
+    ])
+    check(any("case-insensitive registry source" in blocker and "Plugins" in blocker
+              for blocker in source_blockers),
+          "source names differing only by case and pointing at different repositories are a RED")
+    _, source_blockers = derive_sources([_scan(
+        "Systemorph/Memex", [], source_errors=[("mesh/Deployments/memex.json", "bad pluginRepos")])])
+    check(any("partial source map" in blocker and "bad pluginRepos" in blocker
+              for blocker in source_blockers),
+          "an unreadable registry source record blocks a partial source map")
 
     # A not-installed declaration REMOVES an instance — and is printed, never silently dropped.
     rows, excluded, blockers = derive(
@@ -412,12 +505,16 @@ def self_test() -> int:
         out.touch()
         os.environ["GITHUB_OUTPUT"] = str(out)
         try:
-            code = report(*derive(TWO_LIVE, {}), ["Systemorph/Memex"])
+            derived_sources, source_blockers = derive_sources(SOURCE_SCANS)
+            rows, excluded, blockers = derive(TWO_LIVE, {})
+            code = report(rows, excluded, blockers + source_blockers,
+                          ["Systemorph/Memex"], derived_sources)
         finally:
             del os.environ["GITHUB_OUTPUT"]
         text = out.read_text(encoding="utf-8")
-    check(code == 0 and "instances=[{" in text and "count=2" in text,
-          "a passing derivation emits both the matrix and its denominator")
+    check(code == 0 and "instances=[{" in text and "count=2" in text
+          and "sources=FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting" in text,
+          "a passing derivation emits the matrix, denominator and registry sources")
 
     if failures:
         print(f"::error::--self-test: {failures} arm(s) did not behave as documented.")
@@ -458,8 +555,10 @@ def main() -> int:
     print(f"deriving the combo-verification roster from {len(repos)} repository(ies): "
           + ", ".join(repos))
     roster, roster_problems = lock.read_instance_roster(args.root or ".")
-    rows, excluded, blockers = derive(read_scans(repos, args.root), roster)
-    return report(rows, excluded, roster_problems + blockers, repos)
+    scans = read_scans(repos, args.root)
+    rows, excluded, blockers = derive(scans, roster)
+    sources, source_blockers = derive_sources(scans)
+    return report(rows, excluded, roster_problems + blockers + source_blockers, repos, sources)
 
 
 if __name__ == "__main__":

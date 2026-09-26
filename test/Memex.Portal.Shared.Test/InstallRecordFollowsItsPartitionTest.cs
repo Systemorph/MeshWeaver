@@ -62,8 +62,9 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
         $"{PackageInstaller.InstalledPartition}/{packageId}";
 
     /// <summary>
-    /// Writes what an install leaves behind: the record in the <c>Plugins</c> partition, the
-    /// partition root, and one child so the delete has a real subtree to drain.
+    /// Writes what an install leaves behind: the partition root and one child so the delete has a
+    /// real subtree to drain, then the record in the <c>Plugins</c> partition. This mirrors the
+    /// installer's order: it publishes the installed content before its inventory record.
     /// </summary>
     private async Task<string> Install(CancellationToken cancellationToken)
     {
@@ -75,16 +76,6 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
             Version = "1.0.0",
             TargetPartition = packageId,
         };
-
-        await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(
-                MeshNode.FromPath(RecordPath(packageId)) with
-                {
-                    NodeType = PackageInstaller.PackageNodeType,
-                    Name = manifest.Name,
-                    State = MeshNodeState.Active,
-                    Content = manifest,
-                }))
-            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         await CreateAsSystem(new MeshNode(packageId)
         {
@@ -99,6 +90,19 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
             State = MeshNodeState.Active,
             Content = new MarkdownContent { Content = "# page" },
         }, cancellationToken);
+
+        // The hosted repair service lists install records during fixture startup. Publishing the
+        // record before its root and files briefly exposes an incomplete package to that pass; it
+        // can race the fixture's first root create. The real installer writes its record last.
+        await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(
+                MeshNode.FromPath(RecordPath(packageId)) with
+                {
+                    NodeType = PackageInstaller.PackageNodeType,
+                    Name = manifest.Name,
+                    State = MeshNodeState.Active,
+                    Content = manifest,
+                }))
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         (await Exists(RecordPath(packageId), cancellationToken)).Should().BeTrue(
             "the fixture must actually record the install, or the assertions below prove nothing");
