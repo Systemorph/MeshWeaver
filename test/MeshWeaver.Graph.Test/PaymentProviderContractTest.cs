@@ -92,8 +92,19 @@ public class PaymentProviderContractTest
         failed.Renews.Should().BeFalse("a failed charge pays for nothing");
         failed.Ends.Should().BeFalse("the processor retries — the plan is past-due, not over");
         failed.IsActionable.Should().BeTrue();
-        new PaymentDelivery { CanAuthenticate = true, Authentic = true, Subscription = failed }
-            .NamesWork.Should().BeTrue(
-                "an unverifiable failed-charge delivery must be RETAINED as evidence, like a renewal");
+        // The retention DECISION is the commerce caller's (the Store's inbox watcher); what the
+        // contract owes it is that an UNVERIFIABLE failed-charge delivery still NamesWork — the one
+        // predicate that decision turns on (retain as evidence vs discard as junk).
+        var unverifiable = new PaymentDelivery { CanAuthenticate = true, Authentic = false, Subscription = failed };
+        unverifiable.Authentic.Should().BeFalse();
+        unverifiable.NamesWork.Should().BeTrue(
+            "an unverifiable failed-charge delivery must be RETAINED as evidence, like a renewal");
+        new PaymentDelivery
+            {
+                CanAuthenticate = true,
+                Authentic = false,
+                Subscription = failed with { Metadata = ImmutableDictionary<string, string>.Empty, Change = PaymentSubscriptionChange.None },
+            }
+            .NamesWork.Should().BeFalse("…while one that names nothing is junk and may be discarded");
     }
 }

@@ -127,12 +127,17 @@ public interface IPaymentProvider
     /// recorded still gets a portal.</para>
     ///
     /// <para>The default refuses: a provider that does not override it offers no portal
-    /// (<see cref="OffersBillingPortal"/> is false), and a caller that asks anyway gets an error
-    /// rather than a silence.</para>
+    /// (<see cref="OffersBillingPortal"/> is false), and a caller that asks anyway gets a
+    /// <see cref="NotSupportedException"/> rather than a silence. 🚨 That refusal is a CONTRACT
+    /// violation by the caller, not a message for a viewer, and it is therefore not localized: a
+    /// surface asks <see cref="OffersBillingPortal"/> first and renders its OWN localized text when
+    /// the answer is no — the neutral contract has no viewer to translate for. Errors from a
+    /// provider that DOES offer a portal carry a viewer-language message, as every other call here.</para>
     /// </summary>
     IObservable<PaymentBillingPortal> OpenBillingPortal(PaymentBillingPortalRequest request) =>
         System.Reactive.Linq.Observable.Throw<PaymentBillingPortal>(new NotSupportedException(
-            $"{DisplayName} offers no hosted billing portal on this portal."));
+            $"Contract violation: {DisplayName} offers no hosted billing portal "
+            + $"({nameof(OffersBillingPortal)} is false) — check it before calling {nameof(OpenBillingPortal)}."));
 
     /// <summary>
     /// Reads one stored webhook delivery: VERIFIES its signature and PARSES what it is about, in

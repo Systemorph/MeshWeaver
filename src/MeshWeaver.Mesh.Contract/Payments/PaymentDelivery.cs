@@ -142,8 +142,9 @@ public enum PaymentSubscriptionChange
 }
 
 /// <summary>
-/// One parsed SUBSCRIPTION-LIFECYCLE delivery — the renewals and the ending, which arrive long
-/// after the checkout that started them and carry their facts on the SUBSCRIPTION's own metadata.
+/// One parsed SUBSCRIPTION-LIFECYCLE delivery — a renewal, a FAILED charge (the plan goes past-due
+/// while the processor retries) or the ending — which arrive long after the checkout that started
+/// them and carry their facts on the SUBSCRIPTION's own metadata.
 /// </summary>
 /// <param name="Change">What this delivery does to the plan; <see cref="PaymentSubscriptionChange.None"/>
 /// when it names no viewer and no plan, or is not one the portal acts on.</param>
