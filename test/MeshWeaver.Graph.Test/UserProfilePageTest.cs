@@ -210,8 +210,8 @@ public class UserProfilePageTest
         var section = new ProfileSectionDefinition("s", "Subscription", (_, _) => Controls.Markdown("x"))
         { TitleKey = "profile.picture" };
 
-        section.Localized(null).Title.Should().Be("Picture",
-            "a null AccessService resolves the key in English rather than throwing");
+        section.Localized(null).Title.Should().Be("Subscription",
+            "with no AccessService the declared English title is kept, as documented");
     }
 
     // ── content-driven sections (UiContribution, Context = Profile) ─────────────────────────────
@@ -266,6 +266,34 @@ public class UserProfilePageTest
         sections.Select(s => s.Id).Should().Equal("ok");
         sections[0].RequiredPermission.Should().Be(Permission.Read, "a contribution never demands less than Read");
     }
+
+    [Fact]
+    public void ContentSection_MayOnlyEmbedAnAddressInItsOwnPartition()
+    {
+        var sections = UiContributionProjection.ProjectProfileSections(
+            [
+                Contribution("own", new UiContribution
+                    { Context = UiContribution.ProfileContext, Address = "Store/Billing", Area = "A" }),
+                Contribution("foreign", new UiContribution
+                    { Context = UiContribution.ProfileContext, Address = "Acme", Area = "B" }),
+                Contribution("prefix", new UiContribution
+                    { Context = UiContribution.ProfileContext, Address = "StoreFront", Area = "C" }),
+            ],
+            NodePath, UserNode(new User()), isAdmin: false, viewerId: NodePath);
+
+        sections.Select(s => s.Id).Should().Equal(["own"],
+            "a contribution under Store/ may point viewers only at Store's own hubs");
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0 }, ".png", true)]
+    [InlineData(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }, ".jpg", true)]
+    [InlineData(new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61 }, ".gif", true)]
+    [InlineData(new byte[] { 0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50 }, ".webp", true)]
+    [InlineData(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }, ".png", false)]
+    [InlineData(new byte[] { 0x3C, 0x68, 0x74, 0x6D, 0x6C }, ".png", false)]
+    public void ImageSignature_MustMatchTheExtension(byte[] bytes, string extension, bool expected)
+        => ContentCollections.NodeImageUpload.HasImageSignature(bytes, extension).Should().Be(expected);
 
     [Fact]
     public void SeedValidation_KnowsTheProfileContext()

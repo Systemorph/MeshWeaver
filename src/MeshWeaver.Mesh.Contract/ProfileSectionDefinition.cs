@@ -46,13 +46,17 @@ public record ProfileSectionDefinition(
     /// <summary>This section with <see cref="Title"/> resolved into the current viewer's language.</summary>
     /// <param name="access">The viewer's access service; null keeps the English title.</param>
     public ProfileSectionDefinition Localized(AccessService? access)
-        => TitleKey is { Length: > 0 } key ? this with { Title = access.Localize(key) } : this;
+        => TitleKey is { Length: > 0 } key && access is not null
+            ? this with { Title = access.Localize(key) }
+            : this;
 }
 
 /// <summary>
 /// Builds the body of a contributed profile section. Runs on the USER hub's layout area, so
-/// <paramref name="host"/> is that hub's host and <paramref name="userNode"/> is the live user node
-/// (null while it has not loaded). Return any control tree — a reactive body is a
+/// <paramref name="host"/> is that hub's host and <paramref name="userNode"/> is a SNAPSHOT of the
+/// user node taken when the page last changed SHAPE (the node appeared, or its pins changed) — not
+/// on every edit, so a value read from it goes stale after an ordinary edit. A section that shows
+/// live node values binds to <c>host.Workspace.GetMeshNodeStream()</c> instead. Return any control tree — a reactive body is a
 /// <c>Controls.Stack.WithView((h, _) =&gt; observable)</c>, never a <c>Task</c>.
 /// </summary>
 /// <param name="host">The profile page's layout-area host (the user hub).</param>

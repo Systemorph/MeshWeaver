@@ -1749,5 +1749,9 @@
   "profile.showcaseHint": "Heften Sie einen Space, ein Dokument, einen Agent oder ein Beispiel über dessen Menü an, um es hier zu zeigen — fahren Sie über eine Karte, um sie zu lösen.",
   "profile.sectionUnavailable": "Dieser Abschnitt konnte nicht angezeigt werden: {0}",
   "menu.profile": "Profil",
-  "menu.profileTooltip": "Ihr Bild, Ihr Name und Ihre Profilangaben"
+  "menu.profileTooltip": "Ihr Bild, Ihr Name und Ihre Profilangaben",
+  "profile.pictureError.unsupportedType": "Verwenden Sie ein PNG-, JPEG-, GIF- oder WebP-Bild.",
+  "profile.pictureError.tooLarge": "Das Bild ist größer als {0} MB.",
+  "profile.pictureError.notAnImage": "Der Inhalt der Datei ist kein PNG-, JPEG-, GIF- oder WebP-Bild.",
+  "profile.pictureError.noCollection": "Dieses Profil hat keinen Dateispeicher für ein Bild."
 }

@@ -40,7 +40,8 @@ The picture is a `NodeImageUploadControl(nodePath)` — a platform control, usab
 
 - **Upload / Replace** — the file is written into the node's **default `content` collection** under the managed folder `picture/` with a fresh, server-generated name, then `Icon` is set to `content:picture/{name}`. The user's file name is never used, so nothing in it can traverse or collide, and the new URL defeats a browser cache that still holds the old picture. The previous managed picture is deleted.
 - **Remove** — `Icon` is cleared and the managed file is deleted.
-- **Accepted:** PNG, JPEG, GIF, WebP, up to 5 MB. SVG is refused: an uploaded SVG is served from the portal's own origin and can carry script. The ceiling is enforced on the bytes actually read, not on the length the client declared — a stream that runs past it fails and its partial file is deleted.
+- **Accepted:** PNG, JPEG, GIF, WebP, up to 5 MB. SVG is refused: an uploaded SVG is served from the portal's own origin and can carry script. Both rules are checked on the **bytes**, inside the collection's pool leaf and before anything is written: the upload is read bounded by the ceiling (the declared length is only a pre-check), and the bytes must carry the image signature the extension promises — an HTML file renamed to `.png` is refused.
+- **Refusals are typed:** `NodeImageUploadException.Reason` is a `NodeImageUploadFailure` value (`unsupportedType`, `tooLarge`, `notAnImage`, `noCollection` — an open vocabulary); the picture view shows the catalog message `profile.pictureError.{reason}` in the viewer's language, and the generic `profile.pictureFailed` for a reason it does not know.
 - **Order of effects:** bytes first, then the node update (which enforces `Update` on the node). If the save or the update fails, the file just written is deleted again before the error surfaces. The caller's identity is captured when the upload is called and restored around every write, so no pool or reply hop drops it.
 - **Hand-set icons are safe:** only a file whose name the server generated (`picture/` + 32 hex digits + an accepted extension) is ever deleted — the folder alone is not the marker. An icon the owner pointed at any other file (via *Settings → Metadata*), even one inside `picture/`, is cleared on Remove but its file is left alone.
 
@@ -105,7 +106,7 @@ A module **compiled from mesh content** (an in-mesh NodeType, such as the Store)
 | Field | Meaning on the profile page |
 |---|---|
 | `context` | `Profile` (`UiContribution.ProfileContext`) — anything else is another surface |
-| `address` | The hub whose area is embedded. Unset ⇒ the user node itself |
+| `address` | The hub whose area is embedded. Unset ⇒ the user node itself. **Must lie in the contribution's own partition** (`Store/ProfileSections/x` → `Store` or `Store/…`); anything else drops the entry, because the catalog is read as system and a contribution must not point every viewer at a hub its author does not control |
 | `area` | The layout area to embed. Required — an entry without one is dropped |
 | `label` / `labelKey` | The section heading; the key is resolved per viewer |
 | `icon` | Beside the heading (Fluent name, emoji, SVG or URL) |

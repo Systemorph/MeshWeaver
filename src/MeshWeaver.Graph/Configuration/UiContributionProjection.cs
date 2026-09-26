@@ -211,6 +211,8 @@ internal static class UiContributionProjection
                 continue;
 
             var address = contribution.Address is { Length: > 0 } declared ? declared.Trim('/') : null;
+            if (address is not null && !IsInContributorsPartition(address, node.Path))
+                continue;
             sections.Add(new ProfileSectionDefinition(
                 Id: node.Id is { Length: > 0 } id ? id : area,
                 Title: contribution.Label ?? area,
@@ -222,6 +224,28 @@ internal static class UiContributionProjection
             { TitleKey = contribution.LabelKey });
         }
         return sections;
+    }
+
+    /// <summary>
+    /// 🚨 The render-target authorization for an embedding contribution: a contribution may only
+    /// embed an address inside ITS OWN partition (the first segment of the contribution node's
+    /// path) — <c>Store/ProfileSections/subscription</c> may embed <c>Store</c> or
+    /// <c>Store/…</c>, never <c>Acme</c>. The catalog is read as system and a UiContribution is a
+    /// creatable node, so without this anyone able to create one anywhere could make every
+    /// viewer's profile page render an arbitrary hub's area. Tying the target to the partition the
+    /// author could WRITE the contribution into makes the target something that author already
+    /// controls. (The embedded area still runs its own access checks for the viewer.)
+    /// </summary>
+    /// <param name="address">The declared address, trimmed.</param>
+    /// <param name="contributionPath">The contribution node's path.</param>
+    internal static bool IsInContributorsPartition(string address, string? contributionPath)
+    {
+        if (string.IsNullOrEmpty(contributionPath) || address.Contains("..", StringComparison.Ordinal))
+            return false;
+        var partition = contributionPath.Split('/', 2)[0];
+        return partition.Length > 0
+               && (string.Equals(address, partition, StringComparison.OrdinalIgnoreCase)
+                   || address.StartsWith(partition + "/", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

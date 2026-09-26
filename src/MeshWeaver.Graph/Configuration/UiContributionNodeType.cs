@@ -147,7 +147,10 @@ public record UiContribution
     /// The hub address whose <see cref="Area"/> an EMBEDDING context renders — today only
     /// <see cref="ProfileContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
     /// puts the Store's own plan view on every profile page. Unset ⇒ the anchoring node's own hub
-    /// (for a profile section, the user node). Menu and settings contexts ignore it: they open
+    /// (for a profile section, the user node). 🚨 It must lie inside the contribution node's OWN
+    /// partition (<c>Store/ProfileSections/x</c> may embed <c>Store</c> or <c>Store/…</c>); any other
+    /// address drops the entry, so a contribution can only point viewers at something its author
+    /// already controls. Menu and settings contexts ignore it: they open
     /// <see cref="Area"/> on the anchoring node, or navigate to <see cref="Href"/>.
     /// </summary>
     public string? Address { get; init; }

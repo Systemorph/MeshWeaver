@@ -89,7 +89,7 @@ public class ProfilePictureRoundTripTest(ITestOutputHelper output) : MonolithMes
         // ── replace ──
         var second = Png(2);
         var secondIcon = await NodeImageUpload
-            .Replace(Mesh, NodePath, "new.webp", second.Length, () => new MemoryStream(second))
+            .Replace(Mesh, NodePath, "new.png", second.Length, () => new MemoryStream(second))
             .Should().Within(TestTimeouts.Convergence).Emit("the replacement must complete");
 
         secondIcon.Should().NotBe(firstIcon, "a new URL is what defeats a browser cache holding the old picture");
@@ -134,12 +134,34 @@ public class ProfilePictureRoundTripTest(ITestOutputHelper output) : MonolithMes
             .Match(n => n.Kind == System.Reactive.NotificationKind.OnError,
                 "a stream longer than the ceiling must fail the upload", TestContext.Current.CancellationToken);
 
-        outcome.Exception!.Message.Should().Contain("MB");
+        outcome.Exception.Should().BeOfType<NodeImageUploadException>()
+            .Which.Reason.Should().Be(NodeImageUploadFailure.TooLarge);
         Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories).Should().BeEmpty(
             "the partial file written before the ceiling tripped is deleted");
         var node = await Mesh.GetMeshNodeStream(NodePath).Should().Within(TestTimeouts.Convergence)
             .Emit("the node is readable");
         node.Icon.Should().BeNull("a failed upload never points the icon anywhere");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task Upload_RefusesContentRenamedToAnImageExtension()
+    {
+        var html = "<html><script>alert(1)</script></html>"u8.ToArray();
+        var outcome = await NodeImageUpload
+            .Replace(Mesh, NodePath, "innocent.png", html.Length, () => new MemoryStream(html))
+            .Materialize()
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == System.Reactive.NotificationKind.OnError,
+                "bytes without a PNG signature are not a PNG, whatever the name says",
+                TestContext.Current.CancellationToken);
+
+        outcome.Exception.Should().BeOfType<NodeImageUploadException>()
+            .Which.Reason.Should().Be(NodeImageUploadFailure.NotAnImage);
+        Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories).Should().BeEmpty(
+            "the content is checked before anything is written");
+        var node = await Mesh.GetMeshNodeStream(NodePath).Should().Within(TestTimeouts.Convergence)
+            .Emit("the node is readable");
+        node.Icon.Should().BeNull();
     }
 
     [Fact(Timeout = 120_000)]
