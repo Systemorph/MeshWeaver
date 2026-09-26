@@ -69,6 +69,23 @@ public record LayoutAreaHost : IDisposable
     private readonly ILogger<LayoutAreaHost> logger;
 
     /// <summary>
+    /// The mesh's <see cref="AccessService"/>, captured while this host is being constructed — the
+    /// ONE instance every localisation on this host reads the viewer's language from
+    /// (<see cref="LayoutAreaLocalizationExtensions"/>).
+    ///
+    /// <para>🚨 Captured, never re-resolved. <c>AccessService</c> is registered on the mesh ROOT and
+    /// inherited by every hosted hub, so its lifetime is the mesh's, not this hub's: the captured
+    /// instance is exactly the object a late <c>Hub.ServiceProvider.GetService&lt;AccessService&gt;()</c>
+    /// would return — except that the late resolve THROWS once another thread has disposed this hub's
+    /// scope. The render error arm (<see cref="FailRendering(Exception, string?)"/>) runs off the hub
+    /// and localises its placeholder, so a resolve there raced the scope's disposal, lost, and threw
+    /// out of an Rx error arm onto a pool thread: exit 134 in MeshWeaver.AI.Test (Plugins run
+    /// 36267738287). The probe in front of it cannot close that window — it is a check-then-act on a
+    /// scope someone else disposes. See DisposedScopeAndDyingHubs → R3.</para>
+    /// </summary>
+    internal AccessService? ViewerAccess { get; }
+
+    /// <summary>
     /// The area this host actually renders: <see cref="LayoutAreaReference.Area"/> when the
     /// reference names one, otherwise the DEFAULT area the ctor resolved. Kept so failure
     /// paths always report a real area name — <c>Reference.Area</c> is <c>null</c> for every
@@ -116,6 +133,11 @@ public record LayoutAreaHost : IDisposable
         // circuitContext, which would leak one user's identity to other users when
         // the LayoutAreaHost is cached and reused across requests (e.g., in Orleans grains).
         var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
+        ViewerAccess = accessService;
+        // Mesh-lifetime too (registered by AddIoPools on the root) — captured here for the same reason
+        // as ViewerAccess: ScheduleRenderSubscribe runs on late render paths, which must never ask a
+        // scope that may already be disposed.
+        renderSubscribeScheduler = workspace.Hub.ServiceProvider.GetService<IPooledSubscribeScheduler>();
         var capturedAccessContext = accessService?.Context;
         var ctorLogger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Layout.LayoutAreaHost");
@@ -1103,12 +1125,11 @@ public record LayoutAreaHost : IDisposable
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
 
-    // Resolved once: the drainable-subscribe scheduler that runs render subscribes as TRACKED leaves
+    // Captured in the constructor: the drainable-subscribe scheduler that runs render subscribes as TRACKED leaves
     // on the mesh's teardown-drainable Layout I/O pool. Null on hubs without I/O pools registered
     // (bare messaging-only hubs / HubTestBase) — those compile no collectible ALCs, so the historical
     // bare SubscribeOn(TaskPoolScheduler.Default) fallback has nothing for the drain to join.
-    private IPooledSubscribeScheduler? renderSubscribeScheduler;
-    private bool renderSubscribeSchedulerResolved;
+    private readonly IPooledSubscribeScheduler? renderSubscribeScheduler;
 
     /// <summary>
     /// Hops a render pipeline's SUBSCRIBE off the owning hub's action block (so a view generator that
@@ -1128,11 +1149,6 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     private IObservable<T> ScheduleRenderSubscribe<T>(IObservable<T> source)
     {
-        if (!renderSubscribeSchedulerResolved)
-        {
-            renderSubscribeScheduler = Hub.ServiceProvider.GetService<IPooledSubscribeScheduler>();
-            renderSubscribeSchedulerResolved = true;
-        }
         return renderSubscribeScheduler is { } scheduler
             ? scheduler.SubscribeThroughPool(source)
             : source.SubscribeOn(TaskPoolScheduler.Default);
