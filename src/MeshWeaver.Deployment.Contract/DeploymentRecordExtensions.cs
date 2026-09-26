@@ -143,6 +143,14 @@ public static class DeploymentRecordExtensions
         d with { AutoRecycleOnStaleBuild = enabled };
 
     /// <summary>
+    /// Close the instance to logged-out callers (<c>Access:DenyAnonymous</c>): no anonymous read
+    /// anywhere, regardless of the anonymous grants installed packages write. Signed-in users keep
+    /// their access, including inherited Public grants.
+    /// </summary>
+    public static DeploymentContent WithDenyAnonymous(this DeploymentContent d, bool? enabled = true) =>
+        d with { DenyAnonymous = enabled };
+
+    /// <summary>
     /// Let this instance PATCH its own portal Deployment on a detected release — the chart's
     /// <c>selfUpdate.canPatch</c>, one value for the self-patch Role and <c>SelfUpdate__CanPatch</c>.
     /// The fleet hands over; the control instance, whose hand-over is a write into its own mesh,

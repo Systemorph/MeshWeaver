@@ -604,6 +604,7 @@ public static class DeploymentPortalConfig
         // mapping (true → Auto).
         Set("PluginCatalog__DefaultUpdatePolicy", string.IsNullOrWhiteSpace(d.ModuleUpdatePolicy) ? null : d.ModuleUpdatePolicy!.Trim());
         SetBool("Modules__AutoRecycleOnStaleBuild", d.AutoRecycleOnStaleBuild);
+        SetBool("Access__DenyAnonymous", d.DenyAnonymous);
         foreach (var (slot, assembly) in ModuleSlots(d))
             Set($"Modules__Required__{slot}", assembly);
         // 🚨 Rendered only when the record CLAIMS it, and never as "false": the reader takes an

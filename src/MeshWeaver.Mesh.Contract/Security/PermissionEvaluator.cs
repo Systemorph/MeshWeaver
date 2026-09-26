@@ -123,6 +123,18 @@ internal static class PermissionEvaluator
         if (userId == MeshNodeCacheIdentityAddress)
             return Observable.Return(Permission.Read);
 
+        // 🚨 THE instance-level anonymous switch (Access:DenyAnonymous — AnonymousAccess). On a
+        // deployment that states it, the logged-out subject holds NOTHING anywhere: no Anonymous
+        // grant, no PartitionAccessPolicy.PublicRead, no NodeTypeGate public surface is consulted.
+        // It sits HERE, at the entry every permission question passes through (the delivery gate,
+        // AnonymousGate, the RLS node validator, CheckPermission), and ABOVE the fold, so no grant a
+        // package installs later can reopen it. The Public leg a signed-in user's fold recurses
+        // into goes through GetEffectivePermissionsCore, never through this entry, so a signed-in
+        // user's inherited Public grants are untouched. Configuration is read only for the
+        // anonymous subject — a signed-in caller's check never pays for it.
+        if (AnonymousAccess.Refuses(hub.ServiceProvider, userId))
+            return Observable.Return(Permission.None);
+
         // 🚨 Every service the fold needs is resolved HERE, ONCE, on the caller's thread — never
         // inside a selector (#2679). The fold is long-lived by design (it re-emits on every
         // AccessAssignment change — see Doc/Architecture/PermissionApi), while the hub's DI scope
@@ -520,6 +532,11 @@ internal static class PermissionEvaluator
     /// </summary>
     public static IObservable<bool> GetPublicPreview(IMessageHub hub, string targetNamespace)
     {
+        // A link preview is a disclosure TO a logged-out caller (the unfurler), so an instance
+        // closed to anonymous callers (Access:DenyAnonymous) discloses nothing — not even a name.
+        if (AnonymousAccess.IsDenied(hub.ServiceProvider))
+            return Observable.Return(false);
+
         var ns = targetNamespace ?? "";
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);

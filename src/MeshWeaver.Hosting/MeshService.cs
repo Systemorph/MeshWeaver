@@ -354,13 +354,84 @@ internal sealed class MeshService(
     // === Query (delegated to MeshQuery — IObservable only) ===
 
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
-        => _query.Query<T>(StampViewer(request));
+    {
+        var stamped = StampViewer(request);
+        return RefusesAnonymousViewer(ViewerOf(request, stamped))
+            // One definitive, empty Initial read from NO partition — an answer, not silence, so a
+            // consumer waiting on the Initial is released rather than parked.
+            ? Observable.Return(new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Initial,
+                Items = [],
+                Partitions = [],
+            })
+            : _query.Query<T>(stamped);
+    }
 
     public IObservable<T?> Select<T>(string path, string property)
-        => _query.Select<T>(path, property);
+        => RefusesAnonymousViewer(AmbientViewer())
+            ? Observable.Return(default(T))
+            : _query.Select<T>(path, property);
 
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
-        => _query.Query(StampViewer(request));
+    {
+        var stamped = StampViewer(request);
+        return RefusesAnonymousViewer(ViewerOf(request, stamped))
+            ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
+            : _query.Query(stamped);
+    }
+
+    /// <summary>
+    /// 🚨 The READ half of the instance-level anonymous switch (<c>Access:DenyAnonymous</c> —
+    /// <see cref="AnonymousAccess"/>). The permission half sits in <c>PermissionEvaluator</c> and
+    /// covers every C# check — including the in-process query provider, whose rows pass the RLS
+    /// node validator. But the SQL-backed providers (PostgreSQL, Snowflake, Cosmos — in
+    /// MeshWeaver.Plugins) filter rows in the DATABASE against the <c>Anonymous</c> subject's
+    /// projected grants and never consult the C# evaluator, so a logged-out caller's query would
+    /// still see every <c>Anonymous_Access</c> row. Refusing here, at the one call boundary every
+    /// secured read passes, closes that path for every backend at once.
+    ///
+    /// <para>Only a viewer RESOLVED to anonymous is refused — an explicit <c>UserId = ""</c> /
+    /// <c>Anonymous</c>, or an ambient logged-out context (every HTTP, circuit, SignalR and gRPC
+    /// entry point stamps one). A read whose viewer is still UNRESOLVED at this boundary is
+    /// internal (a hub action block, a background service; see <see cref="StampViewer"/>) and is
+    /// left exactly as it was: it is not a logged-out caller, and pinning it here is what once
+    /// installed a package with 0 nodes.</para>
+    /// </summary>
+    /// <param name="viewer">The viewer the read resolved to, or null when unresolved.</param>
+    /// <returns><c>true</c> when the read must answer "nothing".</returns>
+    private bool RefusesAnonymousViewer(string? viewer)
+        => viewer is not null
+           && AnonymousAccess.IsAnonymousSubject(viewer)
+           && AnonymousAccess.IsDenied(hub.ServiceProvider);
+
+    /// <summary>
+    /// The ambient viewer for the reads that carry no request to stamp (<see cref="Select{T}"/>,
+    /// <see cref="Autocomplete"/>): the anonymous subject when the ambient context is a logged-out
+    /// one (named <c>Anonymous</c>, or virtual), the context's id otherwise, and null when there is
+    /// no ambient context at all — unresolved, and therefore never refused.
+    /// </summary>
+    private string? AmbientViewer()
+    {
+        var context = CaptureContext();
+        if (context is null)
+            return null;
+        if (context.IsVirtual)
+            return WellKnownUsers.Anonymous;
+        return string.IsNullOrEmpty(context.ObjectId) ? null : context.ObjectId;
+    }
+
+    /// <summary>
+    /// The viewer a stamped read will be evaluated as, for the anonymous refusal: what
+    /// <see cref="StampViewer"/> resolved — except that a read which named no viewer of its own and
+    /// picked up a VIRTUAL ambient context (a logged-out visitor's circuit) is the anonymous
+    /// subject, whatever id that context carries.
+    /// </summary>
+    private string? ViewerOf(MeshQueryRequest original, MeshQueryRequest stamped)
+        => original.UserId is null
+           && CaptureContext()?.IsVirtual == true
+            ? WellKnownUsers.Anonymous
+            : stamped.UserId;
 
     /// <summary>
     /// 🚨 THE identity boundary for every secured read. Resolves the viewer ONCE, here, and stamps
@@ -414,7 +485,9 @@ internal sealed class MeshService(
         int limit = 10,
         string? contextPath = null,
         string? context = null)
-        => _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context);
+        => RefusesAnonymousViewer(AmbientViewer())
+            ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
+            : _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context);
 
     public IObservable<string?> GetPreRenderedHtml(string path)
         // This is an exact-node read for a page, not discovery. The query index can trail a

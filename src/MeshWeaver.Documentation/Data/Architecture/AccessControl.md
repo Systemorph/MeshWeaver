@@ -781,6 +781,56 @@ hub.CheckPermission("Welcome", WellKnownUsers.Anonymous, Permission.Read)
     .Subscribe(allowed => /* ... */);
 ```
 
+## 🔒 Closing an instance to anonymous callers — `Access:DenyAnonymous`
+
+**An instance that must serve NOTHING to a logged-out caller states one configuration key:
+`Access:DenyAnonymous = true` (environment form `Access__DenyAnonymous`).** Removing anonymous
+grants node by node cannot hold that line: installed packages write their own
+`{Package}/_Access/Anonymous_Access` and `Public_Access` Viewer grants (measured on a company
+instance: AzureCostManagement, Signature, Governance, LearningRoadmap, Cursor, Codex and more), and
+every future install writes more. The switch is instance-level and sits above every grant.
+
+| With the switch on | Effect |
+|---|---|
+| A permission check whose subject is `Anonymous` (empty or virtual contexts resolve to it) | `Permission.None` — no `_Access` grant, no `PartitionAccessPolicy.PublicRead`, no `NodeTypeGate` public surface is consulted |
+| `AnonymousGate` (navigation, SEO head, sitemap, content routes) | `Denied` — a logged-out visitor goes to `/login` first, and nothing is listed publicly |
+| A query, `Select` or autocomplete whose viewer RESOLVED to the anonymous subject | one empty answer, on every backend |
+| `hub.GetPublicPreview(...)` | `false` — a link preview discloses nothing, not even a name |
+| A signed-in user, including the `Public` grants every signed-in user inherits | unchanged |
+| `System`, hub credentials, the mesh-node-cache identity | unchanged |
+| Sign-in pages, `/health`, `/ready`, `/alive`, static assets | unchanged — they ask the mesh for no permission |
+| The webhook inbox (`POST /api/hooks/{target}`) | unchanged — it verifies the target's HMAC signature and then writes as System |
+
+**Absent, empty or unparseable reads as off**, so a deployment that does not state the key behaves
+exactly as before. The value is read live on each check (configuration is layered and reloadable),
+and only when the subject is anonymous — a signed-in caller's check never reads it. On AKS the chart
+renders it from `config.memex_portal.Access__DenyAnonymous` when a deployment sets it; on a
+`Deployment` record it is `DenyAnonymous` (`WithDenyAnonymous()`).
+
+**Where it is enforced, and why three places.**
+
+1. **`PermissionEvaluator.GetEffectivePermissions`** — the entry every permission question passes
+   through (the delivery gate, `AnonymousGate`, `CheckPermission`, the RLS node validator and with it
+   the in-process query provider). The refusal sits ABOVE the fold, so no grant written later can
+   reopen it. The `Public` leg a signed-in user's fold recurses into enters below this point, which
+   is why their `Public` grants are unaffected.
+2. **`MeshService`'s read boundary** (`Query`, `Query<T>`, `Select`, `Autocomplete`). The SQL-backed
+   providers (PostgreSQL, Snowflake, Cosmos) filter rows in the database against the `Anonymous`
+   subject's projected grants and never consult the C# evaluator, so without this a logged-out
+   caller's query would still see every `Anonymous_Access` row. A read whose viewer is still
+   UNRESOLVED at the boundary is internal (see [Query Identity](../QueryIdentity)) — not a logged-out
+   caller — and is left exactly as it was.
+3. **`RlsNodeValidator`** — every node operation consults a hub rule and a per-type
+   `INodeTypeAccessRule` BEFORE the permission fold, and either may answer without reaching it. A
+   NAMED anonymous caller is refused ahead of that chain, so no type's own rule can admit one.
+
+🚨 **What it does not cover.** A read that bypasses `IMeshService` and reaches a storage provider
+directly with an anonymous viewer is not refused by the boundary; it is still subject to the
+provider's own row filter over the Anonymous grants. And a direct evaluation for the `Public`
+pseudo-subject (`GetEffectivePermissions(path, WellKnownUsers.Public)`) is not refused — `Public` is
+the signed-in baseline, never a logged-out caller. Pinned by `DenyAnonymousSwitchTest`
+(`test/MeshWeaver.Graph.Test/`).
+
 ## 🧩 Library-seeded nodes need a library-seeded grant — the `Templates` partition
 
 **A partition whose nodes are seeded by library code must have its access grant seeded the same
