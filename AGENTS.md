@@ -214,14 +214,21 @@ identifiers, how you got there, and **what you did NOT establish**; an issue tha
 certainty sends the next person down a branch you had already excluded. Never file one you have not
 checked is real against the DEPLOYED artifact: a stale checkout or a truncated query produces a
 confident finding about a defect that does not exist, and someone else pays to disprove it.
-🚨 **An agent does NOT open a plain ticket — it files into BUG TRIAGE**, fleet-wide: a
-`Feedback/Feedback` node on the control instance (memex.systemorph.com), which reaches the triage
-agent and may become a GitHub issue *from there*. Triage decides the repo, the priority, and whether
-it becomes a ticket at all — you do not, and a ticket you open yourself bypasses the pool and lands
-in nobody's queue. The pooling is the whole point: ONE inbox per portal, never one queue per repo.
-**File it SUBMITTED (`status: New`), never as a `Draft`** — the draft-and-preview stage exists so a
-person can vet words written in their name, and an agent reporting its own finding has nothing to
-preview and usually no chat to preview it in. Full rule, the two failure modes,
+🚨 **An agent does NOT open a plain ticket — it files into BUG TRIAGE**, fleet-wide: a node of
+TYPE `Feedback/Feedback` on the control instance (memex.systemorph.com — the MCP server named
+`systemorph`, not `memex`), which reaches the triage agent and may become a GitHub issue *from
+there*. Triage decides the repo, the priority, and whether it becomes a ticket at all — you do not,
+and a ticket you open yourself bypasses the pool and lands in nobody's queue. The pooling is the
+whole point: ONE inbox per portal, never one queue per repo. 🚨 **The NAMESPACE is your OWN
+partition: `create` with `namespace: "{user}/Feedback"`** (the node lands at
+`{user}/Feedback/<slug>`, e.g. `rbuergi/Feedback/<slug>`). `Feedback/<id>`,
+`Feedback/_Submissions/<id>` and `Feedback/Inbox/<id>` answer `Access denied: Create permission
+required` **by design** — that refusal names the wrong namespace, never a closed route, so it is no
+reason to drop the finding. **File it SUBMITTED — OMIT `status` (absent means `New`), never a
+`Draft`** — the draft-and-preview stage exists so a person can vet words written in their name, and
+an agent reporting its own finding has nothing to preview and usually no chat to preview it in.
+Write node paths in the message without an `@` prefix, then `get` the node back by its exact path:
+that read is the verdict AND the wake its hand-over waits on. Full rule, the two failure modes,
 triage and where the finding goes: [Incidental Findings](https://memex.meshweaver.cloud/Doc/Architecture/IncidentalFindings) (`get Doc/Architecture/IncidentalFindings`).<!-- shared-rule:end file-it-and-move-on -->
 
 <!-- shared-rule:begin conserve-work-products -->

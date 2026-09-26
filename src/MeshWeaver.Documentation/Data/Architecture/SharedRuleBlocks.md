@@ -193,8 +193,20 @@ naming it, Crm has to carry every block already registered before it is listed. 
 own rollout, and a reader who "tidies up" the missing line reddens the gate on an unreadable
 repository. The rationale is recorded in `.github/shared-rules.json`'s own header, once.
 
-**Changing the text of one:** the hub's copy is authoritative, so the hub's change merges first and
-every spoke's pull request stays red until it does. Never "fix" that red by reverting the hub.
+**Changing the text of one:** the hub's copy is authoritative, so the hub's text lands first — but
+for a block with no slot around the changed words it cannot land GREEN in one step. The gate only
+runs in core and reads the spokes' default branches, so the hub's pull request is red for as long as
+the six spokes carry the old text, and a spoke that changes first reddens every core pull request
+until the hub catches up. **So a text change lands in the same three steps as an addition:** (1) a
+core change carrying the new hub text with that block's `required-in` narrowed to the hub alone,
+and a line in the block's `why` saying the change is in flight; (2) the six spokes copy the hub's
+text; (3) a core change widening `required-in` back to every repo. Between (1) and (3) the block is
+compared nowhere, so finish step 3 the same day. Never "fix" a red by reverting the hub.
+`file-it-and-move-on` was the first block re-worded this way: it named the node TYPE agents file
+into triage and never the NAMESPACE, so agents created at `Feedback/<id>` or
+`Feedback/_Submissions/<id>`, met the by-design `Create permission required`, and dropped the
+finding — including after [Incidental Findings](../IncidentalFindings) had been corrected, because
+that page is not loaded into an agent's context and this block is.
 
 **What a slot is for:** a span that is genuinely per-repo — a doc home, a module list, an instance
 name. A slot is an exemption from the comparison, so it may only be created in the register, never

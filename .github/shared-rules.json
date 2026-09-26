@@ -273,13 +273,7 @@
       "id": "file-it-and-move-on",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
-        "Systemorph/MeshWeaver",
-        "Systemorph/MeshWeaver.Plugins",
-        "Systemorph/MeshWeaver.Education",
-        "Systemorph/MeshWeaver.Reinsurance",
-        "Systemorph/MeshWeaver.SocialMedia",
-        "Systemorph/MeshWeaver.Manufacturing",
-        "Systemorph/Memex"
+        "Systemorph/MeshWeaver"
       ],
       "slots": [],
       "why": [
@@ -302,7 +296,18 @@
         "value, so it needs no slot — unlike conserve-work-products, whose doc-home genuinely differs.",
         "",
         "The full rule lives in Doc/Architecture/IncidentalFindings; this block is the imperative half,",
-        "per the AGENTS.md doctrine that the file carries rules and the evidence lives in the docs."
+        "per the AGENTS.md doctrine that the file carries rules and the evidence lives in the docs.",
+        "",
+        "🚧 TEXT CHANGE IN FLIGHT — required-in is NARROWED to the hub on purpose. The block named the",
+        "node TYPE (`Feedback/Feedback`) and never the NAMESPACE, so agents created at `Feedback/<id>`,",
+        "`Feedback/_Submissions/<id>` or `Feedback/Inbox/<id>`, met the by-design `Create permission",
+        "required`, and dropped the finding (measured in agent transcripts 2026-09-20..25, the last one",
+        "AFTER the doc page carried the namespace: the doc is not loaded, this block is). A text change",
+        "to a block with no slots cannot land green in one step — the hub's PR is red while the spokes",
+        "still carry the old text, and the spokes' PRs are red while the hub does — so it lands in the",
+        "same three steps as adding one: (1) this change: new hub text, required-in narrowed to the hub;",
+        "(2) the six spokes copy the hub's text; (3) required-in widened back to all seven. The window",
+        "between (1) and (3) is the one moment this block is compared nowhere; close it the same day."
       ]
     }
   ]
