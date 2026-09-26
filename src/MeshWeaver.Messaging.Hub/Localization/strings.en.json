@@ -1749,5 +1749,6 @@
   "profile.showcaseHint": "Pin any space, doc, agent, or example from its menu to feature it here — hover a card to unpin it.",
   "profile.sectionUnavailable": "This section could not be displayed: {0}",
   "menu.profile": "Profile",
-  "menu.profileTooltip": "Your picture, name and profile details"
+  "menu.profileTooltip": "Your picture, name and profile details",
+  "store.profileSubscription": "Subscription"
 }
