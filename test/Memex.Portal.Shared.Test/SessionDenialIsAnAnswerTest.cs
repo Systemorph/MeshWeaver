@@ -183,9 +183,18 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
     /// </summary>
     [Fact]
     public async Task RecyclingANodeTypeWithoutUpdateAnswersInsteadOfThrowing()
-        => (await RecycleAsViewer(NodeTypePath)).Should().Be(MeshOperations.RecycleDeniedMessage,
+    {
+        var answer = await RecycleAsViewer(NodeTypePath);
+        answer.Should().Be(MeshOperations.RecycleDeniedMessage,
             "a denial is something the mesh DECIDED — the operation renders it in its own envelope, "
             + "never as an unhandled exception the MCP server logs with a stack trace");
+        // The denial's CONTENT is the contract too, not only its identity: it must not send the
+        // caller to a platform admin (who holds no standing write on a system-owned partition and
+        // is refused the same way), and it must name what DOES re-bind such a type.
+        answer.Should().NotContain("(or a platform admin)");
+        answer.Should().Contain("A platform admin holds no standing write");
+        answer.Should().Contain("on a package install or update, and on a roll");
+    }
 
     /// <summary>
     /// The half the 2026-08-30 fix could not reach: an ordinary node, whose recycle stamp writes
