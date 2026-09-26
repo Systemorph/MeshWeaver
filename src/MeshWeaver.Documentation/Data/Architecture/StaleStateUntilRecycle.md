@@ -134,6 +134,44 @@ race, the reactivated hub re-ran its source query against a half-invalidated sta
 `RequestedReleaseForce` stamp through `GetMeshNodeStream(hubPath).Update` and posts **no**
 `DisposeRequest`. It rebuilds the type; it does not re-bind a live instance.
 
+### Who may recycle a system-owned type — and what an operator does instead
+
+The `Update` check is not a formality that a global admin passes. **A global admin is a platform
+admin, not a data superuser** ([Access Control](/Doc/Architecture/AccessControl) → "The Admin
+partition"): the grant lives in `Admin/_Access` and reaches neither a space nor a system-owned
+partition. Measured on the control instance on 2026-09-26: `Hosting/_Access` gives `system-security`
+the Admin role and gives `rbuergi`, a global admin, **Viewer + Commenter**. So `recycle
+@Hosting/TriageItem` is refused with `RecycleDeniedMessage`, and that is the rule working, not a
+gap in it. Recycling a NodeType also stamps a FORCED release on it, which is a write to a node the
+package owns, so it has to be the package owner's act.
+
+The sanctioned ways to re-bind a type in `Hosting` (or any other package-installed, system-owned
+partition), in order of preference:
+
+1. **Let the platform do it.** A package install or update recycles the types it wrote, with the
+   dependency cascade ("recycle the main bit"), as the system identity. A **roll** ends every
+   activation on the pods it replaces. If a fix to a Hosting type is merged, the path is the
+   module's publish → seal → roll, never a hand recycle.
+2. **If the running activation is stuck and no install or roll is due**, the operator action is a
+   governed `Hosting/InstanceAction` on the control instance. The fleet's rule is that cluster and
+   instance operations go through that API. There is **no `Recycle` action kind today**. A
+   `Restart` (a pod restart, which ends every activation on that pod) is the coarse governed
+   equivalent. A targeted recycle action, run by the operator as system with the requester and
+   `Reason` recorded, is the missing piece if this is needed more than rarely.
+3. **Break-glass elevation** — audited and time-boxed, a person's call — is the only way to hold a
+   write on a system-owned partition. It is described, not built. Granting a standing Update on
+   `Hosting/_Access` to a person is exactly the standing access the Admin model rules out.
+
+Until the denial message was corrected it ended *"Ask someone with write access to the node (or a
+platform admin)"*. That sent a caller to a role which, in a system-owned partition, is refused the
+same way.
+
+🚨 **A client's cached tool schema is not the server's.** On 2026-09-26 an agent session attached to
+the control instance before its roll to `ci.9332` still listed `recycle` as `path`-only. The server
+by then took `reason` (Plugins `abcf92d71`, in `1470fbf3`). An MCP client reads the tool list when it
+connects, so after a roll, reconnect before concluding that a parameter is missing from the
+deployed surface.
+
 ### Three rules for posting one, each paid for
 
 - **Off the router.** Issue through `hub.NodeOperationIssuingHub()`. A `DisposeRequest` posted off the
