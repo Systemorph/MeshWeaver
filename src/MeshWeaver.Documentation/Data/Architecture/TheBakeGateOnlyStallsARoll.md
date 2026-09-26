@@ -98,9 +98,14 @@ finally says `Error`. That ends the loop in defect 2.
 
 The refusal had one more cost, and it was mistaken for a separate fault. Between 2026-09-25 ~18:00Z
 and the break-glass at 04:05Z, every memex portal container on both images died about **3.03 h after
-it booted**. There was no crash dump for these deaths. The Orleans timeouts that followed each one
-were filed as their own incidents ([#5704](https://github.com/Systemorph/MeshWeaver/issues/5704),
-folding #5709, #5730, #5705).
+it booted**. There was no crash dump for these deaths. Silo departures of this kind produce the
+Orleans timeout family filed as [#5704](https://github.com/Systemorph/MeshWeaver/issues/5704)
+(folding #5709, #5730, #5705). That issue was opened from earlier, 2026-09-24 samples, so most of
+its evidence predates this window and is only related. The in-window evidence is narrower:
+`Dequeue` timeouts at 2026-09-25 18:57:39–41Z against silo `S10.244.3.247`, the incarnation of
+`56fbdcd48f-cbms9`, after that pod's 18:55:12Z SIGABRT. The in-window samples tie these
+timeouts to a crash, not to a probe kill. That the probe kills produce the same lines is
+inferred, not observed.
 
 Nothing deleted those pods. **The kubelet killed each container when its startup probe ran out of
 budget.** The readings, all taken 2026-09-26:
