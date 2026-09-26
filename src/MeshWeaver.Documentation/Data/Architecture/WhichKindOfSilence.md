@@ -153,6 +153,36 @@ How to read it:
   against the fresh map instead of adding to one nobody reads again.
 - **Find it** with the same `Logs` action as the heartbeat: `query: "HEAPSTEP\\] tick="`, per pod.
 
+### What the first readings named
+
+The first live readings came from image `3.0.0-ci.9408` on both portals, 2026-09-26 between 10:00Z
+and 18:15Z. `Logs` actions `Ops/Actions/logs-memexcloud-20260926-heapstep-5555` and
+`…/logs-memex-20260926-heapstep-5555` read 43 and 88 lines, none cut.
+
+- **Every step past warm-up has the same allocation mix.** `System.String` is 53–56 % of the sampled
+  bytes, `System.Byte[]` 25–31 %, and `System.Text.Json.JsonDocument` 2–4 %. The mix is the same on
+  memex and on memex-cloud, and across pods. A window allocated 4–7 GiB in 10 s. Only the first ticks
+  after boot differ, when assembly loading (`CoffHeader`) and serializer set-up are in the mix.
+- **The steps are churn, not retention.** With server GC, a gen-0 budget is gigabytes, so
+  `GC.GetTotalMemory(false)` includes garbage until the next collection. On
+  `memex-portal-deployment-6c7669df84-nbrdx`, tick 314 read `heap=4.44GiB`. Tick 315 ran two gen-0,
+  one gen-1 and one gen-2 collection and read `3.03GiB`. At the 512 MiB threshold, a `[HEAPSTEP]` line
+  here marks an allocation burst. It does not by itself mark a leak.
+- **String ≈ 2 × Byte[] plus a `JsonDocument` is one JSON value held twice**: once as UTF-8 and once
+  as UTF-16, which takes twice the bytes. `ObjectPolymorphicConverter.ReadObject` did exactly that for
+  every `object`-typed value. It copied the value into a `JsonDocument`, took `GetRawText()` as a
+  string, and deserialized that string again. Each nested `object` member re-enters the converter, so
+  this happened once per nesting level. `PolymorphicReadAllocationTest` measures one read of a value
+  nested 8 levels deep, with a 400,000-byte leaf string: **4,006,624 bytes** allocated before the fix,
+  **402,024** after. The leaf itself is the floor.
+- **The fix.** When `$type` is the first property, names a registered type, and there is no
+  reference metadata, the converter now deserializes straight from the reader, with no document and
+  no string. Every other shape takes the general path as before, and that path now deserializes from
+  UTF-8 instead of a string.
+- **Not yet established:** whether this converter is the dominant caller in production. The sampler
+  names types, not call sites. The falsifier is the `String` share on the first image that carries this
+  change. If it stays above 50 %, another caller holds the JSON as text.
+
 `HeapStepNamesItsAllocatorTest` pins the rule with pure tests. It also has a live test: it allocates
 ~160 MiB of a marker type and requires the sampler to attribute at least 64 MiB of it to that type.
 That live test is the positive control. A sampler that received nothing would make every real line

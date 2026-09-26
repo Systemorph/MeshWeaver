@@ -6,31 +6,25 @@ using System.Text.Json.Serialization;
 namespace MeshWeaver.Messaging.Serialization;
 
 /// <summary>
-/// Reorders JSON object properties so that $type appears first, which is required
-/// by System.Text.Json for polymorphic types with parameterized constructors.
-/// Returns the original raw text if no reordering is needed.
+/// Deserializes with $type first, which is required by System.Text.Json for polymorphic types
+/// with parameterized constructors — reordering only when $type does not already lead.
 /// </summary>
 internal static class JsonElementNormalizer
 {
     private const string TypeDiscriminator = "$type";
 
-    public static string GetNormalizedRawText(JsonElement element)
+    /// <summary>
+    /// Deserializes <paramref name="element"/> to <paramref name="type"/> with <c>$type</c> first,
+    /// straight from UTF-8 — the element's own bytes when <c>$type</c> already leads (no copy at
+    /// all), else one reordered UTF-8 buffer. Never a UTF-16 string: materialising one per read was
+    /// 2× the payload in <see cref="string"/> allocations for a value that is immediately parsed
+    /// back (MeshWeaver#5555).
+    /// </summary>
+    public static object? Deserialize(JsonElement element, Type type, JsonSerializerOptions options)
     {
-        if (element.ValueKind != JsonValueKind.Object)
-            return element.GetRawText();
+        if (!NeedsReorder(element))
+            return element.Deserialize(type, options);
 
-        if (!element.TryGetProperty(TypeDiscriminator, out _))
-            return element.GetRawText();
-
-        // Check if $type is already the first property
-        using var enumerator = element.EnumerateObject();
-        if (!enumerator.MoveNext())
-            return element.GetRawText();
-
-        if (enumerator.Current.Name == TypeDiscriminator)
-            return element.GetRawText(); // Already first, no work needed
-
-        // Reorder: write $type first, then all other properties
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
         {
@@ -45,7 +39,16 @@ internal static class JsonElementNormalizer
             }
             writer.WriteEndObject();
         }
-        return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
+        return JsonSerializer.Deserialize(buffer.WrittenSpan, type, options);
+    }
+
+    private static bool NeedsReorder(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty(TypeDiscriminator, out _))
+            return false;
+        using var enumerator = element.EnumerateObject();
+        return enumerator.MoveNext() && enumerator.Current.Name != TypeDiscriminator;
     }
 }
 
@@ -140,7 +143,7 @@ public class ReadOnlyCollectionConverter<T> : JsonConverter<IReadOnlyCollection<
                 {
                     // Deserialize each element using the proper JsonSerializerOptions
                     // Normalize to ensure $type is first (required for parameterized constructor types)
-                    var item = JsonSerializer.Deserialize<T>(JsonElementNormalizer.GetNormalizedRawText(element), options);
+                    var item = (T?)JsonElementNormalizer.Deserialize(element, typeof(T), options);
                     if (item != null)
                         list.Add(item);
                 }
@@ -228,7 +231,7 @@ public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
         var list = new List<T>();
         foreach (var element in jsonDoc.RootElement.EnumerateArray())
         {
-            var item = JsonSerializer.Deserialize<T>(JsonElementNormalizer.GetNormalizedRawText(element), options);
+            var item = (T?)JsonElementNormalizer.Deserialize(element, typeof(T), options);
             if (item != null)
                 list.Add(item);
         }
@@ -300,7 +303,7 @@ public class EnumerableConverter<T> : JsonConverter<IEnumerable<T>>
         var list = new List<T>();
         foreach (var element in jsonDoc.RootElement.EnumerateArray())
         {
-            var item = JsonSerializer.Deserialize<T>(JsonElementNormalizer.GetNormalizedRawText(element), options);
+            var item = (T?)JsonElementNormalizer.Deserialize(element, typeof(T), options);
             if (item != null)
                 list.Add(item);
         }
