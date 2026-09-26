@@ -990,6 +990,26 @@ public static class PluginBundleEndpoints
         ?? RootHub(http).ServiceProvider.GetService<PackageOriginAnchor>();
 
     /// <summary>
+    /// The activation reader the INDEX uses: the landing service's maintained snapshot
+    /// (<see cref="ModuleLandingService.GetServedActivation"/>), so a poll costs no scan of the
+    /// share (#4963). Null when this host lands no modules.
+    /// </summary>
+    private static Func<IObservable<ModuleActivationList>>? ServedActivation(IMessageHub rootHub) =>
+        rootHub.ServiceProvider.GetService<ModuleLandingService>() is { } landing
+            ? landing.GetServedActivation
+            : null;
+
+    /// <summary>
+    /// The activation reader the DOWNLOAD uses: the authoritative derivation
+    /// (<see cref="ModuleLandingService.GetActivation"/>), because it decides the bytes. Null when
+    /// this host lands no modules.
+    /// </summary>
+    private static Func<IObservable<ModuleActivationList>>? AuthoritativeActivation(IMessageHub rootHub) =>
+        rootHub.ServiceProvider.GetService<ModuleLandingService>() is { } landing
+            ? landing.GetActivation
+            : null;
+
+    /// <summary>
     /// The registry's record of bundles pushed to the fleet's OCI registry, read once. Same
     /// two-step resolution as <see cref="Anchor"/>; a host that registers none renders no
     /// <c>artifact</c>, which is exactly what the platform default answers.
@@ -1074,7 +1094,9 @@ public static class PluginBundleEndpoints
         // platform default records nothing, so `artifact` reads null until a host records pushes.
         var artifacts = Artifacts(http);
 
-        return Servable(rootHub, Anchor(http), ct)
+        // 🚨 The SERVED activation list (#4963): a maintained snapshot, not a scan of every
+        // module's records on the share per poll — see ModuleLandingService.GetServedActivation.
+        return Servable(rootHub, Anchor(http), ServedActivation(rootHub), ct)
             .Select(state =>
             {
                 var decisions = state.Entries
@@ -1089,7 +1111,7 @@ public static class PluginBundleEndpoints
                 WarnAboutAnEmptyIndex(rootHub, caller, state.Entries, granted);
                 return granted;
             })
-            .SelectMany(packages => ServableModules(rootHub, packages)
+            .SelectMany(packages => ServableModules(rootHub, packages, ServedActivation(rootHub))
                 .SelectMany(modules => artifacts.Select(pushed => Results.Json(new
                 {
                     frameworkMvid = servedLane.Identity,
@@ -1235,10 +1257,11 @@ public static class PluginBundleEndpoints
     /// would weaken #1777.</para>
     /// </summary>
     private static IObservable<(IReadOnlyList<BundleEntry> Entries, PackageOriginSnapshot Anchor)> Servable(
-        IMessageHub rootHub, PackageOriginAnchor? anchor, CancellationToken ct) =>
+        IMessageHub rootHub, PackageOriginAnchor? anchor,
+        Func<IObservable<ModuleActivationList>>? activation, CancellationToken ct) =>
         InstalledPackages(rootHub, ct)
             .Do(packages => WarnAboutUnstampedRecords(rootHub, packages))
-            .SelectMany(records => WithPublishedModules(rootHub, records))
+            .SelectMany(records => WithPublishedModules(records, activation))
             .SelectMany(local => ReadAnchor(anchor)
                 .SelectMany(snapshot => WithAnchoredPackages(rootHub, local, snapshot)
                     .Select(entries => (Entries: entries, Anchor: snapshot))));
@@ -1248,12 +1271,11 @@ public static class PluginBundleEndpoints
     /// versioned download route resolves the matching generation. An install record still wins an
     /// identical package/version entry.</summary>
     private static IObservable<IReadOnlyList<BundleEntry>> WithPublishedModules(
-        IMessageHub rootHub, IReadOnlyList<BundleEntry> records)
+        IReadOnlyList<BundleEntry> records, Func<IObservable<ModuleActivationList>>? readActivation)
     {
-        var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
-        if (landing is null)
+        if (readActivation is null)
             return Observable.Return(records);
-        return landing.GetActivation().Take(1).Select(activation =>
+        return readActivation().Take(1).Select(activation =>
         {
             var published = activation.Entries
                 .Where(e => e.Enabled
@@ -1504,15 +1526,16 @@ public static class PluginBundleEndpoints
     /// as "matches", and never inferred from anything.</para>
     /// </summary>
     private static IObservable<IReadOnlyDictionary<string, ServableModule>> ServableModules(
-        IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
+        IMessageHub rootHub, IReadOnlyList<BundleEntry> packages,
+        Func<IObservable<ModuleActivationList>>? readActivation)
     {
         var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
         var declaring = packages.Where(p => !string.IsNullOrWhiteSpace(p.Module)).ToArray();
-        if (landing is null || declaring.Length == 0)
+        if (landing is null || readActivation is null || declaring.Length == 0)
             return Observable.Return<IReadOnlyDictionary<string, ServableModule>>(
                 new Dictionary<string, ServableModule>());
 
-        return landing.GetActivation().Take(1)
+        return readActivation().Take(1)
             .Select(activation => (IReadOnlyDictionary<string, ServableModule>)declaring
                 .Where(p => ModuleBundleSource.CollectVersion(
                         landing.BaseDirectory, p.Module!, activation, p.ShelfVersion)
@@ -1568,7 +1591,9 @@ public static class PluginBundleEndpoints
         var publishedRoot =
             http.RequestServices.GetService<IConfiguration>()
                 ?[PublishedBundleCatalogue.PublishedRootConfigKey];
-        return Servable(rootHub, anchorService, ct)
+        // The download stays on the AUTHORITATIVE read: it decides which bytes a consumer lands,
+        // so it must resolve a version another replica published a moment ago.
+        return Servable(rootHub, anchorService, AuthoritativeActivation(rootHub), ct)
             .SelectMany(state =>
             {
                 // Named apart from the query-string reader Requested(HttpContext, …) above — one
