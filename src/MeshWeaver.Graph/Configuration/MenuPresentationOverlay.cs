@@ -105,7 +105,7 @@ internal static class MenuPresentationOverlay
             // synced query fed by the change feed, so an admin creating Admin/Menu/Node updates
             // every open menu with no recycle — the "seconds, no build, no rollout" contract in
             // Doc/Architecture/MenuAsData. Same substitution, and the same rationale, as
-            // NotificationService.ReadSettings and NotificationSettingsNodeType.EnsureExists.
+            // NotificationFeaturePreferenceNodeType.ReadAuthoritative and NotificationSettingsNodeType.EnsureExists.
             return workspace.GetQuery(CatalogQueryId(context), CatalogQuery(context))
                 // ContentAs is the bad-data-tolerant read: a stale/unknown $type degrades to a raw
                 // JsonElement and is recovered here, and an unrecoverable one logs LOUD and returns

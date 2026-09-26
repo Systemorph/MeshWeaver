@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Managing Your Notification Preferences"
-Abstract: "Choose how and where you hear about approvals, finished threads, and changes to documents you follow — channels (the always-on in-app bell, email, Teams next) plus plain-English rules a small triage assistant applies to decide what escalates beyond the bell."
+Abstract: "Choose, for each kind of notification — approvals, inbox, triage, access grants, finished threads, system — whether it reaches you in the in-app bell, in Microsoft Teams and by email. By default everything reaches the bell and Teams."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#f9a825'/><path d='M12 4a5 5 0 0 0-5 5c0 5-2 6-2 6h14s-2-1-2-6a5 5 0 0 0-5-5z' fill='white'/><path d='M10.5 18a1.5 1.5 0 0 0 3 0' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round'/></svg>"
 Thumbnail: "images/notifications.svg"
 Authors:
@@ -19,32 +19,45 @@ Tags:
 Memex can tell you when something needs your attention — an approval, a finished thread, a change to a
 document you follow. You decide **how** and **where** you hear about it.
 
-## The two pieces
+## Channels per kind of notification
 
-**Channels** — *where* notifications can go. Everyone has the **in-app bell** (always on). Add more
-channels to receive notifications elsewhere:
+Open **Settings → Notifications**. There is one section per kind of notification — **Approvals**,
+**Inbox**, **Triage**, **Access granted**, **Chat ready**, **System** (and any a module adds) — and each
+has three switches:
 
 | Channel | What it does |
 |---|---|
-| **In-app** | The bell in the top bar. Always on — you can't turn it off. |
-| **Email** | Sends the notification to your mailbox. Add this to get emails. |
-| **Teams** | (Coming soon) Sends to Microsoft Teams. |
+| **Notification bell** | The bell in the top bar of the portal. |
+| **Microsoft Teams** | A message from the Memex bot in Teams, with a link back to what it is about. |
+| **Email** | A message to the address on your profile. |
 
-**Rules** — *which* notifications escalate beyond the bell, written in **plain English**. A small,
-fast assistant reads your rules and decides, for each notification, whether to also send it to email
-(or Teams). Examples of rules you can write:
+**If you change nothing, every kind of notification reaches the bell and Teams.** Email is on by
+default for approvals and access grants, as it was before. Switch a channel off for one kind and only
+that kind changes — for example, keep approvals in Teams but take finished chat threads out of it.
+
+### Connecting Teams
+
+Teams reaches you once you have **sent the Memex bot a message in Teams** — that conversation is where
+your notifications arrive. Until then the Teams channel is simply skipped: nothing fails, and the bell
+still shows everything. If the portal has no Teams bot configured, Teams is skipped for everyone.
+
+### Approvals on the control instance
+
+When an instance action waits for a second administrator, every administrator who may approve it gets
+an **Approvals** notification with a link to the action — so with the default settings it reaches you
+in Teams even though you never open that portal's bell.
+
+## Rules — escalation decided by an assistant
+
+**Rules** are the advanced layer on top: plain-English intent a small triage assistant applies to decide
+what escalates beyond the bell. Examples:
 
 > - *"Email me approval requests right away."*
 > - *"Send me thread completions by email, but nothing about actions I did myself."*
 > - *"Don't email me on weekends."*
 
-## How it works
-
-1. The **in-app bell** always fires — that's the default, and it costs nothing.
-2. If you've written **rules**, the triage assistant checks each notification against them and escalates
-   to the channels you asked for.
-3. **No rules = in-app only.** To start getting emails you need **both**: an **Email channel** *and* a
-   **rule** that says what to send there.
+If you have written rules, the assistant decides about **email** for you (the per-kind email switch then
+defers to it); the bell and Teams switches still apply as set.
 
 ## The easy way: just ask
 
@@ -59,12 +72,14 @@ It will read your current settings, explain them, make the change, and confirm.
 
 ## The manual way
 
-If you'd rather manage them directly, the settings are stored as nodes under your own space:
+If you'd rather manage them directly, the settings are nodes under your own space:
 
-- **Channels:** `{you}/_NotificationChannel/…` — set `kind` (`InApp` / `Email` / `Teams`), an optional
-  `target` address (defaults to your own), and `enabled`.
+- **Channels per kind:** `{you}/_Settings/Notifications/{kind}` (`approvals`, `inbox`, `triage`,
+  `accessGranted`, `chatReady`, `system`) — `bell`, `teams`, `email`.
 - **Rules:** `{you}/_NotificationRule/…` — write your intent in `ruleText`; optionally set a structured
   `channel`, plus `enabled` and `order` (lower runs first).
+- **Rule channels:** `{you}/_NotificationChannel/…` — `kind` (`Email` / `Teams`), an optional
+  `target` address, and `enabled`, for the assistant to route to.
 
 ## Tips
 

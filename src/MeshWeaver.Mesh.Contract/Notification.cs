@@ -136,6 +136,16 @@ public record Notification
     public NotificationType NotificationType { get; init; }
 
     /// <summary>
+    /// The FEATURE this notification was raised for — the key the recipient's per-feature channel
+    /// preference is chosen by (<see cref="NotificationFeatures"/>; the vocabulary is open). Null on
+    /// rows written before the feature key existed; read it through
+    /// <see cref="NotificationFeatures.FeatureOf"/>, which derives one from
+    /// <see cref="NotificationType"/> for those.
+    /// </summary>
+    [Browsable(false)]
+    public string? Feature { get; init; }
+
+    /// <summary>
     /// User ObjectId of who created the notification (e.g., the requester).
     /// </summary>
     [Browsable(false)]
