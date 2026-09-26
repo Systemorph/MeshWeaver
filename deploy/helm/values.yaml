@@ -1021,6 +1021,10 @@ config:
     # at once (trunk never counts). Empty = not the queue (the instance renders neither key).
     Hosting__Builds__PublicUrl: ""
     Hosting__Builds__Concurrency: ""
+    # ---- The triage scope (MeshWeaver.Plugins Hosting/Triage → "The scope"). Set ONLY on the
+    # control instance: the repositories the issue sweep lists and the org webhook's issue intake
+    # triages, one comma-separated value. Empty = the code's default (the active fleet).
+    Hosting__Triage__Repositories: ""
     # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713). The signed inbox
     # the Feedback plugin hands a technical submission to; the fleet value is
     # https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds. Empty = hand-over OFF (the
