@@ -532,6 +532,28 @@ a half-migrated portal; it does **not** make the ordering safe on its own, and t
 what decides whether "unsafe ordering" costs you a stalled rollout or an outage. Treat "the migration ran" as a precondition you verify, not one
 the roll guarantees.
 
+### Which probe reads what — the startup probe proves only that the process booted
+
+Policy [`bake-gate-readiness-only`](/Doc/Architecture/PolicyNotProse). The three probes ask three
+different questions, and only one of them may kill the container over a verdict about the roll:
+
+- **startupProbe → `/health`** (`probes.startup`): *did the process boot?* Every check runs here and
+  every check except a **roll gate** decides the status: the schema (`db_version`), the database, the
+  required modules. Failing it for `periodSeconds × failureThreshold` kills the container, so its
+  budget covers a plain cold boot and nothing else.
+- **readinessProbe → `/ready`**: *may this pod take traffic?* The process-up check plus the roll
+  gates, today the NodeType bake gate (`nodetype_bake`, `PreWarm__GateReadiness`). A refusal keeps
+  the pod alive and out of the Service; with `maxUnavailable: 0` the roll stalls and the previous
+  image keeps serving.
+- **livenessProbe → `/alive`**: *is it making progress?* A GC-bound process restarts.
+
+The bake gate rode the startup probe until MeshWeaver#5544. On 2026-09-25/26 that killed every memex
+container of both images at the three-hour mark, and the control instance was down for seven hours.
+The mechanism, the per-check table and the guards are in
+[The Bake Gate Only Stalls a Roll](/Doc/Architecture/TheBakeGateOnlyStallsARoll). For an instance
+that arms the gate: its `probes.startup` no longer has to cover a bake; the chart adds
+`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render.
+
 ### The migration Job IS the evidence — so it must outlive the observer
 
 `helm upgrade` mints `memex-migration-<revision>`, and that Job object is the **only** durable
@@ -681,8 +703,8 @@ follows is the break-glass form, for when the control plane itself is what is br
 
 - Logs: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
 - **Intermittent hangs while most requests succeed** (portal recently synced or baked): suspect a
-  degraded-but-Ready replica, not a global wedge — after startup, readiness and liveness both watch
-  the light `/alive`, so a GC-bound pod never leaves rotation on its own. Run
+  degraded-but-Ready replica, not a global wedge — after startup, readiness watches the light
+  `/ready` and liveness `/alive`, so a GC-bound pod never leaves rotation on its own. Run
   `az aks command invoke … --command "kubectl top pods -n <NS> --no-headers"`; one or two pods far
   above their siblings in BOTH memory and CPU is the superseded-NodeType-build (ALC) accumulation of
   issue #2194 — `kubectl delete pod` the outliers (grace-drain; the Deployment replaces them).

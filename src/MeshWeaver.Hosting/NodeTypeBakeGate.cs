@@ -737,8 +737,8 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
 /// <summary>DI helper for the bake readiness gate.</summary>
 ///
 /// <remarks>
-/// Only the STATE lives in the framework. The <c>IHealthCheck</c> that surfaces it on <c>/health</c>
-/// belongs to the host (see <c>Memex.Portal.Distributed.NodeTypeBakeHealthCheck</c>), which already
+/// Only the STATE lives in the framework. The <c>IHealthCheck</c> that surfaces it (its verdict on
+/// <c>/ready</c>, its reading printed on <c>/health</c>) belongs to the host (see <c>Memex.Portal.Distributed.NodeTypeBakeHealthCheck</c>), which already
 /// owns its probe wiring — that keeps the health-check package out of the framework's dependency
 /// closure and lets a self-host surface the same state however it likes.
 /// </remarks>
@@ -746,6 +746,15 @@ public static class NodeTypeBakeGateExtensions
 {
     /// <summary>Config key a host reads to decide whether to gate readiness. Default: off.</summary>
     public const string EnabledConfigKey = "PreWarm:GateReadiness";
+
+    /// <summary>
+    /// The name a host registers the gate's health check under. It is a ROLL GATE (policy
+    /// <c>bake-gate-readiness-only</c>): its verdict is read by the readiness probe alone and never
+    /// by the startup probe, so a refusal stalls a roll and never kills a container. The portal's
+    /// service defaults tag the registration of this name accordingly, whatever tags the host gave
+    /// it.
+    /// </summary>
+    public const string HealthCheckName = "nodetype_bake";
 
     /// <summary>
     /// Config key for the operator escape hatch: serve even when the bake could not be PROVEN
@@ -764,13 +773,12 @@ public static class NodeTypeBakeGateExtensions
     /// Registers the shared bake state. Safe and cheap to call unconditionally: the pre-warm hosted
     /// service writes to it whether or not anything gates on it, so the diagnostics are always there.
     ///
-    /// <para>⚠️ A host that gates readiness on this MUST raise its <c>startupProbe.failureThreshold</c>
-    /// to cover a full cold bake. A cold compile is ~2.4 s per NodeType and the sweep is strictly
-    /// sequential (measured 2026-08-10 across three production portals), so the largest mesh we run
-    /// (~240 types) needs ~10 minutes of bake on top of a plain cold boot. Left at the usual default
-    /// (60 × 5 s = 5 minutes) Kubernetes kills and restarts the pod mid-bake, forever. The chart's
-    /// paired setting is 10 s × 180 = 30 minutes; see <c>deploy/helm/values.yaml</c>
-    /// (<c>probes.startup</c>) for the derivation.</para>
+    /// <para>The gate's verdict is read by READINESS only (policy <c>bake-gate-readiness-only</c>),
+    /// so the startup probe's budget no longer has to cover a bake: a baking or refusing pod stays
+    /// alive and out of the Service. What must cover a cold bake instead is the rollout's
+    /// <c>progressDeadlineSeconds</c> — ~2.4 s per NodeType, strictly sequential (measured
+    /// 2026-08-10), ~10 minutes on the largest mesh we run — which the chart derives from
+    /// <c>probes.rollGate.bakeSeconds</c> when the gate is armed; see <c>deploy/helm/values.yaml</c>.</para>
     /// </summary>
     /// <param name="gatesReadiness">
     /// Pass <c>true</c> ONLY when the host also registers a readiness check that consumes this state.
