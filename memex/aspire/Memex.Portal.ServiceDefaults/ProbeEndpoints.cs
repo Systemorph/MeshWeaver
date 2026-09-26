@@ -17,7 +17,8 @@ namespace Memex.Portal.ServiceDefaults;
 /// actually fixes — a process spending most of its wall clock in GC pauses is the canonical one
 /// (<c>ProcessProgressHealthCheck</c>, in MeshWeaver.Plugins).</item>
 /// <item><see cref="Ready"/> — <i>"can I take a request?"</i> Checks tagged <see cref="ReadyTag"/>,
-/// plus the ROLL GATES (<see cref="RollGateTag"/>, today the NodeType bake gate). Failing it means
+/// plus the ROLL GATES (<see cref="RollGateTag"/>: the NodeType bake gate and the required-modules
+/// check). Failing it means
 /// <b>send my traffic to my siblings</b>, which is a claim about the siblings as much as about this
 /// pod, and therefore a much rarer thing to be able to say honestly — except for a roll gate, whose
 /// "no" is about the IMAGE: the pod stays alive, out of the Service, and the roll stalls with the
@@ -78,7 +79,8 @@ public static class ProbeEndpoints
     /// <summary>
     /// <c>/ready</c> — the READINESS path. Checks tagged <see cref="ReadyTag"/> or
     /// <see cref="RollGateTag"/>: the trivial process-up check, plus any roll gate the host
-    /// registered (the NodeType bake gate, <c>nodetype_bake</c>).
+    /// registered (the NodeType bake gate, <c>nodetype_bake</c>, and
+    /// <see cref="RequiredModulesCheckName"/>).
     /// </summary>
     public const string Ready = "/ready";
 
@@ -132,7 +134,23 @@ public static class ProbeEndpoints
     /// allow-list) and is excluded from <see cref="Health"/>'s STATUS, while its reading still
     /// prints in <see cref="Health"/>'s body whatever it says. It must not also carry
     /// <see cref="LiveTag"/>. <c>ServiceDefaults.RollGateChecks</c> applies it by name to the
-    /// NodeType bake gate, so the rule holds for a host that registered that check untagged.</para>
+    /// NodeType bake gate and to <see cref="RequiredModulesCheckName"/> (policy
+    /// <c>required-modules-readiness-only</c>), so the rule holds for a host that registered those
+    /// checks untagged.</para>
     /// </summary>
     public const string RollGateTag = "roll-gate";
+
+    /// <summary>
+    /// The name the portal host registers its required-modules health check under
+    /// (<c>RequiredModulesHealthCheck</c>, MeshWeaver.Plugins): "is every module this deployment
+    /// declares required present on this pod's shelf?".
+    ///
+    /// <para>🚨 It is a ROLL GATE (<see cref="RollGateTag"/>, policy
+    /// <c>required-modules-readiness-only</c>): <c>ServiceDefaults.RollGateChecks</c> tags it by this
+    /// name, so a missing required module holds READINESS only — the roll stalls, the pod stays out of
+    /// the Service, and neither the startup probe nor liveness ever kills a container for it. A host
+    /// should register the check under this constant rather than a literal, so the two cannot drift
+    /// apart and silently put the check back on the startup probe.</para>
+    /// </summary>
+    public const string RequiredModulesCheckName = "required_modules";
 }

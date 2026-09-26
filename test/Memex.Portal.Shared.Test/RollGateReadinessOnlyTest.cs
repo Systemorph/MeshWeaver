@@ -17,8 +17,9 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// 🚨 <b>The NodeType bake gate can NEVER fail the startup probe</b> (policy
-/// <c>bake-gate-readiness-only</c>, MeshWeaver#5544).
+/// 🚨 <b>A roll gate — the NodeType bake gate, and the required-modules check — can NEVER fail
+/// the startup probe</b> (policies <c>bake-gate-readiness-only</c>, MeshWeaver#5544, and
+/// <c>required-modules-readiness-only</c>).
 ///
 /// <para><b>What went wrong.</b> The host registered <c>nodetype_bake</c> untagged, so it landed on
 /// <c>/health</c>, and <c>/health</c> is the startup probe. While the gate refused, the probe never
@@ -109,6 +110,74 @@ public class RollGateReadinessOnlyTest
     }
 
     /// <summary>
+    /// 🚨 <b>A missing required module is a ROLL GATE too</b> (policy
+    /// <c>required-modules-readiness-only</c>). Registered exactly as the host registers it today —
+    /// by name, no tag — an Unhealthy <c>required_modules</c> must leave the startup probe and
+    /// liveness GREEN (nothing kills the container, and a restarted pod of the previous image, whose
+    /// shelf the same registry outage empties, still boots) and turn readiness RED (the roll stalls
+    /// with the pod out of the Service). Its reading still prints on <c>/health</c>.
+    /// </summary>
+    [Fact]
+    public async Task AMissingRequiredModule_HoldsReadiness_AndNeverFailsTheStartupProbe()
+    {
+        var probes = ChartProbePaths();
+
+        var (startup, startupBody) = await ProbeAsync(probes.Startup, RequiredModulesMissing);
+        var (readiness, readinessBody) = await ProbeAsync(probes.Readiness, RequiredModulesMissing);
+        var (liveness, _) = await ProbeAsync(probes.Liveness, RequiredModulesMissing);
+
+        Assert.True(startup.StatusCode == HttpStatusCode.OK,
+            $"the chart's startupProbe path ('{probes.Startup}') answered {(int)startup.StatusCode} "
+            + $"because {ProbeEndpoints.RequiredModulesCheckName} was Unhealthy. A missing required "
+            + "module must stall the roll, never kill the container: on the startup probe a registry "
+            + "outage kills every image's restarted pods alike. Body was:\n" + startupBody);
+        Assert.False(startupBody.StartsWith("Unhealthy", StringComparison.Ordinal),
+            $"line one of /health must agree with the startup status code. Body was:\n{startupBody}");
+        Assert.True(startupBody.Contains($"{ProbeEndpoints.RequiredModulesCheckName}: Unhealthy", StringComparison.Ordinal)
+                    && startupBody.Contains("Demo.Module", StringComparison.Ordinal),
+            "the missing-module reading vanished from /health's body; only the VERDICT moves off the "
+            + $"startup probe, never the READING. Body was:\n{startupBody}");
+
+        Assert.True(readiness.StatusCode == HttpStatusCode.ServiceUnavailable,
+            $"the chart's readinessProbe path ('{probes.Readiness}') answered "
+            + $"{(int)readiness.StatusCode} with a required module missing, so a pod without it would "
+            + $"go Ready and take traffic. Body was:\n{readinessBody}");
+        Assert.True(readinessBody.Contains(ProbeEndpoints.RequiredModulesCheckName, StringComparison.Ordinal),
+            $"readiness refused without naming the check. Body was:\n{readinessBody}");
+
+        Assert.True(liveness.StatusCode == HttpStatusCode.OK,
+            $"the chart's livenessProbe path ('{probes.Liveness}') answered {(int)liveness.StatusCode} "
+            + "with a required module missing. Restarting the pod is the same container death on a "
+            + "different probe.");
+    }
+
+    /// <summary>
+    /// A host cannot put <c>required_modules</c> on liveness by tagging it <c>live</c>: the tag is
+    /// stripped exactly as it is from the bake gate.
+    /// </summary>
+    [Fact]
+    public async Task ARequiredModulesCheckTaggedLive_StillCannotRestartThePod()
+    {
+        var probes = ChartProbePaths();
+
+        var (liveness, _) = await ProbeAsync(probes.Liveness, services => services.AddHealthChecks()
+            .AddCheck(ProbeEndpoints.RequiredModulesCheckName,
+                () => HealthCheckResult.Unhealthy(MissingModule), [ProbeEndpoints.LiveTag]));
+
+        Assert.True(liveness.StatusCode == HttpStatusCode.OK,
+            $"the chart's livenessProbe path ('{probes.Liveness}') answered {(int)liveness.StatusCode} "
+            + "for a required_modules check a host had tagged 'live'.");
+    }
+
+    /// <summary>
+    /// The host registers the check by a LITERAL today; this pins the constant to that literal, so
+    /// a rename on either side cannot silently take the check off the roll-gate list.
+    /// </summary>
+    [Fact]
+    public void TheRequiredModulesCheckName_IsTheNameTheHostRegisters() =>
+        Assert.Equal("required_modules", ProbeEndpoints.RequiredModulesCheckName);
+
+    /// <summary>
     /// 🚨 The negative control that keeps the first test from being vacuous: an ordinary
     /// startup-critical check (the host's <c>db_version</c> shape) that is Unhealthy STILL fails
     /// the startup probe. Only roll gates moved; a portal that cannot boot must still not start.
@@ -128,6 +197,14 @@ public class RollGateReadinessOnlyTest
         Assert.True(body.StartsWith("Unhealthy", StringComparison.Ordinal),
             $"line one must be the startup verdict. Body was:\n{body}");
     }
+
+    private const string MissingModule =
+        "1 required module(s) absent from this pod's shelf: Demo.Module";
+
+    private static void RequiredModulesMissing(IServiceCollection services) =>
+        // Registered exactly as Memex.Portal.Distributed registers it: by name, no tags.
+        services.AddHealthChecks().AddCheck(ProbeEndpoints.RequiredModulesCheckName,
+            () => HealthCheckResult.Unhealthy(MissingModule));
 
     private static void BakeGateRefusing(IServiceCollection services) =>
         // Registered exactly as Memex.Portal.Distributed registers it: by name, no tags.

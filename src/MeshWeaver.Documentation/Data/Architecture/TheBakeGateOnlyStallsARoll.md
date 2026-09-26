@@ -172,10 +172,11 @@ restarted pod of the serving image had to pass the same probe. The control insta
 
 - **`ProbeEndpoints.RollGateTag` (`roll-gate`)** marks a check as a roll gate. The portal's service
   defaults (`ServiceDefaults.TagRollGates`, a `PostConfigure` over every host's registrations) add
-  it to the check named `NodeTypeBakeGateExtensions.HealthCheckName` (`nodetype_bake`) and strip
-  any `live` tag from it. The host registers the check in MeshWeaver.Plugins, by name. The rule
-  holds whatever tags that registration carries, so no host can put the gate back on a killing
-  probe by forgetting a tag.
+  it to the checks named in `ServiceDefaults.RollGateChecks` and strip any `live` tag from them.
+  Those are `NodeTypeBakeGateExtensions.HealthCheckName` (`nodetype_bake`) and
+  `ProbeEndpoints.RequiredModulesCheckName` (`required_modules`). The host registers both checks
+  in MeshWeaver.Plugins, by name. The rule holds whatever tags those registrations carry, so no
+  host can put a roll gate back on a killing probe by forgetting a tag.
 - **`/ready`** reads checks tagged `ready` plus the roll gates. Its body names every check that is
   not Healthy, so the kubelet's probe-failure event says why.
 - **`/health`** still runs every check, and it still prints the gate's reading, whatever it says,
@@ -192,7 +193,9 @@ restarted pod of the serving image had to pass the same probe. The control insta
 - **The guards.** `RollGateReadinessOnlyTest` drives the real endpoints over HTTP, on the probe
   paths the chart ships. A refusing `nodetype_bake` must leave the startup probe at 200, turn
   readiness to 503, leave liveness at 200, and still print on `/health`. An ordinary Unhealthy check
-  must still fail the startup probe. Invariant 10b of `check-chart-invariants.sh` refuses an armed
+  must still fail the startup probe. The same test holds an Unhealthy `required_modules` to the
+  same three answers, and pins `ProbeEndpoints.RequiredModulesCheckName` to the literal the host
+  registers. Invariant 10b of `check-chart-invariants.sh` refuses an armed
   gate whose readiness probe is not on `/ready`, and any render whose rollout deadline does not
   cover a cold bake. `PreWarmGateReadinessGuard` holds the chart's own prose and prerequisites to the same rule.
 
@@ -206,7 +209,7 @@ the check belongs on readiness.
 |---|---|---|---|
 | `nodetype_bake` | Plugins host, `if (gateBake)` | **No: roll gate, `/ready` only** | Its verdict is about the image. A restart reaches the same verdict, and killing a previous-image pod removes the roll's fallback. |
 | `db_version` (+ `DbVersionGate`) | Plugins host | Yes | A portal ahead of its schema must not serve. A restart is the right retry once the migration Job has run. `DbVersionGate` stops the process itself at startup. |
-| `required_modules` | Plugins host | Yes | A declared-required module missing from the pod's shelf. A restart re-runs the bundle-fetch init container. Open question, not decided here: if the registry is down for every image, this kills previous-image pods too. |
+| `required_modules` | Plugins host | **No: roll gate, `/ready` only** (policy [`required-modules-readiness-only`](../PolicyNotProse)) | A declared-required module missing from the pod's shelf. If the registry cannot serve it, it is missing for every image, so on the startup probe it would kill the previous image's restarted pods too, the same failure as the bake gate. As a roll gate a missing module stalls the roll and keeps the pod out of the Service. The cost: a restart no longer re-runs the bundle-fetch init container by itself. A pod whose modules arrive later needs a governed `Restart`. |
 | `process_progress` (`live`) | Plugins host | Yes, and it restarts via `/alive` | A GC-bound process is fixed by a restart. |
 | `PostgreSql` | Plugins host | Yes | No database, no portal. |
 | `self` (`live`, `ready`) | core | Never fails | The process can run a delegate. |
