@@ -303,7 +303,13 @@ derived roster before it asks for credentials, and names the instance any map is
 `memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
 is the failure mode a derivation removes rather than a tidiness argument.
 
-🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Re-measured
+> **RESOLVED — this paragraph and the next three record the state BEFORE the rename.** PartnerRe's
+> installation now answers to `partnerre-test`, the derivation no longer refuses, and it prints five
+> unique names: `build`, `memex`, `memex-cloud`, `partnerre-test`, `pearl`. See the
+> section *DECIDED: the rename* below. The
+> history is kept because the refusal still guards the next repository that declares a taken name.
+
+🚨 **What the derivation said THEN was a refusal, which is the mechanism working.** Measured
 2026-09-21 over all three deployments repositories, the fleet declares **five live** installations:
 `build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud), `memex`
 (memex.systemorph.com) and `pearl` (pearl.meshweaver.cloud) in `Systemorph/Memex`, **and a second
@@ -530,7 +536,11 @@ assembler refuses by name, *"no repository is known for source 'X'"*, the verdic
 worth doing and why it is not urgent — and it unblocks nothing on its own, because the refusal below
 comes first.
 
-### 🚨 MEASURED: the three inputs are necessary and NOT sufficient — the roster refuses first
+### 🚨 MEASURED: the three inputs are necessary and NOT sufficient — the roster refused first
+
+> **RESOLVED by the rename in the next section.** The roster derives now, so the three inputs are
+> once again the whole of what is missing. The text below records why the decision had to come
+> before any credential was issued.
 
 This section used to open *"provisioning the three remaining `COMBO_*` inputs makes this lane green
 today"* — **while the section above described the derivation refusing.** The page contradicted
@@ -568,6 +578,67 @@ maps do not exist:
 Whichever is chosen, **it is not optional and it is not the operator's** — provisioning the three
 inputs against today's tree buys a different red, not a verdict.
 
+### ✅ DECIDED: the rename — PartnerRe's installation is `partnerre-test`
+
+The first way out was taken (#3848). The control instance keeps `memex`; the installation at
+partnerre.meshweaver.cloud answers to **`partnerre-test`**
+([PartnerRe.Memex#85](https://github.com/Systemorph/PartnerRe.Memex/pull/85)). The id comes from that
+record's own `purpose` ("PartnerRe test environment"); `partnerre` was not available (the hand-over
+template `deployments/aks/partnerre/values.partnerre.yaml` declares it) and `partnerre-memex` is a
+retired registry id.
+
+**What moved is the identity and nothing else.** `Hosting__Deployment` (overlay and record
+`extraPortalConfig`), the record's id and file (`mesh/Deployments/partnerre-test.json`) and that
+repository's `envs.json` `deployment` changed. The namespace, the Helm release, the overlay
+directory (`deployments/aks/memex/`), the database, the vault prefix `memex-`, the host and the
+registry instance id (`pluginCatalog.instanceId: partnerre`) did not. The registry authenticates an
+instance key by the instance it was registered for, never by `Hosting__Deployment`, so nothing is
+re-registered. Because the record id no longer equals the namespace, PartnerRe.Memex's
+`check-record-renders-overlay.py` now pairs a record with its overlay by the record's `configPath`.
+
+What the rename changes on the running instance, which has no `Hosting:ReportTo` and lists
+`Hosting/PlatformBuilds` itself (so it is its own control plane for both channels):
+
+- its module inventory is filed at `Ops/Modules/partnerre-test` instead of `Ops/Modules/memex`;
+- its self-update hand-over (the Local route) announces `deployment: partnerre-test`, and a
+  `Hosting/InstanceAction` filed on its own mesh must target that id (`RecycleRunner` refuses a
+  target that is not the instance's own `Hosting:Deployment`).
+
+No mesh the fleet can read syncs that repository's `mesh/Deployments` — memex.systemorph.com's and
+memex.meshweaver.cloud's `Deployments/_GitSync` both read `Systemorph/Memex` — so the file rename is
+not a delete-and-create anywhere else.
+
+The roster the derivation then prints is five names: `build`, `memex`, `memex-cloud`, `partnerre-test`
+and `pearl`. The refusal and its self-test arm stay: they guard the mechanism, and the next
+deployments repository to declare a taken name meets the same red.
+
+### Issuing the two credentials
+
+Each is issued **on the instance it is for**, by a person, and neither can be read back afterwards.
+
+- **`mwi_` key.** `/api/plugins/roll-target` and `/api/plugins/combo` authenticate through
+  `InstanceRegistryAuthenticator`, which resolves the key against the **called portal's own mesh**
+  (`MeshWeaverInstance` nodes and their hash index). So the key comes from that portal's
+  **Settings ▸ Security ▸ Instances** tab (`InstancesSettingsTab`, id `MeshWeaverInstances`):
+  register a NEW entry with its own id (for example `combo-verify`), which returns the raw key once.
+  That is additive and revocable on its own. **Never use Reissue on an existing entry**: `ReissueKey`
+  replaces that entry's key, and the old one stops authenticating the moment it completes. An
+  instance id is claimed mesh-wide, so on memex.meshweaver.cloud (the registry) pick an id no
+  installation uses. A registered entry is granted nothing to pull, and these two routes need no
+  grant.
+- **`mw_` token.** **Settings ▸ Security ▸ API Tokens** (`/me/Settings/ApiTokens`), minted while
+  signed in as a **global admin** of that instance (the `Admin` role in `Admin/_Access`). The token
+  carries its minter's identity, and the lander's `POST /api/mesh/patch` of `Admin/UpdatePolicy`
+  needs that grant.
+
+Both go in the **Actions** store of `Systemorph/MeshWeaver` only. `combo-verify.yml` triggers on
+`workflow_run` and `workflow_dispatch`, and `check-pr-secret-preflight.py` finds no pull-request lane
+that consumes either, so the Dependabot store is not involved. `vars.COMBO_VERIFY_SOURCES` is plain
+data. Its value is the union of `pluginCatalog.sources` over every live installation's overlay,
+plus the two registry mounts PartnerRe consumes from memex.meshweaver.cloud (`Plugins`,
+`Reinsurance`, both already in that union). That gives `Plugins`, `Education`, `Reinsurance`, `Crm`,
+`SocialMedia`, `FundReporting` and `PartnerRe`, each mapped to its `repoPath`.
+
 ### The three inputs are still the whole of the CREDENTIAL prerequisite — `verify:combo` is not one
 
 The lander does not use the
@@ -582,8 +653,8 @@ prerequisite that does not exist and blocks the remediation that would actually 
 
 So the remainder, in the order it can be done:
 
-0. **Resolve the duplicate `memex`** (the section above). Not the operator's, and not skippable:
-   until it is resolved the derivation refuses and no instance is verified whatever is provisioned.
+0. ~~**Resolve the duplicate `memex`**~~: **decided and done** (the rename above). Until it landed,
+   the derivation refused and no instance was verified, whatever was provisioned.
 1. **Provision the three inputs** (the table above). Nothing in this repository can substitute for
    it: a credential is issued at the service that holds it, not derived. Two of the three cannot be
    copied from anywhere — an `mwi_` key is hash-only and an `mw_` token is issued once — so they are
