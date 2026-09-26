@@ -231,6 +231,10 @@ So two node types carry an `INodeTypeAccessRule` whose non-admin leg is the ordi
 
 The fold itself is untouched — `GetEffectivePermissions` still answers `None` for the admin on both paths, which is what `SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest` pins: the widening comes from the rule, consulted by all three seams (`RlsNodeValidator`, the `[RequiresPermission]` delivery gate, the delete pre-flight) through `NodeTypeAccessRuleGate`, so an ordinary viewer's check is byte-for-byte what it was. A sync config carries the repo, branch and last-sync state — never a credential; that is the separate `GitHubCredential` node in the owner's own partition. Deleting the **Space** of a system-owned partition is deliberately NOT widened: a paid plugin's Space is system-owned too, and its `_Access` entitlement grants would go with it.
 
+### Deleting a space nobody may delete: the governed break-glass action
+
+A space whose owner is gone, or a stranded partition with no root at all, refuses every person's delete — the platform admin's included, by the rule above. The sanctioned way out is not a wider grant but the **`DeleteSpace`** kind of `Hosting/InstanceAction` (MeshWeaver.Plugins, `Hosting/DeleteSpaceAction`): it reads the space as system, parks with the full plan (rows per table, grants, GitSync configuration, the `Admin/Partition` record, the schema, the NodeTypes and their outside dependents), and after one approval of exactly that plan removes it through the framework's own deletes and the platform's partition teardown, verifies nothing is left and writes an audit record. It refuses the system and fleet partitions, a user's home and a package's partition by name. It is the audited, per-case elevation this page describes — never a standing permission.
+
 ### Where the grant comes from (db-init)
 
 - **Config-driven** — `Auth:GlobalAdmins: [ "rbuergi", … ]` → `GlobalAdminSeed` seeds a static `Admin/_Access/{user}_Access` grant at boot. A fresh DB with the config set comes up with each listed user already a platform admin.
