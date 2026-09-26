@@ -375,6 +375,18 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "").Value, "{}")
             .Should().BeNull("a blank child is no key");
         WebhookInbox.SenderKeyOf(configuration, "K", null, "{}").Should().BeNull();
+
+        // Two senders provisioned with the SAME value: the answer is an identity, so an ambiguous
+        // match names nobody rather than whichever child the configuration lists first.
+        var shared = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["K"] = "shared",
+                ["K:build"] = "one-value-twice",
+                ["K:pearl"] = "one-value-twice",
+            }).Build();
+        WebhookInbox.SenderKeyOf(shared, "K", Sign("{}", "one-value-twice").Value, "{}")
+            .Should().BeNull("two senders sharing a key cannot be told apart, so neither is named");
     }
 
     /// <summary>

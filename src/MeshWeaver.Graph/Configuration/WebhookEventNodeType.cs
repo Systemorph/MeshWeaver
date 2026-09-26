@@ -217,22 +217,27 @@ public static class WebhookInbox
     /// so the consumer can decide what that one sender may cause. This inbox decides only whether
     /// the bytes are worth storing — it never widens what a delivery is allowed to do.</para>
     ///
-    /// <para>Deterministic (children in configuration order); a blank child is no key. Pure over
-    /// the configuration.</para>
+    /// <para>🚨 The answer is an IDENTITY, so it must be unambiguous: when MORE than one child
+    /// verifies (two senders provisioned with the same value), no sender can be named and the
+    /// delivery is refused rather than attributed to whichever child the configuration happens to
+    /// list first. A blank child is no key. Pure over the configuration.</para>
     /// </summary>
     public static string? SenderKeyOf(
         IConfiguration? configuration, string secretConfigKey, string? signatureHeader, string body)
     {
         if (configuration is null || string.IsNullOrWhiteSpace(signatureHeader))
             return null;
+        string? sender = null;
         foreach (var child in configuration.GetSection(secretConfigKey).GetChildren())
         {
-            if (string.IsNullOrWhiteSpace(child.Value))
+            if (string.IsNullOrWhiteSpace(child.Value)
+                || !VerifyHmacSha256(signatureHeader, body, child.Value))
                 continue;
-            if (VerifyHmacSha256(signatureHeader, body, child.Value))
-                return child.Key;
+            if (sender is not null)
+                return null;                    // ambiguous — two senders share one key
+            sender = child.Key;
         }
-        return null;
+        return sender;
     }
 
     /// <summary>Registers the WebhookEvent node type on the mesh builder.</summary>
