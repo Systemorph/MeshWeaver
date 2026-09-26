@@ -373,7 +373,9 @@ internal static class NodeTypeCompilationHelpers
                     // faults all fall through to the behaviour that existed before — "the
                     // release pipeline compiles, as it would have anyway".
                     var prebuiltConsumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
-                    if (prebuiltConsumer is null)
+                    // A CLOSED type set adopts no database NodeType either — not only "compiles
+                    // none": straight to the park below, before any bundle is asked.
+                    if (prebuiltConsumer is null || hub.ServiceProvider.IsClosedTypeSet())
                     {
                         DispatchOrPark();
                         return;
@@ -510,13 +512,24 @@ internal static class NodeTypeCompilationHelpers
                         // keeps the refusal bounded and visible, exactly like a terminal source error;
                         // the park registry's attempt counter stays at ZERO, the observable proof no
                         // Roslyn pass ever started.
-                        if (PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+                        // A CLOSED type set (ClosedTypeSet) refuses the same way, for a stronger
+                        // reason: not "only prebuilt assemblies may run here" but "no database
+                        // NodeType is a type here at all". Instances never reach this (enrichment
+                        // refuses them first); this is the belt-and-braces for a compile asked of
+                        // the ROW itself — its Compile button, a release request, a self-heal kick
+                        // — so Roslyn never runs on database source in a closed process.
+                        var closedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
+                        if (closedTypeSet || PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
                         {
-                            var reason = PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
+                            var reason = closedTypeSet
+                                ? ClosedTypeSet.RefusalFor(hubPath)
+                                : PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
                             logger?.LogError(
-                                "Compile watcher: {HubPath} has no adopted assembly and this mesh sets {Key} — " +
+                                "Compile watcher: {HubPath} is refused by {Key} — " +
                                 "PARKING with a named refusal instead of compiling. {Reason}",
-                                hubPath, PrebuiltAssemblySeeder.RequirePrebuiltConfigKey, reason);
+                                hubPath,
+                                closedTypeSet ? ClosedTypeSet.ConfigKey : PrebuiltAssemblySeeder.RequirePrebuiltConfigKey,
+                                reason);
                             // The registry is resolved from the hub's services HERE, exactly as the
                             // real dispatch does — the watcher's own handle is only ever probed
                             // null-safely and must not be the thing the park depends on. The park
@@ -529,7 +542,9 @@ internal static class NodeTypeCompilationHelpers
                             var pendingDef = pendingNode!.ContentAs<NodeTypeDefinition>(
                                 hub.JsonSerializerOptions, logger);
                             // #3583 — a type that still holds a build is HELD, not parked dead.
-                            if (pendingDef is not null && SettleAsHold(pendingDef, reason))
+                            // Never on a closed set: there a held build is exactly what must not
+                            // keep serving, so the refusal always settles the type at Error.
+                            if (!closedTypeSet && pendingDef is not null && SettleAsHold(pendingDef, reason))
                                 return;
                             registry?.OnCompileFailed(
                                 hub, hubPath, reason, deterministic: true,

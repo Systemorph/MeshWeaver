@@ -717,6 +717,16 @@ public static class PrebuiltAssemblySeeder
         string? producerPlatformVersion,
         string? platformCeiling)
     {
+        // A CLOSED type set (ClosedTypeSet) adopts nothing onto a database NodeType: every
+        // adoption — the boot seeders, the published root, an on-demand seed — writes through here,
+        // so this is the one place that makes "no type definition is adopted" true for all of them.
+        if (hub.ServiceProvider.IsClosedTypeSet())
+        {
+            logger?.LogInformation(
+                "Prebuilt assembly for {NodeTypePath} NOT SEEDED: {Key}=true — a closed type set "
+                + "adopts no database NodeType", nodeTypePath, ClosedTypeSet.ConfigKey);
+            return Observable.Return(SeedOutcome.NotSeeded);
+        }
         // 🚨 THE GATE — the platform COMPATIBILITY rule (policy platform-backwards-compatibility):
         // the bytes' compatibility key must be the live one, and the running build must sit inside
         // the bytes' platform range (floor = the producing build, ceiling = open unless declared).
