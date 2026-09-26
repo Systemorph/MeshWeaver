@@ -165,6 +165,32 @@ async Task<int> Run(
     root.Subcommands.Add(cmd);
 }
 
+// --- tests -----------------------------------------------------------------
+{
+    var pathArg = new Argument<string>("path") { Description = "Node whose Tests area to run (e.g. @Admin/Maintenance/x)." };
+    var timeoutOpt = new Option<int>("--timeout") { Description = "Seconds to wait for the verdict.", DefaultValueFactory = _ => 600 };
+    var intervalOpt = new Option<int>("--interval") { Description = "Seconds between reads of the area.", DefaultValueFactory = _ => 2 };
+    var cmd = new Command("tests", "Run a node's Tests area and stream its progress until the verdict (exit 0 = all passed, 1 = a failure, 4 = no verdict in time).")
+        { pathArg, timeoutOpt, intervalOpt };
+    cmd.SetAction(async (result, ct) =>
+    {
+        try
+        {
+            var cfg = MemexConfig.Resolve(result.GetValue(baseUrlOpt), result.GetValue(tokenOpt));
+            using var client = new MemexClient(cfg);
+            return await TestsCommand.Run(client, result.GetValue(pathArg)!,
+                TimeSpan.FromSeconds(result.GetValue(timeoutOpt)), TimeSpan.FromSeconds(Math.Max(1, result.GetValue(intervalOpt))),
+                Console.Out, ct);
+        }
+        catch (MemexCliException ex)
+        {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 2;
+        }
+    });
+    root.Subcommands.Add(cmd);
+}
+
 // --- upload ----------------------------------------------------------------
 {
     var pathArg = new Argument<string>("path") { Description = "Target mesh path {nodePath}/{collection}/{filePath}." };

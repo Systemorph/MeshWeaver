@@ -74,6 +74,7 @@ public class MeshApiCookieAuthTest
         "/api/mesh/recycle",
         "/api/mesh/compile",
         "/api/mesh/execute-script",
+        "/api/mesh/run-tests",
         "/api/mesh/mirror",
         "/api/mesh/upload",
     ];

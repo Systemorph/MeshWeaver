@@ -8,6 +8,9 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+    <!-- ActivityRunner.RunActivity: RunTests runs a node's Tests area as an activity (the generic
+         "long-running operation as an activity" contract lives there, owner re-stamps and all). -->
+    <ProjectReference Include="..\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />

@@ -85,6 +85,32 @@ public class AreaProbeTest
         }
     }
 
+    // A Tests area's PROGRESS frame (MeshTestRunner streams them while its cases run). Its rows may
+    // carry anything — here even a verdict glyph — and it must still never classify: the id says the
+    // verdict frame follows.
+    private static readonly JsonElement ProgressFrame = Frame(
+        """{"areas":{"Tests":{"id":"tests-running","title":"Store tests — 1 of 2 done, running for 3s","rows":["✔ First_Passes","❌ looks like a verdict","▶ Second_Runs"]}}}""");
+
+    /// <summary>
+    /// A streamed progress frame is TRANSIENT: the verdict comes from the frame that follows it, and a
+    /// run cut off mid-way says how far it got.
+    /// </summary>
+    [Fact]
+    public async Task ProgressFrame_ThenGreenTable_IsPassed_AndACutRunNamesItsProgress()
+    {
+        var verdict = await AreaProbe.ClassifyTestsFrames(FrameStream(ProgressFrame, GreenTable), TimeSpan.FromSeconds(5))
+            .FirstAsync().Await();
+        Assert.Equal(CheckOutcome.Passed, verdict.Outcome);
+        Assert.Equal("2/2 passed", verdict.Detail);
+
+        var cut = await AreaProbe.ClassifyTestsFrames(
+                Observable.Return(ProgressFrame).Concat(Observable.Never<JsonElement>()), TimeSpan.FromMilliseconds(300))
+            .FirstAsync().Await();
+        Assert.Equal(CheckOutcome.Failed, cut.Outcome);
+        Assert.Contains("still running its cases", cut.Detail);
+        Assert.Contains("1 of 2 done", cut.Detail);
+    }
+
     /// <summary>
     /// The regression pin: a not-found frame followed by the real table must be GREEN. Before the
     /// fix, Take(1) latched the not-found frame and the run failed without the tests ever running.

@@ -37,6 +37,10 @@ public static class AreaProbe
     // one can use the same constant the typed predicates use — never on the localized prose.
     private static readonly string CompileProgressMarker = AreaFrameClassifier.CompileProgressId;
 
+    // A Tests area's PROGRESS frame (MeshTestRunner streams one per second while its cases run) —
+    // transient in the same way: the verdict frame follows. Matched on the control Id, never prose.
+    private static readonly string TestsRunningMarker = AreaFrameClassifier.TestsRunningId;
+
     private static readonly Regex PassSummary = new(
         @"(\d+)\s*/\s*(\d+)\s+passed", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -165,6 +169,17 @@ public static class AreaProbe
         if (IsCompiling(strings))
         {
             onTransient("the node's NodeType is still compiling");
+            return null;
+        }
+
+        // 🚨 A Tests area STREAMS its progress (MeshTestRunner): every frame before the verdict
+        // carries this id, and its rows already show cases that passed or failed so far. Classifying
+        // one would green a suite whose later cases have not run — so it is a promise, like the
+        // compile page, and the timeout verdict reports how far the run got.
+        if (strings.Any(s => string.Equals(s, TestsRunningMarker, StringComparison.Ordinal)))
+        {
+            onTransient("the Tests area was still running its cases — last progress: "
+                + (strings.FirstOrDefault(s => s.Contains(" — ", StringComparison.Ordinal)) ?? "(no title)"));
             return null;
         }
 

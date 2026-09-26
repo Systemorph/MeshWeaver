@@ -48,7 +48,7 @@ namespace MeshWeaver.AI;
 /// bridge at an external boundary (<c>.FirstAsync().ToTask()</c>) — never inside hub
 /// flow. See CLAUDE.md "NOTHING ASYNC EVER".
 /// </summary>
-public class MeshOperations
+public partial class MeshOperations
 {
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
