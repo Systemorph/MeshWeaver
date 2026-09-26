@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -72,6 +73,12 @@ public static class PluginBundleEndpoints
 {
     /// <summary>Route the bundles are mounted at.</summary>
     public const string RoutePrefix = "/api/plugins/bundles";
+
+    /// <summary>The <c>Retry-After</c> (seconds) every transient 503 of these routes carries — a
+    /// catalogue read that stalled, a directory being republished, or resolved bytes that were
+    /// evicted before the archive opened them (#3876, #5345). One value, so a consumer's back-off
+    /// and a test's expectation read the same number.</summary>
+    public const int TransientRetryAfterSeconds = 30;
 
     /// <summary><see cref="HttpContext.Items"/> key holding the authenticated caller.</summary>
     private const string CallerItemKey = "PluginBundle.Caller";
@@ -276,7 +283,7 @@ public static class PluginBundleEndpoints
         // Retention may remove the directory after PrebuiltDirectory observed it (#3876).
         if (!Directory.Exists(directory))
             return NothingPublished(identity, source);
-        http.Response.Headers.RetryAfter = "30";
+        http.Response.Headers.RetryAfter = TransientRetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
         return Results.Json(
             new { error = $"{reason} — source '{source}', framework identity '{identity}'" },
             statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -1791,7 +1798,7 @@ public static class PluginBundleEndpoints
                 + "the archive could open it (the store replaced it meanwhile); answering 503 + "
                 + "Retry-After so the consumer re-reads and resolves what exists now",
                 plugin, version);
-            http.Response.Headers.RetryAfter = "30";
+            http.Response.Headers.RetryAfter = TransientRetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
             return Observable.Return(Results.Json(
                 new
                 {

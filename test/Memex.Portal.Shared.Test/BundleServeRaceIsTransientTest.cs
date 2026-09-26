@@ -57,7 +57,9 @@ public class BundleServeRaceIsTransientTest : IDisposable
 
         var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, status.StatusCode);
-        Assert.Equal("30", http.Response.Headers.RetryAfter.ToString());
+        Assert.Equal(
+            PluginBundleEndpoints.TransientRetryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            http.Response.Headers.RetryAfter.ToString());
     }
 
     /// <summary>

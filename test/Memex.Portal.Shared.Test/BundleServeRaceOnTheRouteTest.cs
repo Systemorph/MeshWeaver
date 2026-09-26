@@ -137,6 +137,8 @@ public class BundleServeRaceOnTheRouteTest(ITestOutputHelper output) : MonolithM
 
         using var response = await Get(app, route, key);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        Assert.Equal(TimeSpan.FromSeconds(30), response.Headers.RetryAfter?.Delta);
+        Assert.Equal(
+            TimeSpan.FromSeconds(PluginBundleEndpoints.TransientRetryAfterSeconds),
+            response.Headers.RetryAfter?.Delta);
     }
 }
