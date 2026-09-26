@@ -1,0 +1,295 @@
+---
+Name: Collectible Thread-Static Handle Reuse (CoreCLR)
+Category: Architecture
+Description: A CoreCLR defect that frees an unrelated GC-statics box of a LIVE collectible context when a thread exits — the mechanism behind the dangling static base of native-crash sighting 18, with a deterministic repro, the dump evidence, and what it means for the portal crashes.
+Icon: Bug
+---
+
+# Collectible thread-static handle reuse (CoreCLR)
+
+**A thread that exits can free an object it never touched, in a collectible context it never
+touched.** When a thread has used a `[ThreadStatic]` of a type in collectible context **A**, context A
+is unloaded while the thread lives on, and the thread-static *index* A's type held is handed to a type
+in a newer collectible context **B**, then the thread's exit calls `FreeHandle` on **B**'s
+`LoaderAllocator` with a handle that was minted by **A**. That releases whatever object happens to sit
+at that slot of B's handle table — a GC-statics box, a `RuntimeType`, anything. The next GC collects
+it, and every later read of that static goes through a pointer to memory that now holds something
+else.
+
+This is a **candidate mechanism** for [sighting #18](../DebuggingNativeCrashes), the dangling static
+base of `EqualityComparer<IScheduledObserver<IEnumerable<LineOfBusiness>>>`. It is established in three
+ways. It is a **runtime** defect, not this repository's. It reproduces deterministically in the complete
+program below, on .NET `10.0.11` and `10.0.12`. And it produces exactly the state #18's dump shows: a
+box absent from `m_slots` while the rest of the handle table looks normal. One thing is **not**
+established: that it is what happened in #18. The dump cannot identify the exiting thread or the freed
+handle (see *Evidence from the #18 dump* below), and the production dumps of #4654 have not been read.
+Investigated on Systemorph/MeshWeaver#4654.
+
+## The defect, in the runtime source
+
+All references are `dotnet/runtime` `release/10.0`. `main` has the same code as of 2026-09-26.
+
+1. **A thread's first touch of a collectible thread static** allocates the thread's data block and
+   pins it with a handle in the **type's** `LoaderAllocator`. The thread records that handle, an index
+   into the allocator's managed `m_slots` array, in its own `pLoaderHandles[tlsIndex]`
+   (`threadstatics.cpp`, `GetThreadLocalStaticBase`: `*pLoaderHandle = pMT->GetLoaderAllocator()->AllocateHandle(gc.tlsEntry)`).
+2. **When that allocator is destroyed**, `FreeTLSIndicesForLoaderAllocator` marks its TLS indices
+   *cleared* in the global map (`TLSIndexToMethodTableMap::Clear`). It **does not touch any thread's
+   `pLoaderHandles`**, so the stale handle stays in every live thread that used the type.
+   `pLoaderHandles` appears in exactly two files, `threads.h` and `threadstatics.cpp`, and no other
+   code scrubs it.
+3. **The next collectible type that needs a thread-static index reuses the cleared one**
+   (`GetTLSIndexForThreadStatic` → `FindClearedIndex`), and that type lives in a different allocator.
+4. **When the thread exits**, `FreeLoaderAllocatorHandlesForTLSData` walks the *current* map and, for
+   every index where the thread's `pLoaderHandles` entry is non-null, calls
+   `entry.pMT->GetLoaderAllocator()->FreeHandle(handle)`. That is the **new** type's allocator, called
+   with the **old** allocator's handle. `FreeHandle` writes `null` into that slot of the new allocator's
+   `m_slots` and pushes the index onto the free stack.
+5. The victim is whatever lived at that slot. For a **GC-statics box** of a collectible type
+   (`LoaderAllocator::AllocateGCHandlesBytesForStaticVariables`), the `m_slots` entry is the **only**
+   strong root. `m_pGCStatics` is tracked by a *weak interior* handle, which is nulled when the box dies
+   and leaves `m_pGCStatics` untouched. The box is collected, and `m_pGCStatics` keeps its old address.
+6. The next `AllocateHandle` pops the freed index and fills the slot again, so **the handle table shows
+   no gap afterwards**. Sighting #18 looked like that: `m_slots` had no null entries inside the used
+   range and held no box for V.
+
+A thread that **touches the new type first** overwrites its stale entry (the old handle is leaked,
+which is harmless). The corruption needs the thread to **exit** without touching the new type.
+
+## The repro — deterministic, with a control
+
+The full source is below: a standalone program, outside the repository's build and outside its
+concurrency rules. It deliberately corrupts its own heap, so it must never run inside a test host.
+There are two projects, `lib` and `host`. The library is generated, because it needs 400 static
+classes, and it is loaded twice, into two collectible contexts.
+
+**`lib/lib.csproj`**
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>disable</Nullable></PropertyGroup>
+</Project>
+```
+
+**`lib/Lib.cs`**, generated by this script (`python3 gen.py > lib/Lib.cs`):
+
+```python
+N = 400
+print("namespace Lib;")
+print("public sealed class Marker { public long Tag = 0x5EED; }")
+print("public static class Tls { [System.ThreadStatic] static object t; "
+      "public static void Touch() => t = new object[] { new Marker() }; }")
+for i in range(N):
+    print(f"public static class H{i} {{ public static object V = new Marker(); }}")
+touch = " ".join(f"_ = H{i}.V;" for i in range(N))
+check = " ".join(f"if (!(H{i}.V is Marker m{i} && m{i}.Tag == 0x5EED)) bad++;" for i in range(N))
+print("public static class Probe { public static void TouchAll() { " + touch + " } "
+      "public static int CountBad() { int bad = 0; " + check + " return bad; } }")
+```
+
+**`host/host.csproj`**
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings><ServerGarbageCollection>false</ServerGarbageCollection></PropertyGroup>
+</Project>
+```
+
+**`host/Program.cs`**
+
+```csharp
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+
+var libPath = args[0];
+var mode = args.Length > 1 ? args[1] : "repro";          // repro | control | baseline
+
+var touched = new ManualResetEventSlim();
+var release = new ManualResetEventSlim();
+Thread holder = null;
+if (mode == "baseline")                                    // no collectible code at all: the emulator control
+{
+    for (int i = 0; i < 5; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+    var j = new object[200_000]; for (int i = 0; i < j.Length; i++) j[i] = new byte[48];
+    GC.Collect();
+    Console.WriteLine("baseline done");
+    return;
+}
+
+var old = StartOld();
+for (int i = 0; old.IsAlive && i < 200; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+Console.WriteLine($"old context collected: {!old.IsAlive}");
+
+var b = Load(libPath, out var ctx2);
+Call(b, "Lib.Probe", "TouchAll");     // 400 GC-statics boxes -> slots in ctx2's LoaderAllocator
+Call(b, "Lib.Tls", "Touch");          // ctx2's Tls reuses the cleared TLS index
+var countBad = b.GetType("Lib.Probe")!.GetMethod("CountBad")!;
+Console.WriteLine($"bad before holder exit: {countBad.Invoke(null, null)}");
+
+if (mode == "repro") { release.Set(); holder.Join(); Console.WriteLine("holder thread exited"); }
+else Console.WriteLine("control: holder thread kept alive");
+
+for (int i = 0; i < 5; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+var junk = new object[200_000]; for (int i = 0; i < junk.Length; i++) junk[i] = new byte[48];
+GC.Collect();
+Console.WriteLine($"bad after holder exit + GC: {countBad.Invoke(null, null)}");
+for (int i = 0; i < 400; i++)
+{
+    var v = b.GetType("Lib.H" + i)!.GetField("V")!.GetValue(null);
+    if (v?.GetType().Name != "Marker") Console.WriteLine($"  Lib.H{i}.V now reads: {(v is null ? "null" : v.GetType().FullName)}");
+}
+GC.KeepAlive(junk);
+GC.KeepAlive(ctx2);
+
+[MethodImpl(MethodImplOptions.NoInlining)]
+WeakReference StartOld()
+{
+    var cell = new Assembly[] { Load(libPath, out var ctx) };
+    var t = new Thread(() =>
+    {
+        TouchAndForget(cell);          // this thread now holds a LOADERHANDLE in ctx1's allocator
+        touched.Set();
+        release.Wait();                // stays alive across the unload + reload
+    }) { IsBackground = true, Name = "tls-holder" };
+    t.Start();
+    touched.Wait();
+    holder = t;
+    var w = new WeakReference(ctx);
+    ctx.Unload();
+    return w;
+}
+
+[MethodImpl(MethodImplOptions.NoInlining)]
+static void TouchAndForget(Assembly[] cell) { Call(cell[0], "Lib.Tls", "Touch"); cell[0] = null; }
+
+static Assembly Load(string path, out AssemblyLoadContext ctx)
+{
+    ctx = new AssemblyLoadContext("c" + Guid.NewGuid(), isCollectible: true);
+    return ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(path)));
+}
+
+static void Call(Assembly a, string type, string method) => a.GetType(type)!.GetMethod(method)!.Invoke(null, null);
+```
+
+**Run it**
+
+```bash
+dotnet build -c Release lib/lib.csproj  -o out/lib
+dotnet build -c Release host/host.csproj -o out/host
+dotnet out/host/host.dll out/lib/lib.dll control   # expect: bad after … : 0
+dotnet out/host/host.dll out/lib/lib.dll           # expect: bad after … : 1 (or AccessViolationException, exit 134)
+# linux-x64 on an Apple-silicon host (colima): the out/ folder must live under $HOME to be mountable
+docker run --rm --platform linux/amd64 -e DOTNET_EnableWriteXorExecute=0 -v "$PWD/out:/r" \
+  mcr.microsoft.com/dotnet/sdk:10.0 dotnet /r/host/host.dll /r/lib/lib.dll
+```
+
+What the host does:
+
+1. Loads the library into collectible context **A**. It starts a background thread that calls
+   `Tls.Touch()`, drops its reference to A, and parks.
+2. Unloads A and runs `GC.Collect` until A's `WeakReference` is dead. The parked thread keeps its stale
+   handle.
+3. Loads the library into context **B**, calls `Probe.TouchAll()` (400 GC-statics boxes, one slot each
+   in B's `m_slots`), then calls `Tls.Touch()` on the main thread. B's `Tls` reuses A's cleared index.
+4. **Repro:** releases the parked thread and joins it (thread exit). **Control:** keeps it parked.
+5. Runs five `GC.Collect`s, allocates 200,000 small arrays, collects again, and counts statics that no
+   longer read a `Marker`.
+
+| runtime | repro (thread exits) | control (thread kept alive) |
+|---|---|---|
+| `10.0.11`, macOS arm64 | **5 of 5 runs: 1 static corrupted** | 5 of 5 runs: 0 |
+| `10.0.12`, linux-x64 (container, `DOTNET_EnableWriteXorExecute=0`, see below) | **3 of 3 runs: `H0.V` now reads `null`** | 3 of 3 runs: 0 |
+
+The failure can take either form. In one arm64 run the dangling base pointed at a reused object, and
+calling `GetType()` on it died with **`System.AccessViolationException` → `Fatal error.` → exit 134**.
+That is sighting #18's exit shape. On x64 the reclaimed memory read as zero.
+
+🚨 Under x64 **emulation** (colima, `--platform linux/amd64`), W^X on made even the **control**
+segfault. A non-collectible GC baseline passed in the same container. With
+`DOTNET_EnableWriteXorExecute=0`, the control passes every run and the repro corrupts every run. So
+the emulated W^X crash is an artefact of the emulator, not a finding. Do not read it as evidence
+either way.
+
+## Evidence from the #18 dump that the preconditions hold in our process
+
+Read with ClrMD over `MeshWeaver.Futu-1773.dmp` (the probe walks the three collectible allocators'
+`m_slots`):
+
+- The allocator whose box went missing (`LoaderAllocator 0x7fd74200c3c0`, the `v7-…` NodeType compile)
+  holds a **collectible thread-static data block**. `m_slots[214]` is an `Object[1]` containing a
+  `SharedArrayPoolThreadLocalArray[]`, which is the `[ThreadStatic] t_tlsBuckets` of
+  **`SharedArrayPool<LineOfBusiness>`**. Next to it, `[213]` holds the pool's GC-statics box and `[215]`
+  holds its lambda cache. Any `ArrayPool<T>.Shared` use over a NodeType-compiled `T` creates one,
+  including the BCL's own pooled builders (LINQ `ToArray` and similar). Our code never has to write
+  `[ThreadStatic]` itself.
+- The process had **three** collectible NodeType contexts resident (`v7`, `v14` and a third). Every
+  recompile retires one and mints another, so TLS indices are cleared and reused all the time.
+- V's box is missing from `m_slots`, and `m_slots` has **no null entry inside its used range**. Step 6
+  predicts exactly that. The earlier reading of that fact as *"never registered"* is not the only
+  explanation, because a freed-then-reused slot looks the same.
+
+**Not established from the dump:** which thread exited, which index was reused, and which handle was
+freed. The per-thread `pLoaderHandles` arrays of threads that have already exited no longer exist, and
+the dump cannot show history. The claim is that **this mechanism produces exactly #18's state, and all
+its preconditions are present in #18's process**. It does not prove that this mechanism is what
+happened there.
+
+## Why this codebase meets it often: thread exits
+
+The trigger is a **thread exit**. This process has two steady sources of them:
+
+- **ThreadPool workers retire** after about 20 s idle. Those are the threads hub turns and
+  deserialisation run on, so they touch NodeType-typed `ArrayPool<T>` constantly.
+- **Every blocking lane of the pools `IoPoolRegistry` registers starts a fresh thread per burst, and
+  that thread exits when its queue drains.** This covers the bounded production pools: the
+  `mw-cpu-lane` compile lane and the `mw-io-lane` IO lanes. It does not cover `IoPool.Unbounded`,
+  whose `InvokeBlocking` runs on the ThreadPool through `Task.Run` and is covered by the ThreadPool
+  bullet above. `LimitedConcurrencyLevelTaskScheduler.NotifyThreadPoolOfPendingWork` runs
+  `new Thread(_ => DrainQueue())`, and `DrainQueue` returns when `_tasks` is empty. The CPU lane has
+  worked this way since the dedicated-thread compile lane, and every IO lane since #5678 (blocking
+  leaves off the ThreadPool, merged 2026-09-25 06:43Z; the images running on
+  memex.systemorph.com / memex.meshweaver.cloud on 2026-09-26, core `4c8530d7dd`, contain it). Each
+  blocking-leaf burst is therefore one thread exit, and one more chance to free a handle belonging to
+  a context unloaded since that thread first ran.
+
+Combined with the recompile cadence measured on `memex` (one new compiled assembly every ~8 s for
+hours, #4654), the three conditions the defect needs (retire a context, reuse its index, exit a thread
+that held the old handle) are routine, not rare.
+
+## What this does and does not explain
+
+| | |
+|---|---|
+| sighting #18 (CI, exit 134, dangling collectible static base) | **Explained by mechanism.** It reproduces the exact state. The dump cannot show which thread exited |
+| sightings #1–#17 (CI, exit 139, a MethodTable word reading **exactly zero** inside `libcoreclr`) | **Consistent, not shown.** A static that dangles into reclaimed memory reads `null` (the x64 repro) or a wrong object. Once code copies that pointer into a live object, the GC marks through a pointer whose "MethodTable" is zeroed free space, which is that family's fingerprint. Nobody has traced a single #1–#17 dump back to a freed handle |
+| #4654 and the ci.9218 portal deaths (exit 139 at `addr (nil)` and at `0x1880000005`; exit 134 ×3) | **Not read.** The production dumps are on the `memex-data` PVC behind break-glass access. Their fields are compatible with this mechanism and with others |
+
+## Remedies
+
+**The root fix is upstream.** It has two possible shapes. `FreeTLSIndicesForLoaderAllocator` could
+null every live thread's `pLoaderHandles[index]` for the indices it clears, under the same
+`g_TLSCrst` that `FreeLoaderAllocatorHandlesForTLSData` already takes. Or a thread's handle could
+carry the identity of the allocator that minted it, with `FreeLoaderAllocatorHandlesForTLSData`
+skipping on a mismatch. The repro above is the report. Filing it on `dotnet/runtime` is a public act
+on the maintainer's behalf, and it has not been done.
+
+**In this repository**, the defect fires only on a thread **exit**, so two changes remove it until a
+runtime fix ships. Both are **stopgaps against a runtime defect**, and they are named as such:
+
+1. `System.Threading.ThreadPool.ThreadsToKeepAlive = -1` (runtimeconfig, or
+   `DOTNET_ThreadPool_ThreadsToKeepAlive=-1`). Pool workers stop retiring. The cost is that the
+   pool's peak thread count stays allocated.
+2. `IIoPool` lanes keep their dedicated threads alive when idle instead of exiting on every drain.
+   That is a change to the sealed scheduler and needs its own review.
+
+Neither has been applied. Each changes thread lifetime for the whole process, so each is an owner's
+decision.
+
+## Related
+
+- [Debugging Native Crashes](../DebuggingNativeCrashes): sighting #18, and the fact-6 recipe that
+  found the dangling base
+- [Controlled IO Pooling](../ControlledIoPooling): the `IIoPool` lanes whose threads exit per drain
+- [Node Type Compilation](../NodeTypeCompilation): where collectible contexts are minted and retired
