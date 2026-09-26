@@ -128,8 +128,11 @@ re-read resolves the version that now exists. Any other I/O fault still surfaces
 `BundleServeRaceIsTransientTest` writes a real archive whose entry opens a real file deleted after
 it was resolved (file, and whole directory), asserts the `503` and its header, pins that the
 unmapped write really does fault with `FileNotFoundException`, and that a different `IOException`
-passes through untouched. Not covered by a test: that the operator is wired on the route — an
-end-to-end fixture would need a compiled NodeType in the store.
+passes through untouched. `BundleServeRaceOnTheRouteTest` pins it on the WIRE, through the real
+authenticated route: a healthy bundle is served `200` first (positive control), then a DANGLING
+symbolic link in the landed generation's `wwwroot` — listed by the walk, unopenable at the archive
+write, no seam and no timing — must answer `503` with `Retry-After: 30`. With the operator removed
+from the route the same request throws the production `FileNotFoundException`.
 
 🚨 **The bytes are served under the SEAL's spelling, never the request's.** The name match is
 case-insensitive and the share is not, so composing the requested name served `store.zip` out of a
