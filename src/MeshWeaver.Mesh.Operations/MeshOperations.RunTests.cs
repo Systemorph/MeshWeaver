@@ -110,11 +110,16 @@ public partial class MeshOperations
                 {
                     if (frame.NotFound)
                         throw new InvalidOperationException($"{nodePath} has no Tests area.");
-                    foreach (var line in frame.Text)
-                        ctx.Log(new LogMessage(line, LogLevel.Information));
+                    var (passed, total) = frame.Counts();
+                    ctx.Log(new LogMessage($"{passed} of {total} cases passed",
+                            passed == total ? LogLevel.Information : LogLevel.Warning)
+                        .WithKey("activity.tests.summary", ("passed", (object?)passed), ("total", (object?)total)));
                     if (!frame.Passed)
-                        throw new InvalidOperationException(
-                            $"{frame.Title ?? nodePath + " tests"}: not every case passed.");
+                        // The area's own words (its title and, for a suite rendered as markdown, its
+                        // failing rows) — upstream text, carried verbatim by the activity's failure line.
+                        throw new InvalidOperationException(string.Join(" · ",
+                            new[] { frame.Title ?? nodePath + " tests" }
+                                .Concat(frame.Rows.Length == 0 ? frame.Text.Where(t => t.Contains('❌')) : [])));
                     return Unit.Default;
                 });
         });
@@ -142,15 +147,21 @@ public partial class MeshOperations
                 (state, frame) =>
                 {
                     var (changed, printed) = TestsAreaFrame.Changes(state.Printed, frame);
-                    foreach (var row in changed)
-                        ctx.Log(new LogMessage(TestsAreaFrame.Line(row),
-                            row.Result.StartsWith('❌') || row.Result.StartsWith('✖') ? LogLevel.Warning : LogLevel.Information));
+                    foreach (var row in changed.Where(r => r.Result != "⏳"))
+                        ctx.Log(CaseLine(row));
                     return (frame, printed);
                 })
-            .Select(state => state.Frame!)
-            .Do(frame =>
-            {
-                if (!frame.Transient && frame.Title is { } title)
-                    ctx.Log(new LogMessage(title, LogLevel.Information));
-            });
+            .Select(state => state.Frame!);
+
+    // One case as a keyed activity line: the viewer's language renders the frame, the case's own
+    // name and output stay as written.
+    private static LogMessage CaseLine(TestsAreaFrame.Row row)
+    {
+        var level = row.Result.StartsWith('❌') || row.Result.StartsWith('✖') ? LogLevel.Warning : LogLevel.Information;
+        if (row.Output.Length == 0)
+            return new LogMessage(TestsAreaFrame.Line(row), level)
+                .WithKey("activity.tests.case", ("result", (object?)row.Result), ("case", (object?)row.Case), ("time", (object?)row.Time));
+        return new LogMessage(TestsAreaFrame.Line(row), level)
+            .WithKey("activity.tests.caseOutput", ("result", (object?)row.Result), ("case", (object?)row.Case), ("time", (object?)row.Time), ("output", (object?)row.Output));
+    }
 }

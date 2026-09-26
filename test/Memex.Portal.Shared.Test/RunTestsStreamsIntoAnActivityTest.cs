@@ -68,6 +68,6 @@ public class RunTestsStreamsIntoAnActivityTest(ITestOutputHelper output) : Monol
         Assert.Contains(lines, l => l.StartsWith("▶ slow", StringComparison.Ordinal) && l.Contains("contacted the service"));
         Assert.Contains(lines, l => l.StartsWith("✅", StringComparison.Ordinal) && l.Contains("slow"));
         Assert.Contains(lines, l => l.StartsWith("❌", StringComparison.Ordinal) && l.Contains("the assertion message"));
-        Assert.Contains(lines, l => l.Contains("1/2 passed", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains("1 of 2 cases passed", StringComparison.Ordinal));
     }
 }

@@ -60,6 +60,20 @@ public sealed record TestsAreaFrame(
         }
     }
 
+    /// <summary>
+    /// How many counted cases passed, out of how many: the verdict's own <c>N/M passed</c> when it
+    /// carries one, otherwise the rows (✅ over every row that is not ⏭ skipped).
+    /// </summary>
+    public (int Passed, int Total) Counts()
+    {
+        var summary = Text.Prepend(Title ?? "").Select(s => PassSummary.Match(s)).FirstOrDefault(m => m.Success);
+        if (summary is not null)
+            return (int.Parse(summary.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
+                int.Parse(summary.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture));
+        var counted = Rows.Where(r => !r.Result.StartsWith('⏭')).ToImmutableArray();
+        return (counted.Count(r => r.Result.StartsWith('✅')), counted.Length);
+    }
+
     /// <summary>Reads one serialized area store for the area <paramref name="area"/>.</summary>
     /// <param name="store">The frame as the sync stream carries it.</param>
     /// <param name="area">The area name (normally <c>Tests</c>).</param>
