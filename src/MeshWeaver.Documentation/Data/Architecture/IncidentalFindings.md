@@ -89,9 +89,12 @@ start pooling such connections, e.g. by portal"*).
 **`Feedback/_Submissions` refuses a user credential, by design.** That is the system partition, and
 `FeedbackSubmitter.Submit` writes there under `ImpersonateAsSystem()` from inside the mesh — a path an
 MCP caller does not travel. A direct `create` there answers
-`Access denied: Create permission required`, and so does the bare `Feedback/{id}`. **Three separate
+`Access denied: Create permission required`, and so do the bare `Feedback/{id}` and
+`Feedback/Inbox/{id}`. **Three separate
 agents read that refusal as "the documented route cannot be followed", because this page named the
-node type and not the namespace.**
+node type and not the namespace** — and it kept happening after this section existed, because an
+agent's context carries the `file-it-and-move-on` block of `AGENTS.md`, not this page. That block
+now names the namespace too; see [Shared Rule Blocks](../SharedRuleBlocks) for how its text changed.
 
 **The route that works is the caller's own partition — `{user}/Feedback/{id}`:**
 
