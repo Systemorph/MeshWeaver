@@ -173,6 +173,47 @@ public class UserProfilePageTest
         MeshNodeImageHelper.ResolvePictureUrl(null, "rbuergi").Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("content:picture/hand-set.svg")]
+    [InlineData("https://example.com/me.SVG?v=2")]
+    [InlineData("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=")]
+    public void PictureUrl_IsNeverAnSvg_InAnySpelling(string icon)
+        => MeshNodeImageHelper.ResolvePictureUrl(icon, "rbuergi").Should().BeNull(
+            "an SVG can carry script and the upload refuses it — the avatar falls back to initials");
+
+    [Fact]
+    public void ManagedFilePath_OnlyForServerGeneratedNames()
+    {
+        const string generated = "0123456789abcdef0123456789abcdef.png";
+        ContentCollections.NodeImageUpload.ManagedFilePath($"content:picture/{generated}")
+            .Should().Be($"picture/{generated}");
+        ContentCollections.NodeImageUpload.ManagedFilePath("content:picture/me.png")
+            .Should().BeNull("a file the owner put in picture/ by hand is theirs, never deleted");
+        ContentCollections.NodeImageUpload.ManagedFilePath("content:picture/../secrets.png").Should().BeNull();
+        ContentCollections.NodeImageUpload.ManagedFilePath("content:logo.png").Should().BeNull();
+    }
+
+    [Fact]
+    public void ContributedSection_Icon_IsRenderedBesideItsHeading()
+    {
+        var body = Controls.Markdown("x");
+        var icon = MeshWeaver.Application.Styles.FluentIcons.Payment();
+        var section = new ProfileSectionDefinition("subscription", "Subscription", (_, _) => body, Icon: icon);
+
+        Descendants(Editor(contributed: [(section, body)])).OfType<IconControl>()
+            .Should().Contain(i => Equals(i.Data, icon));
+    }
+
+    [Fact]
+    public void Localized_WithoutAnAccessService_KeepsTheTitleResolvable()
+    {
+        var section = new ProfileSectionDefinition("s", "Subscription", (_, _) => Controls.Markdown("x"))
+        { TitleKey = "profile.picture" };
+
+        section.Localized(null).Title.Should().Be("Picture",
+            "a null AccessService resolves the key in English rather than throwing");
+    }
+
     private static IEnumerable<UiControl> Descendants(UiControl root)
     {
         yield return root;

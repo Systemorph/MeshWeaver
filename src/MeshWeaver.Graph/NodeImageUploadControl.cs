@@ -24,7 +24,11 @@ public record NodeImageUploadControl(string NodePath)
     /// <summary>Whether the viewer may change the picture. False renders the picture read-only.</summary>
     public bool CanEdit { get; init; } = true;
 
-    /// <summary>The name shown as initials when the node has no picture.</summary>
+    /// <summary>
+    /// The name shown as initials until the node stream answers — the view then takes the node's
+    /// LIVE <c>Name</c> (and derives the picture's accessible name from it, localized), so a rename
+    /// is reflected without the page re-rendering.
+    /// </summary>
     public string? DisplayName { get; init; }
 
     /// <summary>Label of the upload button when there is no picture yet.</summary>
@@ -38,7 +42,4 @@ public record NodeImageUploadControl(string NodePath)
 
     /// <summary>The hint under the buttons (accepted formats and size).</summary>
     public string? HintText { get; init; }
-
-    /// <summary>The picture's accessible name (the <c>alt</c> text).</summary>
-    public string? AltText { get; init; }
 }

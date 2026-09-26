@@ -357,7 +357,22 @@ public static class MeshNodeImageHelper
     public static string? ResolvePictureUrl(string? icon, string? nodePath)
     {
         var resolved = ResolveContentPath(icon, nodePath);
-        return IsImageUrl(resolved) && !IsInlineSvg(resolved) ? resolved : null;
+        return IsImageUrl(resolved) && !IsSvgImage(resolved) ? resolved : null;
+    }
+
+    /// <summary>
+    /// Whether an icon value is an SVG in ANY of its spellings — inline markup, an SVG data URI,
+    /// or a URL / <c>content:</c> path whose file is <c>.svg</c> (query and fragment ignored). A
+    /// picture is never an SVG: the upload refuses them, and the avatar falls back to initials.
+    /// </summary>
+    private static bool IsSvgImage(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return false;
+        if (IsInlineSvg(value) || value.StartsWith("data:image/svg", StringComparison.OrdinalIgnoreCase))
+            return true;
+        var path = value.Split('?', '#')[0];
+        return path.EndsWith(".svg", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

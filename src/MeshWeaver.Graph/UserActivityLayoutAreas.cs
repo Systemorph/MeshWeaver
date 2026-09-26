@@ -1487,7 +1487,6 @@ public static class UserActivityLayoutAreas
                 ReplaceLabel = L("profile.pictureReplace"),
                 RemoveLabel = L("profile.pictureRemove"),
                 HintText = L("profile.pictureHint", NodeImageUpload.MaxBytes / (1024 * 1024)),
-                AltText = L("profile.pictureAlt", displayName),
             }, PictureSectionId));
 
         // Basics — display name (the node's own Name), sign-in email (read-only), language + zone.
@@ -1552,7 +1551,7 @@ public static class UserActivityLayoutAreas
         // Module-contributed sections (subscription, integrations, …), already permission-filtered
         // and sorted by their declared order.
         foreach (var (section, body) in contributed ?? [])
-            container = container.WithView(BuildProfileSection(section.Title, body, section.Id));
+            container = container.WithView(BuildProfileSection(section.Title, body, section.Id, section.Icon));
 
         return container;
     }
@@ -1650,13 +1649,22 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// A titled profile section — an <c>H3</c> heading (Label control, not HTML) over its body.
     /// With <paramref name="id"/> the section carries the stable id
-    /// <c>profile-section-{id}</c> (<see cref="ProfileSectionIdPrefix"/>).
+    /// <c>profile-section-{id}</c> (<see cref="ProfileSectionIdPrefix"/>); with
+    /// <paramref name="icon"/> the icon sits beside the heading.
     /// </summary>
-    private static UiControl BuildProfileSection(string title, UiControl body, string? id = null)
+    private static UiControl BuildProfileSection(string title, UiControl body, string? id = null, object? icon = null)
     {
+        UiControl heading = Controls.H3(title).WithStyle("margin: 0; font-size: 1.15rem;");
+        if (icon is not null)
+            heading = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithVerticalAlignment(VerticalAlignment.Center)
+                .WithHorizontalGap(8)
+                .WithView(Controls.Icon(icon))
+                .WithView(heading);
         var section = Controls.Stack
             .WithStyle("gap: 8px; width: 100%; padding-top: 16px;")
-            .WithView(Controls.H3(title).WithStyle("margin: 0; font-size: 1.15rem;"))
+            .WithView(heading)
             .WithView(body);
         return id is { Length: > 0 } ? section.WithId(ProfileSectionIdPrefix + id) : section;
     }

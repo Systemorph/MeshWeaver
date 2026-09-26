@@ -123,6 +123,44 @@ public class ProfilePictureRoundTripTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task Upload_EnforcesTheCeilingOnTheBytes_NotOnTheDeclaredLength()
+    {
+        // Declares 11 bytes, streams MaxBytes + 1: the declared length is a claim, not a limit.
+        var outcome = await NodeImageUpload
+            .Replace(Mesh, NodePath, "big.png", 11,
+                () => new MemoryStream(new byte[NodeImageUpload.MaxBytes + 1]))
+            .Materialize()
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == System.Reactive.NotificationKind.OnError,
+                "a stream longer than the ceiling must fail the upload", TestContext.Current.CancellationToken);
+
+        outcome.Exception!.Message.Should().Contain("MB");
+        Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories).Should().BeEmpty(
+            "the partial file written before the ceiling tripped is deleted");
+        var node = await Mesh.GetMeshNodeStream(NodePath).Should().Within(TestTimeouts.Convergence)
+            .Emit("the node is readable");
+        node.Icon.Should().BeNull("a failed upload never points the icon anywhere");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task Remove_NeverDeletesAHandSetFile_EvenInsideThePictureFolder()
+    {
+        Directory.CreateDirectory(Path.Combine(_contentRoot, NodeImageUpload.Folder));
+        var handPicked = Path.Combine(_contentRoot, NodeImageUpload.Folder, "me.png");
+        await File.WriteAllBytesAsync(handPicked, Png(4), TestContext.Current.CancellationToken);
+        await Mesh.GetMeshNodeStream(NodePath).Update(n => n with { Icon = "content:picture/me.png" })
+            .Should().Within(TestTimeouts.Convergence).Emit("seed a hand-set icon in the managed folder");
+
+        await NodeImageUpload.Remove(Mesh, NodePath)
+            .Should().Within(TestTimeouts.Convergence).Emit("the removal must complete");
+
+        await Mesh.GetMeshNodeStream(NodePath).Where(n => n.Icon == null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the Icon is cleared");
+        File.Exists(handPicked).Should().BeTrue(
+            "the folder is not the marker — only a server-generated name is ever deleted");
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task Remove_NeverDeletesAFileTheOwnerChoseByHand()
     {
         var handPicked = Path.Combine(_contentRoot, "logo.png");

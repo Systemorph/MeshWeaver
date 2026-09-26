@@ -40,11 +40,11 @@ The picture is a `NodeImageUploadControl(nodePath)` — a platform control, usab
 
 - **Upload / Replace** — the file is written into the node's **default `content` collection** under the managed folder `picture/` with a fresh, server-generated name, then `Icon` is set to `content:picture/{name}`. The user's file name is never used, so nothing in it can traverse or collide, and the new URL defeats a browser cache that still holds the old picture. The previous managed picture is deleted.
 - **Remove** — `Icon` is cleared and the managed file is deleted.
-- **Accepted:** PNG, JPEG, GIF, WebP, up to 5 MB. SVG is refused: an uploaded SVG is served from the portal's own origin and can carry script.
-- **Order of effects:** bytes first, then the node update (which enforces `Update` on the node). If the update is refused, the file just written is deleted again before the error surfaces.
-- **Hand-set icons are safe:** only a file inside `picture/` is ever deleted. An icon the owner pointed at another file of theirs (via *Settings → Metadata*) is cleared on Remove but its file is left alone.
+- **Accepted:** PNG, JPEG, GIF, WebP, up to 5 MB. SVG is refused: an uploaded SVG is served from the portal's own origin and can carry script. The ceiling is enforced on the bytes actually read, not on the length the client declared — a stream that runs past it fails and its partial file is deleted.
+- **Order of effects:** bytes first, then the node update (which enforces `Update` on the node). If the save or the update fails, the file just written is deleted again before the error surfaces. The caller's identity is captured when the upload is called and restored around every write, so no pool or reply hop drops it.
+- **Hand-set icons are safe:** only a file whose name the server generated (`picture/` + 32 hex digits + an accepted extension) is ever deleted — the folder alone is not the marker. An icon the owner pointed at any other file (via *Settings → Metadata*), even one inside `picture/`, is cleared on Remove but its file is left alone.
 
-`content:` references resolve to the access-controlled `/api/content/{nodePath}/…` URL. `MeshNodeImageHelper.ResolvePictureUrl(icon, nodePath)` returns that URL for a picture and `null` for an emoji, inline SVG or glyph name, so an avatar falls back to initials instead of a broken image. The header avatar, the public profile and node cards and mentions all use the node's icon, so the picture appears everywhere at once.
+`content:` references resolve to the access-controlled `/api/content/{nodePath}/…` URL. `MeshNodeImageHelper.ResolvePictureUrl(icon, nodePath)` returns that URL for a picture and `null` for an emoji, a glyph name or any SVG (inline, `data:image/svg…`, or a `.svg` path), so an avatar falls back to initials instead of a broken image. The header avatar, the public profile and node cards and mentions all use the node's icon, so the picture appears everywhere at once.
 
 ---
 
@@ -72,7 +72,7 @@ config.AddNodeHubContribution(UserNodeType.NodeType, userHub => userHub
 
 The rules the page applies:
 
-- **Placement.** Contributed sections render **after** the built-in ones, lowest `Order` first, each under an `H3` heading and with the stable id `profile-section-{Id}`.
+- **Placement.** Contributed sections render **after** the built-in ones, lowest `Order` first, each under an `H3` heading (with `Icon` beside it when set) and with the stable id `profile-section-{Id}`.
 - **Identity.** Two registrations with the same `Id`: the first wins.
 - **Permission.** Filtered against the viewer's *latest* effective permissions on the user node. The default, `Update`, means owner-only — right for anything personal such as a subscription. `Permission.None` shows the section to every viewer of the page.
 - **Language.** `Title` is English; set `TitleKey` to a catalog key and supply both `en` and `de` values — the page resolves it for each viewer.
