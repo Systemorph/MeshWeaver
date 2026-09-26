@@ -9,7 +9,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 A **data cube** is the simplest useful analytics shape: facts keyed by a handful of **dimensions**, carrying one or more **measures**. In MeshWeaver the whole cube is mesh content — the dimension *types* are NodeType nodes, the dimension *members* are mesh nodes, the facts are mesh nodes, and even the *formulas* are data on dimension nodes.
 
-This page builds a complete one: the balance sheet of **Helvetia Vorsorge**, a fictional Swiss pension fund — **Position × Year × Currency → Amount**, with computed positions like *Total Assets* and the *Funding Ratio* modelled **out of** the atomic positions and evaluated by business-rules scopes. The working node set ships in `samples/Graph/Data/PensionFund/` — including the scopes themselves as node-native Code nodes (`BalanceSheet/Source/BalanceSheetScopes.cs`). Business rules / scopes ship as a plugin, which carries the scope engine and its tests that pin every number below.
+This page builds a complete one: the balance sheet of **Helvetia Vorsorge**, a fictional Swiss pension fund — **Position × Year × Currency → Amount**, with computed positions like *Total Assets* and the *Funding Ratio* modelled **out of** the atomic positions and evaluated by business-rules scopes. The dimensions and facts ship as nodes in `samples/Graph/Data/PensionFund/`. The scope evaluation is shown on this page as runnable code: business rules / scopes ship as a plugin, which carries the scope engine, its generator and the tests that pin every number below.
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif">
   <defs>
@@ -323,7 +323,7 @@ entries
     .WithTitle("Assets by Year and Position (CHF m)")
 ```
 
-And the 2025 asset allocation as a pie — evaluated from the scopes, this is the report's asset-allocation view:
+And the 2025 asset allocation as a pie — the asset-allocation view a report built on the scopes would render:
 
 ```csharp --render PensionPieDemo --show-code
 using MeshWeaver.Layout.Chart;

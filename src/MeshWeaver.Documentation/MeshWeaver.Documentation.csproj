@@ -15,7 +15,8 @@
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <!-- NO business-rules dependency: the Doc partition must start without scopes. The DataCubes
-         example's scope-computed report ships with the BusinessRules plugin (MeshWeaver.Plugins);
-         the core PensionFund sample carries only its dimensions and facts. -->
+         example's scope computation is supported by the BusinessRules plugin (MeshWeaver.Plugins),
+         which provides the scope engine and generator; the core PensionFund sample carries only
+         its dimensions and facts. -->
   </ItemGroup>
 </Project>

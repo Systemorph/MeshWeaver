@@ -1,6 +1,7 @@
 
 # ── PensionFund: revealed by #2063, NOT caused by it ────────────────────────────────────────────
-# PensionFund shipped 72 files, 62 of them BOM'd, including all 5 of its NodeTypes (4 since BalanceSheet left). Until #2063 the
+# PensionFund shipped 72 files then, 62 of them BOM'd, including all 5 of its NodeTypes (now 65 files,
+# 60 BOM'd, 4 NodeTypes, since BalanceSheet and its Statement instance left). Until #2063 the
 # gate's own discovery parsed package bytes raw and dropped every BOM'd file, so this package
 # gated `0 type(s)` and reported [PASS] over nothing. The entry below is pre-existing debt that
 # was simply never looked at — diagnosed, not bulk-added. (Its sibling, `PensionFund/BalanceSheet
