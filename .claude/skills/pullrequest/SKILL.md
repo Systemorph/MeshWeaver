@@ -330,6 +330,36 @@ buy, is in [/ci](../ci/SKILL.md).)
   constraint is only as complete as the set of hands it reaches** — applies to anything you
   delegate, not just merges.
 
+## 🚨 Working beside other sessions — holds, collisions, the scratchpad, and your agents
+
+Many sessions and their agents work the fleet at once. Four practices keep them from undoing each
+other:
+
+- **A hold on a PR is a DRAFT, and a draft needs a stated end.** `auto-arm.yml` re-arms auto-merge
+  on every push, so `--disable-auto` is not a hold; draft is the only state it respects. But a draft
+  has no expiry: write in the PR body WHAT it waits for (a named PR merged, a sealed set carrying a
+  commit) and re-check that condition before you leave it parked, because the blocker may already
+  be gone. Copilot does not review pushes to a draft, so mark it ready before the fix you want
+  reviewed, not after.
+- **Collision rule: a PR, branch or worktree another session touched in the last 30 minutes is
+  THEIRS.** Do not push to it, merge it, close it, re-queue it or rebase it. Leave it, or ask on the
+  PR. Once it has been idle for 30 minutes you may adopt it; say so on the PR first, so the owner
+  who comes back knows. Before opening a fix, look for an OPEN PR that already fixes the same issue
+  (`gh api "search/issues?q=repo:Systemorph/<repo>+is:pr+is:open+<issue number>"`): two full fixes of
+  one issue sit red side by side and both cost a review.
+- **The session scratchpad is shared by every agent in the session.** Never run a script, apply a
+  patch or read a log you did not write there: a generic name (`fix.patch`, `build-control.log`)
+  is another agent's file as often as yours, and `git apply` succeeding on the wrong diff looks
+  exactly like success. Prefix every file with your issue number and a slug, and demand a signal
+  that names YOUR artefact (the dll path and mtime, a symbol only your branch defines).
+- **Agents: dispatch fresh after an MCP reconnect, and keep the hand-off current.** A subagent's
+  tool list is fixed when it is spawned, so after the user re-authenticates an MCP server
+  (`/mcp`), agents already running still lack its tools; give that work to a NEW agent and keep
+  the old one on work that does not need the server. When the account's weekly usage limit is
+  reached, every agent stops at once, mid-PR. So keep the session's hand-off note current (each
+  open PR, its state, what it waits for), and resume afterwards with one agent that drains those
+  PRs after checking their CI and queue state, not by re-briefing each task from the start.
+
 ### Why GraphQL, not `gh run watch` — the rate limit and the late-shard race, solved together
 
 `gh run watch` and `gh pr checks --watch` poll the **REST** API every few seconds. Two distinct

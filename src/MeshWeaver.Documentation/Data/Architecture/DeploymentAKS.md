@@ -427,6 +427,12 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
 
 ## Migration under self-update
 
+> **The process every schema change follows** — expand-only migrations, the `Db-migration:`
+> declaration and its rehearsal, `ExpectedDbVersion` on the release, and every roll path migrating
+> first or refusing (the operator's `run.sh` interlock) — is
+> [Planning a Database Migration](/Doc/Architecture/PlanningADatabaseMigration) (policy
+> `db-migration-planned`). This section is the history of why that process exists.
+
 When an install rolls itself to a new tag (per `Admin/UpdatePolicy`), the in-pod updater patches
 **exactly one** workload: `memex-portal-deployment` (container `memex-portal`). It does **not**
 touch the migration, and it says so in its own success line:
@@ -552,7 +558,10 @@ container of both images at the three-hour mark, and the control instance was do
 The mechanism, the per-check table and the guards are in
 [The Bake Gate Only Stalls a Roll](/Doc/Architecture/TheBakeGateOnlyStallsARoll). For an instance
 that arms the gate: its `probes.startup` no longer has to cover a bake; the chart adds
-`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render.
+`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render. memex and
+memex-cloud therefore run `failureThreshold: 60` (600 s, a cold boot) instead of 1080 (3 h); the
+short budget is safe only on an image that carries the readiness-only split, which the page above
+explains.
 
 ### The migration Job IS the evidence — so it must outlive the observer
 
@@ -693,6 +702,21 @@ questions as nodes, with no cluster credential on the caller:
 | what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
 | roll it | pin `pinnedImageTag` on the record → `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` | the run's phases; then a `Sample` |
 | grow a full share | set `volumes[].size` on the record → the same `Reconcile` | the run's `Ensure volume capacity: <volume>` phase, `pv_capacity=` read back from the claim — see "Volume capacity is a record property" above |
+| re-read ONE address a person may not recycle (a NodeType and its dependency network, or any node) | `{ "requestedAction": "Recycle", "recycleTarget": "<path>", "reason": "…" }` + one approval | the run's log; manual `Hosting/RecycleAction` (MeshWeaver.Plugins) |
+| remove a space no person may delete (owner gone, or a stranded partition with no root) | `{ "requestedAction": "DeleteSpace", … }`; it parks WITH its plan, and the approval binds that plan | the plan on the node, then an audit record; manual `Hosting/DeleteSpaceAction` (MeshWeaver.Plugins) |
+
+🚨 **A gated action parks with its plan, and the approval is bound to it.** The approval names the
+request, the action, the deployment and the image tag, plus the kind's own binding (a recycle's
+target and force flag, a DeleteSpace's space) and the DIGEST of the plan the approver read. A plan
+that would come out differently re-parks instead of running unapproved. The approval section of
+`Hosting/AksOperationsViaActions` (MeshWeaver.Plugins) carries the rules, and who may approve whom.
+
+🚨 **A `Reconcile` that adds a Key Vault key needs a `Restart` after it** (an open finding,
+Systemorph/MeshWeaver.Feedback#48). The Reconcile reports success, but the Secrets Store CSI driver
+syncs the new object into the Kubernetes Secret after the rolled pod has already resolved its
+environment, so the pod does not see the new variable until it restarts. File a governed `Restart`
+after such a Reconcile, and check the variable on the pod (a `Sample`'s `/health` detail, or the
+feature itself) before you conclude the key is wrong.
 
 Both observations read the cluster's monitoring stack (kube-state-metrics via Prometheus, Loki)
 from inside the cluster, where it is credential-free; the roll runs as the in-cluster operator Job.
@@ -700,6 +724,14 @@ The fleet guide (`get @Hosting/Guide`, "Roll, restart, observe") carries the ful
 follows is the break-glass form, for when the control plane itself is what is broken.
 
 ## Diagnostics (private cluster — break glass)
+
+🚨 **Always pass `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c` to every `az` call here.** The
+signed-in account's DEFAULT subscription may be "PartnerRe Memex", which holds ANOTHER cluster with
+the same name in a resource group of the same name (`<aks-cluster>` in `<aks-resource-group>`). Without the flag, `az aks command invoke`
+answers from that cluster, with different nodes and a different migration history, and nothing in
+the output says so. The same applies to `az role assignment delete --ids …`: it does not take the
+subscription from the id, uses the default account's tenant, and fails with
+`InvalidAuthenticationTokenTenant`. Pass `--subscription` there too.
 
 - Logs: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
 - **Intermittent hangs while most requests succeed** (portal recently synced or baked): suspect a

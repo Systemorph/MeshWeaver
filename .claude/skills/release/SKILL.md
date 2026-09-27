@@ -245,6 +245,15 @@ cadence. #1780 added **`SelfUpdate__MinRollInterval`**, a restart budget set to 
 commit is refused by `release.yml`. The self-updater holds such a build with
 `heldReason: no sealed content bake …` on `Admin/UpdatePolicy`.
 
+🚨 **But a seal never holds CONTENT SOURCES any more** (policy `module-sync-per-manifest-hash`). An
+instance syncs every module it has, each judged alone by the content hash in its `manifest.lock`:
+unchanged is a no-op, changed syncs to the incoming commit, and a module whose declared platform
+floor is above the running platform is declined by name without holding its siblings. The seal
+decides only whether a NodeType ADOPTS prebuilt bytes or COMPILES from the synced source. A
+content-repo merge that "did not arrive" is therefore not waiting for a seal: read the module's
+outcome on `/health` (`publication-seal`) instead. Manual:
+[ModuleSyncPerManifestHash.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ModuleSyncPerManifestHash.md).
+
 ### The `main-cd.yml` trigger gate and its three SILENT consequences
 
 `main-cd.yml`'s `workflow_run` path is gated on `event == 'push' && head_branch == 'main'` — that
