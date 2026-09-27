@@ -129,7 +129,7 @@ A drop that faults lifts the tombstone, keeps the record (the retry handle) and 
 
 🚨 **It is not a user verb.** `PartitionTeardown.Refusal` refuses unless the current identity IS system,
 and also names an invalid segment, a database-populated mirror, a static partition, a deletion already
-in flight, or a hub with no storage provider. A governed action calls `Refusal` at PLAN time, under
+in flight, or a hub with no store at all. A governed action calls `Refusal` at PLAN time, under
 the same system identity it will run with, and parks with the answer — policy
 `governed-action-preflight`: system credentials from the first step, rights and scale checked at plan
 time, refused at park, never mid-run.
