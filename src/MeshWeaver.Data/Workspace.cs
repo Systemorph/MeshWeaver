@@ -514,8 +514,18 @@ public class Workspace : IWorkspace
     // A stream NOBODY leased is never in this registry and keeps the old conservative parking —
     // undeclared holders (the MeshDataSource / SyncedQueryDataSource reduce callbacks) are
     // unaffected. Opting a call site in is one line and is what makes its streams reclaimable.
-    private readonly ConcurrentDictionary<ISynchronizationStream, int> _remoteStreamLeases =
-        new(StreamReferenceComparer.Instance);
+    // A detach changes ownership, not the holders. The count belongs to the stream and survives
+    // a detach/re-park. Weak keys prevent this bookkeeping from retaining a detached stream after
+    // its new owner disposes it; unlike the old strong dictionary, no removal can erase live holds.
+    private readonly ConditionalWeakTable<ISynchronizationStream, RemoteStreamLeaseState> _remoteStreamLeases = new();
+
+    private sealed class RemoteStreamLeaseState
+    {
+        internal int Count;
+
+        internal bool TryUpdate(int value, int expected) =>
+            Interlocked.CompareExchange(ref Count, value, expected) == expected;
+    }
 
     /// <summary>
     /// Resolves the remote stream for (<paramref name="owner"/>, <paramref name="reference"/>)
@@ -566,11 +576,8 @@ public class Workspace : IWorkspace
         if (StreamLiveness.IsUsable(stream))
             return lease;
         lease.Dispose();
-        // A dead stream is never handed out again (every resolve drops an unusable instance), so a
-        // zero entry left for it would only pin the corpse in the bookkeeping. Conditional on 0:
-        // another holder's count, or a reclaim's sentinel, is never touched.
-        ((ICollection<KeyValuePair<ISynchronizationStream, int>>)_remoteStreamLeases)
-            .Remove(new KeyValuePair<ISynchronizationStream, int>(stream, 0));
+        // The weak-key count does not retain this dead stream. Other holders still own their
+        // releases, so their bookkeeping is never deleted by an unsuccessful late acquire.
         return null;
     }
 
@@ -593,8 +600,8 @@ public class Workspace : IWorkspace
     /// are ONE decision over the same dictionary slot: the lease lands first (the claim fails and the
     /// stream stays) or the claim lands first (the lease is refused and the writer resolves a fresh
     /// stream). The token is UNIQUE per claim, not a shared <c>-1</c>, because ownership can be
-    /// handed out and back inside the claim — <see cref="DetachRemoteStreams"/> drops the lease entry
-    /// (the claim with it) and <see cref="ParkRemoteStreams"/> re-parks the stream as a NEW
+    /// handed out and back inside the claim — <see cref="DetachRemoteStreams"/> cancels a negative
+    /// claim without erasing positive holder counts, and <see cref="ParkRemoteStreams"/> re-parks the stream as a NEW
     /// ownership. A reclaim that still finds its OWN token after taking the parking entry knows no
     /// handover happened; any other value means its claim was superseded. Instance state; never
     /// static.
@@ -606,16 +613,13 @@ public class Workspace : IWorkspace
     /// stream — see <see cref="_reclaimClaims"/>.</summary>
     private IDisposable? TryLeaseRemoteStream(ISynchronizationStream stream)
     {
+        var state = _remoteStreamLeases.GetValue(stream, _ => new RemoteStreamLeaseState());
         while (true)
         {
-            if (_remoteStreamLeases.TryGetValue(stream, out var count))
-            {
-                if (count < 0)
-                    return null;    // claimed by a reclaim — never hand out a hold on it
-                if (_remoteStreamLeases.TryUpdate(stream, count + 1, count))
-                    break;
-            }
-            else if (_remoteStreamLeases.TryAdd(stream, 1))
+            var count = Volatile.Read(ref state.Count);
+            if (count < 0)
+                return null;    // claimed by a reclaim — never hand out a hold on it
+            if (state.TryUpdate(count + 1, count))
                 break;
         }
         // Disposable.Create runs its action AT MOST ONCE (Interlocked-swapped internally), so a
@@ -624,15 +628,13 @@ public class Workspace : IWorkspace
         {
             while (true)
             {
-                // 🚨 Read-then-TryUpdate, never AddOrUpdate: DetachRemoteStreams REMOVES the
-                // bookkeeping when it hands ownership out, and re-adding a zero entry here would
-                // pin a stream this workspace no longer owns. A count at or below zero holds no
-                // lease of ours (the entry was handed out and re-created, or a reclaim owns it),
-                // so there is nothing to release.
-                if (!_remoteStreamLeases.TryGetValue(stream, out var current) || current <= 0)
+                // Release the SAME count the lease incremented. Detach/re-park never resets a
+                // positive count, so an older release cannot consume a newer holder's lease.
+                var current = Volatile.Read(ref state.Count);
+                if (current <= 0)
                     return;
                 var remaining = current - 1;
-                if (!_remoteStreamLeases.TryUpdate(stream, remaining, current))
+                if (!state.TryUpdate(remaining, current))
                     continue;
                 if (remaining == 0)
                     ReclaimIfUnheld(stream);
@@ -660,7 +662,7 @@ public class Workspace : IWorkspace
         // claimed it (a negative token), or when nobody ever leased it (no entry — an undeclared
         // holder may still read it; see the _remoteStreamLeases note).
         var claim = -Interlocked.Increment(ref _reclaimClaims);
-        if (!_remoteStreamLeases.TryUpdate(stream, claim, 0))
+        if (!_remoteStreamLeases.TryGetValue(stream, out var state) || !state.TryUpdate(claim, 0))
             return;
         ReclaimClaimed?.Invoke(stream);
         if (!_evictedRemoteStreams.TryRemove(stream, out _))
@@ -668,13 +670,13 @@ public class Workspace : IWorkspace
             // Another edge (DetachRemoteStreams, Dispose) took ownership after the claim; give the
             // slot back (only if it is still ours) so the bookkeeping does not keep refusing a
             // stream we no longer reclaim.
-            _remoteStreamLeases.TryUpdate(stream, 0, claim);
+            state.TryUpdate(0, claim);
             return;
         }
-        if (!_remoteStreamLeases.TryGetValue(stream, out var held) || held != claim)
+        if (Volatile.Read(ref state.Count) != claim)
         {
             // The parking entry we just took is NOT the one we claimed: ownership was handed out
-            // (DetachRemoteStreams dropped our token) and back (ParkRemoteStreams) inside the claim.
+            // (DetachRemoteStreams cancelled our token) and back (ParkRemoteStreams) inside the claim.
             // That re-park is a new ownership — restore it and leave the stream alone.
             _evictedRemoteStreams[stream] = 0;
             return;
@@ -696,8 +698,7 @@ public class Workspace : IWorkspace
         {
             // Drop the claim only once the stream is disposed: from here a late lease attempt finds
             // a dead stream, fails its IsUsable re-check and resolves a fresh one.
-            ((ICollection<KeyValuePair<ISynchronizationStream, int>>)_remoteStreamLeases)
-                .Remove(new KeyValuePair<ISynchronizationStream, int>(stream, claim));
+            state.TryUpdate(0, claim);
         }
     }
 
@@ -947,12 +948,20 @@ public class Workspace : IWorkspace
                 && _evictedRemoteStreams.TryRemove(parked, out _))
                 detached.Add(parked);
         }
-        // Ownership moves to the caller (it disposes, or hands them back via ParkRemoteStreams),
-        // so drop the lease bookkeeping: keeping a zero-count entry would pin a stream this
-        // workspace no longer owns. A re-parked stream simply re-enters the conservative
-        // "undeclared holders" bucket until a fresh lease is taken.
+        // Supersede any in-flight reclaim, but NEVER erase declared holders: a release loser
+        // re-parks these streams with their original readers still attached. The weak-key state
+        // also follows a stream handed to a successful release without rooting it afterwards.
         foreach (var stream in detached)
-            _remoteStreamLeases.TryRemove(stream, out _);
+        {
+            if (!_remoteStreamLeases.TryGetValue(stream, out var state))
+                continue;
+            while (true)
+            {
+                var count = Volatile.Read(ref state.Count);
+                if (count >= 0 || state.TryUpdate(0, count))
+                    break;
+            }
+        }
         return detached;
     }
 
@@ -1053,7 +1062,7 @@ public class Workspace : IWorkspace
     private void DiscardFaultedRemoteStream(ISynchronizationStream stream)
     {
         _evictedRemoteStreams[stream] = 0;
-        if (_remoteStreamLeases.ContainsKey(stream))
+        if (_remoteStreamLeases.TryGetValue(stream, out _))
         {
             // A declared holder is still mid-write against it; the last lease release reclaims.
             ReclaimIfUnheld(stream);
