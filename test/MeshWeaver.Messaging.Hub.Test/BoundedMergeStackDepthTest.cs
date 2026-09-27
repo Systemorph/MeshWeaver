@@ -57,6 +57,30 @@ public class BoundedMergeStackDepthTest
         public int MaxActive;
     }
 
+    private sealed class DisposeFaultEnumerable : System.Collections.Generic.IEnumerable<IObservable<int>>,
+        System.Collections.Generic.IEnumerator<IObservable<int>>
+    {
+        private bool hasItem;
+
+        public IObservable<int> Current => Observable.Return(1);
+        object System.Collections.IEnumerator.Current => Current;
+
+        public System.Collections.Generic.IEnumerator<IObservable<int>> GetEnumerator() => this;
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public bool MoveNext()
+        {
+            if (hasItem)
+                return false;
+            hasItem = true;
+            return true;
+        }
+
+        public void Reset() => throw new NotSupportedException();
+
+        public void Dispose() => throw new InvalidOperationException("source disposal failed");
+    }
+
     /// <summary>
     /// Runs <paramref name="queued"/> synchronously-completing legs behind <see cref="Bound"/> pending
     /// ones, releases the pending ones, and reports what happened.
@@ -213,6 +237,53 @@ public class BoundedMergeStackDepthTest
         Assert.Equal(new[] { 1 }, values);
         Assert.Equal("source enumeration failed", error?.Message);
         Assert.False(completed);
+    }
+
+    [Fact]
+    public void TheEnumerableOverload_ReportsAnEnumeratorDisposalFailure()
+    {
+        var values = ImmutableList<int>.Empty;
+        var completed = false;
+        Exception? error = null;
+        new DisposeFaultEnumerable()
+            .MergeBounded(Bound)
+            .Subscribe(v => values = values.Add(v), ex => error = ex, () => completed = true);
+
+        Assert.Equal(new[] { 1 }, values);
+        Assert.Equal("source disposal failed", error?.Message);
+        Assert.False(completed);
+    }
+
+    /// <summary>
+    /// During synchronous Subscribe, downstream Take cannot dispose its upstream until Subscribe
+    /// returns. The enumerable overload keeps Rx's existing Merge(IEnumerable, maxConcurrent)
+    /// behavior in that case instead of silently deferring enumeration and starting no sources.
+    /// </summary>
+    [Fact]
+    public void TheEnumerableOverload_MatchesRxMergeWhenTakeTerminatesSynchronously()
+    {
+        static int CountStarted(Func<System.Collections.Generic.IEnumerable<IObservable<int>>, IObservable<int>> merge)
+        {
+            var started = 0;
+            Scheduler.CurrentThread.Schedule(() =>
+            {
+                using var subscription = merge(Enumerable.Range(0, 3)
+                        .Select(i => Observable.Defer(() =>
+                        {
+                            started++;
+                            return Observable.Return(i);
+                        })))
+                    .Take(1)
+                    .Subscribe();
+            });
+            return started;
+        }
+
+        var rxStarted = CountStarted(sources => sources.Merge(Bound));
+        var boundedStarted = CountStarted(sources => sources.MergeBounded(Bound));
+
+        Assert.Equal(3, rxStarted);
+        Assert.Equal(rxStarted, boundedStarted);
     }
 
     /// <summary>
