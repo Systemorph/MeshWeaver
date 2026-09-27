@@ -202,6 +202,19 @@ The Plugins re-seal is `report-plugins-seal`: red on a due seal that did not suc
 re-publishing the platform. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds all of it with negative
 controls. Adding a job: if it is Plugins-side, it must not become a need of a platform job.
 
+## 🚨 Deploy-shaped gates: the migration declaration and the probe invariants
+
+- **A `DbVersion.Latest` bump carries `Db-migration: V<N> — <kind>; <compat>; rolls migrate-first`
+  in its PR body** and passes a rehearsal from the previous version against a real Postgres. Both
+  run in MeshWeaver.Plugins CI (`scripts/check-db-migration-declaration.py`), where the migrations
+  live. Policy `db-migration-planned`; manual:
+  [PlanningADatabaseMigration.md](../../../src/MeshWeaver.Documentation/Data/Architecture/PlanningADatabaseMigration.md).
+- **A roll gate is never on the startup probe.** Invariant 10b of `check-chart-invariants.sh` refuses
+  an armed bake gate whose readiness probe is not on `/ready`, and a rollout deadline that does not
+  cover a cold bake; `RollGateReadinessOnlyTest` drives the real probe endpoints. Adding a health
+  check that can answer Unhealthy means choosing its probe on purpose — see the per-check table in
+  [TheBakeGateOnlyStallsARoll.md](../../../src/MeshWeaver.Documentation/Data/Architecture/TheBakeGateOnlyStallsARoll.md).
+
 ## 🚨 Runs on `main` are never cancelled — load-bearing, not a tuning choice
 
 `dotnet-test.yml` sets `cancel-in-progress` to

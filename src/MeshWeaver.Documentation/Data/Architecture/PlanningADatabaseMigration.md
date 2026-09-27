@@ -163,6 +163,22 @@ changes remove that dependency:
   `manifest.lock`. An unchanged module is a no-op, a changed one syncs, and no Space is held as a
   whole.
 
+## 7. A `Reconcile` that unblocks a roll can meet a second blocker: the vault values half
+
+The governed `Reconcile` that finally carried V58 onto `memex` first failed at `helm upgrade`, not
+at the migration: `Job memex-migration-62 invalid: duplicate volume "kv-secrets"`. The Key Vault
+values half (`helm-values-<release>`, layered before the record's render) still held legacy
+structure (`extraVolumes`, `extraVolumeMounts`, `extraEnvFrom`) from an old whole-release capture,
+and helm deployed that list beside the record's own Key Vault wiring (Systemorph/Memex#295).
+
+The way through was to **re-capture the half first** — a governed `HelmRelease` action with
+`helmAction: capture`, which stores only the secret families (`secrets`, `parameters`,
+`pgbackrest`) — and then run the `Reconcile`. Since #5700 the operator's `hosting-deploy` refuses a
+half that carries anything outside those families, before helm runs, and names that remedy. So a
+Reconcile planned to unblock a migration can stop at this refusal. That is the expected order, not
+a new failure: capture, then Reconcile. Mechanism and the allow-list:
+[Deployment env layers](../DeploymentEnvLayers), "The half carries secret families only".
+
 ## Checklist for a schema change
 
 1. Write the migration as expand-only. If it cannot be, plan the expand release and the contract
@@ -175,3 +191,12 @@ changes remove that dependency:
    before `set image`.
 5. Verify on the instance that the Job logged `Database migration completed. Version: N` and that
    the new pods became ready. A green CD run does not tell you either.
+
+## Related
+
+[Deployment (AKS)](../DeploymentAKS) ·
+[Database Migration Procedure](../DatabaseMigrationProcedure) ·
+[Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash) ·
+[The Self-Update Schema Wall](../SelfUpdateSchemaWall) ·
+[Deployment env layers](../DeploymentEnvLayers) ·
+[The Bake Gate Only Stalls a Roll](../TheBakeGateOnlyStallsARoll)

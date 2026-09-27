@@ -96,6 +96,20 @@ nothing. One project per `dotnet build` invocation (several args is an `MSB1008`
 
 Workflow: run once in background → read failures → fix → run once more.
 
+### In-mesh suites: a node's `Tests` area — run it ONCE, as an activity
+
+🚨 **Rendering a `Tests` area RUNS the suite.** Every `get @<node>/area/Tests` (or `render_area`)
+opens a fresh subscription, so polling the area re-runs every live case, files their side effects
+again, and can still show a verdict an earlier run cached. The area streams now (every case pending
+→ the running case with its elapsed time and output → the verdict), and every case is bounded, so a
+hung case fails as `timed out: no verdict within Ns` instead of leaving the page on *Rendering …*.
+From a terminal or an agent: `memex tests @<node>` (exit 0 passed, 1 failed, 4 no verdict in time),
+or the MCP `run_tests` tool — both drive `MeshOperations.RunTests`, ONE subscription written to a
+`TestRun` activity you poll with `get`, which starts nothing. Only a verdict frame counts: a
+progress frame (`tests-running`) shows ✔/✖, never ✅/❌ or *N/M passed*. Full reference:
+[WritingTests.md](../../../src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md), "A `Tests`
+area streams its progress".
+
 ## Test triage — when CI fails
 
 **DO NOT run entire test projects.** Iterate one test at a time:

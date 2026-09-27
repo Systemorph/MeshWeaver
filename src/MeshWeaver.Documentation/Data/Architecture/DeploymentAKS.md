@@ -11,7 +11,7 @@ This is **one of two deploy routes** for MeshWeaver. Use it for the shared porta
 
 > 🚨 **This runbook is the bootstrap / break-glass form of a `Roll`.** Since 2026-09-08 the rule is that operations go through the control instance's Hosting API: the instance is a `Deployments/<name>` record, its image pin is the roll, and a `Roll` (or `Restart`, `Suspend`, `Audit`, `Reconcile`) `Hosting/InstanceAction` is what the in-cluster operator executes — running exactly the commands below for you. Read them as what happens, not as what you type. Policy, and what the API does not answer yet: [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
 >
-> **The cluster is private.** `kubectl` is not reachable directly — where a break-glass command is unavoidable it runs through `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
+> **The cluster is private.** `kubectl` is not reachable directly — where a break-glass command is unavoidable it runs through `az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
 
 A **code update** is three steps: build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` — those are the Container Apps route.
 
@@ -20,7 +20,7 @@ A **code update** is three steps: build the images, point the Deployments at the
 ## 1. Build + push the images
 
 ```bash
-az acr login -n meshweaver
+az acr login --subscription <subscription> -n meshweaver
 
 # Portal — needs the prebuilt custom base image. MULTI-ARCH: never pass `-r linux-x64`.
 dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
@@ -57,7 +57,7 @@ patches the Deployment straight back off your image — and it polls once immedi
 therefore only usable with the updater paused (see "Hard pause" below); the normal way to ship code is a
 merged PR whose CI build produces a `ci.<N>` tag.
 
-CI also builds images on push, but it lags — check `az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5` before assuming your commit is built. If only portal code changed (no migration/schema change), you can reuse the live `memex-migration` tag and skip the migration build.
+CI also builds images on push, but it lags — check `az acr repository show-tags --subscription <subscription> -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5` before assuming your commit is built. If only portal code changed (no migration/schema change), you can reuse the live `memex-migration` tag and skip the migration build.
 
 ### Business rules / scopes are NOT in the image — they ship as a plugin
 
@@ -98,7 +98,7 @@ nuget.org. The directory that source points at does not exist in the image.
 Portal-only code update (no schema change):
 
 ```bash
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
   kubectl -n <NS> rollout restart deployment/memex-portal-deployment; \
   kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
@@ -127,7 +127,7 @@ The portal container is `memex-portal` in Deployment `memex-portal-deployment`.
 - **Migration ran:** find the Job first — `kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration` — then `kubectl -n <NS> logs job/memex-migration-<revision> --tail=40` → expect `Database migration completed. Version: N`. A Job that reports `Complete` with that line is the success signal. 🚨 **A Job still `Running` past ten minutes is a FAILURE in progress, not a slow success**: the run has a budget (`migration.budgetMinutes`, default 10 — the runner fails RED naming the step that outlived it, and `activeDeadlineSeconds` ends the Job one minute later). A deployment that needs more writes the number into its overlay explicitly; a step that needs more is rewritten as bulk work (one set-based statement per partition, never a request per row — measured 2026-09-07: a row-at-a-time embedding backfill held memex-cloud's Job 4 h 30 min with its deploy long since reported failed).
   - **A `CrashLoopBackOff` on a migration *Deployment* is NOT benign.** That is the legacy shape, and it is exactly the failure the Job replaced: the process exits 0, the Deployment restarts it, and every run rebuilds `public.top_level_index` across every partition schema. The chart records 310 restarts in a day pegging a full core. If you see it, the namespace is still on the legacy Deployment — do not wave it through.
 - **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<portal-host>/` → `200`. **The host is not derivable from the namespace** — namespace `memex` serves `memex.systemorph.com` (the DNS record `deploy/aks/README.md` → "Public ingress + TLS + DNS" creates), while `memex.meshweaver.cloud` is the *`memex-cloud`* namespace. Read the host off the namespace's own Ingress (`kubectl -n <NS> get ingress -o wide`) rather than templating it, or you will happily verify a portal you did not deploy to.
-- **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
+- **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke --subscription <subscription> … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
 
 ### The cluster runs what the chart describes — check it, don't assume it
 
@@ -409,23 +409,29 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
 1. **Provision the UAMI + federated credentials** — included in the infra deploy (`deployPortalIdentity` defaults `true`). Read the client id back:
    ```bash
    # --name is whatever the infra deploy was created with; deploy/aks/README.md uses memex-aks-infra.
-   az deployment sub show --name memex-aks-infra-sc \
+   az deployment sub show --subscription <subscription> --name memex-aks-infra-sc \
      --query "properties.outputs.{clientId:portalIdentityClientId.value, principalId:portalIdentityPrincipalId.value}" -o jsonc
    ```
 2. **Grant AcrPull on the shared registry.** The ACR (`meshweaver.azurecr.io`, RG `meshweaver-shared`) is **cross-RG** from `<aks-resource-group>`, so — exactly like the cluster kubelet's AcrPull — grant it out-of-band:
    ```bash
-   PORTAL_MI_OID=$(az identity show -g <aks-resource-group> -n <portal-identity> --query principalId -o tsv)
-   az role assignment create --assignee-object-id "$PORTAL_MI_OID" --assignee-principal-type ServicePrincipal \
-     --role AcrPull --scope $(az acr show -n meshweaver --query id -o tsv)
+   PORTAL_MI_OID=$(az identity show --subscription <subscription> -g <aks-resource-group> -n <portal-identity> --query principalId -o tsv)
+   az role assignment create --subscription <subscription> --assignee-object-id "$PORTAL_MI_OID" --assignee-principal-type ServicePrincipal \
+     --role AcrPull --scope $(az acr show --subscription <subscription> -n meshweaver --query id -o tsv)
    ```
    (IaC alternative: deploy with `grantSharedAcrPull=true` — authors this via `infra/modules/acr-role-assignment.bicep` in the registry's RG; needs User Access Administrator on `meshweaver-shared`. A *per-deployment* ACR instead of the shared one is granted in-bicep automatically.)
 3. **Set `selfUpdate.azureClientId`** to `portalIdentityClientId` for each environment (the in-pod patch works without it; this only authenticates the tag-list). Same value everywhere:
    - `memex` → the git-ignored `values.deploy.yaml` in the staging dir (template: `deploy/aks/scripts/values.deploy.example.yaml`), or `helm upgrade --set selfUpdate.azureClientId=<clientId>`.
    - `memex-cloud` / customer portals → the git-ignored `deploy/aks/envs/<env>/values.<env>.yaml`.
 
-> Adding a **new** portal namespace? It needs its own federated credential on the shared UAMI — add the namespace to `portalNamespaces` and re-run the infra deploy (idempotent), or `az identity federated-credential create` (see [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment)). The subject must be exactly `system:serviceaccount:<ns>:memex-portal-sa`.
+> Adding a **new** portal namespace? It needs its own federated credential on the shared UAMI — add the namespace to `portalNamespaces` and re-run the infra deploy (idempotent), or `az identity federated-credential create --subscription <subscription> …` (see [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment)). The subject must be exactly `system:serviceaccount:<ns>:memex-portal-sa`.
 
 ## Migration under self-update
+
+> **The process every schema change follows** — expand-only migrations, the `Db-migration:`
+> declaration and its rehearsal, `ExpectedDbVersion` on the release, and every roll path migrating
+> first or refusing (the operator's `run.sh` interlock) — is
+> [Planning a Database Migration](/Doc/Architecture/PlanningADatabaseMigration) (policy
+> `db-migration-planned`). This section is the history of why that process exists.
 
 When an install rolls itself to a new tag (per `Admin/UpdatePolicy`), the in-pod updater patches
 **exactly one** workload: `memex-portal-deployment` (container `memex-portal`). It does **not**
@@ -538,11 +544,13 @@ Policy [`bake-gate-readiness-only`](/Doc/Architecture/PolicyNotProse). The three
 different questions, and only one of them may kill the container over a verdict about the roll:
 
 - **startupProbe → `/health`** (`probes.startup`): *did the process boot?* Every check runs here and
-  every check except a **roll gate** decides the status: the schema (`db_version`), the database, the
-  required modules. Failing it for `periodSeconds × failureThreshold` kills the container, so its
+  every check except a **roll gate** decides the status: the schema (`db_version`) and the database.
+  The required modules (`required_modules`) are a roll gate too (policy
+  `required-modules-readiness-only`), so they no longer decide it. Failing it for `periodSeconds × failureThreshold` kills the container, so its
   budget covers a plain cold boot and nothing else.
 - **readinessProbe → `/ready`**: *may this pod take traffic?* The process-up check plus the roll
-  gates, today the NodeType bake gate (`nodetype_bake`, `PreWarm__GateReadiness`). A refusal keeps
+  gates, today the NodeType bake gate (`nodetype_bake`, `PreWarm__GateReadiness`) and
+  `required_modules`. A refusal keeps
   the pod alive and out of the Service; with `maxUnavailable: 0` the roll stalls and the previous
   image keeps serving.
 - **livenessProbe → `/alive`**: *is it making progress?* A GC-bound process restarts.
@@ -552,7 +560,10 @@ container of both images at the three-hour mark, and the control instance was do
 The mechanism, the per-check table and the guards are in
 [The Bake Gate Only Stalls a Roll](/Doc/Architecture/TheBakeGateOnlyStallsARoll). For an instance
 that arms the gate: its `probes.startup` no longer has to cover a bake; the chart adds
-`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render.
+`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render. memex and
+memex-cloud therefore run `failureThreshold: 60` (600 s, a cold boot) instead of 1080 (3 h); the
+short budget is safe only on an image that carries the whole readiness-only split (#5749 for the bake
+gate AND #5754 for `required_modules`), which the page above explains.
 
 ### The migration Job IS the evidence — so it must outlive the observer
 
@@ -693,6 +704,21 @@ questions as nodes, with no cluster credential on the caller:
 | what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
 | roll it | pin `pinnedImageTag` on the record → `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` | the run's phases; then a `Sample` |
 | grow a full share | set `volumes[].size` on the record → the same `Reconcile` | the run's `Ensure volume capacity: <volume>` phase, `pv_capacity=` read back from the claim — see "Volume capacity is a record property" above |
+| re-read ONE address a person may not recycle (a NodeType and its dependency network, or any node) | `{ "requestedAction": "Recycle", "recycleTarget": "<path>", "reason": "…" }` + one approval | the run's log; manual `Hosting/RecycleAction` (MeshWeaver.Plugins) |
+| remove a space no person may delete (owner gone, or a stranded partition with no root) | `{ "requestedAction": "DeleteSpace", … }`; it parks WITH its plan, and the approval binds that plan | the plan on the node, then an audit record; manual `Hosting/DeleteSpaceAction` (MeshWeaver.Plugins) |
+
+🚨 **A gated action parks with its plan, and the approval is bound to it.** The approval names the
+request, the action, the deployment and the image tag, plus the kind's own binding (a recycle's
+target and force flag, a DeleteSpace's space) and the DIGEST of the plan the approver read. A plan
+that would come out differently re-parks instead of running unapproved. The approval section of
+`Hosting/AksOperationsViaActions` (MeshWeaver.Plugins) carries the rules, and who may approve whom.
+
+🚨 **A `Reconcile` that adds a Key Vault key needs a `Restart` after it** (an open finding,
+Systemorph/MeshWeaver.Feedback#48). The Reconcile reports success, but the Secrets Store CSI driver
+syncs the new object into the Kubernetes Secret after the rolled pod has already resolved its
+environment, so the pod does not see the new variable until it restarts. File a governed `Restart`
+after such a Reconcile, and check the variable on the pod (a `Sample`'s `/health` detail, or the
+feature itself) before you conclude the key is wrong.
 
 Both observations read the cluster's monitoring stack (kube-state-metrics via Prometheus, Loki)
 from inside the cluster, where it is credential-free; the roll runs as the in-cluster operator Job.
@@ -701,11 +727,21 @@ follows is the break-glass form, for when the control plane itself is what is br
 
 ## Diagnostics (private cluster — break glass)
 
-- Logs: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
+🚨 **Always pass `--subscription <subscription>` to every `az` call on this page**, as every
+example does. `<subscription>` is the fleet's own subscription; its id lives in the private
+Systemorph/Memex repo (`docs/aks-ops.md`). The signed-in account's DEFAULT subscription may belong
+to another tenant's installation, which holds ANOTHER cluster with
+the same name in a resource group of the same name (`<aks-cluster>` in `<aks-resource-group>`). Without the flag, `az aks command invoke`
+answers from that cluster, with different nodes and a different migration history, and nothing in
+the output says so. The same applies to `az role assignment delete --ids …`: it does not take the
+subscription from the id, uses the default account's tenant, and fails with
+`InvalidAuthenticationTokenTenant`. Pass `--subscription` there too.
+
+- Logs: `az aks command invoke --subscription <subscription> … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
 - **Intermittent hangs while most requests succeed** (portal recently synced or baked): suspect a
   degraded-but-Ready replica, not a global wedge — after startup, readiness watches the light
   `/ready` and liveness `/alive`, so a GC-bound pod never leaves rotation on its own. Run
-  `az aks command invoke … --command "kubectl top pods -n <NS> --no-headers"`; one or two pods far
+  `az aks command invoke --subscription <subscription> … --command "kubectl top pods -n <NS> --no-headers"`; one or two pods far
   above their siblings in BOTH memory and CPU is the superseded-NodeType-build (ALC) accumulation of
   issue #2194 — `kubectl delete pod` the outliers (grace-drain; the Deployment replaces them).
   Mechanism and the convergence key that prevents it:
