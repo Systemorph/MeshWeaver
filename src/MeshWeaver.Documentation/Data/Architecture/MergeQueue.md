@@ -82,6 +82,52 @@ pool (≈24 runners) cannot serve alongside Plugins' own CI. Whether to return t
 `max_entries_to_build` is a maintainer's ruleset edit; `merge-queue-steward.py status` prints the
 drift.
 
+### 🚨 What that drift did: the queue froze on a waiter with NO verdict (2026-09-27)
+
+The paragraph above predicted it, and on 2026-09-27 09:00–11:00Z it happened: nothing merged for two
+hours. Three entries in a row (core runs 36307979031, 36308367885, 36311194922) failed on ONE job,
+`Dependent suites (MeshWeaver.Plugins)`. Each time its waiter hit the 45-minute cap **with no verdict**.
+Not one was a test failure. The Plugins candidate runs were green, and each landed 3–10 minutes after
+core had stopped waiting (candidate run 36308382966 published at 10:18Z; its core waiter gave up at
+10:08Z).
+
+| measured over REST | value |
+|---|---|
+| a candidate leg's run time | 5–14 min |
+| its wait for a runner | **20–50 min** |
+| `aks-silos-dind` registrations | 24 (the cap), all busy. The 6 listed "offline" were ephemeral runners still starting, not zombies: each picked up a job minutes later. |
+| the set's runner-minutes 08:00–10:50Z | 4,477, of which 27% went to candidate legs and the rest to Plugins PR/push lanes and satellite bakes |
+| a candidate run whose core run had already finished | 36311218290: up to 8 runners for 74 min after core run 36311194922 failed, while four newer entries' legs queued behind it |
+
+**Root cause.** The candidate legs shared the `aks-silos-dind` label with every Plugins PR and every
+satellite bake. GitHub hands a scale set's queued jobs out first-come-first-served, with no job
+priority. So the one piece of work that gates EVERY core merge waited behind whatever PR work was
+queued before it. The set's cap is the hardware (the CI pools take the whole spot and Dsv6 quota), so
+raising it on the same label would only lengthen the same line. What was missing was an ORDER, not
+capacity. The run that kept going after core stopped waiting was a second, smaller defect on the same
+path.
+
+**The fix, in the repos that own each half:**
+
+- **Systemorph/Memex#587**: a gate lane, `aks-silos-dind-gate`. It is the same dind pod under its own
+  label, with PriorityClass `arc-runner-gate` above the ordinary sets' `arc-runner-low` and
+  `preemptionPolicy: Never`. No PR job can queue ahead of a gate leg. When the CI nodes are full, the
+  next freed slot goes to a gate leg, and nothing running is ever evicted.
+- **Systemorph/MeshWeaver.Plugins#2444**: the candidate legs run on that lane (rollback: the variable
+  `MW_RUNNER_CORE_GATE`). Each leg first reads the core run named by the verdict key
+  (`<run id>-<attempt>`) and stands down in seconds if that run has already completed. The verdict
+  then states that reason.
+
+🚨 **A `Dependent suites` timeout is NOT a flake, and the steward treats it as a reject.** The job is
+not a test shard, so the steward's table below rejects it ("a job other than a test shard failed").
+That is correct: a re-queue re-enters the same starved line, and every ejection re-dispatches a new
+candidate on top of the one still running. Look at the candidate run's leg WAIT times before touching
+the entry. A leg that waited longer than it ran is starvation, and the lane above is where to look.
+
+The remaining lever is `max_entries_to_build: 8`. Up to eight concurrent candidates of up to 12 legs
+each is more than the 12-runner gate lane can serve inside core's 45-minute waiter. Whether to return
+to a small value is still the maintainer's ruleset edit, as the paragraph above says.
+
 ### Enabling it
 
 The rule is added to ruleset `2128472` (`main pr protection`) with the REST rulesets API. `PUT`
