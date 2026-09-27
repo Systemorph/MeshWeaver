@@ -200,6 +200,14 @@ representation directly reduces the `JsonElement` case to **512,504** and the `J
 **512,696**, while preserving the typed leaf. Raw diagnostic text is now formed only when re-typing
 fails; registry recovery and the degradation warning's exception still run as before.
 
+Truncating after `GetRawText()` or `ToJsonString()` also allocated the whole failed payload.
+`BoundedJsonDiagnostic` reads a bounded UTF-8 span from a `JsonElement`, or visits a `JsonNode`
+until its character budget is reached. String escaping receives only the remaining prefix, and
+custom value converters are not invoked for diagnostics. The same formatter supplies stream and
+query warnings. A 256,000-character escaped leaf used **1,026,168 allocated bytes** with the old
+serialize-then-truncate path; the three JSON shapes now stay below the 64,000-byte test bound.
+Small JSON, UTF-8 cuts, and disposed-document diagnostics have separate controls.
+
 This establishes and removes a per-query whole-JSON string copy. It does not establish its share
 of the production allocation windows or explain retained memory. After the supported roll, exercise
 query content re-typing on the portal and repeat the heap readings before deciding whether #5555

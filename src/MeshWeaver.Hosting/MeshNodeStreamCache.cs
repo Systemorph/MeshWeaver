@@ -2826,10 +2826,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // content so the corrupt row is identifiable in Loki without flooding the log.
     private const int RawJsonLogMax = 512;
     private static string TruncateRaw(JsonElement je)
-        => TruncateRawText(je.GetRawText());
-
-    private static string TruncateRawText(string raw)
-        => raw.Length <= RawJsonLogMax ? raw : raw[..RawJsonLogMax] + "… (truncated)";
+        => BoundedJsonDiagnostic.Format(je, RawJsonLogMax);
 
     private static MeshNode ConvertContentTypedToJsonElement(MeshNode node, JsonSerializerOptions options)
     {
@@ -3565,12 +3562,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         }
     }
 
-    private static string QueryDiagnosticRaw(object? content) => content switch
-    {
-        JsonElement el => TruncateRaw(el),
-        System.Text.Json.Nodes.JsonObject jo => TruncateRawText(jo.ToJsonString()),
-        _ => string.Empty,
-    };
+    private static string QueryDiagnosticRaw(object? content)
+        => BoundedJsonDiagnostic.Format(content, RawJsonLogMax);
 
     /// <summary>
     /// Removes the cached entry for <paramref name="path"/> so the next
