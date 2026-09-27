@@ -131,18 +131,28 @@ would make this lane a remote system shell.
 
 ## The plan is bound by digest
 
-`ControlLanePlan.Digest()` is the `action-plan/v1` encoding MeshWeaver.Plugins'
-`ActionPlanSnapshot.Digest` computes (length-prefixed, injective; no namespace, no image, executor
-`control-lane`). The control instance parks the action with the reported plan, the approval binds
-that snapshot's digest, and the real run carries it. The control side recomputes the digest over the
-reported steps and refuses a report whose stated digest differs (`ControlLaneClient.VerifyReport`),
-so a drift between the two implementations is a loud refusal at dry-run time — never an approval
-that can never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` pins the encoding.
+`ControlLanePlan.Digest()` is the digest MeshWeaver.Plugins' `ActionPlanSnapshot.Digest` computes:
+length-prefixed and injective, with no namespace, no image and executor `control-lane`.
+
+🚨 **A plan never contains a listing.** Every set a step acts on is a TARGET
+(`ControlLanePlanTarget`): an anchored, scoped query with its count. Examples are the space's
+NodeTypes, its grants, its GitSync nodes and its content roots. The whole subtree is a query with NO
+count, because its rows move while a stranded space waits. The outside dependents and a NodeType's
+dependency network are counts in the command. A plan whose steps carry targets digests as
+`action-plan/v2`, which binds each query and count but never a label. A plan without targets stays
+`action-plan/v1`.
+
+The control instance parks the action with the reported plan, the approval binds that snapshot's
+digest, and the real run carries it. The control side recomputes the digest over the reported steps
+and refuses a report whose stated digest differs (`ControlLaneClient.VerifyReport`). A drift between
+the two implementations is therefore a loud refusal at dry-run time, never an approval that can
+never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` and
+`APlanWithTargets_IsTheActionPlanV2Encoding` pin both encodings.
 
 ## What each operation binds
 
-- **Recycle** binds the target and, for a NodeType, the EXACT address set of its dependency network
-  (its digest is in the step's command). The cascade recomputes the network when the dispose lands,
+- **Recycle** binds the target (a `path:` query, count 1) and, for a NodeType, the EXACT address set
+  of its dependency network (its digest is in the step's command, never the addresses). The cascade recomputes the network when the dispose lands,
   so the run derives it once more right before the dispose and refuses unless it is the bound set; an
   INCOMPLETE network is refused at planning, before anything is disposed.
 - **DeleteSpace** binds what the in-process action binds: the space, schema, root shape, every grant,
