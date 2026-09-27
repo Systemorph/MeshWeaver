@@ -117,17 +117,17 @@ already looks.
 
 | secrets | GUI | owner |
 |---|---|---|
-| a deployment's vault objects (connection strings, sign-in and mail client secrets, registry instance key, AI platform keys) | control instance → `Deployments/<id>` → **Secrets** (status list + Set / Generate / Disable / Delete / Recover) | fleet admins |
-| fleet pairings (`Hosting-PlatformWebhookSecret`, `Hosting-OperationsSigningKey`, control-inbox secrets, the per-deployment announcement key) | the same page on each end of the pairing, compared by fingerprint | fleet admins |
-| per-user AI provider keys | the user's **Model providers** settings (already write-only, `enc:` in the mesh) | the user |
+| a deployment's vault objects, grouped by the domain that reads them (AI provider keys, database connections, sign-in and mail client secrets, Stripe keys, GitHub App and webhook secrets, the registry instance key) | the control instance's **domain app** for that domain, per deployment: `/Hosting/{Ai,Databases,SignIn,Email,Payments,Integrations}/Deployment/<id>` (status list + Set / Generate / Disable / Delete / Recover) — see [Domain Configuration Apps](../DomainConfigurationApps) | fleet admins |
+| fleet pairings (`Hosting-PlatformWebhookSecret`, `Hosting-OperationsSigningKey`, control-inbox secrets, the per-deployment announcement key) | the **Integrations** app on the control instance, and the target instance's Admin app (**Control lane**), compared by fingerprint | fleet admins; the target's own admin for its announcement key |
+| per-user AI provider keys | the user's **Model providers** app (already write-only, `enc:` in the mesh) | the user |
 | an instance's first-run sign-in secret | the instance's **Setup** wizard hand-off | the instance's first admin |
-| payment keys (Stripe secret key, webhook secret) | **Store → Payments** admin, with a *Test* action that lists the webhook endpoints | store admins |
+| the platform master key (`Ai:KeyProtection:MasterKey`) | none — it encrypts every `enc:` value, and replacing it makes them unreadable; break-glass only | — |
 
 The platform pieces are the `SecretStatus` contract, the `WriteOnlySecretSection` control and the
-`SecretInventorySection` list over a scope of them. They are owed by the companion core change and not
-yet on `main`. An app wires those pieces up. It never builds its own form, and it never binds a value
-back into a view. Today the Deployments page's **Set Key Vault secrets…** dialog is the one GUI that
-exists; the rows above marked Store and the status list are what the companion changes add.
+`SecretInventorySection` list over a scope of them ([Instance Secrets](../InstanceSecrets)). An app
+wires those pieces up. It never builds its own form, and it never binds a value back into a view.
+The Deployments page's **Set Key Vault secrets…** dialog predates the domain apps and is removed as
+each domain claims its keys.
 
 ## Break-glass
 
