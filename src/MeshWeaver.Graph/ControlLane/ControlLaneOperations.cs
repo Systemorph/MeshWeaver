@@ -74,11 +74,10 @@ public sealed class DeleteSpaceOperation : IControlLaneOperation
         var space = request.Target;
         return SpaceDeletion.Inventory(hub, space).Select(inventory =>
         {
-            if (SpaceDeletion.PlanRefusal(inventory, SpaceDeletion.OperationalSpace(hub),
-                    ControlLaneAdmission.LedgerPath(request.RequestId), SpaceDeletion.ServedByConfiguration(hub, space)) is { } refused)
+            if (SpaceDeletion.Preflight(hub, ControlLaneAdmission.LedgerPath(request.RequestId), inventory) is { } refused)
                 throw new InvalidOperationException(refused);
-            var (steps, notes) = SpaceDeletion.StepsOf(inventory);
-            var plan = ControlLanePlan.Of(Operation, request.Deployment, steps, notes);
+            var (steps, notes) = SpaceDeletion.PlanSteps(inventory);
+            var plan = ControlLanePlan.OfSteps(Operation, request.Deployment, steps, notes);
             return new ControlLanePreparation(plan, () =>
                 SpaceDeletion.Run(hub, inventory, ControlLaneText.ReasonLine(request))
                     .Select(step => step.After is null ? step.Line : step.Line + " — " + AuditLine(request, inventory, step.After, plan)));
@@ -106,6 +105,9 @@ public sealed class DeleteSpaceOperation : IControlLaneOperation
 /// </summary>
 public sealed class RecycleOperation : IControlLaneOperation
 {
+    /// <summary>Target label key: the one address a recycle tears down.</summary>
+    public const string TargetAddress = "address";
+
     /// <summary>How long the recycled address may take to answer again (a NodeType may compile on re-activation).</summary>
     public static readonly TimeSpan RecycleBudget = TimeSpan.FromMinutes(2);
 
@@ -181,22 +183,24 @@ public sealed class RecycleOperation : IControlLaneOperation
     {
         var isNodeType = network is not null;
         var bound = network is null ? null : NetworkDigest(network.Addresses);
+        // The address is a SET of one, stated as a query; a NodeType's dependency network is not a
+        // query, so it is a COUNT and the DIGEST of its exact address set in the command — never a
+        // listing of the addresses it reaches.
         var steps = new[]
         {
-            ("Recycle",
-                $"hub.RecycleNode(\"{node.Path}\", reason) as system — "
-                + (isNodeType
-                    ? $"a NodeType: the dispose cascades to {network!.Addresses.Count} address(es) in its dependency network "
-                      + $"(address set {bound}); the run re-derives the network and refuses if it is not this set"
-                    : $"a node address (nodeType {node.NodeType ?? "none"}): only this address, no cascade"),
-                false),
+            new ControlLanePlanStep
+            {
+                Name = "Recycle",
+                Command = $"hub.RecycleNode(\"{node.Path}\", reason) as system — "
+                    + (isNodeType
+                        ? $"a NodeType: the dispose cascades to {network!.Addresses.Count} address(es) in its dependency network "
+                          + $"(address set {bound}); the run re-derives the network and refuses if it is not this set"
+                        : $"a node address (nodeType {node.NodeType ?? "none"}): only this address, no cascade"),
+                Targets = [new ControlLanePlanTarget { Label = TargetAddress, Query = $"path:{node.Path}", Count = 1 }],
+            },
         };
-        var notes = network is null
-            ? Array.Empty<string>()
-            : new[] { $"Dependency network ({network.Addresses.Count}): "
-                      + string.Join(", ", network.Addresses.OrderBy(a => a, StringComparer.Ordinal).Take(SpaceDeletion.NamedDependents))
-                      + (network.Addresses.Count > SpaceDeletion.NamedDependents ? $", … and {network.Addresses.Count - SpaceDeletion.NamedDependents} more" : "") };
-        var plan = ControlLanePlan.Of(Operation, request.Deployment, steps, notes);
+        var notes = Array.Empty<string>();
+        var plan = ControlLanePlan.OfSteps(Operation, request.Deployment, steps, notes);
         // 🚨 The cascade recomputes the network when the dispose lands, so the run derives it once more
         // right before the dispose and refuses unless it is the bound set.
         var verified = isNodeType

@@ -113,8 +113,15 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var planned = await Terminal(dry, ct);
         planned.Status.Should().Be(ControlLaneStatus.Planned, planned.Message);
         planned.Plan.Should().NotBeNull();
-        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Delete content");
+        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Tear down the partition",
+            "a space's content goes with its store in ONE teardown, never a per-node delete (policy governed-action-preflight)");
+        planned.Plan.Steps.Select(s => s.Name).Should().NotContain("Delete content");
         planned.PlanDigest.Should().Be(planned.Plan.Digest());
+        planned.Plan.Steps.Should().NotContain(s => s.Command.Contains("Doomed/Page"),
+            "a plan never contains a listing — the sets are queries with counts");
+        planned.Plan.Steps.Single(s => s.Name == "Tear down the partition").Targets
+            .Should().Contain(t => t.Query == "path:Doomed scope:subtree" && t.Count == null,
+                "the subtree is a query and deliberately uncounted");
         (await target.Exists("Doomed/Page")).Should().BeTrue("a dry run changes nothing");
 
         var real = Request(ControlLaneOperation.DeleteSpace, "Doomed", dryRun: false, planned.PlanDigest);
@@ -382,6 +389,32 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             .Should().Contain("equals the fleet-wide inbox secret");
     }
 
+    /// <summary>
+    /// 🚨 PRE-FLIGHT AT PARK (policy governed-action-preflight): the incident's 31,065-row space plans ONE
+    /// teardown and passes; the one per-node leg (GitSync) and the no-store sweep are bounded, and a plan over
+    /// either bound is refused before it is offered.
+    /// </summary>
+    [Fact]
+    public void ALargeSpace_IsOneTeardown_AndAnOversizedLeg_IsRefusedAtPark()
+    {
+        var large = new SpaceDeletionInventory
+        {
+            Space = "UWDeepfield", Schema = "uwdeepfield", StoreExists = true,
+            Tables = [new SpaceTableCount("mesh_nodes", 15780), new SpaceTableCount("activities", 14514), new SpaceTableCount("threads", 771)],
+        };
+        SpaceDeletion.PreflightRefusal(large).Should().BeNull("a reported store is one drop, whatever its size");
+        var (steps, notes) = SpaceDeletion.PlanSteps(large);
+        steps.Select(s => s.Name).Should().Contain("Tear down the partition");
+        steps.Select(s => s.Name).Should().NotContain("Delete content");
+        notes.Should().Contain(n => n.StartsWith("PRE-FLIGHT"));
+
+        SpaceDeletion.PreflightRefusal(large with { GitSyncRows = SpaceDeletion.PerNodeDeleteBound + 1 })
+            .Should().Contain("Refused at park");
+        var hugeNoStore = large with { StoreExists = null, Tables = [new SpaceTableCount("mesh_nodes", SpaceDeletion.SweepBound + 1)] };
+        SpaceDeletion.PreflightRefusal(hugeNoStore).Should().Contain("sweep bound");
+        SpaceDeletion.TeardownCommand(large with { StoreExists = null }).Should().Contain("swept below the pipeline");
+    }
+
     [Fact]
     public void TwoExecutorsClaimingOneOperation_AreRefusedAtConstruction()
     {
@@ -438,6 +471,29 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var plan = ControlLanePlan.Of("Recycle", "memex-cloud", [("Recycle", "hub.RecycleNode(\"A\", reason) as system", false)]);
         plan.Digest().Should().Be(Sha("action-plan/v1;7:Recycle;11:memex-cloud;~;~;12:control-lane;1:1;1:1;4:safe;7:Recycle;"
                                       + "38:hub.RecycleNode(\"A\", reason) as system;"));
+    }
+
+    [Fact]
+    public void APlanWithTargets_IsTheActionPlanV2Encoding()
+    {
+        // Pinned against the in-mesh ActionPlanSnapshot.Digest (MeshWeaver.Plugins) for a structured
+        // step: after each step, the target count, then each target's query and count (never its label).
+        var plan = ControlLanePlan.OfSteps("DeleteSpace", "memex-cloud",
+        [
+            new ControlLanePlanStep
+            {
+                Name = "Delete content", Command = "del", Destructive = true,
+                Targets =
+                [
+                    new ControlLanePlanTarget { Label = "content-roots", Query = "path:X", Count = 1 },
+                    new ControlLanePlanTarget { Label = "subtree", Query = "path:X scope:subtree", Count = null },
+                ],
+            },
+        ]);
+        plan.Digest().Should().Be(Sha("action-plan/v2;11:DeleteSpace;11:memex-cloud;~;~;12:control-lane;1:1;"
+                                      + "1:1;11:destructive;14:Delete content;3:del;1:2;6:path:X;1:1;20:path:X scope:subtree;~;"));
+        (plan with { Steps = [plan.Steps[0] with { Targets = [plan.Steps[0].Targets[0] with { Label = "renamed" }, plan.Steps[0].Targets[1]] }] })
+            .Digest().Should().Be(plan.Digest(), "a target's label is shown, never bound");
     }
 
     [Fact]
