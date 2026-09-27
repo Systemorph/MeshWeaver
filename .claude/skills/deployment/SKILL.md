@@ -139,7 +139,8 @@ dispatch; use `Reconcile`. Manual:
 
 ## The AKS route (break glass — the control plane is what is broken)
 
-🚨 **Pass `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c` on EVERY `az` call.** The default
+🚨 **Pass `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c` on EVERY `az` call** — written
+`<subscription>` in every example below. The default
 subscription may be "PartnerRe Memex", which holds another cluster with the SAME name
 (`<aks-cluster>`); without the flag you read the wrong system and nothing says so.
 `az role assignment delete --ids …` needs it too, or it fails with `InvalidAuthenticationTokenTenant`.
@@ -147,7 +148,7 @@ subscription may be "PartnerRe Memex", which holds another cluster with the SAME
 The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`,
 swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR
 `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via
-`az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`** — and only when
+`az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "…"`** — and only when
 the API above cannot answer.
 
 **On AKS a code update = the record's image pin + a `Roll` action.** What the operator then runs is
@@ -155,7 +156,7 @@ build image → set image → restart (the AKS route does NOT use `tools/deploy.
 — those are the Container Apps route). The commands, for the bootstrap / break-glass case only:
 
 ```bash
-az acr login -n meshweaver
+az acr login --subscription <subscription> -n meshweaver
 # Portal (custom base) AND migration (the migration is what creates schema + the matview):
 dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
@@ -165,7 +166,7 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
 # Roll out (NS = memex). 🚨 The MIGRATION is a Job, not a Deployment — see below.
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
   kubectl -n <NS> rollout restart deployment/memex-portal-deployment; \
   kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
@@ -201,9 +202,9 @@ stops, so `CrashLoopBackOff` on it now means exactly what it says.
 `Database migration completed. Version: N` AND the portal serves (HTTP 200):
 
 ```bash
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration"
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n <NS> logs job/memex-migration-<revision>"
 ```
 
@@ -220,8 +221,8 @@ delivery chain, the publish batching window and the reconciler are in
 [/release](../release/SKILL.md); the assertions are:
 
 ```bash
-az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+az acr repository show-tags --subscription <subscription> -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
 .github/scripts/check-image-set.sh <short-sha>   # the exact assertion CD itself makes
 ```

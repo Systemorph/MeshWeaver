@@ -211,10 +211,12 @@ boot only. Both AKS instances that ran the three-hour budget now carry **`failur
 1080 rationale as a comment, marked superseded, so a reader who finds 1080 in an older render knows
 why it existed.
 
-That budget is safe only on an image that carries the readiness-only split (#5749). On an older
-image the gate still rides `/health`, and a bake outlasts 600 s: on memex-cloud a pod's bake-report
-sweep was stamped about 21.5 min after the pod booted. So arm the gate on an instance only once its
-running image carries #5749, and never roll such an instance back to an older image with the gate
+That budget is safe only on an image that carries the WHOLE readiness-only split: #5749 for the bake
+gate and #5754 for `required_modules`. On an image missing #5749 the gate still rides `/health`, and
+a bake outlasts 600 s: on memex-cloud a pod's bake-report sweep was stamped about 21.5 min after the
+pod booted. On an image missing #5754, a required module that arrives late still fails the startup
+probe inside the shorter budget. So arm the gate on an instance only once its running image carries
+both, and never roll such an instance back to an older image with the gate
 armed and the short budget.
 
 ### Which checks may fail the startup probe
