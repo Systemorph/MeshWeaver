@@ -47,7 +47,7 @@ public static class CompositionAdminSettingsTab
     /// <returns>The same configuration, for chaining.</returns>
     public static MessageHubConfiguration AddCompositionAdminSettingsTab(
         this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(Contribute));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(Contribute)).RelocateSettingsTabsToAdminApp(TabId);
 
     /// <summary>
     /// Contributes the tab, but only once <c>IsGlobalAdmin</c> confirms POSITIVELY — the same shape
@@ -60,20 +60,6 @@ public static class CompositionAdminSettingsTab
     public static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> Contribute(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        IReadOnlyList<SettingsMenuItemDefinition> none = [];
-
-        // Same home as the other Administration tabs: the admin's OWN settings page.
-        var hubPath = host.Hub.Address.ToString();
-        var nodeOwnerId = hubPath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
-            ? hubPath["User/".Length..]
-            : hubPath;
-
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var viewerId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        if (string.IsNullOrEmpty(viewerId)
-            || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
-            return Observable.Return(none);
-
         var tab = new SettingsMenuItemDefinition(
             Id: TabId,
             Label: "Composition",
@@ -85,13 +71,9 @@ public static class CompositionAdminSettingsTab
             Keywords: ["composition", "feature", "flag", "environment", "package", "parameter"])
         { LabelKey = "composition.title", GroupKey = "settings.groupAdministration" };
 
-        return host.Hub.IsGlobalAdmin(viewerId)
-            .Where(isAdmin => isAdmin)
-            .Take(1)
-            .Select(_ => (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab })
-            .Timeout(TimeSpan.FromSeconds(5))
-            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
-            .StartWith(none);
+        // The Admin app is the tab's home (/Admin/Settings/Composition), for confirmed platform
+        // admins only; everywhere else — a person's own settings page included — it contributes nothing.
+        return AdminAppNodeType.AdminOnlyTab(host, tab);
     }
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node) =>

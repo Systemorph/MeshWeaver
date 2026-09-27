@@ -64,4 +64,13 @@ public record App
     /// </summary>
     [Browsable(false)]
     public string? Source { get; init; }
+
+    /// <summary>
+    /// Optional localization key of the tile's label (e.g. <c>inbox.title</c>) for a PLATFORM app
+    /// whose name is catalog text rather than a package's own name. The launcher shows the key
+    /// resolved in the VIEWER's language; the record's <see cref="MeshNode.Name"/> stays the
+    /// fallback for any surface that paints the name alone (it is seeded in the owner's language).
+    /// </summary>
+    [Browsable(false)]
+    public string? LabelKey { get; init; }
 }

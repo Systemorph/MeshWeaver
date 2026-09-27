@@ -202,6 +202,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Query Identity](QueryIdentity) — an unstamped read answers as Anonymous, which reads as absence
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
+- [The Admin App and the Settings App](AdminApp) — `/Admin` holds every platform-admin surface (installed on every image, the control image included), `/{user}/Settings` holds only the person's own settings and opens for them alone; the inventory of what moved, the gates, the redirects, and the Inbox app every user gets
 - [Invitation-Only Onboarding](InvitationOnlyOnboarding)
 - [The Redirect-Target Contract](RedirectTargetContract) — every `returnUrl` sink validates local-only, so every source must mint local; a wrong source is refused rather than followed, which costs the whole flow and logs nothing
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user

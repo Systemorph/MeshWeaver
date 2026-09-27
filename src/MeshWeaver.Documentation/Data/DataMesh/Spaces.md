@@ -117,7 +117,7 @@ The operation:
 
 This is **irreversible** — there is no recycle bin for a dropped partition. Only
 users holding Delete on the Space (its Admins, or a global admin) can do it. Global
-admins can also reach it from **Global Settings → Administration → Partitions**.
+admins can also reach it from **Admin app (`/Admin`) → Partitions**.
 
 ## Authoring your Space's home page
 
