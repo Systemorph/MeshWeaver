@@ -7,7 +7,9 @@ Abstract: >
   undocumented endpoint whose secret nobody set. This page is the measurement of that gap on
   pearl.meshweaver.cloud, and the design that closes it. A provisioned instance now starts at
   sign-in and its first human to onboard becomes platform admin (policy
-  `first-sign-in-becomes-admin`, MeshWeaver.Plugins#2421).
+  `first-sign-in-becomes-admin`, MeshWeaver.Plugins#2421). The grant that blocked it was measured on
+  2026-09-27: the image's own `Auth:GlobalAdmins: ["rbuergi"]`, seeded statically on every instance
+  (MeshWeaver.Plugins#2430, #2431).
 Thumbnail: "sitemap"
 ---
 
@@ -26,7 +28,7 @@ meet.
 | Mechanism | Fires when | Why pearl missed it |
 |---|---|---|
 | The first-run **wizard** (`ISetupCatalogProvider`, `PortalSetupCatalogProvider`) — storage, sign-in, models | `MeshBuilder.IsAwaitingSetup`: no `Graph:Storage` configuration **and** no complete `instance.json` | A provisioned instance is configured by its ConfigMap, rendered from its `Hosting/Deployment` record. It has storage, so it is never awaiting setup. The wizard is for an empty image an operator installs on purpose |
-| **First-user promotion** (`OnboardingGate.Decide`) — the first visitor is admitted and made platform admin | No `AccessAssignment` under `Admin/_Access` | pearl's refusal *is* the evidence that a grant already exists there: with none, `isFirstUser` is true and the visitor is admitted even on an invitation-only portal. Whose grant it is, is not established here — but the design must not depend on that probe being empty |
+| **First-user promotion** (`OnboardingGate.Decide`) — the first visitor is admitted and made platform admin | No `AccessAssignment` under `Admin/_Access` | pearl's refusal *is* the evidence that a grant already exists there: with none, `isFirstUser` is true and the visitor is admitted even on an invitation-only portal. **Whose grant it was is now measured (2026-09-27, see below):** the IMAGE's own seed, `Admin/_Access/rbuergi_Access`, for a person who had not yet onboarded |
 | **`/bootstrap/first-admin`** (`BootstrapController`) — secret-gated, materialises the first admin | `Bootstrap:Secret` is configured | Provisioning never sets it. The endpoint answers `404` when unset — correct, and indistinguishable from "no such endpoint" |
 
 So the gap is not a missing mechanism. It is that **"configured" and "administered" are different
@@ -45,17 +47,64 @@ admin"*, *"setup login from start"*. As built in MeshWeaver.Plugins#2421:
   (`SetupEntry.SignIn` → `/login`), not to `/setup`. A signed-in visitor carries on. `/setup/{link}`
   still works for a link that was actually minted; it is no longer where everybody is sent.
 - **Promotion.** The first person to complete onboarding is made platform admin by
-  `OnboardingGate` — the bootstrap rule every instance already had, which also bypasses
-  invitation-only for exactly that person. What changed is the question it asks: **is there a grant
-  held by someone other than `System`, `Anonymous` or `Public`?**
-  (`AdministratorProbeService.AnyNonPlatformGrant`), over the **unbounded System read** of
-  `Admin/_Access`. Before, it asked "is there any grant at all", and a platform identity's grant
-  switched the promotion off on an instance nobody administered (pearl, 2026-09-16). A grant whose
-  holder cannot be read still counts, so the unreadable case fails closed.
-- **Why it is still the System read.** The entry probe (`HasHumanAdministrator`) reads as the
-  VISITOR. A visitor who cannot read `Admin` sees no grants, and using that answer to promote would
-  make every sign-up the first user: the 43-root-superuser shape (#743). Onboarding keeps its own
-  System read and applies only the new holder rule to it.
+  `OnboardingGate`, the bootstrap rule every instance already had, which also bypasses
+  invitation-only for exactly that person. The question it asks is **is there a HUMAN
+  administrator?**, and there is ONE function that answers it:
+  `AdministratorProbeService.HasHumanAdministrator` (MeshWeaver.Plugins
+  `src/Memex.Portal.Gui/Setup/`, #2430). A human administrator is an undenied `Admin` grant in
+  `Admin/_Access` whose holder is (a) not `System`, `Anonymous` or `Public` **and** (b) has an
+  **Active mesh `User` node**. In other words, somebody has actually signed in and onboarded as that
+  holder.
+- **One rule, every gate.** The onboarding page load and the onboarding submit both reach the rule
+  through `OnboardingAdmissions.Read`, which is also the one write chain (`OnboardingAdmissions.Complete`).
+  The entry page asks the same function. Core's `OnboardingMiddleware` makes no admission decision,
+  and `/bootstrap/first-admin` is secret-gated, so neither holds a copy.
+- **It reads as System, both halves.** Each query is BUILT inside its own `RunAsSystem`.
+  `workspace.GetQuery` binds identity and RLS when it is called, and the User-node query is issued
+  inside `SelectMany`, after the grants' scope has closed. A visitor who may not read `Admin` sees no
+  grants, and promoting on that answer would make every sign-up the first user (the
+  43-root-superuser shape, #743). As a visitor, `nodeType:User` is pinned to the `Auth` mirror they
+  cannot read and answers 0. **It fails closed:** a timeout, a fault, no snapshot or an untyped
+  grant all answer "administered".
+
+### Measured root cause (2026-09-27): the image seeded the administrator
+
+control.systemorph.com was reset on 2026-09-27: its database was dropped, re-created and provisioned
+fresh on `memex-control:3.0.0-ci.9445`, which already contained #2421. The entry page correctly sent
+the maintainer to sign-in, and onboarding still answered "invitation-only, not invited". The grant it
+counted was **not in the database at all**:
+
+- The control image, like the portal image, is MeshWeaver.Plugins `src/Memex.Portal.Distributed`.
+  Its shipped `appsettings.json` carried `"Auth": { "GlobalAdmins": [ "rbuergi" ] }` (since
+  2026-08-25).
+- `memex/Memex.Portal.Shared/MemexConfiguration.cs` → `AddMeshNodes(GlobalAdminSeed.Build(configuration))`.
+  `GlobalAdminSeed` turns every configured id into a **static** `Admin/_Access/{id}_Access`, on every
+  instance, at every start, empty database or not.
+- #2421's `AnyNonPlatformGrant` counted any holder that is not a platform identity. `rbuergi` is
+  not, so the first-person override was off. Invitation-only then refused the very person that grant
+  names, because nobody had yet onboarded as `rbuergi`.
+
+The same shape is visible, read-only, on memex-cloud, the systemorph portal and partnerre:
+`Admin/_Access/rbuergi_Access` with no version and no lastModified, which is the static node's
+signature. pearl's 2026-09-16 refusal is the same mechanism.
+
+Proof by test, not by assertion: `FirstPersonBecomesAdminOnAFreshInstanceTest` (MeshWeaver.Plugins
+`src/Memex.Portal.Gui.Test`) boots a mesh with row-level security on an empty store. It seeds
+exactly what the image's shipped `appsettings.json` seeds, plus a record-seeded holder and a
+`system-security` grant, and drives the gate the page runs.
+- Six of its seven cases fail under #2421's rule. The first failure is "the first person … must be
+  admitted".
+- All seven pass under the human-administrator rule.
+
+The seed itself goes in MeshWeaver.Plugins#2431, a draft. The image then seeds no administrator; an
+instance that wants a configured one declares `Auth__GlobalAdmins__N` on its own record and overlay.
+That PR is a draft because on some instances the static seed may be the maintainer's only
+platform-admin grant.
+
+**What the rule does NOT change.** A grant seeded for a person counts **from the moment that person
+has onboarded**. Existing non-admin users never switch the bootstrap off. Two people completing
+onboarding in the same instant can both read "no human administrator"; that race predates this
+rule and is not closed by it.
 
 **The condition this rests on. It is the reason the older rule below said "arriving first is not a
 credential".** "First" now means *the first person the instance's sign-in admits*. On the
