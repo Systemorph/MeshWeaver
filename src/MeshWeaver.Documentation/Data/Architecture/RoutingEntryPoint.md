@@ -118,6 +118,27 @@ Also note the in-process `TestCluster` runs Orleans' *distributed* directory (Te
 `ConfigureDistributedGrainDirectory`), whereas the portal runs the DHT `LocalGrainDirectory`; the test
 therefore stands in for "the owner cannot answer" rather than reproducing the DHT's own timing.
 
+### Production verification, 2026-09-27
+
+The governed `Logs` actions `Ops/Actions/verify-5037-memex-20260927-placement` and
+`Ops/Actions/verify-5037-memexcloud-20260927-placement` each read a full 24-hour window with
+`Grain placement operation timed out`, limit 200. Both completed without truncation or landing
+failures. Memex returned **0** lines. Memex-cloud returned **35**: 28 name `messagehub/*`, and
+seven generic timeout lines occur within 100 ms of those named failures on the same pod.
+**None names `routing/*`.** This does not report the single-activation placement failures as fixed.
+The positive control `Ops/Actions/verify-5037-memex-20260927-startup` read and landed **126**
+`PlatformStartup` lines over 24 hours, also without truncation or failures. They include 39
+version-bearing starts, from `ci.9406` through `ci.9445`, so this was a window containing repeated
+rolls, not an idle namespace or an empty log source.
+
+The window includes the serving generation's roll: memex's replicas started at 07:09–07:28Z on
+`3.0.0-ci.9445` (core `db9f332bf3d9fa9935799ccbfda4ef0f7fed221e`); memex-cloud's image is
+`3.0.0-ci.9443` (core `311108bf16a70eee39a6618b36456cf82c58a85f`), with replicas starting at
+06:15–06:18Z and further same-image starts later in the window. Both commits descend from
+#5675's `4028fd6468`. Fresh reads of this documentation node on both portals returned typed
+`MarkdownContent`. Those reads prove that nodes were serving; they do not distinguish the
+router's local-stream fast path from a grain dispatch.
+
 ## 🚨 The observation this page exists for
 
 Read the sender in that line. It is `sys.client/hosted-10.244.9.229:11111` — the Orleans **hosted
