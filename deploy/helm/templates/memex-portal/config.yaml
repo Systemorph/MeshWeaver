@@ -576,6 +576,32 @@ data:
   {{- if .Values.config.memex_portal.Hosting__Triage__Repositories }}
   Hosting__Triage__Repositories: "{{ .Values.config.memex_portal.Hosting__Triage__Repositories }}"
   {{- end }}
+  # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
+  # Build instance only: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
+  # VALIDATES each proposed heal before it runs, Heal=false keeps it observe-only, Interval is the
+  # fallback cadence. Rendered only when set, so no other portal carries them (config-key-coverage).
+  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__Enabled }}
+  Hosting__PrBabysitter__Enabled: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Enabled }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__AgentHandoff }}
+  Hosting__PrBabysitter__AgentHandoff: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__AgentHandoff }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__Heal }}
+  Hosting__PrBabysitter__Heal: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Heal }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}
+  Hosting__PrBabysitter__Interval: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}"
+  {{- end }}
+  # Control instance only: the deployments the ONE org webhook's pull-request and check events are
+  # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).
+  {{- if .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}
+  Hosting__PrEvents__ForwardTo: "{{ .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}"
+  {{- end }}
+  # A control-lane TARGET's declared inbox for forwarded events (Doc/Architecture/ControlLane →
+  # "Forwarded events"): the ONLY local inbox the lane may store an event into. Absent = none.
+  {{- if .Values.config.memex_portal.ControlLane__EventTargets__0 }}
+  ControlLane__EventTargets__0: "{{ .Values.config.memex_portal.ControlLane__EventTargets__0 }}"
+  {{- end }}
   # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713) -----------------
   # The URL of the control instance's signed inbox that the Feedback plugin hands a technical
   # submission (bug / idea / technical question) to after Submit — for the fleet that is
