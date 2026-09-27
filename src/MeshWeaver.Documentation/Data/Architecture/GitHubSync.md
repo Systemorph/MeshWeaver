@@ -95,7 +95,7 @@ A Space can sync with **more than one repository**. The Repository section above
 the **primary** source (`{space}/_GitSync`); every additional source is its own config
 node at `{space}/_GitSync/{sourceId}` with its own repository, branch, subdirectory and
 direction. Manage them in the **Additional sync sources** section of the same settings
-tab (or, platform admins, on **Global Settings → Administration → Partitions**): add a
+tab (or, platform admins, on **Admin app (`/Admin`) → Partitions**): add a
 source by name, edit its settings through the same data-bound editor, sync it with its
 own direction-aware buttons, and remove it when no longer needed. Programmatically:
 `GitHubSyncService.AddSyncSource / WatchConfigNodes / RemoveSyncSource`, and every sync

@@ -56,7 +56,11 @@ public static class PlatformSettingsTabAreas
     /// padding/scroll container, so each area builds into a plain full-width stack.
     /// </summary>
     public static MessageHubConfiguration AddPlatformSettingsTabAreas(this MessageHubConfiguration config)
-        => config.AddLayout(layout => layout
+        => config
+        // The Administration tabs are Admin-app tabs now; recorded on every node hub so an old
+        // /_Setting/GlobalSettings/{id} (or any other settings page's) link redirects into the app.
+        .RelocateSettingsTabsToAdminApp([.. AdminAppTabIds])
+        .AddLayout(layout => layout
             .WithView(WhatsNewArea, (host, _) => WhatsNewSettingsTab.BuildContent(host, PaneStack()))
             .WithView(AboutArea, (host, _) => AboutSettingsTab.BuildContent(host, PaneStack()))
             // Privacy's tab content is the ADMIN EDITOR of the public statement (the statement
@@ -127,11 +131,15 @@ public static class PlatformSettingsTabAreas
             Icon = "Info",
             Order = 900,
         }),
-        // Administration group — platform admins only (Gates.AdminOnly on the entry, and the
+        // Administration group — tabs of the ADMIN APP (/Admin/Settings/{id}), platform admins only:
+        // the per-node settings lane (NodeSettings) gated to the AdminApp node type and AdminOnly,
+        // and the area re-asserts the gate for direct URLs. They used to be global-settings tabs
+        // (/_Setting/GlobalSettings/{id}); an old link redirects into the app (see
+        // AddPlatformSettingsTabAreas). Ordered by tab Order within the group. (Gates.AdminOnly on the entry, and the
         // area re-asserts the gate for direct URLs). Ordered by tab Order within the group.
         Seed(InvitationsSettingsTab.TabId, "Invitations", new UiContribution
         {
-            Context = UiContribution.SettingsContext,
+            Context = UiContribution.NodeSettingsContext,
             Area = InvitationsArea,
             Label = "Invitations",
             LabelKey = "settings.invitations",
@@ -140,11 +148,11 @@ public static class PlatformSettingsTabAreas
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",
             Order = 310,
-            Gates = new UiContributionGates { AdminOnly = true },
+            Gates = AdminAppOnly,
         }),
         Seed(InboxSettingsTab.TabId, "Inbox", new UiContribution
         {
-            Context = UiContribution.SettingsContext,
+            Context = UiContribution.NodeSettingsContext,
             Area = InboxArea,
             Label = "Inbox",
             LabelKey = "settings.inbox",
@@ -153,11 +161,11 @@ public static class PlatformSettingsTabAreas
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",
             Order = 320,
-            Gates = new UiContributionGates { AdminOnly = true },
+            Gates = AdminAppOnly,
         }),
         Seed(UpdatePolicySettingsTab.TabId, "Updates", new UiContribution
         {
-            Context = UiContribution.SettingsContext,
+            Context = UiContribution.NodeSettingsContext,
             Area = UpdatePolicyArea,
             Label = "Updates",
             LabelKey = "settings.updates",
@@ -166,11 +174,11 @@ public static class PlatformSettingsTabAreas
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",
             Order = 320,
-            Gates = new UiContributionGates { AdminOnly = true },
+            Gates = AdminAppOnly,
         }),
         Seed(ControlLaneSettingsTab.TabId, "Control lane", new UiContribution
         {
-            Context = UiContribution.SettingsContext,
+            Context = UiContribution.NodeSettingsContext,
             Area = ControlLaneArea,
             Label = "Control lane",
             LabelKey = "settings.controlLane",
@@ -179,11 +187,11 @@ public static class PlatformSettingsTabAreas
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",
             Order = 320,
-            Gates = new UiContributionGates { AdminOnly = true },
+            Gates = AdminAppOnly,
         }),
         Seed(PublishedSettingsTab.TabId, "Published to the web", new UiContribution
         {
-            Context = UiContribution.SettingsContext,
+            Context = UiContribution.NodeSettingsContext,
             Area = PublishedArea,
             Label = "Published to the web",
             LabelKey = "settings.published",
@@ -192,11 +200,11 @@ public static class PlatformSettingsTabAreas
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",
             Order = 320,
-            Gates = new UiContributionGates { AdminOnly = true },
+            Gates = AdminAppOnly,
         }),
         Seed(PrivacySettingsTab.TabId, "Privacy", new UiContribution
         {
-            Context = UiContribution.SettingsContext,
+            Context = UiContribution.NodeSettingsContext,
             Area = PrivacyArea,
             Label = "Privacy",
             LabelKey = "settings.privacy",
@@ -205,7 +213,7 @@ public static class PlatformSettingsTabAreas
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",
             Order = 330,
-            Gates = new UiContributionGates { AdminOnly = true },
+            Gates = AdminAppOnly,
         }),
     ];
 
@@ -215,6 +223,24 @@ public static class PlatformSettingsTabAreas
     /// </summary>
     public static MeshBuilder AddPlatformSettingsTabContributions(this MeshBuilder builder)
         => builder.AddMeshNodes(Seeds);
+
+    /// <summary>
+    /// The gate every Administration seed carries: the Admin app's node only, platform admins only.
+    /// </summary>
+    private static UiContributionGates AdminAppOnly => new()
+    {
+        AdminOnly = true,
+        NodeTypes = [AdminAppNodeType.NodeType],
+    };
+
+    /// <summary>
+    /// The seeded tabs that are Admin-app tabs — the ids an old global-settings link may still name.
+    /// </summary>
+    internal static IReadOnlyList<string> AdminAppTabIds { get; } =
+    [
+        InvitationsSettingsTab.TabId, InboxSettingsTab.TabId, UpdatePolicySettingsTab.TabId,
+        PublishedSettingsTab.TabId, PrivacySettingsTab.TabId, ControlLaneSettingsTab.TabId,
+    ];
 
     private static MeshNode Seed(string id, string name, UiContribution content)
         => new(id, "Admin/UiContribution")
