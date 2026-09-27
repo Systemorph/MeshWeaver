@@ -74,6 +74,12 @@ rules:
   - apiGroups: ["secrets-store.csi.x-k8s.io"]
     resources: ["secretproviderclasses"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # READ-ONLY: hosting-kv-set's sync wait reads which object VERSION each pod mounted (metadata,
+  # never a value). The same rule is on hosting-secret-writer; it is here too while a secret write
+  # can still run as hosting-operator (no Hosting:Operator:SecretWriterServiceAccount configured).
+  - apiGroups: ["secrets-store.csi.x-k8s.io"]
+    resources: ["secretproviderclasspodstatuses"]
+    verbs: ["get", "list"]
   # READ-ONLY, for hosting-audit. The live-only-config audit lists every kind a namespace can carry
   # and compares it against the helm manifest; a kind it is Forbidden to list is one it must NOT
   # report as clean, so it refuses — which means every kind below has to be readable or the audit

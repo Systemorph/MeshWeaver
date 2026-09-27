@@ -8,7 +8,7 @@
 # App's private key: `memexsystemorph-GitHub-App-PrivateKey`, needed by `build` as
 # `build-GitHub-App-PrivateKey`) has to be COPIED under each holder's prefix rather than mapped
 # across prefixes, or the first teardown would take the shared PEM with it. Until now that copy was
-# a hand step (`az keyvault secret show … | az keyvault secret set --file /dev/stdin`). The record
+# a hand step (read the source out of the vault, write it back under the new name). The record
 # now states it (`keyVaultSecrets.secrets[].copyFrom`) and the Provision runs this.
 #
 #   target exists   → KEPT, never rewritten (the master-key rule: hosting-kv-ensure). Its value is
@@ -59,7 +59,7 @@ kv_exists() {
 created=0 kept=0 drift=0
 for pair in "${copies[@]}"; do
   target="${pair%%=*}" source_name="${pair#*=}"
-  manual="az keyvault secret show --vault-name ${vault} --name ${source_name} --query value -o json | jq -j . | az keyvault secret set --vault-name ${vault} --name ${target} --file /dev/stdin --output none"
+  manual="re-issue the credential at its source and paste it on the control instance's record page for this instance (Set Key Vault secrets…) as ${target} — never a hand-run vault command (policy secrets-write-only-entry)"
   if hosting::dry; then
     if kv_exists "$target"; then
       hosting::log "keep    ${target} (exists — never rewritten; a real run compares it with ${source_name} by hash)"
@@ -96,7 +96,7 @@ for pair in "${copies[@]}"; do
   printf '%s' "$source_value" > "$copy_file"
   unset source_value
   az keyvault secret set --vault-name "$vault" --name "$target" --file "$copy_file" --output none \
-    || hosting::die "could not create ${target} in vault ${vault}. Nothing was written; the hand command is: ${manual}"
+    || hosting::die "could not create ${target} in vault ${vault}. Nothing was written; the manual path is: ${manual}"
   rm -f "$copy_file"
   kv_exists "$target" \
     || hosting::die "${target} was written to vault ${vault} but cannot be read back — refusing to report a secret the CSI driver will not find"

@@ -117,8 +117,9 @@ if [ -n "$db_connection" ]; then
     kept=$((kept + 1))
     hosting::say kv_db_connection kept
   else
-    # Every input, or a refusal naming the flag and the one hand command that still works.
-    manual="az keyvault secret set --vault-name ${vault} --name ${db_connection} --file <file holding Host=…;Port=…;Username=…;Password=…;Database=…;SslMode=Require;Trust Server Certificate=true>"
+    # Every input, or a refusal naming the flag and the one manual path that still works: the
+    # write-only GUI (policy secrets-write-only-entry), never a hand-run vault command.
+    manual="paste it on the control instance's record page for this instance (Set Key Vault secrets…) as ${db_connection} — never a hand-run vault command (policy secrets-write-only-entry) (Host=…;Port=…;Username=…;Password=…;Database=…;SslMode=Require;Trust Server Certificate=true)"
     for pair in "db-host:$db_host" "db-port:$db_port" "db-user:$db_user" "db-name:$db_name" "db-password-secret:$db_password_secret"; do
       [ -n "${pair#*:}" ] \
         || hosting::die "${db_connection} is absent from vault ${vault} and cannot be composed: missing --${pair%%:*}. The plan passes --db-password-secret from AZ_POSTGRES_PASSWORD_SECRET on the control record's operator.environment (the vault object holding the server's admin password, e.g. memex-postgres-password) — set it and re-request the action, or write the object by hand: ${manual}"
@@ -142,7 +143,7 @@ if [ -n "$db_connection" ]; then
         "$db_host" "$db_port" "$db_user" "$db_password" "$db_name" > "$db_file"
       unset db_password
       az keyvault secret set --vault-name "$vault" --name "$db_connection" --file "$db_file" --output none \
-        || hosting::die "could not create ${db_connection} in vault ${vault}. Nothing was written; the hand command is: ${manual}"
+        || hosting::die "could not create ${db_connection} in vault ${vault}. Nothing was written; the manual path is: ${manual}"
       rm -f "$db_file"
       kv_exists "$db_connection" \
         || hosting::die "${db_connection} was written to vault ${vault} but cannot be read back — refusing to report a secret the CSI driver will not find"

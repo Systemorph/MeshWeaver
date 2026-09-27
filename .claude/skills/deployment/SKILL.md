@@ -125,6 +125,13 @@ true, and bites:
   its environment.
 - **A `Reconcile` can refuse on the Key Vault values half** before helm runs, if the half carries
   structure. Run a `HelmRelease` action with `helmAction: capture` first, then the Reconcile.
+- **A secret is never set or read with `az` by hand** (policy `secrets-write-only-entry`). Paste or
+  generate it on the control instance: `Deployments/<id>` → **Set Key Vault secrets…**. That files a
+  `SetSecrets` action whose Job writes as the WRITER identity (it can list, set and delete, but never
+  read a value) and stamps the `mw-fp` fingerprint tag. Compare the two ends of a pairing by that
+  fingerprint, never by reading the values. CI refuses a new hand-run vault command
+  (`check-manual-keyvault.py`). Full model:
+  [SecretsWriteOnlyEntry.md](../../../src/MeshWeaver.Documentation/Data/Architecture/SecretsWriteOnlyEntry.md).
 
 The rules, the page layout and the threat model: `Hosting/AksOperationsViaActions` (Plugins,
 "Approval in the mesh" and "What operating it taught") · [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md)

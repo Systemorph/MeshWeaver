@@ -311,18 +311,9 @@ To reset to the post-initialize state, drop the per-user partition schemas and t
 
 Production secrets live in **Key Vault** (access-policy mode) and are projected into the pod by the AKS **CSI Secrets Store** add-on — no plaintext env vars; the vault is the source of truth.
 
-One-time wiring: grant the CSI add-on's identity `get/list` on the vault, store each secret, then create a `SecretProviderClass` that maps Key Vault secret names → env-var keys and syncs them into a k8s Secret the deployment mounts (CSI volume) and reads via `envFrom`:
+The wiring: the CSI add-on's identity is the vault's READER (`get` only), provisioned as infrastructure-as-code; each secret is entered through the record page's write-only **Set Key Vault secrets…** dialog on the control instance and stored by the governed WRITER identity; and a `SecretProviderClass` maps Key Vault secret names → env-var keys and syncs them into a k8s Secret the deployment mounts (CSI volume) and reads via `envFrom`. Nobody runs a vault command by hand (policy `secrets-write-only-entry`, [Secrets: Write-Only Entry](../SecretsWriteOnlyEntry)). The class `memex-kv` maps `ai-keyprotection-masterkey` → `Ai__KeyProtection__MasterKey` (and the PG connection, the Microsoft secret and the Bootstrap secret) and syncs them into the `memex-kv-secrets` k8s Secret; the portal has a CSI volume for `memex-kv` + `envFrom: secretRef: memex-kv-secrets`.
 
-```bash
-# CSI identity object id: az aks show -g <rg> -n <cluster> --query addonProfiles.azureKeyvaultSecretsProvider.identity.objectId -o tsv
-az keyvault set-policy -n <key-vault> --object-id <csi-identity-objectid> --secret-permissions get list
-az keyvault secret set --vault-name <key-vault> --name ai-keyprotection-masterkey --value '<value>'   # dashes only in KV names
-# SecretProviderClass `memex-kv` maps ai-keyprotection-masterkey -> Ai__KeyProtection__MasterKey (and the
-# PG conn / Microsoft secret / Bootstrap secret) and syncs them into the `memex-kv-secrets` k8s Secret;
-# the portal has a CSI volume for `memex-kv` + `envFrom: secretRef: memex-kv-secrets`.
-```
-
-**To rotate a secret:** `az keyvault secret set` (creates a new version) → `kubectl -n memex rollout restart deployment/memex-portal-deployment` (the CSI driver re-reads on the next mount).
+**To rotate a secret:** paste the new value in the same dialog with **Restart after** set — the action writes a new version, waits until the synced Secret carries it, and rolls the portal onto it.
 
 The `SecretProviderClass` + the CSI volume/`envFrom` were applied post-`deploy.sh` by hand until 2026-08-30. The chart now renders all of them from the `keyVaultSecrets` values block (names only); see [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values". The hand-made `memex-kv` object above is the shape the record adopts by stating its live names.
 
