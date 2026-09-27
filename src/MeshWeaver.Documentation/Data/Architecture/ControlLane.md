@@ -139,6 +139,17 @@ reported steps and refuses a report whose stated digest differs (`ControlLaneCli
 so a drift between the two implementations is a loud refusal at dry-run time — never an approval
 that can never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` pins the encoding.
 
+## What each operation binds
+
+- **Recycle** binds the target and, for a NodeType, the EXACT address set of its dependency network
+  (its digest is in the step's command). The cascade recomputes the network when the dispose lands,
+  so the run derives it once more right before the dispose and refuses unless it is the bound set; an
+  INCOMPLETE network is refused at planning, before anything is disposed.
+- **DeleteSpace** binds what the in-process action binds: the space, schema, root shape, every grant,
+  GitSync node, content root and NodeType, the outside dependents and the store route. Row counts are
+  shown, never bound. A framework delete that completes WITHOUT an answer fails the run — no answer
+  is not "already gone".
+
 ## Audited on both sides
 
 - **Target:** the ledger node carries the verified request, every status and step, and whether each

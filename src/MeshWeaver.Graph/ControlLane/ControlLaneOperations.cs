@@ -43,8 +43,9 @@ public static class ControlLaneText
         + $"/{request.Action}, request {request.RequestId}), requested by {Or(request.RequestedBy, "(unattributed)")}, "
         + $"approved by {Or(request.ApprovedBy, "(no approval — dry run)")}, run as system: {Sanitize(request.Reason)}";
 
-    private static string Or(string? value, string fallback) =>
-        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+    /// <summary>An identity from the request, flattened to one line (<see cref="Sanitize"/>), or the fallback. Pure.</summary>
+    public static string Or(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : Sanitize(value);
 }
 
 /// <summary>
@@ -88,7 +89,7 @@ public sealed class DeleteSpaceOperation : IControlLaneOperation
     public static string AuditLine(
         ControlLaneRequest request, SpaceDeletionInventory before, SpaceDeletionInventory after, ControlLanePlan plan) =>
         $"[DeleteSpace] '{before.Space}' on '{request.Deployment}' DELETED as system through the control lane — "
-        + $"requested by {request.RequestedBy ?? "(unattributed)"}, approved by {request.ApprovedBy ?? "(none)"}"
+        + $"requested by {ControlLaneText.Or(request.RequestedBy, "(unattributed)")}, approved by {ControlLaneText.Or(request.ApprovedBy, "(none)")}"
         + (request.ApprovedAt is { } at ? $" at {at.UtcDateTime:yyyy-MM-dd'T'HH:mm:ss'Z'}" : "")
         + $"; {before.TotalRows} row(s) ("
         + string.Join(", ", before.Tables.Select(t => $"{t.Table} {t.Rows}"))
@@ -138,49 +139,74 @@ public sealed class RecycleOperation : IControlLaneOperation
                           + "and this is NOT a statement that the target is absent"));
                 var isNodeType = string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
                 var network = isNodeType
-                    ? SpaceDeletion.AsSystem(hub, () => NodeTypeRecycleCascade.DependencyNetwork(hub, node.Path))
-                        .Take(1).Timeout(NetworkBudget).Select(n => (DependencyNetworkResult?)n)
+                    ? Network(hub, node.Path).Select(n => (DependencyNetworkResult?)n)
                     : Observable.Return<DependencyNetworkResult?>(null);
-                return network.Select(result => Preparation(hub, request, node, result));
+                return network.Select(result =>
+                    result is { IsComplete: false }
+                        // 🚨 Refused BEFORE anything is disposed: an incomplete network means an unknown
+                        // number of live hubs, and no plan can bind a blast radius nobody could read.
+                        ? throw new InvalidOperationException(
+                            $"the dependency network of '{node.Path}' is INCOMPLETE — {result.Incomplete.Count} enumeration leg(s) "
+                            + $"could not be read ({string.Join(" | ", result.Incomplete)}). Nothing is planned and nothing was "
+                            + "recycled; re-request once the index answers")
+                        : Preparation(hub, request, node, result));
             });
     }
+
+    /// <summary>The dependency network of a NodeType, derived as system — the function the cascade itself runs. Cold.</summary>
+    private static IObservable<DependencyNetworkResult> Network(IMessageHub hub, string nodeType) =>
+        SpaceDeletion.AsSystem(hub, () => NodeTypeRecycleCascade.DependencyNetwork(hub, nodeType))
+            .Take(1).Timeout(NetworkBudget);
+
+    /// <summary>
+    /// The EXACT address set a NodeType recycle reaches, as the digest the plan binds — so a network
+    /// that changed between plan and run (same count, other addresses) is another plan. Pure.
+    /// </summary>
+    public static string NetworkDigest(IEnumerable<string> addresses) =>
+        "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            string.Join("\n", addresses.Distinct(StringComparer.Ordinal).OrderBy(a => a, StringComparer.Ordinal))))).ToLowerInvariant();
 
     private ControlLanePreparation Preparation(
         IMessageHub hub, ControlLaneRequest request, MeshNode node, DependencyNetworkResult? network)
     {
         var isNodeType = network is not null;
+        var bound = network is null ? null : NetworkDigest(network.Addresses);
         var steps = new[]
         {
             ("Recycle",
                 $"hub.RecycleNode(\"{node.Path}\", reason) as system — "
                 + (isNodeType
-                    ? $"a NodeType: the dispose cascades to {network!.Addresses.Count} address(es) in its dependency network"
+                    ? $"a NodeType: the dispose cascades to {network!.Addresses.Count} address(es) in its dependency network "
+                      + $"(address set {bound}); the run re-derives the network and refuses if it is not this set"
                     : $"a node address (nodeType {node.NodeType ?? "none"}): only this address, no cascade"),
                 false),
         };
-        var notes = network is { IsComplete: false }
-            ? new[] { $"⚠️ {network.Incomplete.Count} enumeration leg(s) of the dependency network could not be read: "
-                      + string.Join(" | ", network.Incomplete) }
-            : [];
+        var notes = network is null
+            ? Array.Empty<string>()
+            : new[] { $"Dependency network ({network.Addresses.Count}): "
+                      + string.Join(", ", network.Addresses.OrderBy(a => a, StringComparer.Ordinal).Take(SpaceDeletion.NamedDependents))
+                      + (network.Addresses.Count > SpaceDeletion.NamedDependents ? $", … and {network.Addresses.Count - SpaceDeletion.NamedDependents} more" : "") };
         var plan = ControlLanePlan.Of(Operation, request.Deployment, steps, notes);
+        // 🚨 The cascade recomputes the network when the dispose lands, so the run derives it once more
+        // right before the dispose and refuses unless it is the bound set.
+        var verified = isNodeType
+            ? Network(hub, node.Path).Select(now => now.IsComplete && NetworkDigest(now.Addresses) == bound
+                ? now
+                : throw new InvalidOperationException(
+                    $"the dependency network of '{node.Path}' is no longer the approved one ({(now.IsComplete ? $"{now.Addresses.Count} address(es), set {NetworkDigest(now.Addresses)}" : "incomplete")} "
+                    + $"vs approved set {bound}) — nothing was recycled; re-request to plan again"))
+            : Observable.Return<DependencyNetworkResult>(null!);
         return new ControlLanePreparation(plan, () =>
-            SpaceDeletion.AsSystem(hub, () => hub.RecycleNode(node.Path, RecycleBudget, ControlLaneText.ReasonLine(request)))
+            verified.SelectMany(_ => SpaceDeletion.AsSystem(hub, () => hub.RecycleNode(node.Path, RecycleBudget, ControlLaneText.ReasonLine(request)))
                 .Take(1)
                 .DefaultIfEmpty(null)
-                .Select(back =>
-                {
-                    if (back is null)
-                        throw new InvalidOperationException(
-                            $"the dispose of '{node.Path}' was posted, but the address answered again WITHOUT the node — this is not reported as a successful recycle");
-                    if (network is { IsComplete: false })
-                        throw new InvalidOperationException(
-                            $"the recycle of '{node.Path}' is INCOMPLETE: {network.Incomplete.Count} enumeration leg(s) of its dependency network "
-                            + $"could not be read ({string.Join(" | ", network.Incomplete)}); the addresses that WERE derived were recycled");
-                    return $"[Recycle] '{node.Path}' on '{request.Deployment}' recycled as system through the control lane: the dispose "
-                           + $"was posted and a FRESH activation answered a read (version {back.Version})"
-                           + (isNodeType ? $"; {network!.Addresses.Count} address(es) in its dependency network were targeted by the cascade" : "")
-                           + $" — requested by {request.RequestedBy ?? "(unattributed)"}, approved by {request.ApprovedBy ?? "(none)"}; "
-                           + $"plan {ControlLaneText.Short(plan.Digest())}; request {request.RequestId}; reason: {ControlLaneText.Sanitize(request.Reason)}";
-                }));
+                .Select(back => back is null
+                    ? throw new InvalidOperationException(
+                        $"the dispose of '{node.Path}' was posted, but the address answered again WITHOUT the node — this is not reported as a successful recycle")
+                    : $"[Recycle] '{node.Path}' on '{request.Deployment}' recycled as system through the control lane: the dispose "
+                      + $"was posted and a FRESH activation answered a read (version {back.Version})"
+                      + (isNodeType ? $"; the cascade targeted the approved network of {network!.Addresses.Count} address(es)" : "")
+                      + $" — requested by {ControlLaneText.Or(request.RequestedBy, "(unattributed)")}, approved by {ControlLaneText.Or(request.ApprovedBy, "(none)")}; "
+                      + $"plan {ControlLaneText.Short(plan.Digest())}; request {request.RequestId}; reason: {ControlLaneText.Sanitize(request.Reason)}")));
     }
 }

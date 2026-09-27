@@ -465,8 +465,8 @@ public static class SpaceDeletion
         var targets = new[] { inventory.Space }.Concat(inventory.NodeTypes).ToList();
         return Observable.Defer(() =>
         {
-            var access = hub.ServiceProvider.GetService<AccessService>();
-            using (access?.ImpersonateAsSystem())
+            var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+            using (access.ImpersonateAsSystem())
                 foreach (var target in targets)
                     hub.GetMeshHub().NodeOperationIssuingHub()
                         .Post(new DisposeRequest { Reason = reason }, o => o.WithTarget(new Address(target)));
@@ -487,7 +487,11 @@ public static class SpaceDeletion
             .Select(target => AsSystem(hub, () => DeleteInSpace(hub, target, space))
                 .Take(1)
                 .Timeout(DeleteBudget)
-                .DefaultIfEmpty(false)
+                // 🚨 An empty completion is NOT "already gone": no answer is no evidence either way.
+                .Select(removed => (bool?)removed)
+                .DefaultIfEmpty(null)
+                .Select(removed => removed ?? throw new InvalidOperationException(
+                    $"the delete of {what} '{target}' completed WITHOUT an answer — whether it was removed is unknown"))
                 .Catch((Exception ex) => Observable.Throw<bool>(new InvalidOperationException(
                     $"the delete of {what} '{target}' failed — {ex.GetType().Name}: {ex.Message}", ex)))
                 .Select(removed => (target, removed)))

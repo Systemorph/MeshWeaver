@@ -96,8 +96,8 @@ public static class ControlLaneAdmission
             return (ControlLaneVerdict.Refused, $"'{request.Target}' is not a plain mesh path");
         if (string.IsNullOrWhiteSpace(request.Reason))
             return (ControlLaneVerdict.Refused, "the request carries no reason — every lane operation states why");
-        if (string.IsNullOrWhiteSpace(request.Action))
-            return (ControlLaneVerdict.Refused, "the request names no control-side action to report to");
+        if (string.IsNullOrWhiteSpace(request.Action) || !IsPlainPath(request.Action))
+            return (ControlLaneVerdict.Refused, "the request names no plain control-side action path to report to");
         if (!request.DryRun)
         {
             if (!Digest.IsMatch(request.PlanDigest ?? ""))
@@ -112,6 +112,7 @@ public static class ControlLaneAdmission
     /// <summary>A mesh path with no empty segment, no <c>..</c>, and no leading or trailing slash. Pure.</summary>
     public static bool IsPlainPath(string path) =>
         path.Length > 0 && path[0] != '/' && path[^1] != '/'
+        && !path.Any(c => char.IsControl(c) || char.IsWhiteSpace(c) || c is '?' or '#' or '\\' or '@')
         && path.Split('/').All(segment => segment.Length > 0 && segment != ".." && segment != ".");
 
     /// <summary>The ledger path a request id is claimed at on the target.</summary>

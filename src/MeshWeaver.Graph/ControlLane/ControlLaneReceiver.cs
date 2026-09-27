@@ -91,9 +91,14 @@ public sealed class ControlLaneReceiver : IDisposable
         this.hub = hub;
         this.logger = logger;
         this.sink = sink;
-        this.operations = operations
-            .GroupBy(o => o.Operation, StringComparer.Ordinal)
-            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var claimed = operations.GroupBy(o => o.Operation, StringComparer.Ordinal).ToList();
+        // 🚨 Two executors claiming one value would let DI enumeration order decide which system
+        // action an unchanged signed request runs — refused at construction, loudly.
+        if (claimed.FirstOrDefault(g => g.Count() > 1) is { } duplicate)
+            throw new InvalidOperationException(
+                $"control lane operation '{duplicate.Key}' is claimed by {duplicate.Count()} executors "
+                + $"({string.Join(", ", duplicate.Select(o => o.GetType().FullName))}) — each value has exactly one");
+        this.operations = claimed.ToImmutableDictionary(g => g.Key, g => g.Single(), StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -300,7 +305,8 @@ public sealed class ControlLaneReceiver : IDisposable
             {
                 var record = node.ContentAs<ControlLaneRecord>(execution.JsonSerializerOptions);
                 return record is null
-                    ? node
+                    ? throw new InvalidOperationException(
+                        $"the ledger {ControlLaneAdmission.LedgerPath(requestId)} carries no readable ControlLaneRecord, so the audit line could not be appended")
                     : node with
                     {
                         Content = record with

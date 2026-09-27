@@ -283,6 +283,16 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     [Fact]
+    public void TwoExecutorsClaimingOneOperation_AreRefusedAtConstruction()
+    {
+        var act = () => new ControlLaneReceiver(Mesh, [new DeleteSpaceOperation(), new DeleteSpaceOperation()],
+            new InboxSink(this), Microsoft.Extensions.Logging.Abstractions.NullLogger<ControlLaneReceiver>.Instance);
+        var refused = Record.Exception(act);
+        refused.Should().BeOfType<InvalidOperationException>();
+        refused!.Message.Should().Contain("claimed by 2 executors");
+    }
+
+    [Fact]
     public void TheRecord_MustClaimTheLaneKey_AndOneKeySlotPerDeployment()
     {
         ControlLaneKeys.BindingRefusal(Deployment, null, null).Should().Contain("declares no controlLaneKeySecret");
