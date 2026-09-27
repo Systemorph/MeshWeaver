@@ -115,6 +115,11 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         planned.Plan.Should().NotBeNull();
         planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Delete content");
         planned.PlanDigest.Should().Be(planned.Plan.Digest());
+        planned.Plan.Steps.Should().NotContain(s => s.Command.Contains("Doomed/Page"),
+            "a plan never contains a listing — the sets are queries with counts");
+        planned.Plan.Steps.Single(s => s.Name == "Delete content").Targets
+            .Should().Contain(t => t.Query == "path:Doomed scope:subtree" && t.Count == null,
+                "the subtree is a query and deliberately uncounted");
         (await target.Exists("Doomed/Page")).Should().BeTrue("a dry run changes nothing");
 
         var real = Request(ControlLaneOperation.DeleteSpace, "Doomed", dryRun: false, planned.PlanDigest);
@@ -438,6 +443,29 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var plan = ControlLanePlan.Of("Recycle", "memex-cloud", [("Recycle", "hub.RecycleNode(\"A\", reason) as system", false)]);
         plan.Digest().Should().Be(Sha("action-plan/v1;7:Recycle;11:memex-cloud;~;~;12:control-lane;1:1;1:1;4:safe;7:Recycle;"
                                       + "38:hub.RecycleNode(\"A\", reason) as system;"));
+    }
+
+    [Fact]
+    public void APlanWithTargets_IsTheActionPlanV2Encoding()
+    {
+        // Pinned against the in-mesh ActionPlanSnapshot.Digest (MeshWeaver.Plugins) for a structured
+        // step: after each step, the target count, then each target's query and count (never its label).
+        var plan = ControlLanePlan.OfSteps("DeleteSpace", "memex-cloud",
+        [
+            new ControlLanePlanStep
+            {
+                Name = "Delete content", Command = "del", Destructive = true,
+                Targets =
+                [
+                    new ControlLanePlanTarget { Label = "content-roots", Query = "path:X", Count = 1 },
+                    new ControlLanePlanTarget { Label = "subtree", Query = "path:X scope:subtree", Count = null },
+                ],
+            },
+        ]);
+        plan.Digest().Should().Be(Sha("action-plan/v2;11:DeleteSpace;11:memex-cloud;~;~;12:control-lane;1:1;"
+                                      + "1:1;11:destructive;14:Delete content;3:del;1:2;6:path:X;1:1;20:path:X scope:subtree;~;"));
+        (plan with { Steps = [plan.Steps[0] with { Targets = [plan.Steps[0].Targets[0] with { Label = "renamed" }, plan.Steps[0].Targets[1]] }] })
+            .Digest().Should().Be(plan.Digest(), "a target's label is shown, never bound");
     }
 
     [Fact]
