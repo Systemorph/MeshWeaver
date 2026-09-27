@@ -21,7 +21,7 @@ namespace MeshWeaver.Layout.Test;
 ///
 /// <para>The busy queue is made deterministic rather than raced: the test parks the sync hub's turn
 /// loop, submits the click behind the park through the real sender
-/// (<see cref="UserActionSubmission.SubmitUserAction"/>), starts the teardown, and only then lets the
+/// (<c>UserActionSubmission.SubmitUserAction</c>), starts the teardown, and only then lets the
 /// click leave. The owner-side click action records whether its own <c>sync/{id}</c> sub-hub had
 /// already been told to go when it ran, so BOTH ways of losing the click are red — refused, and
 /// run on a handler already being released — and neither needs a timed "nothing happened" window.</para>

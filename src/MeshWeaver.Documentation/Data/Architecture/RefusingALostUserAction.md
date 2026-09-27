@@ -200,6 +200,15 @@ that raises a click. It carries the acting user's `AccessContext` (a user action
 has no identity of its own), owns its own subscription, and hands a refusal to the caller as the
 already-localized `error.userActionNotRun` sentence.
 
+**The receipt now waits for the click action to be DONE.** For a `ClickedEvent` the owner answers
+`UserActionAccepted` when the action's completion signal completes (a `Task`, or the
+`IObservable<Unit>` of `WithReactiveClickAction`) and a `DeliveryFailure` carrying the
+error when it fails — so the receipt is also the end of a framework button's pending state, and the
+five-argument `SubmitUserAction(…, onRefused, onAccepted)` hands both ends to the view. A
+`Task.CompletedTask` handler is acknowledged on the owner's turn exactly as before; a still-running
+one extends the Quiescing drain for as long as it runs, bounded by the hub's quiesce budget like any
+other pending callback. See [Buttons: Pending State & Navigate-on-Accepted](/Doc/GUI/ButtonPendingState).
+
 ### 🚨 And a second thing the refusal was doing, which nobody had measured
 
 A refusal is a `DeliveryFailure` posted back to the **sender**, and the sender of a click is the
@@ -740,3 +749,5 @@ of that page's life being thrown away.
 - [Hub Disposal Model](../HubDisposalModel) — the Quiescing callback drain that now retains accepted
   user actions until their owner-side receipt lands.
 - [Localization](../Localization) — the catalog and the explicit-locale rule.
+- [Buttons: Pending State & Navigate-on-Accepted](/Doc/GUI/ButtonPendingState) — the UI that waits
+  on this receipt.

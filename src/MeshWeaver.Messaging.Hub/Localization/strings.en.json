@@ -31,6 +31,7 @@
   "code.lastRunBy": "last run {0} by {1}",
   "common.send": "Send",
   "common.sending": "Sending...",
+  "common.working": "Working…",
   "common.copy": "Copy",
   "common.copyCode": "Copy code",
   "common.download": "Download",
