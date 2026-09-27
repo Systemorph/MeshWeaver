@@ -141,14 +141,20 @@ that can never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding
 
 ## What each operation binds
 
-- **Recycle** binds the target and, for a NodeType, the EXACT address set of its dependency network
-  (its digest is in the step's command). The cascade recomputes the network when the dispose lands,
-  so the run derives it once more right before the dispose and refuses unless it is the bound set; an
-  INCOMPLETE network is refused at planning, before anything is disposed.
+- **Recycle** uses a complete `scope:children` listing of the target's parent only to establish that
+  the target path exists, then reads the current node from its stream before deciding whether it is a NodeType.
+  It never treats an exact-path index query as proof of presence or absence. It binds the target and,
+  for a NodeType, the EXACT address set of its dependency network (its digest is in the step's
+  command). The cascade recomputes the network when the dispose lands, so the run derives it once
+  more right before the dispose and refuses unless it is the bound set; an INCOMPLETE network is
+  refused at planning, before anything is disposed.
 - **DeleteSpace** binds what the in-process action binds: the space, schema, root shape, every grant,
   GitSync node, content root and NodeType, the outside dependents and the store route. Row counts are
-  shown, never bound. A framework delete that completes WITHOUT an answer fails the run — no answer
-  is not "already gone".
+  shown, never bound. The query index is used only to list nodes and establish path existence (by
+  listing a parent and filtering for its child, never by an exact-path query); the
+  root and `Admin/Partition/{space}` definition are then read from their live node streams before
+  their type/creator or table mappings enter the plan. A framework delete that completes WITHOUT an
+  answer fails the run — no answer is not "already gone".
 
 ## Audited on both sides
 
