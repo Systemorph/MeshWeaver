@@ -112,6 +112,11 @@ markup. Containers: `Controls.Stack`, `Controls.LayoutGrid`, `Controls.Splitter`
 `Controls.Combobox`, `Controls.Listbox`, `Controls.Text`. Column API + a worked table:
 `samples/Graph/Data/Cornerstone/Pricing/Source/PricingLayoutAreas.cs`.
 
+**An activity or action page is controls, not a dump** (policy `action-page-controls-and-queries`,
+proposed). Compose it from cards, grids and query controls that offer "show matching nodes". Express
+a SET of nodes as a mesh query (the top-level node plus `scope:subtree`), never as an enumerated
+listing pasted into a code control. The summary goes last.
+
 **Adding to the user's profile page** (`/{user}/EditProfile`) is a section, never a new page: a
 compiled module registers a `ProfileSectionDefinition` with `AddProfileSections(...)`; a module
 compiled from mesh content (the Store, for example) contributes a `UiContribution` node with

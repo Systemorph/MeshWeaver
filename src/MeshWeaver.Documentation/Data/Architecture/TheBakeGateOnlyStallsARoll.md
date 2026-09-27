@@ -260,8 +260,8 @@ killed) or roll gate (`/ready`, the roll stalls).
 
 ## Incident history
 
-The outage of the control instance, 2026-09-25/26, as three failures and the change that closed
-each one. The failures are the evidence above. The table is here so a reader who arrives from a
+The table lists the control instance's outage of 2026-09-25/26 as three failures, each with the
+change that closed it. The failures are the evidence above. The table is here so a reader who arrives from a
 later incident can see what was already fixed.
 
 | Failure | What closed it |
