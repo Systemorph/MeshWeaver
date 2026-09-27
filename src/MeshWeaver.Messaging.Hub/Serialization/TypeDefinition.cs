@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Utils;
 using Namotion.Reflection;
@@ -13,6 +14,17 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public record TypeDefinition : ITypeDefinition
 {
+    // Hubs register the same framework types independently. Share only metadata belonging to the
+    // CLR type; the weak key must allow runtime-compiled collectible types to leave with their ALC.
+    private static readonly ConditionalWeakTable<Type, DisplayMetadata> Metadata = new();
+
+    private sealed class DisplayMetadata(Type type)
+    {
+        internal DisplayAttribute? Display { get; } = type.GetCustomAttribute<DisplayAttribute>();
+        internal string FallbackName { get; } = type.Name.Wordify();
+        internal Lazy<string> Description { get; } = new(() => XmlDocs.Summary(type));
+    }
+
     /// <summary>
     /// Initializes a type definition, deriving display name, group, order, icon and description from the
     /// type's <see cref="DisplayAttribute"/>, icon attribute and XML doc summary.
@@ -25,11 +37,13 @@ public record TypeDefinition : ITypeDefinition
         Type = elementType;
         CollectionName = typeName;
 
-        var displayAttribute = Type.GetCustomAttribute<DisplayAttribute>();
-        DisplayName = displayAttribute?.GetName() ?? Type.Name.Wordify();
+        var metadata = Metadata.GetValue(elementType, static type => new DisplayMetadata(type));
+        // GetName/GetGroupName resolve ResourceType properties at use time. Cache the declaration,
+        // never their translated values, so two viewers can still receive different display text.
+        DisplayName = metadata.Display?.GetName() ?? metadata.FallbackName;
 
-        GroupName = displayAttribute?.GetGroupName();
-        Order = displayAttribute?.GetOrder();
+        GroupName = metadata.Display?.GetGroupName();
+        Order = metadata.Display?.GetOrder();
         var iconAttribute = Type.GetCustomAttribute<IconAttribute>();
         if (iconAttribute != null)
             Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
@@ -52,7 +66,7 @@ public record TypeDefinition : ITypeDefinition
         // what actually closes the window.
         //
         // Description is pure display metadata with a single consumer, so deferring costs nothing.
-        description = new(() => XmlDocs.Summary(Type));
+        description = metadata.Description;
     }
 
     /// <summary>
@@ -96,7 +110,7 @@ public record TypeDefinition : ITypeDefinition
 
     // Backing store. `init` accepts an already-materialised value (record `with` / deserialization),
     // so an explicitly-supplied Description still wins and is never recomputed from XML docs.
-    private readonly Lazy<string> description = new(string.Empty);
+    private readonly Lazy<string> description;
 
     /// <summary>
     /// Returns the key identifying the given instance using the type's configured key function.

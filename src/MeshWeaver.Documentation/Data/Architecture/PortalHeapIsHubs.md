@@ -124,6 +124,30 @@ The rest of the live heap is the same shape one level up: `LayoutAreaDefinition`
 (7.9 MB) and `ObservableRenderer` 65,279 (4.2 MB) against 2,473 `LayoutDefinition` — the layout
 catalogue, re-materialised per hub.
 
+### Neutral type metadata is shared; hub-specific state stays separate
+
+A private three-silo PostgreSQL diagnostic on 2026-09-27 retained 5,000 owning-node stream
+connections and produced 40,911 hubs. A full native heap census found 40,906 started hubs,
+five starting hubs and no disposed hubs, so this specimen does not reproduce the disposed-hub
+retention above. It does reproduce metadata multiplication: 3,662,876 type definitions describe
+378 CLR types, with 3,652,612 separate deferred XML-description graphs.
+
+`TypeDefinition` shares the type's display declaration, culture-independent wordified fallback
+name and deferred XML description through a `ConditionalWeakTable<Type, …>`. The weak key permits
+collectible types to leave with their assemblies. XML lookup stays on first description access
+and still goes through `XmlDocs.Summary`; constructing a definition must not parse XML docs.
+
+Resource-backed display names and groups are resolved for each definition, rather than caching
+their translated values. Key-function builders, collection names, owning addresses and explicit
+description overrides remain definition-specific. Icon construction also remains independent.
+The registry and Autofac scopes retain their existing ownership boundaries.
+
+A warmed construction probe retaining 1,000 definitions of `System.String` allocated
+1,032,000 bytes before this change and 400,000 afterward, with description graphs decreasing
+from 1,000 to one. This is constructor-allocation evidence, not a measured production heap
+reduction or a closure of the queue-starvation/OOM investigation. The regression budget and
+resource/override/key-isolation tests live in `TypeDefinitionMetadataTest`.
+
 ## Why the LIVE ones are never released
 
 `HostedHubsCollection.messageHubs` — `src/MeshWeaver.Messaging.Hub/HostedHubsCollection.cs:29`:
