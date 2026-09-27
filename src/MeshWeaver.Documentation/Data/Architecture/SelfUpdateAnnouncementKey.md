@@ -26,7 +26,7 @@ triage events and self-update announcements for **any** deployment. So `pearl` s
 |---|---|---|
 | **The declaration** | `Hosting/Deployment` record → `announcementKeySecret` (`DeploymentContent.AnnouncementKeySecret`) | names the deployment's OWN vault object — a NAME, never a value. Declaring it is also the binding (below). |
 | **Generating** | the deployment: **/Admin/Settings/ControlLane** → **Generate key** | the deployment's own global administrator generates the key ON the deployment, on its server. It is stored in that instance's own encrypted store as `Hosting:ControlInbox:Secret` ([Instance Secrets](../InstanceSecrets)), and the self-updater signs with it from the next announcement on, with no restart. The key is shown ONCE, with its fingerprint. |
-| **Registering** | the control instance: **/Hosting/Integrations/Deployment/<id>** → **Announcement key** → paste → **Save** | a global administrator of the control instance pastes the key the deployment's administrator sent over a secure channel. It is stored in the control instance's own encrypted store as `Hosting:PlatformWebhookSecret:<deploymentId>`, where the inbox verifies with it at once, and a vault copy is filed under the record's `announcementKeySecret` through the governed `SetSecrets` action. The fingerprint shown must equal the one the deployment's administrator sent separately. |
+| **Registering** | the control instance: **/Hosting/Integrations/Deployment/<id>** → **Announcement key** → paste → **Save** | a global administrator of the control instance pastes the key the deployment's administrator sent over a secure channel. It is stored in the control instance's own encrypted store as `Hosting:PlatformWebhookSecret:<deploymentId>`, where the inbox verifies with it at once. No vault copy is written. The fingerprint shown must equal the one the deployment's administrator sent separately. |
 | **The sender's mount** (optional) | the deployment's pod: `Hosting__ControlInbox__Secret` ← that vault object | the older way to deliver the same key. The self-updater signs with the key entered in the portal if there is one, else with this mount. |
 | **The receiver's mount** (optional) | the control instance: `Hosting__PlatformWebhookSecret__<deploymentId>` ← the same vault object | a CHILD of the inbox's shared key — the shape `Hosting:ModuleReportSecret:<deployment>` already has. The key registered in the portal takes precedence over it. |
 | **Ingestion** | core `WebhookInbox.Deliver` → `SenderKeyOf` | when the target's shared secret does not verify, the ONE child of the target's `SecretConfigKey` section whose value does is accepted as a **per-sender key** (two children verifying — two senders sharing a value — name nobody and are refused); the delivery is stored and `DeliveryResult.SenderKey` names the child. The inbox only decides whether the bytes are worth storing — it never widens what a delivery may do. |
@@ -55,8 +55,8 @@ The key is generated WHERE IT IS USED TO SIGN — on the deployment, by its own 
 the control instance only registers it. Nobody mints, copies or mounts it by hand, and nobody needs
 vault access or cluster access.
 
-1. **The record declares the key.** `Deployments/<id>` carries `announcementKeySecret` (the name
-   of the vault object the copy is filed under, e.g. `pearl-Hosting-AnnouncementKey`). Without the
+1. **The record declares the key.** `Deployments/<id>` carries `announcementKeySecret` (e.g. `pearl-Hosting-AnnouncementKey` — the claim; it names
+   the object an OPTIONAL mount would read, below). Without the
    declaration, rule 3 refuses every announcement signed with the key, and the Announcement key section says so.
 2. **Generate** (the deployment, its own global administrator). **/Admin/Settings/ControlLane** →
    **Generate key**. The server generates a 256-bit key, stores it encrypted, and shows it ONCE with
@@ -64,8 +64,8 @@ vault access or cluster access.
    e-mail) and the fingerprint separately. Until step 3, **Test connection** reads as a mismatch and
    no update is handed over.
 3. **Register** (the control instance, a global administrator). **/Hosting/Integrations/Deployment/<id>**
-   → **Announcement key** → paste the key → **Save**. The inbox verifies with it at once; a vault copy is filed
-   through the governed `SetSecrets` action, which waits for approval. The fingerprint shown must
+   → **Announcement key** → paste the key → **Save**. The inbox verifies with it at once; nothing is written to a
+   vault. The fingerprint shown must
    equal the one the deployment's administrator sent — if it does not, the key was mangled on the way.
 4. **Test** (the deployment). **Test connection** sends a signed test to the control inbox with
    the header `X-MeshWeaver-Verify-Only: true`. The inbox verifies the signature and stores
@@ -135,8 +135,6 @@ cluster access (policy `secrets-write-only-entry`, [Secrets: Write-Only Entry, S
 | register, register a new key, revoke | control instance → **/Hosting/Integrations/Deployment/<id>** → **Announcement key** | a global administrator of the control instance |
 | generate, generate again | the deployment → **/Admin/Settings/ControlLane** | a global administrator of that deployment |
 | check the pairing | both panels show the fingerprint; **Test connection** on the deployment, and the Integrations app's "last verified" line | either |
-
-The vault copy that registering the key files goes through the governed `SetSecrets` action: the plan is shown, it waits for approval, and the operator's writer identity writes it.
 
 **Break-glass only.** If the portal itself is down, reach the vault through the operator's governed
 path, never through a personal vault permission. A break-glass write is half an operation:
