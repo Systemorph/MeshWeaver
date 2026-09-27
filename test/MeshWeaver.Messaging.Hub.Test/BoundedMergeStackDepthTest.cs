@@ -167,6 +167,55 @@ public class BoundedMergeStackDepthTest
     }
 
     /// <summary>
+    /// An enumerable passed to the overload is consumed inline, even inside an already-running
+    /// trampoline. Callers may subscribe and dispose in one turn after synchronous inputs; deferring
+    /// enumeration to the trampoline would silently drop the entire fan-out.
+    /// </summary>
+    [Fact]
+    public void TheEnumerableOverload_EnumeratesInlineInsideARunningTrampoline()
+    {
+        var values = ImmutableList<int>.Empty;
+        var completed = false;
+        Exception? error = null;
+
+        Scheduler.CurrentThread.Schedule(() =>
+        {
+            using var subscription = Enumerable.Range(0, 3)
+                .Select(i => Observable.Return(i))
+                .MergeBounded(Bound)
+                .ToList()
+                .Subscribe(v => values = v.ToImmutableList(), ex => error = ex,
+                    () => completed = true);
+        });
+
+        Assert.Null(error);
+        Assert.True(completed, "the enumerable fan-out was deferred until after its caller disposed");
+        Assert.Equal(new[] { 0, 1, 2 }, values);
+    }
+
+    /// <summary>An exception thrown while enumerating the source remains an observable error.</summary>
+    [Fact]
+    public void TheEnumerableOverload_ReportsAnEnumerationFailure()
+    {
+        static System.Collections.Generic.IEnumerable<IObservable<int>> FaultWhileEnumerating()
+        {
+            yield return Observable.Return(1);
+            throw new InvalidOperationException("source enumeration failed");
+        }
+
+        var values = ImmutableList<int>.Empty;
+        var completed = false;
+        Exception? error = null;
+        FaultWhileEnumerating()
+            .MergeBounded(Bound)
+            .Subscribe(v => values = values.Add(v), ex => error = ex, () => completed = true);
+
+        Assert.Equal(new[] { 1 }, values);
+        Assert.Equal("source enumeration failed", error?.Message);
+        Assert.False(completed);
+    }
+
+    /// <summary>
     /// An inner that fits the bound is subscribed INLINE on the signal that delivered it — even inside
     /// a running trampoline — so an outer that emits an inner and then faults in the same turn still
     /// has that inner's synchronous values delivered BEFORE the fault, exactly as <c>Merge(n)</c> does.

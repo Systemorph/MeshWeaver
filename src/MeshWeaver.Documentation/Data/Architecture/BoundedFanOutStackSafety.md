@@ -74,6 +74,13 @@ that costs: inside a running trampoline every inner subscription is DEFERRED, so
 an inner and faults in the same turn drops that inner's values, and a long-running outer on the
 trampoline starves the inners. `AnInnerEmittedBeforeAnOuterFault_DeliversItsValuesFirst` pins it.
 
+The `IEnumerable<IObservable<T>>` overload also enumerates inline. Converting an enumerable with
+Rx's `ToObservable()` can defer the enumeration when called from an already-running current-thread
+trampoline; a caller that subscribes and disposes in that turn would then drop the whole fan-out.
+The enumerable overload feeds each item into the same drain loop directly, preserving the
+synchronous start behavior of `Merge(IEnumerable, n)` without reintroducing recursive queued
+subscriptions. `TheEnumerableOverload_EnumeratesInlineInsideARunningTrampoline` pins this contract.
+
 ```csharp
 // ❌ recurses once per queued inner when inners complete synchronously
 nodes.Select(n => Lookup(n)).ToObservable().Merge(NodeCopyHelper.DefaultBatchSize)
