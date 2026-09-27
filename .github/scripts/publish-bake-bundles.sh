@@ -22,7 +22,8 @@
 #
 # <source-sha> is the CONTENT identity — the producing repo's commit the bake was taken from
 # (what the caller passed to mw-plugin-test --source-sha). The publication key is content ×
-# framework: a sealed directory is skipped only when BOTH match (see the sealed-skip below).
+# framework: a sealed directory is skipped only when BOTH match and any supplied portal surface is
+# byte-identical (see the sealed-skip below).
 # Omitting it degrades the skip to framework-identity-only — correct for a producer whose content
 # lives in the framework repo itself, but a NODE repo must pass it: its content changes while the
 # framework identity stays put, and a framework-only skip would freeze its first publication for
@@ -1511,6 +1512,33 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
       publish_publication "$ACCOUNT" "$SHARE" "$DEST" true
       return 0
+    fi
+    # A core commit can be baked against a newer Plugins closure without changing the
+    # framework identity. The canonical portal surface must therefore agree too: skipping
+    # on the content SHA alone can keep a missing-type HOLD alive over a newer image.
+    if { [ -z "${SOURCE_SHA:-}" ] || [ "$published_sha" = "$SOURCE_SHA" ]; } && [ "$HAS_SURFACE" = "true" ]; then
+      surface_exists=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
+        --path "$LIVE/$SURFACE_FILE" --auth-mode login --backup-intent --query exists -o tsv \
+        --only-show-errors 2>/dev/null || echo unknown)
+      if [ "$surface_exists" != "true" ] && [ "$surface_exists" != "false" ]; then
+        echo "::error::could not determine whether $ACCOUNT/$SHARE holds $LIVE/$SURFACE_FILE. Refusing rather than treating an unreadable surface as identical."
+        exit 1
+      fi
+      surface_same=false
+      if [ "$surface_exists" = "true" ]; then
+        if ! az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
+            --path "$LIVE/$SURFACE_FILE" --dest "$SENTINEL_LOCAL_DIR/remote-$SURFACE_FILE" \
+            --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+          echo "::error::$LIVE/$SURFACE_FILE exists but could not be read. Refusing: the live surface was never compared."
+          exit 1
+        fi
+        if cmp -s "$SURFACE_LOCAL" "$SENTINEL_LOCAL_DIR/remote-$SURFACE_FILE"; then surface_same=true; fi
+      fi
+      if [ "$surface_same" != "true" ]; then
+        echo "sealed publication under $LIVE has a missing or changed platform surface despite matching content and framework identities — republishing the complete set."
+        publish_publication "$ACCOUNT" "$SHARE" "$DEST" true
+        return 0
+      fi
     fi
     # 🚨 A TARGET THAT ALREADY HOLDS THIS PUBLICATION IS AN OUTCOME, AND IT HAS TO BE COUNTED
     # (#4247). These two branches skip because the target is ALREADY SEALED ON THIS CONTENT — the
