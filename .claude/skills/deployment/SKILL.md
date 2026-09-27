@@ -61,8 +61,8 @@ refuses one under `deploy/`). Full procedure and decision table: [Deploying Acro
 ## 🚨 First: the memex API, not the cluster
 
 **Maintainer directive, 2026-09-08: every operation goes through the memex API — no direct `az` /
-`kubectl` access.** The control instance (`memex.meshweaver.cloud`, module `Hosting` from
-MeshWeaver.Plugins) exposes each of the recipes below as a `Hosting/InstanceAction` node whose
+`kubectl` access.** The control instance (`memex.systemorph.com`, MCP server `systemorph`, module
+`Hosting` from MeshWeaver.Plugins) exposes each of the recipes below as a `Hosting/InstanceAction` node whose
 answer is a node; the in-cluster operator and the monitoring stack hold the only credentials.
 Reach for the commands further down ONLY when the control plane itself is what is broken (the
 "break glass" section of the fleet guide, `get @Hosting/Guide`).
@@ -73,13 +73,50 @@ Reach for the commands further down ONLY when the control plane itself is what i
 | what is it running, per replica (image, ready, restarts, started, its own `/health` + detail) | `{ "requestedAction": "Sample" }` | `Ops/Status/<id>` (`replicas[]`, `warnings[]`), the Deployment page's status strip |
 | the last hour's error lines | `{ "requestedAction": "Logs", "query": "fail:\|crit:\|Exception", "sinceMinutes": 60, "limit": 300 }` | the action node's `logQl` / `entryCount` / `truncated`; lines under `Ops/Logs`, `@Deployments/<id>/area/Logs` |
 | what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
+| re-read ONE address no person may recycle (a NodeType and its dependency network, or any node) | `{ "requestedAction": "Recycle", "recycleTarget": "<path>", "reason": "…" }` + one approval | the run's log. Manual: `Hosting/RecycleAction` (Plugins) |
+| delete a space no person may delete (owner gone, stranded partition) — the sanctioned break-glass for DATA, since a global admin is not a data superuser | `{ "requestedAction": "DeleteSpace", … }`; it parks WITH the full plan | the plan on the node, the audit record. Manual: `Hosting/DeleteSpaceAction` (Plugins) |
 | upgrade the cluster's Kubernetes version (control plane + every pool) | plan: `{ "requestedAction": "UpgradeCluster", "dryRun": true }`; then `{ "requestedAction": "UpgradeCluster", "upgradePlan": "<plan node path>", "confirmation": "<id>" }` + ONE mesh approval — never `az aks upgrade` (policy `cluster-upgrade-governed`) | the plan on the dry-run node; the run's `log`, `aks_versions`; a stuck portal roll refuses it by name. Manual: `Hosting/ClusterUpgrade` (Plugins) · [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) "Kubernetes version upgrades" |
 
 All nodes are `nodeType: Hosting/InstanceAction`, `content.$type: InstanceActionContent`,
 `content.deployment: "Deployments/<id>"`. The full table — including what each action does and
 which credential runs it — is the fleet guide's "Roll, restart, observe — the ops actions".
 
-### 🚨 Authoring or reading a governed action: system credentials from the first step, pre-flight at park
+## 🚨 A gated action: you approve a PLAN, and the approval is bound to it
+
+Every mutating kind parks at *awaiting approval* WITH the plan it will run (the steps and commands,
+in the order they run). The approval binds the request, the action, the deployment, the image tag,
+the kind's own binding (a Recycle's target and force flag, a DeleteSpace's space) and the DIGEST of
+that plan. A plan that would come out differently re-parks; it never runs unapproved. What else is
+true, and bites:
+
+- **Plans are deterministic.** A clock-derived value (a dump's object name) comes from `planSeedAt`,
+  stamped at the first park of an approval round. A node that re-parks every few seconds with a
+  moving `parkedAt` is a plan that is not deterministic: a defect to file, not an approval to retry.
+- **The requester is recorded once**, at the first park. A re-park never rewrites it, so the approver
+  is never mistaken for the requester.
+- **Approve with the button.** It attests the AUTHENTICATED clicker (an HMAC over the approval, the
+  request, the park and the node revision). An approval typed by someone else is not an approval.
+- **Only the configured maintainer (`Hosting:Operator:Maintainer`) may approve their own request.**
+  From an agent session that is ONE MCP `patch`, written as the maintainer, carrying `requestedBy`,
+  `approvedBy`, `approvedAt` and every binding field as parked (`approvedRequest`, `approvedAction`,
+  `approvedDeployment`, `approvedImageTag`, plus `approvedRecycle` / `approvedPlan` where the kind
+  binds them). Split it into several writes, or let a binding field drift, and the gate re-parks.
+  This is a write in the maintainer's name, so do it only when the maintainer asked for it.
+- **A `Running` action survives a restart of the control instance.** The watcher re-opens every
+  orphaned `Running` action on start and resumes following it. Do not re-file it.
+- **One rollout budget.** How long a roll may take is the chart's own progress deadline
+  (`ChartRolloutBudget`), read by the action's wait and by the stuck-roll alarm alike.
+- **A `Reconcile` that ADDS a Key Vault key needs a `Restart` after it** (open finding,
+  Systemorph/MeshWeaver.Feedback#48): the CSI driver syncs the new object after the pod has resolved
+  its environment.
+- **A `Reconcile` can refuse on the Key Vault values half** before helm runs, if the half carries
+  structure. Run a `HelmRelease` action with `helmAction: capture` first, then the Reconcile.
+
+The rules, the page layout and the threat model: `Hosting/AksOperationsViaActions` (Plugins,
+"Approval in the mesh") · [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md)
+"Diagnostics — through the memex API first".
+
+## 🚨 Authoring or reading a governed action: system credentials from the first step, pre-flight at park
 
 Policy `governed-action-preflight`. **Every step of a governed action runs under the system
 identity from its first step**, and **at PLAN time — before it parks for approval — the action
@@ -97,12 +134,39 @@ identity but system), and its plan refuses at park when a per-node leg exceeds i
 [Partition Teardown](../../../src/MeshWeaver.Documentation/Data/Architecture/PartitionTeardown.md) →
 *The direct teardown*; the action's own manual is `Hosting/DeleteSpaceAction` (MeshWeaver.Plugins).
 
+## 🚨 Probes: the startup budget covers a cold boot, never a bake
+
+The bake gate and `required_modules` are ROLL GATES (policies `bake-gate-readiness-only`,
+`required-modules-readiness-only`): their verdict is read by `/ready` alone, so a refusal stalls the
+roll with the previous image serving and kills nothing. The startup probe proves only that the
+process booted, and memex and memex-cloud run it at `failureThreshold: 60` (600 s). Never raise
+`probes.startup` to "cover a bake" — that is the configuration that killed every container of both
+images every 3 h and took the control instance down. A container that dies at exactly
+`periodSeconds × failureThreshold` after boot is a startup-probe kill, not a crash: read `Sample`'s
+`lastTerminationReason` / `lastExitCode` per replica. Full account and incident history:
+[TheBakeGateOnlyStallsARoll.md](../../../src/MeshWeaver.Documentation/Data/Architecture/TheBakeGateOnlyStallsARoll.md).
+
+## 🚨 A schema change is planned, and every roll migrates first
+
+Policy `db-migration-planned`: migrations are expand-only, a `DbVersion` bump declares
+`Db-migration: V<N> — …` in its PR, every release publishes `ExpectedDbVersion`, and every roll path
+runs the migration Job before the image moves or refuses (the operator's `run.sh` interlock does it
+whatever Hosting generation planned the roll). The one exception is the break-glass `HelmRelease`
+dispatch; use `Reconcile`. Manual:
+[PlanningADatabaseMigration.md](../../../src/MeshWeaver.Documentation/Data/Architecture/PlanningADatabaseMigration.md).
+
 ## The AKS route (break glass — the control plane is what is broken)
+
+🚨 **Pass `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c` on EVERY `az` call** — written
+`<subscription>` in every example below. The default
+subscription may be "PartnerRe Memex", which holds another cluster with the SAME name
+(`<aks-cluster>`); without the flag you read the wrong system and nothing says so.
+`az role assignment delete --ids …` needs it too, or it fails with `InvalidAuthenticationTokenTenant`.
 
 The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`,
 swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR
 `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via
-`az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`** — and only when
+`az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "…"`** — and only when
 the API above cannot answer.
 
 **On AKS a code update = the record's image pin + a `Roll` action.** What the operator then runs is
@@ -110,7 +174,7 @@ build image → set image → restart (the AKS route does NOT use `tools/deploy.
 — those are the Container Apps route). The commands, for the bootstrap / break-glass case only:
 
 ```bash
-az acr login -n meshweaver
+az acr login --subscription <subscription> -n meshweaver
 # Portal (custom base) AND migration (the migration is what creates schema + the matview):
 dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
@@ -120,7 +184,7 @@ dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.cs
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
 # Roll out (NS = memex). 🚨 The MIGRATION is a Job, not a Deployment — see below.
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
   kubectl -n <NS> rollout restart deployment/memex-portal-deployment; \
   kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
@@ -156,9 +220,9 @@ stops, so `CrashLoopBackOff` on it now means exactly what it says.
 `Database migration completed. Version: N` AND the portal serves (HTTP 200):
 
 ```bash
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration"
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n <NS> logs job/memex-migration-<revision>"
 ```
 
@@ -175,8 +239,8 @@ delivery chain, the publish batching window and the reconciler are in
 [/release](../release/SKILL.md); the assertions are:
 
 ```bash
-az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+az acr repository show-tags --subscription <subscription> -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
+az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
 .github/scripts/check-image-set.sh <short-sha>   # the exact assertion CD itself makes
 ```
@@ -234,7 +298,10 @@ wiring itself — a full restart costs 30–60 s and loses the dashboard auth to
 - [ ] The operation was filed as a `Hosting/InstanceAction` on the control instance (Reconcile/Roll,
       Sample, Logs, Audit); any `kubectl` you ran yourself is written up as break-glass, with its
       other half reconciled.
-- [ ] Where `kubectl` was unavoidable, it was reached only through `az aks command invoke`.
+- [ ] Where `kubectl` was unavoidable, it was reached only through `az aks command invoke`, with
+      `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c`.
+- [ ] A gated action was approved on the PLAN it parked with (the plan hash on the page), not on its
+      reason.
 - [ ] No `deploy.sh` re-run for a code update.
 - [ ] The migration Job's log shows `Database migration completed. Version: N`.
 - [ ] The RUNNING image tag was read back off the deployment — not inferred from a green CI tick.

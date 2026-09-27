@@ -66,6 +66,11 @@ plane cannot select:
    acceptance reading is `pearl`'s boot line `apply=control-lane`, then its next announcement
    opening `selfupdate-roll-pearl-…` on the control instance.
 
+**Where this stands:** steps 1 and 2 are merged (#5775, MeshWeaver.Plugins#2416). Steps 3 to 5
+for `pearl` are an open pull request in Systemorph/Memex (#574) and wait on the owner's vault act,
+so until they land `pearl` still has no key the control plane accepts, and stays on hand rolls.
+Read the Memex record for `Deployments/pearl` before assuming either way.
+
 For a FLEET instance adopting its own key later, the same order holds with one extra care: the
 record's `announcementKeySecret` DECLARATION is what switches the fleet secret off for it (rule 4),
 so declare it only after both mounts are live — otherwise its announcements are refused until the
