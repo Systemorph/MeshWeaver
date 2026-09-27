@@ -388,6 +388,17 @@ case "$_kve_out" in *"::hosting:: kv_db_connection=created"*) ok "the run report
 case "$_kve_out" in *"::hosting:: kv_created=1"*) ok "…and counts it among the created objects" ;; *) bad "created count" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 
+# Existence is decided from `secret list` (metadata), never `secret show` (a value read the writer
+# identity cannot make), and a REFUSED listing is a refusal, never "absent" (policy
+# secrets-write-only-entry).
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+case "$_kve_log" in *"secret show"*"--query id"*) bad "existence is never checked with a value read" "az saw: ${_kve_log}" ;; *"secret list"*) ok "existence is checked with \`secret list\`, never \`secret show\`" ;; *) bad "existence check" "az saw: ${_kve_log}" ;; esac
+rm -rf "$_kve_state"
+kve HOSTING_KVE_LIST_FAIL=1 HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -ne 0 ] && ok "a vault that refuses the LISTING is a refusal, never 'absent'" || bad "list refused" "exited 0: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and nothing is (over)written" "az saw: ${_kve_log}" ;; *) ok "…and nothing is (over)written" ;; esac
+rm -rf "$_kve_state"
+
 # Present: KEPT — no read of the password, no write — the master-key rule, one object over.
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
   -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
