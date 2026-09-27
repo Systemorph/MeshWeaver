@@ -6,8 +6,9 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// Seed-integrity contract for the settings tabs riding the <c>UiContribution</c> lane
-/// (<see cref="PlatformSettingsTabAreas"/>, WS7 slices 2 + 4). Every seed must project into the
-/// global settings menu (Context = Settings), point at an AREA the same class actually registers
+/// (<see cref="PlatformSettingsTabAreas"/>, WS7 slices 2 + 4). Every ungated seed must project into
+/// the global settings menu (Context = Settings) and every Administration seed into the ADMIN APP
+/// (Context = NodeSettings, gated to the <c>AdminApp</c> node type), point at an AREA the same class actually registers
 /// (a dangling area renders the standard not-found placeholder — silently, to every user), keep
 /// its node id equal to the tab's former compiled tab id (the <c>/GlobalSettings/{Id}</c> deep-link
 /// contract), and the admin tabs must carry <c>Gates.AdminOnly</c> — dropping the gate would list
@@ -38,13 +39,17 @@ public class PlatformSettingsTabSeedTest
     ];
 
     [Fact]
-    public void Every_Seed_Targets_The_Settings_Context_And_A_Registered_Area()
+    public void Every_Seed_Targets_Its_Surface_And_A_Registered_Area()
     {
         Assert.NotEmpty(PlatformSettingsTabAreas.Seeds);
         Assert.All(PlatformSettingsTabAreas.Seeds, seed =>
         {
             var contribution = Assert.IsType<UiContribution>(seed.Content);
-            Assert.Equal(UiContribution.SettingsContext, contribution.Context);
+            // Administration tabs are tabs of the Admin app; everything else stays on the global
+            // settings page every signed-in viewer can open.
+            Assert.Equal(
+                AdminTabIds.Contains(seed.Id) ? UiContribution.NodeSettingsContext : UiContribution.SettingsContext,
+                contribution.Context);
             Assert.NotNull(contribution.Area);
             Assert.NotEqual("", contribution.Area);
             Assert.Contains(contribution.Area, PlatformSettingsTabAreas.Areas);
@@ -80,12 +85,27 @@ public class PlatformSettingsTabSeedTest
         {
             var contribution = Assert.IsType<UiContribution>(seed.Content);
             if (AdminTabIds.Contains(seed.Id))
+            {
                 Assert.True(contribution.Gates?.AdminOnly,
                     $"'{seed.Id}' was admin-gated as a compiled provider and must stay admin-only");
+                // Only the Admin app's node may carry it — not every node's settings page.
+                Assert.Equal(new[] { AdminAppNodeType.NodeType }, contribution.Gates?.NodeTypes?.ToArray() ?? []);
+            }
             else
                 Assert.NotEqual(true, contribution.Gates?.AdminOnly);
         });
     }
+
+    /// <summary>
+    /// Every Administration seed is recorded as RELOCATED, so an old
+    /// <c>/_Setting/GlobalSettings/{id}</c> link redirects into the Admin app instead of landing on
+    /// the global page's first tab.
+    /// </summary>
+    [Fact]
+    public void Admin_Tabs_Are_Recorded_As_Relocated_To_The_Admin_App()
+        => Assert.Equal(
+            AdminTabIds.OrderBy(i => i, StringComparer.Ordinal),
+            PlatformSettingsTabAreas.AdminAppTabIds.OrderBy(i => i, StringComparer.Ordinal));
 
     [Fact]
     public void Seeds_Live_In_The_Admin_UiContribution_Namespace_As_UiContribution_Nodes()
