@@ -29,8 +29,9 @@
 # SHA-256 prefix of what was written, so a reader can tell "the vault holds what was pasted" from
 # "something else is in there" without either being shown.
 #
-# --wait <object>=<syncedSecret>/<configKey>: after the write, wait until the Key Vault CSI driver
-# has synced the new value into <syncedSecret>'s <configKey> in --namespace (compared by hash). A
+# --wait <object>=<syncedSecret>/<configKey>: after the write, wait until every pod in --namespace
+# that mounts the object reports the NEW VERSION in its SecretProviderClassPodStatus (a metadata
+# read; no Secret is read). A
 # pod restarted before the sync would read the OLD synced Secret (DeploymentAKS → "KeyVault CSI env
 # timing"); the plan restarts only after this step returns.
 #
@@ -162,7 +163,6 @@ for object in "${objects[@]}"; do
     jq -rj --arg k "$object" '.[$k]' "$work/secrets.json" > "$work/value" \
       || hosting::die "could not extract the value for ${object}. ${written} of ${#objects[@]} object(s) were written before this one."
   fi
-  hash="$(hosting::sha256 < "$work/value")"
   fp="$(hosting::fingerprint "$work/value")"
   set_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if ! version_id="$(az keyvault secret set --vault-name "$vault" --name "$object" --file "$work/value" \
@@ -182,26 +182,45 @@ for object in "${objects[@]}"; do
   hosting::log "set       ${object} in vault ${vault} (${version_id##*/}; ${fp}; ${source_tag} by ${set_by})"
   hosting::say kv_set "${object}:${fp}"
   written=$((written + 1))
-  echo "$hash" > "$work/hash.$object"
+  echo "${version_id##*/}" > "$work/version.$object"
 done
 hosting::say kv_set_count "$written"
 
-# ── the CSI sync, by hash ──────────────────────────────────────────────────────────────────────
+# ── the CSI sync, by VERSION ───────────────────────────────────────────────────────────────────
+# Every pod that mounts the object has a SecretProviderClassPodStatus recording the object VERSION it
+# mounted (metadata, never a value). The wait is over when every such record carries the version this
+# step just wrote. It reads no Secret at all, so the writer's ServiceAccount needs no `get` on any
+# Kubernetes Secret (Doc/Architecture/SecretsWriteOnlyEntry).
 attempts="${HOSTING_KV_SYNC_ATTEMPTS:-40}" interval="${HOSTING_KV_SYNC_INTERVAL:-15}"
 for entry in "${waits[@]}"; do
   w_object="${entry%%=*}"; w_rest="${entry#*=}"; w_secret="${w_rest%%/*}"; w_key="${w_rest#*/}"
-  hosting::step "Wait for ${w_secret}/${w_key} to carry the new ${w_object}"
-  expected="$(cat "$work/hash.$w_object")"
-  synced_hash=""
+  hosting::step "Wait for the pods mounting ${w_object} (${w_secret}/${w_key}) to carry its new version"
+  expected="$(cat "$work/version.$w_object")"
+  verdict=""
   for i in $(seq 1 "$attempts"); do
-    synced_hash="$(hosting::secret_value "$namespace" "$w_secret" "$w_key" | hosting::sha256)"
-    if [ "$synced_hash" = "$expected" ]; then
-      hosting::log "synced    ${w_secret}/${w_key} carries the new value (attempt ${i})"
-      break
+    hosting::probe any kubectl -n "$namespace" get secretproviderclasspodstatuses -o json; rc=$?
+    if [ "$rc" -eq 2 ]; then
+      hosting::die "could not read the CSI driver's pod statuses in ${namespace}: ${HOSTING_PROBE_ERR}. The writer's ServiceAccount needs get/list on secretproviderclasspodstatuses (deploy/aks/manifests/hosting-operator/secret-writer.yaml). The vault HOLDS the new value; nothing here says whether the pods have it."
+    fi
+    if [ "$rc" -eq 0 ]; then
+      verdict="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r --arg id "secret/${w_object}" --arg v "$expected" '
+        [.items[]?.status.objects[]? | select(.id == $id) | .version] as $vs
+        | if ($vs | length) == 0 then "unmounted"
+          elif all($vs[]; . == $v) then "current \($vs | length)"
+          else "stale \([$vs[] | select(. != $v)] | length)/\($vs | length)" end' 2>/dev/null)"
+      case "$verdict" in current*)
+        hosting::log "synced    ${w_object}: ${verdict#current } pod mount(s) carry version ${expected} (attempt ${i})"
+        break ;;
+      esac
     fi
     [ "$i" -lt "$attempts" ] && sleep "$interval"
   done
-  [ "$synced_hash" = "$expected" ] \
-    || hosting::die "synced Secret ${w_secret} in ${namespace} did not pick up ${w_object} within $((attempts * interval))s. The vault HOLDS the new value; the pods still read the old one until the Key Vault CSI driver syncs it. The SecretProviderClass must list ${w_object} under ${w_key} and the driver's rotation must be enabled — then re-request the action (idempotent: the same value is written again)."
+  case "$verdict" in
+    current*) ;;
+    unmounted)
+      hosting::die "no pod in ${namespace} mounts ${w_object}: no SecretProviderClassPodStatus lists it. The vault HOLDS the new value, but the SecretProviderClass must list ${w_object} under ${w_key} before any pod can read it. Declare it on the record, Reconcile, then re-request the action (idempotent: the same value is written again)." ;;
+    *)
+      hosting::die "the pods in ${namespace} did not pick up version ${expected} of ${w_object} within $((attempts * interval))s (${verdict:-no reading}). The vault HOLDS the new value; the pods still read the old one until the Key Vault CSI driver rotates it. The driver's rotation must be enabled — then re-request the action (idempotent: the same value is written again)." ;;
+  esac
   hosting::say kv_synced "$w_object"
 done

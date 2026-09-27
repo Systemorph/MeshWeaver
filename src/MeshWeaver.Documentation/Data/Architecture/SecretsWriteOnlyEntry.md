@@ -57,8 +57,10 @@ alphabet its character classes span. Every generated value and every real API ke
 clears that bar easily. A short human-chosen password does not, and a published hash prefix of one
 would let anyone guess it offline, so its fingerprint reads `withheld:low-entropy`. There is
 deliberately no keyed HMAC: its key would be one more secret both ends would have to **read**, which is
-exactly the reader this design removes. `MeshWeaver.Mesh.SecretFingerprint.Of` and the operator's
-`hosting::fingerprint` compute the same string.
+exactly the reader this design removes. The operator's `hosting::fingerprint` is the reference
+implementation today. The portal-side twin, `SecretFingerprint.Of` in `MeshWeaver.Mesh.Security`, is
+**owed**: it arrives with the core change that adds the write-only secret control, and it must produce
+the same string byte for byte.
 
 `Enable`/`Disable` never pass tags: `set-attributes` replaces the whole tag set and would wipe the
 fingerprint. Who toggled a secret is recorded on the governed action node instead.
@@ -99,8 +101,9 @@ A new value reaches a pod in two stages. First the CSI driver's rotation poll re
 updates the synced Kubernetes Secret. Then the pod must restart, because environment variables are
 read only at start. The secret action does both:
 
-- `hosting-kv-set --wait <object>=<syncedSecret>/<key>` waits until the synced Secret carries the new
-  value (compared by hash) before the plan continues;
+- `hosting-kv-set --wait <object>=<syncedSecret>/<key>` waits until every pod mounting the object
+  reports the new VERSION in its `SecretProviderClassPodStatus` (metadata, never a value) before the plan
+  continues. No Kubernetes Secret is read, so the writer's ServiceAccount holds no Secret `get`;
 - with **Restart after** set, the plan then rolls the portal onto it.
 
 A Reconcile that **adds** a key to a class is different: the driver syncs only the objects a class
@@ -120,9 +123,11 @@ already looks.
 | an instance's first-run sign-in secret | the instance's **Setup** wizard hand-off | the instance's first admin |
 | payment keys (Stripe secret key, webhook secret) | **Store → Payments** admin, with a *Test* action that lists the webhook endpoints | store admins |
 
-The platform pieces are the `SecretStatus` contract and the `WriteOnlySecretSection` control, plus a list
-view over a scope of them. An app wires those pieces up. It never builds its own form, and it never
-binds a value back into a view.
+The platform pieces are the `SecretStatus` contract, the `WriteOnlySecretSection` control and the
+`SecretInventorySection` list over a scope of them. They are owed by the companion core change and not
+yet on `main`. An app wires those pieces up. It never builds its own form, and it never binds a value
+back into a view. Today the Deployments page's **Set Key Vault secrets…** dialog is the one GUI that
+exists; the rows above marked Store and the status list are what the companion changes add.
 
 ## Break-glass
 
@@ -130,8 +135,8 @@ If the GUI or the control plane itself is down and a secret must change to bring
 Owner-level administrators (subscription `Owner`) can grant themselves access. That is **break-glass**,
 never a procedure:
 
-- a documented break-glass step carries the marker `kv-break-glass` on or just above its command, and the
-  prose around it says why the GUI could not be used;
+- a documented break-glass step carries `kv-break-glass: <why no GUI can do this>` on or up to three
+  lines above its command. A bare marker exempts nothing;
 - the grant is removed again in the same session, and the value is re-set through the GUI afterwards,
   so the tags and the audit trail describe the value actually in the vault.
 
@@ -143,35 +148,76 @@ or `set-policy … --secret-permissions`). There are two exceptions:
 
 - a path listed in `.github/manual-keyvault.allow`, with a reason: the governed operator verbs, their
   tests, and the guard itself;
-- a line carrying the `kv-break-glass` marker (see above).
+- a line carrying `kv-break-glass: <reason>` (see above).
 
-A stale allow entry fails too, so the list only shrinks. Core runs the guard on itself. Every node repo
-gets it through the shared `node-repo-validate` lane, and Systemorph/Memex runs it in its own build.
+A command split over lines with a trailing backslash is joined before it is matched. A stale allow entry
+fails too, so the list only shrinks. Core runs the guard on itself. The node repos and
+Systemorph/Memex do NOT run it yet: MeshWeaver.Plugins still carries such commands, and wiring the
+shared `node-repo-validate` lane before its cleanup merges would red every Plugins pull request. The lane
+wiring follows that cleanup.
 
 ## Where the fleet stands, and the migration
 
-Measured on vault `Systemorph`: the vault is in **access-policy** mode, not RBAC mode. That decides what
-can be expressed today:
+Measured on vault `Systemorph`: the vault is in **access-policy** mode, not RBAC mode, and six
+principals hold secret permissions on it:
 
-- **Access policies can already express both roles, vault-wide.** Reader = `get`; writer =
-  `list, set, delete, recover, purge`. Without `get`, `list` still returns attributes and tags, and `set`
-  covers attribute updates. This is step 1, and it needs no vault migration.
-- **Per-secret scope needs RBAC mode**, with custom roles: a *Secret Writer* with
-  `…/secrets/readMetadata/action`, `…/secrets/setSecret/action`, `…/secrets/delete`,
-  `…/secrets/recover/action` and `…/secrets/purge/action`, and a *Secret Reader* with
-  `…/secrets/getSecret/action` only. The built-in roles do not fit, because both *Secrets Officer* and
-  *Secrets User* include metadata reads. Flipping a vault to RBAC drops every access policy **at once**,
-  so the assignments must exist first. The chosen shape is a new RBAC-mode vault for the fleet with
-  per-secret assignments, leaving the legacy non-fleet objects where they are. That is step 2.
-- **The operator still reads values in four places**, and each must be rewritten before the writer can
-  lose `get`: `hosting-kv-copy` (`copyFrom`), `hosting::pg_password` (composes connection strings from
-  the admin password), `hosting-registry-register`, and the Memex `helm-release` / `infra-deploy`
-  workflows (the helm "vault half" and the control database password). Until then those steps keep
-  running as `hosting-operator`. That is step 3.
-- **Humans:** the standing user access policies on the vault are removed once the GUIs above cover their
-  secrets. That is the last step, and the only one that needs the maintainer.
+| principal | secrets today | target |
+|---|---|---|
+| CSI add-on identity (the READER, one identity for every pod in the cluster) | get, list | get |
+| `hosting-operator` (operator Jobs, `infra-deploy`) | get, list, set | none: its secret work moves to the writer |
+| `github-actions-deploy` (Memex `helm-release` / `infra-deploy`) | get, list, set | none |
+| a user principal | backup, delete, get, list, recover, restore, set | none: break-glass is an Owner re-granting temporarily |
+| two principals the directory no longer resolves | get (+ delete, set) | removed |
+| `secret-writer` (new) | — | list, set, delete, recover, purge; never get |
 
-The identities, the custom roles and the assignments are provisioned as infrastructure-as-code in
+`hosting-operator` also holds the RBAC role *Key Vault Secrets Officer* on the vault, which is **inert**
+in access-policy mode. It changes nothing today and would become live, with value reads, if the vault
+flipped to RBAC, so it goes as well.
+
+The order is chosen so that nothing breaks: build every replacement first, then narrow the policies,
+and do every change to the vault through infrastructure-as-code.
+
+1. **The split, with access policies, vault-wide (now).** Add the writer (`list, set, delete, recover,
+   purge`) and narrow the reader to `get`. With no `get`, `list` still returns attributes and tags, and
+   `set` covers attribute updates. Systemorph/Memex `infra/estate.bicep` declares both. The reader
+   narrowing is flagged separately, so it can be switched on after a pod restart has been verified on
+   `get` alone.
+2. **Remove every value read from the governed path**, so `hosting-operator` needs no `get`:
+   - `hosting-kv-copy`: a `copyFrom` becomes a record reference to the same object, or a re-issue at the
+     source entered through the GUI;
+   - `hosting::pg_password`: the connection string is minted together with a per-instance database
+     password in one writer step, instead of being composed from the admin password;
+   - `hosting-kv-ensure` and `hosting-signin-app`: their existence checks use `list`, not `secret show`;
+   - `hosting-registry-register` and `hosting-kv-rotate`: the registry key is issued straight into the
+     vault and never read back;
+   - `hosting-image-mirror` and `hosting-pull-secret`: the registry credentials are mounted through a
+     CSI class in the operator's namespace, the same reader path the pods use;
+   - `hosting-deploy` and Memex's `helm-release`: the helm "vault half" is retired, and each value in it
+     becomes its own vault object mapped on the record.
+
+   Each of these files is marked TRANSITIONAL in `.github/manual-keyvault.allow` until its rewrite
+   lands. After that, `hosting-operator` and `github-actions-deploy` lose their access policies.
+3. **Humans and orphans.** The user principal's standing policy and the two unresolvable principals are
+   removed. Break-glass is a subscription Owner re-granting temporarily (above).
+4. **A new RBAC-mode fleet vault with per-secret scope.** Access policies cannot scope below the vault,
+   so the per-secret step is a NEW vault in RBAC mode. It uses two custom roles, because the built-in
+   *Secrets Officer* and *Secrets User* roles both include metadata reads:
+   - *Secret Writer*: `…/secrets/readMetadata/action`, `…/secrets/setSecret/action`,
+     `…/secrets/delete`, `…/secrets/recover/action`, `…/secrets/purge/action`;
+   - *Secret Reader*: `…/secrets/getSecret/action` only.
+
+   The migration, per record:
+   1. the writer re-enters or generates each of the record's objects in the new vault through the GUI.
+      Values are never copied out of the old vault, because nothing may read them;
+   2. the reader is assigned per secret, from the objects the record's `SecretProviderClass` lists. A
+      per-instance reader identity then replaces the one cluster-wide CSI identity;
+   3. the record's `keyVault` moves to the new vault and a Reconcile rolls the pods onto it;
+   4. the old objects are deleted, recoverable for the retention period.
+
+   The legacy objects that belong to no instance (disk-encryption keys, certificates) stay in the old
+   vault.
+
+The identities, the policies and later the custom roles and assignments are provisioned in
 Systemorph/Memex `infra/estate.bicep`, through the governed `InfraDeploy` action (what-if, then an
 approved deploy). They are never created with `az` by hand. Which identity each instance holds is in
 Systemorph/Memex `docs/control-instance.md` → *Secrets and identities*.

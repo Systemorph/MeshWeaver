@@ -25,8 +25,11 @@ unless one of these holds:
   * the file matches a glob in the allow file (default `.github/manual-keyvault.allow`), one per line:
     `<glob>  — <reason>`. That is where the GOVERNED implementation lives (the operator's
     `hosting-kv-*` verbs, which run as the writer identity), plus its tests and this gate itself;
-  * the line, or one of the 3 lines above it, carries the marker `kv-break-glass`. The marker is for a
-    documented BREAK-GLASS procedure, and the prose around it must say why the GUI cannot be used.
+  * the line, or one of the 3 lines above it, carries the marker WITH ITS REASON:
+    `kv-break-glass: <why no GUI can do this>` (at least 20 characters). The marker is for a documented
+    BREAK-GLASS procedure; a bare marker exempts nothing.
+
+A command split over lines with a trailing backslash is joined first, so a continuation cannot hide one.
 
 An allow entry that matches no offending file is STALE and fails too, so the list can only shrink.
 
@@ -54,6 +57,26 @@ PATTERN = re.compile(
     r"|set-policy\b[^\n]*--secret-permissions)")
 MARKER = "kv-break-glass"
 MARKER_WINDOW = 3
+# The marker exempts a command only when it carries its REASON: `kv-break-glass: <why no GUI can do
+# this>`, at least 20 characters of it. A bare marker exempts nothing.
+MARKER_WITH_REASON = re.compile(re.escape(MARKER) + r"\s*:\s*\S.{19,}")
+
+
+def logical_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Joins shell/Markdown continuations (a trailing backslash) into ONE logical line, so a command
+    split as `az keyvault secret \\` + `set …` is seen whole. Returns (index of its first physical
+    line, joined text)."""
+    out: list[tuple[int, str]] = []
+    i = 0
+    while i < len(lines):
+        start, parts = i, [lines[i]]
+        while parts[-1].rstrip().endswith("\\") and i + 1 < len(lines):
+            parts[-1] = parts[-1].rstrip()[:-1]
+            i += 1
+            parts.append(lines[i])
+        out.append((start, " ".join(parts)))
+        i += 1
+    return out
 TEXT_SUFFIXES = {".md", ".sh", ".bash", ".py", ".yml", ".yaml", ".ps1", ".cs", ".json", ".bicep",
                  ".txt", ".tpl", ".razor", ".ts", ".js", ""}
 DEFAULT_ALLOW = ".github/manual-keyvault.allow"
@@ -102,13 +125,13 @@ def scan(root: Path, allow_file: Path) -> int:
             continue
         lines = text.splitlines()
         hits = []
-        for i, line in enumerate(lines):
-            if not PATTERN.search(line):
+        for start, logical in logical_lines(lines):
+            if not PATTERN.search(logical):
                 continue
-            window = lines[max(0, i - MARKER_WINDOW): i + 1]
-            if any(MARKER in w for w in window):
+            window = lines[max(0, start - MARKER_WINDOW): start + 1]
+            if any(MARKER_WITH_REASON.search(w) for w in window):
                 continue
-            hits.append(i + 1)
+            hits.append(start + 1)
         if not hits:
             continue
         matched = [g for g, n in allow if n > 0 and fnmatch.fnmatch(rel, g)]
@@ -119,7 +142,8 @@ def scan(root: Path, allow_file: Path) -> int:
             print(f"::error file={rel},line={number}::a manual Key Vault secret command. Secrets are entered through the "
                   f"write-only GUI of the app that owns them and written by the governed writer identity "
                   f"(Doc/Architecture/SecretsWriteOnlyEntry). Point the reader at that GUI. Only a documented "
-                  f"break-glass procedure may keep the command, marked `{MARKER}` on or above the line.")
+                  f"break-glass procedure may keep the command, marked `{MARKER}: <why no GUI can do this>` on or "
+                  f"up to {MARKER_WINDOW} lines above it.")
             errors += 1
     for glob, number in allow:
         if number > 0 and glob not in used:
@@ -161,10 +185,18 @@ def self_test() -> int:
     case("a download FIRES", {"scripts/x.sh": "az keyvault secret download --vault-name V --name y --file f\n"}, "", 1)
     case("an access-policy grant of secret permissions FIRES",
          {"docs/a.md": "az keyvault set-policy -n V --object-id o --secret-permissions get list\n"}, "", 1)
-    case("a marked break-glass procedure is SILENT",
-         {"docs/b.md": "<!-- kv-break-glass: the GUI is down -->\naz keyvault secret set --vault-name V --name x --file f\n"}, "", 0)
+    case("a marked break-glass procedure WITH its reason is SILENT",
+         {"docs/b.md": "<!-- kv-break-glass: the control plane itself is down, so no GUI can file the write -->\naz keyvault secret set --vault-name V --name x --file f\n"}, "", 0)
+    case("a BARE marker (no reason) exempts nothing",
+         {"docs/b.md": "# kv-break-glass\naz keyvault secret set --vault-name V --name x --file f\n"}, "", 1)
+    case("a marker with a too-short reason exempts nothing",
+         {"docs/b.md": "# kv-break-glass: because\naz keyvault secret set --vault-name V --name x --file f\n"}, "", 1)
     case("a marker further than 3 lines up does not count",
-         {"docs/b.md": "kv-break-glass\n\n\n\n\naz keyvault secret set --vault-name V --name x --file f\n"}, "", 1)
+         {"docs/b.md": "kv-break-glass: the control plane itself is down, so no GUI can file it\n\n\n\n\naz keyvault secret set --vault-name V --name x --file f\n"}, "", 1)
+    case("a command split with a line continuation FIRES",
+         {"docs/c.md": "az keyvault secret \\\n  set --vault-name V --name x --value y\n"}, "", 1)
+    case("a command split after `az keyvault` FIRES",
+         {"scripts/c.sh": "az keyvault \\\n  secret show --vault-name V \\\n  --name pw --query value\n"}, "", 1)
     case("the governed implementation under an allowed glob is SILENT",
          {"deploy/bin/hosting-kv-set": "az keyvault secret set --vault-name \"$v\" --name \"$o\" --file f\n"},
          "deploy/bin/*  — the governed writer verbs\n", 0)

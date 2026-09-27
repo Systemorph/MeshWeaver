@@ -408,7 +408,7 @@ rm -rf "$_kve_state"
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=other \
   -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
 [ "$_kve_rc" -ne 0 ] && ok "an unreadable password object refuses" || bad "unreadable password refuses" "exited 0: ${_kve_out}"
-case "$_kve_out" in *"could not read memex-postgres-password"*"az keyvault secret set --vault-name Systemorph --name acme-db-connection --file"*) ok "…naming the object and the exact hand command" ;; *) bad "names the hand command" "said: ${_kve_out}" ;; esac
+case "$_kve_out" in *"could not read memex-postgres-password"*"Set Key Vault secrets…) as acme-db-connection"*) ok "…naming the object and the write-only GUI path" ;; *) bad "names the hand command" "said: ${_kve_out}" ;; esac
 case "$_kve_log" in *"secret set"*"acme-db-connection"*) bad "…and writes nothing" "az saw: ${_kve_log}" ;; *) ok "…and writes nothing" ;; esac
 rm -rf "$_kve_state"
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
@@ -491,7 +491,7 @@ rr_done
 # Present but the registry rejects it → refused, object KEPT, hand fix named.
 rr absent "acme-PluginCatalog-RegistryToken=mwi_stale-NEVER-PRINTED" -- "${RR_ARGS[@]}"
 [ "$_rr_rc" -ne 0 ] && ok "a present key the registry rejects is a REFUSAL, never a re-registration" || bad "rejected present key refuses" "exited 0: ${_rr_out}"
-case "$_rr_out" in *"does not accept"*"re-issue"*"az keyvault secret set --vault-name Systemorph --name acme-PluginCatalog-RegistryToken --file"*) ok "…naming the re-issue path and the hand command" ;; *) bad "names the fix" "said: ${_rr_out}" ;; esac
+case "$_rr_out" in *"does not accept"*"re-issue"*"Set Key Vault secrets…) as acme-PluginCatalog-RegistryToken"*) ok "…naming the re-issue path and the write-only GUI" ;; *) bad "names the fix" "said: ${_rr_out}" ;; esac
 case "$_rr_reglog" in *REGISTER*) bad "…and registers nothing" "registry saw: ${_rr_reglog}" ;; *) ok "…and registers nothing" ;; esac
 case "$_rr_azlog" in *"secret set"*) bad "…and keeps the object" "az saw: ${_rr_azlog}" ;; *) ok "…and keeps the object" ;; esac
 rr_done
@@ -594,7 +594,7 @@ rm -rf "$_kvc_state"
 
 kvc HOSTING_KVC_VALUES="" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
 [ "$_kvc_rc" -ne 0 ] && ok "an unreadable source refuses" || bad "unreadable source refuses" "exited 0: ${_kvc_out}"
-case "$_kvc_out" in *"could not read memexsystemorph-GitHub-App-PrivateKey"*"az keyvault secret show --vault-name Systemorph --name memexsystemorph-GitHub-App-PrivateKey --query value -o json | jq -j . | az keyvault secret set --vault-name Systemorph --name build-GitHub-App-PrivateKey --file /dev/stdin"*) ok "…naming the source and the exact hand command" ;; *) bad "names the hand command" "said: ${_kvc_out}" ;; esac
+case "$_kvc_out" in *"could not read memexsystemorph-GitHub-App-PrivateKey"*"re-issue the credential at its source"*"as build-GitHub-App-PrivateKey"*) ok "…naming the source and the write-only GUI path" ;; *) bad "names the hand command" "said: ${_kvc_out}" ;; esac
 rm -rf "$_kvc_state"
 
 kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" HOSTING_KVC_SET_FAIL=1 -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
@@ -671,7 +671,7 @@ rm -rf "$_sa_state"
 # Absent + client id, Graph denied → RED with the exact hand commands; nothing written.
 sa HOSTING_SA_GRAPH_DENIED=1 -- "${SA_ARGS[@]}" --client-id $SA_ID
 [ "$_sa_rc" -ne 0 ] && ok "without Application.ReadWrite.OwnedBy the mint is a RED step" || bad "denied mint is red" "exited 0: ${_sa_out}"
-case "$_sa_out" in *"Application.ReadWrite.OwnedBy"*"az ad app credential reset --id ${SA_ID} --append --display-name acme --years 1 --query password -o tsv > <file> 2>/dev/null; az keyvault secret set --vault-name Systemorph --name acme-Authentication-Microsoft-ClientSecret --file <file>"*) ok "…naming the right and the exact hand commands" ;; *) bad "denied message" "said: ${_sa_out}" ;; esac
+case "$_sa_out" in *"Application.ReadWrite.OwnedBy"*"az ad app credential reset --id ${SA_ID} --append --display-name acme --years 1 --query password -o tsv > <file> 2>/dev/null; then paste it"*"as acme-Authentication-Microsoft-ClientSecret"*) ok "…naming the right, the Entra command and the write-only GUI path" ;; *) bad "denied message" "said: ${_sa_out}" ;; esac
 [ ! -f "$_sa_state/set.acme-Authentication-Microsoft-ClientSecret" ] && ok "…and writes nothing" || bad "denied writes nothing" "it wrote"
 rm -rf "$_sa_state"
 
@@ -2022,17 +2022,25 @@ case "$_kvs_out" in *"secret-writer grant"*) ok "…naming the grant the writer 
 case "$_kvs_out" in *NEVER-PRINTED*) bad "…without printing the value on the failure path" "it did: ${_kvs_out}" ;; *) ok "…without printing the value on the failure path" ;; esac
 rm -rf "$_kvs_state"
 
-# --wait: the synced Secret carries the new value → done; carries a stale one → RED after the attempts.
-kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SYNCED="$KVS_SECRET" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --namespace acme --wait acme-Authentication-Microsoft-ClientSecret=acme-portal-keyvault/Authentication__Microsoft__ClientSecret
-[ "$_kvs_rc" -eq 0 ] && ok "kv-set waits for the synced Secret and returns when it carries the value" || bad "wait ok" "exited ${_kvs_rc}: ${_kvs_out}"
+# --wait: every pod mount reports the new VERSION → done; an old one → RED after the attempts; no
+# pod mounts it → RED naming the class. It reads no Secret (the kubectl stub refuses `get secret`).
+KVS_WAIT=(--vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --namespace acme --wait acme-Authentication-Microsoft-ClientSecret=acme-portal-keyvault/Authentication__Microsoft__ClientSecret)
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SPC_OBJECT=acme-Authentication-Microsoft-ClientSecret HOSTING_KVS_SPC_VERSION=7f3a -- "${KVS_WAIT[@]}"
+[ "$_kvs_rc" -eq 0 ] && ok "kv-set waits until every pod mount reports the new version" || bad "wait ok" "exited ${_kvs_rc}: ${_kvs_out}"
 case "$_kvs_out" in *"::hosting:: kv_synced=acme-Authentication-Microsoft-ClientSecret"*) ok "…reporting the sync" ;; *) bad "kv_synced fact" "said: ${_kvs_out}" ;; esac
-case "$(cat "$_kvs_state/kubectl.log")" in *"-n acme get secret acme-portal-keyvault"*) ok "…by reading the named Secret in the namespace" ;; *) bad "kubectl read" "kubectl saw: $(cat "$_kvs_state/kubectl.log")" ;; esac
+case "$(cat "$_kvs_state/kubectl.log")" in *"-n acme get secretproviderclasspodstatuses"*) ok "…by reading the CSI pod statuses (metadata) in the namespace" ;; *) bad "kubectl read" "kubectl saw: $(cat "$_kvs_state/kubectl.log")" ;; esac
+case "$(cat "$_kvs_state/kubectl.log")" in *"get secret "*) bad "…and never a Secret" "kubectl saw: $(cat "$_kvs_state/kubectl.log")" ;; *) ok "…and never a Secret" ;; esac
 rm -rf "$_kvs_state"
-kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SYNCED="stale" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --namespace acme --wait acme-Authentication-Microsoft-ClientSecret=acme-portal-keyvault/Authentication__Microsoft__ClientSecret
-[ "$_kvs_rc" -ne 0 ] && ok "a Secret that never picks the value up is a RED step (the vault holds it, the pods do not)" || bad "wait stale" "exited 0"
-case "$_kvs_out" in *"The vault HOLDS the new value"*) ok "…saying exactly what state that leaves" ;; *) bad "stale message" "said: ${_kvs_out}" ;; esac
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SPC_OBJECT=acme-Authentication-Microsoft-ClientSecret HOSTING_KVS_SPC_VERSION=old -- "${KVS_WAIT[@]}"
+[ "$_kvs_rc" -ne 0 ] && ok "pods that never pick the new version up are a RED step (the vault holds it, the pods do not)" || bad "wait stale" "exited 0"
+case "$_kvs_out" in *"stale 2/2"*"The vault HOLDS the new value"*) ok "…saying exactly what state that leaves, with the stale count" ;; *) bad "stale message" "said: ${_kvs_out}" ;; esac
 [ -f "$_kvs_state/set.acme-Authentication-Microsoft-ClientSecret" ] && ok "…and the value WAS written before the wait" || bad "written before wait" "it was not"
 rm -rf "$_kvs_state"
+kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SPC_OBJECT= -- "${KVS_WAIT[@]}"
+[ "$_kvs_rc" -ne 0 ] && ok "an object no pod mounts is a RED wait" || bad "wait unmounted" "exited 0"
+case "$_kvs_out" in *"no pod in acme mounts"*"must list"*) ok "…naming the SecretProviderClass as what is missing" ;; *) bad "unmounted message" "said: ${_kvs_out}" ;; esac
+rm -rf "$_kvs_state"
+unset KVS_WAIT
 
 # Dry run: narrates, writes nothing, needs no HOSTING_SECRETS.
 kvs HOSTING_DRY_RUN=true -- --vault Systemorph --object acme-X --namespace acme --wait acme-X=s/k

@@ -252,7 +252,17 @@ hosting::fingerprint() {
   LC_ALL=C grep -q '[0-9]' "$file" && alphabet=$((alphabet + 10))
   LC_ALL=C grep -q '[^A-Za-z0-9]' "$file" && alphabet=$((alphabet + 32))
   [ "$alphabet" -gt 0 ] || { echo "withheld:low-entropy"; return 0; }
-  bits="$(awk -v n="$len" -v a="$alphabet" 'BEGIN { printf "%d", n * log(a) / log(2) }')"
+  # Pure bash integer arithmetic — the operator image (Azure Linux 3) carries no awk. log2 of every
+  # alphabet the four classes can sum to, × 10^9 and truncated; bits × 10^9 = len × that.
+  local log2e9
+  case "$alphabet" in
+    10) log2e9=3321928094 ;; 26) log2e9=4700439718 ;; 32) log2e9=5000000000 ;;
+    36) log2e9=5169925001 ;; 42) log2e9=5392317422 ;; 52) log2e9=5700439718 ;;
+    58) log2e9=5857980995 ;; 62) log2e9=5954196310 ;; 68) log2e9=6087462841 ;;
+    84) log2e9=6392317422 ;; 94) log2e9=6554588851 ;;
+    *) echo "withheld:low-entropy"; return 0 ;;
+  esac
+  bits=$(( len * log2e9 / 1000000000 ))
   if [ "$bits" -ge 128 ]; then
     echo "sha256:$(hosting::sha256 < "$file" | cut -c1-12)"
   else
