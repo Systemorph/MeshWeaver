@@ -4,6 +4,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using MeshWeaver.Fixture;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.Logging;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.PluginCatalog;
@@ -334,6 +342,139 @@ public class SealedBundleFloorCacheTest : IDisposable
 
         Assert.NotNull(options);
         Assert.Equal(TimeSpan.Parse(Declared), options!.AvailabilityAnswerBudget);
+    }
+
+    [Fact]
+    public void ACancelledPointerReadStopsBeforeAnAbsentPointerBecomesAFallback()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var source = Track(Path.Combine(Path.GetTempPath(), "mw-5719-" + Guid.NewGuid().ToString("N")));
+
+        var failure = Assert.Throws<OperationCanceledException>(() =>
+            ShippedPrebuiltBundles.ResolvePublicationPointer(source, cancellation.Token));
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+    }
+
+    [Fact]
+    public void CancellationDuringPointerResolutionDoesNotReturnAPublicationFault()
+    {
+        var root = RootWithIdentities(1);
+        var source = Path.Combine(FirstIdentityOf(root), PlatformSource);
+        File.WriteAllText(Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName), "../outside\n");
+        using var cancellation = new CancellationTokenSource();
+        var logger = new PointerWarningLogger(cancellation.Cancel);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            ShippedPrebuiltBundles.ResolvePublicationPointer(source, cancellation.Token, logger));
+
+        Assert.True(logger.SawPointerWarning);
+    }
+
+    [Fact]
+    public void ACancelledReadStopsBeforeAnAbsentRootBecomesAnAvailabilityVerdict()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var root = Track(Path.Combine(Path.GetTempPath(), "mw-5719-" + Guid.NewGuid().ToString("N")));
+        var cache = new SealedBundleFloorCache();
+
+        var failure = Assert.Throws<OperationCanceledException>(() => cache.Read(root, cancellation.Token));
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(0, cache.Remembered);
+    }
+
+    [Fact]
+    public void CancellationDuringAPublicationReadDoesNotRememberItOrPruneUnvisitedSources()
+    {
+        var root = RootWithIdentities(2);
+        var cache = new SealedBundleFloorCache();
+        Assert.Null(cache.Read(root).Refusal);
+        var remembered = cache.Remembered;
+        var reads = cache.SourcesRead;
+        Directory.Delete(FirstIdentityOf(root), recursive: true);
+
+        // The real pointer reader warns and falls back to this sealed flat publication.
+        // Cancel at that boundary, after the walk started, without timing a directory race.
+        const string identity = "a5719cancel";
+        SealIdentity(root, identity, "plugins", ["Store"]);
+        File.WriteAllText(Path.Combine(root, identity, "plugins",
+            ShippedPrebuiltBundles.PublicationPointerFileName), "../outside\n");
+        using var cancellation = new CancellationTokenSource();
+        var logger = new PointerWarningLogger(cancellation.Cancel);
+
+        Assert.Throws<OperationCanceledException>(() => cache.Read(root, cancellation.Token, logger));
+
+        Assert.True(logger.SawPointerWarning);
+        Assert.Equal(remembered, cache.Remembered);
+        Assert.Equal(reads, cache.SourcesRead);
+        Assert.Equal(0L, cache.SourcesForgotten);
+
+        // Cancellation must not become a cached refusal; the next uncancelled read is whole.
+        var next = cache.Read(root);
+        Assert.Null(next.Refusal);
+        Assert.Contains("Store", next.Bundles);
+        Assert.Equal(2, next.Identities);
+        Assert.Equal(1L, cache.SourcesForgotten);
+    }
+
+    [Fact]
+    public async Task EndingTheRealPooledObservationCancelsItsWalkBeforeItCachesThePublication()
+    {
+        var root = RootWithIdentities(1);
+        var source = Path.Combine(FirstIdentityOf(root), PlatformSource);
+        File.WriteAllText(Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName), "../outside\n");
+        var cache = new SealedBundleFloorCache();
+        using var pool = new IoPool(1);
+        using var entered = new AsyncSubject<Unit>();
+        var release = 0;
+        var logger = new PointerWarningLogger(() =>
+        {
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Quick),
+                "the test must release the publication reader");
+        });
+        Exception? observedError = null;
+        using var observation = cache.Observe(pool, root, logger).Subscribe(_ => { }, ex => observedError = ex);
+        try
+        {
+            await entered.Should().Within(TestTimeouts.Quick).Emit(
+                "the real filesystem worker must have reached the pointer read",
+                cancellationToken: TestContext.Current.CancellationToken);
+            observation.Dispose(); // Cancels the actual InvokeBlocking worker token.
+        }
+        finally
+        {
+            observation.Dispose();
+            Volatile.Write(ref release, 1);
+            pool.Dispose();
+            await pool.Disposed.Should().Within(TestTimeouts.Quick).Emit(
+                "join the filesystem worker before asserting or deleting its fixture",
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        Assert.Null(observedError); // An ended Rx subscription receives no terminal.
+        Assert.True(logger.SawPointerWarning);
+        Assert.Equal(0, cache.Remembered);
+        Assert.Equal(0L, cache.SourcesRead);
+    }
+
+    private sealed class PointerWarningLogger(Action onWarning) : ILogger
+    {
+        public bool SawPointerWarning { get; private set; }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel != LogLevel.Warning || !formatter(state, exception).Contains("publication pointer"))
+                return;
+            SawPointerWarning = true;
+            onWarning();
+        }
     }
 
     // ── fixture ─────────────────────────────────────────────────────────────────────────────────
