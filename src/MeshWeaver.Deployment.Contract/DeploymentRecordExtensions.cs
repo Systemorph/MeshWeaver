@@ -429,6 +429,16 @@ public static class DeploymentRecordExtensions
         d with { AnnouncementKeySecret = vaultSecret };
 
     /// <summary>
+    /// The key the control lane uses for this deployment, by vault object NAME
+    /// (Doc/Architecture/ControlLane). Declaring it binds the record: the control instance sends lane
+    /// requests to this instance only while it is declared. The mounts (<c>ControlLane__Key</c> on
+    /// this instance, <c>Hosting__PlatformWebhookSecret__{id}</c> on the control instance) are
+    /// ordinary <see cref="Map"/> entries; this renders nothing by itself.
+    /// </summary>
+    public static DeploymentContent WithControlLaneKeySecret(this DeploymentContent d, string? vaultSecret) =>
+        d with { ControlLaneKeySecret = vaultSecret };
+
+    /// <summary>
     /// The chart-owned Key Vault secret class: which vault objects land under which configuration
     /// keys (names only, never values). <paramref name="map"/> receives the class to extend with
     /// <see cref="Map"/>.

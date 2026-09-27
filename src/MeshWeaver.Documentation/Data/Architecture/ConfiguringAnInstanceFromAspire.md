@@ -206,6 +206,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithGate(language, image, address, enabled)` | `Gates[].Language`, `Gates[].Image`, `Gates[].Address`, `Gates[].Enabled` | `grpc` | — |
 | `WithKeyVault(vault, prefix)` | `KeyVault`, `KeyVaultSecretPrefix` | `keyVaultSecrets.vaultName` | — |
 | `WithAnnouncementKeySecret(vaultSecret)` | `AnnouncementKeySecret` | — (a binding the control plane reads; the value arrives through ordinary `keyVaultSecrets` mappings — [Self-Update Announcement Key](../SelfUpdateAnnouncementKey)) | — |
+| `WithControlLaneKeySecret(vaultSecret)` | `ControlLaneKeySecret` | — (a binding the control plane reads before sending a control-lane request; the value arrives through ordinary `keyVaultSecrets` mappings — `ControlLane__Key` on the instance, `Hosting__PlatformWebhookSecret__{id}` on the control instance — [Control Lane](../ControlLane)) | — |
 | `WithKeyVaultSecrets(map, vaultName, tenantId, identityClientId, className, syncedSecret, volumeName, mountPath)` | `KeyVaultSecrets.VaultName`, `KeyVaultSecrets.TenantId`, `KeyVaultSecrets.IdentityClientId`, `KeyVaultSecrets.Name`, `KeyVaultSecrets.SyncedSecret`, `KeyVaultSecrets.VolumeName`, `KeyVaultSecrets.MountPath`, `KeyVaultSecrets.Secrets[].Key`, `KeyVaultSecrets.Secrets[].VaultSecret` | `keyVaultSecrets` | — (the keys are the secrets' own; values never touch the record) |
 | `WithKeyVaultSecretClass(secretClass)` | `KeyVaultSecretClasses` | `keyVaultSecretClasses` | — |
 | `WithVaultValuesKeys(keys)` | `VaultValuesKeys` | `extraEnvFrom` | — |

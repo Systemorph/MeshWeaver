@@ -106,5 +106,7 @@ The second command reads back metadata only — never `value`.
 
 - [Self-Update on the Control Lane](/Doc/Architecture/SelfUpdateControlLane) — the hand-over this
   key signs.
+- [Control Lane](/Doc/Architecture/ControlLane) — the control→instance lane, which uses a per-deployment
+  key of the same shape in the other direction.
 - MeshWeaver.Plugins `Hosting/SelfUpdateAnnouncementIdentity` — the original design and the residual
   it closes.
