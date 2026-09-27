@@ -748,3 +748,24 @@ and the instrument that records it either way is the incident node's own counter
 
 Related: [CI Content Bake](../CiContentBake) · [Plugin Build Contract](../PluginBuildContract) ·
 [Bake Identity Mismatch](../BakeIdentityMismatch) · [Module Build Architecture](../ModuleBuildArchitecture)
+
+### An unchanged content commit can describe a changed portal surface
+
+The publisher must compare a newly measured `platform-surface.json` with the live
+publication before reporting a same-content skip. Framework identity and core source commit
+do not identify the portal's complete closure: a later image can include a newer Plugins
+commit without changing either value.
+
+On 2026-09-27, ci.9468 measured its portal surface at 15:56 UTC, but both share targets
+skipped publication because core commit `2bb14d8` was already sealed. The live canonical
+surface remained the 10:08 UTC document, whose `MeshWeaver.AI` entry omitted
+`MeshWeaver.AI.ProviderRouting`. The availability gate consequently held the release over
+the landed OpenAI module. The gate's hold was correct for the document it received; the
+publisher had preserved an older description of the target.
+
+When the incoming bake provides a surface, a missing or different live document requires
+a complete republication through the existing publication path. An unreadable existing
+document fails the target rather than proving equality. An identical document retains the
+skip. The decision reads the generation selected by `_current`, just like the consumers.
+The publisher harness exercises changed surfaces with and without a source commit and
+checks the resulting sealed bytes, while retaining unchanged-publication controls.

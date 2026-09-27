@@ -223,6 +223,8 @@ if action == "upload":
     sys.exit(0)
 
 if action == "download":
+    if os.environ.get("MOCK_AZ_FAIL_DOWNLOAD_OF") == Path(path).name:
+        sys.stderr.write("stub-az: simulated download failure\n"); sys.exit(1)
     src = share_root() / path
     dest = Path(flag("--dest"))
     if not src.is_file():
@@ -585,6 +587,7 @@ class Harness:
         env.pop("RUNNER_TEMP", None)
         for k in ("MOCK_AZ_HOOK_ON", "MOCK_AZ_HOOK_CMD", "MOCK_AZ_HOOK_ONCE", "MOCK_AZ_HOOK_WHEN",
                   "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS",
+                  "MOCK_AZ_FAIL_DOWNLOAD_OF",
                   "MOCK_AZ_EAT_STDIN", "MOCK_AZ_DELETE_LOG", "MOCK_AZ_DISPOSAL_PREFIX",
                   "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
                   "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
@@ -856,6 +859,46 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           "targets-published=0 targets-converged=0 targets-already=1" in r.stdout,
           "receipt: " + (next((line for line in r.stdout.splitlines() if line.startswith("bake published:")),
                               "<no final receipt>")))
+
+    # Equal source and framework identities do not imply equal portal surfaces: the image
+    # can incorporate a newer plugin commit while core is unchanged. Read the shelf bytes.
+    for source_sha, layout in ((sha, layout) for sha in ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "")
+                               for layout in ("flat", "generation")):
+        h.reset()
+        old_host = Bake(work, "old-host-" + (source_sha or "none") + layout, source_sha, surface_shared=True)
+        new_host = Bake(work, "new-host-" + (source_sha or "none") + layout, source_sha, surface_shared=True)
+        (new_host.dir / SURFACE).write_text('{"assemblies":{"MeshWeaver.AI":["MeshWeaver.AI.ProviderRouting"]}}\n')
+        r = h.publish(old_host, "Systemorph/MeshWeaver", "4051", {"BAKE_PUBLICATION_LAYOUT": layout})
+        s = h.shelf()
+        incumbent = s.under(s.pointer()) if s.pointer() else s
+        check("the earlier portal surface sealed (non-vacuous same-content control)",
+              r.returncode == 0 and incumbent.sealed(), f"rc={r.returncode}")
+        r = h.publish(new_host, "Systemorph/MeshWeaver", "4052", {"BAKE_PUBLICATION_LAYOUT": layout})
+        s = h.shelf()
+        live = s.under(s.pointer()) if s.pointer() else s
+        check(f"same content with changed surface republishes (sha={bool(source_sha)}, layout={layout})",
+              r.returncode == 0 and live.sealed()
+              and (live.dest / SURFACE).read_bytes() == (new_host.dir / SURFACE).read_bytes()
+              and "targets-already=0" in r.stdout,
+              f"rc={r.returncode}, {denominator(live)}")
+
+    h.reset()
+    no_surface = Bake(work, "same-content-no-surface", core.source_sha, surface=False)
+    r = h.publish(no_surface, "Systemorph/MeshWeaver", "4061")
+    check("the same-content publication without a surface is sealed first",
+          r.returncode == 0 and h.shelf().sealed(), f"rc={r.returncode}")
+    r = h.publish(core, "Systemorph/MeshWeaver", "4062")
+    check("a missing surface is replaced rather than skipped on matching content",
+          r.returncode == 0 and h.shelf().sealed()
+          and (h.shelf().dest / SURFACE).read_bytes() == (core.dir / SURFACE).read_bytes(),
+          f"rc={r.returncode}")
+    before = h.shelf().files()
+    r = h.publish(core, "Systemorph/MeshWeaver", "4063", {"MOCK_AZ_FAIL_DOWNLOAD_OF": SURFACE})
+    check("an unreadable existing surface fails without changing the sealed publication",
+          r.returncode != 0 and "the live surface was never compared" in r.stdout
+          and h.shelf().sealed() and h.shelf().files() == before
+          and "already published; skipping" not in r.stdout,
+          f"rc={r.returncode}")
 
     # ── THE SECOND `already` BRANCH: a producer that gives NO content sha. ─────────────────────
     # 🚨 Copilot on #4335, and it was right: every case above publishes WITH a source sha
