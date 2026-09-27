@@ -35,6 +35,9 @@ The decision table, in full (see `classify`):
   CI_FAILURE  every failed assertion is catalogued  requeue kind=flake     cap 2 per head sha
   CI_FAILURE  a shard failed on an infrastructure   requeue kind=infra     cap 2 per head sha
               step and left no test evidence
+  CI_FAILURE  the ONLY failed job is `Dependent     requeue kind=infra     cap 2 per head sha
+              suites`, on its no-verdict step (the
+              dependent never reported — starvation)
   CI_FAILURE  ≥1 uncatalogued assertion, the group  requeue kind=bisect    cap 1 per head sha
               held >1 PR and this PR's own run was  (the culprit's solo group fails and stays out)
               green
@@ -81,6 +84,12 @@ QUEUE_BRANCH = "main"
 TEST_STEP = "Run Tests"
 VERDICT_STEP_PREFIXES = ("Summarize test failures", "Fail on non-zero project exit", "Gate:")
 SHARD_JOB = re.compile(r"^Run tests \(shard (\d+)\)$")
+# The dependent-suites gate (dotnet-test.yml) fails on this step, and ONLY this step, when
+# MeshWeaver.Plugins wrote no verdict by the deadline — a runner-capacity fact, not a verdict about
+# the tree (2026-09-27: five entries rejected this way while every candidate that ran was green).
+# A verdict that says the candidate broke something fails the wait step itself and stays a reject.
+DEPENDENT_JOB = "Dependent suites (MeshWeaver.Plugins)"
+DEPENDENT_NO_VERDICT_STEP = "No verdict in time: the dependent's suites did not report (infrastructure)"
 MARKER = re.compile(r"<!-- steward: requeued=(?P<n>\d+) head=(?P<head>[0-9a-f]{7,40}) kind=(?P<kind>[a-z]+) -->")
 CAPS = {"timeout": 2, "flake": 2, "infra": 2, "bisect": 1}
 MAX_CATALOGUE_DAYS = 30
@@ -146,6 +155,9 @@ class RunEvidence:
     run_url: str
     failed_jobs: tuple[str, ...]      # non-shard jobs that failed (build, gates) — never a flake
     shards: tuple[Shard, ...]         # the failing shards, with whatever evidence they left
+    # Non-shard jobs whose red is an infrastructure fact by construction (today: the dependent
+    # gate's no-verdict step). Kept OUT of failed_jobs so they never read as a build failure.
+    starved_jobs: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -302,6 +314,12 @@ def count_attempts(comment_bodies, head_sha: str) -> dict:
 
 # ─────────────────────────────── the decision ───────────────────────────────
 
+def dependent_starved(job: dict) -> bool:
+    """The dependent gate failed on its no-verdict step and on nothing else."""
+    failed = [s.get("name") for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
+    return failed == [DEPENDENT_NO_VERDICT_STEP]
+
+
 def is_derived_test_report(job: dict, failed_shards: set[str]) -> bool:
     """Recognize result summaries only when their underlying shard failed."""
     # GitHub exposes the publisher's check summaries alongside actual workflow jobs.
@@ -369,6 +387,19 @@ def classify(ctx: Context, evidence: RunEvidence | None, catalogue: tuple[FlakeE
                         "a job other than a test shard failed — a build or gate failure is never a flake",
                         details=tuple(f"failed job: `{j}`" for j in evidence.failed_jobs))
 
+    starved = tuple(f"`{j}` failed on `{DEPENDENT_NO_VERDICT_STEP}` — the dependent's suites never "
+                    "reported inside the deadline (their legs waited for runners); no verdict about the tree"
+                    for j in evidence.starved_jobs)
+    if starved and not evidence.shards:
+        spent = ctx.attempts.get("infra", 0)
+        if spent < CAPS["infra"]:
+            return Decision("requeue", "infra",
+                            f"the group build failed on infrastructure, not on the tree; re-queued — attempt {spent + 1} of {CAPS['infra']} for this head",
+                            details=starved)
+        return Decision("reject", "cap",
+                        f"already re-queued {spent} times for this head on infra grounds — the cap is {CAPS['infra']}; a dependent that never reports for this head is STUCK, not slow: read the candidate run's leg WAIT times",
+                        details=starved)
+
     if not evidence.shards:
         return Decision("reject", "unclassifiable",
                         "the run failed without a failing test shard or a failing job the steward recognises")
@@ -376,7 +407,7 @@ def classify(ctx: Context, evidence: RunEvidence | None, catalogue: tuple[FlakeE
     active = [e for e in catalogue if e.active(ctx.today)]
     matched: list = []
     unmatched: list = []
-    infra: list[str] = []
+    infra: list[str] = list(starved)
     unclassifiable: list[str] = []
     for s in evidence.shards:
         if s.failures:
@@ -525,6 +556,7 @@ class Gh:
     def run_evidence(self, run: dict, workdir: Path) -> RunEvidence:
         jobs = (self.api(f"actions/runs/{run['id']}/jobs?per_page=100") or {}).get("jobs", [])
         failed_jobs = []
+        starved_jobs = []
         shards = []
         failed_shards = {m.group(1) for job in jobs
                          if job.get("conclusion") == "failure"
@@ -541,9 +573,11 @@ class Gh:
                 present = bool(name) and self.download_artifact(run["id"], name, target)
                 failures, markers = read_shard_artifact(target, shard) if present else ((), ())
                 shards.append(Shard(shard, steps, present, failures, markers))
+            elif job["name"] == DEPENDENT_JOB and dependent_starved(job):
+                starved_jobs.append(job["name"])
             elif job["name"] != REQUIRED_CHECK and not is_derived_test_report(job, failed_shards):
                 failed_jobs.append(job["name"])
-        return RunEvidence(run["id"], run["html_url"], tuple(failed_jobs), tuple(shards))
+        return RunEvidence(run["id"], run["html_url"], tuple(failed_jobs), tuple(shards), tuple(starved_jobs))
 
     def shard_artifact_name(self, run_id: int, shard: str) -> str | None:
         """The artefact carrying THIS shard's newest attempt, chosen by attempt NUMBER.
@@ -825,11 +859,32 @@ def self_test() -> int:
         return Context(reason, pr, "abc123abc123", group, own, dict(attempts or no_attempts), today,
                        tuple(gates))
 
-    def ev(failed_jobs=(), shards=()):
-        return RunEvidence(1, "https://github.com/Systemorph/MeshWeaver/actions/runs/1", tuple(failed_jobs), tuple(shards))
+    def ev(failed_jobs=(), shards=(), starved=()):
+        return RunEvidence(1, "https://github.com/Systemorph/MeshWeaver/actions/runs/1", tuple(failed_jobs), tuple(shards),
+                           tuple(starved))
 
     def shard(*failures, steps=(TEST_STEP,), present=True, markers=()):
         return Shard("2", tuple(steps), present, tuple(failures), tuple(markers))
+
+    print("dependent suites that never reported:")
+    job = lambda *failed: {"name": DEPENDENT_JOB, "steps": [{"name": n, "conclusion": "failure"} for n in failed]
+                           + [{"name": "Mint a MeshWeaver.Plugins token (read)", "conclusion": "success"}]}
+    check(dependent_starved(job(DEPENDENT_NO_VERDICT_STEP)), "failed ONLY on the no-verdict step => starved")
+    check(not dependent_starved(job("Wait for MeshWeaver.Plugins' verdict on this candidate")),
+          "failed on the wait step (a verdict said the candidate broke something) => NOT starved")
+    check(not dependent_starved(job(DEPENDENT_NO_VERDICT_STEP, "Mint a MeshWeaver.Plugins token (read)")),
+          "the no-verdict step plus any other failed step => NOT starved")
+    check(not dependent_starved({"name": DEPENDENT_JOB, "steps": []}), "no step evidence => NOT starved")
+    d = classify(ctx(), ev(starved=(DEPENDENT_JOB,)), cat)
+    check(d.action == "requeue" and d.kind == "infra", "only the dependent gate starved => requeue (infra)")
+    d = classify(ctx(attempts={**no_attempts, "infra": 2}), ev(starved=(DEPENDENT_JOB,)), cat)
+    check(d.action == "reject" and d.kind == "cap", "starved again past the infra cap => reject (cap)")
+    d = classify(ctx(), ev(failed_jobs=("Build solution (once)",), starved=(DEPENDENT_JOB,)), cat)
+    check(d.action == "reject" and d.kind == "build", "starved beside a real build failure => reject (build)")
+    d = classify(ctx(), ev(failed_jobs=(DEPENDENT_JOB,)), cat)
+    check(d.action == "reject" and d.kind == "build", "the dependent gate red on a VERDICT => reject")
+    d = classify(ctx(), ev(shards=(shard(honest),), starved=(DEPENDENT_JOB,)), cat)
+    check(d.action == "reject", "starved beside an uncatalogued assertion => still reject")
 
     print("derived reports:")
     report = lambda name, steps=(): {"name": name, "steps": list(steps)}

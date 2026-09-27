@@ -3765,14 +3765,29 @@ jobs:
         repositories: MeshWeaver.Plugins
         permission-contents: read
     - name: Wait for MeshWeaver.Plugins' verdict on this candidate
+      id: wait
       env:
         GITHUB_TOKEN: ${{ steps.token.outputs.token }}
       run: |
+        set +e
         python3 .github/scripts/await-dependent-verdict.py \
           --key "${{ needs.dependent-suites-dispatch.outputs.key }}" \
           --candidate "${{ needs.dependent-suites-dispatch.outputs.candidate }}" \
           --base "${{ needs.dependent-suites-dispatch.outputs.base }}" \
           --deadline-minutes 42
+        rc=$?
+        # Exit 3 = NO verdict by the deadline (EXIT_NO_VERDICT). It is handed to the step below so
+        # that silence fails under its OWN name — the steward re-queues that one as infrastructure
+        # and rejects every other red of this job. Any other non-zero is a verdict and fails HERE.
+        if [ "$rc" = 3 ]; then echo "outcome=no-verdict" >> "$GITHUB_OUTPUT"; exit 0; fi
+        exit "$rc"
+    # 🚨 STILL RED — silence is never a pass. Its own step name is the contract the merge-queue
+    # steward reads (merge-queue-steward.py, DEPENDENT_NO_VERDICT_STEP): rename one, rename both.
+    - name: "No verdict in time: the dependent's suites did not report (infrastructure)"
+      if: ${{ steps.wait.outputs.outcome == 'no-verdict' }}
+      run: |
+        echo "::error::MeshWeaver.Plugins wrote no verdict for this candidate inside the deadline. That is a statement about runner capacity on the dependent's side, not about this change — the merge-queue steward re-queues it (capped per head sha). Its legs' WAIT times are on the candidate run linked above."
+        exit 1
 
   collect-results:
     env:

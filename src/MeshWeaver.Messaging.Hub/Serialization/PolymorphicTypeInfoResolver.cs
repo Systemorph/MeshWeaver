@@ -161,7 +161,18 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
                 continue;
 
             // Skip if we already added this type from JsonDerivedType attributes
-            if (derivedTypes.Any(dt => dt.DerivedType == derivedType))
+            // This runs for EVERY registry candidate, including unrelated types. A captured Any
+            // predicate allocated ~88 bytes per candidate per metadata resolution (#5555); compare
+            // the existing list directly, retaining its ordering and attribute-discriminator precedence.
+            var alreadyAdded = false;
+            for (var i = 0; i < derivedTypes.Count; i++)
+            {
+                if (derivedTypes[i].DerivedType != derivedType)
+                    continue;
+                alreadyAdded = true;
+                break;
+            }
+            if (alreadyAdded)
                 continue;
 
             // Check if this registered type inherits from or implements the base type

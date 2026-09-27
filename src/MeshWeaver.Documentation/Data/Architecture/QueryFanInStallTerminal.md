@@ -262,6 +262,30 @@ checkout that CI nests inside the Plugins workspace is deliberately outside its 
 copy it counts only a visible lambda — a `Subscribe(MethodGroup)` is textually identical to
 `Subscribe(observer)` and is not counted, so the sweep read those by hand.
 
+### Production verification of the subscriber fix (2026-09-27)
+
+The control instance's `Ops/Actions/verify-5650-memex-20260927-unwind` ran a real `Logs` action
+at 10:54Z over the preceding 1,440 minutes in namespace `memex`. Its query was
+`Unwind: exception type|Stack overflow|Gathering state for process`. It finished `Done`, with
+**0 lines read, 0 failed writes, and `truncated: false`**. This window starts after the
+2026-09-26 04:06Z deployment of the subscriber fix, meeting #5650's required 24-hour window.
+
+The positive control, `Ops/Actions/verify-5650-memex-20260927-startup`, read **126**
+`[PlatformStartup]` lines over the same namespace and duration, without truncation. Its persisted
+entries include the startup of ci.9445: `Ops/Logs/memex-1790493032329207595-fb8bbb-7vcp8`.
+Thus the zero comes from a live log instrument, not an empty namespace or failed query.
+
+The fleet sample at 10:52Z reported `notScraped: false`, one generation, and **3/3 ready replicas**
+on ci.9445, core `db9f332bf3d9fa9935799ccbfda4ef0f7fed221e`. GitHub's commit comparison confirms
+that this commit descends from the core guard fix (`8df1ddc4ee`). The ci.9445 publication's CD run
+`36299288833` built the portal from Plugins `fec0e4d`, which descends from the bell fix
+(`5617d2be4d9acd753912311bec3a9c258cf5a771`). The initial deployment provenance is recorded in
+#5650's 2026-09-26 post-roll reading.
+
+This verifies the process-death defect caused by the subscriber's missing error arm. It does not
+establish why the underlying query providers stalled, which remains a separate investigation
+(#5315). Nor does this quiet window exercise the large-export trigger required by #5649.
+
 ## What is pinned, and what is not
 
 - **`QueryFanInStallIsTerminalTest`** (`test/MeshWeaver.Hosting.Test`) — a stalled provider faults and

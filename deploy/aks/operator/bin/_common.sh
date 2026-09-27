@@ -229,6 +229,18 @@ hosting::inline_setters() {
   printf '%s' "$HOSTING_PROBE_OUT" | jq -r --arg k "$key" '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")'
 }
 
+# Does vault <vault> hold a LIVE object named <name>? Answered from `secret list` (names and
+# metadata), never `secret show`: a `show`, even with `--query id`, is a VALUE read that needs `get`,
+# which the writer identity does not hold (policy `secrets-write-only-entry`,
+# Doc/Architecture/SecretsWriteOnlyEntry). Returns 0 present, 1 absent, 2 when the listing itself
+# failed. That last case is NOT "absent": the caller must refuse, because a create-if-absent step
+# that read a refused listing as "absent" would overwrite a live secret.
+hosting::kv_exists() {
+  local vault="$1" name="$2" names
+  names="$(az keyvault secret list --vault-name "$vault" --query "[].name" -o tsv 2>/dev/null)" || return 2
+  printf '%s\n' "$names" | grep -qx -- "$name"
+}
+
 # SHA-256 hex of STDIN — how two keys are compared without either being shown.
 hosting::sha256() { sha256sum | cut -c1-64; }
 
