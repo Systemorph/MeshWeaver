@@ -178,7 +178,7 @@ public static class PlatformSettingsTabAreas
         }),
         Seed(ControlLaneSettingsTab.TabId, "Control lane", new UiContribution
         {
-            Context = UiContribution.SettingsContext,
+            Context = UiContribution.NodeSettingsContext,
             Area = ControlLaneArea,
             Label = "Control lane",
             LabelKey = "settings.controlLane",
@@ -187,7 +187,7 @@ public static class PlatformSettingsTabAreas
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",
             Order = 320,
-            Gates = new UiContributionGates { AdminOnly = true },
+            Gates = AdminAppOnly,
         }),
         Seed(PublishedSettingsTab.TabId, "Published to the web", new UiContribution
         {
@@ -239,7 +239,7 @@ public static class PlatformSettingsTabAreas
     internal static IReadOnlyList<string> AdminAppTabIds { get; } =
     [
         InvitationsSettingsTab.TabId, InboxSettingsTab.TabId, UpdatePolicySettingsTab.TabId,
-        PublishedSettingsTab.TabId, PrivacySettingsTab.TabId,
+        PublishedSettingsTab.TabId, PrivacySettingsTab.TabId, ControlLaneSettingsTab.TabId,
     ];
 
     private static MeshNode Seed(string id, string name, UiContribution content)

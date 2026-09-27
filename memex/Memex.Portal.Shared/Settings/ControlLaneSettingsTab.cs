@@ -24,7 +24,8 @@ namespace Memex.Portal.Shared.Settings;
 /// </summary>
 public static class ControlLaneSettingsTab
 {
-    /// <summary>The tab id (the settings deep link <c>/GlobalSettings/ControlLane</c>).</summary>
+    /// <summary>The tab id — a tab of the Admin app (<c>/Admin/Settings/ControlLane</c>); the old
+    /// <c>/GlobalSettings/ControlLane</c> deep link redirects there.</summary>
     public const string TabId = "ControlLane";
 
     /// <summary>The section id (namespaces its layout data).</summary>

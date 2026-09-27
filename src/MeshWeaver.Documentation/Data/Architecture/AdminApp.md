@@ -67,7 +67,7 @@ would: every one waits for a positive admin verdict. Nothing about the app widen
 | **Instances** (AKS overview, control instance) | a tab on EVERY node's settings page for an admin | `/Admin/Settings/Instances` | platform admin + `Instances:Enabled` |
 | **Partitions** (partition sync overview) | `/{user}/Settings/PartitionSync` | `/Admin/Settings/PartitionSync` | platform admin |
 | **Sign-in providers** | `/{user}/Settings/SignInProviders` | `/Admin/Settings/SignInProviders` | platform admin, and only on the Admin hub (`SignInSetupAccess.Decide`) |
-| **Invitations**, **Inbox** (non-user mail), **Updates** (`Admin/UpdatePolicy`), **Published to the web**, **Privacy** (statement editor) | `/_Setting/GlobalSettings/{id}` | `/Admin/Settings/{id}` | `AdminOnly` + `NodeTypes: [AdminApp]`; each area re-asserts the gate |
+| **Invitations**, **Inbox** (non-user mail), **Updates** (`Admin/UpdatePolicy`), **Published to the web**, **Privacy** (statement editor), **Control lane** (the self-update announcement key — [Self-Update Announcement Key](../SelfUpdateAnnouncementKey)) | `/_Setting/GlobalSettings/{id}` | `/Admin/Settings/{id}` | `AdminOnly` + `NodeTypes: [AdminApp]`; each area re-asserts the gate |
 | **Token Usage** (instance-wide spend) | `{node}/Settings/TokenUsage` gated on `Permission.All` of the page's node — which every person holds on their own partition, so it showed on everybody's settings page | `/Admin/Settings/TokenUsage` | platform admin |
 | **AI Admin** (model credit bill, providers) | `/{user}/Settings/AiAdmin` | `/Admin/Settings/AiAdmin` | platform admin |
 | **Coupons**, **Instance grants**, **Composition** | `/{user}/Settings/{id}` | `/Admin/Settings/{id}` | platform admin |
