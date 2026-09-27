@@ -50,6 +50,11 @@ git worktree remove /Users/roland/code/MW-my-change   # once merged/abandoned
   `git diff > patch` + `git apply` instead.
 - Parallel PR-building sub-agents must pass `isolation: "worktree"` as a tool PARAM (a prompt-only
   "work in a worktree" does nothing).
+- **A worktree or branch another session touched in the last 30 minutes is theirs**, and a patch
+  or log in the shared session scratchpad is not yours unless you named it. Name a patch for its
+  branch (`<issue>-<slug>.patch`), and after `git apply` grep for a marker from YOUR change: an apply
+  of someone else's diff also exits 0. The collision rule and the other shared-session practices:
+  [/pullrequest](../pullrequest/SKILL.md), "Working beside other sessions".
 - **Stay at the root of your worktree** for every command — never the primary, never a hard-coded
   path. Avoid chained commands (`&&`, `||`), `for` loops, and `cd`; they all require user
   confirmation.

@@ -201,6 +201,24 @@ restarted pod of the serving image had to pass the same probe. The control insta
   gate whose readiness probe is not on `/ready`, and any render whose rollout deadline does not
   cover a cold bake. `PreWarmGateReadinessGuard` holds the chart's own prose and prerequisites to the same rule.
 
+### The startup budget, once the gate is off the startup probe
+
+With the gate on readiness, the startup budget no longer has to cover a bake. It covers a plain cold
+boot only. Both AKS instances that ran the three-hour budget now carry **`failureThreshold: 60`**
+(`periodSeconds: 10`, so **600 s**) in their records in Systemorph/Memex:
+`deployments/aks/memex/values.memex.public.yaml` (Memex #547) and
+`deployments/aks/memex-cloud/values.memexcloud.public.yaml` (Memex #549). The records keep the old
+1080 rationale as a comment, marked superseded, so a reader who finds 1080 in an older render knows
+why it existed.
+
+That budget is safe only on an image that carries the WHOLE readiness-only split: #5749 for the bake
+gate and #5754 for `required_modules`. On an image missing #5749 the gate still rides `/health`, and
+a bake outlasts 600 s: on memex-cloud a pod's bake-report sweep was stamped about 21.5 min after the
+pod booted. On an image missing #5754, a required module that arrives late still fails the startup
+probe inside the shorter budget. So arm the gate on an instance only once its running image carries
+both, and never roll such an instance back to an older image with the gate
+armed and the short budget.
+
 ### Which checks may fail the startup probe
 
 The question for each check is whether killing and restarting the container is the right answer to
@@ -240,8 +258,29 @@ killed) or roll gate (`/ready`, the roll stalls).
   marker exists only once a pod of that build is admitted with the gate armed. Until then, a
   restart falls back on rule 1 and the provenance witness.
 
+## Incident history
+
+The outage of the control instance, 2026-09-25/26, as three failures and the change that closed
+each one. The failures are the evidence above. The table is here so a reader who arrives from a
+later incident can see what was already fixed.
+
+| Failure | What closed it |
+|---|---|
+| A type that had never built (`BinaryClickerV2/BinaryToggle`, #3883) read as a regression, and the serving image refused its own readiness | #5725: the two rules. A regression needs a working build from an older image, and an image that has served here never refuses itself |
+| The gate's verdict rode the startup probe, so every refused container was killed at `periodSeconds × failureThreshold` (10 s × 1080 = 3 h), on both images | #5749: the gate holds readiness only (policy `bake-gate-readiness-only`). #5754 put `required_modules` under the same rule (policy `required-modules-readiness-only`). Sample reports how each container's previous run ended (Plugins #2397) |
+| The previous image was not a safe fallback: a serving pod that crashed for another reason (#4654) had to pass the same probe, and could not | the same split: a restarted previous-image pod no longer meets the verdict on its startup probe. The startup budget went back to a cold boot, 600 s, on memex and memex-cloud (Memex #547, #549) |
+
+Two conditions made the recovery slower than the fix. The migrate-first roll plan could not reach
+the control instance, because the Hosting sources that carried it were held behind a seal; see
+[Planning a Database Migration](../PlanningADatabaseMigration) and
+[Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash). And the replacement pod waited
+`Pending` on `Insufficient cpu` with the silos node pool at its autoscaler maximum; the pool's
+maximum and its declaration moved into the estate's governed infrastructure lane (Memex #546,
+#551).
+
 ## Related
 
+[Deploying Across Platform Versions](../DeployingAcrossPlatformVersions) ·
 [Mesh Admission](../MeshAdmission) ·
 [NodeType Compilation](../NodeTypeCompilation) ·
 [Deployment (AKS)](../DeploymentAKS)
