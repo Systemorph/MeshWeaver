@@ -4046,6 +4046,34 @@ public static class MeshExtensions
                     // was cancelled AFTER removing nodes really did leave the tree half-gone.
                     // A timeout is a different condition and keeps its own branch and its Error.
                     var isCancelled = !isTimeout && CancellationClassifier.IsCooperativeCancellation(ex);
+                    // 🚨 TEARDOWN IS NOT A VERDICT — the delete's half of the rule
+                    // HandleValidateDeleteRequest follows. A cascade LEAF runs this handler on its
+                    // own per-node hub, and several stages resolve from that hub after a storage
+                    // read (post-deletion handlers, the access-rule gate, the permission fold, the
+                    // validators). A recycle that disposes the hub in between faulted the leg with
+                    // "Unexpected error: Instances cannot be resolved …" and refused the whole
+                    // recursive delete. With NOTHING removed, the honest answer is the transient
+                    // ShuttingDown the commit re-asks on (RideOutRecyclingLeaf), carried by the mesh
+                    // hub because this one may no longer be able to post. Once anything was removed
+                    // it is a torn state and keeps its loud branch below.
+                    if (partial.Count == 0 && !isTimeout && !isCancelled && !isUnauthorized
+                        && IsTeardownOfThisHub(hub, ex))
+                    {
+                        logger.LogInformation(
+                            "[DeleteNode] {Path}: this activation was disposed mid-delete ({Error}) with "
+                            + "nothing removed — answering ShuttingDown so the caller re-asks the fresh "
+                            + "activation; this is not a verdict about the delete",
+                            path, ex.GetType().Name);
+                        AnswerFromLiveOrParent(hub, meshHub, request, new DeliveryFailure(request)
+                        {
+                            ErrorType = ErrorType.ShuttingDown,
+                            Message = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                                hub.Address,
+                                $"{ShutdownNack.FormatActivationTag(hub)}, {ex.GetType().Name}",
+                                $"cannot finish DeleteNodeRequest for '{path}'")
+                        }, logger);
+                        return;
+                    }
                     if (isUnauthorized && partial.Count > 0)
                         logger.LogError(ex,
                             "[DeleteNode] permission-denied MID-COMMIT path={Path} — {Partial} node(s) were "
@@ -4569,15 +4597,24 @@ public static class MeshExtensions
                 // the continuations. Identity is untouched — the AccessContext is stamped
                 // explicitly below (the System context the commit decided), and the leaf's
                 // [RequiresPermission(Delete)] gate reads that, never the sender address.
-                return issuingHub.Observe(
-                        // CascadeRootPath rides to the leaf's handler so per-leaf validators
-                        // exempt space-teardown invariants (last-admin) exactly like the
-                        // pre-flight ValidateDeleteRequest(p, rootPath) already does.
-                        baseRequest with { Path = path, Recursive = false, CascadeRootPath = rootPath },
-                        o => callerAccessContext is null
-                            ? o.WithTarget(new Address(path))
-                            : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext))
-                    .Take(1)
+                //
+                // 🚨 A leaf that answers ShuttingDown is RE-ASKED, never counted as a failed commit
+                // (RideOutRecyclingLeaf) — the same recycle that could refuse the pre-flight can
+                // land between the pre-flight and this leg. The re-ask is safe because the leaf's
+                // delete is idempotent: if the dying activation had already removed the row, the
+                // next one answers AlreadyAbsent and the arm below records nothing — the only cost
+                // is that this operation then under-reports that one removal, never over-reports.
+                return RideOutRecyclingLeaf(
+                        () => issuingHub.Observe(
+                                // CascadeRootPath rides to the leaf's handler so per-leaf validators
+                                // exempt space-teardown invariants (last-admin) exactly like the
+                                // pre-flight ValidateDeleteRequest(p, rootPath) already does.
+                                baseRequest with { Path = path, Recursive = false, CascadeRootPath = rootPath },
+                                o => callerAccessContext is null
+                                    ? o.WithTarget(new Address(path))
+                                    : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext))
+                            .Take(1),
+                        path, "commit", logger)
                     .SelectMany(delivery =>
                     {
                         if (delivery.Message is DeleteNodeResponse resp && resp.Success)
@@ -4728,6 +4765,65 @@ public static class MeshExtensions
             });
 
     /// <summary>
+    /// 🚨 RIDE OUT A RECYCLING LEAF — the rider both halves of a recursive delete use for a leg
+    /// that answers <see cref="ErrorType.ShuttingDown"/>.
+    ///
+    /// <para><see cref="ErrorType.ShuttingDown"/> is a PROMISE ("the address may reactivate …
+    /// retry to get the authoritative answer"), never a verdict, and both the pre-flight and the
+    /// commit treated it as one: it fell through to their generic arms and refused the whole
+    /// recursive delete. That is how an unrelated recycle refused a governed DeleteSpace — the
+    /// pre-flight's own post ACTIVATES each leaf, an activation can cold-compile its NodeType, and
+    /// the resulting Release recycles that type's dependency network, disposing the very leaf
+    /// hubs that were validating (measured on memex.systemorph.com; see DisposedScopeAndDyingHubs
+    /// → "A pre-flight on a hub a recycle disposes").</para>
+    ///
+    /// <para>Same rider shape as the point read (<c>MeshNodeStreamExtensions.GetMeshNodeOutcome</c>):
+    /// the first ShuttingDown re-asks at once (zero latency for the sub-second recycle), later ones
+    /// on <see cref="MeshNodeStreamExtensions.RecyclingReProbePace"/> so a wedged teardown is paced,
+    /// not hammered. There is deliberately NO count of its own: the ride-out lives INSIDE the leg's
+    /// existing bound, which the caller applies around this, so nothing here widens a budget — a
+    /// leaf that recycles for the entire leg is still refused, by name, as Unavailable.</para>
+    /// </summary>
+    /// <param name="ask">One cold ask of the leaf; every subscription posts afresh, which is what
+    /// lets a re-ask land on the leaf's NEXT activation.</param>
+    /// <param name="path">The leaf, for the log line.</param>
+    /// <param name="stage">Which half of the delete is asking, for the log line.</param>
+    /// <param name="logger">Where each re-ask is recorded.</param>
+    /// <param name="onRecycling">Called once per recycling answer, so the caller's timeout can say
+    /// the leaf recycled rather than that it never replied.</param>
+    /// <param name="reAsks">How many re-asks have already been spent; 0 from every caller.</param>
+    private static IObservable<T> RideOutRecyclingLeaf<T>(
+        Func<IObservable<T>> ask,
+        string path,
+        string stage,
+        ILogger logger,
+        Action? onRecycling = null,
+        int reAsks = 0)
+        => ask().Catch<T, Exception>(ex =>
+        {
+            if (!IsRecyclingAnswer(ex))
+                return Observable.Throw<T>(ex);
+            onRecycling?.Invoke();
+            logger.LogDebug(
+                "[DeleteNode] {Stage} leaf {Path} answered ShuttingDown (re-ask #{ReAsk}) — its "
+                + "activation is recycling, asking the next one: {Message}",
+                stage, path, reAsks + 1, ex.Message);
+            return reAsks == 0
+                ? RideOutRecyclingLeaf(ask, path, stage, logger, onRecycling, reAsks + 1)
+                : Observable.Timer(MeshNodeStreamExtensions.RecyclingReProbePace)
+                    .SelectMany(_ => RideOutRecyclingLeaf(ask, path, stage, logger, onRecycling, reAsks + 1));
+        });
+
+    /// <summary>
+    /// Whether a leg's fault is the transient "this activation is going away" answer — typed on
+    /// <see cref="ErrorType.ShuttingDown"/> or <see cref="HubDisposingException"/>, never on
+    /// message text, so a real refusal can never be mistaken for a recycle.
+    /// </summary>
+    private static bool IsRecyclingAnswer(Exception ex)
+        => ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }
+           || HubDisposingException.IsHubDisposal(ex);
+
+    /// <summary>
     /// Bulk-atomic pre-flight: post <see cref="ValidateDeleteRequest"/> at every
     /// descendant address (root excluded — already validated by the caller) and
     /// return the FIRST failure as <c>(Path, Error, Reason)</c>, or <c>null</c>
@@ -4832,7 +4928,29 @@ public static class MeshExtensions
             StringComparer.OrdinalIgnoreCase);
         var posted = 0;
 
-        var perPath = descendants.Select(p => Observable
+        // One ask of the leaf. Cold: every subscription posts a fresh ValidateDeleteRequest, which
+        // is what lets a re-ask below land on the leaf's NEXT activation.
+        IObservable<IMessageDelivery<ValidateDeleteResponse>> Ask(string p) => Observable
+            .Defer(() => issuingHub
+                // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
+                // This post fires from a SelectMany continuation on the workspace's
+                // emission scheduler where AsyncLocal AccessContext is unreliable —
+                // without an explicit stamp, the PostPipeline falls back to whatever
+                // hub-self impersonation is ambient (e.g. `sync/<streamId>`) and the
+                // owner's [RequiresPermission(Delete)] gate denies. The original
+                // request's AccessContext carries the caller's full identity + roles,
+                // captured at handler entry where AsyncLocal was correct.
+                .Observe(new ValidateDeleteRequest(p, rootPath), o => callerAccessContext is null
+                    ? o.WithTarget(new Address(p))
+                    : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext)))
+            .Take(1);
+
+        var perPath = descendants.Select(p =>
+        {
+            // How many times THIS leaf answered "recycling" — read only by the leg's timeout
+            // message, so a leaf that recycled for the whole leg says so instead of "never replied".
+            var recyclingAnswers = 0;
+            return Observable
             .Defer(() =>
             {
                 // Outstanding from the moment this leg is posted, not from the moment the fan-out
@@ -4845,20 +4963,12 @@ public static class MeshExtensions
                 // is true: the request is counted before it can be outstanding.
                 System.Threading.Interlocked.Increment(ref posted);
                 unanswered.TryAdd(p, 0);
-                return issuingHub
-                    // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
-                    // This post fires from a SelectMany continuation on the workspace's
-                    // emission scheduler where AsyncLocal AccessContext is unreliable —
-                    // without an explicit stamp, the PostPipeline falls back to whatever
-                    // hub-self impersonation is ambient (e.g. `sync/<streamId>`) and the
-                    // owner's [RequiresPermission(Delete)] gate denies. The original
-                    // request's AccessContext carries the caller's full identity + roles,
-                    // captured at handler entry where AsyncLocal was correct.
-                    .Observe(new ValidateDeleteRequest(p, rootPath), o => callerAccessContext is null
-                        ? o.WithTarget(new Address(p))
-                        : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext));
+                // 🚨 A leaf that answers "I am recycling" is re-asked, never refused — see
+                // RideOutRecyclingLeaf. Before this, ShuttingDown fell through to the generic arm
+                // below and refused the whole recursive delete as ValidationFailed.
+                return RideOutRecyclingLeaf(() => Ask(p), p, "pre-flight", logger,
+                    () => System.Threading.Interlocked.Increment(ref recyclingAnswers));
             })
-            .Take(1)
             .SelectMany(d =>
             {
                 var resp = d.Message as ValidateDeleteResponse;
@@ -4893,11 +5003,23 @@ public static class MeshExtensions
             // rung deeper again) so a leaf that IS alive still gets to say which of ITS reads
             // starved. Equal budgets are not an ordering — that is the defect this issue is named
             // after, and it is the reason the value is derived rather than written.
-            .TimeoutAtStage(legTimeout, () => DeleteStageTimeout(
-                DeleteStage.PreValidateDescendants,
-                $"the descendant '{p}' did not answer ValidateDeleteRequest within "
-                + $"{legTimeout.TotalSeconds:0}s — its per-node hub never replied, so THIS ONE node "
-                + $"refused the recursive delete of '{rootPath}' and the subtree is untouched"))
+            .TimeoutAtStage(legTimeout, () =>
+            {
+                var recycled = System.Threading.Volatile.Read(ref recyclingAnswers);
+                return DeleteStageTimeout(
+                    DeleteStage.PreValidateDescendants,
+                    recycled == 0
+                        ? $"the descendant '{p}' did not answer ValidateDeleteRequest within "
+                          + $"{legTimeout.TotalSeconds:0}s — its per-node hub never replied, so THIS ONE node "
+                          + $"refused the recursive delete of '{rootPath}' and the subtree is untouched"
+                        // A different fact, so a different sentence: the leaf DID answer, every
+                        // time, and every answer was "recycling". Saying "never replied" would send
+                        // an operator after a wedged hub when the thing to find is a recycle loop.
+                        : $"the descendant '{p}' was still recycling after {recycled} ShuttingDown "
+                          + $"answer(s) within {legTimeout.TotalSeconds:0}s — no activation of it stayed "
+                          + $"up long enough to validate, so THIS ONE node refused the recursive delete "
+                          + $"of '{rootPath}' and the subtree is untouched");
+            })
             .Catch<(string, string, NodeDeletionRejectionReason)?, Exception>(ex =>
             {
                 // The [RequiresPermission(Delete)] gate on ValidateDeleteRequest refused
@@ -4943,7 +5065,8 @@ public static class MeshExtensions
             })
             // Answered — pass, fail, or its own leg bound lapsing. Whatever is LEFT in the map
             // when the STAGE backstop fires is what neither answered nor reported itself.
-            .Do(answer => unanswered.TryRemove(p, out _)));
+            .Do(answer => unanswered.TryRemove(p, out _));
+        });
 
         // Collect every descendant's outcome; emit the first non-null failure
         // (or null when all pass). Merge — not Concat — so independent
@@ -5192,6 +5315,32 @@ public static class MeshExtensions
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
         var path = request.Message.Path;
 
+        // 🚨 EVERYTHING the answer needs is taken HERE, at handler entry, while this hub is
+        // provably alive — never inside the continuation after the storage read. This handler runs
+        // on the DESCENDANT's own per-node hub, which the pre-flight activates by posting to it; an
+        // activation can cold-compile its NodeType, the resulting Release recycles the type's
+        // dependency network, and that cascade can dispose THIS hub while the read is in flight.
+        // Measured on memex.systemorph.com: ~15 leaves of one DeleteSpace answered "Validation
+        // error: Instances cannot be resolved … LifetimeScope … already been disposed" and the
+        // whole delete was refused. See DisposedScopeAndDyingHubs → "A pre-flight on a hub a
+        // recycle disposes".
+        //
+        // Hoisting is NOT the whole fix, and that page says why: INodeValidator is scoped PER HUB,
+        // so a validator resolved here can still reach back into the dead scope from its own body.
+        // What the hoist buys is that the CONTINUATION no longer faults on its own; what makes the
+        // outcome correct is the teardown classification in the Catch below, which answers such a
+        // fault as the transient ShuttingDown the pre-flight re-asks on — never as a validation
+        // verdict about the caller's delete.
+        var validators = DeletionValidators(hub);
+        // The DELIVERY's AccessContext first — the same order the root-node runner uses, and for
+        // the same reason: the ambient AsyncLocal does not survive the hop onto the storage read's
+        // thread, and the pre-flight stamps the caller's identity on this delivery explicitly.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var accessContext = request.AccessContext ?? accessService?.Context ?? accessService?.CircuitContext;
+        // Captured, never re-read later: Configuration.ParentHub re-resolves from the parent's
+        // ServiceProvider, which is the DI touch a teardown path must not make.
+        var parent = hub.Configuration.ParentHub;
+
         var existingNodeObs = persistence.Read(path, hub.JsonSerializerOptions);
 
         // Running validators against a fabricated DeleteNodeRequest keeps
@@ -5211,13 +5360,14 @@ public static class MeshExtensions
             .SelectMany(node =>
             {
                 if (node == null)
-                    return Observable.Return(
+                    return Observable.Return<object>(
                         ValidateDeleteResponse.FromError(
                             $"Node not found at path: {path}",
                             NodeDeletionRejectionReason.NodeNotFound));
 
-                return RunDeletionValidatorsObs(hub, node, proxyDeleteRequest, request.Message.RootPath)
-                    .Select(err => err is null
+                return RunDeletionValidatorsObs(
+                        validators, accessContext, node, proxyDeleteRequest, request.Message.RootPath)
+                    .Select(err => (object)(err is null
                         ? ValidateDeleteResponse.Ok()
                         // 🚨 Carry the REASON, not just the text. RunDeletionValidatorsObs already
                         // distinguishes an availability failure from a verdict (#1446), and
@@ -5225,12 +5375,35 @@ public static class MeshExtensions
                         // exactly the mistake that fix exists to stop: an unestablished permission
                         // check reported as a policy decision, so nobody looks for the starved read.
                         : ValidateDeleteResponse.FromError(
-                            err.Value.ErrorMessage ?? "Validation failed", err.Value.Reason));
+                            err.Value.ErrorMessage ?? "Validation failed", err.Value.Reason)));
             })
             .Catch((Exception ex) =>
             {
+                // 🚨 TEARDOWN IS NOT A VERDICT. A fault that exists only because THIS activation is
+                // going away says nothing about whether the node may be deleted, and answering it
+                // as ValidationFailed refused a whole DeleteSpace over a recycle nobody asked for.
+                // HubDisposingException.IsDisposedContainer already states the rule: a hub whose
+                // scope has been closed cannot serve anything, so the delivery is answered as
+                // RETRYABLE. The pre-flight rides that out and re-asks the fresh activation.
+                if (IsTeardownOfThisHub(hub, ex))
+                {
+                    logger.LogInformation(
+                        "[ValidateDelete] {Path}: this activation was disposed while validating "
+                        + "({Error}) — answering ShuttingDown so the pre-flight re-asks the fresh "
+                        + "activation; this is not a verdict about the delete",
+                        path, ex.GetType().Name);
+                    return Observable.Return<object>(new DeliveryFailure(request)
+                    {
+                        ErrorType = ErrorType.ShuttingDown,
+                        Message = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                            hub.Address,
+                            $"{ShutdownNack.FormatActivationTag(hub)}, {ex.GetType().Name}",
+                            $"cannot finish ValidateDeleteRequest for '{path}'")
+                    });
+                }
+
                 logger.LogWarning(ex, "[ValidateDelete] {Path} failed — treating as error", path);
-                return Observable.Return(
+                return Observable.Return<object>(
                     ValidateDeleteResponse.FromError(
                         $"Validation error: {ex.Message}",
                         // A read that ran out of time did not DECIDE anything — same vocabulary as
@@ -5239,12 +5412,67 @@ public static class MeshExtensions
                             ? NodeDeletionRejectionReason.Unavailable
                             : NodeDeletionRejectionReason.ValidationFailed));
             })
-            .Subscribe(response =>
-            {
-                hub.Post(response, o => o.ResponseFor(request));
-            });
+            .Subscribe(answer => AnswerFromLiveOrParent(hub, parent, request, answer, logger));
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Every registered <see cref="INodeValidator"/> that takes part in a delete, resolved NOW.
+    /// Call it where the hub is known to be alive — at handler entry — never from a continuation.
+    /// </summary>
+    private static IReadOnlyList<INodeValidator> DeletionValidators(IMessageHub hub)
+        => hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Delete))
+            .ToList();
+
+    /// <summary>
+    /// Whether <paramref name="ex"/> is THIS hub going away rather than a fault of the work: the
+    /// hub has left service, the fault is the typed <see cref="HubDisposingException"/>, or it is
+    /// the DI container's "scope already disposed" and the hub's own scope confirms it
+    /// (<see cref="ScopeTeardown.IsTerminatedByScopeTeardown"/> — the probe that keeps an unrelated
+    /// disposed dependency from being mistaken for a teardown).
+    /// </summary>
+    private static bool IsTeardownOfThisHub(IMessageHub hub, Exception ex)
+        => hub.IsShuttingDown
+           || hub.RunLevel > MessageHubRunLevel.Started
+           || HubDisposingException.IsHubDisposal(ex)
+           || hub.IsTerminatedByScopeTeardown(ex);
+
+    /// <summary>
+    /// Posts the answer to <paramref name="request"/> from this hub while it can still post, and
+    /// through its PARENT once <c>RunLevel &gt;= DisposeHostedHubs</c> has closed its own gate — the
+    /// same carrier <c>MessageService.NackThroughParent</c> uses. Correlation rides
+    /// <c>ResponseFor</c>'s RequestId, never the posting hub's identity, so the caller cannot tell
+    /// the difference. Without it an answer computed on an activation a recycle disposed was
+    /// dropped, and the caller waited out its whole leg for nothing.
+    /// </summary>
+    private static void AnswerFromLiveOrParent(
+        IMessageHub hub, IMessageHub? parent, IMessageDelivery request, object answer, ILogger logger)
+    {
+        try
+        {
+            if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                hub.Post(answer, o => o.ResponseFor(request));
+                return;
+            }
+            if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                parent.Post(answer, o => o.ResponseFor(request));
+                return;
+            }
+            logger.LogDebug(
+                "[NodeOperation] no live carrier for the answer to {RequestId} from {Address} "
+                + "(hub {RunLevel}, parent {ParentRunLevel}) — the caller's leg bound reports it",
+                request.Id, hub.Address, hub.RunLevel, parent?.RunLevel);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[NodeOperation] posting the answer to {RequestId} from {Address} failed",
+                request.Id, hub.Address);
+        }
     }
 
     /// <summary>
@@ -5746,27 +5974,28 @@ public static class MeshExtensions
     /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
     /// stops at the first failure); emits the first failure as a tuple or <c>null</c>
     /// if all pass. No <c>await</c>.
+    ///
+    /// <para>🚨 It takes its validators and its <see cref="AccessContext"/> as ARGUMENTS and
+    /// resolves nothing: its caller runs it in a continuation after a storage read, on a per-node
+    /// hub a recycle can dispose in the meantime, so the resolve belongs at the caller's handler
+    /// entry (<see cref="DeletionValidators"/>). It used to resolve both here, and a disposed scope
+    /// then refused a whole recursive delete as a validation verdict.</para>
     /// </summary>
     private static IObservable<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsObs(
-        IMessageHub hub,
+        IReadOnlyList<INodeValidator> validators,
+        AccessContext? accessContext,
         MeshNode node,
         DeleteNodeRequest request,
         string? cascadeRootPath = null)
     {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
         {
             Operation = NodeOperation.Delete,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext,
+            AccessContext = accessContext,
             DeleteCascadeRootPath = cascadeRootPath ?? request.Path
         };
-
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
-            .Where(v => v.SupportedOperations.Count == 0
-                        || v.SupportedOperations.Contains(NodeOperation.Delete))
-            .ToList();
 
         if (validators.Count == 0)
             return Observable.Return<(string?, NodeDeletionRejectionReason)?>(null);

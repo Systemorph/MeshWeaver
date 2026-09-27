@@ -3791,7 +3791,7 @@ public static class MeshNodeStreamExtensions
     /// window) is polled a handful of times, not hammered. The caller's own budget —
     /// never this constant — bounds the loop.
     /// </summary>
-    private static readonly TimeSpan RecyclingReProbePace = TimeSpan.FromMilliseconds(500);
+    internal static readonly TimeSpan RecyclingReProbePace = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// Names WHICH recycling failure this was, from the number of distinct owner activations that
