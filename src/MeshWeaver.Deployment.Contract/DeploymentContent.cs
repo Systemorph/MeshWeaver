@@ -149,7 +149,7 @@ public record DeploymentContent
 
     /// <summary>
     /// Key Vault secret NAME of the key the CONTROL LANE uses for this deployment
-    /// (Doc/Architecture/ControlLane) — e.g. <c>memex-cloud-Hosting-ControlLaneKey</c>. A NAME, never
+    /// (Doc/Architecture/ControlLane) — e.g. <c>memexcloud-Hosting-ControlLaneKey</c>. A NAME, never
     /// a value. The same vault object is mounted twice: into this deployment's pod as
     /// <c>ControlLane__Key</c> (which ARMS the lane there) and into the control instance as
     /// <c>Hosting__PlatformWebhookSecret__{deploymentId}</c> (the deployment's own key slot, which

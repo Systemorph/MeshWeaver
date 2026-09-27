@@ -165,9 +165,9 @@ Minting a key is an operator act; no agent creates or reads a secret value. The 
 in the command and never printed:
 
 ```bash
-az keyvault secret set --vault-name Systemorph --name memex-cloud-Hosting-ControlLaneKey \
+az keyvault secret set --vault-name Systemorph --name memexcloud-Hosting-ControlLaneKey \
   --value "$(openssl rand -hex 32)" --output none
-az keyvault secret show --vault-name Systemorph --name memex-cloud-Hosting-ControlLaneKey \
+az keyvault secret show --vault-name Systemorph --name memexcloud-Hosting-ControlLaneKey \
   --query "{name:name, enabled:attributes.enabled, updated:attributes.updated}" -o table
 ```
 
