@@ -196,20 +196,33 @@ public static class ShippedPrebuiltBundles
     /// </summary>
     /// <param name="sourceDirectory">A <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c> directory.</param>
     /// <param name="logger">Diagnostics — the same lines <see cref="PublicationDirectoryOf"/> has always logged.</param>
-    public static PublicationPointer ResolvePublicationPointer(string sourceDirectory, ILogger? logger = null)
+    public static PublicationPointer ResolvePublicationPointer(string sourceDirectory, ILogger? logger = null) =>
+        ResolvePublicationPointer(sourceDirectory, CancellationToken.None, logger);
+
+    /// <summary>Resolves a publication pointer under its filesystem worker's cancellation.</summary>
+    /// <param name="sourceDirectory">The source publication directory.</param>
+    /// <param name="cancellationToken">Cancellation of the worker that owns the read.</param>
+    /// <param name="logger">Diagnostics for a refused pointer.</param>
+    public static PublicationPointer ResolvePublicationPointer(
+        string sourceDirectory, CancellationToken cancellationToken, ILogger? logger = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var pointer = Path.Combine(sourceDirectory, PublicationPointerFileName);
         string? named;
         try
         {
-            if (!File.Exists(pointer))
+            var exists = File.Exists(pointer);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!exists)
                 return new PublicationPointer(sourceDirectory, null, null);
             named = File.ReadAllLines(pointer)
                 .Select(l => l.Trim())
                 .FirstOrDefault(l => l.Length > 0);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // A pointer being replaced right now reads short, or not at all. That is the ONE
             // window this layout has, it is a single small write rather than a whole publication,
             // and it degrades to the generation that applied a moment ago — never to a mix.
@@ -217,6 +230,7 @@ public static class ShippedPrebuiltBundles
                 "ShippedPrebuiltBundles: {Pointer} could not be read — reading {SourceDirectory} "
                 + "as its own publication directory; a pointer being replaced reads this way, and "
                 + "the next read resolves it", pointer, sourceDirectory);
+            cancellationToken.ThrowIfCancellationRequested();
             return new PublicationPointer(sourceDirectory, null,
                 $"the pointer could not be read ({ex.GetType().Name}: {ex.Message})");
         }
@@ -236,18 +250,23 @@ public static class ShippedPrebuiltBundles
                 + "directory name — a publication pointer may only address a subdirectory of its "
                 + "own source directory. Reading {SourceDirectory} as its own publication "
                 + "directory instead", pointer, named, sourceDirectory);
+            cancellationToken.ThrowIfCancellationRequested();
             return new PublicationPointer(sourceDirectory, named,
                 $"the pointer names '{named}', which is not a single directory name");
         }
 
         var generation = Path.Combine(sourceDirectory, named);
-        if (!Directory.Exists(generation))
+        cancellationToken.ThrowIfCancellationRequested();
+        var generationExists = Directory.Exists(generation);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!generationExists)
         {
             logger?.LogWarning(
                 "ShippedPrebuiltBundles: {Pointer} names generation '{Named}', which is not on "
                 + "disk — reading {SourceDirectory} as its own publication directory instead. A "
                 + "generation the pointer names must outlive the pointer",
                 pointer, named, sourceDirectory);
+            cancellationToken.ThrowIfCancellationRequested();
             return new PublicationPointer(sourceDirectory, named,
                 $"the pointer names generation '{named}', which is not on disk");
         }
