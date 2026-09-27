@@ -131,4 +131,41 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
         var deserializedSkin = (LayoutStackSkin)deserializedStack.Skins[0];
         deserializedSkin.Orientation.Should().Be("Horizontal");
     }
+
+    /// <summary>
+    /// The expander is the OUTERMOST skin of the control it is added to, and its declaration (title,
+    /// summary, open or collapsed) survives the wire — the renderer reads all three from the skin.
+    /// </summary>
+    [Fact]
+    public void ExpanderSkin_RoundTrips_AsTheOutermostSkin()
+    {
+        var client = GetClient();
+
+        var section = Controls.Stack
+            .WithView(Controls.Markdown("body"), "Body")
+            .AddSkin(Skins.Expander("Details").WithSummary("12 fields").WithExpanded(false));
+
+        var serialized = JsonSerializer.Serialize((UiControl)section, client.JsonSerializerOptions);
+        Output.WriteLine($"Serialized expander: {serialized}");
+        serialized.Should().Contain("ExpanderSkin");
+
+        var deserialized = JsonSerializer.Deserialize<UiControl>(serialized, client.JsonSerializerOptions);
+        var popped = deserialized.Should().BeOfType<StackControl>().Which.PopSkin(out var outer);
+        var expander = outer.Should().BeOfType<ExpanderSkin>(
+            "an expander added last must be popped first, so it wraps the whole container").Which;
+        expander.Title.Should().Be("Details");
+        expander.Summary.Should().Be("12 fields");
+        expander.Expanded.Should().Be(false);
+        popped.Skins.OfType<ExpanderSkin>().Should().BeEmpty("popping removes exactly the expander");
+    }
+
+    /// <summary><see cref="Skins.Expander"/> declares a section open unless told otherwise.</summary>
+    [Fact]
+    public void ExpanderSkin_DefaultsToOpen()
+    {
+        var skin = Skins.Expander("Request");
+        skin.Title.Should().Be("Request");
+        skin.Expanded.Should().BeNull("null is the declared-open default the renderers honour");
+        skin.Summary.Should().BeNull();
+    }
 }
