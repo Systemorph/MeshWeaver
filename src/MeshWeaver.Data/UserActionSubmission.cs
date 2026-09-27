@@ -75,6 +75,31 @@ public static class UserActionSubmission
         IUserAction action,
         AccessContext? actingUser = null,
         Action<string>? onRefused = null)
+        => stream.SubmitUserAction(action, actingUser, onRefused, onAccepted: null);
+
+    /// <summary>
+    /// Submits <paramref name="action"/> exactly as the four-argument overload does, and additionally
+    /// reports the owner's ACCEPTANCE to <paramref name="onAccepted"/>. For a click the owner answers
+    /// when the control's click action is DONE (its returned Task or observable completed), so
+    /// <paramref name="onAccepted"/> and <paramref name="onRefused"/> are the two ends of a pending
+    /// state — mutually exclusive, each at most once: a framework button shows itself pressed from the
+    /// click until one of them fires (see <c>Doc/GUI/ButtonPendingState</c>).
+    /// </summary>
+    /// <param name="stream">The stream the person acted on.</param>
+    /// <param name="action">The click, blur or dialog dismissal.</param>
+    /// <param name="actingUser">The acting person's <see cref="AccessContext"/> — see the other overload.</param>
+    /// <param name="onRefused">Receives the already-localized sentence explaining that the action did not run.</param>
+    /// <param name="onAccepted">
+    /// Invoked once when the owner acknowledges the action. It runs on whichever thread delivered the
+    /// receipt, so a UI marshals back onto its own dispatcher before touching component state.
+    /// </param>
+    /// <returns>The subscription to the receipt — see the other overload.</returns>
+    public static IDisposable SubmitUserAction(
+        this ISynchronizationStream stream,
+        IUserAction action,
+        AccessContext? actingUser,
+        Action<string>? onRefused,
+        Action? onAccepted)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(action);
@@ -99,7 +124,7 @@ public static class UserActionSubmission
                     ? o.WithTarget(stream.Owner)
                     : o.WithTarget(stream.Owner).WithAccessContext(actingUser))
             .Subscribe(
-                _ => { },
+                _ => onAccepted?.Invoke(),
                 ex =>
                 {
                     // The owner's own sentence when it produced one (it is resolved off the acting

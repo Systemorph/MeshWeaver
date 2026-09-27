@@ -91,6 +91,7 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [Attributes](Attributes) | Declarative style, visibility, and validation annotations |
 | [Side Panel](SidePanel) | Slide-in panels for detail views and settings |
 | [Reactive Dialogs](ReactiveDialogs) | Modal dialogs backed by observable state |
+| [Buttons: Pending State & Navigate-on-Accepted](ButtonPendingState) | Every clickable button shows itself pressed until the owner confirms the click — and can jump straight to a progress view on acceptance |
 | [Node Menu](NodeMenu) | Context menus on mesh nodes |
 | [Profile Page](ProfilePage) | The owner's profile page — picture upload, display name, language, bio — and how modules add sections to it |
 | [Unreadable Content Is Not Empty Content](UnreadableContentIsNotEmpty) | An empty state is an INVITATION — rendering it over content the view could not interpret is how the stored text gets overwritten |
