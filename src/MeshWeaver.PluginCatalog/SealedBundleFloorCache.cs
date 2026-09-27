@@ -129,7 +129,7 @@ public sealed class SealedBundleFloorCache
     /// <param name="logger">Diagnostics.</param>
     public IObservable<SealedBundleFloor> Observe(
         IIoPool pool, string? publishedRoot, ILogger? logger = null) =>
-        pool.InvokeBlocking(_ => Read(publishedRoot, logger));
+        pool.InvokeBlocking(ct => Read(publishedRoot, ct, logger));
 
     /// <summary>
     /// The denominator, answering the same question as
@@ -140,9 +140,20 @@ public sealed class SealedBundleFloorCache
     /// </summary>
     /// <param name="publishedRoot">The published bundle root.</param>
     /// <param name="logger">Diagnostics.</param>
-    public SealedBundleFloor Read(string? publishedRoot, ILogger? logger = null)
+    public SealedBundleFloor Read(string? publishedRoot, ILogger? logger = null) =>
+        Read(publishedRoot, CancellationToken.None, logger);
+
+    /// <summary>Reads the floor under the calling filesystem worker's cancellation.</summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="cancellationToken">Cancellation of the worker that owns this walk.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public SealedBundleFloor Read(
+        string? publishedRoot, CancellationToken cancellationToken, ILogger? logger = null)
     {
-        if (PublishedBundleCatalogue.RootRefusal(publishedRoot) is { } rootRefusal)
+        cancellationToken.ThrowIfCancellationRequested();
+        var rootRefusal = PublishedBundleCatalogue.RootRefusal(publishedRoot);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (rootRefusal is not null)
             return SealedBundleFloor.Unreadable(rootRefusal);
 
         var bundles = new List<string>();
@@ -155,22 +166,21 @@ public sealed class SealedBundleFloorCache
         {
             var root = new DirectoryInfo(publishedRoot!);
             rootKey = root.FullName;
-            foreach (var identityDirectory in root
-                         .EnumerateDirectories()
-                         .OrderBy(d => d.FullName, StringComparer.Ordinal))
+            foreach (var identityDirectory in OrdinalDirectories(root, cancellationToken))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (PublishedBundleCatalogue.IsReleaseMarkerDirectory(identityDirectory.FullName))
                     continue;
 
                 var declaredHere = new List<string>();
-                foreach (var sourceDirectory in identityDirectory
-                             .EnumerateDirectories()
-                             .OrderBy(d => d.FullName, StringComparer.Ordinal))
+                foreach (var sourceDirectory in OrdinalDirectories(identityDirectory, cancellationToken))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     visited.Add(sourceDirectory.FullName);
                     // The stamp rides the enumeration the loop already performed — one metadata read,
                     // against the pointer probe plus the sentinel open that a re-read costs.
                     var stamp = sourceDirectory.LastWriteTimeUtc;
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (observed.TryGetValue(sourceDirectory.FullName, out var known)
                         && known.Stamp == stamp
                         && string.Equals(known.Root, rootKey, StringComparison.Ordinal))
@@ -182,7 +192,8 @@ public sealed class SealedBundleFloorCache
 
                     read++;
                     var declaration = PublishedBundleCatalogue.DeclaredBundlesOfSource(
-                        sourceDirectory.FullName, logger);
+                        sourceDirectory.FullName, logger, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     // 🚨 NOT remembered. See the class remarks: a cached refusal is a permanent freeze.
                     if (declaration.Refusal is not null)
                         return SealedBundleFloor.Unreadable(declaration.Refusal);
@@ -204,6 +215,11 @@ public sealed class SealedBundleFloorCache
                 bundles.AddRange(declaredHere);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Shutdown ended the walk; it did not establish an unreadable store.
+            throw;
+        }
         catch (Exception ex)
         {
             // An IO fault against the share is an availability incident, and it must be
@@ -221,9 +237,11 @@ public sealed class SealedBundleFloorCache
         // fresher entry for the same key is not dropped by an older read's prune. No gate is needed
         // beyond that — an entry is pure cache, so the worst a lost race costs is one extra source
         // read next tick, which is the fail-closed direction.
+        cancellationToken.ThrowIfCancellationRequested();
         var forgotten = 0;
         foreach (var entry in observed)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.Equals(entry.Value.Root, rootKey, StringComparison.Ordinal)
                 && !visited.Contains(entry.Key)
                 && observed.TryRemove(entry))
@@ -247,5 +265,22 @@ public sealed class SealedBundleFloorCache
             + "{Bundles} distinct bundle ids",
             publishedRoot, read, recalled, forgotten, identities, floor.Bundles.Count);
         return floor;
+    }
+
+    // OrderBy consumes the entire lazy listing before yielding its first directory.
+    // Check cancellation while materializing, so listing the share is covered too.
+    private static List<DirectoryInfo> OrdinalDirectories(
+        DirectoryInfo directory, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var listed = new List<DirectoryInfo>();
+        foreach (var entry in directory.EnumerateDirectories())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            listed.Add(entry);
+        }
+        listed.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.FullName, b.FullName));
+        cancellationToken.ThrowIfCancellationRequested();
+        return listed;
     }
 }

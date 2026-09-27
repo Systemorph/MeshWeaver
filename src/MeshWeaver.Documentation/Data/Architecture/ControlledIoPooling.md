@@ -418,6 +418,14 @@ token is how a caller drops it without writing anything. A cancelled walk surfac
 `OperationCanceledException` and is reported as the pool ending the pass, never as "seeding failed"
 or "the shelf is unreadable" — the read did not fail, the process is stopping.
 
+`SealedBundleFloorCache.Observe` follows the same contract (#5719): the filesystem pool's
+worker token reaches the floor read, directory listings check it while materializing (before
+sorting), and each publication and cache-pruning step checks it. Cancellation escapes as
+`OperationCanceledException`; it is never converted into an unreadable-store verdict or used
+to prune entries from a walk that did not finish. The existing synchronous `Read(root, logger)`
+surface remains available for callers with no worker token; pooled callers use the overload
+whose token is required.
+
 The distinction the guard cannot draw lexically, and a reviewer must: a blocking leaf that is **one
 short syscall** (`_ => File.ReadAllText(path)`) has no step at which to look and is correct as it
 stands; a blocking leaf that **walks** — a directory tree, a list of archives, a sweep — takes the
