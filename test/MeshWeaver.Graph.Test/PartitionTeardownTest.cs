@@ -1,0 +1,257 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using MeshWeaver.Reactive.Assertions;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// 🚨 <b>A whole partition is torn down as ONE operation, whatever its size</b> —
+/// <see cref="PartitionTeardown.TearDownPartition"/>.
+///
+/// <para><b>The incident.</b> A governed <c>DeleteSpace</c> on the control instance ran eight steps
+/// as system and then stalled in step 9: the recursive <c>DeleteNodeRequest</c> of a 31,138-descendant
+/// space pre-validates every descendant with a <c>ValidateDeleteRequest</c>, and the fan-out did not
+/// settle within its 25 s bound (64 of 1,740 posted requests outstanding). A whole-space deletion has
+/// no per-node invariant worth validating 31,000 times — the space and all its access go together —
+/// so the content goes with the partition's store in one drop.</para>
+///
+/// <para>The store stand-in is the shape <c>StrandedPartitionRecordTeardownTest</c> uses, with one
+/// addition: its drop REMOVES the partition's rows from the in-memory store the way
+/// <c>DROP SCHEMA … CASCADE</c> removes them from Postgres — or, switched to "cannot tell", does
+/// nothing, which is the backend with no per-partition store that the teardown must sweep itself.</para>
+/// </summary>
+public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    /// <summary>More descendants than the per-node delete could ever pre-validate in its bound.</summary>
+    private const int Descendants = 3000;
+
+    private sealed class PartitionStore(IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        private readonly ConcurrentDictionary<string, byte> provisioned = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentQueue<string> events = new();
+
+        public string Name => "test-teardown-store";
+        public bool IsReadOnly => true;
+        public IStorageAdapter Adapter => adapter;
+        public IReadOnlyList<string> Events => events.ToArray();
+
+        /// <summary>When false the provider answers "cannot tell" and its drop does nothing — a backend with no per-partition store.</summary>
+        public bool HoldsStores { get; set; } = true;
+
+        public string? FaultDropFor { get; set; }
+
+        public bool IsProvisioned(string ns) => provisioned.ContainsKey(ns);
+
+        public IObservable<System.Reactive.Unit> EnsurePartitionProvisioned(string ns) => Observable.Defer(() =>
+        {
+            provisioned[ns] = 1;
+            return Observable.Return(System.Reactive.Unit.Default);
+        });
+
+        public IObservable<bool?> PartitionExists(string ns) =>
+            Observable.Defer(() => Observable.Return<bool?>(HoldsStores ? provisioned.ContainsKey(ns) : null));
+
+        public IObservable<System.Reactive.Unit> DeletePartition(string ns) => Observable.Defer(() =>
+        {
+            if (string.Equals(ns, FaultDropFor, StringComparison.OrdinalIgnoreCase))
+            {
+                events.Enqueue($"drop-faulted:{ns}");
+                return Observable.Throw<System.Reactive.Unit>(new InvalidOperationException("the store is unreachable"));
+            }
+            events.Enqueue($"drop:{ns}");
+            if (!HoldsStores)
+                return Observable.Return(System.Reactive.Unit.Default);
+            provisioned.TryRemove(ns, out _);
+            // DROP SCHEMA … CASCADE: every row of the partition goes, satellites included.
+            return adapter.ListDescendantPaths(ns).Take(1)
+                .SelectMany(paths => adapter.DeleteMany(paths.Append(ns).ToList()).Take(1))
+                .Select(_ => System.Reactive.Unit.Default);
+        });
+    }
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services
+                .AddSingleton<IPartitionStorageProvider>(sp =>
+                    new PartitionStore(sp.GetRequiredService<IStorageAdapter>())));
+
+    private PartitionStore Store => Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>().OfType<PartitionStore>().Single();
+    private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+    private IStorageAdapter Persistence => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+
+    private static string NewPartition() => "teardown" + Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>
+    /// 🚨 THE INCIDENT'S SHAPE, at a size the per-node delete cannot pre-validate: a space with a root,
+    /// thousands of descendants, a grant, a thread and a record, torn down as system — within ONE
+    /// convergence bound, leaving no row, no record and no store.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task ALargeSpace_IsTornDownAsOneOperation_WithinOneBound()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = await Seed(ct);
+
+        var clock = Stopwatch.StartNew();
+        var outcome = await Access.RunAsSystem(() => Mesh.TearDownPartition(partition, "test: whole-space teardown"))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        clock.Stop();
+        Output.WriteLine($"tore down {partition} ({Descendants} descendants) in {clock.ElapsedMilliseconds} ms: {outcome}");
+
+        outcome.Partition.Should().Be(partition);
+        outcome.RecordDeleted.Should().BeTrue("the partition's record is the last thing the teardown removes");
+        Store.IsProvisioned(partition).Should().BeFalse("the store is dropped");
+        Store.Events.Count(e => e == $"drop:{partition}").Should().Be(1,
+            "ONE drop — the record delete inside the claim must stand down, not drop a second time");
+        await AssertNothingLeft(partition, ct);
+    }
+
+    /// <summary>
+    /// A backend with NO per-partition store (the in-memory store): the provider drop removes nothing,
+    /// so the teardown removes the rows itself, below the pipeline — still one operation, no per-node
+    /// validation, satellites included.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task OnABackendWithNoPerPartitionStore_TheRowsAreSweptBelowThePipeline()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = await Seed(ct);
+        Store.HoldsStores = false;
+        try
+        {
+            await Access.RunAsSystem(() => Mesh.TearDownPartition(partition, "test: sweep"))
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+            await AssertNothingLeft(partition, ct);
+        }
+        finally
+        {
+            Store.HoldsStores = true;
+        }
+    }
+
+    /// <summary>🚨 Not a user verb: without the system identity it refuses by name and touches nothing.</summary>
+    [Fact(Timeout = 240000)]
+    public async Task WithoutTheSystemIdentity_ItRefuses_AndTouchesNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = await Seed(ct, descendants: 3);
+
+        PartitionTeardown.Refusal(Mesh, partition).Should().Contain("system identity");
+        var failure = await Mesh.TearDownPartition(partition, "test: no identity")
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .Timeout(TestTimeouts.Quick).Await(ct);
+        failure.Should().NotBeNull("a teardown without the system identity must be refused");
+        failure!.Message.Should().Contain("system identity");
+        Store.IsProvisioned(partition).Should().BeTrue("nothing was touched");
+        Store.Events.Should().NotContain($"drop:{partition}");
+    }
+
+    /// <summary>Invalid segments and the database-populated mirrors are refused by name, whatever the identity.</summary>
+    [Fact(Timeout = 60000)]
+    public void InvalidSegmentsAndMirrors_AreRefusedByName()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        PartitionTeardown.Refusal(Mesh, "a/b", requireSystem: false).Should().Contain("not a valid partition segment");
+        PartitionTeardown.Refusal(Mesh, "_Access", requireSystem: false).Should().Contain("not a valid partition segment");
+        PartitionTeardown.Refusal(Mesh, "Auth", requireSystem: false).Should().Contain("mirror");
+        PartitionTeardown.Refusal(Mesh, NewPartition(), requireSystem: false).Should().BeNull("an ordinary partition may be torn down");
+    }
+
+    /// <summary>
+    /// A drop that faults keeps the record (the retry handle), lifts the tombstone (the partition is still
+    /// there) and propagates the cause.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task AFailedDrop_KeepsTheRecord_LiftsTheTombstone_AndPropagates()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = await Seed(ct, descendants: 3);
+        Store.FaultDropFor = partition;
+        try
+        {
+            var failure = await Access.RunAsSystem(() => Mesh.TearDownPartition(partition, "test: faulted drop"))
+                .Select(_ => (Exception?)null)
+                .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+            failure.Should().NotBeNull();
+            failure!.Message.Should().Contain("unreachable");
+            var record = await Persistence.Read($"{PartitionNodeType.Namespace}/{partition}", Mesh.JsonSerializerOptions)
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+            record.Should().NotBeNull("the record is the only handle a retry has");
+            Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>().IsRecentlyDeleted(partition)
+                .Should().BeFalse("the partition was not torn down, so no tombstone may stand");
+        }
+        finally
+        {
+            Store.FaultDropFor = null;
+        }
+    }
+
+    // ——— helpers ———
+
+    /// <summary>A provisioned partition with a record, a root, <paramref name="descendants"/> content rows,
+    /// a grant and a thread — the content written below the pipeline, as a large space's rows sit in its store.</summary>
+    private async Task<string> Seed(CancellationToken ct, int descendants = Descendants)
+    {
+        var partition = NewPartition();
+        await Store.EnsurePartitionProvisioned(partition).Timeout(TestTimeouts.Quick).Await(ct);
+        var response = await Access
+            .RunAsSystem(() => ObserveNodeOperation(new CreateNodeRequest(new MeshNode(partition, PartitionNodeType.Namespace)
+            {
+                Name = partition,
+                NodeType = PartitionNodeType.NodeType,
+                State = MeshNodeState.Active,
+                Content = new PartitionDefinition { Namespace = partition, Schema = partition.ToLowerInvariant() },
+            })))
+            .FirstAsync().Select(d => d.Message)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        response.Success.Should().BeTrue($"the record create must succeed: {response.Error}");
+
+        var rows = new List<MeshNode>
+        {
+            new(partition) { Name = "Large space", NodeType = SpaceNodeType.NodeType, State = MeshNodeState.Active, CreatedBy = "owner" },
+            new("owner_Access", $"{partition}/_Access")
+            {
+                Name = "owner", NodeType = CreateNodesRequest.AccessAssignmentNodeType, State = MeshNodeState.Active,
+                Content = new AccessAssignment { AccessObject = "owner", Roles = [new RoleAssignment { Role = "Admin" }] },
+            },
+            new("t1", $"{partition}/Section0/_Thread") { Name = "t1", NodeType = "Thread", State = MeshNodeState.Active },
+        };
+        for (var i = 0; i < descendants; i++)
+            rows.Add(new MeshNode($"page{i}", $"{partition}/Section{i % 30}")
+            {
+                Name = $"page {i}", NodeType = "Markdown", State = MeshNodeState.Active,
+            });
+        await Access.RunAsSystem(() => Persistence.WriteMany(rows, Mesh.JsonSerializerOptions).Take(1))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        var written = await Persistence.ListDescendantPaths(partition).Take(1).Timeout(TestTimeouts.Quick).Await(ct);
+        written.Count.Should().BeGreaterThanOrEqualTo(descendants + 2,
+            "CONTROL: the rows are in the store before the teardown, or its emptiness afterwards proves nothing");
+        Output.WriteLine($"seeded '{partition}' with {written.Count} descendant row(s)");
+        return partition;
+    }
+
+    private async Task AssertNothingLeft(string partition, CancellationToken ct)
+    {
+        var left = await Persistence.ListDescendantPaths(partition).Take(1).Timeout(TestTimeouts.Quick).Await(ct);
+        left.Should().BeEmpty("no descendant row — content, grant or thread — may outlive the teardown");
+        var root = await Persistence.Read(partition, Mesh.JsonSerializerOptions).Take(1).Timeout(TestTimeouts.Quick).Await(ct);
+        root.Should().BeNull("the root goes with the partition");
+        var record = await Persistence.Read($"{PartitionNodeType.Namespace}/{partition}", Mesh.JsonSerializerOptions)
+            .Take(1).Timeout(TestTimeouts.Quick).Await(ct);
+        record.Should().BeNull("the record goes last");
+    }
+}

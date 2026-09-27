@@ -79,6 +79,24 @@ All nodes are `nodeType: Hosting/InstanceAction`, `content.$type: InstanceAction
 `content.deployment: "Deployments/<id>"`. The full table — including what each action does and
 which credential runs it — is the fleet guide's "Roll, restart, observe — the ops actions".
 
+### 🚨 Authoring or reading a governed action: system credentials from the first step, pre-flight at park
+
+Policy `governed-action-preflight`. **Every step of a governed action runs under the system
+identity from its first step**, and **at PLAN time — before it parks for approval — the action
+verifies each step is feasible**: the rights the step needs as system, and the scale bound of the
+mechanism it uses. A step the system identity cannot perform, or one known to exceed its bound, is
+**refused at park with the reason** — never discovered partway through a destructive run, where it
+leaves the target half-removed. The plan names, per step, the identity, the mechanism and its bound.
+
+The incident that set it: a governed `DeleteSpace` of `UWDeepfield` (31,138 descendants) ran its
+grant and GitSync removals as system, then failed in *Delete content* — a per-node recursive
+`DeleteNodeRequest` whose `ValidateDeleteRequest` pre-flight fan-out could not settle in its 25 s
+bound — leaving the space with no grant and no sync but all its content. A whole-space deletion now
+drops the partition as ONE teardown (`PartitionTeardown.TearDownPartition`, which itself refuses any
+identity but system), and its plan refuses at park when a per-node leg exceeds its bound. Manual:
+[Partition Teardown](../../../src/MeshWeaver.Documentation/Data/Architecture/PartitionTeardown.md) →
+*The direct teardown*; the action's own manual is `Hosting/DeleteSpaceAction` (MeshWeaver.Plugins).
+
 ## The AKS route (break glass — the control plane is what is broken)
 
 The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`,
