@@ -135,6 +135,15 @@ public static class SpaceDeletion
     /// </summary>
     public const int PerNodeDeleteBound = 200;
 
+    /// <summary>
+    /// The most rows the teardown may SWEEP on a backend with no per-partition store (no provider reports
+    /// the store present — a single in-memory adapter), where the drop removes nothing and the rows go
+    /// through the storage seam one by one, below the pipeline and without validation. That cost does
+    /// grow with the space, so it is bounded and refused at park above the bound; a backend that reports
+    /// its store is one drop and has no bound.
+    /// </summary>
+    public const int SweepBound = 250_000;
+
     /// <summary>How many index reads run at once.</summary>
     public const int ReadConcurrency = 4;
 
@@ -265,7 +274,23 @@ public static class SpaceDeletion
             ? $"PRE-FLIGHT: removing the GitSync configuration of '{inventory.Space}' is a per-node recursive delete of "
               + $"{inventory.GitSyncRows} row(s), over the bound of {PerNodeDeleteBound} such a delete can pre-validate — it "
               + "would stall mid-run and leave the space half removed. Refused at park; nothing was touched"
-            : null;
+            : inventory.StoreExists != true && inventory.TotalRows > SweepBound
+                ? $"PRE-FLIGHT: no provider reports a per-partition store for '{inventory.Space}', so the teardown would SWEEP "
+                  + $"its {inventory.TotalRows} row(s) one by one — over the sweep bound of {SweepBound}. Refused at park; "
+                  + "nothing was touched"
+                : null;
+
+    /// <summary>
+    /// How the teardown removes the rows, as the plan states it: one drop when a provider reports the
+    /// store, a bounded sweep below the pipeline when none does. Pure.
+    /// </summary>
+    public static string TeardownMechanism(SpaceDeletionInventory inventory) =>
+        inventory.StoreExists == true
+            ? $"ONE drop of the store '{inventory.Schema}' on every provider (Postgres: DROP SCHEMA … CASCADE — every table, "
+              + "satellites included), whatever its size"
+            : $"no provider reports a per-partition store, so the provider drop removes nothing and the "
+              + $"{inventory.TotalRows.ToString(CultureInfo.InvariantCulture)} row(s) are swept below the pipeline through the "
+              + $"storage seam, without per-node validation (bound {SweepBound.ToString(CultureInfo.InvariantCulture)})";
 
     /// <summary>
     /// The WHOLE pre-flight, asked AS SYSTEM (policy <c>governed-action-preflight</c>): what may never be
@@ -333,8 +358,8 @@ public static class SpaceDeletion
             inventory.GitSync.Count == 0
                 ? "• GitSync removal: nothing to remove."
                 : $"• GitSync removal: per-node recursive delete as system, {inventory.GitSyncRows} row(s) ≤ bound {PerNodeDeleteBound}.",
-            "• Teardown: PartitionTeardown.TearDownPartition as system — ONE drop per provider whatever the size "
-            + $"({inventory.TotalRows.ToString(CultureInfo.InvariantCulture)} row(s) now); PartitionTeardown.Refusal answered none.",
+            "• Teardown: PartitionTeardown.TearDownPartition as system — " + TeardownMechanism(inventory)
+            + "; PartitionTeardown.Refusal answered none.",
             "• Verify: read as system; any residue fails the run.",
             "Not touched: the build coordinator's own bookkeeping (Admin/Build/…) — it stops scheduling the space once its store is gone.");
         return (steps.ToImmutable(), notes);
@@ -347,8 +372,7 @@ public static class SpaceDeletion
     public static string TeardownCommand(SpaceDeletionInventory inventory)
     {
         var space = inventory.Space;
-        return $"PartitionTeardown.TearDownPartition(\"{space}\") as system — ONE drop of the store '{inventory.Schema}' on every "
-            + "provider (Postgres: DROP SCHEMA … CASCADE — every table, satellites included), whatever its size, then "
+        return $"PartitionTeardown.TearDownPartition(\"{space}\") as system — {TeardownMechanism(inventory)}, then "
             + $"Admin/Partition/{space} deleted inside the same claim. Never a per-node recursive delete of the content, never raw SQL. "
             + (inventory.Root is null
                 ? "The space has NO root."
