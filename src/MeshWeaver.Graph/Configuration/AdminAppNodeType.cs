@@ -198,6 +198,10 @@ public static class AdminAppNodeType
         NodeType = MeshNode.NodeTypePath,
         IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+        // Every declaration node carries its definition — readers of NodeType nodes (the deployment
+        // report's adopted-framework inventory among them) refuse one without it. The one instance
+        // lives at the root.
+        Content = new NodeTypeDefinition { DefaultNamespace = "", RestrictedToNamespaces = [""] },
         HubConfiguration = config => config
             .AddDefaultLayoutAreas()
             .HideSettingsTabs([.. HiddenDefaultTabs])
