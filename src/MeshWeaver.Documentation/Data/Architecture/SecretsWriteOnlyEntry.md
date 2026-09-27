@@ -187,7 +187,7 @@ and do every change to the vault through infrastructure-as-code.
      source entered through the GUI;
    - `hosting::pg_password`: the connection string is minted together with a per-instance database
      password in one writer step, instead of being composed from the admin password;
-   - `hosting-kv-ensure` and `hosting-signin-app`: their existence checks use `list`, not `secret show`;
+   - done: every existence check (`hosting-kv-ensure`, `-kv-copy`, `-signin-app`, `-registry-register`) uses `list` through `hosting::kv_exists`, never `secret show`, and a refused listing is a refusal, never "absent";
    - `hosting-registry-register` and `hosting-kv-rotate`: the registry key is issued straight into the
      vault and never read back;
    - `hosting-image-mirror` and `hosting-pull-secret`: the registry credentials are mounted through a
