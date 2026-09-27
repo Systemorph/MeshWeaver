@@ -134,6 +134,23 @@ That one-way direction is the load-bearing part. Making the mirror writable woul
 over one set of rows for no gain — PRs close GitHub issues natively, and a `NoOpenIssues` gate reads
 GitHub directly, so nothing downstream needs the copy to be authoritative.
 
+### How an issue reaches triage
+
+An issue opened straight on GitHub reaches the triage agent by two routes, both on the control
+instance, and both limited to the same **triage scope** (`Hosting:Triage:Repositories`: the active
+fleet repositories by default; the control instance's record declares it). An issue in any other
+repository is counted and logged, and gets no item and no thread.
+
+- **The organisation Issues webhook** delivers `opened`/`reopened` to the control instance's inbox.
+- **The periodic sweep** (`TriageIssueSweep`) lists every OPEN issue in scope that is missing a
+  classification — including one that already existed, and one that lost its `sev:` or type label
+  later, which the webhook deliberately ignores.
+
+Each issue becomes ONE item, `Hosting/Triage/issue/{repo}-{number}`, whichever route found it
+(`foundBy`). The mechanism, the settings and the idempotency rule are in MeshWeaver.Plugins'
+`Hosting/Triage` (`get Hosting/Triage`). A finding an agent makes goes in by the third route,
+`Feedback/Feedback` (AGENTS.md, "file it and move on"), never as a hand-opened issue.
+
 > ⚠️ `Hosting/Issue` is **not** part of this. It is fleet health — "no replicas ready", "not
 > observed" — machine-written, self-resolving, one node per deployment × condition. It carries its
 > own `Severity` (`Warning`/`Critical`, set by the detector), which is unrelated to the `sev:` scale
