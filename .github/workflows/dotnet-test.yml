@@ -3579,7 +3579,8 @@ jobs:
   # breaking core change still never reaches the fleet (Doc/Architecture/CrossRepoPairGate § "The
   # dependent's suites run once per platform set").
   #
-  # What still decides a queue entry here, all of it core-only and fast: the cross-repo pair, the
+  # What still decides a pull request here (and, with no merge queue — policy `merge-on-own-green` —
+  # what decides its merge), all of it core-only and fast: the cross-repo pair, the
   # interface-addition, satellite-pin and closing-keyword gates, and the platform-compatibility
   # ladder (`platform-compat`). None of them skips on an input: `Consolidate test results` is green
   # only when each of them actually ran green.

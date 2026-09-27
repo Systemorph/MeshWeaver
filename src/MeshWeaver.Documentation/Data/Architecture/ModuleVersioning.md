@@ -115,6 +115,12 @@ the break.
 You author a series. The build derives the patch against the last published release and settles it
 on `main` in `tag-modules`, so a branch never races the trunk for a number.
 
+**The hash input is the Git-visible package tree:** tracked files plus non-ignored untracked files
+in the working tree. Git-ignored local outputs (for example, a test `.trx` file under a package)
+are not package content and do not affect `moduleVersion`. This keeps a developer's post-merge lock
+identical to the lock CI derives from the commit; a new non-ignored content file still needs to be
+committed with its regenerated lock.
+
 - **Bump the MINOR for a feature. Bump the MAJOR for a break.** That is the whole authoring rule.
 - 🚨 **Never hand-edit the PATCH.** It is derived. A hand-set patch is a claim about a tree you did
   not measure.

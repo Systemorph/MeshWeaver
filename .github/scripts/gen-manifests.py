@@ -288,17 +288,25 @@ def _closure_inputs(root: Path) -> tuple[dict[str, set[str]], set[str]]:
     return _CLOSURE_INPUTS[key]
 
 
-def _project_paths(proj: Path) -> list[Path]:
-    """The files of one `src/` project directory that get hashed — ENUMERATION only.
+def _git_visible_files(root: Path, directory: Path) -> list[Path]:
+    """Files in a directory that belong to the Git-visible working tree.
 
-    Split out from the hashing so `--resolve`'s safety check can ask what the regeneration is
-    about to read WITHOUT a second copy of these rules to drift from. It drifted: the check
-    enumerated git's view (`ls-files --others --exclude-standard`) while the hashing enumerates
-    the FILESYSTEM, so every ignored-but-present file was hashed into a lock and invisible to the
-    check — Copilot's review of MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
+    The lock describes files Git can publish: tracked and non-ignored untracked files. Ignored
+    build/test outputs must not move the version (#42).
     """
+    relative = directory.relative_to(root).as_posix()
+    listed = git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
+                        f":(literal){relative}"], preserve_output=True)
+    if listed is None:
+        raise SystemExit(f"✗ gen-manifests: could not enumerate Git-visible files under "
+                         f"{relative}")
+    return sorted(root / name for name in listed.split("\0") if name)
+
+
+def _project_paths(proj: Path, root: Path) -> list[Path]:
+    """The files of one `src/` project directory that get hashed — ENUMERATION only."""
     found: list[Path] = []
-    for path in sorted(proj.rglob("*")):
+    for path in _git_visible_files(root, proj):
         if not path.is_file() or path.name in EXCLUDE_FILES:
             continue
         rel = path.relative_to(proj)
@@ -310,7 +318,7 @@ def _project_paths(proj: Path) -> list[Path]:
 
 def _hash_project(proj: Path, root: Path, files: dict[str, str]) -> None:
     """Hash one `src/` project directory into `files`, keyed by its repo-relative POSIX path."""
-    for path in _project_paths(proj):
+    for path in _project_paths(proj, root):
         files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -389,21 +397,22 @@ def module_source_files(plugin: Path, root: Path) -> dict[str, str]:
     return files
 
 
-def _package_paths(plugin: Path) -> list[Path]:
-    """The package's OWN files that get hashed — ENUMERATION only (see `_project_paths`)."""
-    return [p for p in sorted(plugin.rglob("*"))
-            if p.is_file() and p.name not in EXCLUDE_FILES]
+def _package_paths(plugin: Path, root: Path) -> list[Path]:
+    """The package's OWN Git-visible files that get hashed — ENUMERATION only."""
+    return [path for path in _git_visible_files(root, plugin)
+            if path.is_file() and path.name not in EXCLUDE_FILES]
 
 
 def hash_files(plugin: Path, root: Path) -> dict[str, str]:
     """POSIX path (prefixed with the plugin dir name) -> sha256 hex of the raw file bytes.
 
-    For a MIXED package this also covers the `src/` project its assembly is built from AND the
-    in-tree siblings that ride its bundle — see `module_source_files` for why, and for why the set
-    stops exactly there.
+    The package tree includes tracked files and non-ignored untracked files, but not ignored local
+    outputs. For a MIXED package this also covers the `src/` project its assembly is built from AND
+    the in-tree siblings that ride its bundle — see `module_source_files` for why, and for why the
+    set stops exactly there.
     """
     files: dict[str, str] = {}
-    for path in _package_paths(plugin):
+    for path in _package_paths(plugin, root):
         files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     files.update(module_source_files(plugin, root))
     return files
@@ -411,20 +420,15 @@ def hash_files(plugin: Path, root: Path) -> dict[str, str]:
 
 def hashed_paths(root: Path) -> set[str]:
     """Every repo-relative POSIX path `generate()` would hash, from the SAME enumerators
-    `hash_files` reads — never a re-statement of their rules.
-
-    🚨 This exists so `--resolve`'s "is anything here not part of the merge?" check and the
-    regeneration it guards can never answer about different file sets. They did: the check asked
-    git (`ls-files --others --exclude-standard`, which HIDES ignored files) while the hashing
-    walks the filesystem, so an ignored-but-present `Module/output.trx` was hashed into the lock
-    the resolver staged and named by nothing.
+    `hash_files` reads — never a re-statement of their rules. Ignored local outputs are absent from
+    both the hash and the resolver's safety check.
     """
     found: set[str] = set()
     for plugin in plugin_dirs(root):
-        for path in _package_paths(plugin):
+        for path in _package_paths(plugin, root):
             found.add(path.relative_to(root).as_posix())
         for directory in _module_source_dirs(plugin, root):
-            for path in _project_paths(directory):
+            for path in _project_paths(directory, root):
                 found.add(path.relative_to(root).as_posix())
     return found
 
@@ -438,7 +442,8 @@ def module_version(files: dict[str, str]) -> str:
     return h.hexdigest()[:16]
 
 
-def git(root: Path, args: list[str], timeout: int = 30) -> str | None:
+def git(root: Path, args: list[str], timeout: int = 30, *,
+        preserve_output: bool = False) -> str | None:
     """Run a git command, returning stdout or None when it fails (never raises).
 
     `subprocess.SubprocessError` is caught alongside `OSError` because the network commands below
@@ -448,7 +453,9 @@ def git(root: Path, args: list[str], timeout: int = 30) -> str | None:
     try:
         out = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
                              timeout=timeout)
-        return out.stdout.strip() if out.returncode == 0 else None
+        if out.returncode != 0:
+            return None
+        return out.stdout if preserve_output else out.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -1194,13 +1201,10 @@ def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str] | None:
     excluding the conflicted locks themselves, which are exactly what this run is about to
     rewrite. `None` when any of its git reads failed. Pure-ish: three git reads, no writes.
 
-    🚨 THE IGNORED FILES ARE THE POINT. `--exclude-standard` hides gitignored untracked files from
-    git, but `hash_files()` walks the FILESYSTEM and hashes them anyway (only `manifest.lock` and
-    `.DS_Store` are exempt) — so an ignored `Module/output.trx` went into the regenerated lock the
-    resolver staged, and CI then red on a lock hashing a file that is in nobody's commit. They are
-    filtered through `hashed_paths(root)` rather than listed wholesale, because a repo's ignored
-    set is mostly `bin/`, `obj/` and `node_modules/` that `generate()` never reads: refusing on
-    those would make `--resolve` unusable, and refusing on none of them was the defect.
+    Git-ignored untracked files are not part of `generate()`'s Git-visible hash input. Intersect
+    ignored paths with `hashed_paths(root)` anyway, so this safety check remains coupled to the
+    actual enumerator if another declared input is added later. Repositories commonly ignore large
+    build folders that do not belong in a module lock.
     Copilot's review of MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
     """
     conflicted = set(locks)
@@ -1422,12 +1426,10 @@ def self_test() -> int:
                 failures.append(f"{lock_path} stopped being unmerged — --resolve staged a conflict "
                                 f"the generator does not own, markers and all")
 
-        # 2d. 🚨 An IGNORED untracked file under a package is hashed by `hash_files()` (it walks the
-        #     FILESYSTEM; only EXCLUDE_FILES are exempt) and was invisible to this refusal, which
-        #     asked git with `--exclude-standard`. The lock then hashes a file that is in nobody's
-        #     commit and CI reds on it. Copilot's review of Reinsurance#225 / SocialMedia#208.
-        # `.gitignore` is COMMITTED IN THE BASE, so it is not itself a loose path — a fixture whose
-        # own ignore file tripped the refusal would pass for the wrong reason.
+        # 2d. An ignored build artifact inside a package is invisible to Git and therefore must
+        #     also be invisible to the hash. Otherwise a post-merge hook can commit a lock for
+        #     bytes absent from every commit, then the clean rerun refuses the version downward.
+        # `.gitignore` is COMMITTED IN THE BASE, so it is not itself a loose path.
         repo2d = tmp / "ignored"
         (repo2d / "Mod").mkdir(parents=True)
         g(repo2d.parent, "init", "-q", "-b", "main", str(repo2d))
@@ -1450,24 +1452,35 @@ def self_test() -> int:
         if g(repo2d, "diff", "--name-only", "--diff-filter=U").split() != ["Mod/manifest.lock"]:
             failures.append("fixture(ignored): expected only the lock unmerged, got "
                             f"{g(repo2d, 'diff', '--name-only', '--diff-filter=U').split()}")
+        clean_files2d = hash_files(repo2d / "Mod", repo2d)
         (repo2d / "Mod" / "output.trx").write_text("a build artifact, not part of this merge\n")
         if g(repo2d, "status", "--porcelain").count("Mod/output.trx"):
-            failures.append("fixture(ignored) does not reproduce the hazard — git still reports "
-                            "Mod/output.trx, so the old check would have caught it anyway")
-        if "Mod/output.trx" not in hashed_paths(repo2d):
-            failures.append("fixture(ignored) does not reproduce the hazard — hash_files() does "
-                            "not hash Mod/output.trx, so nothing would go into the lock")
+            failures.append("fixture(ignored) is invalid — Git reports Mod/output.trx even though "
+                            "the committed .gitignore excludes it")
+        if "Mod/output.trx" in hashed_paths(repo2d):
+            failures.append("an ignored build artifact must not appear in the manifest file set")
+        if hash_files(repo2d / "Mod", repo2d) != clean_files2d:
+            failures.append("an ignored build artifact changed the module hash")
         called2d = []
+
+        def regenerate_without_ignored_file():
+            called2d.append(True)
+            files = hash_files(repo2d / "Mod", repo2d)
+            (repo2d / "Mod" / "manifest.lock").write_text(serialize({
+                "schema": SCHEMA, "module": "Mod", "moduleVersion": module_version(files),
+                "version": "1.0.0", "files": files,
+            }))
+            return 0
+
         rc = resolve_conflicts(repo2d, fetch=False,
-                               regenerate=lambda: (called2d.append(True), 0)[1])
-        if rc != 1:
-            failures.append(f"an IGNORED untracked file that hash_files() hashes must be refused, "
-                            f"got {rc}")
-        if called2d:
-            failures.append("the ignored-file case still ran the regenerator")
-        # The control that keeps this from degenerating into "refuse every ignored file": a repo's
-        # ignored set is mostly bin/obj/node_modules that `generate()` never reads, and refusing on
-        # those would make --resolve unusable. `scripts/` is skipped, so nothing under it is hashed.
+                               regenerate=regenerate_without_ignored_file)
+        if rc != 0:
+            failures.append(f"an ignored build artifact must not block lock regeneration, got {rc}")
+        if not called2d:
+            failures.append("the ignored-file fixture did not exercise lock regeneration")
+        if g(repo2d, "diff", "--name-only", "--diff-filter=U").strip():
+            failures.append("lock regeneration with an ignored build artifact left a conflict")
+        # A Git-ignored file outside every package is also harmless; scripts/ is skipped.
         (repo2d / "Mod" / "output.trx").unlink()
         (repo2d / "scripts" / "scratch.trx").write_text("ignored, and hashed by nobody\n")
         if "scripts/scratch.trx" in hashed_paths(repo2d):
@@ -1858,7 +1871,8 @@ def self_test() -> int:
         return 1
     print("✓ gen-manifests self-test: --resolve regenerates a lock-only conflict, ALSO stages a "
           "non-conflicted lock the regeneration moved, REFUSES a half-merged tree and an unstaged "
-          "edit, no-ops on a clean one, an older trunk commit derives against ITSELF (#1426), a "
+          "edit, ignores local build outputs in package hashes, no-ops on a clean one, an older "
+          "trunk commit derives against ITSELF (#1426), a "
           "content change whose derived version is BELOW the committed one REFUSES rather than "
           "downgrading it while the same change with nothing committed above the derivable set "
           "still moves FORWARD (#4781) — with the remedy split, since a VERIFIED remote means the "

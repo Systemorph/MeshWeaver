@@ -181,7 +181,13 @@ public class RendererParityTest
             .WithGitHubApp("gh-client", "12345", "Systemorph")
             .WithOpsGitHubApp("ops-client", "67890", "Systemorph", "client-GitHub-App-PrivateKey", "GitHub__Apps__client__PrivateKey")
             .WithSocialLinkedIn("linkedin")
-            .WithAi(a => a.OpenRouter(["anthropic/claude-sonnet-4"]).Anthropic(["claude-sonnet-4"], enabled: true).AzureFoundry(["gpt-5"], enabled: true).AzureAis(["deepseek"]).Tiers("heavy", "standard", "light", "utility"))
+            .WithAi(a =>
+            {
+                var ai = a.OpenRouter(["anthropic/claude-sonnet-4"]).OpenRouterEU(["z-ai/glm-5.3"], endpoint: "https://eu.openrouter.ai/api/v1")
+                    .Anthropic(["claude-sonnet-4"], enabled: true).AzureFoundry(["gpt-5"], enabled: true).AzureAis(["deepseek"])
+                    .RequiredDataResidency("Eu").Tiers("heavy", "standard", "light", "utility");
+                return ai with { Anthropic = ai.Anthropic! with { DataResidency = "Eu", DataRetention = "ZDR" } };
+            })
             .WithOperator(true, "hosting", "hosting-operator", "ghcr.io/systemorph/hosting-operator:1")
             .WithOperatorExecutor("Job", "maintainer")
             .WithTelemetry("http://otel:4317", "grpc")

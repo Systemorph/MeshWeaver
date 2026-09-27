@@ -842,7 +842,7 @@ ladder (`platform-compat` — deployed plugin bytes on the candidate platform). 
 | control arm | the same arm, at the base | **only** what the candidate did not pass — a test already red in Plugins against the last sealed set is reported and never holds the set |
 | verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift or on ANY missing evidence; echoes the set; written at `refs/core-candidate/<key>` in Plugins |
 | attribution | Plugins `core-candidate.yml` → `Release gate: attribute …` (private) | for each drifted suite, the bundle's pull requests whose OWN diff can reach it (`scripts/core-release-attribution.py`) — in that run's summary, because suite names are private |
-| wait | `main-cd.yml`, same job → `.github/scripts/await-dependent-verdict.py --set` | polls the ref read-only over REST; green only for `success` about exactly this key, candidate, base AND set; silence by the deadline is red |
+| wait | `main-cd.yml`, same job → `.github/scripts/await-dependent-verdict.py --set` | polls the ref read-only over REST; green only for `success` about exactly this key, candidate, base AND set; silence by the deadline is red on its own exit code (3), which the ledger entry names as NO verdict rather than drift |
 | hold | `promote` needs the job | a red or missing verdict ⇒ `promote` never runs ⇒ no consumer-visible tag, no seal, no build fact, no release marker |
 | ledger | `main-cd.yml` → `release-held` / `release-passed` (reusable `node-repo-ci-failure.yml`, label `core-release-held`) | a held set appends to ONE issue and posts ONE signed event to the control portal's triage; a passing set closes it |
 
