@@ -68,7 +68,7 @@ public class PolymorphicResolverAllocationTest(ITestOutputHelper output) : HubTe
         var added = large - small;
         Output.WriteLine($"Extra resolution allocation beyond registry traversal: {added:N0} bytes "
             + $"for {candidates} unrelated types (small={small:N0}, large={large:N0}).");
-        added.Should().BeLessThan(16L * candidates,
+        added.Should().BeLessThan(1024L,
             "unrelated candidates need an assignability check, not a captured Any predicate "
             + "and boxed list enumerator for each registry entry");
         resolver.GetTypeInfo(typeof(Probe), options).PolymorphismOptions!.DerivedTypes
