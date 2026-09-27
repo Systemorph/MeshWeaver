@@ -53,6 +53,17 @@ The reviewer posts under TWO logins with ONE account id:
 It posted exactly one review per pull request on all 50 (the ruleset carries
 `review_on_push: false`), always at state COMMENTED.
 
+THE SECOND REVIEWER — the internal one (policy `internal-code-review`)
+----------------------------------------------------------------------
+The PR steward's GLM-5.3 reviewer (MeshWeaver.Plugins `Governance/PullRequestSteward.md`) posts
+through the `systemorph-com` GitHub App, under ONE login and ONE account id on both endpoints:
+  pulls/{n}/reviews    `systemorph-com[bot]`  type Bot  id 328286035
+  pulls/{n}/comments   `systemorph-com[bot]`  type Bot  id 328286035
+It reviews every HEAD (not once per pull request), at state COMMENTED or CHANGES_REQUESTED — never
+APPROVED. Both reviewers are accepted: a review by EITHER lands condition 1, and condition 2 counts
+the threads BOTH opened. Copilot stays in the set until its `copilot_code_review` rule is gone from
+every repository that calls this lane and no open pull request carries an unanswered Copilot thread.
+
 WHAT MAKES A REVIEW A REVIEW: PROVENANCE, NOT PRESENTATION
 ----------------------------------------------------------
 A review counts as landed because the REVIEWER ACCOUNT posted it at a non-PENDING state — never
@@ -97,14 +108,14 @@ import sys
 import time
 
 REVIEWER_ACCOUNT_ID = 175728472
-# The INTERNAL reviewer (maintainer, 2026-09-27: "no more github copilot involvement, we take over
-# review 100% with GLM-5.3"). The GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward posts its
-# review, its inline findings and the `internal-review` check run through the `systemorph-com`
-# GitHub App, whose bot account is `systemorph-com[bot]`, id 328286035 (read from
-# `GET /users/systemorph-com%5Bbot%5D`). It is ACCEPTED ALONGSIDE Copilot so that no pull request
-# is stranded between the two states while the `copilot_code_review` rule is retired repository by
-# repository: either reviewer's review lands the review, and every thread EITHER one opened needs a
-# reply from a person. Design of record: MeshWeaver.Plugins `Governance/PullRequestSteward.md`.
+# The INTERNAL reviewer — policy `internal-code-review` (Doc/Architecture/PolicyNotProse, the
+# register). The GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward posts its review, its inline
+# findings and the `internal-review` check run through the `systemorph-com` GitHub App, whose bot
+# account is `systemorph-com[bot]`, id 328286035 (`GET /users/systemorph-com%5Bbot%5D`). It is
+# ACCEPTED ALONGSIDE Copilot so that no pull request is stranded while the `copilot_code_review`
+# rule is retired repository by repository: either reviewer's review lands the review, and every
+# thread EITHER one opened needs a reply from a person. Design of record: MeshWeaver.Plugins
+# `Governance/PullRequestSteward.md`.
 INTERNAL_REVIEWER_ACCOUNT_ID = 328286035
 REVIEWER_ACCOUNT_IDS = frozenset({REVIEWER_ACCOUNT_ID, INTERNAL_REVIEWER_ACCOUNT_ID})
 REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]"})
@@ -719,7 +730,7 @@ def self_test() -> int:
     case("a User account named like the reviewer is not the reviewer", (NOT_LANDED,), _pr(0),
          [_review(user={"login": "Copilot", "type": "User", "id": 1})], [])
 
-    # The internal GLM-5.3 reviewer (systemorph-com[bot]) — accepted alongside Copilot, 2026-09-27.
+    # The internal GLM-5.3 reviewer (systemorph-com[bot]) — accepted alongside Copilot (policy `internal-code-review`).
     case("the internal reviewer's review lands the review", GREEN, _pr(0),
          [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [])
     case("the internal reviewer at CHANGES_REQUESTED still landed", GREEN, _pr(0),
