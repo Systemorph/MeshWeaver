@@ -113,7 +113,9 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var planned = await Terminal(dry, ct);
         planned.Status.Should().Be(ControlLaneStatus.Planned, planned.Message);
         planned.Plan.Should().NotBeNull();
-        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Delete content");
+        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Tear down the partition",
+            "a space's content goes with its store in ONE teardown, never a per-node delete (policy governed-action-preflight)");
+        planned.Plan.Steps.Select(s => s.Name).Should().NotContain("Delete content");
         planned.PlanDigest.Should().Be(planned.Plan.Digest());
         (await target.Exists("Doomed/Page")).Should().BeTrue("a dry run changes nothing");
 
@@ -355,6 +357,32 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 (ControlLaneKeys.ControlKeySection, FleetSecret), (ControlLaneKeys.ControlKeyOf(Deployment), FleetSecret)),
                 Deployment).Refusal
             .Should().Contain("equals the fleet-wide inbox secret");
+    }
+
+    /// <summary>
+    /// 🚨 PRE-FLIGHT AT PARK (policy governed-action-preflight): the incident's 31,065-row space plans ONE
+    /// teardown and passes; the one per-node leg (GitSync) and the no-store sweep are bounded, and a plan over
+    /// either bound is refused before it is offered.
+    /// </summary>
+    [Fact]
+    public void ALargeSpace_IsOneTeardown_AndAnOversizedLeg_IsRefusedAtPark()
+    {
+        var large = new SpaceDeletionInventory
+        {
+            Space = "UWDeepfield", Schema = "uwdeepfield", StoreExists = true,
+            Tables = [new SpaceTableCount("mesh_nodes", 15780), new SpaceTableCount("activities", 14514), new SpaceTableCount("threads", 771)],
+        };
+        SpaceDeletion.PreflightRefusal(large).Should().BeNull("a reported store is one drop, whatever its size");
+        var (steps, notes) = SpaceDeletion.StepsOf(large);
+        steps.Select(s => s.Name).Should().Contain("Tear down the partition");
+        steps.Select(s => s.Name).Should().NotContain("Delete content");
+        notes.Should().Contain(n => n.StartsWith("PRE-FLIGHT"));
+
+        SpaceDeletion.PreflightRefusal(large with { GitSyncRows = SpaceDeletion.PerNodeDeleteBound + 1 })
+            .Should().Contain("Refused at park");
+        var hugeNoStore = large with { StoreExists = null, Tables = [new SpaceTableCount("mesh_nodes", SpaceDeletion.SweepBound + 1)] };
+        SpaceDeletion.PreflightRefusal(hugeNoStore).Should().Contain("sweep bound");
+        SpaceDeletion.TeardownCommand(large with { StoreExists = null }).Should().Contain("swept below the pipeline");
     }
 
     [Fact]
