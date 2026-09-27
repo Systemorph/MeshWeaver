@@ -126,30 +126,40 @@ public sealed class RecycleOperation : IControlLaneOperation
     {
         var target = request.Target;
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var query = $"path:{target} limit:1";
+        var query = $"path:{target} select:path limit:1";
         return SpaceDeletion.AsSystem(hub, () => MeshReading.Read(mesh, query))
             .SelectMany(reading =>
             {
-                var node = reading.Rows.FirstOrDefault(r => string.Equals(r.Path, target, StringComparison.Ordinal));
-                if (node is null)
-                    return Observable.Throw<ControlLanePreparation>(new InvalidOperationException(reading.IsAnswer
-                        ? $"there is no node at '{target}' — the index was asked ({query}) and answered without listing it. "
-                          + "Nothing was recycled: a dispose to an address with no node is a no-op, and a no-op is never reported as a recycle"
-                        : $"could NOT ESTABLISH whether '{target}' exists — {reading.WhyNotAnAnswer}. Nothing was recycled, "
-                          + "and this is NOT a statement that the target is absent"));
-                var isNodeType = string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
-                var network = isNodeType
-                    ? Network(hub, node.Path).Select(n => (DependencyNetworkResult?)n)
-                    : Observable.Return<DependencyNetworkResult?>(null);
-                return network.Select(result =>
-                    result is { IsComplete: false }
-                        // 🚨 Refused BEFORE anything is disposed: an incomplete network means an unknown
-                        // number of live hubs, and no plan can bind a blast radius nobody could read.
-                        ? throw new InvalidOperationException(
-                            $"the dependency network of '{node.Path}' is INCOMPLETE — {result.Incomplete.Count} enumeration leg(s) "
-                            + $"could not be read ({string.Join(" | ", result.Incomplete)}). Nothing is planned and nothing was "
-                            + "recycled; re-request once the index answers")
-                        : Preparation(hub, request, node, result));
+                if (!reading.IsAnswer)
+                    return Observable.Throw<ControlLanePreparation>(new InvalidOperationException(
+                        $"could NOT ESTABLISH whether '{target}' exists — {reading.WhyNotAnAnswer}. Nothing was recycled, "
+                        + "and this is NOT a statement that the target is absent"));
+                var listedNode = reading.Rows.FirstOrDefault(r => string.Equals(r.Path, target, StringComparison.Ordinal));
+                if (listedNode is null)
+                    return Observable.Throw<ControlLanePreparation>(new InvalidOperationException(
+                        $"there is no node at '{target}' — the index was asked ({query}) and answered without listing it. "
+                        + "Nothing was recycled: a dispose to an address with no node is a no-op, and a no-op is never reported as a recycle"));
+                return SpaceDeletion.ReadCurrentNode(hub, target).SelectMany(current =>
+                {
+                    if (current.Node is null)
+                        return Observable.Throw<ControlLanePreparation>(new InvalidOperationException(
+                            $"could NOT ESTABLISH the current content of '{target}' after its path was listed — {current.Error}. "
+                            + "Nothing was recycled"));
+                    var node = current.Node;
+                    var isNodeType = string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
+                    var network = isNodeType
+                        ? Network(hub, node.Path).Select(n => (DependencyNetworkResult?)n)
+                        : Observable.Return<DependencyNetworkResult?>(null);
+                    return network.Select(result =>
+                        result is { IsComplete: false }
+                            // 🚨 Refused BEFORE anything is disposed: an incomplete network means an unknown
+                            // number of live hubs, and no plan can bind a blast radius nobody could read.
+                            ? throw new InvalidOperationException(
+                                $"the dependency network of '{node.Path}' is INCOMPLETE — {result.Incomplete.Count} enumeration leg(s) "
+                                + $"could not be read ({string.Join(" | ", result.Incomplete)}). Nothing is planned and nothing was "
+                                + "recycled; re-request once the index answers")
+                            : Preparation(hub, request, node, result));
+                });
             });
     }
 

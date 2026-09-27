@@ -68,6 +68,9 @@ public sealed record SpaceDeletionInventory
     public bool IsGone => TotalRows == 0 && Grants.Count == 0 && GitSync.Count == 0 && !RecordExists && StoreExists != true;
 }
 
+/// <summary>A point read from the owning node stream, or a named reason it could not be read.</summary>
+internal sealed record AuthoritativeNodeRead(string Path, MeshNode? Node, string? Error);
+
 /// <summary>
 /// THE engine of a governed space deletion — the break-glass removal of a space no user identity may
 /// delete, AS SYSTEM, through the framework's own deletes and the platform's partition teardown,
@@ -329,15 +332,18 @@ public static class SpaceDeletion
         definition.TableMappings is { } mappings
         && mappings.Keys.Any(segment => segment.StartsWith('_') && path.Split('/').Contains(segment, StringComparer.Ordinal));
 
-    /// <summary>The query that reads the space's <c>Admin/Partition</c> record. Pure.</summary>
-    public static string RecordQuery(string space) => $"path:{PartitionNodeType.Namespace}/{space} limit:1";
+    /// <summary>The listing that establishes whether the space's <c>Admin/Partition</c> record exists. Pure.</summary>
+    public static string RecordQuery(string space) => $"path:{PartitionNodeType.Namespace}/{space} select:path limit:1";
+
+    /// <summary>The listing that establishes whether the space root exists. Pure.</summary>
+    public static string RootQuery(string space) => $"path:{space} select:path limit:1";
 
     /// <summary>The queries one inventory runs: the root, the main rows, one per satellite NodeType (defaults AND custom). Pure.</summary>
     public static IReadOnlyList<string> InventoryQueries(string space, PartitionDefinition? definition = null)
     {
         var queries = new List<string>
         {
-            $"path:{space} select:path,id,namespace,nodeType,name,createdBy limit:1",
+            RootQuery(space),
             $"namespace:{space} scope:descendants select:path,id,namespace,nodeType",
         };
         var custom = (definition?.NodeTypeTableMappings ?? new Dictionary<string, string>())
@@ -383,38 +389,80 @@ public static class SpaceDeletion
             .Zip(AsSystem(hub, () => MeshReading.Read(mesh, RecordQuery(space))), (store, record) => (store, record))
             .SelectMany(first =>
             {
-                var recordNode = first.record.Rows
+                var listedRecord = first.record.Rows
                     .FirstOrDefault(r => string.Equals(r.Path, recordPath, StringComparison.OrdinalIgnoreCase));
-                var definition = recordNode?.ContentAs<PartitionDefinition>(hub.JsonSerializerOptions);
-                var unreadRecord = first.record.IsAnswer ? [] : new[] { $"{first.record.Query}: {first.record.WhyNotAnAnswer}" };
-                var definitionUnread = recordNode is not null && definition is null
-                    ? new[] { $"{recordPath}: the record exists but its content is not a readable PartitionDefinition" }
-                    : [];
-                var queries = first.store == false ? [] : InventoryQueries(space, definition).ToArray();
-                var rootQuery = queries.FirstOrDefault();
-                return queries
-                    .Select(q => AsSystem(hub, () => MeshReading.Read(mesh, q)))
-                    .MergeBounded(ReadConcurrency)
-                    .ToList()
-                    .SelectMany(readings =>
+                var recordRead = !first.record.IsAnswer || listedRecord is null
+                    ? Observable.Return(new AuthoritativeNodeRead(recordPath, null, null))
+                    : ReadCurrentNode(hub, recordPath);
+                return recordRead.SelectMany(currentRecord =>
+                {
+                    var definition = currentRecord.Node?.ContentAs<PartitionDefinition>(hub.JsonSerializerOptions);
+                    var unreadRecord = first.record.IsAnswer
+                        ? []
+                        : new[] { $"{first.record.Query}: {first.record.WhyNotAnAnswer}" };
+                    var liveRecordUnread = first.record.IsAnswer && listedRecord is not null && currentRecord.Node is null
+                        ? new[] { $"{recordPath}: the record was listed but its current node could not be read — {currentRecord.Error}" }
+                        : [];
+                    var definitionUnread = listedRecord is not null && currentRecord.Node is not null && definition is null
+                        ? new[] { $"{recordPath}: the current node exists but its content is not a readable PartitionDefinition" }
+                        : [];
+                    var queries = first.store == false ? [] : InventoryQueries(space, definition).ToArray();
+                    var rootQuery = RootQuery(space);
+                    var readings = queries
+                        .Select(q => AsSystem(hub, () => MeshReading.Read(mesh, q)))
+                        .MergeBounded(ReadConcurrency)
+                        .ToList();
+                    return readings.SelectMany(items =>
                     {
-                        var unread = unreadRecord.Concat(definitionUnread)
-                            .Concat(readings.Where(r => !r.IsAnswer).Select(r => $"{r.Query}: {r.WhyNotAnAnswer}"))
-                            .ToList();
-                        var root = readings.Where(r => r.Query == rootQuery).SelectMany(r => r.Rows)
-                            .FirstOrDefault(r => string.Equals(r.Path, space, StringComparison.Ordinal));
-                        var rows = readings.SelectMany(r => r.Rows)
-                            .Where(r => string.Equals(r.Path, space, StringComparison.Ordinal)
-                                        || r.Path.StartsWith(space + "/", StringComparison.Ordinal))
-                            .ToList();
-                        var nodeTypes = rows.Where(r => string.Equals(r.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
-                            .Select(r => r.Path).Distinct(StringComparer.Ordinal).ToList();
-                        return Networks(hub, nodeTypes).Select(network => Fold(
-                            space, root, rows, recordNode is not null, first.store, network.Addresses,
-                            unread.Concat(network.Unread), definition));
+                        var listing = items.FirstOrDefault(r => r.Query == rootQuery);
+                        var rootRead = listing is null
+                            ? Observable.Return(new AuthoritativeNodeRead(space, null,
+                                first.store == false ? null : "the root listing was not returned"))
+                            : !listing.IsAnswer
+                                ? Observable.Return(new AuthoritativeNodeRead(space, null,
+                                    $"the root listing did not answer — {listing.WhyNotAnAnswer}"))
+                                : listing.Rows.FirstOrDefault(r => string.Equals(r.Path, space, StringComparison.Ordinal)) is null
+                                    ? Observable.Return(new AuthoritativeNodeRead(space, null, null))
+                                    : ReadCurrentNode(hub, space);
+                        return rootRead.SelectMany(rootReadResult =>
+                        {
+                            var unread = unreadRecord.Concat(liveRecordUnread).Concat(definitionUnread)
+                                .Concat(items.Where(r => !r.IsAnswer).Select(r => $"{r.Query}: {r.WhyNotAnAnswer}"))
+                                .ToList();
+                            if (rootReadResult.Error is not null)
+                                unread.Add($"{space}: the root listing or current node could not be read — {rootReadResult.Error}");
+                            var root = rootReadResult.Node;
+                            // The root's indexed row is existence evidence only. Do not let its stale
+                            // NodeType/CreatedBy/Name contribute to the deletion plan.
+                            var rows = items.Where(r => r.Query != rootQuery).SelectMany(r => r.Rows)
+                                .Where(r => !string.Equals(r.Path, space, StringComparison.Ordinal)
+                                            && r.Path.StartsWith(space + "/", StringComparison.Ordinal))
+                                .Concat(root is null ? [] : new[] { root })
+                                .ToList();
+                            var nodeTypes = rows.Where(r => string.Equals(r.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+                                .Select(r => r.Path).Distinct(StringComparer.Ordinal).ToList();
+                            return Networks(hub, nodeTypes).Select(network => Fold(
+                                space, root, rows, listedRecord is not null, first.store, network.Addresses,
+                                unread.Concat(network.Unread), definition));
+                        });
                     });
+                });
             });
     }
+
+    /// <summary>
+    /// Reads current node content from its owning stream. Call only after a complete listing has
+    /// established that the path exists; an empty/faulted/timeout stream is not evidence that the
+    /// listed node is absent and must leave the deletion plan unreadable.
+    /// </summary>
+    internal static IObservable<AuthoritativeNodeRead> ReadCurrentNode(IMessageHub hub, string path) =>
+        AsSystem(hub, () => hub.GetMeshNodeStream(path)
+            .Take(1)
+            .Timeout(MeshReading.DefaultBudget)
+            .Select(node => new AuthoritativeNodeRead(path, node, null))
+            .DefaultIfEmpty(new AuthoritativeNodeRead(path, null, "the node stream completed without a node"))
+            .Catch((Exception ex) => Observable.Return(new AuthoritativeNodeRead(
+                path, null, $"{ex.GetType().Name}: {ex.Message}"))));
 
     /// <summary>The union of the NodeTypes' dependency networks and the legs that could not be read. Never errors. Cold.</summary>
     private static IObservable<(ImmutableList<string> Addresses, ImmutableList<string> Unread)> Networks(
