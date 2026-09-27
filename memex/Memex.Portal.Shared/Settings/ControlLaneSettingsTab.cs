@@ -9,14 +9,16 @@ using Memex.Portal.Shared.SelfUpdate;
 namespace Memex.Portal.Shared.Settings;
 
 /// <summary>
-/// Admin settings tab <b>Control lane</b>: where a global administrator of THIS instance enters
-/// the announcement key the control instance issued for it, checks its fingerprint, and tests it.
-/// The self-updater signs its hand-over to the control instance with that key
-/// (<see cref="SelfUpdateHandover"/>). See <c>Doc/Architecture/SelfUpdateAnnouncementKey</c>.
+/// Admin settings tab <b>Control lane</b>: where a global administrator of THIS instance
+/// GENERATES its announcement key (shown once with its fingerprint, then sent to the control
+/// instance's operators over a secure channel, who register it), checks the fingerprint, and tests
+/// the pairing. A key handed over the other way can also be pasted and saved. The self-updater signs
+/// its hand-over to the control instance with that key (<see cref="SelfUpdateHandover"/>). See
+/// <c>Doc/Architecture/SelfUpdateAnnouncementKey</c>.
 ///
 /// <para>Built on the platform's write-only secret control (<see cref="WriteOnlySecretSection"/>):
-/// the key is typed into a password box, saved encrypted (<see cref="InstanceSecrets"/>), and never
-/// shown again. The page shows only whether a key is present, its fingerprint, who saved it and
+/// a generated key is shown ONCE; a pasted key is typed into a password box. Either is saved
+/// encrypted (<see cref="InstanceSecrets"/>) and never shown again. The page shows only whether a key is present, its fingerprint, who saved it and
 /// when, and the last announcement's result.</para>
 ///
 /// <para>🚨 <b>Live, no restart.</b> The self-updater reads the key at every announcement, so a key
@@ -56,8 +58,16 @@ public static class ControlLaneSettingsTab
                 InputLabel = host.Localize("ui.controlLaneKeyLabel"),
                 Placeholder = host.Localize("ui.controlLaneKeyPlaceholder"),
                 Detail = status.Select(s => DetailMarkdown(s, (k, a) => host.Localize(k, a), host.ViewerLocale())),
+                GenerateLabel = host.Localize("ui.controlLaneGenerate"),
+                RegenerateLabel = host.Localize("ui.controlLaneRegenerate"),
                 Verbs = new SecretSectionVerbs
                 {
+                    // The key is generated HERE, on this instance, on the server, and shown ONCE with
+                    // its fingerprint; the administrator hands it to Systemorph over a secure
+                    // channel, and Systemorph registers it on the control instance. Until then the
+                    // control instance refuses this instance's announcements (Test connection says so).
+                    Generate = () => InstanceSecrets.Generate(host.Hub, key)
+                        .Select(g => new SecretGenerated(g.Value, g.Status.Secret, host.Localize("ui.controlLaneGeneratedNote"))),
                     Save = value => InstanceSecrets.Set(host.Hub, key, value).Select(s => s.Secret),
                 },
                 ExtraButtons = [test],
