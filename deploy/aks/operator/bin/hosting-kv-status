@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# hosting-kv-status --vault <name> (--object <name> … | --prefix <prefix>)
+#
+# The STATUS of vault objects, from METADATA ALONE: for each one, whether it exists, whether it is
+# enabled, when it was created and last updated, when it expires, whether it sits soft-deleted
+# (recoverable), and the tags the writer stamped at write time — the fingerprint (`mw-fp`), who set
+# it (`mw-set-by`), when (`mw-set-at`) and how (`mw-source`: paste | generate). This is what a
+# write-only secret GUI shows (policy `secrets-write-only-entry`, Doc/Architecture/
+# SecretsWriteOnlyEntry): status and fingerprint, NEVER a value.
+#
+# 🚨 IT NEVER READS A VALUE, and cannot: it runs as the WRITER identity, which holds `list` and no
+# `get`. `az keyvault secret list` returns every object's attributes and tags without its value;
+# `list-deleted` does the same for the soft-deleted ones. There is no `secret show` in this file,
+# and `hosting-kv-set`'s test stub forbids one.
+#
+# Output: one fact per object,
+#   ::hosting:: kv_status=<base64 of {"name","present","enabled","created","updated","expires",
+#                                    "deleted","recoverableUntil","fingerprint","setBy","setAt","source"}>
+# plus `kv_status_count=<n>`. An object the vault does not hold is reported `present:false` — that
+# is an ANSWER (the GUI shows "not set"), not a failure. A vault the writer cannot LIST is a failure:
+# "I was not allowed to look" must never read as "nothing is there".
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-kv-status"
+
+vault="" prefix="" objects=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vault)  vault="${2:-}";      shift 2 ;;
+    --object) objects+=("${2:-}"); shift 2 ;;
+    --prefix) prefix="${2:-}";     shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag vault "$vault"
+hosting::safe_name vault "$vault"
+[ ${#objects[@]} -gt 0 ] || [ -n "$prefix" ] \
+  || hosting::die "name the objects (--object) or a --prefix — a status of nothing is a bug in the caller"
+for object in "${objects[@]}"; do hosting::safe_name object "$object"; done
+[ -z "$prefix" ] || hosting::safe_name prefix "$prefix"
+
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image"
+
+if hosting::dry; then
+  hosting::log "(dry run) would list the metadata of ${#objects[@]} object(s)${prefix:+ and every object named ${prefix}*} in vault ${vault} — never a value"
+  hosting::say kv_status_count 0
+  exit 0
+fi
+
+work="$(mktemp -d)" || hosting::die "could not create a working directory"
+trap 'rm -rf "$work"' EXIT
+
+# Metadata only. `list` carries attributes and tags, never a value.
+az keyvault secret list --vault-name "$vault" --include-managed false -o json > "$work/live.json" 2>"$work/az.err" \
+  || hosting::die "could not LIST vault ${vault}: $(tr -d '\n' < "$work/az.err" | cut -c1-300). The writer identity needs \`list\` on ${vault} — refusing to report objects as absent when the listing was refused."
+az keyvault secret list-deleted --vault-name "$vault" -o json > "$work/deleted.json" 2>"$work/az.err" \
+  || hosting::die "could not list the soft-deleted objects of vault ${vault}: $(tr -d '\n' < "$work/az.err" | cut -c1-300). The writer identity needs \`list\` on ${vault}."
+
+# The names to report: the explicit ones, plus every live or deleted object under the prefix.
+names_file="$work/names"
+printf '%s\n' "${objects[@]}" > "$names_file"
+if [ -n "$prefix" ]; then
+  jq -r --arg p "$prefix" '.[] | (.name // (.id | split("/") | .[4])) | select(startswith($p))' "$work/live.json" "$work/deleted.json" >> "$names_file"
+fi
+count=0
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  fact="$(jq -cn --arg n "$name" --slurpfile live "$work/live.json" --slurpfile del "$work/deleted.json" '
+    def nm: (.name // (.id | split("/") | .[4]));
+    ($live[0] | map(select(nm == $n)) | first) as $l
+    | ($del[0] | map(select(nm == $n)) | first) as $d
+    | ($l // $d) as $o
+    | {
+        name: $n,
+        present: ($l != null),
+        enabled: (if $l == null then null else $l.attributes.enabled end),
+        created: ($o.attributes.created // null),
+        updated: ($o.attributes.updated // null),
+        expires: ($o.attributes.expires // null),
+        deleted: ($l == null and $d != null),
+        recoverableUntil: ($d.scheduledPurgeDate // null),
+        fingerprint: ($o.tags["mw-fp"] // null),
+        setBy: ($o.tags["mw-set-by"] // null),
+        setAt: ($o.tags["mw-set-at"] // null),
+        source: ($o.tags["mw-source"] // null)
+      }')" || hosting::die "could not compose the status of ${name}"
+  hosting::say kv_status "$(printf '%s' "$fact" | base64 | tr -d '\n')"
+  present="$(printf '%s' "$fact" | jq -r 'if .present then (if .enabled == false then "disabled" else "set" end) elif .deleted then "soft-deleted" else "not set" end')"
+  hosting::log "$(printf '%-48s %s' "$name" "$present")"
+  count=$((count + 1))
+done < <(sort -u "$names_file")
+hosting::say kv_status_count "$count"

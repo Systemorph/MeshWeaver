@@ -232,6 +232,52 @@ hosting::inline_setters() {
 # SHA-256 hex of STDIN — how two keys are compared without either being shown.
 hosting::sha256() { sha256sum | cut -c1-64; }
 
+# The FINGERPRINT of the secret value in <file>, on STDOUT: `sha256:<first 12 hex>`, or
+# `withheld:low-entropy` when the value is too guessable to publish a hash of it (policy
+# `secrets-write-only-entry`, Doc/Architecture/SecretsWriteOnlyEntry). It is written as the vault
+# object's `mw-fp` TAG at write time. A status view can then compare the two ends of a pairing from
+# metadata alone, and nobody ever reads the value back.
+#
+# 🚨 A bare SHA-256 prefix of a LOW-entropy value (a human password) lets anyone guess it offline,
+# so the hash is published only when the value is estimated at >= 128 bits: its length × log2 of
+# the alphabet its character classes span. Every generated value (32 random bytes), and every real
+# API key, client secret or PEM, clears that bar by a wide margin. There is no keyed HMAC: its key
+# would be one more secret that both ends of a pairing must READ, which is exactly the reader this
+# design removes. Mirrors MeshWeaver.Mesh.SecretFingerprint.Of; the two must agree byte for byte.
+hosting::fingerprint() {
+  local file="$1" len alphabet=0 bits
+  len="$(LC_ALL=C wc -c < "$file" | tr -d ' ')"
+  LC_ALL=C grep -q '[a-z]' "$file" && alphabet=$((alphabet + 26))
+  LC_ALL=C grep -q '[A-Z]' "$file" && alphabet=$((alphabet + 26))
+  LC_ALL=C grep -q '[0-9]' "$file" && alphabet=$((alphabet + 10))
+  LC_ALL=C grep -q '[^A-Za-z0-9]' "$file" && alphabet=$((alphabet + 32))
+  [ "$alphabet" -gt 0 ] || { echo "withheld:low-entropy"; return 0; }
+  # Pure bash integer arithmetic — the operator image (Azure Linux 3) carries no awk. log2 of every
+  # alphabet the four classes can sum to, × 10^9 and truncated; bits × 10^9 = len × that.
+  local log2e9
+  case "$alphabet" in
+    10) log2e9=3321928094 ;; 26) log2e9=4700439718 ;; 32) log2e9=5000000000 ;;
+    36) log2e9=5169925001 ;; 42) log2e9=5392317422 ;; 52) log2e9=5700439718 ;;
+    58) log2e9=5857980995 ;; 62) log2e9=5954196310 ;; 68) log2e9=6087462841 ;;
+    84) log2e9=6392317422 ;; 94) log2e9=6554588851 ;;
+    *) echo "withheld:low-entropy"; return 0 ;;
+  esac
+  bits=$(( len * log2e9 / 1000000000 ))
+  if [ "$bits" -ge 128 ]; then
+    echo "sha256:$(hosting::sha256 < "$file" | cut -c1-12)"
+  else
+    echo "withheld:low-entropy"
+  fi
+}
+
+# Who asked for a secret write, in a form that can be written as a vault TAG: an email-like
+# principal or an identifier. Validates in place; see hosting::safe_name for why it prints nothing.
+hosting::safe_actor() {
+  local what="$1" value="${2:-}"
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9@._+-]{0,127}$ ]] \
+    || hosting::die "${what} '${value}' is not a principal name (letters, digits, @ . _ + -) — refusing to write it as a vault tag"
+}
+
 # One call to the registry, AUTHENTICATED BY THE KEY IN THE NAMED VARIABLE:
 #   hosting::registry_call <key-variable-name> <GET|POST> <url> [json-body]
 # Sets REGISTRY_STATUS (the HTTP code; "000" when nothing answered) and REGISTRY_BODY.

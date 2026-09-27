@@ -78,18 +78,13 @@ pod is reconciled.
 
 ## Owner commands
 
-Minting the value is an operator act; no agent creates or reads a secret value. The value is
-generated in the command and never printed (`--output none` — `az keyvault secret set` otherwise
-echoes the secret it stored):
-
-```bash
-az keyvault secret set --vault-name Systemorph --name pearl-Hosting-AnnouncementKey \
-  --value "$(openssl rand -hex 32)" --output none
-az keyvault secret show --vault-name Systemorph --name pearl-Hosting-AnnouncementKey \
-  --query "{name:name, enabled:attributes.enabled, updated:attributes.updated}" -o table
-```
-
-The second command reads back metadata only — never `value`.
+Minting the value is a GUI act on the control instance, never a vault command (policy
+`secrets-write-only-entry`, [Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry)):
+on `Deployments/pearl`, **Set Key Vault secrets…** → **Generate** for `pearl-Hosting-AnnouncementKey`.
+Both ends of this pairing read the vault, so the value is minted in the operator Job and never shown to
+anyone. The status the page then shows (present, enabled, updated, and the `mw-fp` fingerprint tag) comes
+from vault metadata alone, and the control instance's end is compared against the deployment's by that
+fingerprint.
 
 ## What is NOT covered
 

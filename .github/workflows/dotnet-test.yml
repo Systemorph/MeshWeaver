@@ -2269,6 +2269,17 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 🔐 No doc, runbook, skill or script tells a human to set or read a Key Vault secret by hand
+    # (policy `secrets-write-only-entry`, Doc/Architecture/SecretsWriteOnlyEntry): secrets are
+    # entered through the write-only GUI of the app that owns them and written by the governed
+    # writer identity. Only the governed verbs (.github/manual-keyvault.allow) and a marked
+    # `kv-break-glass` procedure may hold such a command. Self-test first.
+    - name: "No manual Key Vault secret command — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-manual-keyvault.py --self-test
+    - name: "No manual Key Vault secret command outside the governed verbs"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-manual-keyvault.py --root .
     # 🚨 A FAILING GUARD MUST NOT SKIP THE GUARDS AFTER IT (#4784). `node-repo-validate.yml`'s
     # `validate` job is ~36 independent guards in one step list, and GitHub's implicit step condition
     # is `success()` — so measured on MeshWeaver.SocialMedia#210, one drift red skipped 16 later

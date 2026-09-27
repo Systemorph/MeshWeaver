@@ -57,8 +57,8 @@ fi
 
 redirect="https://${host}/signin-microsoft"
 display="${name} Portal (${host})"
-register_by_hand="APP_ID=\$(az ad app create --display-name \"${display}\" --sign-in-audience AzureADMultipleOrgs --web-redirect-uris \"${redirect}\" --query appId -o tsv); az ad sp create --id \"\$APP_ID\" --output none; az ad app credential reset --id \"\$APP_ID\" --display-name ${name} --years ${years} --query password -o tsv > <file> 2>/dev/null; az keyvault secret set --vault-name ${vault} --name ${object} --file <file> --output none; rm <file>; then set signIn.microsoftClientId: \"\$APP_ID\" on the record"
-mint_by_hand="az ad app credential reset --id ${client_id:-<client id>} --append --display-name ${name} --years ${years} --query password -o tsv > <file> 2>/dev/null; az keyvault secret set --vault-name ${vault} --name ${object} --file <file> --output none; rm <file>"
+register_by_hand="APP_ID=\$(az ad app create --display-name \"${display}\" --sign-in-audience AzureADMultipleOrgs --web-redirect-uris \"${redirect}\" --query appId -o tsv); az ad sp create --id \"\$APP_ID\" --output none; az ad app credential reset --id \"\$APP_ID\" --display-name ${name} --years ${years} --query password -o tsv > <file> 2>/dev/null; then paste it on the control instance's record page for this instance (Set Key Vault secrets…) as ${object} — never a hand-run vault command (policy secrets-write-only-entry), rm <file>, and set signIn.microsoftClientId: \"\$APP_ID\" on the record"
+mint_by_hand="az ad app credential reset --id ${client_id:-<client id>} --append --display-name ${name} --years ${years} --query password -o tsv > <file> 2>/dev/null; then paste it on the control instance's record page for this instance (Set Key Vault secrets…) as ${object} — never a hand-run vault command (policy secrets-write-only-entry), and rm <file>"
 
 kv_exists() { az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1; }
 
