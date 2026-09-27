@@ -93,6 +93,12 @@ write-only).
 
 ### The announcement key: generated on the target, registered on the control instance
 
+> **Target design, not yet the procedure.** Until MeshWeaver.Plugins#2435 lands, the shipped
+> procedure is the one in [Self-Update Announcement Key](../SelfUpdateAnnouncementKey): the control
+> instance ISSUES the key and the target's administrator enters it. Follow that page to operate
+> today. The change set that moves the flow here also rewrites that page and the
+> [Instance Secrets](../InstanceSecrets) summary.
+
 The key that signs a deployment's self-update hand-over is generated where it is used: on the target
 instance, in its Admin app's **Control lane** tab (InstanceSecrets `Hosting:ControlInbox:Secret`,
 live, no restart). The control instance only has to VERIFY signatures, so it holds the same value
