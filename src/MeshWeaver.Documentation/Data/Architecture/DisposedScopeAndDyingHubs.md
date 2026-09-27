@@ -416,7 +416,7 @@ The fix has three parts. The first alone would be cosmetic, for the reason given
 2. **Classify teardown as retryable, never as a verdict.** A fault is treated as this hub's own
    teardown when:
    - the hub has left `Started`; or
-   - the fault is a `HubDisposingException`; or
+   - the fault is a `HubDisposingException` raised for this hub's own address; or
    - the fault is an `ObjectDisposedException` **and** the hub's own scope probe confirms it
      (`IsTerminatedByScopeTeardown`).
 

@@ -4801,7 +4801,7 @@ public static class MeshExtensions
         int reAsks = 0)
         => ask().Catch<T, Exception>(ex =>
         {
-            if (!IsRecyclingAnswer(ex))
+            if (!IsRecyclingAnswer(ex, path))
                 return Observable.Throw<T>(ex);
             onRecycling?.Invoke();
             logger.LogDebug(
@@ -4815,13 +4815,19 @@ public static class MeshExtensions
         });
 
     /// <summary>
-    /// Whether a leg's fault is the transient "this activation is going away" answer — typed on
-    /// <see cref="ErrorType.ShuttingDown"/> or <see cref="HubDisposingException"/>, never on
-    /// message text, so a real refusal can never be mistaken for a recycle.
+    /// Whether a leg's fault is the transient "this LEAF's activation is going away" answer — typed
+    /// on <see cref="ErrorType.ShuttingDown"/>, or a <see cref="HubDisposingException"/> raised for
+    /// the leaf's OWN address, never on message text, so a real refusal can never be mistaken for a
+    /// recycle.
+    ///
+    /// <para>🚨 Address-scoped, never a bare <see cref="HubDisposingException.IsHubDisposal"/>: a
+    /// typed disposal raised for some OTHER hub (a dependency the answer needed) says nothing about
+    /// whether re-asking this leaf can help, and treating it as a recycle would re-ask a healthy leaf
+    /// until the leg ran out instead of reporting the real failure at once.</para>
     /// </summary>
-    private static bool IsRecyclingAnswer(Exception ex)
+    private static bool IsRecyclingAnswer(Exception ex, string leafPath)
         => ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }
-           || HubDisposingException.IsHubDisposal(ex);
+           || ActivityControlPlaneExtensions.IsOwnHubDisposing(ex, new Address(leafPath));
 
     /// <summary>
     /// Bulk-atomic pre-flight: post <see cref="ValidateDeleteRequest"/> at every
@@ -5429,15 +5435,17 @@ public static class MeshExtensions
 
     /// <summary>
     /// Whether <paramref name="ex"/> is THIS hub going away rather than a fault of the work: the
-    /// hub has left service, the fault is the typed <see cref="HubDisposingException"/>, or it is
-    /// the DI container's "scope already disposed" and the hub's own scope confirms it
+    /// hub has left service, the fault is a <see cref="HubDisposingException"/> raised for THIS
+    /// hub's address (<see cref="ActivityControlPlaneExtensions.IsOwnHubDisposing(Exception, Address)"/> — another
+    /// hub's typed disposal is that hub's business and stays a real failure here), or it is the DI
+    /// container's "scope already disposed" and the hub's own scope confirms it
     /// (<see cref="ScopeTeardown.IsTerminatedByScopeTeardown"/> — the probe that keeps an unrelated
     /// disposed dependency from being mistaken for a teardown).
     /// </summary>
     private static bool IsTeardownOfThisHub(IMessageHub hub, Exception ex)
         => hub.IsShuttingDown
            || hub.RunLevel > MessageHubRunLevel.Started
-           || HubDisposingException.IsHubDisposal(ex)
+           || ActivityControlPlaneExtensions.IsOwnHubDisposing(ex, hub.Address)
            || hub.IsTerminatedByScopeTeardown(ex);
 
     /// <summary>
