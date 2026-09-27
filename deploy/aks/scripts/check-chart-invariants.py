@@ -272,6 +272,14 @@ NEVER_BLANK_CONFIG = {
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
     "AzureAIS__Order":
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
+    "OpenRouter__Endpoint":
+        "read as a string, but blank is NOT inert: the catalog seeder does `endpoint ??= "
+        "source.DefaultEndpoint`, and an empty string is not null — so a rendered \"\" replaces "
+        "OpenRouter's default endpoint with nothing. Rendered only when set.",
+    "OpenRouterEU__Endpoint":
+        "the EU region's endpoint (https://eu.openrouter.ai/api/v1), and the thing that makes the "
+        "section's models Eu. Blank replaces the section's default endpoint with nothing, exactly "
+        "as for OpenRouter__Endpoint. Rendered only when set.",
     "SelfUpdate__Registry":
         "binds to SelfUpdateOptions.Registry, whose default is the upstream ACR and whose value "
         "names the host of EVERY image the self-updater rolls to. Blank is not inert here — it is "

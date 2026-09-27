@@ -179,6 +179,23 @@ Two ways to fix an AKS deployment:
 1. **Config in the chart** — `deploy/helm/templates/memex-portal/config.yaml` templates the `Anthropic__*` / `AzureFoundry__*` / `ModelTier__*` keys and `secrets.yaml` the `Anthropic__ApiKey` / `AzureFoundry__ApiKey` / `Ai__KeyProtection__MasterKey` keys; `deploy/aks/values.aks.yaml` carries the AKS-correct values (key from Key Vault via the CSI Secrets Store add-on). Set the endpoint + key there and a fresh deploy self-populates the system catalog, matching Aspire.
 2. **Author space/user provider nodes** — create `ModelProvider` + `LanguageModel` nodes directly (see [Set up a space provider](#set-up-a-space-provider)). This needs no redeploy and is how the Systemorph shared provider was set up; the key still has to be supplied (org key on the node, or per-user keys).
 
+### EU-only processing: the keys the chart renders
+
+An instance that must keep prompts inside the EU (policy `ai-eu-only-processing`; the pull-request review model follows `code-review-eu-only`) is configured with the keys below. The mechanism — how a model is marked, how an EU-only instance fails closed, which routes are EU — is the manual `AI/ModelDataResidency` in MeshWeaver.Plugins; this section only states what the portal chart delivers.
+
+| Key | Meaning |
+|---|---|
+| `AI__RequiredDataResidency` | The instance switch. `Eu` makes the picker, tier resolution, Auto and the round refuse every model not marked `Eu`. Blank or absent = no requirement. |
+| `{Section}__DataResidency` | The declared processing region of every model seeded from that section (`Eu`, `Global`, …). Undeclared, the section is marked from its endpoint host where the host implies it (`eu.openrouter.ai` → `Eu`), otherwise `Unknown` — never `Eu`. |
+| `{Section}__DataRetention` | A free-text retention note shown with the mark (e.g. `ZDR`). |
+| `OpenRouter__Endpoint` | OpenRouter's endpoint. Absent = the section's default (`openrouter.ai`). |
+| `OpenRouterEU__Endpoint`, `OpenRouterEU__Models__0..15` | A second OpenRouter section for the EU region (`https://eu.openrouter.ai/api/v1`), shaped like `OpenRouter__Models__0..15`. It has **no `ApiKey`** of its own: the `Provider/OpenRouterEU` node takes the account key from `Provider/OpenRouter` through `credentialFrom`, so there is no secret to deliver. |
+| `Features__Ai__Providers__OpenRouterEU` | The provider gate, same opt-in shape as `Features__Ai__Providers__OpenRouter`. The chart only delivers it; it takes effect once the host (MeshWeaver.Plugins) reads it when registering the `OpenRouterEU` catalog section. |
+
+`{Section}` is each model catalog section: `Anthropic`, `AzureFoundry`, `OpenRouter`, `OpenRouterEU`, `AzureOpenAI`, `OpenAI`, `OpenAICompatible`.
+
+**Every one of these keys is rendered only when a deployment sets it** (trimmed; a blank or whitespace-only value renders no key), and the chart defaults set none — so a deployment record that declares nothing renders exactly what it did before. That guard is load-bearing for the endpoints: the catalog seeder falls back to a section's default endpoint only when the key is *absent*, so a rendered `""` would replace the default with nothing. `deploy/aks/scripts/check-chart-invariants.sh` asserts all of this against a fixture (`testdata/values.eu-ai-residency.yaml`), and its invariant 9 refuses a blank `OpenRouter__Endpoint` or `OpenRouterEU__Endpoint`.
+
 ### Choosing models: open-weight, and Auto routes only to these
 
 The Systemorph deployments run their tiers on **open-weight** models — cheap, fast, strong at programming and structured output, and (uniquely) able to run on-device — served through the single funded **OpenRouter** key. **Auto routes only to these**; Claude/GPT/Gemini/Grok stay installed but **untiered** (a manual pick — see the note below, and [Auto and the tiers route to open-weight models only](/Doc/AI/ModelTiers)).
