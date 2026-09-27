@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Immutable;
+using System.IO;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -9,6 +10,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -155,6 +157,41 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
     }
 
     // ───────────── the decision, pure ─────────────
+
+    /// <summary>A newer prebuilt adoption must retire the previous build's pending release.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APrebuiltAdoption_RetiresThePreviousBuildsPendingRelease()
+    {
+        var typePath = $"{TestPartition}/SupersededRelease{Guid.NewGuid().ToString("N")[..8]}";
+        var unreleased = ReleasePathFor(typePath, "20260923055416-Hd-IFSiA");
+        await SeedAsync(typePath, unreleased);
+
+        var seedHub = Mesh.GetHostedHub(new Address("late-release-seed", Guid.NewGuid().ToString("N")),
+            c => c.AddData().WithGraphTypes(), HostedHubCreation.Always)
+            ?? throw new InvalidOperationException("The seed hub must exist");
+        var bytes = File.ReadAllBytes(typeof(ALateReleaseIsAdoptedWhenItLandsTest).Assembly.Location);
+        var mvid = ServedBuildIdentity.OfBytes(bytes);
+        mvid.Should().NotBeNullOrEmpty();
+        var outcome = await PrebuiltAssemblySeeder.SeedDetailed(seedHub, typePath, bytes, null,
+                PrebuiltAssemblySeeder.LiveFrameworkMvid, null, null, sourceFingerprint: null)
+            .Should().Within(TestTimeouts.WriteConvergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.Adopted);
+
+        var adopted = await Mesh.GetMeshNodeStream(typePath).Should().Within(TestTimeouts.WriteConvergence)
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+                        && d.LatestAssemblyMvid == mvid);
+        var definition = adopted.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+        definition.LastCompiledVersion.Should().NotBe(3326L, "the prebuilt bundle replaced the old build");
+        definition.UnreleasedBuildPath.Should().BeNull(
+            "the pending release describes the old bytes, so its late arrival must not move the new build's pointer");
+        definition.UnreleasedBuildReason.Should().BeNull("the reason belongs to the retired marker");
+
+        await MeshService.CreateNode(ReleaseNodeAt(unreleased, typePath))
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        await Mesh.GetMeshNodeStream(typePath)
+            .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestReleasePath == unreleased)
+            .Should().NotEmit(TestTimeouts.Quick, "the old release cannot become the adopted bundle's release");
+    }
 
     [Fact]
     public void Adopt_MovesThePointer_WhenTheStampNamesThePath()

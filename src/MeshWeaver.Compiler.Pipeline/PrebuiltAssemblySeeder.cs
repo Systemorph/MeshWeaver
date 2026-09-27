@@ -1074,6 +1074,11 @@ public static class PrebuiltAssemblySeeder
                             LastCompiledVersion = version,
                             LatestAssemblyCollection = location.Collection,
                             LatestAssemblyPath = location.ContentPath,
+                            // A pending release describes the previous build's coordinates.
+                            // Retire it in the SAME write that publishes the adopted build;
+                            // otherwise LateReleaseAdoption can bind that old release later.
+                            UnreleasedBuildPath = null,
+                            UnreleasedBuildReason = null,
                             // The adopted bytes' own identity (#2471), read from the image
                             // in hand — no file, no load. An adopted build is exactly the
                             // case where a path says least: several pods adopt the same

@@ -407,6 +407,15 @@ the stamp still names that path, and that check is the whole guard:
 - every later settle rewrites or clears the stamp, so a stamp that still names the path still describes
   the current build.
 
+Prebuilt adoption also retires the pending marker and its reason in the owner write that publishes
+the new assembly coordinates. An adoption is a build publication without a compile settle; leaving
+the previous build's marker in place would let its late release move the adopted build's pointer
+backwards. The existing release pointer and unspent author notes retain their usual adoption policy.
+The regression case `APrebuiltAdoption_RetiresThePreviousBuildsPendingRelease` drives the real seeder
+with PE bytes, checks that the new build landed, then creates the old pending release and checks
+that the pointer does not follow it. Before the repair, the same real seeder left the old marker
+standing despite advancing `lastCompiledVersion` and the assembly identity.
+
 A faulted write therefore faults the watcher. The hub-watcher re-establish then re-derives the
 stamp and the listing and retries the adoption, rather than logging once and never asking again.
 No bound is widened, and no timer or poll is added. A release that never lands leaves the stamp
