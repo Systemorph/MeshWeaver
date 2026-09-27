@@ -86,7 +86,7 @@ drift.
 
 The paragraph above predicted it, and on 2026-09-27 09:00–11:00Z it happened: nothing merged for two
 hours. Three entries in a row (core runs 36307979031, 36308367885, 36311194922) failed on ONE job,
-`Dependent suites (MeshWeaver.Plugins)`. Each time its waiter hit the 45-minute cap **with no verdict**.
+`Dependent suites (MeshWeaver.Plugins)`. Each time its waiter hit its 42-minute verdict deadline (`await-dependent-verdict.py --deadline-minutes 42`, inside the job's 45-minute `timeout-minutes`) **with no verdict**.
 Not one was a test failure. The Plugins candidate runs were green, and each landed 3–10 minutes after
 core had stopped waiting (candidate run 36308382966 published at 10:18Z; its core waiter gave up at
 10:08Z).
@@ -125,7 +125,7 @@ candidate on top of the one still running. Look at the candidate run's leg WAIT 
 the entry. A leg that waited longer than it ran is starvation, and the lane above is where to look.
 
 The remaining lever is `max_entries_to_build: 8`. Up to eight concurrent candidates of up to 12 legs
-each is more than the 12-runner gate lane can serve inside core's 45-minute waiter. Whether to return
+each is more than the 12-runner gate lane can serve inside core's 42-minute verdict deadline. Whether to return
 to a small value is still the maintainer's ruleset edit, as the paragraph above says.
 
 ### Enabling it
