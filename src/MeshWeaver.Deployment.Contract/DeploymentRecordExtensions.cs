@@ -575,6 +575,14 @@ public static class DeploymentRecordExtensions
     public static AiProviders OpenRouter(this AiProviders a, IEnumerable<string> models, string? endpoint = null, int? order = null, bool? enabled = null) =>
         a with { OpenRouter = Provider(a.OpenRouter, models, endpoint, order, enabled) };
 
+    /// <summary>OpenRouter's EU route: models on the EU endpoint (optionally an endpoint override), the account key by reference.</summary>
+    public static AiProviders OpenRouterEU(this AiProviders a, IEnumerable<string> models, string? endpoint = null) =>
+        a with { OpenRouterEU = Provider(a.OpenRouterEU, models, endpoint, null, null) };
+
+    /// <summary>The processing region every model this instance serves must satisfy (e.g. <c>Eu</c>); null/blank clears it.</summary>
+    public static AiProviders RequiredDataResidency(this AiProviders a, string? region) =>
+        a with { RequiredDataResidency = string.IsNullOrWhiteSpace(region) ? null : region.Trim() };
+
     /// <summary>Anthropic models behind an endpoint (an Azure AI Foundry Anthropic endpoint, or Anthropic's own).</summary>
     public static AiProviders Anthropic(this AiProviders a, IEnumerable<string> models, string? endpoint = null, int? order = null, bool? enabled = null) =>
         a with { Anthropic = Provider(a.Anthropic, models, endpoint, order, enabled) };
