@@ -1070,6 +1070,15 @@ jobs:
           fi
           [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "::error::the repository is still SHALLOW after the history fetch — every selector that reads a tag, a publication baseline or a merge-base would now narrow silently. Refusing to continue."; exit 1; }
           echo "full history: $(git rev-list --count HEAD) commit(s), $(git tag | wc -l | tr -d ' ') tag(s)"
+      # 🚨 The scope scripts and module-build-key.py below READ every package's manifest.lock
+      # (moduleVersion keys the build; version names the bundle). A main-owned repo's pull request
+      # commits no lock, so its committed one describes the BASE tree — keyed on it, a changed
+      # module would reuse the base's bundle. The materialized lock is this tree's (no-op on a
+      # settled or branch-owned tree). Same step in every job of this lane that reads a lock.
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          root: repo
       # A reusable workflow's `github` context belongs to its CALLER. The job context is the
       # identity of the reusable workflow that actually defines this job. Read the whole context
       # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
@@ -1730,6 +1739,9 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      # The workspace build reads each package's lock (see `select`): this tree's, never the base's.
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
       # The registry helper is lane orchestration too, but the global compiler mounts the whole
       # workspace as its source tree. Fetch this one pre-build helper into a disposable path, then
       # remove it before the mount; the durable tools checkout lands after the build below.
@@ -2110,6 +2122,9 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      # The pack names each bundle from `{package}/manifest.lock`'s version: this tree's lock.
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
@@ -4359,6 +4374,9 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      # The test host installs the content tree and stamps each install with its lock's version.
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:

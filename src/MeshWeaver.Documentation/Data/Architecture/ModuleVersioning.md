@@ -378,6 +378,7 @@ witness at all, so it also had no `--resolve` and no self-test.
 |---|---|
 | `skip` | **required** — the top-level directories that are NOT packages. Per-repo by construction (a scratch directory in one repo is a shipping package in another), and `validate-repos.py`'s `package_dirs(root)` must return the same packages `plugin_dirs` does, which the lane's `check-package-enumeration.py` asserts on the checkout and on a fixture (see below). There is no default: a guessed skip list either demands a `manifest.lock` for `scripts/` or silently stops versioning a real module. |
 | `hashModuleSources` | optional, default **false** — the #878 fix (hash a mixed package's `src/` project, and the siblings riding its bundle, into its `moduleVersion`). It needs the caller's `scripts/project-closure.py` to expose `graph_of` / `module_owned` / `riding_siblings`, and asking for it without one is an **error**, never a quiet fall-back to the smaller hash. Default false because turning it on **moves every mixed package's version** — a release event, not a script upgrade. |
+| `lockOwner` | optional, `branch` (default) or `main` — **who writes the committed `manifest.lock`**. See [Who writes the lock](#who-writes-the-lock) below. An unknown value is an error, never read as the default. |
 
 Both settings are *declared*, never inferred from whether a file happens to exist: a capability that
 degrades silently on a missing input is the skip-trapdoor shape AGENTS.md forbids, and here it would
@@ -454,7 +455,79 @@ vendored copy wrote, or the swap republishes modules that did not change. Measur
 2026-09-07 across all six repos: identical verdicts everywhere, and Manufacturing gained the trunk
 witness (`verified against their tags` → `verified against the published tags and the trunk`).
 
+## Who writes the lock
+
+A `manifest.lock` is DERIVED: its `files` map is a function of the package's tree, its
+`moduleVersion` a hash of that map, its `version` a function of the hash and the last release.
+Two places can write it, and a repo declares which one does in `gen-manifests.config.json`.
+
+**`lockOwner: branch`** (the default, and the historical contract) — every commit carries locks that
+describe its own tree. A pull request runs the generator and commits the output; `--check` reds a
+stale lock; `main` re-derives the version in its `finalize-versions` step.
+
+**`lockOwner: main`** — the lock is a MAIN artifact, and a pull request commits **no** lock change.
+
+### Why `main` exists: a lock conflict cannot be prevented while branches write locks
+
+A lock's trailer — `moduleVersion`, `sourceCommit`, `version` — changes on **every** content change to
+its module, and its `files` lines are alphabetical neighbours (git conflicts on ADJACENT changed
+lines, not only on the same line). So two pull requests that touch one module — or one `src/`
+project riding into many bundles — always conflict on its lock, and each merge to `main` turns every
+open pull request that touches the same module DIRTY. GitHub decides mergeability on its own
+servers, where no custom merge driver runs, so a `.gitattributes merge=` driver cannot prevent the
+state; it only helps whoever merges locally, after the fact. Measured on MeshWeaver.Plugins on
+2026-09-27: of 21 open pull requests, 10 were conflicting, and every conflicting **non-draft** one
+conflicted on generated `manifest.lock` files and nothing else (one merge, #2457, turned seven DIRTY
+at once; #2448 went DIRTY four times in three hours). Each DIRTY cost a merge of `main` and a full
+CI restart on shared runners.
+
+The only state in which a merge on `main` cannot conflict another pull request over a lock is one in
+which pull requests do not write locks. So:
+
+| who | what | how |
+|---|---|---|
+| a pull request | commits NO lock change | `--check` reds a diff that touches any package's `manifest.lock`, naming the one-line fix (`git checkout <base> -- <locks>`) |
+| every CI job that READS a lock | reads the lock THIS tree implies | the lanes run `.github/actions/materialize-locks` after the content checkout: `gen-manifests.py --materialize`, local and network-free, never committed; a byte no-op on a settled tree |
+| `main` | the only writer of a committed lock | the caller's settle job runs `gen-manifests.py --settle` on the merged tree and commits the result |
+| a developer | nothing | the bare generator writes nothing on a main-owned repo (so the `post-merge` hook commits nothing); `--materialize` gives a local view that must not be committed |
+
+`--materialize` derives the version from the **committed** lock alone — same patch when the content
+hash still matches it, +1 when it moved, `.0` for a new series or a new module. That is
+`derive_release` with its trunk witness already on disk: a main-owned tree's committed lock IS the
+last settled claim it descends from, and no published tag outranks it (tags are cut from settled
+commits). Being pure is the point — every job of one run materializes independently and must arrive
+at the same bytes, which a derivation reading the live remote could not promise. `--settle` derives
+with the verified remote (both witnesses, as ever) and **asserts** that its numbers equal what
+`--materialize` gives from the committed lock whenever the trunk it derived against is the checkout
+itself — the property that makes a bundle named at pull-request time the bundle `main` publishes.
+
+What the other checks do on a main-owned tree:
+
+- `--check` — every committed lock is **well-formed** (identity, schema, a `version`, and a
+  `moduleVersion` that is the hash of its own `files` — a hand edit or a textual merge of two locks
+  fails), no tree would materialize a version BELOW its committed one, and, on a pull request, the
+  lock diff is EMPTY. The base is `MW_LOCK_BASE` when set, else the merge ref's first parent (what
+  `actions/checkout` gives a `pull_request` run); a pull-request run whose base cannot be read is RED,
+  never "no base".
+- `--check-versions` — checks every module whose committed lock describes the tree, and NAMES the
+  modules it could not check because `main` has not settled them yet (their lock claims no version
+  for this tree). `--settle` refuses to finish while any module is unsettled, so the claim that is
+  made is always checked.
+- `--resolve` — resolves a lock conflict by ADOPTING the trunk's lock (every one of them), so the
+  branch leaves the merge carrying no lock change and can never conflict on one again.
+
+🚨 **The merge commit on `main` carries the locks of the commit before it until the settle commit
+lands.** Everything in CI reads the materialized lock, so no bundle, seal or key sees the stale one;
+what reads `main`'s committed tree directly — a GitSynced portal importing `main` unsealed — sees the
+new content under the old lock for the minutes until the settle commit, and treats that module as
+unchanged until then (`ModuleSyncDecision`). A settle job that fails is red on `main`, never silent.
+
 ## Before you open the PR
+
+On a main-owned repo, none of the generator steps below apply: commit no lock, and prove the diff
+carries none with `MW_LOCK_BASE=origin/main python3 scripts/platform-script.py gen-manifests.py --check`
+(the lock diff is taken against the merge base, so a branch that is merely behind is not charged
+with the locks `main` settled since).
 
 ```bash
 python3 scripts/platform-script.py gen-manifests.py         # after ANY change to a package folder

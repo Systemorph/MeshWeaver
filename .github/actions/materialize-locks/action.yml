@@ -1,0 +1,45 @@
+name: Materialize main-owned manifest locks
+description: >-
+  Before a job READS a package's manifest.lock, write the locks this checkout's tree implies —
+  for a repo whose locks are main-owned (`lockOwner: main` in scripts/gen-manifests.config.json).
+  Local, deterministic, never committed; a byte no-op on a settled tree and on a branch-owned repo.
+# 🚨 WHY EVERY LOCK-READING JOB NEEDS THIS (Doc/Architecture/ModuleVersioning → "Who writes the lock").
+# A main-owned repo's pull requests commit NO lock, and main's merge commit carries the locks of the
+# commit before it until the settle job lands. So the committed lock is not this tree's, and every
+# reader downstream would be wrong in a way nothing reports: `module-build-key.py` would key a NEW
+# tree with the OLD moduleVersion and reuse the old bundle (a PR testing code it does not contain),
+# the pack would name a bundle with the old version, and a seal built from it would carry a lock
+# whose content hash tells a GitSynced portal "unchanged" (ModuleSyncDecision). The materialized
+# lock is a pure function of the tree plus the committed (settled) lock, so every job of one run
+# arrives at the same bytes, and `--settle` asserts main commits exactly these numbers.
+inputs:
+  root:
+    description: The content repository's checkout (the directory holding scripts/gen-manifests.config.json).
+    default: .
+runs:
+  using: composite
+  steps:
+    - name: Materialize main-owned manifest locks
+      shell: bash
+      env:
+        MATERIALIZE_ACTION_PATH: ${{ github.action_path }}
+        MATERIALIZE_ROOT: ${{ inputs.root }}
+      run: |
+        set -euo pipefail
+        root="$(cd "$MATERIALIZE_ROOT" && pwd)"
+        config="$root/scripts/gen-manifests.config.json"
+        # A repo with no allow-file has not adopted the canonical generator; its locks are committed
+        # by its branches and verified by its own validate lane. Nothing here can apply to it — the
+        # line says so rather than printing nothing.
+        if [ ! -f "$config" ]; then
+          echo "no scripts/gen-manifests.config.json — this repo's locks are branch-owned; nothing to materialize"
+          exit 0
+        fi
+        owner="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("lockOwner", "branch"))' "$config")"
+        if [ "$owner" != "main" ]; then
+          echo "lockOwner: $owner — every commit carries its own locks; nothing to materialize"
+          exit 0
+        fi
+        script="$MATERIALIZE_ACTION_PATH/../../scripts/gen-manifests.py"
+        [ -f "$script" ] || { echo "::error::the canonical gen-manifests.py is missing beside this action ($script)"; exit 1; }
+        MW_REPO_ROOT="$root" python3 "$script" --materialize

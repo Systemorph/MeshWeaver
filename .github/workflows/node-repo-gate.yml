@@ -923,6 +923,10 @@ jobs:
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps:
       - uses: actions/checkout@v7
+      # The tester installs this tree and stamps each install with its lock's moduleVersion; a
+      # main-owned repo's pull request carries the BASE's locks, so the gate reads this tree's.
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
       # Cross-repo `requires` must resolve for the package roots to bind — the tester installs
       # whatever the mount holds, so the required modules are STAGED into it, exactly like
       # production resolves the requires from the store's package sources.
