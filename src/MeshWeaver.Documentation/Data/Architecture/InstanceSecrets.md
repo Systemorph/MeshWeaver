@@ -126,9 +126,9 @@ vault inventory or from this store.
 
 ## Where it is used
 
-- **The self-update announcement key.** The control instance issues a deployment's key on the
-  deployment's record page, and the deployment's administrator enters it under
-  **Settings ▸ Control lane**. See [Self-Update Announcement Key](../SelfUpdateAnnouncementKey).
+- **The self-update announcement key.** The deployment's administrator GENERATES the key on the
+  deployment under **/Admin/Settings/ControlLane**; the control instance registers that value as the
+  deployment's per-sender key. See [Self-Update Announcement Key](../SelfUpdateAnnouncementKey).
 
 ## Related
 
