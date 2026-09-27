@@ -37,11 +37,16 @@ public static class GlobalSettingsLayoutArea
     {
         var tabId = host.Reference.Id?.ToString();
 
+        // A platform-admin tab that moved into the Admin app (Invitations, Updates, Data Sources, …)
+        // redirects an old /_Setting/GlobalSettings/{id} link into the app.
+        if (AdminAppNodeType.RedirectIfRelocated(host, tabId?.Split('?')[0]) is { } redirect)
+            return Observable.Return<UiControl?>(redirect);
+
         // Reactive menu evaluation — re-renders when a provider's live admin check resolves.
         return host.Hub.Configuration.EvaluateGlobalSettingsMenuItems(host, ctx)
             .Select(items =>
             {
-                var selectedTab = string.IsNullOrEmpty(tabId) && items.Count > 0 ? items[0].Id : (tabId ?? DataSourcesTab);
+                var selectedTab = string.IsNullOrEmpty(tabId) && items.Count > 0 ? items[0].Id : (tabId ?? "");
                 return (UiControl?)BuildGlobalSettingsPage(host, selectedTab, items);
             });
     }
@@ -156,14 +161,28 @@ public static class GlobalSettingsLayoutArea
     #region Default Tab Content Builders
 
     /// <summary>
+    /// The Data Sources tab as an Admin-app tab. It used to be the first tab of the global settings
+    /// page, where every signed-in viewer landed on it; the sources are platform configuration, so
+    /// it lives in the Admin app now (platform admins only) and an old link redirects there.
+    /// </summary>
+    internal static SettingsMenuItemDefinition DataSourcesAdminTab { get; } = new(
+        Id: DataSourcesTab,
+        Label: "Data Sources",
+        ContentBuilder: (host, stack, _) => BuildDataSourcesTab(host, stack),
+        Group: AdminAppNodeType.AdministrationGroup,
+        Icon: FluentIcons.Database(),
+        GroupIcon: FluentIcons.Shield(),
+        Order: 302,
+        Keywords: ["data sources", "sources", "repositories", "install", "export"])
+    { LabelKey = "settings.dataSources", GroupKey = AdminAppNodeType.AdministrationGroupKey };
+
+    /// <summary>
     /// Data Sources tab: lists all MeshDataSource nodes with status and actions.
     /// </summary>
     internal static UiControl BuildDataSourcesTab(LayoutAreaHost host, StackControl stack)
     {
         stack = stack.WithView(Controls.H2(host.Localize("settings.dataSources")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "Registered data source repositories. Enable or disable sources, install data, or export subtrees.</p>"));
+        stack = stack.WithView(Controls.Markdown(host.Localize("settings.dataSourcesIntro")));
 
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService == null)
