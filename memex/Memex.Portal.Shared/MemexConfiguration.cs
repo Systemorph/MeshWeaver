@@ -15,6 +15,7 @@ using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph.ControlLane;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Hosting.Persistence;
@@ -788,7 +789,11 @@ public static class MemexConfiguration
                 .AddSpaceType()
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
-                .AddWebhookInbox();
+                .AddWebhookInbox()
+                // The control→instance lane (Doc/Architecture/ControlLane): POST /api/control-lane
+                // on a TARGET, and the signing half on the control instance. Registered on every
+                // portal and armed on none until ControlLane:Key + Hosting:Deployment are set.
+                .AddControlLane();
                 // Courses are fully node-native: the Edu pack owns the types (Edu/Lesson,
                 // Edu/Module, Edu/Exercise, Edu/Quiz, Edu/CourseInvite, Edu/CourseCatalog) AND
                 // the whole-course navigation (EduCourseNavigationProvider, registered per-hub

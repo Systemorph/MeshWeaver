@@ -1,0 +1,192 @@
+---
+Name: Control Lane
+Category: Architecture
+Description: The signed control→instance lane — how the control instance runs a governed, approved operation (Recycle, DeleteSpace) IN another instance's mesh. One request signed with the target's own key, verified for signature, expiry and single use; the target computes its own plan and refuses any plan the approval did not bind; every step is audited on the target and reported back signed. Where it lives, the key, the checks in order, and the owner commands.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h12"/><path d="m12 6 6 6-6 6"/><rect x="18" y="4" width="3" height="16" rx="1"/><circle cx="4" cy="12" r="2"/></svg>
+---
+
+# Control Lane
+
+The control instance governs the fleet through `Hosting/InstanceAction` nodes. Until this lane,
+every lane ran the OTHER way or somewhere else:
+
+| lane | direction | reaches |
+|---|---|---|
+| the signed inbox (`/api/hooks/Hosting/PlatformBuilds`) | instance → control | the control instance's mesh |
+| the operator (`aks-ops.yml`, the in-cluster Job) | control → cluster | Kubernetes, helm, the databases |
+| **the control lane (`/api/control-lane`)** | **control → instance** | **the target instance's mesh** |
+
+So an operation that has to act INSIDE another instance's mesh — recycle an address, delete a
+space nobody may delete — could only be filed on that instance's own mesh, which needs the Hosting
+package there. `memex-cloud` does not run Hosting. This lane closes that gap with the smallest
+surface that is still safe: two operations, one signed request per step, and the target as the
+authority over what it runs.
+
+## The shape
+
+```
+control instance                                            target instance
+Hosting/InstanceAction (DeleteSpace, deployment=memex-cloud)
+  │ 1. dry run: POST /api/control-lane  ─── signed, K_dep ──►  verify · admit · claim Admin/ControlLane/{id}
+  │                                                              plan (as system, writes nothing)
+  │ ◄── report Planned {plan, digest}  ─── signed, K_dep ────  POST {control}/api/hooks/Hosting/PlatformBuilds
+  │ 2. parks WITH that plan; an approver approves its digest
+  │ 3. real run: POST /api/control-lane {planDigest, approvedBy} ► verify · admit · claim
+  │                                                              plan again; digest ≠ approved → Refused, nothing touched
+  │ ◄── Progress … Done {audit line} ───────────────────────  execute as system through the SAME engine
+```
+
+| part | where | what it does |
+|---|---|---|
+| **The request** | `ControlLaneRequest` (core, `MeshWeaver.Graph.ControlLane`) | names the target `deployment`, the `operation`, the `target` (and its `confirmation`), `dryRun`, the approved `planDigest`, `requestedBy`, `approvedBy`/`approvedAt`, the control `action` node, `issuedAt`/`expiresAt`, and a `requestId`. Signed as sent: `X-Hub-Signature-256` = HMAC-SHA256 over the raw body. |
+| **The endpoint** | `POST /api/control-lane` (`ControlLaneEndpoints`, `Memex.Portal.Shared`) | anonymous — the signature IS the authentication — and answers the verdict as the status code. An acceptance is signed back with the same key. |
+| **The receiver** | `ControlLaneReceiver` (core) | verifies, admits, claims, runs, reports (below). Registered on every portal by `AddControlLane()`; armed on none until configured. |
+| **The operations** | `IControlLaneOperation` — `RecycleOperation`, `DeleteSpaceOperation` (core) | each computes its plan AS SYSTEM, writing nothing, and executes exactly that plan. |
+| **The ledger** | `Admin/ControlLane/{requestId}` (`ControlLaneRecord`) on the target | created BEFORE anything runs — its creation is the single-use claim — and appended to at every step. |
+| **The report** | `ControlLaneReport` → the control instance's inbox | every status, signed with the same key, posted to the control instance's CONFIGURED inbox — never to a URL the request names. |
+| **The control half** | `ControlLaneClient` (core) + MeshWeaver.Plugins `Hosting/InstanceAction` | signs with the deployment's own key, parks the action with the target's plan, sends the approved run, and folds the reports onto the action node. |
+
+## Where it lives, and why core
+
+The executor is in **core** (`src/MeshWeaver.Graph/ControlLane`, the endpoint in
+`memex/Memex.Portal.Shared`), not in a Plugins package:
+
+- **Every portal carries it without installing anything.** The target must not need the Hosting
+  package; core is in every image, including a customer's.
+- **It is security code a remote request invokes as system.** Compiled, reviewed and shipped in the
+  image — never in-mesh source a node editor could change at runtime.
+- **The SAME engine serves both paths.** `SpaceDeletion` is the space-deletion engine the in-process
+  `DeleteSpace` instance action already ran (MeshWeaver.Plugins `Hosting/DeleteSpaceAction`), moved
+  to core so the in-mesh runner delegates to it and the lane executes it; `RecycleOperation` is the
+  one framework surface, `hub.RecycleNode`. Both depend only on core surfaces (the recycle cascade,
+  the partition teardown, the framework's deletes).
+
+The InstanceAction integration — parking, approval, folding reports — stays where the actions are,
+in MeshWeaver.Plugins `Hosting`.
+
+## The key
+
+The lane uses **one key per deployment**, from the vault, never the fleet-wide inbox secret. It
+mirrors the [announcement key](/Doc/Architecture/SelfUpdateAnnouncementKey) in reverse:
+
+| mount | where | as |
+|---|---|---|
+| the target's lane key | the target's pod | `ControlLane__Key` — mounting it is what ARMS the lane there |
+| the deployment's own key slot | the control instance | `Hosting__PlatformWebhookSecret__{deployment}` — signs requests to it, verifies its reports |
+| the declaration | the target's `Hosting/Deployment` record | `controlLaneKeySecret` — the vault object's NAME; the binding |
+
+- **The record must claim the key** (`ControlLaneKeys.BindingRefusal`). A record that declares no
+  `controlLaneKeySecret` is never sent a request. A record that also declares an
+  `announcementKeySecret` must name the same object — the control instance holds one key per
+  deployment in that slot.
+- **The control half signs ONLY with the deployment's own key** (`ControlLaneKeys.ControlKeyFor`):
+  never the shared `Hosting:PlatformWebhookSecret`, and never a child that equals it.
+- **The target refuses to arm** (`ControlLaneKeys.ArmingRefusal`) without `ControlLane:Key` and
+  `Hosting:Deployment`, and when the lane key EQUALS any secret its own webhook inbox verifies with —
+  on a fleet portal that is the fleet secret, which every CI lane and every portal holds.
+- **One key, two directions, told apart inside the signed body.** A request carries
+  `"kind": "control-lane-request"`, a report `"event": "control-lane-report"`; each parser requires
+  its discriminator to be PRESENT, so a report can never be replayed as a command.
+- **Why its own mount name on the target.** `Hosting:ControlInbox:Secret` (the announcement
+  signer) may still hold the fleet secret on an instance that has not migrated — and its Feedback
+  hand-over signs with it, which a deployment key may not do. The lane key is therefore mounted under
+  a name nothing else reads.
+
+## What the target checks, in order
+
+The order is contract: nothing is parsed before the signature verifies, nothing is written before
+admission, nothing runs before the claim.
+
+| # | check | refused as | HTTP |
+|---|---|---|---|
+| 1 | the lane is armed (`ArmingRefusal`) | `not-armed` — OUR misconfiguration | 503 |
+| 2 | the signature verifies with `ControlLane:Key` | `signature-invalid` — says nothing more | 401 |
+| 3 | it is a request, envelope version 1, a well-formed request id | `malformed` | 400 |
+| 4 | it names THIS deployment (`Hosting:Deployment`) | `wrong-deployment` | 403 |
+| 5 | issued ≤ now + 2 min, now < expiry, lifetime ≤ 15 min | `expired` | 410 |
+| 6 | a registered operation claims it; a plain target path; a reason; an action node; a real run carries an approved digest and an approver; the operation's own shape rule (DeleteSpace: one segment, confirmation repeats it exactly) | `refused` | 422 |
+| 7 | the ledger node `Admin/ControlLane/{requestId}` is CREATED — a second create is the replay | `replayed` | 409 |
+
+Then it answers `202` with a signed body and runs on the mesh's off-router execution hub, which
+outlives every target:
+
+1. **Plan** — the operation reads what it would act on, as system, writing nothing. A refusal
+   (a protected partition, a user's home, a package's partition, a reading that was a floor, a
+   target that is not there, nothing left to delete) is reported `Refused`. Otherwise `Planned`,
+   carrying the plan and its digest. A dry run ends here.
+2. **Compare** — 🚨 the plan the target computes NOW must have the digest the approval bound; any
+   other plan is reported `Refused`, both digests named, and NOTHING is touched.
+3. **Execute** — the same engine as the in-process action, as system; one `Progress` report per
+   step; the last line is the audit line (who asked, who approved, when, what was removed).
+4. **Done** or **Failed** — terminal, reported and written to the ledger.
+
+## Operations: an open vocabulary, closed executors
+
+`ControlLaneOperation` is an open set of string constants (policy
+`open-vocabulary-string-constants`): `Recycle` and `DeleteSpace` are the platform's starting set,
+and a module adds its own by registering an `IControlLaneOperation` that claims a new value. An
+unclaimed value is refused BY NAME. The one deliberate difference from the rule's usual shape: the
+executors are registered in CODE, not as rule nodes — a node anyone with write access could edit
+would make this lane a remote system shell.
+
+## The plan is bound by digest
+
+`ControlLanePlan.Digest()` is the `action-plan/v1` encoding MeshWeaver.Plugins'
+`ActionPlanSnapshot.Digest` computes (length-prefixed, injective; no namespace, no image, executor
+`control-lane`). The control instance parks the action with the reported plan, the approval binds
+that snapshot's digest, and the real run carries it. The control side recomputes the digest over the
+reported steps and refuses a report whose stated digest differs (`ControlLaneClient.VerifyReport`),
+so a drift between the two implementations is a loud refusal at dry-run time — never an approval
+that can never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` pins the encoding.
+
+## Audited on both sides
+
+- **Target:** the ledger node carries the verified request, every status and step, and whether each
+  report reached the control instance; every status is also a `[ControlLane]` log line (Warning for
+  Accepted/Planned/Refused/Done, Error for Failed and for a report the control inbox did not
+  accept).
+- **Control:** the action node carries the requester, the approver, the plan the approval bound and
+  every report folded into its log.
+
+## Owner commands
+
+Minting a key is an operator act; no agent creates or reads a secret value. The value is generated
+in the command and never printed:
+
+```bash
+az keyvault secret set --vault-name Systemorph --name memex-cloud-Hosting-ControlLaneKey \
+  --value "$(openssl rand -hex 32)" --output none
+az keyvault secret show --vault-name Systemorph --name memex-cloud-Hosting-ControlLaneKey \
+  --query "{name:name, enabled:attributes.enabled, updated:attributes.updated}" -o table
+```
+
+The second command reads back metadata only.
+
+## Rollout order — mint first, declare last
+
+1. **Core** — the lane (this page). Inert everywhere: nothing is armed.
+2. **MeshWeaver.Plugins** — the portal maps `/api/control-lane`; `Hosting/InstanceAction` routes a
+   Recycle/DeleteSpace whose record is another instance through the lane; the inbox watcher folds
+   `control-lane-report` onto the action node.
+3. **Mint the vault object** (above). 🚨 Before the Memex change merges: a vault object the vault
+   does not hold fails the WHOLE CSI mount of every pod that names it — the control instance's too.
+4. **Systemorph/Memex** — the target's record declares `controlLaneKeySecret` and maps the object to
+   `ControlLane__Key`; the control instance's record maps it to
+   `Hosting__PlatformWebhookSecret__{deployment}`.
+5. **Reconcile** the control instance, then the target. The acceptance reading is a dry-run action
+   on the control instance reaching `Planned` with the target's plan.
+
+## What is NOT covered
+
+- **Rotation** is a flag day per deployment: replace the vault object's value, Reconcile both ends.
+- **Other operations.** Two exist; anything else is a new `IControlLaneOperation` in an image.
+- **Liveness.** A target that never reports leaves the control action waiting until the request
+  expires; the action then says it heard nothing — it does not retry.
+
+## Related
+
+- [Self-Update Announcement Key](/Doc/Architecture/SelfUpdateAnnouncementKey) — the per-deployment key this lane
+  reuses in reverse.
+- [Self-Update on the Control Lane](/Doc/Architecture/SelfUpdateControlLane) — the instance→control hand-over.
+- [Stale State Until Recycle](/Doc/Architecture/StaleStateUntilRecycle) — what `Recycle` does and does not do.
+- MeshWeaver.Plugins `Hosting/DeleteSpaceAction`, `Hosting/RecycleAction` — the in-process kinds.

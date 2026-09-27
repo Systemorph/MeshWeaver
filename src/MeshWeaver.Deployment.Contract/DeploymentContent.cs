@@ -147,6 +147,22 @@ public record DeploymentContent
     [Description("Key Vault secret NAME of this deployment's own self-update announcement key")]
     public string? AnnouncementKeySecret { get; init; }
 
+    /// <summary>
+    /// Key Vault secret NAME of the key the CONTROL LANE uses for this deployment
+    /// (Doc/Architecture/ControlLane) — e.g. <c>memex-cloud-Hosting-ControlLaneKey</c>. A NAME, never
+    /// a value. The same vault object is mounted twice: into this deployment's pod as
+    /// <c>ControlLane__Key</c> (which ARMS the lane there) and into the control instance as
+    /// <c>Hosting__PlatformWebhookSecret__{deploymentId}</c> (the deployment's own key slot, which
+    /// signs requests to it and verifies its reports).
+    ///
+    /// <para>🚨 Declaring it is the BINDING: the control instance sends a lane request to this
+    /// record's instance only when the record claims the key — a key the record does not claim
+    /// authorises nothing. Because the control instance holds ONE key per deployment in that slot, a
+    /// record that also declares <see cref="AnnouncementKeySecret"/> must name the SAME object.</para>
+    /// </summary>
+    [Description("Key Vault secret NAME of the key the control lane signs requests to this deployment with")]
+    public string? ControlLaneKeySecret { get; init; }
+
     /// <summary>Grafana base URL for this deployment's logs. Empty → no logs link in the overview.</summary>
     public string? GrafanaBaseUrl { get; init; }
 
