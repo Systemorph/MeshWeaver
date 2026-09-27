@@ -9,11 +9,14 @@ using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Graph.Configuration;
 
-/// <summary>A value a <see cref="SecretSectionVerbs.Generate"/> verb minted, returned ONCE so it can be shown.</summary>
-/// <param name="Value">The new value. Shown once in a dialog; never stored in the layout, never logged.</param>
+/// <summary>What a <see cref="SecretSectionVerbs.Generate"/> verb produced.</summary>
+/// <param name="Value">The new value, returned ONCE so it can be shown: it appears once in a dialog, is
+/// never stored in the layout, and is never logged. NULL means the value is NEVER SHOWN to anyone,
+/// e.g. a key minted inside an operator Job for two ends that both read the vault. The dialog then
+/// shows only the fingerprint and the note.</param>
 /// <param name="Status">The resulting status.</param>
-/// <param name="Note">Optional markdown shown under the value, e.g. where a vault copy was filed.</param>
-public sealed record SecretGenerated(string Value, SecretStatus Status, string? Note = null);
+/// <param name="Note">Optional markdown shown in the dialog, e.g. where a vault copy was filed.</param>
+public sealed record SecretGenerated(string? Value, SecretStatus Status, string? Note = null);
 
 /// <summary>
 /// What a write-only secret surface may DO. Each verb is optional; a verb left null has no button.
@@ -234,10 +237,13 @@ public static class WriteOnlySecretSection
             generated =>
             {
                 host.UpdateData(ResultId(id), host.Localize("secret.saved", generated.Status.Fingerprint ?? ""));
-                var body = Controls.Stack.WithStyle("gap: 10px;")
-                    .WithView(Controls.Markdown(host.Localize("secret.shownOnce")), "Warning")
-                    .WithView(Controls.Markdown($"```text\n{generated.Value}\n```"), "Value")
-                    .WithView(Controls.Markdown(host.Localize("secret.fingerprintLine", generated.Status.Fingerprint ?? "")), "Fingerprint");
+                var body = Controls.Stack.WithStyle("gap: 10px;");
+                // A null value is never shown to anyone: only its fingerprint and the note.
+                if (!string.IsNullOrEmpty(generated.Value))
+                    body = body
+                        .WithView(Controls.Markdown(host.Localize("secret.shownOnce")), "Warning")
+                        .WithView(Controls.Markdown($"```text\n{generated.Value}\n```"), "Value");
+                body = body.WithView(Controls.Markdown(host.Localize("secret.fingerprintLine", generated.Status.Fingerprint ?? "")), "Fingerprint");
                 if (!string.IsNullOrEmpty(generated.Note))
                     body = body.WithView(Controls.Markdown(generated.Note!), "Note");
                 var close = Controls.Button(host.Localize("common.close"))
