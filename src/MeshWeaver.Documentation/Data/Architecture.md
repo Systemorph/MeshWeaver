@@ -203,6 +203,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
 - [The Admin App and the Settings App](AdminApp) — `/Admin` holds every platform-admin surface (installed on every image, the control image included), `/{user}/Settings` holds only the person's own settings and opens for them alone; the inventory of what moved, the gates, the redirects, and the Inbox app every user gets
+- [Domain Configuration Apps](DomainConfigurationApps) — configuration and secrets live in the app that owns their domain (AI, Databases, Sign-in, Email, Payments, Integrations), never as panels on the Deployment record page: the fleet apps on the control instance per deployment, the instance-scope tabs in each Admin app, what each reads, writes and gates, and how a change reaches the portal
 - [Invitation-Only Onboarding](InvitationOnlyOnboarding)
 - [The Redirect-Target Contract](RedirectTargetContract) — every `returnUrl` sink validates local-only, so every source must mint local; a wrong source is refused rather than followed, which costs the whole flow and logs nothing
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
