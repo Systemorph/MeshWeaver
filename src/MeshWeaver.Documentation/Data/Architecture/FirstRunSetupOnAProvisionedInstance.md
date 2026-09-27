@@ -5,9 +5,9 @@ Abstract: >
   first-run wizard does not appear (it keys on "no storage"), the onboarding gate's first-user
   promotion does not fire (it keys on "no admin grant"), and the only remaining door is an
   undocumented endpoint whose secret nobody set. This page is the measurement of that gap on
-  pearl.meshweaver.cloud, and the design that closes it. Since 2026-09-27 a provisioned instance
-  starts at sign-in and its first human to onboard becomes platform admin (MeshWeaver.Plugins#2421);
-  that rule is safe only where sign-in is restricted to the owning organisation.
+  pearl.meshweaver.cloud, and the design that closes it. A provisioned instance now starts at
+  sign-in and its first human to onboard becomes platform admin (policy
+  `first-sign-in-becomes-admin`, MeshWeaver.Plugins#2421).
 Thumbnail: "sitemap"
 ---
 
@@ -33,9 +33,10 @@ So the gap is not a missing mechanism. It is that **"configured" and "administer
 states, and only the first one is modelled.** A provisioned instance is fully configured and has no
 human in it.
 
-## 🚨 Decided 2026-09-27: a provisioned instance starts at SIGN-IN, and its first human becomes admin
+## 🚨 A provisioned instance starts at SIGN-IN, and its first human becomes admin
 
-**This supersedes "The rule" below for a provisioned instance.** Maintainer, 2026-09-27, on
+**Policy `first-sign-in-becomes-admin`** (`Doc/Architecture/PolicyNotProse`) — it supersedes "The
+rule" below for a provisioned instance. The maintainer, on
 `control.systemorph.com` (provisioned healthy, and every visitor sent to a `/setup` whose link
 nothing had minted): *"this must work after new deploy. must log in first user then take him as
 admin"*, *"setup login from start"*. As built in MeshWeaver.Plugins#2421:
