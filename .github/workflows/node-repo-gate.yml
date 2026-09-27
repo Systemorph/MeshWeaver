@@ -924,9 +924,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # The tester installs this tree and stamps each install with its lock's moduleVersion; a
-      # main-owned repo's pull request carries the BASE's locks, so the gate reads this tree's.
+      # main-owned repo's pull request carries the BASE's locks, so the gate reads this tree's —
+      # written by the generator at this lane's scripts ref (a disposable checkout the action removes).
+      - name: Check out the lock generator at the lane's scripts ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          path: .materialize-generator
+          sparse-checkout: .github/scripts/gen-manifests.py
+          sparse-checkout-cone-mode: false
       - name: Materialize main-owned manifest locks
         uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          generator: .materialize-generator/.github/scripts/gen-manifests.py
       # Cross-repo `requires` must resolve for the package roots to bind — the tester installs
       # whatever the mount holds, so the required modules are STAGED into it, exactly like
       # production resolves the requires from the store's package sources.
