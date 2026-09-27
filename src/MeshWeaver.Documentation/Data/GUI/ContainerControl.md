@@ -19,6 +19,9 @@ Five containers cover the majority of layout needs:
 | [Splitter](Splitter) | Creates resizable, collapsible panes | Sidebars, IDE-style layouts |
 | [Layout](Layout) | Assigns children header / body / footer roles | Whole-page scaffolds with persistent chrome |
 
+Any control can also be made **collapsible** with the [Expander](Expander) skin — a section whose
+open/closed state the area declares from the data, while each viewer can still toggle it.
+
 For responsive multi-column grid layouts, see [Layout Grid](../LayoutGrid).
 
 ---
