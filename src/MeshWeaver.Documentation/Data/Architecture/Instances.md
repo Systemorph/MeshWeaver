@@ -105,7 +105,7 @@ provisioned with the deploy tooling, not from the running app — the company in
 
 ## The admin Instances tab (company instance only)
 
-**Settings ▸ Administration ▸ Instances** lists every portal on the cluster live from the k8s API —
+**Admin app (`/Admin`) ▸ Instances** lists every portal on the cluster live from the k8s API —
 domain, namespace, running version (image tag), replica health — with per-instance Grafana/Loki log
 deep links and a guided create-instance **plan** generator (commands only; nothing deploys itself).
 
