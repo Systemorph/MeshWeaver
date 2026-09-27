@@ -516,6 +516,17 @@ What the other checks do on a main-owned tree:
 - `--resolve` — resolves a lock conflict by ADOPTING the trunk's lock (every one of them), so the
   branch leaves the merge carrying no lock change and can never conflict on one again.
 
+🚨 **A caller that declares `lockOwner: main` MUST settle FIRST and publish only what its own settle
+claimed.** `--materialize` names a changed module `patch+1` over the committed lock, so two merges that
+touch one module and both land before either settle would each materialize the SAME number for
+DIFFERENT trees. What makes that harmless is the order, not the derivation: the settle job is the
+first job of every `main` run and pushes the claim at once (git's push is the compare-and-swap); the
+next merge descends from that claim and materializes `patch+2`; and a run whose push lost the race
+settles the NEWER tip instead — whose tree contains its own — and reports that it does not own the
+settled tree, so it publishes, seals and tags nothing. A run whose settle did land publishes exactly
+what it materialized (`--settle` asserts the two agree). MeshWeaver.Plugins' `settle-locks` job and its
+`own` output are the reference shape.
+
 🚨 **The merge commit on `main` carries the locks of the commit before it until the settle commit
 lands.** Everything in CI reads the materialized lock, so no bundle, seal or key sees the stale one;
 what reads `main`'s committed tree directly — a GitSynced portal importing `main` unsealed — sees the
