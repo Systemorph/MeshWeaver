@@ -289,6 +289,12 @@ public static class ControlLaneWire
     public static ControlLaneRequest? ParseRequest(string? body) =>
         Discriminator(body, "kind") == ControlLaneRequest.RequestKind ? Parse<ControlLaneRequest>(body) : null;
 
+    /// <summary>The forwarded event in <paramref name="body"/>, or null when it is not one; the
+    /// <c>"kind": "control-lane-event"</c> discriminator must be present, so neither a request nor
+    /// a report can be read as one. Never throws.</summary>
+    public static ControlLaneEvent? ParseEvent(string? body) =>
+        Discriminator(body, "kind") == ControlLaneEvent.EventKind ? Parse<ControlLaneEvent>(body) : null;
+
     /// <summary>The report in <paramref name="body"/>, or null when it is not one; the
     /// <c>"event": "control-lane-report"</c> discriminator must be present. Never throws.</summary>
     public static ControlLaneReport? ParseReport(string? body) =>

@@ -146,9 +146,14 @@ public sealed class ControlLaneReceiver : IDisposable
                                   + "{Key}. Nothing was read or stored.", ControlLaneKeys.TargetKey);
                 return Observable.Return(new ControlLaneReceipt(ControlLaneVerdict.SignatureInvalid));
             }
-            var request = ControlLaneWire.ParseRequest(body);
             var self = configuration[ControlLaneKeys.DeploymentKey]!.Trim();
             var now = DateTimeOffset.UtcNow;
+            // A FORWARDED EVENT (Doc/Architecture/ControlLane → "Forwarded events") shares the
+            // arming and the signature above and nothing after them: it names no operation, runs
+            // nothing and is never reported — its whole effect is one node in a declared inbox.
+            if (ControlLaneWire.ParseEvent(body) is { } forwarded)
+                return ReceiveEvent(forwarded, self, now, configuration);
+            var request = ControlLaneWire.ParseRequest(body);
             var (verdict, why) = ControlLaneAdmission.Admit(request, self, now, Operations);
             if (verdict == ControlLaneVerdict.Accepted
                 && operations[request!.Operation].ShapeRefusal(request) is { } shape)
@@ -178,6 +183,31 @@ public sealed class ControlLaneReceiver : IDisposable
                     return new ControlLaneReceipt(ControlLaneVerdict.Accepted, null, request.RequestId);
                 });
         });
+
+    /// <summary>
+    /// A verified forwarded event: admitted (this deployment, its window, a DECLARED target, the
+    /// size cap) and stored — the inbox node's creation is the single-use claim. Cold; never errors.
+    /// </summary>
+    private IObservable<ControlLaneReceipt> ReceiveEvent(ControlLaneEvent evt, string self, DateTimeOffset now, IConfiguration configuration)
+    {
+        var (verdict, why) = ControlLaneEvents.Admit(evt, self, now, ControlLaneEvents.Targets(configuration));
+        if (verdict != ControlLaneVerdict.Accepted)
+        {
+            logger.LogWarning("[ControlLane] forwarded event {EventId} REFUSED ({Verdict}) — {Why}. Nothing was stored.",
+                evt.EventId, verdict, why);
+            return Observable.Return(new ControlLaneReceipt(verdict, why, evt.EventId));
+        }
+        return ControlLaneEvents.Store(hub, evt, now)
+            .Do(receipt =>
+            {
+                if (receipt.Verdict == ControlLaneVerdict.Accepted)
+                    logger.LogInformation("[ControlLane] forwarded {Source} event {Name} {EventId} stored in {Target}/_Inbox",
+                        evt.Source, evt.Name, evt.EventId, evt.Target);
+                else
+                    logger.LogWarning("[ControlLane] forwarded event {EventId} REFUSED ({Verdict}) — {Why}",
+                        evt.EventId, receipt.Verdict, receipt.Why);
+            });
+    }
 
     /// <summary>
     /// The single-use claim: CREATE the ledger node. A create of an id that already exists is the
