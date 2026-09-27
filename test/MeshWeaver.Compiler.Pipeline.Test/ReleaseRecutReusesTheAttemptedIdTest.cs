@@ -106,19 +106,62 @@ public class ReleaseRecutReusesTheAttemptedIdTest(ITestOutputHelper output) : Mo
         };
     }
 
-    private async Task<MeshNode> SeedTypeAsync(string typePath)
+    private async Task<MeshNode> SeedTypeAsync(string typePath, NodeTypeDefinition? definition = null)
     {
         var typeNode = MeshNode.FromPath(typePath) with
         {
             Name = typePath,
             NodeType = MeshNode.NodeTypePath,
             State = MeshNodeState.Active,
-            Content = Consumed(),
+            Content = definition ?? Consumed(),
         };
         await MeshService.CreateNode(typeNode)
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the NodeType whose release is re-cut must exist", cancellationToken: TestContext.Current.CancellationToken);
         return typeNode;
+    }
+
+    /// <summary>The standing release can lag even when the NodeType already advertises the
+    /// same build the successful compile returns. The pure verdict must drive an actual re-cut.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnAlreadyAdoptedBuild_RecutsTheOlderStandingRelease()
+    {
+        var typePath = $"{TestPartition}/RecutAdopted{Guid.NewGuid().ToString("N")[..8]}";
+        var result = Built(typePath);
+        var previous = result with
+        {
+            Version = 3319,
+            ContentPath = $"{typePath.Replace('/', '_')}/v3319-sdc4cbaa-dc97978288e7.dll",
+            CompiledSources = Sources(3319),
+        };
+        var stalePath = $"{typePath}/{GraphNodeTypeNames.ReleaseSegment}/20260920072917-"
+                        + NodeTypeBuildState.ContentHashOf(previous);
+        var typeNode = await SeedTypeAsync(typePath, Consumed() with
+        {
+            LastCompiledVersion = result.Version,
+            LatestAssemblyCollection = result.Collection,
+            LatestAssemblyPath = result.ContentPath,
+            CompiledSources = result.CompiledSources,
+            LatestReleasePath = stalePath,
+        });
+
+        var settle = await ReleasePostCondition
+            .Restore(Mesh, typePath, result, typeNode, activityPath: null,
+                NodeTypeBuildState.ReleaseCreateOutcome.Failed("first create refused"), logger: null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the stale release must be re-cut for the adopted build",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        settle.ReleasePath.Should().NotBeNull().And.NotBe(stalePath);
+        settle.ReleasePath.Should().EndWith("-" + NodeTypeBuildState.ContentHashOf(result));
+        settle.Diagnosis.Should().NotBeNull();
+        settle.Diagnosis!.Message.Should().Contain("Restored at");
+        var release = await Mesh.GetMeshNodeStream(settle.ReleasePath!)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the re-cut release node must actually exist",
+                cancellationToken: TestContext.Current.CancellationToken);
+        release.ContentAs<NodeTypeRelease>(Mesh.JsonSerializerOptions)!.AssemblyStoreVersion
+            .Should().Be(result.Version);
     }
 
     /// <summary>Every release node under <paramref name="typePath"/>, by LISTING — the same
