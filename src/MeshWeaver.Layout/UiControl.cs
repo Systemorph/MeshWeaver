@@ -245,9 +245,12 @@ public abstract record UiControl : IUiControl
     /// the click requests (e.g. <c>GetMeshNodeStream(path).Update(…).Select(_ =&gt; Unit.Default)</c>),
     /// never the long-running work that write triggers: the owner's watcher runs that, and the page
     /// shows its progress. An observable that never completes keeps the button pending.
+    /// <para>A distinct NAME, not a <c>WithClickAction</c> overload: a lambda that fits both a
+    /// <c>Task</c> and an <c>IObservable</c> return (<c>_ =&gt; throw …</c>) would otherwise become
+    /// ambiguous in every caller — including in-mesh NodeType sources no CI build type-checks.</para>
     /// </summary>
     /// <param name="onClick">The callback invoked on click; its observable is subscribed exactly once by the owner.</param>
-    public UiControl WithClickAction(Func<UiActionContext, IObservable<Unit>> onClick)
+    public UiControl WithReactiveClickAction(Func<UiActionContext, IObservable<Unit>> onClick)
     {
         return this with { ClickAction = onClick, };
     }
@@ -337,10 +340,10 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
 
     /// <summary>Returns a copy with <paramref name="onClick"/> registered as a REACTIVE click handler, typed as <typeparamref name="TControl"/>.
     /// The click is acknowledged to the client when the observable completes and refused when it errors — see
-    /// <see cref="UiControl.WithClickAction(Func{UiActionContext, IObservable{Unit}})"/>.</summary>
+    /// <see cref="UiControl.WithReactiveClickAction"/>.</summary>
     /// <param name="onClick">The callback invoked on click; its observable is subscribed exactly once by the owner.</param>
     /// <returns>A copy of <typeparamref name="TControl"/> with the click action set.</returns>
-    public new TControl WithClickAction(Func<UiActionContext, IObservable<Unit>> onClick)
+    public new TControl WithReactiveClickAction(Func<UiActionContext, IObservable<Unit>> onClick)
     {
         return This with { ClickAction = onClick };
     }

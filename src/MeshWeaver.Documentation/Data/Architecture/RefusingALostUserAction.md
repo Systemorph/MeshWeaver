@@ -202,7 +202,7 @@ already-localized `error.userActionNotRun` sentence.
 
 **The receipt now waits for the click action to be DONE.** For a `ClickedEvent` the owner answers
 `UserActionAccepted` when the action's completion signal completes (a `Task`, or the
-`IObservable<Unit>` of the reactive `WithClickAction` overload) and a `DeliveryFailure` carrying the
+`IObservable<Unit>` of `WithReactiveClickAction`) and a `DeliveryFailure` carrying the
 error when it fails — so the receipt is also the end of a framework button's pending state, and the
 five-argument `SubmitUserAction(…, onRefused, onAccepted)` hands both ends to the view. A
 `Task.CompletedTask` handler is acknowledged on the owner's turn exactly as before; a still-running

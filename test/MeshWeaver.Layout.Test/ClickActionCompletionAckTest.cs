@@ -36,8 +36,8 @@ public class ClickActionCompletionAckTest(ITestOutputHelper output) : HubTestBas
             .AddLayout(layout => layout.WithView(
                 Area,
                 Controls.Stack
-                    .WithView(Controls.Button("Approve").WithClickAction(_ => reactiveWork.AsObservable()), "Reactive")
-                    .WithView(Controls.Button("Fail").WithClickAction(_ => Observable.Defer(() =>
+                    .WithView(Controls.Button("Approve").WithReactiveClickAction(_ => reactiveWork.AsObservable()), "Reactive")
+                    .WithView(Controls.Button("Fail").WithReactiveClickAction(_ => Observable.Defer(() =>
                     {
                         // Subscribed FIRST, then signalled: the test errors the work only once the
                         // owner is listening, so the refusal can only come from the completion arm.
@@ -52,7 +52,7 @@ public class ClickActionCompletionAckTest(ITestOutputHelper output) : HubTestBas
                     })), "Failing")
                     .WithView(Controls.Button("Throw").WithClickAction(ThrowSynchronously), "Throwing")
                     .WithView(Controls.Button("Go")
-                        .WithClickAction(_ => Observable.Return(Unit.Default))
+                        .WithReactiveClickAction(_ => Observable.Return(Unit.Default))
                         .WithNavigateOnAccepted(AcceptedTarget), "Navigating")));
 
     private static Task ThrowSynchronously(UiActionContext _) =>

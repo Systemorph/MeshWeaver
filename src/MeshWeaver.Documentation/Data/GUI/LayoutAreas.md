@@ -304,7 +304,7 @@ Controls.Button("Cancel").WithNavigateToHref(cancelHref);
 
 > 🚨 The handler is **synchronous** — `ctx => { …; return Task.CompletedTask; }`, never `async ctx =>`. An async click handler runs its continuation on the wrong scheduler and deadlocks the layout pump under load. Work that needs I/O is composed as an `IObservable<T>` and `.Subscribe(...)`d from inside the handler; the handler itself returns immediately. See [Observables](/Doc/GUI/Observables) and [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
 >
-> The button shows itself pressed until the owner confirms the click. To keep it pressed until a write is CONFIRMED — and to jump to a progress view the moment it is — return the write's observable from the reactive `WithClickAction(ctx => IObservable<Unit>)` overload (the framework subscribes it) and add `.WithNavigateOnAccepted(href)`. See [Buttons: Pending State & Navigate-on-Accepted](../ButtonPendingState).
+> The button shows itself pressed until the owner confirms the click. To keep it pressed until a write is CONFIRMED — and to jump to a progress view the moment it is — return the write's observable from `WithReactiveClickAction(ctx => IObservable<Unit>)` (the framework subscribes it) and add `.WithNavigateOnAccepted(href)`. See [Buttons: Pending State & Navigate-on-Accepted](../ButtonPendingState).
 
 ## Live Demo
 

@@ -33,14 +33,16 @@ signal, normalised to ONE contract (`UiControl.ClickAction` is an `IObservable<U
 |---|---|---|
 | `WithClickAction(ctx => { …; return Task.CompletedTask; })` | immediately, on the owner's turn — exactly as before | it throws |
 | `WithClickAction(ctx => { … })` (an `Action`) | immediately | it throws |
-| `WithClickAction(ctx => someObservable)` (an `IObservable<Unit>`) | the observable **completes** (values are ignored) | it **errors**, or the action throws before returning it |
+| `WithReactiveClickAction(ctx => someObservable)` (an `IObservable<Unit>`) | the observable **completes** (values are ignored) | it **errors**, or the action throws before returning it |
 
 So a synchronous handler behaves as it always has, and a handler that wants the button to stay
-pressed until its write is confirmed **returns that write**:
+pressed until its write is confirmed **returns that write** from `WithReactiveClickAction` — a
+distinct name rather than a `WithClickAction` overload, because a lambda that fits both return types
+(`_ => throw …`) would otherwise turn ambiguous in every existing caller, in-mesh sources included:
 
 ```csharp
 Controls.Button(texts.Approve)
-    .WithClickAction(ctx => ApproveAs(ctx.Host.Hub, access, caller, path)   // GetMeshNodeStream(path).Update(…)
+    .WithReactiveClickAction(ctx => ApproveAs(ctx.Host.Hub, access, caller, path)   // GetMeshNodeStream(path).Update(…)
         .Take(1)
         .Select(_ => Unit.Default))
     .WithNavigateOnAccepted(progressHref);
