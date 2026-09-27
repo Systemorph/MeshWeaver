@@ -79,6 +79,52 @@ public static class ControlLaneClient
         });
 
     /// <summary>
+    /// Signs a FORWARDED EVENT with the target deployment's own key and posts it to the target's
+    /// lane endpoint. Emits the receipt — ACCEPTED only for a 202 the target signed with the same
+    /// key naming this event. Errors when there is no key of the deployment's own, or nothing
+    /// answered. Cold.
+    /// </summary>
+    /// <param name="hub">The control instance's hub.</param>
+    /// <param name="evt">The event to forward.</param>
+    /// <param name="endpoint">The target's lane endpoint (<see cref="EndpointOf"/>).</param>
+    public static IObservable<ControlLaneReceipt> Forward(IMessageHub hub, ControlLaneEvent evt, Uri endpoint) =>
+        Observable.Defer(() =>
+        {
+            var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+            var (key, refusal) = ControlLaneKeys.ControlKeyFor(configuration, evt.Deployment);
+            if (key is null)
+                return Observable.Throw<ControlLaneReceipt>(new InvalidOperationException(refusal));
+            var body = ControlLaneWire.Body(evt);
+            var transport = hub.ServiceProvider.GetRequiredService<IControlLaneTransport>();
+            return transport.Post(endpoint, body, ControlLaneWire.Sign(body, key))
+                .Take(1)
+                .Select(answer => ReceiptOf(answer, key, evt.EventId, endpoint));
+        });
+
+    /// <summary>
+    /// A forwarded event for <paramref name="deployment"/>, valid for <see cref="DefaultLifetime"/>
+    /// from <paramref name="now"/>, with a fresh id. Pure but for the id.
+    /// </summary>
+    /// <param name="deployment">The target deployment id.</param>
+    /// <param name="source">The event's origin (<see cref="ControlLaneEventSource"/>).</param>
+    /// <param name="name">The origin's event name.</param>
+    /// <param name="target">The target's declared inbox owner.</param>
+    /// <param name="payload">The verified body, verbatim.</param>
+    /// <param name="now">Now.</param>
+    public static ControlLaneEvent NewEvent(string deployment, string source, string name, string target, string payload, DateTimeOffset now) =>
+        new()
+        {
+            EventId = NewRequestId(),
+            Deployment = deployment,
+            Source = source,
+            Name = name,
+            Target = target,
+            Payload = payload,
+            IssuedAt = now,
+            ExpiresAt = now + DefaultLifetime,
+        };
+
+    /// <summary>
     /// The receipt an answer carries. A 202 counts as ACCEPTED only when its body verifies with the
     /// deployment's key and names this request — an unsigned 2xx, or one for another request, is a
     /// refusal naming what came back. Pure.
