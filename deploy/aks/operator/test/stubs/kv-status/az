@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-kv-status and hosting-kv-state. It is the WRITER identity: it LISTS
+# (metadata and tags, never a value), sets attributes, deletes, recovers and purges — and REFUSES
+# every value read (`secret show`, `secret download`), so a verb that reads a value fails here.
+#
+#   HOSTING_KVST_STATE     directory: az.log (every argv)
+#   HOSTING_KVST_LIST_FAIL non-empty → `secret list` is refused (the writer cannot list)
+set -uo pipefail
+state="${HOSTING_KVST_STATE:?the az stub needs HOSTING_KVST_STATE}"
+printf 'az %s\n' "$*" >> "$state/az.log"
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret list")
+    [ -n "${HOSTING_KVST_LIST_FAIL:-}" ] && { echo "ERROR: (Forbidden) does not have secrets list permission" >&2; exit 1; }
+    cat <<'JSON'
+[
+  {"id":"https://v.vault.azure.net/secrets/acme-Stripe-SecretKey","name":"acme-Stripe-SecretKey",
+   "attributes":{"enabled":true,"created":"2026-09-01T10:00:00+00:00","updated":"2026-09-20T10:00:00+00:00","expires":null},
+   "tags":{"mw-fp":"sha256:0123456789ab","mw-set-by":"alice@example.com","mw-set-at":"2026-09-20T10:00:00Z","mw-source":"paste"}},
+  {"id":"https://v.vault.azure.net/secrets/acme-Old","name":"acme-Old",
+   "attributes":{"enabled":false,"created":"2026-01-01T10:00:00+00:00","updated":"2026-01-01T10:00:00+00:00"},
+   "tags":{"file-encoding":"utf-8"}},
+  {"id":"https://v.vault.azure.net/secrets/other-Thing","name":"other-Thing","attributes":{"enabled":true},"tags":{}}
+]
+JSON
+    exit 0 ;;
+  "keyvault secret list-deleted")
+    [ -n "${HOSTING_KVST_LIST_FAIL:-}" ] && { echo "ERROR: (Forbidden) does not have secrets list permission" >&2; exit 1; }
+    case "$*" in
+      *"--query"*) echo "acme-Gone" ;;
+      *) echo '[{"id":"https://v.vault.azure.net/secrets/acme-Gone","name":"acme-Gone","scheduledPurgeDate":"2026-12-01T00:00:00+00:00","attributes":{"enabled":true,"updated":"2026-09-02T00:00:00+00:00"},"tags":{"mw-fp":"sha256:ffffffffffff"}}]' ;;
+    esac
+    exit 0 ;;
+  "keyvault secret set-attributes"|"keyvault secret delete"|"keyvault secret recover"|"keyvault secret purge")
+    exit 0 ;;
+  "keyvault secret show"|"keyvault secret download")
+    echo "ERROR: (Forbidden) does not have secrets get permission — the writer identity never reads a value" >&2; exit 1 ;;
+esac
+echo "az stub: unexpected invocation: $*" >&2
+exit 1

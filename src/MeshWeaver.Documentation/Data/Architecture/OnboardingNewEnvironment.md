@@ -71,10 +71,11 @@ az ad app create --display-name "<Env> Portal (<host>)" \
   --sign-in-audience AzureADMultipleOrgs \
   --web-redirect-uris "https://<host>/signin-microsoft"
 az ad app credential reset --id <appId> --display-name <env> --years 1   # -> client secret
-# 4. KV secrets. FRESH master key only for an EMPTY db; for a MIGRATED db REUSE the
-#    source's master key (else stored enc: provider keys become undecryptable).
-az keyvault secret set --vault-name $KV --name <env>-Ai-KeyProtection-MasterKey --value "$(openssl rand -base64 32)"
-az keyvault secret set --vault-name $KV --name <env>-Authentication-Microsoft-ClientSecret --value "<entra-secret>"
+# 4. KV secrets — NOT a command here (policy secrets-write-only-entry, Doc/Architecture/SecretsWriteOnlyEntry).
+#    The Provision's hosting-kv-ensure MINTS <env>-Ai-KeyProtection-MasterKey for an EMPTY db; for a
+#    MIGRATED db the source's master key must be REUSED (else stored enc: provider keys become
+#    undecryptable) — declare it as a copyFrom on the record. The Entra client secret is pasted into
+#    Deployments/<env> → "Set Key Vault secrets…" on the control instance (write-only).
 # 5. Self-update (ACR polling): federate the SHARED portal UAMI to THIS namespace's memex-portal-sa
 #    so the in-pod self-updater can list ACR tags. Preferred: add the namespace to `portalNamespaces`
 #    in infra/main.bicep and re-run the (idempotent) infra deploy. Quick out-of-band equivalent:

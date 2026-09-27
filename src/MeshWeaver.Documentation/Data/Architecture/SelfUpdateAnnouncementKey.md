@@ -122,7 +122,7 @@ this page.
 ## Owner actions — all in the portal
 
 Nobody runs a command to create, copy or inspect this key, and nobody needs a vault permission or
-cluster access:
+cluster access (policy `secrets-write-only-entry`, [Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry)):
 
 | act | where | who |
 |---|---|---|
