@@ -5,7 +5,9 @@ Abstract: >
   first-run wizard does not appear (it keys on "no storage"), the onboarding gate's first-user
   promotion does not fire (it keys on "no admin grant"), and the only remaining door is an
   undocumented endpoint whose secret nobody set. This page is the measurement of that gap on
-  pearl.meshweaver.cloud, and the design that closes it.
+  pearl.meshweaver.cloud, and the design that closes it. A provisioned instance now starts at
+  sign-in and its first human to onboard becomes platform admin (policy
+  `first-sign-in-becomes-admin`, MeshWeaver.Plugins#2421).
 Thumbnail: "sitemap"
 ---
 
@@ -31,7 +33,40 @@ So the gap is not a missing mechanism. It is that **"configured" and "administer
 states, and only the first one is modelled.** A provisioned instance is fully configured and has no
 human in it.
 
-## The rule
+## 🚨 A provisioned instance starts at SIGN-IN, and its first human becomes admin
+
+**Policy `first-sign-in-becomes-admin`** (`Doc/Architecture/PolicyNotProse`) — it supersedes "The
+rule" below for a provisioned instance. The maintainer, on
+`control.systemorph.com` (provisioned healthy, and every visitor sent to a `/setup` whose link
+nothing had minted): *"this must work after new deploy. must log in first user then take him as
+admin"*, *"setup login from start"*. As built in MeshWeaver.Plugins#2421:
+
+- **Entry.** An instance with no human administrator sends an **anonymous** visitor to **sign-in**
+  (`SetupEntry.SignIn` → `/login`), not to `/setup`. A signed-in visitor carries on. `/setup/{link}`
+  still works for a link that was actually minted; it is no longer where everybody is sent.
+- **Promotion.** The first person to complete onboarding is made platform admin by
+  `OnboardingGate` — the bootstrap rule every instance already had, which also bypasses
+  invitation-only for exactly that person. What changed is the question it asks: **is there a grant
+  held by someone other than `System`, `Anonymous` or `Public`?**
+  (`AdministratorProbeService.AnyNonPlatformGrant`), over the **unbounded System read** of
+  `Admin/_Access`. Before, it asked "is there any grant at all", and a platform identity's grant
+  switched the promotion off on an instance nobody administered (pearl, 2026-09-16). A grant whose
+  holder cannot be read still counts, so the unreadable case fails closed.
+- **Why it is still the System read.** The entry probe (`HasHumanAdministrator`) reads as the
+  VISITOR. A visitor who cannot read `Admin` sees no grants, and using that answer to promote would
+  make every sign-up the first user: the 43-root-superuser shape (#743). Onboarding keeps its own
+  System read and applies only the new holder rule to it.
+
+**The condition this rests on. It is the reason the older rule below said "arriving first is not a
+credential".** "First" now means *the first person the instance's sign-in admits*. On the
+**enterprise target** (Systemorph/Memex `docs/enterprise-target-architecture.md`: the client's own estate)
+sign-in is the client's **single-tenant** Entra application, so the first person through the door
+is someone in that organisation's directory. On an instance whose sign-in admits the public
+(Google, LinkedIn, a multi-tenant Microsoft app), the same rule would hand the instance to whoever
+arrives first. Such an instance must not be provisioned without an administrator: a setup link or a
+record-declared first admin. The deployment record is where that condition is decided.
+
+## The rule (2026-09-16 — superseded for provisioned instances, see above)
 
 > An instance that has **no human administrator** serves a SETUP surface at its entry point, not a
 > welcome page — and completing that surface requires a secret the operator holds, never merely
