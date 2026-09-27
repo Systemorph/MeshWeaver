@@ -790,6 +790,14 @@ public static class MemexConfiguration
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
                 .AddWebhookInbox()
+                // Secrets a global admin may ENTER in the portal instead of an operator minting
+                // them in a vault (Doc/Architecture/InstanceSecrets). Each slot is a key the code
+                // below READS: the self-updater's signing key (Settings ▸ Control lane, on a target
+                // instance) and a deployment's own announcement key as the control inbox verifies it
+                // (issued on the Deployment record page, on the control instance). The fleet-wide
+                // inbox secret itself is NOT a slot, so the portal can never replace it.
+                .AddInstanceSecretSlot(SelfUpdate.SelfUpdateHandover.SecretKey)
+                .AddInstanceSecretSlot(SelfUpdate.SelfUpdateHandover.LocalSecretKey + ":*")
                 // The control→instance lane (Doc/Architecture/ControlLane): POST /api/control-lane
                 // on a TARGET, and the signing half on the control instance. Registered on every
                 // portal and armed on none until ControlLane:Key + Hosting:Deployment are set.

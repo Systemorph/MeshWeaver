@@ -816,7 +816,7 @@ interface and pin gates above were right to be silent.
 | candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished) and run; exit codes and dead hosts recorded exactly as the platform canary records them |
 | control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
 | verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base) or on ANY missing evidence; written as a root commit at `refs/core-candidate/<key>` in Plugins |
-| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; green only for `success` about exactly this key, candidate and base; silence by the deadline is red |
+| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; green only for `success` about exactly this key, candidate and base; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)"), which the merge-queue steward re-queues as `infra`, capped per head — a red verdict fails the wait step and is rejected |
 
 It is a `needs:` of `Consolidate test results` with an explicit fail step, so it blocks.
 

@@ -53,6 +53,17 @@ The reviewer posts under TWO logins with ONE account id:
 It posted exactly one review per pull request on all 50 (the ruleset carries
 `review_on_push: false`), always at state COMMENTED.
 
+THE SECOND REVIEWER — the internal one (policy `internal-code-review`)
+----------------------------------------------------------------------
+The PR steward's GLM-5.3 reviewer (MeshWeaver.Plugins `Governance/PullRequestSteward.md`) posts
+through the `systemorph-com` GitHub App, under ONE login and ONE account id on both endpoints:
+  pulls/{n}/reviews    `systemorph-com[bot]`  type Bot  id 328286035
+  pulls/{n}/comments   `systemorph-com[bot]`  type Bot  id 328286035
+It reviews every HEAD (not once per pull request), at state COMMENTED or CHANGES_REQUESTED — never
+APPROVED. Both reviewers are accepted: a review by EITHER lands condition 1, and condition 2 counts
+the threads BOTH opened. Copilot stays in the set until its `copilot_code_review` rule is gone from
+every repository that calls this lane and no open pull request carries an unanswered Copilot thread.
+
 WHAT MAKES A REVIEW A REVIEW: PROVENANCE, NOT PRESENTATION
 ----------------------------------------------------------
 A review counts as landed because the REVIEWER ACCOUNT posted it at a non-PENDING state — never
@@ -97,7 +108,17 @@ import sys
 import time
 
 REVIEWER_ACCOUNT_ID = 175728472
-REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot"})
+# The INTERNAL reviewer — policy `internal-code-review` (Doc/Architecture/PolicyNotProse, the
+# register). The GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward posts its review, its inline
+# findings and the `internal-review` check run through the `systemorph-com` GitHub App, whose bot
+# account is `systemorph-com[bot]`, id 328286035 (`GET /users/systemorph-com%5Bbot%5D`). It is
+# ACCEPTED ALONGSIDE Copilot so that no pull request is stranded while the `copilot_code_review`
+# rule is retired repository by repository: either reviewer's review lands the review, and every
+# thread EITHER one opened needs a reply from a person. Design of record: MeshWeaver.Plugins
+# `Governance/PullRequestSteward.md`.
+INTERNAL_REVIEWER_ACCOUNT_ID = 328286035
+REVIEWER_ACCOUNT_IDS = frozenset({REVIEWER_ACCOUNT_ID, INTERNAL_REVIEWER_ACCOUNT_ID})
+REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]"})
 REFUSAL_MARKERS = (
     re.compile(r"\bCopilot (?:was unable|wasn't able|was not able|could not|couldn't|cannot|can't) (?:to )?review\b", re.IGNORECASE),
     re.compile(r"\bunable to review this pull request\b", re.IGNORECASE),
@@ -113,7 +134,7 @@ QUEUE_REF = re.compile(r"^(?:refs/heads/)?gh-readonly-queue/(?P<base>[^/]+)/pr-(
 def is_reviewer(user: dict | None) -> bool:
     if not user or user.get("type") != "Bot":
         return False
-    return user.get("id") == REVIEWER_ACCOUNT_ID or user.get("login") in REVIEWER_LOGINS
+    return user.get("id") in REVIEWER_ACCOUNT_IDS or user.get("login") in REVIEWER_LOGINS
 
 
 def is_person(user: dict | None) -> bool:
@@ -588,6 +609,7 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
 
 REVIEWER_REVIEW_USER = {"login": "copilot-pull-request-reviewer[bot]", "type": "Bot", "id": REVIEWER_ACCOUNT_ID}
 REVIEWER_COMMENT_USER = {"login": "Copilot", "type": "Bot", "id": REVIEWER_ACCOUNT_ID}
+INTERNAL_REVIEWER_USER = {"login": "systemorph-com[bot]", "type": "Bot", "id": INTERNAL_REVIEWER_ACCOUNT_ID}
 PERSON = {"login": "rbuergi", "type": "User", "id": 6334612}
 OTHER_BOT = {"login": "github-actions[bot]", "type": "Bot", "id": 41898282}
 REVIEW_BODY_SEPT = "### 🟡 Changes recommended\n\n<details>\n<summary>Pull request overview</summary>\n\n- **Files reviewed:** 3/3 changed files\n</details>"
@@ -707,6 +729,21 @@ def self_test() -> int:
          [_review(user={"login": "copilot-reviewer-v2[bot]", "type": "Bot", "id": REVIEWER_ACCOUNT_ID})], [])
     case("a User account named like the reviewer is not the reviewer", (NOT_LANDED,), _pr(0),
          [_review(user={"login": "Copilot", "type": "User", "id": 1})], [])
+
+    # The internal GLM-5.3 reviewer (systemorph-com[bot]) — accepted alongside Copilot (policy `internal-code-review`).
+    case("the internal reviewer's review lands the review", GREEN, _pr(0),
+         [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [])
+    case("the internal reviewer at CHANGES_REQUESTED still landed", GREEN, _pr(0),
+         [_review("**Internal review (GLM-5.3)** — 1 blocking finding.", user=INTERNAL_REVIEWER_USER, state="CHANGES_REQUESTED")], [])
+    case("an internal-reviewer thread with no reply is unanswered", (UNANSWERED,), _pr(1),
+         [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER)], mention=("1 of 1",))
+    case("an internal-reviewer thread answered by a person is green", GREEN, _pr(2),
+         [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")])
+    case("either reviewer lands it; BOTH reviewers' threads need replies", (UNANSWERED,), _pr(3),
+         [_review(), _review(user=INTERNAL_REVIEWER_USER, rid=2)],
+         [_comment(1), _comment(2, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")], mention=("1 of 2",))
+    case("a User account named systemorph-com[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
+         [_review(user={"login": "systemorph-com[bot]", "type": "User", "id": 7})], [])
 
     # condition 2 — is every thread the reviewer opened answered by a person?
     case("#4310 shape: 3 findings, 0 replies", (UNANSWERED,), _pr(3), [_review()], three, mention=("3 of 3",))
