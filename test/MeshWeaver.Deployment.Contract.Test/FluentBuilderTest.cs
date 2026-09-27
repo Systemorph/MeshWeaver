@@ -143,9 +143,17 @@ public class FluentBuilderTest
         Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", c["ModelTier__Heavy"]);
         Assert.False(c.ContainsKey("OpenRouter__DataResidency"), "an unstated mark renders nothing");
 
-        var endpoint = new DeploymentContent().WithAi(a => a.OpenRouterEU([], endpoint: "https://eu.openrouter.example/api/v1"));
+        var endpoint = new DeploymentContent().WithAi(a => a.OpenRouterEU([], endpoint: " https://eu.openrouter.example/api/v1 "));
         Assert.Equal("https://eu.openrouter.example/api/v1",
             DeploymentPortalConfig.PortalConfig(endpoint, PortalConfigOptions.Helm)["OpenRouterEU__Endpoint"]);
+
+        // Blank renders nothing — the chart's contract for these keys: a blank endpoint is the EU
+        // default, a blank model slot names nothing, and neither becomes an empty key.
+        var blanks = new DeploymentContent().WithAi(a => a.OpenRouterEU(["", " z-ai/glm-5.3 ", "  "], endpoint: "  "));
+        var bc = DeploymentPortalConfig.PortalConfig(blanks, PortalConfigOptions.Helm);
+        Assert.False(bc.ContainsKey("OpenRouterEU__Endpoint"), "a blank endpoint renders no key");
+        Assert.Equal("z-ai/glm-5.3", bc["OpenRouterEU__Models__0"]);
+        Assert.False(bc.ContainsKey("OpenRouterEU__Models__1"), "blank slots render no key");
 
         var plain = DeploymentPortalConfig.PortalConfig(new DeploymentContent().WithAi(a => a.OpenRouter(["z-ai/glm-5.3"])), PortalConfigOptions.Helm);
         Assert.DoesNotContain(plain.Keys, k => k.StartsWith("OpenRouterEU__", StringComparison.Ordinal)
