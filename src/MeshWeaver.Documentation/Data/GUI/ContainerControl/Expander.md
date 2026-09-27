@@ -37,7 +37,8 @@ typical use is a page whose most relevant section depends on the node's state:
 
 ```csharp
 var running = run.State == RunState.Running;
-section.AddSkin(Skins.Expander("Execution").WithExpanded(running));
+// AddSkin returns a NEW control — the skinned one is what you place on the page.
+var execution = section.AddSkin(Skins.Expander("Execution").WithExpanded(running));
 ```
 
 The viewer's click toggles a local, per-viewer state that is **written nowhere** — not onto the
@@ -53,8 +54,11 @@ every viewer races on, and it is exactly the replicate-then-save shape
 
 # Rendering
 
-Blazor renders it as a Fluent accordion item; the React client renders the same header, summary
-and chevron. Both honour the declaration/toggle contract above.
+The renderers live with the view packs in MeshWeaver.Plugins: Blazor renders the skin as a Fluent
+accordion item, the React client as the same header, summary and chevron, and both honour the
+declaration/toggle contract above. A portal whose image predates them has no view for the skin and
+renders the control through the unknown-skin fallback, so check the portal's version before relying
+on it.
 
 # See Also
 
