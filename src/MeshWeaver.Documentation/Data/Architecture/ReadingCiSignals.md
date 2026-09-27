@@ -1424,6 +1424,27 @@ MeshWeaver.Plugins (or another node repo) shortly after core published — with 
 test names — and is fixed by a pull request there. Core carries no context for it by design
 (maintainer, 2026-09-03: the integration is event-based; no top-level repository depends on another).
 
+### 🚦 A green merge queue does NOT say the dependent passes — the release gate does, per platform set
+
+Policy [`dependent-suites-per-release`](../PolicyNotProse): MeshWeaver.Plugins' suites no longer run
+on a pull request or a merge-queue entry. They run once per platform set, in `main-cd.yml`'s
+`Dependent suites (MeshWeaver.Plugins) against this platform set`, against the BUNDLE of every core
+merge since the newest promoted set, and `promote` needs that job. So read the three signals as three
+different facts:
+
+| signal | what it says | what it does NOT say |
+|---|---|---|
+| `Consolidate test results` green on a queue entry | core's own tests and every core-only cross-repo gate (pair, interface additions, pins, closing keywords, compatibility ladder) passed | that a behaviour change behind an unchanged signature leaves MeshWeaver.Plugins green |
+| the release gate green on a CD run | Plugins' reachable suites pass against the whole bundle, and the set was promoted | anything about Education, Reinsurance, SocialMedia, Crm or Manufacturing — they still learn it in their daily run |
+| the release gate RED (or no verdict) | the set is HELD: no tag, no seal, no build fact; nothing in the fleet can select it | which pull request broke it — read the private Plugins run's attribution table, or the `core-release-held` issue's bundle list |
+
+🚨 **A held set looks like "CD is slow" from every other angle.** `main` is green, the queue lands
+work, and yet no new image appears and `/api/version` does not move. Before chasing the image legs,
+open the newest CD run's `Dependent suites …` job: a red there is the answer, the delivery verdict
+names it, and the `core-release-held` issue carries the bundle. The handoff deliberately does not
+re-dispatch a held HEAD, so the next attempt is the next merge or the hourly reconcile — never a
+re-run of the same bundle by hand, which measures nothing new.
+
 ### 🚨 Several satellites red in the same second on a missing `plugins` publication: find out WHICH seal is missing before blaming anyone
 
 When several satellites' `main` runs fail within a second of each other, they share a trigger, so

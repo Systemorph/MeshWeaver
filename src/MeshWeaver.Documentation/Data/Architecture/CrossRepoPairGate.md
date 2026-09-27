@@ -158,11 +158,11 @@ nothing**. The whole board, so that "uncovered" is written down rather than infe
 |---|---|---|---|
 | 1 | a public **type** leaves `src/` | `Cross-repo pair (public surface)` | **gated** |
 | 2 | an **added overload** makes a dependent's `<see cref>` ambiguous | — | **UNCOVERED** |
-| 3 | a **JSON envelope's field names** change | `Dependent suites (MeshWeaver.Plugins)` | **run** where a Plugins suite exercises the envelope; otherwise uncovered |
+| 3 | a **JSON envelope's field names** change | the release gate, `Dependent suites (MeshWeaver.Plugins) against this platform set` | **run once per platform set** where a Plugins suite exercises the envelope — it holds the SET, not the merge; otherwise uncovered |
 | 4 | a **comment** another repo's regex parses as data | — | **UNCOVERED** |
 | 5 | an i18n **value** change | — | **UNCOVERED** (the mirror guard compares against a *pinned* core commit) |
 | 6 | a public **member** leaves a type that stays | `Cross-repo pair (public surface)` | **gated** |
-| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | `Dependent suites (MeshWeaver.Plugins)` | **run** — Plugins' reachable suites against the candidate, in the merge queue (below); still undetectable by any SURFACE detector, and uncovered for the other satellites |
+| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | the release gate, `Dependent suites (MeshWeaver.Plugins) against this platform set` | **run once per platform set** — Plugins' reachable suites against the bundle of merges in the set, before `promote` (below); the merge lands, the SET is held. Still undetectable by any SURFACE detector, and uncovered for the other satellites |
 | 8 | a `PackageVersion` a satellite consumes VERSIONLESS is removed | `Satellite package pins (removal declared)` | **gated** (#3349) |
 | 9 | a RENDERED-UI change a satellite's e2e asserts on | — | **UNCOVERED**; the honest instrument is the release note |
 | 10 | a member **ADDED** to a public interface breaks external IMPLEMENTERS | `Interface additions (implementers declared)` | **gated** (#3465) |
@@ -174,8 +174,8 @@ The structural answer to those is the one #2689 names as its acceptance criterio
 **compile-and-run the dependent's suite against the candidate core commit**, as a CI-time
 integration and never as a build-time reference. That keeps the dependency direction intact: core
 still builds and ships without the plugin repos present, and the integration is an *observation
-about* a candidate commit rather than a *link into* it. **For MeshWeaver.Plugins it is now built** —
-see *"The dependent's suites run against the candidate"* below. For every other satellite the answer
+about* a candidate commit rather than a *link into* it. **For MeshWeaver.Plugins it is built, and it
+runs once per platform set** — see *"The dependent's suites run once per platform set"* below. For every other satellite the answer
 is still event-based and lives in the dependent: see *"The dependent reacts to core's events"*.
 
 ## The seven CODE shapes
@@ -793,10 +793,12 @@ now **refused**, and a reason that mentions a sweep (`sweep`, `swept`, `search_c
 quoting `searched: true` is refused too. A reason that rests on something else — *"only read by the
 test this PR rewrites"* — is judged on its length alone, as before.
 
-## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins)`)
+## The dependent's suites run once per platform set (`Dependent suites (MeshWeaver.Plugins) against this platform set`)
 
-**Policy [`dependent-suites-gate`](../PolicyNotProse): a core change reaches `main` only after
-MeshWeaver.Plugins' suites that can reach it pass against the CANDIDATE commit.**
+**Policy [`dependent-suites-per-release`](../PolicyNotProse): a platform set reaches the fleet only
+after MeshWeaver.Plugins' suites that the set's BUNDLE can reach pass against it.** The bundle is every
+core merge since the newest set already promoted. It supersedes policy `dependent-suites-gate`, which
+ran the same measurement for every merge-queue entry.
 
 ### Why it exists
 
@@ -807,33 +809,78 @@ blocked the sealed plugins publication and every satellite's CI for hours. Every
 a behaviour change behind an unchanged signature — so every one was green here, and the pair,
 interface and pin gates above were right to be silent.
 
+### Why it runs per SET, not per merge
+
+The first shape of this gate (policy `dependent-suites-gate`) dispatched a full Plugins candidate run —
+up to 12 legs on the self-hosted `aks-silos-dind-gate` lane — for EVERY merge-queue entry, and the
+queue waited up to 42 minutes for each verdict. Measured on 2026-09-27: the CI cluster sat at its
+Azure quota (7 nodes); at `max_entries_to_build: 8` the queue cascaded for eight hours and `main` did
+not move from `2bb14d8db9` after 08:25Z; five entries were ejected on *no verdict* alone (every
+candidate that did run was green); and 21 Plugins PR runs sat queued with none running, because the
+candidate legs took the capacity. The cost scaled with core's merge rate, while the harm it prevents
+— a broken core reaching the fleet — happens only at PROMOTION. So the measurement moved to
+promotion and runs once per set, which the hourly publication cadence (`CD_BATCH_WINDOW_MINUTES`)
+already bundles.
+
+What the merge queue still runs is everything core can decide alone, fast, and without a skip:
+`Cross-repo pair (public surface)`, `Interface additions (implementers declared)`,
+`Satellite package pins (removal declared)`, the closing-keyword gate and the platform-compatibility
+ladder (`platform-compat` — deployed plugin bytes on the candidate platform). Each is a `needs:` of
+`Consolidate test results`, so the required context is green only when each of them ran green.
+
 ### How it works
 
 | step | where | what |
 |---|---|---|
-| request | `dotnet-test.yml` → `Dependent suites (request)` | proves the receiver exists on Plugins' default branch, then sends ONE `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base, and a key unique to the run attempt |
-| scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | selects the Plugins suites whose compiled closure (Plugins' project graph + its `$(MeshWeaverRoot)` references + core's own reverse closure) can reach `base..candidate`; the **full** universe of 83 on any uncertainty (an unowned build input, an empty diff, core's `test/xunit.runner.json`); legs cut by the portal-host lane's measured weights |
-| candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished) and run; exit codes and dead hosts recorded exactly as the platform canary records them |
-| control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
-| verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base) or on ANY missing evidence; written as a root commit at `refs/core-candidate/<key>` in Plugins |
-| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; green only for `success` about exactly this key, candidate and base; silence by the deadline is red |
+| decide | `main-cd.yml` → `gate` | a run that publishes names its target commit and, from ACR before anything is tagged, the commit of the newest PROMOTED set (`published_short`) |
+| request | `main-cd.yml` → `Dependent suites (MeshWeaver.Plugins) against this platform set` | names the set (`<PlatformVersion>-ci.<run>`), the candidate (the target commit) and the base (the newest promoted set's commit — the bundle is `base..candidate`); proves the receiver exists on Plugins' default branch AND reads `client_payload.set`; sends ONE `repository_dispatch core-candidate-suites`; prints the bundle's pull requests |
+| scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | selects the suites whose compiled closure can reach `base..candidate`; the **full** universe on any uncertainty |
+| candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (the set is not promoted yet, so there is no image to take it from) and run |
+| control arm | the same arm, at the base | **only** what the candidate did not pass — a test already red in Plugins against the last promoted set is reported and never holds the set |
+| verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift or on ANY missing evidence; echoes the set; written at `refs/core-candidate/<key>` in Plugins |
+| attribution | Plugins `core-candidate.yml` → `Release gate: attribute …` (private) | for each drifted suite, the bundle's pull requests whose OWN diff can reach it (`scripts/core-release-attribution.py`) — in that run's summary, because suite names are private |
+| wait | `main-cd.yml`, same job → `.github/scripts/await-dependent-verdict.py --set` | polls the ref read-only over REST; green only for `success` about exactly this key, candidate, base AND set; silence by the deadline is red |
+| hold | `promote` needs the job | a red or missing verdict ⇒ `promote` never runs ⇒ no consumer-visible tag, no seal, no build fact, no release marker |
+| ledger | `main-cd.yml` → `release-held` / `release-passed` (reusable `node-repo-ci-failure.yml`, label `core-release-held`) | a held set appends to ONE issue and posts ONE signed event to the control portal's triage; a passing set closes it |
 
-It is a `needs:` of `Consolidate test results` with an explicit fail step, so it blocks.
+### Why "held at promotion" stops the break before the fleet
 
-**Where it runs.** Every merge-queue entry — the only road to `main`, and the entry's commit is the
-combination that actually lands — plus a pull request labelled `dependent-suites` (read live, so
-label and re-run). Not every pull-request push, and that is a cost decision measured before it was
-made: over core's last 200 merges the selector reaches nothing for 9, the 5 doc-reading suites for 59
-(documentation pages only), 11–22 suites for ~40, and **70–80 of 83 for ~100** — Plugins' test bases
-reference core's foundations. A candidate is therefore roughly two runner-hours of suite time on the
-self-hosted `aks-silos-dind` pool, and pull-request pushes outnumber queue entries several times over.
+Every reader of "the platform the fleet may use" keys on `promote` having run: an install's
+self-updater selects only tags `promote` applied (and whose release marker `publish-bake` sealed); a
+satellite's `resolve-platform.py` resolves only a set whose `Promote`, `Verify every image shipped`
+and platform-bake jobs all succeeded; a Plugins pull request resolves only a set Plugins' own `main`
+passed on, and Plugins' `main` resolves only sealed sets; and the control instance hears of a set only
+through `notify-platform-update`, which needs `promote`. A held set therefore reaches none of them —
+without a single consumer changing. `main` stays open: the fix merges normally, and the next
+publishing run measures the bundle again from the same base (the held set was never promoted, so the
+base does not move).
 
-**What core prints.** This repository is public and MeshWeaver.Plugins is private, so the verdict
-carries counts, one sentence and the link to the Plugins run — never a test name, a suite name or an
-assertion. That is also why the suites cannot run in core's own workflow: its logs and artifacts are
-public.
+### Reading a held set
 
-### Proven live, both directions
+- **Core's run** (public): the release gate's summary names the set, the base, the candidate and the
+  bundle's pull requests; the waiter prints the verdict's counts and the Plugins run link. The
+  delivery verdict goes red naming `dependent-suites`, and `alert-on-failure` files CD's
+  `ci-failure` issue.
+- **The ledger** (`core-release-held`, public): the set, the bundle, and the link — plus the signed
+  event that opens a triage thread on the control instance.
+- **The Plugins run** (private): the failing suites and tests, the drift detail, and the
+  per-suite attribution to the bundle's pull requests. A suite reached by ONE pull request is
+  attributed; a suite reached by several lists them all — narrow it by dispatching
+  `core-candidate.yml` by hand (`workflow_dispatch`: candidate, base, key) over a shorter range.
+  Bisection is deliberately not automatic: every step is a full candidate run on the same quota the
+  gate was moved off the queue to relieve.
+- **The handoff does not re-dispatch a held HEAD.** A publisher dispatched minutes later would
+  re-measure the same bundle; a new merge or the hourly reconcile (within its per-commit heal budget)
+  re-measures it, and the reconcile also picks up an adaptation that landed in Plugins meanwhile.
+
+### Testing a risky change BEFORE it merges
+
+The queue no longer asks Plugins. An author who wants the verdict first dispatches Plugins'
+`core-candidate.yml` by hand with the PR's merge commit as `candidate`, its first parent as `base`,
+and any key; the verdict lands at `refs/core-candidate/<key>` and the run names the suites. That is an
+opt-in measurement, never a gate.
+
+### Proven live, both directions (measured on the per-entry shape — the arms are unchanged)
 
 Run against branch `ci/dependent-suites-controls` through Plugins' `workflow_dispatch` before this
 gate was required:
@@ -854,27 +901,26 @@ from-source leg build took 5–6 minutes.
 
 The same shape (`dependent-suites.yml`, #3103) was withdrawn on 2026-09-03 because the context went
 red on every core pull request while Plugins had no receiver, and because it coupled the two trunks.
-The receiver now lands in Plugins FIRST and the request job refuses to send to a default branch
-without one; the control arm means a red that exists in Plugins' own `main` never blocks core; and
-it runs where landing happens rather than on every push. The coupling is real and stated: a core
-change that DELIBERATELY retires behaviour a Plugins test encodes needs a Plugins adaptation that
-passes against both behaviours, landed first — the expand-then-contract order.
+The receiver lands in Plugins FIRST and the request refuses to send to a default branch without one;
+the control arm means a red that exists in Plugins' own `main` never holds core; and it now runs
+once per promoted set rather than on every push or queue entry. The coupling is real and stated: a
+core change that DELIBERATELY retires behaviour a Plugins test encodes needs a Plugins adaptation
+that passes against both behaviours, landed first — the expand-then-contract order — or its set is
+held until it does.
 
 ### Where its teeth stop
 
 - **MeshWeaver.Plugins only.** Education, Reinsurance, SocialMedia, Crm and Manufacturing still find
   a core break in their own daily run.
+- **It holds the SET, not the merge.** A breaking change lands on `main` and stays there until the
+  fix; what it cannot do is reach an install. Every merge after it rides in the same held bundle
+  until the bundle is green again, so a long-held set delays every fix behind it — fix forward fast.
 - **No `-warnaserror`** on the candidate build: a new obsoletion is a warning there, so shape 2 (an
   ambiguous `<see cref>`, an error only under warnings-as-errors) is still caught by the dependent's
   own CI, not here.
-- **A flaky Plugins test** that fails at the candidate and passes at the base reads as drift; the
-  merge-queue steward's flake catalogue is where that is handled.
+- **A flaky Plugins test** that fails at the candidate and passes at the base reads as drift and
+  holds the set; the next publishing run re-measures it.
 - **In-mesh NodeType source** is not compiled by these suites; that stays the compile gates' job.
-- **A fork's queue entry is refused, not run.** The candidate's code executes on Plugins' runners
-  beside that private repository's checkout, so the request job reads the entry's pull request and
-  fails RED when its head is a fork — re-land it from a branch here. On the Plugins side the registry
-  credential exists only for the step that pre-pulls the test image, and is logged out before any
-  candidate code runs.
 
 ## The dependent reacts to core's events — core never waits
 

@@ -343,6 +343,8 @@ jobs:
           MW_REGISTRY_PUBLISHER_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
           FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
           FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          CONTROL_WEBHOOK_URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
@@ -350,8 +352,10 @@ jobs:
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
           [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh — and that POST is the ONE event core emits: memex fans it out to the node repos, so without it every satellite falls back to its schedule poll")
           [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
-          [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App whose installation token reads the Plugins content tree for plugins-modules / plugins-bake (content-app-id) — NOT a dispatch credential: core dispatches to no repository")
+          [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App whose installation token reads the Plugins content tree for plugins-modules / plugins-bake (content-app-id), AND sends the release gate's ONE core-candidate-suites request to MeshWeaver.Plugins and reads its verdict (dependent-suites, policy dependent-suites-per-release) — Contents: write on MeshWeaver.Plugins")
           [ -n "$DEPENDENT_DISPATCH_APP_PRIVATE_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY that App's private key, PEM")
+          [ -n "$CONTROL_WEBHOOK_URL" ]    || missing+=("vars.CONTROL_WEBHOOK_URL          the control portal's triage inbox (org variable, https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds) — where the release gate files a HELD platform set (release-held)")
+          [ -n "$CONTROL_WEBHOOK_SECRET" ] || missing+=("secrets.CONTROL_WEBHOOK_SECRET    the HMAC that inbox verifies (org secret, byte-identical to the control instance's Hosting:PlatformWebhookSecret) — the release gate signs its held/passed events with it")
           [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares the Plugins publication is sealed to (<account>/<share>…)")
           # 🚨 The fleet registry's publisher password. Every image job and every bake job pushes
           # to cr.meshweaver.cloud with it, so an unset value is a delivery that reaches ACR and
@@ -418,6 +422,9 @@ jobs:
       # Reconcile found the images complete: no image build is due, but the content bake still
       # is — the images being present says nothing about whether the bundles are.
       bake_only: ${{ steps.decide.outputs.bake_only }}
+      # The seven-character commit of the newest PROMOTED platform set, read from ACR before this
+      # run promotes anything — the base of the bundle `dependent-suites` measures. Empty = unknown.
+      published_short: ${{ steps.relevance.outputs.published_short }}
       # The version of the ALREADY-PROMOTED set, read off its portal image — empty on every
       # publishing run, where `portal-image` mints the version instead. Resolved ONCE here because
       # two consumers need it (the platform bake's release marker, and the seal probe) and because
@@ -903,6 +910,11 @@ jobs:
           fi
           echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant"
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          # The same read names the commit of the newest PROMOTED set — the BASE of the bundle the
+          # release gate (`dependent-suites`) measures. Every set promoted since that gate existed
+          # passed it, so "since the newest promoted set" is exactly "since the last set the
+          # dependent's suites vouched for". Empty = unknown; the gate then says so and falls back.
+          echo "published_short=${newest_short}" >> "$GITHUB_OUTPUT"
       - name: "Decide"
         id: decide
         env:
@@ -2401,9 +2413,256 @@ jobs:
   # portalNext is opt-in (chart default enabled: false) and the self-updater never rolls it —
   # nothing waits on it, so it does not belong to this repo's all-or-nothing set.
 
+  # ─────────── THE RELEASE GATE: the dependent's suites, once per platform set ───────────
+  # Policy `dependent-suites-per-release` (Doc/Architecture/CrossRepoPairGate § "The dependent's
+  # suites run once per platform set"). It REPLACES the per-merge-queue-entry gate that
+  # `dotnet-test.yml` ran under policy `dependent-suites-gate`: that one dispatched a full
+  # MeshWeaver.Plugins candidate run for EVERY queue entry, and on 2026-09-27 — the CI cluster at its
+  # Azure quota — it froze core's queue for hours and starved Plugins' own PR CI. The protection it
+  # bought is kept, and moved to where it is needed: a breaking core change must never reach the
+  # FLEET, and the fleet reaches a core change only through `promote`.
+  #
+  # WHAT IT MEASURES. The platform SET this run is about to promote (`<PlatformVersion>-ci.<run>`),
+  # its core commit (the candidate), and the core commit of the newest set ALREADY promoted (the
+  # base, read by `gate` from ACR before anything is tagged). base..candidate is the BUNDLE — every
+  # core merge since the last set the fleet could roll to. MeshWeaver.Plugins' `core-candidate.yml`
+  # selects the suites that bundle can reach, builds them FROM SOURCE against the candidate, re-runs
+  # only what failed at the base (so a red that already exists in Plugins never holds core), writes
+  # its verdict at `refs/core-candidate/<key>` in ITS repository, and — on a red — files the failing
+  # suites, attributed to the bundle's pull requests, into triage from there (the names are private).
+  #
+  # WHAT IT GATES. `promote` needs this job, so a red verdict — or NO verdict — means the set gets no
+  # consumer-visible tag: no install selects it, no satellite resolves it as sealed, no Plugins pull
+  # request builds against it, no build fact is posted. `main` stays open; the next merge (the fix,
+  # or anything else) re-measures the bundle from the same base, and the hourly reconcile
+  # re-measures HEAD within its per-commit budget, which also picks up an adaptation that landed in
+  # Plugins meanwhile.
+  #
+  # 🚨 NO SKIP-TRAPDOOR. The credential is asserted RED by `preflight`; the receiver is proven to
+  # exist on Plugins' default branch before dispatching; the waiter never passes on silence and
+  # accepts a green only about exactly this set, candidate, base and key. The only condition on the
+  # job is the RUN's own decision to publish — a run that publishes nothing has no set to vouch for.
+  #
+  # 🚨 NOT a `plugins-*` job, and deliberately so (PlatformDeliveryNeverWaitsOnPluginsGuard): the
+  # Plugins SEAL of this identity is a follow-up that never holds the platform (policy
+  # `platform-backwards-compatibility`). This job is a verdict ABOUT THE PLATFORM — does this core
+  # break a dependent that runs it — and only drift blocks: a Plugins failure that reproduces at the
+  # base is reported and never holds the set.
+  dependent-suites:
+    name: "Dependent suites (MeshWeaver.Plugins) against this platform set"
+    needs: [preflight, gate]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      set: ${{ steps.bundle.outputs.set }}
+      # The ledger entry `release-held` files when the set is held — PUBLIC facts only (this
+      # repository is public): the set, the bundle's pull requests and the link to the private
+      # MeshWeaver.Plugins run that names the failing suites and attributes each to those PRs.
+      ledger: ${{ steps.ledger.outputs.entry }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 1
+          sparse-checkout: |
+            /.github/scripts/
+            /Directory.Build.props
+          sparse-checkout-cone-mode: false
+      - name: "Prove the waiter cannot pass on silence (self-test)"
+        run: python3 .github/scripts/await-dependent-verdict.py --self-test
+      # The set's name is a pure function of the commit's `PlatformVersion` and this run's number —
+      # `$(Version)` = `$(PlatformVersion)-ci.$(GITHUB_RUN_NUMBER)` under CIRun (Directory.Build.props),
+      # the same computation every image leg makes. `promote` re-checks it against the legs' own
+      # version, so a drift between the two is a red there, never a verdict about another set.
+      - name: "Name the set, its candidate commit and the bundle's base"
+        id: bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ needs.gate.outputs.sha }}
+          PUBLISHED_SHORT: ${{ needs.gate.outputs.published_short }}
+        run: |
+          set -euo pipefail
+          pv=$(sed -n "s#.*<PlatformVersion Condition=\"'\$(PlatformVersion)' == ''\">\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</PlatformVersion>.*#\1#p" Directory.Build.props | head -1)
+          [ -n "$pv" ] || { echo "::error::could not read <PlatformVersion> from Directory.Build.props at $CANDIDATE — the set cannot be named, so no verdict could be bound to it"; exit 1; }
+          set_id="${pv}-ci.${GITHUB_RUN_NUMBER}"
+          [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::gate named candidate '$CANDIDATE', not a 40-hex commit"; exit 1; }
+          base=""
+          if [ -n "$PUBLISHED_SHORT" ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$PUBLISHED_SHORT" --jq .sha) || base=""
+          fi
+          if [ -z "$base" ] || [ "$base" = "$CANDIDATE" ]; then
+            # No promoted set could be read (ACR unreadable, first publish), or this run re-publishes
+            # the very commit already promoted (`rebuild`). The bundle is then the candidate's own
+            # change against its first parent — the per-commit measurement, said out loud.
+            parent=$(gh api "repos/$GITHUB_REPOSITORY/commits/$CANDIDATE" --jq '.parents[0].sha')
+            echo "::notice title=Bundle base::no distinct promoted set to measure from (published='${PUBLISHED_SHORT:-<none>}') — measuring $CANDIDATE against its first parent ${parent:0:9}"
+            base="$parent"
+          fi
+          [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the bundle base '$base' is not a 40-hex commit"; exit 1; }
+          key="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          { echo "set=$set_id"; echo "candidate=$CANDIDATE"; echo "base=$base"; echo "key=$key"; } >> "$GITHUB_OUTPUT"
+          # The bundle, by pull request — public facts (core is public), printed so a red is
+          # attributable from this log too. Plugins attributes each failing suite privately.
+          if prs=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$CANDIDATE" \
+                     --jq '[.commits[] | select(.parents | length > 1) | .commit.message | capture("^Merge pull request #(?<n>[0-9]+)") | "#" + .n] | join(" ")'); then
+            :
+          else
+            prs="(the compare could not be read — the Plugins run lists the bundle)"
+          fi
+          {
+            echo "### Release gate — set \`$set_id\`"
+            echo
+            echo "candidate \`${CANDIDATE:0:9}\` · base (newest promoted set) \`${base:0:9}\` · key \`$key\`"
+            echo
+            echo "Bundle: ${prs:-<no merge commits between base and candidate>}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "prs=${prs:-}" >> "$GITHUB_OUTPUT"
+          echo "set $set_id · candidate $CANDIDATE · base $base · key $key · bundle: ${prs:-<none>}"
+      - name: Mint a MeshWeaver.Plugins token (dispatch + read the verdict)
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: MeshWeaver.Plugins
+          permission-contents: write
+      # PRESENT is not a RECEIVER. A dispatch to a repository whose default branch has no workflow
+      # listening — or one that does not echo the set back — would be accepted (204) and the waiter
+      # would then time out blaming Plugins. Prove the receiver first and say so by name.
+      - name: The receiver exists on MeshWeaver.Plugins' default branch, and understands a set
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/Systemorph/MeshWeaver.Plugins/contents/.github/workflows/core-candidate.yml" --jq .content > "$RUNNER_TEMP/receiver.b64"; then
+            echo "::error::MeshWeaver.Plugins has no .github/workflows/core-candidate.yml on its default branch (or this token cannot read it) — the request would start nothing. The receiver lands in Plugins FIRST."
+            exit 1
+          fi
+          tr -d '\n' < "$RUNNER_TEMP/receiver.b64" | base64 -d > "$RUNNER_TEMP/receiver.yml"
+          if ! grep -Eq '^\s*types:\s*\[\s*core-candidate-suites\s*\]' "$RUNNER_TEMP/receiver.yml"; then
+            echo "::error::MeshWeaver.Plugins' core-candidate.yml no longer subscribes to 'repository_dispatch: types: [core-candidate-suites]' — the request would be accepted and start nothing."
+            exit 1
+          fi
+          if ! grep -q 'client_payload.set' "$RUNNER_TEMP/receiver.yml"; then
+            echo "::error::MeshWeaver.Plugins' core-candidate.yml does not read 'client_payload.set' — its verdict would name no platform set, and this gate accepts a green only about exactly this set. The platform-set half lands in Plugins FIRST."
+            exit 1
+          fi
+          echo "receiver present, subscribed to core-candidate-suites, and reads the platform set"
+      - name: Request the dependent's suites against this platform set
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SET: ${{ steps.bundle.outputs.set }}
+          CANDIDATE: ${{ steps.bundle.outputs.candidate }}
+          BASE: ${{ steps.bundle.outputs.base }}
+          KEY: ${{ steps.bundle.outputs.key }}
+        run: |
+          set -euo pipefail
+          # ONE release measurement at a time, and the NEWEST wins: group `release` with cancel `true`
+          # makes Plugins cancel an older set's measurement still in flight — that set's bundle is a
+          # subset of this one's (same base), and its CD run is superseded here anyway. Together with
+          # each leg re-asking whether this run is still waiting (before its build and before every
+          # suite), an orphaned measurement ends by the mechanism, never by hand (measured 2026-09-27
+          # 16:41Z: four per-entry runs from discarded queue waves held the gate lane until cancelled
+          # by hand).
+          jq -n --arg c "$CANDIDATE" --arg b "$BASE" --arg k "$KEY" --arg s "$SET" \
+            '{event_type: "core-candidate-suites", client_payload: {candidate: $c, base: $b, key: $k, group: "release", cancel: "true", set: $s}}' \
+            | gh api -X POST repos/Systemorph/MeshWeaver.Plugins/dispatches --input -
+          echo "requested: MeshWeaver.Plugins core-candidate-suites for set $SET ($CANDIDATE against $BASE, key $KEY)"
+      - name: Wait for MeshWeaver.Plugins' verdict on this platform set
+        id: wait
+        env:
+          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          python3 .github/scripts/await-dependent-verdict.py \
+            --key "${{ steps.bundle.outputs.key }}" \
+            --candidate "${{ steps.bundle.outputs.candidate }}" \
+            --base "${{ steps.bundle.outputs.base }}" \
+            --set "${{ steps.bundle.outputs.set }}" \
+            --deadline-minutes 40
+      # A REPORTER, not a gate: it decides nothing and runs whatever happened above, so a held set's
+      # ledger entry says what was measured and where the private detail is.
+      - name: Describe the verdict for the release ledger
+        id: ledger
+        if: always()
+        env:
+          SET: ${{ steps.bundle.outputs.set }}
+          BASE: ${{ steps.bundle.outputs.base }}
+          CANDIDATE: ${{ steps.bundle.outputs.candidate }}
+          PRS: ${{ steps.bundle.outputs.prs }}
+          VERDICT_RUN: ${{ steps.wait.outputs.verdict_run }}
+          WAIT: ${{ steps.wait.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          url="${VERDICT_RUN:-$RUN_URL}"
+          case "$WAIT" in
+            success) step="the dependent's suites passed" ;;
+            failure) if [ -n "$VERDICT_RUN" ]; then step="drift — the failing suites and the pull requests each is attributed to are in the linked MeshWeaver.Plugins run"; else step="NO verdict within the deadline — the set is unverified, so it is held"; fi ;;
+            *)       step="the waiter did not run ($WAIT) — the request or its preconditions failed; see this core run" ;;
+          esac
+          entry=$(jq -cn --arg n "Dependent suites (MeshWeaver.Plugins) — set ${SET:-?} held; bundle ${BASE:0:9}..${CANDIDATE:0:9}: ${PRS:-(see run)}" \
+                        --arg u "$url" --arg s "$step" '[{name: $n, url: $u, step: $s}]')
+          echo "entry=$entry" >> "$GITHUB_OUTPUT"
+          echo "$entry"
+
+  # ── A HELD SET HAS AN AUDIENCE: one issue and one signed event to the control portal's triage ──
+  # The release gate runs on `main`, attached to no pull request and no reviewer — a red there is red
+  # in an empty room unless it lands somewhere that outlives the run (/ci → "A SCHEDULED lane's
+  # honest red"). Both outcomes are wired, on its OWN label, so a green set closes exactly what a
+  # held one opened and never touches CD's `ci-failure` or a satellite's `ci-main-red`. The entry is
+  # public (this repository is), so it carries the set, the bundle's pull requests and the link to
+  # the private MeshWeaver.Plugins run, where the failing suites are named and attributed.
+  release-held:
+    name: "Release gate: a set is held — file it, tell the control portal"
+    needs: [gate, dependent-suites]
+    if: always() && needs.gate.outputs.publish == 'true' && needs.dependent-suites.result == 'failure'
+    permissions: {contents: read, issues: write, actions: read}
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ needs.gate.outputs.sha }}
+      event: ${{ github.event_name }}
+      failed-jobs: ${{ needs.dependent-suites.outputs.ledger }}
+      platform-set: ${{ needs.dependent-suites.outputs.set }}
+      issue-title: "core release gate: a platform set is held (MeshWeaver.Plugins suites)"
+      label: core-release-held
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+  release-passed:
+    name: "Release gate: the set passed — close the ledger"
+    needs: [gate, dependent-suites]
+    if: always() && needs.gate.outputs.publish == 'true' && needs.dependent-suites.result == 'success'
+    permissions: {contents: read, issues: write, actions: read}
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ needs.gate.outputs.sha }}
+      event: ${{ github.event_name }}
+      platform-set: ${{ needs.dependent-suites.outputs.set }}
+      issue-title: "core release gate: a platform set is held (MeshWeaver.Plugins suites)"
+      label: core-release-held
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image]
+    # `dependent-suites` is the RELEASE GATE (policy `dependent-suites-per-release`): no verdict about
+    # exactly this set, or a red one, and nothing below runs — the set gets no consumer-visible tag.
+    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, dependent-suites]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2416,7 +2675,20 @@ jobs:
       # 🚨 The plugins sha `gate` resolved, threaded — NOT re-resolved here. See gate's
       # "Resolve the plugins HEAD" step: re-resolving is what turns a correct publish red (#2622).
       PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
+      VOUCHED_SET: ${{ needs.dependent-suites.outputs.set }}
     steps:
+      # The release gate's green is about ONE named set. If the legs built a different version than
+      # the set the verdict names, the verdict vouches for something this job is not about to tag.
+      - name: "The dependent's verdict is about exactly the set being promoted"
+        run: |
+          set -euo pipefail
+          for v in "$V_PORTAL" "$V_MIGRATION" "$V_PLUGIN"; do
+            if [ "$v" != "$VOUCHED_SET" ]; then
+              echo "::error::the release gate vouched for set '$VOUCHED_SET' but a leg built '$v' (portal=$V_PORTAL migration=$V_MIGRATION plugin-test=$V_PLUGIN) — refusing to promote a set the dependent's suites did not measure"
+              exit 1
+            fi
+          done
+          echo "promoting $VOUCHED_SET — the set MeshWeaver.Plugins' suites passed against"
       # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
       # needs a working tree — this job had none, so the first publishing run after #2857 failed
       # Promote with `bash: .github/scripts/acr-login.sh: No such file or directory` (exit 127,
@@ -4144,7 +4416,7 @@ jobs:
     # re-publish and filed `ci-failure` ("no deployable image") over a set every install could
     # already roll to. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds this list, transitively.
     needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote,
-            publish-bake, notify-platform-update, verify-images]
+            publish-bake, notify-platform-update, verify-images, dependent-suites]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -4383,6 +4655,7 @@ jobs:
             portal-image-mirror=${{ needs.portal-image-mirror.result }}
             migration-image=${{ needs.migration-image.result }}
             plugin-test-image=${{ needs.plugin-test-image.result }}
+            dependent-suites=${{ needs.dependent-suites.result }}
             promote=${{ needs.promote.result }}
             publish-bake=${{ needs.publish-bake.result }}
             notify-platform-update=${{ needs.notify-platform-update.result }}
@@ -4553,6 +4826,9 @@ jobs:
           # the body because the body may carry no `${{ }}` — `test-cd-steps.py` extracts this step
           # by its `id:` and refuses a body it would have to rewrite.
           HANDOFF_ELIGIBLE: ${{ github.event_name != 'workflow_dispatch' }}
+          # The release gate's own result (policy `dependent-suites-per-release`). A RED verdict is a
+          # finding about THIS commit's bundle, not a missing publisher — see the branch below.
+          DEPENDENTS_RESULT: ${{ needs.dependent-suites.result }}
         run: |
           set -euo pipefail
           say() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
@@ -4593,6 +4869,18 @@ jobs:
           if [ "$HEAD" = "$SHA" ] && [ "$DELIVERY_INCOMPLETE" != "true" ] \
              && { { [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; } || [ "$COMPLETE" = "true" ]; }; then
             echo "nothing owed — this run is main's HEAD ($SHORT_HEAD) publication (publish=$PUBLISH promote=$PROMOTE_RESULT complete=$COMPLETE, every shipping leg clean)."
+            exit 0
+          fi
+
+          # 🚨 THE RELEASE GATE HELD THIS EXACT COMMIT — do not hand it straight back to itself. The
+          # dependent's suites measured HEAD's bundle and found a break (or gave no verdict); a
+          # publisher dispatched now would re-measure the same bundle minutes later and consume the
+          # commit's heal budget on an answer that is already in. What re-measures it is a NEW
+          # commit on main (the fix — its run measures the bundle from the same base) or the hourly
+          # reconcile, which also picks up an adaptation landed in MeshWeaver.Plugins meanwhile.
+          # Only when HEAD is the commit that was measured: a newer HEAD is a different bundle.
+          if [ "$HEAD" = "$SHA" ] && [ "$PUBLISH" = "true" ] && [ "$DEPENDENTS_RESULT" != "success" ]; then
+            say "### ⛔ HELD — the release gate (dependent's suites) concluded \`$DEPENDENTS_RESULT\` for main's HEAD \`$SHORT_HEAD\`, so its set was not promoted. Not handing on: a publisher now would re-measure the same bundle. A new merge or the hourly reconcile re-measures it; the failing suites are in the linked MeshWeaver.Plugins run and in triage."
             exit 0
           fi
 

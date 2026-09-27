@@ -115,14 +115,17 @@ Core still compiles, tests and ships with no sibling on disk. Every edge of this
 ASSERTED as well as documented — `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` enumerates them
 and fails in both directions, so a new one has to be a decision rather than a diff nobody noticed.
 
-The THIRD edge of this class is `dotnet-test.yml`'s `Dependent suites (MeshWeaver.Plugins)`
-(policy [`dependent-suites-gate`](../PolicyNotProse), #2689's acceptance criterion). Every merge-queue
-entry — and a pull request labelled `dependent-suites` — sends ONE `repository_dispatch
-core-candidate-suites` to MeshWeaver.Plugins naming the candidate commit, and then READS the verdict
-that repository writes at `refs/core-candidate/<key>` after building its reachable suites from source
-against the candidate. Plugins' source never enters core's build and Plugins writes nothing into
-core: the dispatch is a test REQUEST about an unmerged commit, and the read is a fact about it — see
-[The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's suites run against the candidate".
+The THIRD edge of this class is `main-cd.yml`'s release gate, `Dependent suites (MeshWeaver.Plugins)
+against this platform set` (policy [`dependent-suites-per-release`](../PolicyNotProse), #2689's
+acceptance criterion). Once per platform set — before `promote` tags it for the fleet — it sends ONE
+`repository_dispatch core-candidate-suites` to MeshWeaver.Plugins naming the set, its core commit and
+the commit of the newest promoted set, and then READS the verdict that repository writes at
+`refs/core-candidate/<key>` after building its reachable suites from source against the set's
+bundle. Plugins' source never enters core's build and Plugins writes nothing into core: the dispatch
+is a test REQUEST about a set nobody may roll to yet, and the read is a fact about it — see
+[The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's suites run once per platform set".
+(From policy `dependent-suites-gate` until `dependent-suites-per-release` the same request came from
+`dotnet-test.yml`, for every merge-queue entry; it is on no pull request or queue entry any more.)
 
 🚨 **This reverses a decision, and says so.** A dispatcher of this shape (`dependent-suites.yml`,
 #3103) existed for a few hours on 2026-09-03 and was withdrawn by the maintainer — *"none of the

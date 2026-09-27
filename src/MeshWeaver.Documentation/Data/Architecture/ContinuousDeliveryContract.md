@@ -97,6 +97,15 @@ Only after **all five legs succeed** does the `promote` job apply real tags, and
 manifest-only operation (`docker buildx imagetools create`) — the layers are already in the registry,
 so it costs seconds.
 
+🚦 **…and only after the RELEASE GATE passed** (policy `dependent-suites-per-release`). `promote` also
+needs `Dependent suites (MeshWeaver.Plugins) against this platform set`, which measures
+MeshWeaver.Plugins' reachable suites against the bundle of every core merge since the newest
+promoted set, and whose green must name exactly the set the legs built. A red or missing verdict
+HOLDS the set: it gets no consumer-visible tag, so no install, satellite or Plugins pull request can
+select it, and `release-held` files it for triage. This is a verdict about the PLATFORM, not the
+Plugins seal — only drift holds a set — so it does not contradict the ladder below. See
+[The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's suites run once per platform set".
+
 **Why staging-then-promote rather than build-to-archive:** the bytes have to reach the registry for a
 push to happen at all, so pushing them to a staging tag costs exactly what pushing them to the real
 tag costs. The only thing worth withholding is the **tag**, because the tag is the entire consumer

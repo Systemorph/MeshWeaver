@@ -64,23 +64,43 @@ Two properties of `dotnet-test.yml` matter for the queue and were checked rather
   context can be absent ejects entries with nothing to point at (`CI_TIMEOUT`), which is what the
   missing `merge_group` trigger looked like before #2799.
 
-### 🚨 The dependent's suites lengthen a queue build — and the table above has drifted
+### 🚨 A queue build runs NO dependent suites any more — they run once per platform set
 
-Every queue entry now also runs **`Dependent suites (MeshWeaver.Plugins)`** (policy
-[`dependent-suites-gate`](../PolicyNotProse); [The Cross-Repo Pair Gate](../CrossRepoPairGate) §
-"The dependent's suites run against the candidate"): MeshWeaver.Plugins builds its reachable suites
-against the entry's commit and core waits for the verdict AFTER its own tests. A queue build is
-therefore core's run (~20 min) plus a waiter of up to 45 — about 65 minutes end to end, with each
-JOB still under the fleet's 45-minute cap. `check_response_timeout_minutes` must cover that: the
-45 in the table above would eject every entry whose Plugins run is slow.
+From 2026-09-25 to 2026-09-27 every queue entry also ran `Dependent suites (MeshWeaver.Plugins)`
+(policy `dependent-suites-gate`): a full MeshWeaver.Plugins candidate run of up to 12 legs, waited on
+for up to 42 minutes after core's own tests. A queue build was therefore ~65 minutes, the ruleset's
+`check_response_timeout_minutes` was raised to 120 to cover it, and at `max_entries_to_build: 8` up
+to eight such runs competed for a CI cluster that was at its Azure quota. Measured on 2026-09-27: the
+queue cascaded for eight hours, `main` sat at `2bb14d8db9` from 08:25Z, five entries were ejected on
+*no verdict* alone (every candidate that ran was green), and 21 Plugins PR runs queued with none
+running. `max_entries_to_build` was cut to 2 by hand at ~16:00Z.
 
-Measured live on 2026-09-25 (`gh api repos/Systemorph/MeshWeaver/rulesets/2128472`), the ruleset is
-NOT the table above: `max_entries_to_build: 8`, `max_entries_to_merge: 8`,
-`check_response_timeout_minutes: 120`. The 120 covers the gate. The 8 means up to eight entries —
-eight Plugins candidate runs, each up to ~12 legs on `aks-silos-dind` — can build at once, which that
-pool (≈24 runners) cannot serve alongside Plugins' own CI. Whether to return to a small
-`max_entries_to_build` is a maintainer's ruleset edit; `merge-queue-steward.py status` prints the
-drift.
+Policy [`dependent-suites-per-release`](../PolicyNotProse) removed the measurement from the queue.
+The dependent's suites run ONCE per platform set, in `main-cd.yml` before `promote`, against the
+bundle of every merge since the last promoted set — so the fleet is protected where the fleet is
+reached, and a queue entry is decided by core-only gates again: the cross-repo pair, interface
+additions, satellite pins, closing keywords and the platform-compatibility ladder, all `needs:` of
+`Consolidate test results` ([The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's
+suites run once per platform set"). A queue build is back to core's own run (~20 minutes).
+
+**What that means for the ruleset** (a maintainer's edit; nothing here applies it). The required
+contexts do not change — `Dependent suites` was never one, it failed `Consolidate test results`
+through a `needs:`. `check_response_timeout_minutes` can return to the 45 in the table above: with
+no waiter, a queue build that has not reported in 45 minutes is stuck by the fleet's own doctrine,
+and 120 only delays the steward's re-queue of a genuinely dead build by 75 minutes.
+`max_entries_to_build` is a throughput choice again rather than a quota defence. Read the live values
+with `merge-queue-steward.py status` (it prints the drift from the table above). The exact edit
+(`PUT` replaces the whole ruleset, so everything else is read back unchanged):
+
+```bash
+gh api repos/Systemorph/MeshWeaver/rulesets/2128472 \
+  --jq '{name, target, enforcement, conditions, bypass_actors,
+         rules: [.rules[] | if .type == "merge_queue"
+                             then .parameters.check_response_timeout_minutes = 45
+                             else . end]}' > /tmp/ruleset-2128472.json
+gh api -X PUT repos/Systemorph/MeshWeaver/rulesets/2128472 --input /tmp/ruleset-2128472.json
+gh api repos/Systemorph/MeshWeaver/rulesets/2128472 --jq '.rules[]|select(.type=="merge_queue").parameters'
+```
 
 ### Enabling it
 

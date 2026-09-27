@@ -929,6 +929,7 @@ def run_handoff_cases(root, case) -> None:
         ("sort_by(.started_at)", "no longer takes the LATEST check run, so a re-run reads as its first attempt"),
         ("DELIVERY_LEGS", "no longer reads the shipping legs, so a run that promoted and then failed tests nothing"),
         ("HANDOFF_ELIGIBLE", "lost the one-hop bound, so a deterministic failure loops forever"),
+        ("DEPENDENTS_RESULT", "no longer reads the release gate, so a held set is handed straight back to itself"),
     ):
         if needle not in body:
             die(f"step `{HANDOFF_STEP_ID}` {why} (missing `{needle}`). Update the harness with the step.")
@@ -951,7 +952,7 @@ def run_handoff_cases(root, case) -> None:
             "DELIVERY_LEGS": CLEAN_LEGS,
             "HANDOFF_ELIGIBLE": "true", "RUN_ID": str(ME), "REPO": "Systemorph/MeshWeaver",
             "WORKFLOW_NAME": CD, "WORKFLOW_FILE": "main-cd.yml", "GH_TOKEN": "",
-            "GH_TIP_RESULT": HEAD,
+            "GH_TIP_RESULT": HEAD, "DEPENDENTS_RESULT": "success",
         }
         env.update(over)
         return env
@@ -1053,6 +1054,29 @@ def run_handoff_cases(root, case) -> None:
         [me])
     case("a BAKE-ONLY run on HEAD hands nothing on (it would otherwise dispatch itself forever)",
          rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # ── ARM 3b: THE RELEASE GATE HELD THIS EXACT COMMIT (policy `dependent-suites-per-release`) ──
+    # promote never ran because the dependent's suites said no (or said nothing). That is a finding
+    # about HEAD's bundle, not a missing publisher: handing on would re-measure the same bundle
+    # minutes later. It must NOT dispatch — and it must still dispatch once HEAD has MOVED, because a
+    # newer HEAD is a different bundle (the fix, typically).
+    for verdict in ("failure", "cancelled"):
+        rc, log, dispatched, _ = drive(
+            handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="skipped", DEPENDENTS_RESULT=verdict,
+                    DELIVERY_LEGS="success success success success skipped skipped skipped"), [me])
+        case(f"a set the release gate held ({verdict}) on HEAD is NOT handed straight back to itself",
+             rc == 0 and not dispatched and "HELD" in log, f"rc={rc} dispatched={dispatched} log={log}")
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=BUILT, PUBLISH="true", PROMOTE_RESULT="skipped", DEPENDENTS_RESULT="failure",
+                DELIVERY_LEGS="success success success success skipped skipped skipped"), [me])
+    case("...but once main has MOVED past the held commit, the new HEAD still gets a publisher",
+         rc == 0 and dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="skipped", DEPENDENTS_RESULT="failure",
+                DELIVERY_LEGS="success success success success skipped skipped skipped"), [me],
+        mutate=('[ "$DEPENDENTS_RESULT" != "success" ]', 'false'))
+    case("MUTATION CONTROL: without the release-gate branch the held commit IS handed back to itself",
+         dispatched, f"dispatched={dispatched} log={log}")
 
     # ── ARM 4: THE ONE-HOP BOUND ────────────────────────────────────────────────────────────
     # Exactly ARM 1's state, but this run arrived BY a handoff. A deterministic promote failure

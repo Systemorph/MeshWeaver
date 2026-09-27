@@ -99,10 +99,18 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "cannot detect the missed-repo case), and `cross-repo-pair` resolves the "
                 + "`Pairs-with:` pull request a surface-removing change declares (#2689 — the "
                 + "deleting half must land LAST). Both mint a scoped App installation token and "
-                + "read; neither checks anything out. `dependent-suites` (policy "
-                + "`dependent-suites-gate`, #2689's acceptance criterion) reads the verdict "
-                + "MeshWeaver.Plugins writes at refs/core-candidate/<key> after running its suites "
-                + "against this candidate — a fact about the candidate, never Plugins source"),
+                + "read; neither checks anything out. (Until policy `dependent-suites-per-release` "
+                + "this workflow also dispatched MeshWeaver.Plugins' suites for every merge-queue "
+                + "entry and read their verdict; that request now runs once per platform set, in "
+                + "main-cd.yml's `dependent-suites`, before `promote`.)"),
+            new KeyValuePair<string, string>("main-cd.yml",
+                "`dependent-suites` — the RELEASE GATE (policy `dependent-suites-per-release`, "
+                + "#2689's acceptance criterion): proves MeshWeaver.Plugins' `core-candidate.yml` "
+                + "receiver exists, sends ONE `core-candidate-suites` request naming the platform set "
+                + "about to be promoted and its bundle's base, and reads the verdict Plugins writes at "
+                + "refs/core-candidate/<key>. A FACT about the set, never Plugins source; it is on no "
+                + "pull request, and it holds `promote`, so a core behaviour change that breaks the "
+                + "dependent never reaches the fleet"),
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),
