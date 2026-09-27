@@ -38,7 +38,8 @@ namespace MeshWeaver.Graph.Configuration;
 /// <c>{second}-{8 chars of SHA256(Collection/ContentPath)}</c>, and the stamp is written only for an id
 /// minted for THIS build's bytes (<see cref="NodeTypeBuildState.IsReusableAttempt"/> guards the reuse).
 /// A node at that path therefore names these bytes. The stamp describes the current build only: every
-/// later settle rewrites or clears it, so "the stamp still names this path" in the owner write is the
+/// later settle rewrites or clears it, and prebuilt adoption clears it when the adopted coordinates
+/// name a different build (same-coordinate replays preserve it), so "the stamp still names this path" in the owner write is the
 /// whole guard.</para>
 /// </summary>
 public static class LateReleaseAdoption
