@@ -114,9 +114,6 @@ public static class SpaceDeletion
     /// <summary>How many index reads run at once.</summary>
     public const int ReadConcurrency = 4;
 
-    /// <summary>How many outside dependents the plan names (the count is always stated whole).</summary>
-    public const int NamedDependents = 20;
-
     // ───────────────────────────── pure rules ─────────────────────────────
 
     /// <summary>
@@ -228,45 +225,73 @@ public static class SpaceDeletion
 
     /// <summary>
     /// The steps of a space deletion — what the approver reads and the approval binds — and the notes
-    /// beside them. What is bound is what decides the blast radius; the per-table ROW COUNTS are in
-    /// the notes and are NOT bound (a stranded space keeps being written into while it waits). Pure.
+    /// beside them. 🚨 A plan never contains a listing: every set a step acts on is a TARGET, an
+    /// anchored, scoped query with its count (<see cref="ControlLanePlanTarget"/>) — the space's own
+    /// address, its NodeTypes, grants, GitSync nodes and content roots with counts, the whole subtree
+    /// with NO count (its rows move while a stranded space waits, so they are shown in the notes and
+    /// never bound), and the outside dependents as a count in the command only. The same plan
+    /// MeshWeaver.Plugins' in-process <c>DeleteSpaceRunner.PlanOf</c> shows. Pure.
     /// </summary>
-    public static (ImmutableList<(string Name, string Command, bool Destructive)> Steps, ImmutableList<string> Notes) StepsOf(
-        SpaceDeletionInventory inventory)
+    public static (ImmutableList<ControlLanePlanStep> Steps, ImmutableList<string> Notes) PlanSteps(SpaceDeletionInventory inventory)
     {
         var space = inventory.Space;
-        var steps = ImmutableList.CreateBuilder<(string Name, string Command, bool Destructive)>();
-        var disposeTargets = new[] { space }.Concat(inventory.NodeTypes).ToList();
-        steps.Add(("Dispose the space's hubs",
-            "DisposeRequest as system, from the node-operation hub, to:\n" + string.Join("\n", disposeTargets)
-            + (inventory.NodeTypes.Count == 0 ? "" : "\n(a NodeType definition's dispose cascades to its dependency network)"),
-            false));
+        var steps = ImmutableList.CreateBuilder<ControlLanePlanStep>();
+        var nodeTypes = Target(TargetNodeTypes, NodeTypesQuery(space), inventory.NodeTypes.Count);
+        steps.Add(new ControlLanePlanStep
+        {
+            Name = "Dispose the space's hubs",
+            Command = "DisposeRequest as system, from the node-operation hub, to the space's own address and to every NodeType defined in it"
+                + (inventory.NodeTypes.Count == 0 ? "" : " (a NodeType definition's dispose cascades to its dependency network)"),
+            Targets = inventory.NodeTypes.Count == 0
+                ? [Target(TargetSpaceRoot, RootQuery(space), 1)]
+                : [Target(TargetSpaceRoot, RootQuery(space), 1), nodeTypes],
+        });
         if (inventory.Grants.Count > 0)
-            steps.Add(("Remove access grants",
-                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system — the space is going away, so the keep-an-admin invariant is moot — {inventory.Grants.Count} grant(s):\n" + string.Join("\n", inventory.Grants),
-                true));
+            steps.Add(new ControlLanePlanStep
+            {
+                Name = "Remove access grants",
+                Command = $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system for each grant — the space is going away, so the keep-an-admin invariant is moot",
+                Destructive = true,
+                Targets = [Target(TargetGrants, GrantsQuery(space), inventory.Grants.Count)],
+            });
         if (inventory.GitSync.Count > 0)
-            steps.Add(("Remove GitSync configuration",
-                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system, {inventory.GitSync.Count} node(s):\n" + string.Join("\n", inventory.GitSync),
-                true));
+            steps.Add(new ControlLanePlanStep
+            {
+                Name = "Remove GitSync configuration",
+                Command = $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system for each GitSync configuration node",
+                Destructive = true,
+                Targets = [Target(TargetGitSync, GitSyncQuery(space), inventory.GitSync.Count)],
+            });
         if (inventory.ContentRoots.Count > 0)
-            steps.Add(("Delete content",
-                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system per content root, "
-                + $"{(inventory.Root is null ? "the space has NO root" : $"the root is a {inventory.Root.NodeType ?? "(untyped)"} created by {inventory.Root.CreatedBy ?? "(unattributed)"}")}:\n"
-                + string.Join("\n", inventory.ContentRoots)
-                + (inventory.NodeTypes.Count == 0 ? "" : $"\nNodeTypes defined here ({inventory.NodeTypes.Count}):\n" + string.Join("\n", inventory.NodeTypes))
-                + (inventory.Dependents.Count == 0
-                    ? "\nNo address outside the space depends on them."
-                    : $"\n{inventory.Dependents.Count} address(es) OUTSIDE the space depend on them and lose a type or a dependency:\n"
-                      + string.Join("\n", inventory.Dependents.Take(NamedDependents))
-                      + (inventory.Dependents.Count > NamedDependents ? $"\n… and {inventory.Dependents.Count - NamedDependents} more" : "")),
-                true));
+        {
+            var targets = ImmutableList.CreateBuilder<ControlLanePlanTarget>();
+            targets.Add(Target(TargetContentRoots, inventory.Root is null ? ChildrenQuery(space) : RootQuery(space), inventory.ContentRoots.Count));
+            targets.Add(Target(TargetSubtree, SubtreeQuery(space), null));
+            if (inventory.NodeTypes.Count > 0)
+                targets.Add(nodeTypes);
+            steps.Add(new ControlLanePlanStep
+            {
+                Name = "Delete content",
+                Command = $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system per content root — "
+                    + (inventory.Root is null
+                        ? "the space has NO root"
+                        : $"the root is a {inventory.Root.NodeType ?? "(untyped)"} created by {inventory.Root.CreatedBy ?? "(unattributed)"}")
+                    + ". "
+                    + (inventory.Dependents.Count == 0
+                        ? "No address outside the space depends on its NodeTypes."
+                        : $"{inventory.Dependents.Count.ToString(CultureInfo.InvariantCulture)} address(es) OUTSIDE the space depend on its NodeTypes and lose a type or a dependency."),
+                Destructive = true,
+                Targets = targets.ToImmutable(),
+            });
+        }
         if (inventory.StoreExists != false || inventory.RecordExists)
-            steps.Add(("Drop the partition store", StoreRoute(inventory), true));
-        steps.Add(("Verify and write the audit record",
-            $"dispose again; re-read every table, the grants, the GitSync configuration, Admin/Partition/{space} and "
-            + $"the store '{inventory.Schema}' as system — any residue FAILS the run; the audit record is written on this node",
-            false));
+            steps.Add(new ControlLanePlanStep { Name = "Drop the partition store", Command = StoreRoute(inventory), Destructive = true });
+        steps.Add(new ControlLanePlanStep
+        {
+            Name = "Verify and write the audit record",
+            Command = $"dispose again; re-read every table, the grants, the GitSync configuration, Admin/Partition/{space} and "
+                + $"the store '{inventory.Schema}' as system — any residue FAILS the run; the audit record is written on this node",
+        });
 
         var notes = ImmutableList.Create(
             "Rows per table (shown, not bound — the build queue and compile watcher of a stranded space keep writing "
@@ -279,6 +304,46 @@ public static class SpaceDeletion
             "Not touched: the build coordinator's own bookkeeping (Admin/Build/…) — it stops scheduling the space once its store is gone.");
         return (steps.ToImmutable(), notes);
     }
+
+    /// <summary>Target label key: the space's own address.</summary>
+    public const string TargetSpaceRoot = "space-root";
+
+    /// <summary>Target label key: the NodeTypes the space defines.</summary>
+    public const string TargetNodeTypes = "nodetypes";
+
+    /// <summary>Target label key: the space's access grants.</summary>
+    public const string TargetGrants = "grants";
+
+    /// <summary>Target label key: the space's GitSync configuration.</summary>
+    public const string TargetGitSync = "gitsync";
+
+    /// <summary>Target label key: the content roots the recursive deletes start from.</summary>
+    public const string TargetContentRoots = "content-roots";
+
+    /// <summary>Target label key: everything beneath them — uncounted, the rows are in the notes.</summary>
+    public const string TargetSubtree = "subtree";
+
+    private static ControlLanePlanTarget Target(string label, string query, int? count) =>
+        new() { Label = label, Query = query, Count = count };
+
+    /// <summary>The space's own address. Pure.</summary>
+    public static string RootQuery(string space) => $"path:{space}";
+
+    /// <summary>The space's direct children — a rootless space's content roots. Pure.</summary>
+    public static string ChildrenQuery(string space) => $"namespace:{space} scope:children";
+
+    /// <summary>Everything in the space, root included. Pure.</summary>
+    public static string SubtreeQuery(string space) => $"path:{space} scope:subtree";
+
+    /// <summary>Every NodeType the space defines. Pure.</summary>
+    public static string NodeTypesQuery(string space) => $"namespace:{space} scope:descendants nodeType:{MeshNode.NodeTypePath}";
+
+    /// <summary>Every access grant in the space. Pure.</summary>
+    public static string GrantsQuery(string space) =>
+        $"namespace:{space} scope:descendants nodeType:{AccessAssignmentGuard.AccessAssignmentNodeType}";
+
+    /// <summary>Every GitSync configuration node in the space. Pure.</summary>
+    public static string GitSyncQuery(string space) => $"namespace:{space} scope:descendants nodeType:{GitSyncNodeType}";
 
     /// <summary>How the store is dropped, as the plan states it. Pure.</summary>
     public static string StoreRoute(SpaceDeletionInventory inventory)
