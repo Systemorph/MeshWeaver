@@ -579,17 +579,18 @@ data:
   # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
   # Build instance only: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
   # VALIDATES each proposed heal before it runs, Heal=false keeps it observe-only, Interval is the
-  # fallback cadence. Rendered only when set, so no other portal carries them (config-key-coverage).
-  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__Enabled }}
+  # fallback cadence. Rendered whenever the key is PRESENT (hasKey), so an explicit `false` reaches
+  # the container and switches it off; absent on every other portal (config-key-coverage).
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Enabled" }}
   Hosting__PrBabysitter__Enabled: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Enabled }}"
   {{- end }}
-  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__AgentHandoff }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__AgentHandoff" }}
   Hosting__PrBabysitter__AgentHandoff: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__AgentHandoff }}"
   {{- end }}
-  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__Heal }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Heal" }}
   Hosting__PrBabysitter__Heal: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Heal }}"
   {{- end }}
-  {{- if .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interval" }}
   Hosting__PrBabysitter__Interval: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}"
   {{- end }}
   # Control instance only: the deployments the ONE org webhook's pull-request and check events are
