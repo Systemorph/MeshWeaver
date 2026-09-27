@@ -83,6 +83,7 @@ public static class GraphConfigurationExtensions
                 .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate
                 .AddEmailType()
                 .AddEaCredentialType()
+                .AddInstanceSecretType()
                 .AddTeamsConversationType()
                 .AddGraphSubscriptionType()
                 .AddActivityType()

@@ -46,6 +46,9 @@ public static class PlatformSettingsTabAreas
     /// <summary>Layout area rendering <see cref="PublishedSettingsTab.BuildContent"/> (admin-gated).</summary>
     public const string PublishedArea = "SettingsPublished";
 
+    /// <summary>Layout area rendering <see cref="ControlLaneSettingsTab.BuildContent"/> (admin-gated).</summary>
+    public const string ControlLaneArea = "SettingsControlLane";
+
 
     /// <summary>
     /// Registers the tranches' tab contents as layout areas on the per-node hubs. The settings
@@ -67,7 +70,9 @@ public static class PlatformSettingsTabAreas
             .WithView(UpdatePolicyArea, (host, _) => AdminGated(host,
                 () => UpdatePolicySettingsTab.BuildContent(host, PaneStack())))
             .WithView(PublishedArea, (host, _) => AdminGated(host,
-                () => PublishedSettingsTab.BuildContent(host, PaneStack()))));
+                () => PublishedSettingsTab.BuildContent(host, PaneStack())))
+            .WithView(ControlLaneArea, (host, _) => AdminGated(host,
+                () => ControlLaneSettingsTab.BuildContent(host, PaneStack()))));
 
     /// <summary>
     /// The admin-gated area body. Each admin tab's contributed entry hides the tab via
@@ -92,7 +97,7 @@ public static class PlatformSettingsTabAreas
     internal static IReadOnlyList<string> Areas { get; } =
     [
         WhatsNewArea, AboutArea, PrivacyArea, InvitationsArea, InboxArea,
-        UpdatePolicyArea, PublishedArea,
+        UpdatePolicyArea, PublishedArea, ControlLaneArea,
     ];
 
     /// <summary>
@@ -157,6 +162,19 @@ public static class PlatformSettingsTabAreas
             Label = "Updates",
             LabelKey = "settings.updates",
             Icon = "ArrowSync",
+            Group = "Administration",
+            GroupKey = "settings.groupAdministration",
+            GroupIcon = "Shield",
+            Order = 320,
+            Gates = new UiContributionGates { AdminOnly = true },
+        }),
+        Seed(ControlLaneSettingsTab.TabId, "Control lane", new UiContribution
+        {
+            Context = UiContribution.SettingsContext,
+            Area = ControlLaneArea,
+            Label = "Control lane",
+            LabelKey = "settings.controlLane",
+            Icon = "Key",
             Group = "Administration",
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",

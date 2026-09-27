@@ -25,8 +25,10 @@ triage events and self-update announcements for **any** deployment. So `pearl` s
 | part | where | what it does |
 |---|---|---|
 | **The declaration** | `Hosting/Deployment` record → `announcementKeySecret` (`DeploymentContent.AnnouncementKeySecret`) | names the deployment's OWN vault object — a NAME, never a value. Declaring it is also the binding (below). |
-| **The sender's mount** | the deployment's pod: `Hosting__ControlInbox__Secret` ← that vault object | the self-updater signs with whatever `Hosting:ControlInbox:Secret` holds — **no sender-side code changed**. |
-| **The receiver's mount** | the control instance: `Hosting__PlatformWebhookSecret__<deploymentId>` ← the same vault object | a CHILD of the inbox's shared key — the shape `Hosting:ModuleReportSecret:<deployment>` already has. |
+| **Issuing** | the control instance: the deployment's record page → **Announcement key** → **Issue key** | a global administrator of the control instance generates the key on the server. It is stored in the control instance's own encrypted store as `Hosting:PlatformWebhookSecret:<deploymentId>` ([Instance Secrets](../InstanceSecrets)), where the inbox verifies with it at once. A vault copy is filed under the record's `announcementKeySecret` through the governed `SetSecrets` action. The key is shown ONCE. |
+| **Entering** | the deployment: **Settings ▸ Control lane** | the deployment's own global administrator pastes the key. It is stored in that instance's own encrypted store as `Hosting:ControlInbox:Secret`, and the self-updater signs with it from the next announcement on, with no restart. |
+| **The sender's mount** (optional) | the deployment's pod: `Hosting__ControlInbox__Secret` ← that vault object | the older way to deliver the same key. The self-updater signs with the key entered in the portal if there is one, else with this mount. |
+| **The receiver's mount** (optional) | the control instance: `Hosting__PlatformWebhookSecret__<deploymentId>` ← the same vault object | a CHILD of the inbox's shared key — the shape `Hosting:ModuleReportSecret:<deployment>` already has. The key issued on the record page takes precedence over it. |
 | **Ingestion** | core `WebhookInbox.Deliver` → `SenderKeyOf` | when the target's shared secret does not verify, the ONE child of the target's `SecretConfigKey` section whose value does is accepted as a **per-sender key** (two children verifying — two senders sharing a value — name nobody and are refused); the delivery is stored and `DeliveryResult.SenderKey` names the child. The inbox only decides whether the bytes are worth storing — it never widens what a delivery may do. |
 | **Authorization** | MeshWeaver.Plugins `PlatformBuildInboxWatcher` → `AnnouncementKeys` → `SelfUpdateRouting` | re-verifies the stored body and decides what the key may cause (the rules below). |
 
@@ -47,7 +49,58 @@ triage events and self-update announcements for **any** deployment. So `pearl` s
    for that deployment. A record that declares nothing keeps the fleet-secret path — the migration
    bridge for the instances that hold it today (`memex-cloud`, `build`).
 
+## Issuing, entering and testing the key — in the portal
+
+Nobody mints, copies or mounts the key by hand, and nobody needs vault access or cluster access.
+
+1. **The record declares the key.** `Deployments/<id>` carries `announcementKeySecret` (the name
+   of the vault object the copy is filed under, e.g. `pearl-Hosting-AnnouncementKey`). Without the
+   declaration, rule 3 refuses every announcement signed with the key, and the record page says so.
+2. **Issue** (control instance, a global administrator). On the deployment's record page, the
+   **Announcement key** panel → **Issue key**. The server generates a 256-bit key and stores it,
+   encrypted, as the per-sender key the inbox verifies. It files a vault copy through the governed
+   `SetSecrets` action, which waits for approval, and shows the key ONCE with its fingerprint.
+   Copy it and send it to the deployment's administrator over a secure channel.
+3. **Enter** (the deployment, its own global administrator). **Settings ▸ Control lane** → paste the
+   key → **Save**. The page shows the key's fingerprint, which must equal the one on the control
+   instance's record page.
+4. **Test** (the deployment). **Test connection** sends a signed test to the control inbox with
+   the header `X-MeshWeaver-Verify-Only: true`. The inbox verifies the signature and stores
+   nothing. The page shows the control instance's verdict: **Match** (verified as this deployment's
+   key) or **Mismatch — re-enter the key** (401: the control instance holds no matching key). The
+   result is recorded on both ends. The record page shows it as the key's last verified use, so
+   the two panels say "paired" together.
+
+**Rotate** is **Issue key** again (the button reads **Rotate key** once a key exists). The new key is
+stored, and the old one keeps verifying until the deployment's first announcement signed with the
+new key, or for 14 days at most. That is the dual-verification window, so a rotation is not a flag
+day. **Revoke key** disables the key at once; it also suppresses a mounted copy of the same key.
+
+What each end shows is only the status: present or not, the fingerprint, who set it and when, and
+the last use. Neither end ever shows the key again.
+
+## For the deployment's administrator — step by step
+
+This is the part to send to a customer who administers their own instance.
+
+1. You receive a key from Systemorph over a secure channel. It is 64 characters of `0–9` and `a–f`.
+2. Sign in to your instance as a global administrator, open **Settings**, and choose
+   **Control lane** in the **Administration** group.
+3. Paste the key into **Control-instance announcement key** and press **Save**. The field empties,
+   and the page shows **Set** with a fingerprint such as `sha256:3f9a0c1b2d4e`. The key itself is not
+   shown again, not even to you.
+4. Press **Test connection**. You should see **✅ Match. The control instance verified this key as
+   the key of `<your instance>`.**
+5. Read the fingerprint back to Systemorph if asked. It must equal the one Systemorph sees.
+
+If the test says **❌ Mismatch — re-enter the key**, paste the key again. Take care to copy all 64
+characters and nothing else, then press **Save** and **Test connection** again. Nothing has to be
+restarted at any point: the key is used from the next update announcement on.
+
 ## Rollout order — mount first, declare last
+
+With the portal flow above, the mounts in this section are OPTIONAL. The section still applies to a
+deployment that delivers its key by mount instead.
 
 Each step is safe on its own, and none leaves a deployment signing with a key the running control
 plane cannot select:
@@ -93,9 +146,9 @@ The second command reads back metadata only — never `value`.
 
 ## What is NOT covered
 
-- **Rotation** is a flag day for one deployment: replace the vault object's value, then Reconcile
-  the control instance and the deployment. A set of identifiers per record would make it ordinary;
-  nothing needs it yet.
+- **The record claim is not part of Test connection.** The test proves that the two ends hold the
+  same key. It does not check rule 3: the record page's panel warns when the record declares no
+  `announcementKeySecret`.
 - **Feedback from a deployment-key sender** is refused by rule 1 — the Feedback hand-over signs with
   the same `Hosting:ControlInbox:Secret`. A deployment that must send feedback needs a triage-scoped
   key of its own, which is not designed here.

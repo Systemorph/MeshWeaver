@@ -345,7 +345,114 @@ public class SelfUpdateHandover
 
     /// <summary>The settings of the hub this hand-over serves. Virtual: a test presents a configured control inbox without standing up a second mesh.</summary>
     public virtual Settings ReadSettings() =>
-        ReadSettings(hub.ServiceProvider.GetService<IConfiguration>(), hub.ServiceProvider.GetService<PluginCatalogOptions>());
+        ReadSettings(hub.ServiceProvider.GetService<IConfiguration>(), hub.ServiceProvider.GetService<PluginCatalogOptions>())
+            with
+            {
+                // The signing key may be set in the PORTAL (Settings ▸ Control lane) rather than
+                // mounted — and a key revoked there counts as absent even if one is mounted.
+                SecretPresent = SigningSecret().Length > 0,
+            };
+
+    /// <summary>
+    /// The key this install signs with: the one a global administrator entered in the portal
+    /// (<see cref="InstanceSecrets"/>, live, no restart) or, when none was, the mounted
+    /// <see cref="SecretKey"/>. Read at every use and never captured, because the key is rotatable.
+    /// Trimmed exactly as the mounted value always was.
+    /// </summary>
+    private string SigningSecret() => InstanceSecrets.Resolve(hub, SecretKey)?.Trim() ?? "";
+
+    /// <summary>The verdict of a key test (<see cref="Test"/>).</summary>
+    /// <param name="Accepted">Whether the control instance verified the test signature.</param>
+    /// <param name="Sender">As whom it verified: the per-sender key's name (e.g. the deployment id),
+    /// or null when the fleet-wide secret verified it.</param>
+    /// <param name="Destination">The inbox URL that answered.</param>
+    /// <param name="Detail">What came back, in one sentence. Never a value.</param>
+    public sealed record TestOutcome(bool Accepted, string? Sender, string Destination, string Detail);
+
+    /// <summary>The event a key test carries. The inbox never stores a test, so no consumer ever sees it.</summary>
+    public const string TestEvent = "self-update-key-test";
+
+    /// <summary>
+    /// Tests the signing key against the control instance: POSTs a signed, VERIFY-ONLY test to the
+    /// control inbox (<see cref="WebhookInbox.VerifyOnlyHeader"/>), which checks the signature and
+    /// stores nothing, and reports what the control instance answered. The result is also recorded
+    /// as the key's last use. Cold. Fails when no inbox route exists, naming what is missing.
+    /// </summary>
+    public IObservable<TestOutcome> Test() =>
+        Observable.Defer(() =>
+        {
+            var settings = ReadSettings();
+            if (RouteFor(settings) != Route.Post)
+                return Observable.Throw<TestOutcome>(new InvalidOperationException(
+                    Missing(settings) ?? "this instance delivers to its own inbox; there is no control instance to test against"));
+            var url = settings.Url!;
+            var body = Body(new Announcement
+            {
+                Event = TestEvent,
+                Deployment = settings.Deployment,
+                Instance = settings.Instance,
+                DetectedAt = Stamp(DateTimeOffset.UtcNow),
+            });
+            var secret = SigningSecret();
+            var signature = Sign(body, secret);
+            return httpPool.Invoke(async ct =>
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Post, url)
+                    {
+                        Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                    };
+                    request.Headers.TryAddWithoutValidation(WebhookInbox.SignatureHeader, signature);
+                    request.Headers.TryAddWithoutValidation(WebhookInbox.VerifyOnlyHeader, "true");
+                    using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+                    var answer = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return TestOutcomeOf(url, (int)response.StatusCode, answer);
+                })
+                .SelectMany(outcome => InstanceSecrets
+                    .RecordUse(hub, SecretKey, outcome.Accepted, outcome.Detail)
+                    .Select(_ => outcome));
+        });
+
+    /// <summary>
+    /// Reads a key test's answer. Accepted only on a 2xx whose body says <c>verified</c> for both
+    /// the status and the signature. A 401 means the control instance holds no matching key. Pure.
+    /// </summary>
+    public static TestOutcome TestOutcomeOf(string url, int statusCode, string? answer)
+    {
+        var (status, signature) = InboxAnswerOf(answer);
+        var sender = SenderOf(answer);
+        if (statusCode is >= 200 and < 300 && status == "verified" && signature == "verified")
+            return new TestOutcome(true, sender, url, sender is null
+                ? "accepted by the control instance (verified with the fleet-wide secret, not a key of this deployment's own)"
+                : $"accepted by the control instance as '{sender}'");
+        if (statusCode == 401)
+            return new TestOutcome(false, null, url,
+                "refused by the control instance (401): it holds no key matching this one — the two fingerprints differ");
+        if (statusCode is >= 200 and < 300)
+            return new TestOutcome(false, sender, url, status == "accepted"
+                ? "the control instance does not support key tests yet (it stored the test instead of only verifying it)"
+                : $"the control instance answered {statusCode} but did not report a verified signature (signature: {signature ?? "unreadable"})");
+        return new TestOutcome(false, null, url, $"the control instance answered {statusCode}");
+    }
+
+    /// <summary>The <c>sender</c> field of an inbox answer, or null. Pure.</summary>
+    public static string? SenderOf(string? answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(answer);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("sender", out var value)
+                   && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     // ───────────────────────────── the delivery (IO) ─────────────────────────────
 
@@ -371,8 +478,8 @@ public class SelfUpdateHandover
 
     private IObservable<Outcome> Post(string url, string body)
     {
-        // Read at delivery, never captured: the secret is rotatable configuration.
-        var secret = hub.ServiceProvider.GetService<IConfiguration>()?[SecretKey]?.Trim() ?? "";
+        // Read at delivery, never captured: the secret is rotatable (portal-set or mounted).
+        var secret = SigningSecret();
         if (secret.Length == 0)
             return Observable.Throw<Outcome>(new InvalidOperationException(
                 $"{UrlKey} is set but {SecretKey} is empty — nothing could be signed, nothing was sent"));
@@ -410,8 +517,19 @@ public class SelfUpdateHandover
                         : status is null && verdict is null
                             ? "the answer is not the inbox contract"
                             : "the inbox did not accept the event as a verified delivery"));
-            return new Outcome(Route.Post, url, $"accepted ({(int)response.StatusCode}), signature verified");
-        });
+            var sender = SenderOf(answer);
+            return new Outcome(Route.Post, url, sender is null
+                ? $"accepted ({(int)response.StatusCode}), signature verified"
+                : $"accepted ({(int)response.StatusCode}), signature verified as '{sender}'");
+        })
+        // The announcement's result is the key's LAST USE, shown beside its fingerprint in
+        // Settings ▸ Control lane. Recorded only for a portal-set key (a no-op otherwise).
+        .SelectMany(outcome => InstanceSecrets
+            .RecordUse(hub, SecretKey, ok: true, $"announcement {outcome.Detail}")
+            .Select(_ => outcome))
+        .Catch<Outcome, SelfUpdateHandoverRejectedException>(rejected => InstanceSecrets
+            .RecordUse(hub, SecretKey, ok: false, rejected.Message)
+            .SelectMany(_ => Observable.Throw<Outcome>(rejected)));
     }
 
     private IObservable<Outcome> DeliverLocally(string body)
