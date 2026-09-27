@@ -381,6 +381,81 @@ diagnostic be the thing that is allowed to fail. `HostedHubsCollection.ReadOwner
 established precedent: a best-effort teardown diagnostic, read where it is needed, never permitted to
 fault the teardown it describes.
 
+### 🚨 A pre-flight on a hub a recycle disposes
+
+This is R3 where the scope is closed by someone else — an **unrelated recycle**, not the operation
+itself. It refused a governed DeleteSpace on memex.systemorph.com (2026-09-27 05:26:38–41Z, pod
+`memex-portal-deployment-5db78dfc99-d2cpk`):
+
+```text
+ValidationFailed: Cannot delete 'UWDeepfieldData/Clients/SafeDriveInsurance': Validation error:
+  Instances cannot be resolved and nested lifetimes cannot be created from this LifetimeScope as
+  it (or one of its parent scopes) has already been disposed.
+```
+
+About 15 `[ValidateDelete] UWDeepfieldData/Clients/… failed — treating as error` lines landed in
+the same seconds, while the UWDeepfield NodeTypes minted new `Release` nodes. The recursive delete's
+pre-flight posts one `ValidateDeleteRequest` to every descendant. That post **activates** each
+leaf's per-node hub. `HandleValidateDeleteRequest` read the node from storage and, in the
+continuation after that read, resolved `AccessService` and every `INodeValidator` from the leaf
+hub's scope. When the hub was disposed in between, the resolve threw. The handler's `Catch` then
+reported "this activation is going away" as `ValidationFailed`, and one such leaf refused the
+whole subtree.
+
+**What set off the disposal is not proven.** The hypothesis is that each activation cold-compiled
+its NodeType and each new Release's recycle cascade disposed the instance hubs of that type. The
+Release timestamps match; nothing measured confirms the causal link. The fix does not depend on
+it: **any** disposal in that window now converges.
+
+The fix has three parts. The first alone would be cosmetic, for the reason given above.
+
+1. **Resolve at handler entry.** The validators, the delivery's `AccessContext` and the parent hub
+   are taken where the hub is provably alive. `RunDeletionValidatorsObs` now takes them as
+   arguments and resolves nothing. This removes the continuation's own fault. It does **not** stop
+   a per-hub-scoped validator from reaching back into the dead scope from its own body.
+2. **Classify teardown as retryable, never as a verdict.** A fault is treated as this hub's own
+   teardown when:
+   - the hub has left `Started`; or
+   - the fault is a `HubDisposingException` raised for this hub's own address; or
+   - the fault is an `ObjectDisposedException` **and** the hub's own scope probe confirms it
+     (`IsTerminatedByScopeTeardown`).
+
+   That fault is answered as `ErrorType.ShuttingDown`, worded by
+   `ShutdownNack.RetryForTheAuthoritativeAnswer` with the activation tag. It is posted through
+   the **parent** once the hub is past `DisposeHostedHubs`, the same carrier
+   `MessageService.NackThroughParent` uses, because a hub at that run level cannot post its own
+   answer. Before this, even a correct verdict computed on a dying leaf was dropped at that point.
+   The leaf leg of `HandleDeleteNodeRequest` applies the same rule, but **only while nothing was
+   removed**. Once something has been removed the state is torn and keeps its loud branch.
+3. **The caller rides it out.** `RideOutRecyclingLeaf` wraps both the pre-flight leg and the
+   commit's leaf leg. It uses the point read's rider shape: one immediate re-ask, then re-asks at
+   `RecyclingReProbePace`. It has **no budget of its own** and runs inside the leg's existing
+   bound, so a leaf that recycles for the whole leg is still refused by name as `Unavailable`. The
+   refusal says *"was still recycling after N ShuttingDown answer(s)"* rather than *"never
+   replied"*, because an operator should look for a recycle loop, not a wedged hub. The commit
+   re-ask is safe because a leaf delete is idempotent. If the dying activation had already removed
+   the row, the next activation answers `AlreadyAbsent`, and the delete under-reports that one
+   removal rather than over-reporting.
+
+`RecursiveDeleteSurvivesARecycledLeafTest` covers both halves. A validator disposes the leaf's hub
+on its first call (pre-flight) or its second call (commit). It waits for `DisposalCompleted`, then
+resolves from the dead scope, which raises the genuine Autofac fault. The test asserts that the
+delete completes, that the leaf was asked again, and that storage holds none of the three nodes.
+
+**Swept alongside, and left as they are.** In `HandleDeleteNodeRequest`, a leaf leg still resolves
+five services after its storage read:
+
+- the post-deletion handlers;
+- the access-rule gate;
+- `CheckDeletePermissionByRule`'s `AccessService`;
+- the permission fold;
+- `RunDeletionValidatorsWithWarningsObs`.
+
+They were not hoisted. Several are scoped per hub, so hoisting them would be the cosmetic fix. The
+teardown classification in part 2 covers all five. The create, upsert, move and copy handlers run
+on the node-operation execution hub, which outlives the operation, so they do not have this
+exposure.
+
 ### The swept inventory
 
 A lexical sweep of `src/` and `memex/` (scope-aware: comments and every string form stripped, a
