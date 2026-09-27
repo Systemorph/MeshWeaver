@@ -61,8 +61,8 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
 
         // 1. a Plugins job as a DIRECT need of the verdict.
         Assert.Contains(Problems(Mutate(text,
-                "            publish-bake, notify-platform-update, verify-images]",
-                "            publish-bake, notify-platform-update, verify-images, plugins-bake]")),
+                "            publish-bake, notify-platform-update, verify-images, dependent-suites]",
+                "            publish-bake, notify-platform-update, verify-images, dependent-suites, plugins-bake]")),
             p => p.Contains("delivery-verdict", StringComparison.Ordinal) && p.Contains("plugins-bake", StringComparison.Ordinal));
 
         // 2. a Plugins job reached TRANSITIVELY — through a need of a need (publish-bake → plugins-modules).
@@ -86,6 +86,91 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
         // 5. the report job deleted — a Plugins red would then be judged by nobody.
         Assert.Contains(Problems(Mutate(text, "\n  report-plugins-seal:\n", "\n  report-plugins-seal-gone:\n")),
             p => p.Contains(ReportJob, StringComparison.Ordinal));
+    }
+
+    /// <summary>The release gate (policy <c>dependent-suites-per-release</c>).</summary>
+    private const string ReleaseGate = "dependent-suites";
+
+    /// <summary>
+    /// 🚨 Ratchet for policy <c>dependent-suites-per-release</c>: a platform set reaches the fleet only
+    /// after MeshWeaver.Plugins' suites passed against its bundle. <c>promote</c> — the one job that
+    /// makes a set selectable by any install, satellite or Plugins pull request — must NEED the
+    /// release gate, the gate must run on the run's own publish decision and on nothing about an
+    /// input, and it must bind its verdict to the set being promoted.
+    ///
+    /// <para>This is NOT the coupling the rest of this class forbids, and the distinction is the
+    /// point. What <c>platform-backwards-compatibility</c> keeps off the platform's path is the
+    /// Plugins SEAL of this identity (the <c>plugins-*</c> jobs) — Plugins' own publication, whose
+    /// red is Plugins' own business. The release gate is a verdict ABOUT THE PLATFORM: does this core
+    /// break a dependent that runs it. Only drift blocks — a Plugins failure that reproduces at the
+    /// bundle's base is reported and never holds the set — so it cannot hold the platform for a red
+    /// the platform did not cause. And it must itself stay off every <c>plugins-*</c> job, or it
+    /// would smuggle the seal back in through a need.</para>
+    /// </summary>
+    [Fact]
+    public void ThePlatformPromotion_WaitsOnTheReleaseGate_AndTheGateOnNoPluginsJob()
+    {
+        var problems = ReleaseGateProblems(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        Assert.True(problems.Count == 0,
+            "the release gate in main-cd.yml is no longer what policy dependent-suites-per-release requires:\n  "
+            + string.Join("\n  ", problems));
+    }
+
+    /// <summary>Negative controls for <see cref="ReleaseGateProblems"/>.</summary>
+    [Fact]
+    public void TheReleaseGateDetector_CatchesEachWayToLoseIt()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        Assert.Empty(ReleaseGateProblems(text));
+
+        // 1. promote no longer waits for the verdict.
+        Assert.Contains(ReleaseGateProblems(Mutate(text,
+                "    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, dependent-suites]",
+                "    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image]")),
+            p => p.Contains("promote", StringComparison.Ordinal));
+
+        // 2. the gate skips on an input instead of on the run's publish decision.
+        Assert.Contains(ReleaseGateProblems(Mutate(text,
+                "    needs: [preflight, gate]\n    if: needs.gate.outputs.publish == 'true'\n    runs-on: ubuntu-latest\n    timeout-minutes: 45",
+                "    needs: [preflight, gate]\n    if: needs.gate.outputs.publish == 'true' && vars.DEPENDENT_SUITES != ''\n    runs-on: ubuntu-latest\n    timeout-minutes: 45")),
+            p => p.Contains("if:", StringComparison.Ordinal));
+
+        // 3. the waiter no longer binds the verdict to the set.
+        Assert.Contains(ReleaseGateProblems(Mutate(text,
+                "            --set \"${{ steps.bundle.outputs.set }}\" \\\n",
+                "")),
+            p => p.Contains("--set", StringComparison.Ordinal));
+
+        // 4. the gate reaches a Plugins SEAL job through its needs.
+        Assert.Contains(ReleaseGateProblems(Mutate(text,
+                "    needs: [preflight, gate]\n    if: needs.gate.outputs.publish == 'true'",
+                "    needs: [preflight, gate, plugins-modules]\n    if: needs.gate.outputs.publish == 'true'")),
+            p => p.Contains("plugins-modules", StringComparison.Ordinal));
+    }
+
+    internal static List<string> ReleaseGateProblems(string workflowText)
+    {
+        var problems = new List<string>();
+        var jobs = Jobs(workflowText);
+        if (!jobs.TryGetValue(ReleaseGate, out var gate))
+        {
+            problems.Add($"`{ReleaseGate}` is missing — nothing measures a set's bundle before `promote` tags it for the fleet");
+            return problems;
+        }
+        var needs = jobs.ToDictionary(kv => kv.Key, kv => NeedsOf(kv.Value));
+        if (!jobs.ContainsKey("promote") || !needs["promote"].Contains(ReleaseGate))
+            problems.Add($"`promote` does not need `{ReleaseGate}` — a set would reach the fleet with no verdict about its bundle");
+        var cond = ScalarOf(gate, "if") ?? "";
+        if (cond.Trim() != "needs.gate.outputs.publish == 'true'")
+            problems.Add($"`{ReleaseGate}`'s `if:` is `{cond}` — it must run exactly when the run publishes, never on an input's presence");
+        foreach (var reached in Closure(ReleaseGate, needs).Where(IsPluginsSide).OrderBy(x => x, StringComparer.Ordinal))
+            problems.Add($"`{ReleaseGate}` reaches `{reached}` through its needs — the Plugins seal must never hold the platform");
+        var body = Serialize(gate);
+        if (!body.Contains("await-dependent-verdict.py", StringComparison.Ordinal) || !body.Contains("--set", StringComparison.Ordinal))
+            problems.Add($"`{ReleaseGate}` no longer waits through await-dependent-verdict.py with `--set` — a green about another set would promote this one");
+        if (Regex.IsMatch(body, @"(?m)^\s*-?\s*continue-on-error\s*:"))
+            problems.Add($"`{ReleaseGate}` carries `continue-on-error` — a skip-trapdoor on the release gate");
+        return problems;
     }
 
     /// <summary>

@@ -50,15 +50,16 @@ does exactly what it should: it fails RED naming a secret the maintainer can see
 remediation line must therefore name the STORE** — `Settings → Secrets → Actions` is misleading
 here — and the fix is to provision the same names into the Dependabot store, never an `if:`.
 
-Core's `dotnet-test.yml` *does* carry `github.actor != 'dependabot[bot]'` on `shared-rules` and
-`cross-repo-pair`. That is legitimate for exactly one reason, and it is a **precondition, not a
-precedent**: those gates also trigger on `merge_group`, where the Actions store IS available, and
-the merge queue is the only path to `main` — *the exemption moves WHERE the gate runs, never
-WHETHER it runs*. **Measured 2026-09-06: only `Systemorph/MeshWeaver` has a `merge_queue` rule.**
-Plugins, Reinsurance, SocialMedia, Crm, Manufacturing, Education and Memex have none — several
-carry a `merge_group:` trigger whose event never fires, which is the trap. Copying that `if:` into
-a satellite is a skip-trapdoor, and a silent one: the satellites' required contexts are the gate
-jobs themselves, and an absent required context counts as SATISFIED.
+Core's `dotnet-test.yml` *used to* carry `github.actor != 'dependabot[bot]'` on `shared-rules` and
+`cross-repo-pair`. That was legitimate for exactly one reason, a **precondition, not a precedent**:
+those gates also triggered on `merge_group`, where the Actions store IS available, and the merge
+queue was the only path to `main` — *the exemption moved WHERE the gate ran, never WHETHER it ran*.
+**The queue is retired (policy `merge-on-own-green`), so the precondition is gone and so is the
+exemption**: a Dependabot PR runs both gates, their credential (`FLEET_READER_APP_*`) provisioned in
+the Dependabot store. **No repository in the fleet has a `merge_queue` rule now**; several carry a
+`merge_group:` trigger whose event never fires, which is the trap. Copying that `if:` anywhere is a
+skip-trapdoor, and a silent one: the satellites' required contexts are the gate jobs themselves, and
+a SKIPPED required context counts as SATISFIED.
 
 🚨 **Two traps that make this read as a workflow bug.** (1) **Only `secrets.` is doubled** — there
 is no Dependabot *variables* store (`GET /repos/{o}/{r}/dependabot/variables` → 404), so
@@ -359,17 +360,20 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   contains `searched: false` is refused (#2741: no embedding provider, nothing was searched —
   #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
   positive marker is refused too.
-- **Core dispatches ONE thing to a plugin repository: a request to test a CANDIDATE** (policy
-  `dependent-suites-gate`). `Dependent suites (MeshWeaver.Plugins)` in `dotnet-test.yml` runs on every
-  merge-queue entry (and a PR labelled `dependent-suites`), sends `core-candidate-suites`, and waits
-  for the verdict Plugins writes at `refs/core-candidate/<key>` — green only when no suite that
-  passes at the base fails at the candidate. It is a `needs:` of `Consolidate test results`. The
-  same shape was withdrawn on 2026-09-03 (no receiver existed, every core PR went red); it came back
-  after #5635/#5647/#5655 held Plugins' main red for hours, with the receiver landed FIRST. The
-  release wave is still memex's; `PlatformReleaseNotifyGuard.DispatchLedger` admits this one sender.
+- **Core dispatches ONE thing to a plugin repository: a request to test a PLATFORM SET before it
+  is promoted** (policy `dependent-suites-per-release`). `main-cd.yml`'s `Dependent suites
+  (MeshWeaver.Plugins) against this platform set` sends `core-candidate-suites` naming the set, its
+  core commit and the newest sealed set's commit (the bundle is everything between), and waits for
+  the verdict Plugins writes at `refs/core-candidate/<key>` — green only when no suite that passes at
+  the base fails at the candidate, and only about exactly that set. `promote` needs it, so a red or
+  missing verdict HOLDS the set from the fleet; `release-held` files it (label `core-release-held`)
+  and tells triage. It runs on NO pull request and NO merge-queue entry any more: per entry
+  (`dependent-suites-gate`) it froze the queue for hours on 2026-09-27 with the cluster at quota. The
+  release wave is still memex's; `PlatformReleaseNotifyGuard.DispatchLedger` admits this one sender,
+  and `PlatformDeliveryNeverWaitsOnPluginsGuard` holds `promote` to it.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
-  its `ApiReadLedger` enumerates the reads on that side of it (the dependent-suites verdict is one).
+  its `ApiReadLedger` enumerates the reads on that side of it (the release gate's verdict is one).
 - **The `none` escape is a declaration, not a skip** — printed into the log, and refused without a
   reason. Core cannot see a private repo's callers; what the gate removes is nobody being asked.
 

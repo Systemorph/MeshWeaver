@@ -255,8 +255,10 @@ every satellite must match; moving it is a release decision, made once for the f
 schedule. See [The Continuous Delivery Contract](../ContinuousDeliveryContract) and
 [Bake Identity Mismatch](../BakeIdentityMismatch).
 
-**The bump PR is still the integration test.** There is no `Dependent suites (MeshWeaver.Plugins)`
-check in core: a core PR being green does not mean a dependent still builds, and for a dependent
+**The bump PR is still the integration test.** Core's release gate (`Dependent suites
+(MeshWeaver.Plugins) against this platform set`, policy `dependent-suites-per-release`) runs
+MeshWeaver.Plugins' suites once per platform set and covers no other dependent: a core PR being green
+does not mean a dependent still builds, and for a dependent
 that *pins* core, even the release-event rebake does not close that gap — the event moves what is
 BAKED, not what `src/` compiles against. The pin bump PR is where the dependent's suite meets the
 candidate core commit, which is precisely why it must be a PR that CI actually runs on. See

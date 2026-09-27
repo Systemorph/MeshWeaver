@@ -652,9 +652,8 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
     /// <para>The neighbours were checked when this was written and are clean for structural
     /// reasons rather than by luck, which is why they are not exempted by name:
     /// <c>arm-credential.yml</c> mints and inspects a token and arms nothing;
-    /// <c>merge-queue-steward.yml</c> acts only on a <c>dequeued</c> event, which cannot occur for
-    /// a pull request that was never admitted to a merge queue — and a queue exists only on a
-    /// branch that has one configured, i.e. a protected one; and <c>release.yml</c> /
+    /// the merge-queue steward that once re-queued dequeued pull requests is retired with the queue
+    /// (policy <c>merge-on-own-green</c>); and <c>release.yml</c> /
     /// <c>node-repo-platform-ref-bump.yml</c> OPEN pull requests (already covered above) without
     /// arming them.</para>
     /// </summary>

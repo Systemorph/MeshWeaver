@@ -2,20 +2,24 @@
 """Wait for MeshWeaver.Plugins' verdict on THIS core candidate, and finish with it.
 
     python3 .github/scripts/await-dependent-verdict.py --key K --candidate SHA --base SHA \
-        --deadline-minutes 40          # GITHUB_TOKEN = a READ token on MeshWeaver.Plugins
+        [--set 3.0.0-ci.N] --deadline-minutes 40   # GITHUB_TOKEN = a READ token on MeshWeaver.Plugins
     python3 .github/scripts/await-dependent-verdict.py --self-test
 
-The waiting half of the `Dependent suites (MeshWeaver.Plugins)` gate in `dotnet-test.yml`
-(policy `dependent-suites-gate`; Doc/Architecture/CrossRepoPairGate § "The dependent's suites run
-against the candidate"). The job before it sent `repository_dispatch core-candidate-suites` to
-MeshWeaver.Plugins; that repository's `core-candidate.yml` builds its reachable suites against the
-candidate from source, re-runs only what failed at the candidate's first parent, and writes its
-verdict as a commit message at `refs/core-candidate/<key>`. This script polls that ref over REST
-(never GraphQL — AGENTS.md), once a minute, and exits with the verdict.
+The waiting half of the release gate `Dependent suites (MeshWeaver.Plugins)` in `main-cd.yml`
+(policy `dependent-suites-per-release`; Doc/Architecture/CrossRepoPairGate § "The dependent's suites
+run once per platform set"). The step before it sent `repository_dispatch core-candidate-suites` to
+MeshWeaver.Plugins naming the platform SET, its core commit (the candidate) and the core commit of
+the last SEALED set (the base) — so the change measured is the whole bundle of merges since then.
+That repository's `core-candidate.yml` builds its reachable suites against the candidate from
+source, re-runs only what failed at the base, and writes its verdict as a commit message at
+`refs/core-candidate/<key>`. This script polls that ref over REST (never GraphQL — AGENTS.md), once
+a minute, and exits with the verdict. `promote` needs that job, so a set whose verdict is not a
+green about exactly this set is never tagged for the fleet.
 
 🚨 IT NEVER PASSES ON SILENCE. No ref by the deadline → RED ("the dependent did not answer"). A
 verdict for a different key, candidate or base → RED (it is about something else). A malformed
-verdict → RED. The only green is `conclusion: success` for exactly this key, candidate and base.
+verdict → RED. The only green is `conclusion: success` for exactly this key, candidate and base —
+and, with `--set`, for exactly this platform set.
 A transport failure while polling is retried until the deadline, and then it is the silence case —
 never a pass.
 
@@ -38,11 +42,11 @@ API = "https://api.github.com"
 # repository; whatever else it might carry is dropped, not printed.
 PUBLIC_COUNTS = ("selected", "universe", "legs", "drift", "preExisting", "missingEvidence")
 # 🚦 SILENCE IS NOT A VERDICT, AND IT GETS ITS OWN EXIT CODE. Still red — never a pass — but
-# distinguishable from a verdict that says the candidate broke something: the workflow maps this
-# code to its own failing step, and the merge-queue steward reads THAT step as infrastructure (the
-# dependent's legs never got a runner inside the deadline — measured 2026-09-27: legs that ran
-# 5–14 min waited 20–50 min on a shared FIFO label), re-queueing on evidence, capped per head.
-# Every other red (a failure verdict, a mismatched or malformed one, no token) stays exit 1.
+# distinguishable from a verdict that says the candidate broke something (measured 2026-09-27: legs
+# that ran 5–14 min waited 20–50 min on a shared FIFO label, so silence was infrastructure, not a
+# finding). The release gate's ledger entry names the two apart ("NO verdict within the deadline"
+# vs "drift"), and the set is HELD either way. Every other red (a failure verdict, a mismatched or
+# malformed one, no token) stays exit 1.
 EXIT_NO_VERDICT = 3
 
 
@@ -50,18 +54,23 @@ def public_view(verdict: dict) -> dict:
     counts = verdict.get("counts") if isinstance(verdict.get("counts"), dict) else {}
     return {"conclusion": verdict.get("conclusion"), "candidate": verdict.get("candidate"),
             "base": verdict.get("base"), "key": verdict.get("key"),
+            "set": verdict.get("set") if isinstance(verdict.get("set"), str) else None,
             "counts": {k: counts.get(k) for k in PUBLIC_COUNTS if isinstance(counts.get(k), int)},
             "summary": verdict.get("summary") if isinstance(verdict.get("summary"), str) else None,
             "run": verdict.get("run") if isinstance(verdict.get("run"), str) else None}
 
 
-def validate(verdict: object, key: str, candidate: str, base: str) -> tuple[bool, str]:
-    """(passes, the sentence to print). Pure — the self-test drives it."""
+def validate(verdict: object, key: str, candidate: str, base: str, platform_set: str = "") -> tuple[bool, str]:
+    """(passes, the sentence to print). Pure — the self-test drives it. A non-empty `platform_set`
+    binds the verdict to that set as well: a green about another set is not a green about this one."""
     if not isinstance(verdict, dict):
         return False, "the verdict is not a JSON object — it cannot be read as an answer"
     if verdict.get("schema") != 1:
         return False, f"unknown verdict schema {verdict.get('schema')!r} — refusing to guess what it means"
-    for field, want in (("key", key), ("candidate", candidate), ("base", base)):
+    expected = [("key", key), ("candidate", candidate), ("base", base)]
+    if platform_set:
+        expected.append(("set", platform_set))
+    for field, want in expected:
         if verdict.get(field) != want:
             return False, (f"the verdict at this key names {field}={verdict.get(field)!r}, not {want!r} — "
                            "it is about a different measurement")
@@ -150,6 +159,13 @@ def self_test() -> int:
     for field in ("summary", "run", "counts"):
         ok, text = validate({k: v for k, v in good.items() if k != field}, K, C, B)
         check(f"a 'success' WITHOUT its {field} is RED (a green must carry its evidence)", not ok, text)
+    S = "3.0.0-ci.9400"
+    ok, _ = validate({**good, "set": S}, K, C, B, S)
+    check("a success naming exactly this platform set passes the release gate", ok)
+    ok, text = validate({**good, "set": "3.0.0-ci.9399"}, K, C, B, S)
+    check("a success about ANOTHER platform set is RED", not ok and "set" in text, text)
+    ok, text = validate(good, K, C, B, S)
+    check("a success that names no set is RED when the gate is about a set", not ok and "set" in text, text)
     ok, _ = validate({**good, "run": "https://example.com/x"}, K, C, B)
     check("a run link that is not a Plugins Actions run is RED", not ok)
     view = public_view({**good, "failingTests": ["Secret.Test.Name"], "counts": {**counts, "names": ["x"]}})
@@ -183,6 +199,8 @@ def main() -> int:
     ap.add_argument("--key")
     ap.add_argument("--candidate")
     ap.add_argument("--base")
+    ap.add_argument("--set", default="", dest="platform_set",
+                    help="the platform set the verdict must be about (the release gate always passes it)")
     ap.add_argument("--deadline-minutes", type=int, default=40)
     a = ap.parse_args()
     if a.self_test:
@@ -195,14 +213,21 @@ def main() -> int:
         return 1
     deadline = time.time() + a.deadline_minutes * 60
     print(f"waiting up to {a.deadline_minutes} min for {REPO} refs/core-candidate/{a.key} "
-          f"(candidate {a.candidate[:9]}, base {a.base[:9]})", flush=True)
+          f"(set {a.platform_set or '-'}, candidate {a.candidate[:9]}, base {a.base[:9]})", flush=True)
     verdict, why = poll(a.key, token, deadline)
+    # The dependent's run link, for the release gate's ledger entry (main-cd.yml `release-held`):
+    # written whatever the verdict says, because a red is exactly when the reader needs it.
+    out = os.environ.get("GITHUB_OUTPUT")
+    run_link = verdict.get("run") if isinstance(verdict, dict) else None
+    if out and isinstance(run_link, str) and run_link.startswith(f"https://github.com/{REPO}/actions/runs/"):
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(f"verdict_run={run_link}\n")
     if verdict is None:
         print(f"::error::MeshWeaver.Plugins did not answer within {a.deadline_minutes} min ({why}). "
-              "Silence is not a pass: the candidate is unverified. Its run is under "
+              "Silence is not a pass: the set is unverified and is NOT promoted. Its run is under "
               f"https://github.com/{REPO}/actions/workflows/core-candidate.yml")
         return EXIT_NO_VERDICT
-    ok, text = validate(verdict, a.key, a.candidate, a.base)
+    ok, text = validate(verdict, a.key, a.candidate, a.base, a.platform_set)
     print(text if ok else f"::error::{text}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

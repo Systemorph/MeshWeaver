@@ -396,33 +396,32 @@ only); adding a `workflow_run` branch + a raw-WS `/events/ci` endpoint would let
 with the harness `Monitor` `ws:` source for zero-poll delivery. Deferred — the background loop is
 enough today.
 
-## 🚦 The merge queue — `--auto` enqueues, the steward re-queues, you never re-order
+## 🚦 There is NO merge queue — a PR merges on its OWN green (policy `merge-on-own-green`)
 
-Core `main` merges through GitHub's **merge queue** (ruleset `main pr protection`, rule
-`merge_queue`; the full manual is
-[MergeQueue.md](../../../src/MeshWeaver.Documentation/Data/Architecture/MergeQueue.md)). Each
-entry is built on top of the entries ahead of it, so the combination that lands is the combination
-that was tested — the fix for two independently-green PRs being red together (#2412). What that
+Core `main` merged through a merge queue until 2026-09-27; the maintainer removed it (*"why do we
+have to build all again in main?"*) after the queue — re-building every entry on `main` and, for two
+days, running MeshWeaver.Plugins' suites per entry — stalled `main` for eight hours. What that
 changes about this procedure:
 
-- **`gh pr merge <n> --auto` means "enqueue when this PR's own required checks are green".**
-  `auto-arm.yml` runs it on every non-draft PR, so a green PR lands without a hand on it. Convert to
-  **draft** to opt out. `gh pr merge <n> --merge` on a green PR is the same thing done by hand: it
-  enters the queue, it does not merge on the spot.
-- **A push to a queued branch ejects it.** The queue does not pick up the new commit in place; the
-  arm lane re-arms on `synchronize` and the new head re-enters once its own run is green.
-- **Dequeue via GraphQL** (`dequeuePullRequest(input:{id:<PR node id>})`), never by re-ordering or
-  by `jump`. The queue's order is its correctness argument.
-- **Never re-queue an ejected PR by hand, and never re-run the failed queue build.** The
-  `merge-queue-steward.yml` lane acts on every `dequeued` event: a catalogued flake, an
-  infrastructure death, a `CI_TIMEOUT`, or a multi-PR group whose own run was green is re-queued
-  (capped per head sha, recorded in a marker comment); anything else is left out with the failing
-  assertion, the run URL and the `queue-rejected` label. Read its comment. A red on a queue build
-  lives on the `gh-readonly-queue/main/pr-<N>-…` run, not on the PR's commit — `gh pr checks` shows
-  nothing. To make a flake re-queueable, add an evidence-bearing entry (assertion-MESSAGE regex,
-  issue, run URLs, ≤30-day expiry) to `.github/known-flakes.json`; never a test-name pattern.
-- **The step-3 poll still applies to the PR's own run**, and after the queue lands it, to `main`'s.
-  The queue is not a reason to stop watching; it is the reason the merge is no longer yours to press.
+- **`gh pr merge <n> --auto` means "merge when this PR's required contexts are green"** —
+  `Consolidate test results` and `Automatic review answered`, `strict: false`. `auto-arm.yml` runs it
+  on every non-draft PR, so a green, answered PR lands without a hand on it. Convert to **draft** to
+  opt out (and see "Disarming auto-merge is not a hold" in MergeQueue.md — `--disable-auto` is re-armed
+  on the next push).
+- **Nothing re-builds your PR on top of `main` before it lands.** Two independently-green PRs can be
+  red together. That is caught AFTER landing: **read `main`'s push run of Build and Test after your
+  merge** (step 3's poll, re-targeted at `main`), and fix forward at once if it is red — a red `main`
+  publishes nothing, and it is now everyone's first job.
+- **MeshWeaver.Plugins is measured per PLATFORM SET, not per PR** (policy
+  `dependent-suites-per-release`): core CD's release gate runs Plugins' suites against the bundle of
+  every merge since the last sealed set and HOLDS the set on a break. A green PR therefore says
+  nothing about Plugins; a held set files a `core-release-held` issue naming the bundle's PRs. Want
+  the verdict before you merge a risky behaviour change? Dispatch Plugins' `core-candidate.yml` by
+  hand with your PR's merge commit as `candidate` and its first parent as `base`.
+- **The steward, `known-flakes.json`, `queue-rejected` and `dequeuePullRequest` are gone** with the
+  queue. There is no ejection to read and no queue ref (`gh-readonly-queue/…`) any more.
+
+Full record (why the queue existed, what it measured, why it went): [MergeQueue.md](../../../src/MeshWeaver.Documentation/Data/Architecture/MergeQueue.md).
 
 ## What's New entry — the MECHANICS, for when you are cutting a release
 

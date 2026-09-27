@@ -1,11 +1,35 @@
 ---
 Name: The Merge Queue
 Category: Architecture
-Description: Why main needs a queue, what the first outing measured (the churn window; hand re-queues), the settings that remove the churn, and the steward that re-queues on evidence so nobody runs after the queue.
+Description: RETIRED — core main merges on each pull request's own green (policy merge-on-own-green). Why the queue existed, why it was removed, what now catches a landed combination that is red, and the queue-era record (the churn window, the steward) kept as evidence.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
 ---
 
 # The Merge Queue
+
+> 🚨 **RETIRED — core `main` no longer merges through a queue** (policy
+> [`merge-on-own-green`](../PolicyNotProse)). On 2026-09-27 the `merge_queue` rule was removed from
+> ruleset `2128472`; a pull request now lands on its OWN green — the required contexts are
+> `Consolidate test results` and `Automatic review answered`, `strict: false` — with no rebuild on top
+> of `main` and no dependent suites per entry. `auto-arm.yml` still arms every non-draft pull request;
+> without a queue that simply IS auto-merge on green. The steward (`merge-queue-steward.yml`, its
+> script, its guard and `.github/known-flakes.json`) was removed with the queue: there are no
+> `dequeued` events left for it to act on.
+>
+> **Why.** The queue re-built every entry on top of `main` and, from 2026-09-25, ran
+> MeshWeaver.Plugins' candidate suites per entry too. On 2026-09-27, with the CI cluster at its Azure
+> quota, that stalled `main` for eight hours (`2bb14d8db9` from 08:25Z) and starved Plugins' own CI.
+> The maintainer's question was *"why do we have to build all again in main?"*.
+>
+> **What now catches what the queue caught.** Two independently-green pull requests that are red
+> together still land — that is the cost accepted. They are caught AFTER landing, by two nets:
+> `main`'s own push run of Build and Test (never cancelled on `main`, so every landed combination is
+> compiled and tested — `MainRunsAreNeverCancelledGuard` holds that), and the release gate, which measures MeshWeaver.Plugins' suites against every platform
+> set before `promote` ([The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's suites run
+> once per platform set"). A red `main` publishes nothing (CD keys on `Consolidate test results` for
+> that commit), so neither net lets a broken combination reach the fleet.
+>
+> Everything below is the queue-era manual, kept as the record of what was measured.
 
 **A merge queue builds the combination that is about to land, before it lands.** With
 `strict: false` branch protection every pull request is tested against the `main` it branched from,
@@ -64,23 +88,28 @@ Two properties of `dotnet-test.yml` matter for the queue and were checked rather
   context can be absent ejects entries with nothing to point at (`CI_TIMEOUT`), which is what the
   missing `merge_group` trigger looked like before #2799.
 
-### 🚨 The dependent's suites lengthen a queue build — and the table above has drifted
+### 🚨 A queue build runs NO dependent suites any more — they run once per platform set
 
-Every queue entry now also runs **`Dependent suites (MeshWeaver.Plugins)`** (policy
-[`dependent-suites-gate`](../PolicyNotProse); [The Cross-Repo Pair Gate](../CrossRepoPairGate) §
-"The dependent's suites run against the candidate"): MeshWeaver.Plugins builds its reachable suites
-against the entry's commit and core waits for the verdict AFTER its own tests. A queue build is
-therefore core's run (~20 min) plus a waiter of up to 45 — about 65 minutes end to end, with each
-JOB still under the fleet's 45-minute cap. `check_response_timeout_minutes` must cover that: the
-45 in the table above would eject every entry whose Plugins run is slow.
+From 2026-09-25 to 2026-09-27 every queue entry also ran `Dependent suites (MeshWeaver.Plugins)`
+(policy `dependent-suites-gate`): a full MeshWeaver.Plugins candidate run of up to 12 legs, waited on
+for up to 42 minutes after core's own tests. A queue build was therefore ~65 minutes, the ruleset's
+`check_response_timeout_minutes` was raised to 120 to cover it, and at `max_entries_to_build: 8` up
+to eight such runs competed for a CI cluster that was at its Azure quota. Measured on 2026-09-27: the
+queue cascaded for eight hours, `main` sat at `2bb14d8db9` from 08:25Z, five entries were ejected on
+*no verdict* alone (every candidate that ran was green), and 21 Plugins PR runs queued with none
+running. `max_entries_to_build` was cut to 2 by hand at ~16:00Z.
 
-Measured live on 2026-09-25 (`gh api repos/Systemorph/MeshWeaver/rulesets/2128472`), the ruleset is
-NOT the table above: `max_entries_to_build: 8`, `max_entries_to_merge: 8`,
-`check_response_timeout_minutes: 120`. The 120 covers the gate. The 8 means up to eight entries —
-eight Plugins candidate runs, each up to ~12 legs on `aks-silos-dind` — can build at once, which that
-pool (≈24 runners) cannot serve alongside Plugins' own CI. Whether to return to a small
-`max_entries_to_build` is a maintainer's ruleset edit; `merge-queue-steward.py status` prints the
-drift.
+Policy [`dependent-suites-per-release`](../PolicyNotProse) removed the measurement from the queue.
+The dependent's suites run ONCE per platform set, in `main-cd.yml` before `promote`, against the
+bundle of every merge since the last sealed set — so the fleet is protected where the fleet is
+reached, and a queue entry is decided by core-only gates again: the cross-repo pair, interface
+additions, satellite pins, closing keywords and the platform-compatibility ladder, all `needs:` of
+`Consolidate test results` ([The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's
+suites run once per platform set"). A queue build is back to core's own run (~20 minutes).
+
+The same day the queue itself was removed (the banner at the top); the required contexts were never
+changed by either step — `Dependent suites` was never one, it failed `Consolidate test results`
+through a `needs:`.
 
 ### 🚨 What that drift did: the queue froze on a waiter with NO verdict (2026-09-27)
 

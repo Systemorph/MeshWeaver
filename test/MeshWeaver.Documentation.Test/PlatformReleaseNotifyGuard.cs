@@ -203,11 +203,13 @@ public class PlatformReleaseNotifyGuard
     /// emitters for one event is the cross-repo coupling the rule forbids.</para>
     ///
     /// <para>ONE ledgered exception, and it is not a release event (policy
-    /// <c>dependent-suites-gate</c>, Doc/Architecture/CrossRepoPairGate): <see cref="DispatchLedger"/>.
-    /// Core's pull-request/merge-queue gate asks MeshWeaver.Plugins to run its suites against the
-    /// CANDIDATE commit (<c>core-candidate-suites</c>) and waits for the verdict — a TEST REQUEST
-    /// about an unmerged commit, which memex cannot carry because nothing has been published. The
-    /// release wave stays memex's, and every other sender is still a regression.</para>
+    /// <c>dependent-suites-per-release</c>, Doc/Architecture/CrossRepoPairGate): <see cref="DispatchLedger"/>.
+    /// Core CD's release gate asks MeshWeaver.Plugins to run its suites against the platform set it
+    /// is about to promote (<c>core-candidate-suites</c>) and waits for the verdict before
+    /// <c>promote</c> — a TEST REQUEST about a set nobody may roll to yet, which memex cannot carry
+    /// because nothing has been published. (Until policy <c>dependent-suites-per-release</c> the same
+    /// request was sent by <c>dotnet-test.yml</c> for every merge-queue entry.) The release wave stays
+    /// memex's, and every other sender is still a regression.</para>
     ///
     /// <para>Otherwise there is no ledger. The reusable lanes core hosts for the satellites
     /// (<c>node-repo-publish-bake.yml</c>, <c>node-repo-tag-modules.yml</c>) used to send
@@ -254,22 +256,23 @@ public class PlatformReleaseNotifyGuard
     }
 
     /// <summary>
-    /// The ONE permitted sender (policy <c>dependent-suites-gate</c>): <c>dotnet-test.yml</c> asks
-    /// MeshWeaver.Plugins to test a core CANDIDATE. Keyed by file, and every sending line in that
+    /// The ONE permitted sender (policy <c>dependent-suites-per-release</c>): <c>main-cd.yml</c>'s
+    /// <c>dependent-suites</c> asks MeshWeaver.Plugins to test the platform set it is about to promote. Keyed by file, and every sending line in that
     /// file is held to the one event type and the one target by
     /// <see cref="TheLedgeredSender_SendsOnlyTheCandidateTestRequest"/>.
     /// </summary>
     private static readonly System.Collections.Immutable.ImmutableDictionary<string, string> DispatchLedger =
         System.Collections.Immutable.ImmutableDictionary.CreateRange(StringComparer.Ordinal,
         [
-            new System.Collections.Generic.KeyValuePair<string, string>("dotnet-test.yml",
-                "`dependent-suites-dispatch` sends `core-candidate-suites` to MeshWeaver.Plugins so its "
-                + "suites run against the candidate core commit before it lands (#2689; #5635/#5647/#5655 "
-                + "each turned Plugins' main red through a behaviour change no core gate could see)"),
+            new System.Collections.Generic.KeyValuePair<string, string>("main-cd.yml",
+                "`dependent-suites` sends `core-candidate-suites` to MeshWeaver.Plugins so its suites "
+                + "run against the bundle of core merges in the platform set before `promote` tags it "
+                + "for the fleet (policy dependent-suites-per-release; #2689 — #5635/#5647/#5655 each "
+                + "turned Plugins' main red through a behaviour change no core gate could see)"),
         ]);
 
     /// <summary>
-    /// 🚨 The ledger entry is NOT a licence to dispatch anything from <c>dotnet-test.yml</c>. Every
+    /// 🚨 The ledger entry is NOT a licence to dispatch anything from <c>main-cd.yml</c>. Every
     /// sending line there must name the one event type and the one target — a second event, or a
     /// dispatch to another repository, would be a new coupling hiding behind an old entry.
     /// And the entry must still MATCH: a ledger line whose sender vanished is a detector that

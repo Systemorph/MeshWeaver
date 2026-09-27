@@ -11,8 +11,9 @@
 # a caller that forwards the App credential and nothing else. (Deliberately no list of repo names
 # here: an enumeration in a comment is a copy of the fleet roster and would drift exactly the way
 # the copies below did. `gh search code --owner Systemorph "auto-arm.yml@"` answers who calls it.)
-# The repos are NOT identical — core runs a merge queue and the others do not — so the arm step
-# handles both shapes rather than the file forking per repo.
+# A repository may or may not run a merge queue (core ran one until policy `merge-on-own-green`
+# removed it; today no fleet repository does), so the arm step handles both shapes rather than the
+# file forking per repo. Without a queue, arming IS auto-merge on the PR's own green.
 #
 # It used to be hand-copied into every one of them, and the copies DRIFTED exactly as AGENTS.md
 # warns a copy-pasted lane does. Measured 2026-09-02 — the numbers below are a record of that
