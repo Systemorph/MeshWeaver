@@ -542,6 +542,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Operating from the portal, not the cluster](OperatingFromThePortal)
 - [Operator Credentials Travel by Name](OperatorCredentialsByName) — the operator's only environment is a ConfigMap, so a step is handed a Key Vault object's NAME and reads the value with the identity it already runs as; why every database action failed at step 1 (Memex#132), why the CSI class built for it was consumed by nobody, and the one contract the Postgres steps now share with hosting-kv-ensure on both executors
 - [The Payment Provider Contract](PaymentProviderContract)
+- [Secrets: Write-Only Entry, Split Identities](SecretsWriteOnlyEntry) — nobody touches Key Vault by hand: a write-only GUI per owning app, ONE governed writer identity that can list/set/delete but never read a value, a reader identity (the pods) that can only `get`, the write-time fingerprint tag, and the CI guard against new hand-run vault commands
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
 - [Project Templates](ProjectTemplates)
 - [Reading a Recurrence Reopen](ReadingARecurrenceReopen) — a bot reopen asserts two things and both fail independently; the 2026-09-17 wave measured, and the honest triple behind core's count

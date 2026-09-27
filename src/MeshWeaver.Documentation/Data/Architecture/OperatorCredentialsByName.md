@@ -51,11 +51,14 @@ was checked, the lane had the same hole with no class to opt into at all.
 ## The fix: the same read hosting-kv-ensure already makes
 
 `hosting-kv-ensure` — two steps earlier in every Provision — already reads that exact object, by
-name, with that exact identity:
+name, with that exact identity: a VALUE read of `--db-password-secret` in `--vault`, captured into a
+variable and never printed.
 
-```
-az keyvault secret show --vault-name "$vault" --name "$db_password_secret" --query value -o tsv
-```
+> 🚨 That value read is one of the four the secrets migration removes: under policy
+> `secrets-write-only-entry` the identity that writes the vault may never read a value
+> ([Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry) → *Where the fleet stands*).
+> Until the connection string is composed without reading the admin password back, these steps keep
+> running as `hosting-operator`, not as the writer.
 
 The plan hands it `--vault {record.keyVault}` and `--db-password-secret "$AZ_POSTGRES_PASSWORD_SECRET"`
 (a name the record's `operator.environment` carries, correctly, in the plaintext channel), and it

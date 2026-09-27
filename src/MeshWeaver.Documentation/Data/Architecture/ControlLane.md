@@ -161,17 +161,12 @@ that can never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding
 
 ## Owner commands
 
-Minting a key is an operator act; no agent creates or reads a secret value. The value is generated
-in the command and never printed:
-
-```bash
-az keyvault secret set --vault-name Systemorph --name memexcloud-Hosting-ControlLaneKey \
-  --value "$(openssl rand -hex 32)" --output none
-az keyvault secret show --vault-name Systemorph --name memexcloud-Hosting-ControlLaneKey \
-  --query "{name:name, enabled:attributes.enabled, updated:attributes.updated}" -o table
-```
-
-The second command reads back metadata only.
+Minting a key is a GUI act on the control instance, never a vault command, and no agent creates or
+reads a secret value (policy `secrets-write-only-entry`,
+[Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry)). On `Deployments/memex-cloud`,
+use **Set Key Vault secrets…** → **Generate** for `memexcloud-Hosting-ControlLaneKey`. Both ends of the
+lane read the vault, so the value is minted in the operator Job and never shown. The status the page
+shows (present, enabled, updated, and the `mw-fp` fingerprint) comes from vault metadata alone.
 
 ## Rollout order — mint first, declare last
 

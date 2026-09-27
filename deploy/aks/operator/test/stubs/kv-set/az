@@ -3,25 +3,41 @@
 # is how a test proves a pasted value never travels on a command line — and answers the vault
 # from a small state:
 #
-#   HOSTING_KVS_STATE      directory: az.log (every argv), set.<name> (what a `set --file` wrote)
+#   HOSTING_KVS_STATE      directory: az.log (every argv), set.<name> (what a `set --file` wrote),
+#                          tags.<name> (the --tags it carried, one per line)
 #   HOSTING_KVS_SET_FAIL   space-separated object names whose `keyvault secret set` refuses
 #
-# `keyvault secret show --query id` answers for anything this run wrote (the read-back), and
-# refuses everything else — a set the vault did not keep must be a failed step.
+# It behaves like the WRITER identity (Doc/Architecture/SecretsWriteOnlyEntry): `set` answers the
+# new version id, `list-versions` lists it, and `show` — a VALUE read — is FORBIDDEN, so a step that
+# still reads a value back fails here exactly as it would against the vault.
 set -uo pipefail
 state="${HOSTING_KVS_STATE:?the az stub needs HOSTING_KVS_STATE}"
 printf 'az %s\n' "$*" >> "$state/az.log"
 case "${1:-} ${2:-} ${3:-}" in
   "keyvault secret set")
-    name="" file=""; while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --file) file="${2:-}"; shift 2 ;; --value) echo "az stub: hosting-kv-set must write through --file, never --value" >&2; exit 1 ;; *) shift ;; esac; done
+    name="" file="" tags=() in_tags=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="${2:-}"; in_tags=0; shift 2 ;;
+        --file) file="${2:-}"; in_tags=0; shift 2 ;;
+        --value) echo "az stub: hosting-kv-set must write through --file, never --value" >&2; exit 1 ;;
+        --tags) in_tags=1; shift ;;
+        --*) in_tags=0; shift ;;
+        *) [ "$in_tags" = 1 ] && tags+=("$1"); shift ;;
+      esac
+    done
     for f in ${HOSTING_KVS_SET_FAIL:-}; do [ "$f" = "$name" ] && { echo "ERROR: (Forbidden) The user, group or application does not have secrets set permission on key vault" >&2; exit 1; }; done
     [ -n "$file" ] || { echo "az stub: hosting-kv-set must write through --file, never --value" >&2; exit 1; }
     [ -f "$file" ] || { echo "az stub: --file ${file} does not exist" >&2; exit 1; }
-    cp "$file" "$state/set.$name"; exit 0 ;;
-  "keyvault secret show")
+    cp "$file" "$state/set.$name"
+    printf '%s\n' "${tags[@]}" > "$state/tags.$name"
+    printf 'https://vault.test/secrets/%s/7f3a\n' "$name"; exit 0 ;;
+  "keyvault secret list-versions")
     name=""; while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; *) shift ;; esac; done
-    [ -f "$state/set.$name" ] && { printf 'https://vault.test/secrets/%s/7f3a\n' "$name"; exit 0; }
-    echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
+    [ -f "$state/set.$name" ] && printf 'https://vault.test/secrets/%s/7f3a\n' "$name"
+    exit 0 ;;
+  "keyvault secret show")
+    echo "ERROR: (Forbidden) The user, group or application does not have secrets get permission on key vault — the writer identity never reads a value" >&2; exit 1 ;;
 esac
 echo "az stub: unexpected invocation: $*" >&2
 exit 1

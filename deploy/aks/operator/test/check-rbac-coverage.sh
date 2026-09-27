@@ -57,6 +57,7 @@ resource_of() {
     job|jobs)                                echo "batch jobs" ;;
     cronjob|cronjobs|cj)                     echo "batch cronjobs" ;;
     secretproviderclass|secretproviderclasses|spc) echo "secrets-store.csi.x-k8s.io secretproviderclasses" ;;
+    secretproviderclasspodstatus|secretproviderclasspodstatuses) echo "secrets-store.csi.x-k8s.io secretproviderclasspodstatuses" ;;
     certificate|certificates|cert) echo "cert-manager.io certificates" ;;
     *) echo "" ;;
   esac

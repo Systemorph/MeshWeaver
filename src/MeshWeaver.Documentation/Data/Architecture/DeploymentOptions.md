@@ -56,8 +56,8 @@ The chart templates these in `deploy/helm/templates/memex-portal/config.yaml` (+
 
 The real `AzureFoundry` key lives in Key Vault, mounted by the CSI add-on and synced into a K8s Secret the portal reads via `envFrom`.
 
-1. Store the secret: `az keyvault secret set --vault-name <key-vault> --name AzureFoundry-ApiKey --value <key>`.
-2. Grant the add-on identity read access (once): `az role assignment create --assignee <csi-addon-identity-clientId> --role "Key Vault Secrets User" --scope <key-vault resourceId>` (or an access policy with secret get/list).
+1. Enter the secret on the control instance: `Deployments/<id>` → **Set Key Vault secrets…** — a write-only paste box the governed writer identity stores as `AzureFoundry-ApiKey` (policy `secrets-write-only-entry`, [Secrets: Write-Only Entry](../SecretsWriteOnlyEntry)). Nobody runs a vault command by hand.
+2. The add-on identity's read access is the fleet's READER grant (`get` only), provisioned as infrastructure-as-code through the governed `InfraDeploy` action — never a hand-run role assignment.
 3. Declare it under `keyVaultSecrets:` in the environment's values (`vaultName`, `tenantId`, `identityClientId`, and `secrets: [{vaultSecret: AzureFoundry-ApiKey, key: AzureFoundry__ApiKey}]`) — the chart renders the `SecretProviderClass`, the CSI volume, its mount and the `envFrom`, so steps 3–4 of the legacy path below are no longer hand-applied. See [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values". *(Legacy, hand-made shape — template at [`deploy/aks/envs/example/secretproviderclass.yaml`](https://github.com/Systemorph/MeshWeaver/blob/main/deploy/aks/envs/example/secretproviderclass.yaml); the real one is per-environment and git-ignored.)*
 4. *(Legacy only)* Patch the portal Deployment to mount it + read the synced secret:
 
