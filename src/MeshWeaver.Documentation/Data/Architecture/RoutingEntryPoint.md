@@ -118,6 +118,39 @@ Also note the in-process `TestCluster` runs Orleans' *distributed* directory (Te
 `ConfigureDistributedGrainDirectory`), whereas the portal runs the DHT `LocalGrainDirectory`; the test
 therefore stands in for "the owner cannot answer" rather than reproducing the DHT's own timing.
 
+### Production verification, 2026-09-27
+
+The governed `Logs` actions `Ops/Actions/verify-5037-memex-20260927-placement` and
+`Ops/Actions/verify-5037-memexcloud-20260927-placement` requested `sinceMinutes: 1440`,
+`Grain placement operation timed out`, limit 200. The query stages ran on 2026-09-27 at
+11:56:55–11:56:56Z (memex) and 11:57:04–11:57:05Z (memex-cloud). Each lower bound is
+24 hours before its query's end. The action records retain these second-resolution stage
+bounds, **not the exact start/end sent to Loki**, so these are bounded observations rather
+than independently reproducible fixed UTC windows.
+
+Both actions completed without truncation or landing failures. Memex returned **0** lines.
+Memex-cloud returned **35**: **28 explicitly name `messagehub/*`; seven are unclassified**
+because they omit the grain identity. Those seven occur within 100 ms of named failures on
+the same pod, but proximity does not establish attribution. **Zero lines name `routing/*`; this
+is not proof that all remaining placement failures belong to other grain types.** Issue #5037
+remains open pending complete production verification.
+
+The positive control `Ops/Actions/verify-5037-memex-20260927-startup` requested the same
+1,440-minute duration and read and landed **126** `PlatformStartup` lines, with no truncation
+or failures; its query stage ran at 11:58:55–11:58:56Z. It includes 39 version-bearing starts,
+from `ci.9406` through `ci.9445`, establishing repeated rolls and a populated log source.
+Attempts to pin 2026-09-26T12:00:00Z through 2026-09-27T12:00:00Z using `__timestamp__`
+failed because the deployed Loki rejects that function in both `label_format` and `line_format`.
+The failed actions are not zero-result measurements and do not establish that fixed window.
+
+The window includes the serving generation's roll: memex's replicas started at 07:09–07:28Z on
+`3.0.0-ci.9445` (core `db9f332bf3d9fa9935799ccbfda4ef0f7fed221e`); memex-cloud's image is
+`3.0.0-ci.9443` (core `311108bf16a70eee39a6618b36456cf82c58a85f`), with replicas starting at
+06:15–06:18Z and further same-image starts later in the window. Both commits descend from
+#5675's `4028fd6468`. Fresh reads of this documentation node on both portals returned typed
+`MarkdownContent`. Those reads prove that nodes were serving; they do not distinguish the
+router's local-stream fast path from a grain dispatch.
+
 ## 🚨 The observation this page exists for
 
 Read the sender in that line. It is `sys.client/hosted-10.244.9.229:11111` — the Orleans **hosted
