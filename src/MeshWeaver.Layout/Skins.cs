@@ -29,4 +29,11 @@ public static class Skins
     /// Gets the skin for card.
     /// </summary>
     public static CardSkin Card => new();
+
+    /// <summary>
+    /// Gets a collapsible-section skin headed <paramref name="title"/> — see <see cref="ExpanderSkin"/>.
+    /// </summary>
+    /// <param name="title">The header text, or a data binding.</param>
+    /// <returns>A new <see cref="ExpanderSkin"/>, declared open.</returns>
+    public static ExpanderSkin Expander(object? title) => new() { Title = title };
 }
