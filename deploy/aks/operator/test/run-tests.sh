@@ -388,6 +388,17 @@ case "$_kve_out" in *"::hosting:: kv_db_connection=created"*) ok "the run report
 case "$_kve_out" in *"::hosting:: kv_created=1"*) ok "…and counts it among the created objects" ;; *) bad "created count" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 
+# Existence is decided from `secret list` (metadata), never `secret show` (a value read the writer
+# identity cannot make), and a REFUSED listing is a refusal, never "absent" (policy
+# secrets-write-only-entry).
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+case "$_kve_log" in *"secret show"*"--query id"*) bad "existence is never checked with a value read" "az saw: ${_kve_log}" ;; *"secret list"*) ok "existence is checked with \`secret list\`, never \`secret show\`" ;; *) bad "existence check" "az saw: ${_kve_log}" ;; esac
+rm -rf "$_kve_state"
+kve HOSTING_KVE_LIST_FAIL=1 HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -ne 0 ] && ok "a vault that refuses the LISTING is a refusal, never 'absent'" || bad "list refused" "exited 0: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and nothing is (over)written" "az saw: ${_kve_log}" ;; *) ok "…and nothing is (over)written" ;; esac
+rm -rf "$_kve_state"
+
 # Present: KEPT — no read of the password, no write — the master-key rule, one object over.
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
   -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
@@ -456,6 +467,14 @@ rr() {  # rr <mode> <vault values> [env…] -- <args…>
 }
 rr_done() { rm -rf "$_rr_reg" "$_rr_kv"; }
 RR_ARGS=(--registry-url https://registry.test --instance-id acme --home-url https://acme.meshweaver.cloud --vault Systemorph --object acme-PluginCatalog-RegistryToken)
+
+# A REFUSED listing is a refusal, never "absent": nothing is registered, nothing is written.
+rr normal "" HOSTING_RRAZ_LIST_FAIL=1 -- "${RR_ARGS[@]}"
+[ "$_rr_rc" -ne 0 ] && ok "registry-register: a vault that refuses the LISTING is a refusal, never 'absent'" || bad "registry-register list refused" "exited 0: ${_rr_out}"
+case "$_rr_out" in *"could not LIST vault Systemorph"*) ok "…naming the refused listing" ;; *) bad "registry-register list message" "said: ${_rr_out}" ;; esac
+case "$_rr_reglog" in *REGISTER*) bad "…and registers nothing" "registry saw: ${_rr_reglog}" ;; *) ok "…and registers nothing" ;; esac
+case "$_rr_azlog" in *"secret set"*) bad "…and writes nothing" "az saw: ${_rr_azlog}" ;; *) ok "…and writes nothing" ;; esac
+rr_done
 
 # Absent → registered on the free plan, stored, proven.
 rr normal "" -- "${RR_ARGS[@]}"
@@ -566,6 +585,13 @@ kvc() {  # kvc [env…] -- <args…>
 }
 KVC_PEM="-----BEGIN-FAKE-PEM-NEVER-PRINTED-----"
 
+# A REFUSED listing is a refusal, never "absent": nothing is copied over a target that may exist.
+kvc HOSTING_KVC_LIST_FAIL=1 HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -ne 0 ] && ok "kv-copy: a vault that refuses the LISTING is a refusal, never 'absent'" || bad "kv-copy list refused" "exited 0: ${_kvc_out}"
+case "$_kvc_out" in *"could not LIST vault Systemorph"*) ok "…naming the refused listing" ;; *) bad "kv-copy list message" "said: ${_kvc_out}" ;; esac
+case "$_kvc_log" in *"secret set"*) bad "…and copies nothing" "az saw: ${_kvc_log}" ;; *) ok "…and copies nothing" ;; esac
+rm -rf "$_kvc_state"
+
 kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
 [ "$_kvc_rc" -eq 0 ] && ok "kv-copy materialises an ABSENT target from its source" || bad "kv-copy copies an absent target" "exited ${_kvc_rc}: ${_kvc_out}"
 [ "$(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)" = "$KVC_PEM" ] && ok "…byte-for-byte" || bad "the copy is byte-identical" "wrote: $(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)"
@@ -632,6 +658,13 @@ sa() {  # sa [env…] -- <args…>
 }
 SA_ARGS=(--name acme --host acme.meshweaver.cloud --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret)
 SA_ID=66d36350-397d-420f-97b2-ae173fc97d05
+
+# A REFUSED listing is a refusal, never "absent": no credential is minted, nothing is written.
+sa HOSTING_SA_LIST_FAIL=1 -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -ne 0 ] && ok "signin-app: a vault that refuses the LISTING is a refusal, never 'absent'" || bad "signin-app list refused" "exited 0: ${_sa_out}"
+case "$_sa_out" in *"could not LIST vault Systemorph"*) ok "…naming the refused listing" ;; *) bad "signin-app list message" "said: ${_sa_out}" ;; esac
+case "$_sa_log" in *"credential reset"*|*"secret set"*) bad "…and mints and writes nothing" "az saw: ${_sa_log}" ;; *) ok "…and mints and writes nothing" ;; esac
+rm -rf "$_sa_state"
 
 # Present + app readable + redirect on it → kept, verified.
 sa HOSTING_SA_EXISTING=acme-Authentication-Microsoft-ClientSecret -- "${SA_ARGS[@]}" --client-id $SA_ID
