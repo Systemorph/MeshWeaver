@@ -25,6 +25,7 @@ public class PlatformSettingsTabSeedTest
         InboxSettingsTab.TabId,
         UpdatePolicySettingsTab.TabId,
         PublishedSettingsTab.TabId,
+        ControlLaneSettingsTab.TabId,
     ];
 
     /// <summary>The tabs whose compiled providers gated on the platform-admin check.</summary>
@@ -35,6 +36,7 @@ public class PlatformSettingsTabSeedTest
         InboxSettingsTab.TabId,
         UpdatePolicySettingsTab.TabId,
         PublishedSettingsTab.TabId,
+        ControlLaneSettingsTab.TabId,
     ];
 
     [Fact]
