@@ -3490,17 +3490,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // round-tripped to a typed instance here; passing a JsonNode through untouched left
         // consumers' `Content is X` soft-casts silently failing (issue #889 — the buyer's
         // AccessAssignment folding to nothing).
-        var rawText = node.Content switch
-        {
-            JsonElement el when el.ValueKind == JsonValueKind.Object => el.GetRawText(),
-            System.Text.Json.Nodes.JsonObject jo => jo.ToJsonString(),
-            _ => null,
-        };
-        if (rawText is null)
+        if (node.Content is not JsonElement { ValueKind: JsonValueKind.Object }
+            and not System.Text.Json.Nodes.JsonObject)
             return node;
         try
         {
-            var deserialized = JsonSerializer.Deserialize<object>(rawText, options);
+            // Read the JSON representation directly. A successful query read needs only the
+            // materialized content; GetRawText/ToJsonString first creates another full UTF-16
+            // payload. Diagnostic text belongs to the failure branches below.
+            var deserialized = node.Content switch
+            {
+                JsonElement el => el.Deserialize<object>(options),
+                System.Text.Json.Nodes.JsonObject jo => jo.Deserialize<object>(options),
+                _ => null,
+            };
             if (deserialized is null)
                 return node;
             // 🚨 Bad-data tolerance: Deserialize<object> degrades BACK to a JsonElement when
@@ -3524,13 +3527,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // sink the untyped-content shard gate scans (#3625).
                 degradations?.Record(
                     node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded));
+                var rawText = QueryDiagnosticRaw(node.Content);
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
-                        "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText)),
+                        "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawText),
                     "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
                     + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
                     + "'Content is X'/'as X' consumers will fail (renders empty). Raw: {RawJson}",
-                    node.Path, TruncateRawText(rawText));
+                    node.Path, rawText);
                 return node;
             }
             return node with { Content = deserialized };
@@ -3550,15 +3554,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // No parsed element here — the parse is what failed — so the NodeType is the only key
             // Unresolved() can re-ask under, which is the exact route it prefers anyway.
             degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
+            var rawText = QueryDiagnosticRaw(node.Content);
             logger.LogWarning(
                 new MeshNodeContentDegradedException(
-                    "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText), ex),
+                    "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawText, ex),
                 "MeshNodeStreamCache.GetQuery: FAILED to deserialize Content for {Path} — content stays an "
                 + "untyped JsonElement; downstream 'Content is X' will fail (renders empty). Raw: {RawJson}",
-                node.Path, TruncateRawText(rawText));
+                node.Path, rawText);
             return node;
         }
     }
+
+    private static string QueryDiagnosticRaw(object? content) => content switch
+    {
+        JsonElement el => TruncateRaw(el),
+        System.Text.Json.Nodes.JsonObject jo => TruncateRawText(jo.ToJsonString()),
+        _ => string.Empty,
+    };
 
     /// <summary>
     /// Removes the cached entry for <paramref name="path"/> so the next

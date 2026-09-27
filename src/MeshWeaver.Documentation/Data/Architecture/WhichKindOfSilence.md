@@ -168,8 +168,9 @@ and 18:15Z. `Logs` actions `Ops/Actions/logs-memexcloud-20260926-heapstep-5555` 
   `memex-portal-deployment-6c7669df84-nbrdx`, tick 314 read `heap=4.44GiB`. Tick 315 ran two gen-0,
   one gen-1 and one gen-2 collection and read `3.03GiB`. At the 512 MiB threshold, a `[HEAPSTEP]` line
   here marks an allocation burst. It does not by itself mark a leak.
-- **String ≈ 2 × Byte[] plus a `JsonDocument` is one JSON value held twice**: once as UTF-8 and once
-  as UTF-16, which takes twice the bytes. `ObjectPolymorphicConverter.ReadObject` did exactly that for
+- **String ≈ 2 × Byte[] plus a `JsonDocument` suggests a JSON round trip**, but does not identify
+  its caller or prove duplication: UTF-8 input and a correctly materialized UTF-16 leaf can also
+  contribute that mix. `ObjectPolymorphicConverter.ReadObject` did duplicate the whole value for
   every `object`-typed value. It copied the value into a `JsonDocument`, took `GetRawText()` as a
   string, and deserialized that string again. Each nested `object` member re-enters the converter, so
   this happened once per nesting level. `PolymorphicReadAllocationTest` measures one read of a value
@@ -180,8 +181,29 @@ and 18:15Z. `Logs` actions `Ops/Actions/logs-memexcloud-20260926-heapstep-5555` 
   no string. Every other shape takes the general path as before, and that path now deserializes from
   UTF-8 instead of a string.
 - **Not yet established:** whether this converter is the dominant caller in production. The sampler
-  names types, not call sites. The falsifier is the `String` share on the first image that carries this
-  change. If it stays above 50 %, another caller holds the JSON as text.
+  names types, not call sites. A high `String` share after the repair keeps the allocation investigation
+  open, but cannot distinguish another whole-JSON copy from strings that content needs to materialize.
+
+### A query read still copied the whole value
+
+On 2026-09-27, `Ops/Actions/verify-5555-memexcloud-20260927-heapstep` read and landed 50 lines from
+the three `3.0.0-ci.9443` replicas, with no failures or truncation. Nine windows still attributed more
+than 50 percent of sampled allocation to strings. That image contains the converter repair. These
+are allocated bytes, not retained roots, and they still do not attribute a caller.
+
+An independent code-path control found another full-value copy: `MeshNodeStreamCache.DeserializeContent`,
+which re-types every emitted query node, called `JsonElement.GetRawText()` or `JsonObject.ToJsonString()`
+before deserialization. `QueryContentAllocationTest` drives that production method with real hub
+serializer options and a registered content type. After warm-up, a 512,000-byte leaf costs
+**1,024,616 allocated bytes** through either input shape before the repair. Reading the JSON
+representation directly reduces the `JsonElement` case to **512,504** and the `JsonObject` case to
+**512,696**, while preserving the typed leaf. Raw diagnostic text is now formed only when re-typing
+fails; registry recovery and the degradation warning's exception still run as before.
+
+This establishes and removes a per-query whole-JSON string copy. It does not establish its share
+of the production allocation windows or explain retained memory. After the supported roll, exercise
+query content re-typing on the portal and repeat the heap readings before deciding whether #5555
+can be closed.
 
 `HeapStepNamesItsAllocatorTest` pins the rule with pure tests. It also has a live test: it allocates
 ~160 MiB of a marker type and requires the sampler to attribute at least 64 MiB of it to that type.
