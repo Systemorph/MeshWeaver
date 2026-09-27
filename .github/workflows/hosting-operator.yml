@@ -188,6 +188,16 @@ jobs:
           # against an older image stops at "command not found" BEFORE the image moves. The line
           # moves up into the plan list in the change that merges that plan step.
           hosting-migrate            #5148 — ships and is behaviour-tested, but no plan step emits it yet: the plan half is draft Plugins#2219
+          #
+          # hosting-kv-status and hosting-kv-state are the write-only secret GUI's read and
+          # lifecycle verbs (policy `secrets-write-only-entry`, Doc/Architecture/SecretsWriteOnlyEntry):
+          # status from vault METADATA only, and enable/disable/delete/recover/purge, all run as the
+          # writer identity that never reads a value. They ship and are behaviour-tested against
+          # test/stubs/kv-status. The plan steps that emit them (SecretStatus / SecretLifecycle
+          # actions) are the MeshWeaver.Plugins half, which lands after this image is on
+          # hosting-operator:main, for the same reason as hosting-migrate above.
+          hosting-kv-status          secrets-write-only-entry — ships and is behaviour-tested; the plan half is the Plugins secret-status action
+          hosting-kv-state           secrets-write-only-entry — ships and is behaviour-tested; the plan half is the Plugins secret-lifecycle action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
@@ -234,7 +244,7 @@ jobs:
         # MeshWeaver#4722 sweep added them with the helm one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore deploy/aks/operator/test/stubs/aks-upgrade/az deploy/aks/operator/test/stubs/aks-upgrade/kubectl deploy/aks/operator/test/stubs/aks-upgrade/curl; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/kv-status/azdeploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore deploy/aks/operator/test/stubs/aks-upgrade/az deploy/aks/operator/test/stubs/aks-upgrade/kubectl deploy/aks/operator/test/stubs/aks-upgrade/curl; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done

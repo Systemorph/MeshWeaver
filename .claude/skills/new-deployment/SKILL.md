@@ -42,15 +42,18 @@ Every one of these is a **prerequisite the Provision REFUSES without**, so do th
 1. **The sign-in app** (multi-tenant; invitation-only is the gate, not the audience):
    `az ad app create --display-name "<Name> Portal (<host>)" --sign-in-audience AzureADMultipleOrgs --web-redirect-uris https://<host>/signin-microsoft`,
    then `az ad sp create --id <appId>`, then the client secret into the vault as
-   `<prefix>Authentication-Microsoft-ClientSecret`. The appId goes on the record as
-   `signIn.microsoftClientId`. 🚨 `az … credential reset` PRINTS the secret on stderr:
-   `--query password -o tsv > "$S/x" 2>/dev/null`, then `az keyvault secret set --file "$S/x"`,
-   then `rm`. Never `cat` a stderr capture from a minting verb.
+   `<prefix>Authentication-Microsoft-ClientSecret` — through the record page's **Set Key Vault
+   secrets…** dialog on the control instance (write-only; the governed writer identity stores it,
+   policy `secrets-write-only-entry`, `Doc/Architecture/SecretsWriteOnlyEntry`), never a vault
+   command of your own. The appId goes on the record as `signIn.microsoftClientId`. 🚨 `az …
+   credential reset` PRINTS the secret on stderr: `--query password -o tsv > "$S/x" 2>/dev/null`,
+   paste it from that file into the dialog, then `rm`. Never `cat` a stderr capture from a
+   minting verb.
 2. **The registry instance key** — ONE key, two jobs (plugin catalog AND image pull):
    `POST https://memex.meshweaver.cloud/api/instances/register` with
    `{"bootstrapKey":"","instanceId":"<id>","displayName":"…","homeUrl":"https://<host>"}` (open
-   registration = the `free` plan; an admin raises it under Admin ▸ Instance grants). Pipe
-   `.instanceKey` straight into the vault as `<prefix>PluginCatalog-RegistryToken`.
+   registration = the `free` plan; an admin raises it under Admin ▸ Instance grants). Paste
+   `.instanceKey` into the same **Set Key Vault secrets…** dialog as `<prefix>PluginCatalog-RegistryToken`.
    `hosting-kv-ensure` lists this object as REQUIRED and refuses the whole Provision without it —
    "minting a random value here would produce an instance that boots, registers nothing, and shows
    an empty Store with no error".

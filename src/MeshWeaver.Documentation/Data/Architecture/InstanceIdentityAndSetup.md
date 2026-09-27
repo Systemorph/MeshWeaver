@@ -197,8 +197,8 @@ The `Hosting/Deployment` record is the **only** description of an environment; t
 adds is that the record lives in the instance's partition, that secrets are named on the record
 and resolved by the operator at render time (the `KeyVaultSecretsSpec` shape that already exists —
 *"the Key Vault fields name secrets; they never hold them"*), and that a change is an MCP `patch`
-of the record plus an `InstanceAction` — reviewable in the partition's activity log, never an
-`az keyvault secret set` or a hand-dispatched workflow.
+of the record plus an `InstanceAction` — reviewable in the partition's activity log, never a hand-run vault command
+or a hand-dispatched workflow.
 
 For a Homebrew install the same record renders the `memex-local` values layers instead of AKS
 values: `memex-local up` becomes "render the record, apply the chart", and the three hand-written

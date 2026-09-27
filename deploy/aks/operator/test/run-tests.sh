@@ -1960,8 +1960,34 @@ kvs HOSTING_SECRETS="$KVS_JSON" -- --vault Systemorph --object acme-Authenticati
 case "$_kvs_out" in *NEVER-PRINTED*) bad "kv-set never prints a value" "it did: ${_kvs_out}" ;; *) ok "kv-set never prints a value" ;; esac
 case "$_kvs_log" in *NEVER-PRINTED*) bad "…and never puts one on an az command line" "az saw: ${_kvs_log}" ;; *) ok "…and never puts one on an az command line" ;; esac
 case "$_kvs_log" in *"--file"*) ok "…the write goes through --file" ;; *) bad "through --file" "az saw: ${_kvs_log}" ;; esac
-case "$_kvs_out" in *"::hosting:: kv_set=acme-Authentication-Microsoft-ClientSecret:"*"::hosting:: kv_set=acme-Email-ClientSecret:"*"::hosting:: kv_set_count=2"*) ok "…reported by NAME with a hash prefix, and the count" ;; *) bad "kv_set facts" "said: ${_kvs_out}" ;; esac
+case "$_kvs_out" in *"::hosting:: kv_set=acme-Authentication-Microsoft-ClientSecret:"*"::hosting:: kv_set=acme-Email-ClientSecret:"*"::hosting:: kv_set_count=2"*) ok "…reported by NAME with a fingerprint, and the count" ;; *) bad "kv_set facts" "said: ${_kvs_out}" ;; esac
+# Write-only: the writer never reads a value back (the stub FORBIDS `show`); it confirms by version.
+case "$_kvs_log" in *"keyvault secret show"*) bad "kv-set never reads a value back" "az saw: ${_kvs_log}" ;; *) ok "kv-set never reads a value back (no \`secret show\`)" ;; esac
+case "$_kvs_log" in *"keyvault secret list-versions"*) ok "…it confirms the write by version, through a metadata read" ;; *) bad "list-versions confirm" "az saw: ${_kvs_log}" ;; esac
+# The status travels as TAGS written in the same call.
+_kvs_expected_fp="sha256:$(printf '%s' "$KVS_SECRET" | sha256sum | cut -c1-12)"
+_kvs_tags="$(cat "$_kvs_state/tags.acme-Authentication-Microsoft-ClientSecret" 2>/dev/null)"
+case "$_kvs_tags" in *"mw-fp=${_kvs_expected_fp}"*) ok "…tagged mw-fp with the SHA-256 fingerprint of a high-entropy value" ;; *) bad "mw-fp tag" "tags: ${_kvs_tags}" ;; esac
+case "$_kvs_tags" in *"mw-set-by=hosting-operator"*"mw-set-at="*"mw-source=paste"*) ok "…and mw-set-by / mw-set-at / mw-source=paste" ;; *) bad "status tags" "tags: ${_kvs_tags}" ;; esac
 rm -rf "$_kvs_state"
+
+# A LOW-entropy value (a short password) is written, but its fingerprint is WITHHELD — a published
+# SHA-256 prefix of it would be an offline guessing oracle.
+kvs HOSTING_SECRETS="$(printf '{"acme-Pw":"hunter22"}' | base64 | tr -d '\n')" -- --vault Systemorph --object acme-Pw --set-by alice@example.com
+[ "$_kvs_rc" -eq 0 ] && ok "a low-entropy value is still written" || bad "low entropy write" "exited ${_kvs_rc}: ${_kvs_out}"
+case "$(cat "$_kvs_state/tags.acme-Pw" 2>/dev/null)" in *"mw-fp=withheld:low-entropy"*"mw-set-by=alice@example.com"*) ok "…with its fingerprint WITHHELD, and the named requester recorded" ;; *) bad "withheld fp" "tags: $(cat "$_kvs_state/tags.acme-Pw" 2>/dev/null)" ;; esac
+case "$_kvs_out" in *"$(printf '%s' hunter22 | sha256sum | cut -c1-12)"*) bad "…and its hash appears nowhere in the output" "said: ${_kvs_out}" ;; *) ok "…and its hash appears nowhere in the output" ;; esac
+rm -rf "$_kvs_state"
+
+# --generate: minted in the Job, never shown, needs no HOSTING_SECRETS, tagged mw-source=generate.
+kvs -- --vault Systemorph --generate acme-Bootstrap-Secret
+[ "$_kvs_rc" -eq 0 ] && ok "--generate writes without any pasted value" || bad "generate" "exited ${_kvs_rc}: ${_kvs_out}"
+_kvs_gen="$(cat "$_kvs_state/set.acme-Bootstrap-Secret" 2>/dev/null)"
+[ "${#_kvs_gen}" -ge 43 ] && ok "…a 256-bit value (base64 of 32 bytes)" || bad "generated length" "length ${#_kvs_gen}"
+case "$_kvs_out$_kvs_log" in *"$_kvs_gen"*) bad "…never printed and never on a command line" "it leaked" ;; *) ok "…never printed and never on a command line" ;; esac
+case "$(cat "$_kvs_state/tags.acme-Bootstrap-Secret" 2>/dev/null)" in *"mw-fp=sha256:"*"mw-source=generate"*) ok "…tagged mw-source=generate with a fingerprint" ;; *) bad "generate tags" "tags: $(cat "$_kvs_state/tags.acme-Bootstrap-Secret" 2>/dev/null)" ;; esac
+rm -rf "$_kvs_state"
+refuses_hard "kv-set refuses a --set-by that is not a principal" "is not a principal name" hosting-kv-set --vault V --object o --set-by 'a b;id'
 
 # A named object with NO value → nothing written at all, the missing one named.
 kvs HOSTING_SECRETS="$KVS_JSON" -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret --object acme-Missing
@@ -1992,7 +2018,7 @@ rm -rf "$_kvs_state"
 # The vault refuses the write → RED, names the object and the role, prints nothing.
 kvs HOSTING_SECRETS="$KVS_JSON" HOSTING_KVS_SET_FAIL=acme-Authentication-Microsoft-ClientSecret -- --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret
 [ "$_kvs_rc" -ne 0 ] && ok "a vault that refuses the write fails the step" || bad "set fail" "exited 0"
-case "$_kvs_out" in *"Key Vault Secrets Officer"*) ok "…naming the role the operator identity needs" ;; *) bad "role named" "said: ${_kvs_out}" ;; esac
+case "$_kvs_out" in *"secret-writer grant"*) ok "…naming the grant the writer identity needs" ;; *) bad "grant named" "said: ${_kvs_out}" ;; esac
 case "$_kvs_out" in *NEVER-PRINTED*) bad "…without printing the value on the failure path" "it did: ${_kvs_out}" ;; *) ok "…without printing the value on the failure path" ;; esac
 rm -rf "$_kvs_state"
 
@@ -2024,6 +2050,49 @@ refuses_hard "kv-set refuses --wait without --namespace"  "--wait needs --namesp
 refuses_hard "kv-set refuses a --wait for an object it does not set" "which no --object writes" hosting-kv-set --vault V --object o --namespace n --wait other=s/k
 refuses_hard "kv-set rejects unknown flags"               "unknown argument"               hosting-kv-set --vault V --object o --nope 1
 unset _kvs_out _kvs_rc _kvs_log _kvs_state KVS_JSON KVS_SECRET
+
+echo
+echo "── hosting-kv-status / hosting-kv-state: status and lifecycle from METADATA, never a value ──"
+# The write-only secret GUI's read side (policy secrets-write-only-entry): existence, enabled,
+# dates, soft-delete and the write-time tags — from `list` alone. The stub is the WRITER identity:
+# it refuses `show`/`download`, so a verb that reads a value is red here.
+KVST_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-status" && pwd)"
+kvst() {  # kvst <verb> [env…] -- <args…>; sets $_kvst_out $_kvst_rc $_kvst_log
+  local verb="$1" envs=(); shift
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _kvst_state="$(mktemp -d)"
+  _kvst_out="$(env "${envs[@]}" PATH="$KVST_STUBS:$PATH" HOSTING_KVST_STATE="$_kvst_state" "$verb" "$@" 2>&1)"; _kvst_rc=$?
+  _kvst_log="$(cat "$_kvst_state/az.log" 2>/dev/null || true)"
+  rm -rf "$_kvst_state"
+}
+kvst_fact() {  # the decoded kv_status fact for <name>
+  printf '%s\n' "$_kvst_out" | sed -n 's/^::hosting:: kv_status=//p' | while IFS= read -r b; do printf '%s' "$b" | base64 -d; echo; done | jq -c --arg n "$1" 'select(.name == $n)'
+}
+kvst hosting-kv-status -- --vault Systemorph --prefix acme- --object acme-Never
+[ "$_kvst_rc" -eq 0 ] && ok "kv-status answers for a prefix and a named object" || bad "kv-status" "exited ${_kvst_rc}: ${_kvst_out}"
+case "$(kvst_fact acme-Stripe-SecretKey)" in *'"present":true'*'"enabled":true'*'"fingerprint":"sha256:0123456789ab"'*'"setBy":"alice@example.com"'*'"source":"paste"'*) ok "…a set object: present, enabled, fingerprint, set-by, source" ;; *) bad "set object status" "got: $(kvst_fact acme-Stripe-SecretKey)" ;; esac
+case "$(kvst_fact acme-Old)" in *'"present":true'*'"enabled":false'*'"fingerprint":null'*) ok "…a disabled object written before the tags existed: enabled=false, no fingerprint" ;; *) bad "old object status" "got: $(kvst_fact acme-Old)" ;; esac
+case "$(kvst_fact acme-Gone)" in *'"present":false'*'"deleted":true'*'"recoverableUntil":"2026-12-01'*) ok "…a soft-deleted object: recoverable, with its purge date" ;; *) bad "deleted status" "got: $(kvst_fact acme-Gone)" ;; esac
+case "$(kvst_fact acme-Never)" in *'"present":false'*'"deleted":false'*) ok "…an object the vault never held: not set (an answer, not a failure)" ;; *) bad "absent status" "got: $(kvst_fact acme-Never)" ;; esac
+[ -z "$(kvst_fact other-Thing)" ] && ok "…and nothing outside the prefix" || bad "prefix scope" "reported other-Thing"
+case "$_kvst_out" in *"::hosting:: kv_status_count=4"*) ok "…counting what it reported" ;; *) bad "count" "said: ${_kvst_out}" ;; esac
+case "$_kvst_log" in *"secret show"*|*"secret download"*) bad "kv-status never reads a value" "az saw: ${_kvst_log}" ;; *) ok "kv-status never reads a value" ;; esac
+kvst hosting-kv-status HOSTING_KVST_LIST_FAIL=1 -- --vault Systemorph --object acme-X
+[ "$_kvst_rc" -ne 0 ] && ok "a vault the writer cannot LIST is RED — never 'nothing is there'" || bad "list refused" "exited 0: ${_kvst_out}"
+refuses_hard "kv-status needs objects or a prefix" "name the objects" hosting-kv-status --vault V
+
+kvst hosting-kv-state -- --vault Systemorph --object acme-Old --op disable --set-by alice@example.com
+[ "$_kvst_rc" -eq 0 ] && ok "kv-state disables an object" || bad "disable" "exited ${_kvst_rc}: ${_kvst_out}"
+case "$_kvst_log" in *"set-attributes"*"--enabled false"*) ok "…through set-attributes --enabled false" ;; *) bad "disable argv" "az saw: ${_kvst_log}" ;; esac
+case "$_kvst_log" in *"--tags"*) bad "…without --tags (which would wipe the write-time fingerprint)" "az saw: ${_kvst_log}" ;; *) ok "…without --tags (which would wipe the write-time fingerprint)" ;; esac
+kvst hosting-kv-state -- --vault Systemorph --object acme-Gone --op purge
+[ "$_kvst_rc" -eq 0 ] && ok "kv-state purges an object that is ALREADY soft-deleted" || bad "purge deleted" "exited ${_kvst_rc}: ${_kvst_out}"
+kvst hosting-kv-state -- --vault Systemorph --object acme-Stripe-SecretKey --op purge
+[ "$_kvst_rc" -ne 0 ] && ok "…and refuses to purge a LIVE object (delete first, then purge)" || bad "purge live refused" "exited 0"
+case "$_kvst_log" in *"secret purge"*) bad "…without calling purge at all" "az saw: ${_kvst_log}" ;; *) ok "…without calling purge at all" ;; esac
+refuses_hard "kv-state refuses an unknown op" "is not one of" hosting-kv-state --vault V --object o --op read
+refuses_hard "kv-state needs --object" "missing required flag --object" hosting-kv-state --vault V --op delete
+unset _kvst_out _kvst_rc _kvst_log _kvst_state
 
 # ── every kind the CHART renders is writable by the operator's ClusterRole ─────────────────────
 # core #3774 rendered a PodDisruptionBudget; the role could only read them; the next Reconcile of

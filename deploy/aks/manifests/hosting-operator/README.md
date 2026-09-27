@@ -7,6 +7,7 @@ Applied on the **control instance's** cluster only. Three principals, deliberate
 | `memex-portal-sa` (the portal, unchanged) | `get`/`patch` its own Deployment — what the self-updater needs | anything in this directory |
 | `hosting-jobrunner` (mounted into the portal as a token) | create/get/delete Jobs and read pod logs **in `memex-ops` only** | touch a namespace, a database, or any cloud resource |
 | `hosting-operator` (the Job's own SA) | namespaces, Helm releases, ingresses cluster-wide, and — via Workload Identity — the Azure control plane | exist outside the seconds a run takes |
+| `hosting-secret-writer` (a SECRET action's Job, `secret-writer.yaml`) | via Workload Identity, as `secret-writer`: list, set, delete, recover and purge Key Vault secrets, never read one; in-cluster, read the synced Secret by hash and restart a Deployment | read a vault value, create or delete anything in the cluster ([Secrets: Write-Only Entry](../../../../src/MeshWeaver.Documentation/Data/Architecture/SecretsWriteOnlyEntry.md)) |
 
 The portal never holds the powerful credential. It holds a token whose entire power is *"start an
 operator job and read what it said"*, which is what makes a prompt injection into an in-pod AI CLI

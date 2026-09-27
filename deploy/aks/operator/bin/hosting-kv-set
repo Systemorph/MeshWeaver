@@ -33,21 +33,43 @@
 # has synced the new value into <syncedSecret>'s <configKey> in --namespace (compared by hash). A
 # pod restarted before the sync would read the OLD synced Secret (DeploymentAKS → "KeyVault CSI env
 # timing"); the plan restarts only after this step returns.
+#
+# --generate <name>: mint the value HERE (32 random bytes, base64) instead of taking a pasted one.
+# Nobody ever sees it: it goes from /dev/urandom into a 0600 file and into the vault. That is the
+# right shape for every secret no third party has to paste anywhere (a master key, a bootstrap
+# secret, an in-fleet pairing whose two ends both read the vault). --generate and --object may
+# be mixed in one step; a generated object needs no HOSTING_SECRETS entry.
+#
+# --set-by <principal>: who asked for the write, recorded as the object's `mw-set-by` tag.
+#
+# WRITE-ONLY BY CONSTRUCTION (policy `secrets-write-only-entry`, Doc/Architecture/
+# SecretsWriteOnlyEntry): this step runs as the WRITER identity, which may list, read metadata, set,
+# delete and recover, and may NEVER read a value (no `get`). So it never calls `secret show`. The
+# write is confirmed by the version id the `set` itself returns, looked up again in `list-versions`
+# (a metadata read). The status travels as TAGS written in the same call:
+#   mw-fp      hosting::fingerprint — `sha256:<12 hex>`, or `withheld:low-entropy`
+#   mw-set-by  --set-by, or `hosting-operator` when the caller named nobody
+#   mw-set-at  the UTC instant of the write
+#   mw-source  paste | generate
 # shellcheck source=_common.sh
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-kv-set"
 
-vault="" namespace="" objects=() waits=()
+vault="" namespace="" set_by="hosting-operator" objects=() generated=() waits=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --vault)     vault="${2:-}";        shift 2 ;;
     --namespace) namespace="${2:-}";    shift 2 ;;
     --object)    objects+=("${2:-}");   shift 2 ;;
+    --generate)  generated+=("${2:-}"); objects+=("${2:-}"); shift 2 ;;
     --wait)      waits+=("${2:-}");     shift 2 ;;
+    --set-by)    set_by="${2:-}";       shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
+hosting::safe_actor set-by "$set_by"
+is_generated() { local g; for g in "${generated[@]}"; do [ "$g" = "$1" ] && return 0; done; return 1; }
 hosting::need_flag vault "$vault"
 hosting::safe_name vault "$vault"
 [ ${#objects[@]} -gt 0 ] || hosting::die "missing required flag --object — a secret write that names nothing is a bug in the caller, not a no-op"
@@ -71,9 +93,15 @@ for entry in "${waits[@]}"; do
   [ "$found" = "1" ] || hosting::die "wait names '${w_object}', which no --object writes — refusing to wait for a value this step does not set"
 done
 
+pasted_count=$(( ${#objects[@]} - ${#generated[@]} ))
+
 if hosting::dry; then
   for object in "${objects[@]}"; do
-    hosting::log "(dry run) would set ${object} in vault ${vault} from the pasted value (through --file, never shown)"
+    if is_generated "$object"; then
+      hosting::log "(dry run) would GENERATE ${object} in vault ${vault} (never shown), tagged mw-set-by=${set_by}"
+    else
+      hosting::log "(dry run) would set ${object} in vault ${vault} from the pasted value (through --file, never shown), tagged mw-set-by=${set_by}"
+    fi
   done
   for entry in "${waits[@]}"; do
     hosting::log "(dry run) would wait for ${entry#*=} in ${namespace} to carry the new ${entry%%=*}"
@@ -84,8 +112,10 @@ fi
 
 command -v jq >/dev/null 2>&1 \
   || hosting::die "jq is not installed in this image — the pasted values arrive as JSON"
-[ -n "${HOSTING_SECRETS:-}" ] \
-  || hosting::die "HOSTING_SECRETS is empty — the control plane hands the pasted values to this Job in the environment, and an empty one means the action reached the cluster with nothing to write. Nothing was written."
+if [ "$pasted_count" -gt 0 ]; then
+  [ -n "${HOSTING_SECRETS:-}" ] \
+    || hosting::die "HOSTING_SECRETS is empty — the control plane hands the pasted values to this Job in the environment, and an empty one means the action reached the cluster with nothing to write. Nothing was written."
+fi
 
 # Everything below touches the values. umask first: every temporary this step creates is 0600.
 umask 077
@@ -93,16 +123,21 @@ work="$(mktemp -d)" || hosting::die "could not create a private working director
 cleanup() { rm -rf "$work"; unset HOSTING_SECRETS; }
 trap cleanup EXIT
 
-if ! printf '%s' "$HOSTING_SECRETS" | base64 -d > "$work/secrets.json" 2>/dev/null; then
-  hosting::die "HOSTING_SECRETS is not valid base64. Nothing was written."
+if [ -n "${HOSTING_SECRETS:-}" ]; then
+  if ! printf '%s' "$HOSTING_SECRETS" | base64 -d > "$work/secrets.json" 2>/dev/null; then
+    hosting::die "HOSTING_SECRETS is not valid base64. Nothing was written."
+  fi
+else
+  echo '{}' > "$work/secrets.json"
 fi
 unset HOSTING_SECRETS
 jq -e 'type == "object"' "$work/secrets.json" >/dev/null 2>&1 \
   || hosting::die "HOSTING_SECRETS did not decode to a JSON object of {object: value}. Nothing was written."
 
-# ── every object has a non-empty value, or nothing is written ──────────────────────────────────
+# ── every PASTED object has a non-empty value, or nothing is written ───────────────────────────
 missing=()
 for object in "${objects[@]}"; do
+  is_generated "$object" && continue
   if ! jq -e --arg k "$object" 'has($k) and (.[$k] | type == "string" and length > 0)' "$work/secrets.json" >/dev/null 2>&1; then
     missing+=("$object")
   fi
@@ -111,26 +146,41 @@ if [ ${#missing[@]} -gt 0 ]; then
   hosting::die "no value was handed over for $(IFS=,; echo "${missing[*]}") — the plan names an object the request carries no value for. Nothing was written; re-enter the secret and re-request the action."
 fi
 
-# ── the writes, through --file ─────────────────────────────────────────────────────────────────
+# ── the writes, through --file, tagged, confirmed by metadata ──────────────────────────────────
 written=0
 for object in "${objects[@]}"; do
   hosting::step "Set ${object}"
-  # -j: raw and WITHOUT a trailing newline — a client secret with a newline appended fails every
-  # token exchange, and az stores the file byte-for-byte.
-  jq -rj --arg k "$object" '.[$k]' "$work/secrets.json" > "$work/value" \
-    || hosting::die "could not extract the value for ${object}. ${written} of ${#objects[@]} object(s) were written before this one."
+  if is_generated "$object"; then
+    source_tag="generate"
+    # 32 random bytes, base64, no newline: 256 bits, never printed, never on a command line.
+    head -c 32 /dev/urandom | base64 | tr -d '\n' > "$work/value" \
+      || hosting::die "could not generate a value for ${object}. ${written} of ${#objects[@]} object(s) were written before this one."
+  else
+    source_tag="paste"
+    # -j: raw and WITHOUT a trailing newline — a client secret with a newline appended fails every
+    # token exchange, and az stores the file byte-for-byte.
+    jq -rj --arg k "$object" '.[$k]' "$work/secrets.json" > "$work/value" \
+      || hosting::die "could not extract the value for ${object}. ${written} of ${#objects[@]} object(s) were written before this one."
+  fi
   hash="$(hosting::sha256 < "$work/value")"
-  if ! az keyvault secret set --vault-name "$vault" --name "$object" --file "$work/value" --output none 2>"$work/az.err"; then
+  fp="$(hosting::fingerprint "$work/value")"
+  set_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if ! version_id="$(az keyvault secret set --vault-name "$vault" --name "$object" --file "$work/value" \
+        --tags "mw-fp=${fp}" "mw-set-by=${set_by}" "mw-set-at=${set_at}" "mw-source=${source_tag}" \
+        --query id -o tsv 2>"$work/az.err")"; then
     rm -f "$work/value"
-    hosting::die "could not set ${object} in vault ${vault}: $(tr -d '\n' < "$work/az.err" | cut -c1-300). ${written} of ${#objects[@]} object(s) were written before this one; the operator identity needs Key Vault Secrets Officer on ${vault}."
+    hosting::die "could not set ${object} in vault ${vault}: $(tr -d '\n' < "$work/az.err" | cut -c1-300). ${written} of ${#objects[@]} object(s) were written before this one; the writer identity needs the secret-writer grant (list, set, delete, recover — Doc/Architecture/SecretsWriteOnlyEntry) on ${vault}."
   fi
   rm -f "$work/value"
-  # Read back BY ID, so a write az reported and the vault did not keep is a failure here, not a
-  # pod that cannot start later.
-  version="$(az keyvault secret show --vault-name "$vault" --name "$object" --query id -o tsv 2>/dev/null)" \
-    || hosting::die "set ${object} in vault ${vault}, but it does not read back — refusing to report a write the vault does not confirm"
-  hosting::log "set       ${object} in vault ${vault} (${version##*/}; sha256 ${hash:0:12}…)"
-  hosting::say kv_set "${object}:${hash:0:12}"
+  [ -n "$version_id" ] \
+    || hosting::die "set ${object} in vault ${vault}, but the vault returned no version id — refusing to report a write the vault does not confirm"
+  # Confirm BY VERSION through a METADATA read (list-versions), never a value read: a write az
+  # reported and the vault did not keep is a failure here, not a pod that cannot start later.
+  if ! az keyvault secret list-versions --vault-name "$vault" --name "$object" --query "[?id=='${version_id}'].id" -o tsv 2>/dev/null | grep -qx "$version_id"; then
+    hosting::die "set ${object} in vault ${vault} (${version_id##*/}), but that version is not listed — refusing to report a write the vault does not confirm"
+  fi
+  hosting::log "set       ${object} in vault ${vault} (${version_id##*/}; ${fp}; ${source_tag} by ${set_by})"
+  hosting::say kv_set "${object}:${fp}"
   written=$((written + 1))
   echo "$hash" > "$work/hash.$object"
 done

@@ -1,0 +1,11 @@
+# Paths that may hold a Key Vault secret data-plane command (check-manual-keyvault.py).
+# Policy `secrets-write-only-entry` — Doc/Architecture/SecretsWriteOnlyEntry.
+#
+# Each line: <glob>  — <why this path may hold one>. The list only SHRINKS: an entry that no longer
+# matches a file holding a vault command is stale and reds the gate. A doc or runbook NEVER goes
+# here — a documented break-glass procedure carries the `kv-break-glass` marker instead.
+
+deploy/aks/operator/bin/*  — the GOVERNED implementation: the operator verbs an InstanceAction runs (hosting-kv-set/-status/-state as the writer identity; the provisioning verbs still on hosting-operator are the migration's step 3)
+deploy/aks/operator/test/*  — the behaviour suite that proves those verbs write through --file, never print a value and never read one back
+deploy/aks/operator/test/stubs/*/az  — stand-in az binaries for that suite; they answer the commands, they do not run them
+.github/scripts/check-manual-keyvault.py  — this gate, which has to spell the commands it refuses

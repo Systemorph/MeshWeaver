@@ -288,8 +288,11 @@ Then re-run the Dependabot PR's workflow. The positive signal is the preflight's
 not merely a green wall.
 
 **Where the value comes from is the whole difficulty**, and it is not the same question for every
-name — see the three tiers below. Never echo a value into a shell, a log or a file you keep:
-`az keyvault secret show … -o tsv > file` then `gh secret set … < file`, and shred the file.
+name — see the three tiers below. Never echo a value into a shell, a log or a file you keep, and
+never read one OUT of Key Vault to copy it: nobody holds a vault read (policy
+`secrets-write-only-entry`, [Secrets: Write-Only Entry](../SecretsWriteOnlyEntry)). A value that
+lives only in the vault is RE-ISSUED at its source and entered in both places, the vault half
+through its write-only GUI and the GitHub half with `gh secret set` from stdin.
 
 ### Three tiers, not two — and the third one nobody can mirror
 
