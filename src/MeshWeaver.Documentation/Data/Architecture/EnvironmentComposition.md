@@ -203,7 +203,7 @@ deliberately read-only.
 
 ## Seeing it: the Composition tab
 
-**Settings → Administration → Composition** (platform admins only) shows two tables:
+**Admin app (`/Admin`) → Composition** (platform admins only) shows two tables:
 
 - **Feature flags** — every declared flag, whether it is on, whether it installs or excludes, its
   packages and its purpose. Bound to `IFeatureFlags.All`, so it is never a startup snapshot.
