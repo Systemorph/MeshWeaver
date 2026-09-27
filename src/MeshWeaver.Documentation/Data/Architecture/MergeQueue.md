@@ -118,11 +118,18 @@ path.
   (`<run id>-<attempt>`) and stands down in seconds if that run has already completed. The verdict
   then states that reason.
 
-🚨 **A `Dependent suites` timeout is NOT a flake, and the steward treats it as a reject.** The job is
-not a test shard, so the steward's table below rejects it ("a job other than a test shard failed").
-That is correct: a re-queue re-enters the same starved line, and every ejection re-dispatches a new
-candidate on top of the one still running. Look at the candidate run's leg WAIT times before touching
-the entry. A leg that waited longer than it ran is starvation, and the lane above is where to look.
+🚨 **A `Dependent suites` NO-VERDICT is infrastructure, and the steward re-queues it.** The
+steward used to reject it with every other non-shard job ("a build or gate failure is never a
+flake"), which left five entries (#5789, #5791, #5792, #5793, #5795) `queue-rejected` that morning
+for starvation alone. Silence and a verdict are now two different reds.
+`await-dependent-verdict.py` exits `3` on silence. `dotnet-test.yml` fails that case on its own step,
+*No verdict in time: the dependent's suites did not report (infrastructure)*. A Dependent-suites
+job that failed on that step and nothing else is re-queued as `infra`, capped at 2 per head sha,
+with the usual marker comment. A red **verdict** (the candidate broke a dependent suite) still fails
+the wait step itself and is still rejected, and a no-verdict next to a build failure or an
+uncatalogued assertion is rejected too. Before you touch an entry that hit the cap, read the
+candidate run's leg WAIT times: a leg that waited longer than it ran is starvation, and the gate
+lane above is where to look.
 
 The remaining lever is `max_entries_to_build: 8`. Up to eight concurrent candidates of up to 12 legs
 each is more than the 12-runner gate lane can serve inside core's 42-minute verdict deadline. Whether to return
@@ -173,6 +180,7 @@ applying an existing one needs only `pull_requests: write`).
 | `CI_FAILURE` | a job other than a test shard failed (build, a gate) | **reject** — never a flake | — |
 | `CI_FAILURE` | every failed assertion matches an active catalogue entry | re-queue | 2 |
 | `CI_FAILURE` | a shard failed on an infrastructure step (download, upload, setup) and left no test evidence | re-queue | 2 |
+| `CI_FAILURE` | the only failed job is `Dependent suites (MeshWeaver.Plugins)`, on its no-verdict step: the dependent never reported inside the deadline | re-queue (`infra`) | 2 |
 | `CI_FAILURE` | an uncatalogued assertion, the group held more than one PR, and this PR's own run was green | re-queue **alone** — the culprit's solo group fails and stays out | 1 |
 | `CI_FAILURE` | anything else — an uncatalogued assertion, a dead host with no recorded failure, no artifact to read | **reject**: comment the assertion and the run, label `queue-rejected` | — |
 | `MANUAL`, `QUEUE_CLEARED`, `ROLL_BACK`, `BRANCH_PROTECTIONS`, `GIT_TREE_INVALID`, `INVALID_MERGE_COMMIT`, `MERGE_CONFLICT`, `UNKNOWN_REMOVAL_REASON` | — | comment once, no action | — |
