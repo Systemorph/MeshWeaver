@@ -178,6 +178,15 @@ the **repair**: `ReleasePostCondition` exists because a consumed release request
 the compile just produced. That remedy can itself fail — and when it did, it reported the failure in
 the one shape nobody can act on.
 
+The check must compare against the **release**, not only the preceding NodeType record. On
+2026-09-27, `Store/Purchase` advertised build 1794 while its release named 1487;
+`Hosting/InstanceRequest` advertised 10608 while its release named 10583. Both request stamps were
+handled. A subsequent adoption of the *same* current build leaves `before.LastCompiledVersion ==
+result.Version`, so a comparison of those two records alone misses the still-stale release. For
+canonical release ids, the eight-character suffix is `SHA256(Collection/ContentPath)`; comparing it
+with the result's durable coordinates detects that case without reading another node or guessing
+from timestamps. Legacy ids or results without store coordinates give no verdict from this hash.
+
 ### What was measured
 
 `Admin/_LogIncident/a98877ee6204cad1`, category `MeshWeaver.Graph.CompileWatcher`, **8 occurrences

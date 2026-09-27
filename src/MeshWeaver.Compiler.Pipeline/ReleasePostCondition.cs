@@ -72,8 +72,10 @@ internal static class ReleasePostCondition
     /// build the standing release was cut for.</param>
     /// <param name="result">The SUCCESSFUL compile's result — the build about to be stamped.</param>
     /// <param name="newReleasePath">The release cut on THIS settle, or <c>null</c> when none landed.</param>
+    /// <param name="nodeTypePath">The owning NodeType path, used to validate a standing release id.</param>
     internal static string? Violation(
-        NodeTypeDefinition? before, NodeCompilationResult result, string? newReleasePath)
+        NodeTypeDefinition? before, NodeCompilationResult result, string? newReleasePath,
+        string nodeTypePath)
     {
         if (before is null) return null;
         // A release for these exact bytes was just cut — the invariant holds by construction.
@@ -91,7 +93,7 @@ internal static class ReleasePostCondition
             return $"a release request (requestedReleaseAt={requested:O}) was consumed and this "
                  + "compile succeeded, yet the node names NO release at all";
 
-        return NamesAnEarlierBuild(before, result) is { } drift
+        return NamesAnEarlierBuild(before, result, nodeTypePath) is { } drift
             ? $"a release request (requestedReleaseAt={requested:O}) was consumed and this compile "
               + $"succeeded, yet latestReleasePath still names '{before.LatestReleasePath}' — cut "
               + $"for an EARLIER build ({drift})"
@@ -104,7 +106,8 @@ internal static class ReleasePostCondition
     /// a fact the result does not carry (a producer without an assembly store) is INCONCLUSIVE and
     /// never counted, so this never invents a violation from an absence.
     /// </summary>
-    private static string? NamesAnEarlierBuild(NodeTypeDefinition before, NodeCompilationResult result)
+    private static string? NamesAnEarlierBuild(
+        NodeTypeDefinition before, NodeCompilationResult result, string nodeTypePath)
     {
         if (result.Version is { } version && before.LastCompiledVersion != version)
             return $"lastCompiledVersion {before.LastCompiledVersion?.ToString() ?? "(none)"} → {version}";
@@ -118,6 +121,20 @@ internal static class ReleasePostCondition
             && before.CompiledSources is { } previous
             && !SameSnapshot(previous, compiled))
             return "the compiled-source snapshot changed";
+
+        // The NodeType may ALREADY advertise this adopted build before the consumed request
+        // settles. Comparing result only with that record then says "unchanged", while the
+        // standing release still names older bytes (#5057). Release ids encode the hash of the
+        // durable collection/content path, so compare the release itself when both coordinates
+        // exist. A legacy id or a storeless producer gives no verdict here.
+        if (!string.IsNullOrEmpty(result.Collection) && !string.IsNullOrEmpty(result.ContentPath)
+            && NodeTypeBuildState.ReleaseContentHash(
+                before.LatestReleasePath, nodeTypePath + "/Release") is { } releaseHash)
+        {
+            var compiledHash = NodeTypeBuildState.ContentHashOf(result);
+            if (!string.Equals(releaseHash, compiledHash, StringComparison.Ordinal))
+                return $"release content hash '{releaseHash}' differs from compiled content hash '{compiledHash}'";
+        }
         return null;
     }
 
@@ -206,7 +223,7 @@ internal static class ReleasePostCondition
         // every read here comes from.
         var survivor = NodeTypeBuildState.ReleaseIssuingHub(hub);
         var before = pendingNode.ContentAs<NodeTypeDefinition>(survivor.JsonSerializerOptions);
-        if (Violation(before, result, firstAttempt.ReleasePath) is not { } violation)
+        if (Violation(before, result, firstAttempt.ReleasePath, nodeTypePath) is not { } violation)
             return Observable.Return(new Settle(firstAttempt.ReleasePath, null));
 
         // 🚨 WHY THE FIRST CREATE FAILED, on the line an operator reads (#5057). This was the missing
