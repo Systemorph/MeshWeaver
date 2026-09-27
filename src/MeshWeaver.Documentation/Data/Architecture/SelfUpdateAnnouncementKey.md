@@ -1,7 +1,7 @@
 ---
 Name: Self-Update Announcement Key
 Category: Architecture
-Description: How a deployment announces its own self-update to the control instance with a key of its OWN instead of the fleet-wide inbox secret — the record names the vault object, the inbox accepts it as a per-sender key, the consumer lets it cause nothing but that record's self-update events, and a record that declares one is no longer announceable with the fleet secret. With the rollout order and the owner commands.
+Description: How a deployment announces its own self-update to the control instance with a key of its OWN instead of the fleet-wide inbox secret — the record names the vault object, the inbox accepts it as a per-sender key, the consumer lets it cause nothing but that record's self-update events, and a record that declares one is no longer announceable with the fleet secret. The key is issued on the record page, entered in the deployment's Settings ▸ Control lane, and tested there — no vault command, no mount, no restart.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
 ---
 
@@ -97,52 +97,46 @@ If the test says **❌ Mismatch — re-enter the key**, paste the key again. Tak
 characters and nothing else, then press **Save** and **Test connection** again. Nothing has to be
 restarted at any point: the key is used from the next update announcement on.
 
-## Rollout order — mount first, declare last
+## Rollout order
 
-With the portal flow above, the mounts in this section are OPTIONAL. The section still applies to a
-deployment that delivers its key by mount instead.
+Each step is safe on its own:
 
-Each step is safe on its own, and none leaves a deployment signing with a key the running control
-plane cannot select:
+1. **Core** — `DeploymentContent.AnnouncementKeySecret`, `WebhookInbox.SenderKeyOf` (#5775), then
+   the portal store, the verify-only test and **Settings ▸ Control lane** (#5791).
+2. **MeshWeaver.Plugins** — the consumer rules above (`AnnouncementKeys`, MeshWeaver.Plugins#2416),
+   then the record page's **Announcement key** panel. It compiles against the sealed platform set,
+   so it lands after the core half is sealed.
+3. **Systemorph/Memex** — `Deployments/<id>` declares `announcementKeySecret` (the claim, rule 3).
+   No vault object is mapped on either end, so no CSI mount can fail on an object that does not
+   exist yet.
+4. **Issue, enter, test** — in the portal, as described above. No reconcile and no restart.
 
-1. **Core** (this change) — `DeploymentContent.AnnouncementKeySecret`, `WebhookInbox.SenderKeyOf`.
-   Nothing reads a sender key until the control instance mounts one.
-2. **MeshWeaver.Plugins** — the consumer rules above (`AnnouncementKeys`). It compiles against the
-   sealed platform set, so it lands after the core half is sealed.
-3. **Mint the vault object** (owner act, below). 🚨 Before the Memex change merges: a declared vault
-   object the vault does not hold fails the WHOLE CSI mount of the pod that names it — and the
-   control instance is one of those pods.
-4. **Systemorph/Memex** — `Deployments/pearl` declares `announcementKeySecret` and maps the object to
-   `Hosting__ControlInbox__Secret`; the control instance's record and overlay map the same object to
-   `Hosting__PlatformWebhookSecret__pearl`.
-5. **Reconcile** the control instance, then `pearl` (a Roll renders no SecretProviderClass). The
-   acceptance reading is `pearl`'s boot line `apply=control-lane`, then its next announcement
-   opening `selfupdate-roll-pearl-…` on the control instance.
+The declaration switches the fleet secret off for that record (rule 4). For a FLEET instance that
+announces with the fleet secret today, issue the key and have its administrator enter it BEFORE the
+declaration merges. Otherwise its announcements are refused until the key is entered.
 
-**Where this stands:** steps 1 and 2 are merged (#5775, MeshWeaver.Plugins#2416). Steps 3 to 5
-for `pearl` are an open pull request in Systemorph/Memex (#574) and wait on the owner's vault act,
-so until they land `pearl` still has no key the control plane accepts, and stays on hand rolls.
-Read the Memex record for `Deployments/pearl` before assuming either way.
+**Where this stands:** read `Deployments/pearl` on the control instance. Its **Announcement key**
+panel says whether a key is issued and when pearl last verified with it. That is the reading, not
+this page.
 
-For a FLEET instance adopting its own key later, the same order holds with one extra care: the
-record's `announcementKeySecret` DECLARATION is what switches the fleet secret off for it (rule 4),
-so declare it only after both mounts are live — otherwise its announcements are refused until the
-pod is reconciled.
+## Owner actions — all in the portal
 
-## Owner commands
+Nobody runs a command to create, copy or inspect this key, and nobody needs a vault permission or
+cluster access:
 
-Minting the value is an operator act; no agent creates or reads a secret value. The value is
-generated in the command and never printed (`--output none` — `az keyvault secret set` otherwise
-echoes the secret it stored):
+| act | where | who |
+|---|---|---|
+| issue, rotate, revoke | control instance → `Deployments/<id>` → **Announcement key** | a global administrator of the control instance |
+| enter, replace | the deployment → **Settings ▸ Control lane** | a global administrator of that deployment |
+| check the pairing | both panels show the fingerprint; **Test connection** on the deployment, and the record page's "last verified" line | either |
 
-```bash
-az keyvault secret set --vault-name Systemorph --name pearl-Hosting-AnnouncementKey \
-  --value "$(openssl rand -hex 32)" --output none
-az keyvault secret show --vault-name Systemorph --name pearl-Hosting-AnnouncementKey \
-  --query "{name:name, enabled:attributes.enabled, updated:attributes.updated}" -o table
-```
+The vault copy that **Issue key** files goes through the governed `SetSecrets` action on the same
+record page: the plan is shown, it waits for approval, and the operator's writer identity writes it.
 
-The second command reads back metadata only — never `value`.
+**Break-glass only.** If the portal itself is down, reach the vault through the operator's governed
+path, never through a personal vault permission. A break-glass write is half an operation:
+afterwards, re-issue the key in the portal, so that the portal's store, the fingerprints and the
+"last verified" reading describe the key actually in use.
 
 ## What is NOT covered
 
