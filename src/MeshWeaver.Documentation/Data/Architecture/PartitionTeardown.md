@@ -98,6 +98,51 @@ of a node with children is refused (`NodeDeletionRejectionReason.HasChildren`), 
 has drained the subtree before step 5 runs. So "the partition root was deleted" and "the partition is
 empty" are the same statement by the time the drop fires.
 
+## The direct teardown: a whole partition as ONE operation
+
+`PartitionDropPostDeletionHandler` runs at the END of a recursive root delete, and that delete
+pre-validates every descendant with a `ValidateDeleteRequest` fan-out before it removes anything.
+That is the right shape for a user deleting their own space, whose rights the pipeline checks node by
+node. It is the wrong shape for a **governed whole-space deletion**, where the space and all its
+access go together and there is no per-node invariant worth validating.
+
+**Measured on the control instance (2026-09-27):** a governed `DeleteSpace` of `UWDeepfield` ran its
+first eight steps as system, then failed in *Delete content* — `pre-validate-descendants` did not
+settle within its 25 s bound, **64 of 1,740 posted `ValidateDeleteRequest`s outstanding, 31,138
+descendants planned, at most 64 in flight**. The store drop that would have followed is ONE operation
+per provider whatever the row count.
+
+`PartitionTeardown.TearDownPartition(hub, partition, because)` (MeshWeaver.Graph) is that drop, called
+for a partition as a whole:
+
+1. **claim** — `RecentlyDeletedRegistry.BeginSubtreeDeletion(partition)` for the whole run, so every
+   write at or under the partition is refused, plus `MarkDeleted(partition)` against a stale re-save;
+2. **drop** — `PartitionDropPostDeletionHandler.DropStores` on every provider (the same drop, never a
+   copy). On a backend with **no per-partition store** — no provider answers `PartitionExists == true`,
+   the in-memory store — the drop removes nothing, so the rows are removed below the pipeline through
+   `IStorageAdapter.DeleteMany`, deepest first, satellites included;
+3. **evict** the queries anchored to the partition;
+4. **delete** `Admin/Partition/{partition}` as system — inside the claim, so
+   `StrandedPartitionTeardownValidator` stands down instead of dropping a second time.
+
+A drop that faults lifts the tombstone, keeps the record (the retry handle) and propagates.
+
+🚨 **It is not a user verb.** `PartitionTeardown.Refusal` refuses unless the current identity IS system,
+and also names an invalid segment, a database-populated mirror, a static partition, a deletion already
+in flight, or a hub with no storage provider. A governed action calls `Refusal` at PLAN time, under
+the same system identity it will run with, and parks with the answer — policy
+`governed-action-preflight`: system credentials from the first step, rights and scale checked at plan
+time, refused at park, never mid-run.
+
+**What it does not do:** no per-node post-deletion handler runs. The caller disposes the partition's
+hubs first (the governed `DeleteSpace` does, as its first step). An in-memory registry keyed by a path
+inside the partition — the compile park registry — keeps its entry until that path is recreated or
+the process restarts.
+
+`PartitionTeardownTest` (MeshWeaver.Graph.Test) pins it: a 3,000-descendant space with a grant, a
+thread and a record torn down within one convergence bound, exactly one drop, nothing left; the sweep
+on a backend with no per-partition store; the refusal without the system identity; the faulted drop.
+
 ## The ordering contract
 
 Store-drop **then** definition-delete, sequentially (`.Concat`, like provisioning, so concurrent DDL
