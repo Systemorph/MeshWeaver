@@ -34,6 +34,7 @@ public class MeshTestRunnerTests
         [MeshFact(TimeoutSeconds = 1)] public async Task Hangs() => await Task.Delay(Timeout.InfiniteTimeSpan);
         [MeshFact(TimeoutSeconds = 1)] public async Task HangsButObserves(CancellationToken ct) => await Task.Delay(Timeout.InfiniteTimeSpan, ct);
         [MeshTheory] [MeshInlineData(1, 2)] [MeshInlineData(2, 3)] public void Adds(int a, int expected) { if (a + 1 != expected) throw new Exception($"{a}+1 != {expected}"); }
+        [MeshTheory] [MeshInlineData(null)] public void AcceptsNull(object? value) { if (value is not null) throw new Exception("expected null"); }
         [MeshTheory(TimeoutSeconds = 1)] [MeshInlineData(3)] public async Task TheoryObserves(int n, CancellationToken ct) => await Task.Delay(Timeout.InfiniteTimeSpan, ct);
     }
 
@@ -42,13 +43,14 @@ public class MeshTestRunnerTests
     {
         var results = await MeshTestRunner.Run(null, [typeof(Sample)], TestTimeouts.Quick).ToList().Await();
         var byName = results.ToDictionary(r => r.Name);
-        Assert.Equal(9, results.Count);
+        Assert.Equal(10, results.Count);
         Assert.True(byName["Passes"].Passed);
         Assert.True(byName["an async case"].Passed);
         Assert.StartsWith("❌", byName["Fails"].Result); Assert.Contains("the assertion message", byName["Fails"].Detail);
         Assert.True(byName["Skipped"].Skipped); Assert.Equal("not today", byName["Skipped"].Detail);
         Assert.StartsWith("❌", byName["Hangs"].Result); Assert.Contains("no verdict within 1s", byName["Hangs"].Detail);
         Assert.True(byName["Adds(1, 2)"].Passed); Assert.True(byName["Adds(2, 3)"].Passed);
+        Assert.True(byName["AcceptsNull(null)"].Passed);
 
         // The bound CANCELS: a case that observes the runner's token unwinds and the verdict says so;
         // one that ignores it is still running after the grace and the verdict names THAT — the
@@ -63,7 +65,7 @@ public class MeshTestRunnerTests
         Assert.True(byName["Hangs"].Elapsed >= MeshTestRunner.CancellationGrace, $"an ignoring case is reported only after the grace: {byName["Hangs"].Elapsed}");
 
         var list = results.ToList();
-        Assert.Equal("Sample tests — 4/8 passed · 1 skipped", MeshTestRunner.Summary("Sample", list));   // 9 cases, 1 skipped → 8 counted, 4 green
+        Assert.Equal("Sample tests — 5/9 passed · 1 skipped", MeshTestRunner.Summary("Sample", list));   // 10 cases, 1 skipped → 9 counted, 5 green
         var table = MeshTestRunner.Table(list);
         Assert.Contains("| ✅ pass |", table); Assert.Contains("| ❌ FAIL |", table); Assert.Contains("| ⏭ skipped |", table);
         Assert.NotNull(MeshTestRunner.Render("Sample", list));

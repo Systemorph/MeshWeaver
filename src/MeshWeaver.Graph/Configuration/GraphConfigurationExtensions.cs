@@ -83,6 +83,7 @@ public static class GraphConfigurationExtensions
                 .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate
                 .AddEmailType()
                 .AddEaCredentialType()
+                .AddInstanceSecretType()
                 .AddTeamsConversationType()
                 .AddGraphSubscriptionType()
                 .AddActivityType()
@@ -393,6 +394,10 @@ public static class GraphConfigurationExtensions
                 // which is both why no import that is legal today starts failing and why the bulk
                 // fan-out pays no read. Scoped, like the other content-integrity validators.
                 services.AddScoped<INodeValidator, CreatableTypesCreationValidator>();
+
+                // Instance secrets are written only through the InstanceSecrets verbs (rights,
+                // slot and encryption checked, then written as system); a direct write is refused.
+                services.AddScoped<INodeValidator, InstanceSecretWriteGuard>();
 
                 // Delivery for the compile pipeline's parked-failure bell. The pipeline lives in
                 // MeshWeaver.Compiler and cannot reference NotificationService (it reads the
