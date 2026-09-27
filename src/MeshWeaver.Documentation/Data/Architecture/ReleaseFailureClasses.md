@@ -407,8 +407,10 @@ the stamp still names that path, and that check is the whole guard:
 - every later settle rewrites or clears the stamp, so a stamp that still names the path still describes
   the current build.
 
-Prebuilt adoption also retires the pending marker and its reason in the owner write that publishes
-the new assembly coordinates. An adoption is a build publication without a compile settle; leaving
+Prebuilt adoption also retires the pending marker and its reason in the owner write when the adopted
+coordinates prove they name a different build. Same-coordinate replays retain the marker: the hash
+in the release id still names those bytes. Missing store coordinates cannot prove obsolescence and
+also retain it. An adoption is a build publication without a compile settle; leaving
 the previous build's marker in place would let its late release move the adopted build's pointer
 backwards. The existing release pointer and unspent author notes retain their usual adoption policy.
 The regression case `APrebuiltAdoption_RetiresThePreviousBuildsPendingRelease` drives the real seeder

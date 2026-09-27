@@ -185,12 +185,79 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
         definition.UnreleasedBuildPath.Should().BeNull(
             "the pending release describes the old bytes, so its late arrival must not move the new build's pointer");
         definition.UnreleasedBuildReason.Should().BeNull("the reason belongs to the retired marker");
+        definition.LatestReleasePath.Should().Be($"{typePath}/{PreviousRelease}");
+        definition.ReleaseNotes.Should().Be("notes for the release that landed late");
 
         await MeshService.CreateNode(ReleaseNodeAt(unreleased, typePath))
             .Should().Within(TestTimeouts.Convergence).Emit();
         await Mesh.GetMeshNodeStream(typePath)
             .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestReleasePath == unreleased)
             .Should().NotEmit(TestTimeouts.Quick, "the old release cannot become the adopted bundle's release");
+    }
+
+    /// <summary>A replay returning the pending build's store coordinates still owes that release.</summary>
+    [Fact]
+    public void AReplayOfThePendingBuild_PreservesItsMarker()
+    {
+        var location = new AssemblyStoreLocation("local-cache", "assemblies", "T/v1-build.dll");
+        var hash = NodeTypeBuildState.ContentHashOf(new NodeCompilationResult(
+            location.LocalPath, [], Collection: location.Collection, ContentPath: location.ContentPath));
+        var definition = Stamped("T", $"T/Release/20260923055416-{hash}");
+        PrebuiltAssemblySeeder.PendingReleaseWasSuperseded(definition, "T", location).Should().BeFalse();
+        PrebuiltAssemblySeeder.PendingReleaseWasSuperseded(definition, "T",
+            location with { ContentPath = "T/v2-build.dll" }).Should().BeTrue();
+        PrebuiltAssemblySeeder.PendingReleaseWasSuperseded(definition, "T",
+            location with { Collection = "" }).Should().BeFalse("missing coordinates prove nothing");
+    }
+
+    /// <summary>The real seeder must preserve and eventually adopt a same-coordinate pending release.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASeedReturningThePendingCoordinates_KeepsTheLateReleaseWatch()
+    {
+        var typePath = $"{TestPartition}/ReplayRelease{Guid.NewGuid().ToString("N")[..8]}";
+        await SeedAsync(typePath, ReleasePathFor(typePath, "20260923055416-Hd-IFSiA"));
+        var settled = await Mesh.GetMeshNodeStream(typePath).Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.CurrentSourceVersions is not null);
+        var bytes = File.ReadAllBytes(typeof(ALateReleaseIsAdoptedWhenItLandsTest).Assembly.Location);
+        // Store the bytes for the revision produced by the next owner write. The version assertion
+        // below proves that SeedDetailed really reads this first-write-wins key.
+        var storeVersion = settled.Version + 1;
+        var location = await Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>()
+            .PutWithLocation(typePath, storeVersion, bytes, null)
+            .Should().Within(TestTimeouts.WriteConvergence).Emit();
+        var hash = NodeTypeBuildState.ContentHashOf(new NodeCompilationResult(
+            location.LocalPath, [], Collection: location.Collection, ContentPath: location.ContentPath));
+        var pending = ReleasePathFor(typePath, $"20260923055416-{hash}");
+        await Mesh.GetMeshNodeStream(typePath).Update(current => current with
+        {
+            Content = current.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)! with
+            {
+                UnreleasedBuildPath = pending,
+            },
+        }).Should().Within(TestTimeouts.WriteConvergence).Emit();
+        await Mesh.GetMeshNodeStream(typePath).Should().Within(TestTimeouts.WriteConvergence)
+            .Match(n => n.Version == storeVersion
+                        && n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.UnreleasedBuildPath == pending,
+                "the owner must publish the revision whose store key the seed will reuse");
+        var seedHub = Mesh.GetHostedHub(new Address("late-release-replay", Guid.NewGuid().ToString("N")),
+            c => c.AddData().WithGraphTypes(), HostedHubCreation.Always)!;
+        var outcome = await PrebuiltAssemblySeeder.SeedDetailed(seedHub, typePath, bytes, null,
+                PrebuiltAssemblySeeder.LiveFrameworkMvid, null, null, sourceFingerprint: null)
+            .Should().Within(TestTimeouts.WriteConvergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.Adopted);
+        var seeded = await Mesh.GetMeshNodeStream(typePath).Should().Within(TestTimeouts.WriteConvergence)
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestAssemblyPath == location.ContentPath);
+        seeded.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.UnreleasedBuildPath.Should().Be(pending);
+
+        var release = ReleaseNodeAt(pending, typePath);
+        await MeshService.CreateNode(release with
+        {
+            Content = release.ContentAs<NodeTypeRelease>(Mesh.JsonSerializerOptions)! with { AssemblyStoreVersion = storeVersion },
+        }).Should().Within(TestTimeouts.Convergence).Emit();
+        await Mesh.GetMeshNodeStream(typePath).Should().Within(TestTimeouts.CrossSilo)
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+                        && d.LatestReleasePath == pending && d.UnreleasedBuildPath is null,
+                "the retained marker must keep the watch live until this build's release arrives");
     }
 
     [Fact]
