@@ -280,6 +280,9 @@ NEVER_BLANK_CONFIG = {
         "the EU region's endpoint (https://eu.openrouter.ai/api/v1), and the thing that makes the "
         "section's models Eu. Blank replaces the section's default endpoint with nothing, exactly "
         "as for OpenRouter__Endpoint. Rendered only when set.",
+    "Features__Ai__Providers__OpenRouterEU":
+        "bound as a Boolean — a blank value fails the binder. Rendered only when set to a "
+        "non-blank value (an explicit \"false\" still renders).",
     "SelfUpdate__Registry":
         "binds to SelfUpdateOptions.Registry, whose default is the upstream ACR and whose value "
         "names the host of EVERY image the self-updater rolls to. Blank is not inert here — it is "

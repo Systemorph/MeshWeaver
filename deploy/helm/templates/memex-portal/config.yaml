@@ -941,8 +941,10 @@ data:
   {{- end }}
   # The EU-region OpenRouter section (OpenRouterEU, above) — same opt-in gate shape. Delivered here so
   # a record can declare it; it takes effect once the host reads it when registering that section.
-  {{- if hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenRouterEU" }}
-  Features__Ai__Providers__OpenRouterEU: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenRouterEU }}"
+  # Bound as a Boolean, so a blank value must not reach the binder: hasKey keeps an explicit `false`,
+  # the trimmed-non-blank test drops "" and "   " (they render no key), and the value renders trimmed.
+  {{- if and (hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenRouterEU") (.Values.config.memex_portal.Features__Ai__Providers__OpenRouterEU | toString | trim) }}
+  Features__Ai__Providers__OpenRouterEU: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenRouterEU | toString | trim }}"
   {{- end }}
   # The co-hosted CLI harnesses (Claude Code, GitHub Copilot) — same gate shape, same reasoning.
   {{- if hasKey .Values.config.memex_portal "Features__Ai__Clis__ClaudeCode" }}
