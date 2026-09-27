@@ -50,6 +50,23 @@
 
 
         /// <summary>
+        /// Where the client navigates the moment the owner ACCEPTS this button's click — i.e. when the
+        /// click action is done (its Task or observable completed) — without waiting for any
+        /// long-running work that action started. Unlike <see cref="NavigateToHref"/>, which navigates
+        /// before anything is sent, this navigates only on the acknowledgement, so a refused click stays
+        /// on the page and shows why. Typical use: an Approve button whose action writes the approval and
+        /// whose target is the live progress view of the work the approval releases.
+        /// See <c>Doc/GUI/ButtonPendingState</c>.
+        /// </summary>
+        public object? NavigateOnAccepted { get; init; }
+
+        /// <summary>Returns a copy that navigates to <paramref name="href"/> once the click is accepted.</summary>
+        /// <param name="href">The href (or a binding to one) to navigate to on acceptance.</param>
+        /// <returns>A new <see cref="ButtonControl"/> with <see cref="NavigateOnAccepted"/> set.</returns>
+        public ButtonControl WithNavigateOnAccepted(object href)
+            => this with { NavigateOnAccepted = href };
+
+        /// <summary>
         /// Sets the aria-label of the button.
         /// </summary>
         /// <param name="label"></param>

@@ -1,4 +1,7 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
@@ -56,7 +59,7 @@ public abstract record UiControl : IUiControl
     /// </summary>
     public object? Readonly { get; init; }
     private readonly ImmutableList<Skin> _skins = []; // updated to nullable
-    private readonly Func<UiActionContext, Task>? clickAction; // updated to nullable
+    private readonly Func<UiActionContext, IObservable<Unit>>? clickAction;
 
     /// <summary>Ordered list of skins applied to this control; the last skin is popped first during rendering.</summary>
     [JsonConverter(typeof(SkinListConverter))]
@@ -81,7 +84,16 @@ public abstract record UiControl : IUiControl
     /// <summary>Indicates whether a click action has been registered on this control; set automatically when a click handler is assigned.</summary>
     public bool IsClickable { get; init; }
 
-    internal Func<UiActionContext, Task>? ClickAction
+    /// <summary>
+    /// The click action, normalised to ONE completion contract: the observable it returns. The
+    /// owner-side handler (<c>LayoutAreaHost.OnClick</c>) answers the sender's
+    /// <c>UserActionAccepted</c> receipt when this observable COMPLETES and a <c>DeliveryFailure</c>
+    /// when it ERRORS (or when the action throws synchronously) — which is what a pending button on the
+    /// client waits for. A <see cref="Task"/>-returning action is adapted by <see cref="FromTask"/>, so
+    /// "done" means the returned Task completed; <c>Task.CompletedTask</c> is therefore acknowledged on
+    /// the handler's own turn, exactly as before.
+    /// </summary>
+    internal Func<UiActionContext, IObservable<Unit>>? ClickAction
     {
         get => clickAction;
         init
@@ -222,8 +234,35 @@ public abstract record UiControl : IUiControl
     /// <param name="onClick">The asynchronous callback invoked on click.</param>
     public UiControl WithClickAction(Func<UiActionContext, Task> onClick)
     {
+        return this with { ClickAction = FromTask(onClick), };
+    }
+
+    /// <summary>
+    /// Returns a copy with <paramref name="onClick"/> registered as a REACTIVE click handler. The click
+    /// is acknowledged to the clicking client when the returned observable completes (any number of
+    /// values) and refused — with the error's message — when it errors, so a framework button stays
+    /// pending exactly as long as the work the handler composed. Return the confirmation of the write
+    /// the click requests (e.g. <c>GetMeshNodeStream(path).Update(…).Select(_ =&gt; Unit.Default)</c>),
+    /// never the long-running work that write triggers: the owner's watcher runs that, and the page
+    /// shows its progress. An observable that never completes keeps the button pending.
+    /// <para>A distinct NAME, not a <c>WithClickAction</c> overload: a lambda that fits both a
+    /// <c>Task</c> and an <c>IObservable</c> return (<c>_ =&gt; throw …</c>) would otherwise become
+    /// ambiguous in every caller — including in-mesh NodeType sources no CI build type-checks.</para>
+    /// </summary>
+    /// <param name="onClick">The callback invoked on click; its observable is subscribed exactly once by the owner.</param>
+    public UiControl WithReactiveClickAction(Func<UiActionContext, IObservable<Unit>> onClick)
+    {
         return this with { ClickAction = onClick, };
     }
+
+    /// <summary>
+    /// Adapts a <see cref="Task"/>-returning click action to the reactive completion contract of
+    /// <see cref="ClickAction"/>. No await and no bridge on the hub: an already-completed Task (the
+    /// sanctioned <c>return Task.CompletedTask;</c> shape) is answered synchronously by Rx's
+    /// <c>ToObservable</c>; a still-running one only registers a continuation.
+    /// </summary>
+    internal static Func<UiActionContext, IObservable<Unit>> FromTask(Func<UiActionContext, Task> onClick) =>
+        ctx => onClick(ctx) is { } task ? task.ToObservable() : Observable.Return(Unit.Default);
 
     /// <summary>Returns a copy with <paramref name="onClick"/> registered as a synchronous click handler (wrapped as a completed Task).</summary>
     /// <param name="onClick">The synchronous callback invoked on click.</param>
@@ -295,6 +334,16 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
     /// <param name="onClick">The asynchronous callback invoked when the user clicks the control.</param>
     /// <returns>A copy of <typeparamref name="TControl"/> with the click action set.</returns>
     public new TControl WithClickAction(Func<UiActionContext, Task> onClick)
+    {
+        return This with { ClickAction = FromTask(onClick) };
+    }
+
+    /// <summary>Returns a copy with <paramref name="onClick"/> registered as a REACTIVE click handler, typed as <typeparamref name="TControl"/>.
+    /// The click is acknowledged to the client when the observable completes and refused when it errors — see
+    /// <see cref="UiControl.WithReactiveClickAction"/>.</summary>
+    /// <param name="onClick">The callback invoked on click; its observable is subscribed exactly once by the owner.</param>
+    /// <returns>A copy of <typeparamref name="TControl"/> with the click action set.</returns>
+    public new TControl WithReactiveClickAction(Func<UiActionContext, IObservable<Unit>> onClick)
     {
         return This with { ClickAction = onClick };
     }

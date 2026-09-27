@@ -613,22 +613,61 @@ public record LayoutAreaHost : IDisposable
 
 
 
+    /// <summary>
+    /// Runs the clicked control's action and answers the sender's receipt when the action is DONE —
+    /// which is what a framework button's pending state waits for (see
+    /// <c>Doc/GUI/ButtonPendingState</c>).
+    /// <para><b>"Done" is defined by the action's own completion signal</b>, normalised by
+    /// <see cref="UiControl.ClickAction"/> to an observable: the observable COMPLETING answers
+    /// <see cref="UserActionAccepted"/>; it ERRORING — or the action throwing synchronously — answers a
+    /// <see cref="DeliveryFailure"/> carrying the error's message, which reaches the sender's
+    /// <c>onRefused</c> arm so the person sees why nothing happened. A <c>Task.CompletedTask</c> action
+    /// (and a synchronous <c>Action</c>) completes on this turn, so its receipt is posted here exactly as
+    /// before; a reactive action's receipt is posted from its completion, with no await, no bridge and
+    /// nothing parked on this turn. The receipt is a response (<c>ResponseFor</c>), so it carries the
+    /// request's AccessContext whichever thread completes the action.</para>
+    /// </summary>
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {
-        if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
-            try
-            {
-                control.ClickAction.Invoke(
-                    new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
-                );
-            }
-            catch (Exception ex)
-            {
-                FailRequest(ex, request);
-                return request.Processed();
-            }
-        return AcceptUserAction(request);
+        if (GetControl(request.Message.Area) is not UiControl { ClickAction: not null } control)
+            return AcceptUserAction(request);
+
+        IObservable<System.Reactive.Unit> completion;
+        try
+        {
+            completion = control.ClickAction.Invoke(
+                new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+            ) ?? Observable.Return(System.Reactive.Unit.Default);
+        }
+        catch (Exception ex)
+        {
+            FailRequest(ex, request);
+            return request.Processed();
+        }
+
+        // Exactly one answer per click: onError and onCompleted are mutually exclusive, and values
+        // are ignored — only the terminal signal means anything.
+        //
+        // 🚨 The subscription is OWNED BY THIS HOST, not by the clicked area. A click's own write
+        // routinely re-renders the page and clears the area that held the button (an approval
+        // removes the Approve section) — possibly before the write's confirmation arrives; an
+        // area-owned subscription would be disposed right there and the receipt would never be
+        // sent, stranding the button in its pending state. Host-owned, it is released when the
+        // stream (and with it the page) goes away, and dropped from the set as soon as it settles.
+        var subscription = new SingleAssignmentDisposable();
+        pendingClickActions.Add(subscription);
+        subscription.Disposable = completion.Subscribe(
+            _ => { },
+            ex => { FailRequest(ex, request); pendingClickActions.Remove(subscription); },
+            () => { AcceptUserAction(request); pendingClickActions.Remove(subscription); });
+        return request.Processed();
     }
+
+    /// <summary>
+    /// The click actions still running (see <see cref="OnClick"/>), disposed with this host. A
+    /// settled one removes itself, so the set holds only what is actually pending.
+    /// </summary>
+    private readonly CompositeDisposable pendingClickActions = new();
 
     private IMessageDelivery OnCloseDialog(IMessageDelivery<CloseDialogEvent> request)
     {
@@ -1281,6 +1320,9 @@ public record LayoutAreaHost : IDisposable
         foreach (var disposable in disposablesByArea.ToArray())
             disposable.Value.ForEach(d => d.Dispose());
         disposablesByArea.Clear();
+        // Held apart from disposablesByArea on purpose: no area re-render may release a pending
+        // click action — only the host's own teardown (see OnClick).
+        pendingClickActions.Dispose();
     }
 
     /// <summary>
