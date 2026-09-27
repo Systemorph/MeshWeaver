@@ -148,6 +148,31 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         (await ReportsOf(real, ct)).Should().Contain(r => r.Message.Contains("FRESH activation"));
     }
 
+    [Fact(Timeout = 120000)]
+    public async Task DeleteSpaceInventoryReadsRootAndPartitionDefinitionFromTheirLiveStreams()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string space = "LiveInventory";
+        await target!.SeedSpace(space);
+
+        await AsSystem(target.Hub, () => target.Hub.GetMeshNodeStream(space)
+            .Update(root => root with { Name = "current-root-name" }));
+
+        var seededRecord = PartitionOwnership.PartitionDefinitionNode(new MeshNode(space) { Name = space }, "stream-read test");
+        var seededDefinition = (PartitionDefinition)seededRecord.Content!;
+        var currentRecord = seededRecord with { Content = seededDefinition with { Table = "current_rows" } };
+        await AsSystem(target.Hub, () => target.Hub.ServiceProvider.GetRequiredService<IMeshService>().CreateOrUpdateNode(currentRecord));
+
+        var inventory = await SpaceDeletion.Inventory(target.Hub, space)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        inventory.Root.Should().NotBeNull();
+        inventory.Root!.Name.Should().Be("current-root-name");
+        inventory.Tables.Should().ContainSingle(table => table.Table == "current_rows" && table.Rows == 2,
+            "the partition definition's live table mapping is part of the approved inventory");
+        inventory.Unread.Should().BeEmpty();
+    }
+
     // ───────────────────────────── the negatives ─────────────────────────────
 
     [Fact(Timeout = 120000)]
@@ -340,6 +365,14 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
                                       + "38:hub.RecycleNode(\"A\", reason) as system;"));
     }
 
+    [Fact]
+    public void SpaceDeletionExistenceQueriesDoNotProjectRootOrPartitionContent()
+    {
+        SpaceDeletion.RootQuery("LiveInventory").Should().Be("path:LiveInventory select:path limit:1");
+        SpaceDeletion.RecordQuery("LiveInventory").Should().Be("path:Admin/Partition/LiveInventory select:path limit:1");
+        SpaceDeletion.InventoryQueries("LiveInventory").First().Should().Be(SpaceDeletion.RootQuery("LiveInventory"));
+    }
+
     // ───────────────────────────── helpers ─────────────────────────────
 
     private static string Sha(string text) =>
@@ -424,6 +457,8 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>The TARGET instance: a second, independent mesh with the lane armed.</summary>
     private sealed class TargetMesh(ITestOutputHelper output, ControlLaneTest control) : MonolithMeshTestBase(output)
     {
+        public IMessageHub Hub => Mesh;
+
         protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
             => base.ConfigureMesh(builder)
                 .AddWebhookInbox()
