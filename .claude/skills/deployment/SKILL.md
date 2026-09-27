@@ -89,6 +89,12 @@ the kind's own binding (a Recycle's target and force flag, a DeleteSpace's space
 that plan. A plan that would come out differently re-parks; it never runs unapproved. What else is
 true, and bites:
 
+- **Every step runs as system, and the plan PRE-FLIGHTS rights and scale** (policy
+  `governed-action-preflight`, proposed; implementation in flight). An action refuses at park
+  when a step cannot complete, never partway through a destructive run. The evidence is a
+  DeleteSpace that failed at step 9 after it had already removed the space's grant and GitSync. It
+  hit 31,138 per-node delete validations against a 25 s bound. Until the pre-flight ships, read a
+  destructive plan's scale (the rows per table) yourself before you approve it.
 - **Plans are deterministic.** A clock-derived value (a dump's object name) comes from `planSeedAt`,
   stamped at the first park of an approval round. A node that re-parks every few seconds with a
   moving `parkedAt` is a plan that is not deterministic: a defect to file, not an approval to retry.
@@ -100,8 +106,16 @@ true, and bites:
   From an agent session that is ONE MCP `patch`, written as the maintainer, carrying `requestedBy`,
   `approvedBy`, `approvedAt` and every binding field as parked (`approvedRequest`, `approvedAction`,
   `approvedDeployment`, `approvedImageTag`, plus `approvedRecycle` / `approvedPlan` where the kind
-  binds them). Split it into several writes, or let a binding field drift, and the gate re-parks.
-  This is a write in the maintainer's name, so do it only when the maintainer asked for it.
+  binds them). Create the action and WAIT FOR THE PARK first: an approval in the create write,
+  or one dated before `parkedAt`, is refused and re-parks. `approvedPlan` is not stored on the node,
+  so recompute `ActionPlanSnapshot.Digest()` from the parked `actionPlan` (`sha256:` lower-hex).
+  Split the approval into several writes, or let a binding field drift, and the gate re-parks. This
+  is a write in the maintainer's name, so do it only when the maintainer asked for it.
+- **The digest binds the COMMANDS, not the values file or the operator environment** rendered at
+  dispatch. After a record change that follows an approval, re-request the action rather than
+  trusting the binding to catch it.
+- **Approvable is not yet runnable.** An approved plan can still stop on an unbound `$VAR` or a
+  declared vault object that is absent. Check both before you approve.
 - **A `Running` action survives a restart of the control instance.** The watcher re-opens every
   orphaned `Running` action on start and resumes following it. Do not re-file it.
 - **One rollout budget.** How long a roll may take is the chart's own progress deadline
@@ -113,7 +127,7 @@ true, and bites:
   structure. Run a `HelmRelease` action with `helmAction: capture` first, then the Reconcile.
 
 The rules, the page layout and the threat model: `Hosting/AksOperationsViaActions` (Plugins,
-"Approval in the mesh") · [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md)
+"Approval in the mesh" and "What operating it taught") · [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md)
 "Diagnostics — through the memex API first".
 
 ## 🚨 Probes: the startup budget covers a cold boot, never a bake
@@ -139,9 +153,10 @@ dispatch; use `Reconcile`. Manual:
 
 ## The AKS route (break glass — the control plane is what is broken)
 
-🚨 **Pass `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c` on EVERY `az` call** — written
-`<subscription>` in every example below. The default
-subscription may be "PartnerRe Memex", which holds another cluster with the SAME name
+🚨 **Pass `--subscription <subscription>` on EVERY `az` call**, as every example below does.
+`<subscription>` is the fleet's own subscription; its id is in the private Systemorph/Memex repo
+(`docs/aks-ops.md`), never in this public one. The signed-in account's default subscription may
+belong to another tenant's installation, which holds another cluster with the SAME name
 (`<aks-cluster>`); without the flag you read the wrong system and nothing says so.
 `az role assignment delete --ids …` needs it too, or it fails with `InvalidAuthenticationTokenTenant`.
 
@@ -281,7 +296,7 @@ wiring itself — a full restart costs 30–60 s and loses the dashboard auth to
       Sample, Logs, Audit); any `kubectl` you ran yourself is written up as break-glass, with its
       other half reconciled.
 - [ ] Where `kubectl` was unavoidable, it was reached only through `az aks command invoke`, with
-      `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c`.
+      `--subscription <subscription>`.
 - [ ] A gated action was approved on the PLAN it parked with (the plan hash on the page), not on its
       reason.
 - [ ] No `deploy.sh` re-run for a code update.
