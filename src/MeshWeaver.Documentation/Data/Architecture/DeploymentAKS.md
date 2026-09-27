@@ -423,7 +423,7 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
    - `memex` → the git-ignored `values.deploy.yaml` in the staging dir (template: `deploy/aks/scripts/values.deploy.example.yaml`), or `helm upgrade --set selfUpdate.azureClientId=<clientId>`.
    - `memex-cloud` / customer portals → the git-ignored `deploy/aks/envs/<env>/values.<env>.yaml`.
 
-> Adding a **new** portal namespace? It needs its own federated credential on the shared UAMI — add the namespace to `portalNamespaces` and re-run the infra deploy (idempotent), or `az identity federated-credential create` (see [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment)). The subject must be exactly `system:serviceaccount:<ns>:memex-portal-sa`.
+> Adding a **new** portal namespace? It needs its own federated credential on the shared UAMI — add the namespace to `portalNamespaces` and re-run the infra deploy (idempotent), or `az identity federated-credential create --subscription <subscription> …` (see [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment)). The subject must be exactly `system:serviceaccount:<ns>:memex-portal-sa`.
 
 ## Migration under self-update
 
@@ -727,9 +727,10 @@ follows is the break-glass form, for when the control plane itself is what is br
 
 ## Diagnostics (private cluster — break glass)
 
-🚨 **Always pass `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c` to every `az` call on this
-page** (`<subscription>` in the examples). The
-signed-in account's DEFAULT subscription may be "PartnerRe Memex", which holds ANOTHER cluster with
+🚨 **Always pass `--subscription <subscription>` to every `az` call on this page**, as every
+example does. `<subscription>` is the fleet's own subscription; its id lives in the private
+Systemorph/Memex repo (`docs/aks-ops.md`). The signed-in account's DEFAULT subscription may belong
+to another tenant's installation, which holds ANOTHER cluster with
 the same name in a resource group of the same name (`<aks-cluster>` in `<aks-resource-group>`). Without the flag, `az aks command invoke`
 answers from that cluster, with different nodes and a different migration history, and nothing in
 the output says so. The same applies to `az role assignment delete --ids …`: it does not take the
