@@ -345,6 +345,34 @@ public class SealedBundleFloorCacheTest : IDisposable
     }
 
     [Fact]
+    public void ACancelledPointerReadStopsBeforeAnAbsentPointerBecomesAFallback()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var source = Track(Path.Combine(Path.GetTempPath(), "mw-5719-" + Guid.NewGuid().ToString("N")));
+
+        var failure = Assert.Throws<OperationCanceledException>(() =>
+            ShippedPrebuiltBundles.ResolvePublicationPointer(source, cancellation.Token));
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+    }
+
+    [Fact]
+    public void CancellationDuringPointerResolutionDoesNotReturnAPublicationFault()
+    {
+        var root = RootWithIdentities(1);
+        var source = Path.Combine(FirstIdentityOf(root), PlatformSource);
+        File.WriteAllText(Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName), "../outside\n");
+        using var cancellation = new CancellationTokenSource();
+        var logger = new PointerWarningLogger(cancellation.Cancel);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            ShippedPrebuiltBundles.ResolvePublicationPointer(source, cancellation.Token, logger));
+
+        Assert.True(logger.SawPointerWarning);
+    }
+
+    [Fact]
     public void ACancelledReadStopsBeforeAnAbsentRootBecomesAnAvailabilityVerdict()
     {
         using var cancellation = new CancellationTokenSource();

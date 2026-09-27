@@ -421,7 +421,9 @@ or "the shelf is unreadable" — the read did not fail, the process is stopping.
 `SealedBundleFloorCache.Observe` follows the same contract (#5719): the filesystem pool's
 worker token reaches the floor read, directory listings check it while materializing (before
 sorting), and each publication and cache-pruning step checks it. Cancellation escapes as
-`OperationCanceledException`; it is never converted into an unreadable-store verdict or used
+`OperationCanceledException`. The publication-pointer resolver also checks between its existence,
+pointer-file and generation probes, so those reads cannot continue as a fallback after cancellation.
+Cancellation is never converted into an unreadable-store verdict or used
 to prune entries from a walk that did not finish. The existing synchronous `Read(root, logger)`
 surface remains available for callers with no worker token; pooled callers use the overload
 whose token is required.

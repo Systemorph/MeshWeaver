@@ -399,7 +399,7 @@ public static class PublishedBundleCatalogue
         // source directory holding nothing, so the source silently declares NOTHING. The
         // floor is the set of packages that must carry a sealed bake, so reading it short
         // clears a release that should hold — cannot determine ≠ clear to proceed.
-        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, cancellationToken, logger);
         cancellationToken.ThrowIfCancellationRequested();
         var declared = DeclaredBundlesOf(pointer.Directory);
         cancellationToken.ThrowIfCancellationRequested();
@@ -940,7 +940,7 @@ public static class PublishedBundleCatalogue
     /// exists to prevent. Reading the sentinel alone is one file read per source.</para>
     /// </summary>
     /// <param name="publication">The publication directory — <b>already resolved</b> by the caller
-    /// (<see cref="ShippedPrebuiltBundles.ResolvePublicationPointer"/>), because the caller is the
+    /// (<see cref="ShippedPrebuiltBundles.ResolvePublicationPointer(string, ILogger)"/>), because the caller is the
     /// one that must tell "this source declares nothing" from "the pointer could not be followed".</param>
     private static IReadOnlyList<string>? DeclaredBundlesOf(string publication)
     {
