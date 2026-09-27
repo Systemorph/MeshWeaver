@@ -153,9 +153,10 @@ dispatch; use `Reconcile`. Manual:
 
 ## The AKS route (break glass — the control plane is what is broken)
 
-🚨 **Pass `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c` on EVERY `az` call** — written
-`<subscription>` in every example below. The default
-subscription may be "PartnerRe Memex", which holds another cluster with the SAME name
+🚨 **Pass `--subscription <subscription>` on EVERY `az` call**, as every example below does.
+`<subscription>` is the fleet's own subscription; its id is in the private Systemorph/Memex repo
+(`docs/aks-ops.md`), never in this public one. The signed-in account's default subscription may
+belong to another tenant's installation, which holds another cluster with the SAME name
 (`<aks-cluster>`); without the flag you read the wrong system and nothing says so.
 `az role assignment delete --ids …` needs it too, or it fails with `InvalidAuthenticationTokenTenant`.
 
@@ -295,7 +296,7 @@ wiring itself — a full restart costs 30–60 s and loses the dashboard auth to
       Sample, Logs, Audit); any `kubectl` you ran yourself is written up as break-glass, with its
       other half reconciled.
 - [ ] Where `kubectl` was unavoidable, it was reached only through `az aks command invoke`, with
-      `--subscription 7ecc5974-5319-4596-ad2b-3470f6b7f85c`.
+      `--subscription <subscription>`.
 - [ ] A gated action was approved on the PLAN it parked with (the plan hash on the page), not on its
       reason.
 - [ ] No `deploy.sh` re-run for a code update.
