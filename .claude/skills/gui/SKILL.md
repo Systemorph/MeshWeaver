@@ -112,6 +112,12 @@ markup. Containers: `Controls.Stack`, `Controls.LayoutGrid`, `Controls.Splitter`
 `Controls.Combobox`, `Controls.Listbox`, `Controls.Text`. Column API + a worked table:
 `samples/Graph/Data/Cornerstone/Pricing/Source/PricingLayoutAreas.cs`.
 
+**Adding to the user's profile page** (`/{user}/EditProfile`) is a section, never a new page: a
+compiled module registers a `ProfileSectionDefinition` with `AddProfileSections(...)`; a module
+compiled from mesh content (the Store, for example) contributes a `UiContribution` node with
+`context: "Profile"`, read live. A picture for any node is the platform's `NodeImageUploadControl`.
+Full reference: [ProfilePage.md](../../../src/MeshWeaver.Documentation/Data/GUI/ProfilePage.md).
+
 ## GUI side: subscribe via the cache (the canonical Blazor view)
 
 ```csharp
