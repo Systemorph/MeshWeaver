@@ -108,10 +108,8 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
         Catalog.Changes.Where(_ => predicate(Catalog)).Should().Within(Budget).Emit(because);
 
     private Task<MeshNode?> StoredNode(string key) =>
-        Observable.Using(
-                () => Access.ImpersonateAsSystem(),
-                _ => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{InstanceSecrets.PathOf(key)}")).Take(1)
-                    .Select(c => c.Items.FirstOrDefault()))
+        Access.RunAsSystem(() => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{InstanceSecrets.PathOf(key)}")).Take(1)
+                .Select(c => c.Items.FirstOrDefault()))
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     private static KeyValuePair<string, string> Sign(string body, string secret) =>
@@ -124,21 +122,17 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     private Task CreateTarget() =>
-        Observable.Using(
-                () => Access.ImpersonateAsSystem(),
-                _ => MeshService.CreateOrUpdateNode(new MeshNode(Target)
-                {
-                    Name = Target,
-                    NodeType = "Markdown",
-                    Content = new MarkdownContent { Content = "# Inbox\n" },
-                }))
+        Access.RunAsSystem(() => MeshService.CreateOrUpdateNode(new MeshNode(Target)
+            {
+                Name = Target,
+                NodeType = "Markdown",
+                Content = new MarkdownContent { Content = "# Inbox\n" },
+            }))
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     private Task<int> InboxCount() =>
-        Observable.Using(
-                () => Access.ImpersonateAsSystem(),
-                _ => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                        $"path:{Target}/{WebhookInbox.InboxContainer} scope:children")).Take(1))
+        Access.RunAsSystem(() => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{Target}/{WebhookInbox.InboxContainer} scope:children")).Take(1))
             .Select(c => c.Items.Count(n => n.NodeType == WebhookInbox.NodeType))
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
@@ -227,7 +221,7 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task Only_a_global_administrator_can_set_a_secret_and_nothing_is_written_otherwise()
     {
-        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(
+        var refusal = await Assert.ThrowsAsync<InstanceSecretException>(
             () => SetAs(PlainUser, SigningKey, SecretFingerprint.Generate()));
         Assert.Contains("global administrator", refusal.Message);
         Assert.Null(await StoredNode(SigningKey));
@@ -236,7 +230,7 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task A_key_no_slot_admits_is_refused()
     {
-        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(
+        var refusal = await Assert.ThrowsAsync<InstanceSecretException>(
             () => SetAs(PlatformAdmin, InboxKey, "would-replace-the-fleet-secret"));
         Assert.Contains("not a setting", refusal.Message);
         Assert.Null(await StoredNode(InboxKey));
@@ -377,6 +371,66 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
         await WaitForCatalog(_ => InstanceSecrets.Resolve(Mesh, key) == generated.Value, "recovering restores the portal key");
 
         Assert.DoesNotContain(logs.Messages, m => m.Contains(generated.Value[..16], StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_direct_write_is_refused_and_a_plain_value_is_never_used()
+    {
+        var key = $"{InboxKey}:intruder";
+        // A person with rights on Admin writes a secret node DIRECTLY, around the verbs, with a plain value.
+        var direct = new MeshNode(InstanceSecrets.IdOf(key), InstanceSecrets.Partition)
+        {
+            NodeType = InstanceSecrets.NodeType,
+            Content = new InstanceSecretContent { ConfigKey = key, EncryptedValue = "plain-injected-key" },
+        };
+        Exception? refused = null;
+        using (Access.SwitchAccessContext(Identity(PlatformAdmin)))
+            try
+            {
+                await MeshService.CreateNode(direct).FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+            }
+            catch (Exception ex)
+            {
+                refused = ex;
+            }
+        Assert.NotNull(refused);
+        Assert.Null(await StoredNode(key));
+
+        // Even content that got past the guard (written as system) is never used unless it is enc:-tagged.
+        var entry = InstanceSecretCatalog.CatalogEntry.From(InstanceSecrets.PathOf(key),
+            new InstanceSecretContent { ConfigKey = key, EncryptedValue = "plain-injected-key" }, s => s, DateTimeOffset.UtcNow);
+        Assert.Null(entry.Current);
+    }
+
+    [Fact]
+    public async Task A_value_carrying_the_encryption_tag_is_refused()
+    {
+        var refusal = await Assert.ThrowsAsync<InstanceSecretException>(
+            () => SetAs(PlatformAdmin, SigningKey, "enc:v1:not-really-encrypted"));
+        Assert.Equal("secret.error.reservedPrefix", refusal.Text.Key);
+        Assert.Null(await StoredNode(SigningKey));
+    }
+
+    [Theory]
+    [InlineData("Test:InboxSecret:a--b")]
+    [InlineData("Test:InboxSecret:--")]
+    public void A_key_that_would_collide_in_the_node_id_is_not_admitted(string key) =>
+        Assert.False(InstanceSecrets.Admits(InboxKey + ":*", key));
+
+    [Fact]
+    public void Two_spellings_of_one_key_address_one_node() =>
+        Assert.Equal(InstanceSecrets.PathOf("Test:InboxSecret:Pearl"), InstanceSecrets.PathOf("test:inboxsecret:pearl"));
+
+    [Fact]
+    public async Task A_rotation_overlap_is_clamped_to_the_maximum()
+    {
+        var key = $"{InboxKey}:pearl";
+        await SetAs(PlatformAdmin, key, SecretFingerprint.Generate());
+        await WaitForCatalog(c => c.Entry(key) is not null, "the first key is live");
+        var rotated = await SetAs(PlatformAdmin, key, SecretFingerprint.Generate(), keepPrevious: TimeSpan.FromDays(3650));
+        Assert.NotNull(rotated.PreviousUntil);
+        Assert.True(rotated.PreviousUntil <= DateTimeOffset.UtcNow + InstanceSecrets.DefaultRotationOverlap + TimeSpan.FromMinutes(1),
+            $"a ten-year overlap is clamped to {InstanceSecrets.DefaultRotationOverlap}: {rotated.PreviousUntil}");
     }
 
     /// <summary>Collects every formatted log message, so a test can prove a value never reached one.</summary>

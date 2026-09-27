@@ -92,8 +92,9 @@ public record InstanceSecretContent
     /// <summary>Whether that use succeeded, for example whether the other end accepted the signature.</summary>
     public bool? LastUseOk { get; init; }
 
-    /// <summary>One sentence about that use, e.g. "accepted by the control instance as 'pearl'". Never a value.</summary>
-    public string? LastUseResult { get; init; }
+    /// <summary>One sentence about that use, e.g. "accepted by the control instance as 'pearl'" —
+    /// keyed, so it renders in the viewer's language. Never a value.</summary>
+    public LocalizableText? LastUseResult { get; init; }
 }
 
 /// <summary>
@@ -116,7 +117,7 @@ public sealed record InstanceSecretStatus(
     DateTimeOffset? PreviousUntil = null,
     DateTimeOffset? LastUsedAt = null,
     bool? LastUseOk = null,
-    string? LastUseResult = null)
+    LocalizableText? LastUseResult = null)
 {
     /// <summary>The value was set in the portal.</summary>
     public const string FromPortal = "portal";
@@ -126,6 +127,21 @@ public sealed record InstanceSecretStatus(
 
     /// <summary>There is no value.</summary>
     public const string FromNone = "none";
+}
+
+/// <summary>
+/// Why a secret operation wrote nothing — a keyed sentence, so the portal shows it in the viewer's
+/// language (<see cref="Text"/>). <see cref="Exception.Message"/> is the English rendering. It never
+/// contains a secret value.
+/// </summary>
+/// <param name="text">The refusal.</param>
+public sealed class InstanceSecretException(LocalizableText text) : InvalidOperationException(text.English)
+{
+    /// <summary>The refusal, keyed for the viewer's language.</summary>
+    public LocalizableText Text { get; } = text;
+
+    internal static InstanceSecretException Of(string english, string key, params (string Name, object? Value)[] args) =>
+        new(LocalizableText.Keyed(english, key, args));
 }
 
 /// <summary>
@@ -215,8 +231,14 @@ public static class InstanceSecrets
             .AddMeshDataSource(source => source.WithContentType<InstanceSecretContent>())
     };
 
-    /// <summary>The node id for <paramref name="configKey"/>: <c>Secret-</c> plus the key with <c>:</c> as <c>--</c>. Pure.</summary>
-    public static string IdOf(string configKey) => IdPrefix + configKey.Trim().Replace(":", "--");
+    /// <summary>
+    /// The node id for <paramref name="configKey"/>: <c>Secret-</c> plus the key LOWER-CASED with
+    /// <c>:</c> as <c>--</c>. Configuration keys compare case-insensitively, so two spellings of one
+    /// key must address one node. The encoding is injective because <see cref="Admits"/> refuses any
+    /// key containing <c>--</c>. Pure.
+    /// </summary>
+    public static string IdOf(string configKey) =>
+        IdPrefix + configKey.Trim().ToLowerInvariant().Replace(":", "--");
 
     /// <summary>The node path for <paramref name="configKey"/>. Pure.</summary>
     public static string PathOf(string configKey) => $"{Partition}/{IdOf(configKey)}";
@@ -226,7 +248,8 @@ public static class InstanceSecrets
     {
         var key = (configKey ?? "").Trim();
         var p = (pattern ?? "").Trim();
-        if (key.Length == 0 || p.Length == 0)
+        // `--` is the node id's separator (IdOf): a key containing it could collide with another.
+        if (key.Length == 0 || p.Length == 0 || key.Contains("--", StringComparison.Ordinal))
             return false;
         if (!p.EndsWith(":*", StringComparison.Ordinal))
             return string.Equals(p, key, StringComparison.OrdinalIgnoreCase);
@@ -265,6 +288,10 @@ public static class InstanceSecrets
     public static ImmutableList<(string Child, ImmutableList<string> Values)> Candidates(
         InstanceSecretCatalog? catalog, IConfiguration? configuration, string section)
     {
+        // A faulted catalog cannot see a revocation any more: offer no per-sender key at all
+        // (fail closed), rather than a mounted key the portal may have disabled since.
+        if (catalog?.Faulted == true)
+            return ImmutableList<(string, ImmutableList<string>)>.Empty;
         var result = ImmutableDictionary.CreateBuilder<string, ImmutableList<string>>(StringComparer.OrdinalIgnoreCase);
         if (configuration is not null)
             foreach (var child in configuration.GetSection(section).GetChildren())
@@ -359,7 +386,8 @@ public static class InstanceSecrets
     /// <param name="configKey">A key some registered <see cref="InstanceSecretSlot"/> admits.</param>
     /// <param name="value">The value, used byte for byte.</param>
     /// <param name="keepPreviousFor">During a ROTATION, how long the value being replaced keeps
-    /// verifying. Null replaces it outright.</param>
+    /// verifying — at most <see cref="DefaultRotationOverlap"/>; a longer span is clamped to it, so no
+    /// caller can keep a replaced credential alive indefinitely. Null replaces it outright.</param>
     /// <param name="source">How the value was produced (<see cref="SecretSources"/>).</param>
     public static IObservable<InstanceSecretStatus> Set(
         IMessageHub hub, string configKey, string value, TimeSpan? keepPreviousFor = null,
@@ -367,9 +395,18 @@ public static class InstanceSecrets
         Write(hub, configKey, mustExist: false, (current, user, now, protect) =>
         {
             if (string.IsNullOrEmpty(value))
-                throw new InvalidOperationException("The value is empty, so nothing was saved.");
+                throw InstanceSecretException.Of("The value is empty, so nothing was saved.", "secret.error.empty");
+            // 🚨 The protector treats an `enc:`-tagged input as ALREADY encrypted and returns it
+            // unchanged, so a pasted `enc:…` would be stored verbatim — in the clear.
+            if (value.StartsWith("enc:", StringComparison.Ordinal))
+                throw InstanceSecretException.Of(
+                    "A value may not start with 'enc:' (that prefix marks encrypted data), so nothing was saved.",
+                    "secret.error.reservedPrefix");
             var encrypted = Protect(protect, value);
-            var keepPrevious = keepPreviousFor is { } span && span > TimeSpan.Zero
+            var overlap = keepPreviousFor is { } requested && requested > TimeSpan.Zero
+                ? (requested > DefaultRotationOverlap ? DefaultRotationOverlap : requested)
+                : (TimeSpan?)null;
+            var keepPrevious = overlap is not null
                 && current is { Disabled: false, DeletedAt: null, EncryptedValue: { Length: > 0 } };
             return (current ?? new InstanceSecretContent { CreatedAt = now }) with
             {
@@ -386,7 +423,7 @@ public static class InstanceSecrets
                 RecoverableUntil = null,
                 PreviousEncryptedValue = keepPrevious ? current!.EncryptedValue : null,
                 PreviousFingerprint = keepPrevious ? current!.Fingerprint : null,
-                PreviousUntil = keepPrevious ? now + keepPreviousFor!.Value : null,
+                PreviousUntil = keepPrevious ? now + overlap!.Value : null,
                 LastUsedAt = null,
                 LastUseOk = null,
                 LastUseResult = null,
@@ -461,9 +498,9 @@ public static class InstanceSecrets
         Write(hub, configKey, mustExist: true, (current, user, now, _) =>
         {
             if (current!.DeletedAt is null)
-                throw new InvalidOperationException("The secret is not deleted, so there is nothing to recover.");
+                throw InstanceSecretException.Of("The secret is not deleted, so there is nothing to recover.", "secret.error.notDeleted");
             if (current.RecoverableUntil is { } until && until <= now)
-                throw new InvalidOperationException("The recovery window has passed. Set a new value instead.");
+                throw InstanceSecretException.Of("The recovery window has passed. Set a new value instead.", "secret.error.recoveryPassed");
             return current with
             {
                 DeletedAt = null,
@@ -481,7 +518,7 @@ public static class InstanceSecrets
     /// a failed write is logged.
     /// </summary>
     public static IObservable<Unit> RecordUse(
-        IMessageHub hub, string configKey, bool ok, string result, bool verifiedWithCurrent = false)
+        IMessageHub hub, string configKey, bool ok, LocalizableText result, bool verifiedWithCurrent = false)
     {
         var catalog = hub.ServiceProvider.GetService<InstanceSecretCatalog>();
         if (catalog?.Entry(configKey) is not { IsDeleted: false, IsDisabled: false })
@@ -519,8 +556,9 @@ public static class InstanceSecrets
     private static string Protect(IProviderKeyProtector? protector, string value)
     {
         if (protector is null)
-            throw new InvalidOperationException(
-                "This installation registers no key protector, so the secret cannot be stored encrypted. Nothing was saved.");
+            throw InstanceSecretException.Of(
+                "This installation registers no key protector, so the secret cannot be stored encrypted. Nothing was saved.",
+                "secret.error.noProtector");
         string? stored;
         try
         {
@@ -529,12 +567,14 @@ public static class InstanceSecrets
         catch (Exception ex)
         {
             // The protector's message names the missing master key, never the value.
-            throw new InvalidOperationException(
-                $"The secret could not be encrypted ({ex.Message}). Nothing was saved.");
+            throw InstanceSecretException.Of(
+                $"The secret could not be encrypted ({ex.Message}). Nothing was saved.",
+                "secret.error.encryptFailed", ("reason", ex.Message));
         }
         if (stored is null || !stored.StartsWith("enc:", StringComparison.Ordinal))
-            throw new InvalidOperationException(
-                "Encryption is unavailable on this installation (no master key), so the secret was refused rather than stored in cleartext.");
+            throw InstanceSecretException.Of(
+                "Encryption is unavailable on this installation (no master key), so the secret was refused rather than stored in cleartext.",
+                "secret.error.noMasterKey");
         return stored;
     }
 
@@ -550,20 +590,18 @@ public static class InstanceSecrets
         {
             var key = (configKey ?? "").Trim();
             if (!IsSettable(hub, key))
-                return Observable.Throw<InstanceSecretStatus>(new InvalidOperationException(
-                    $"'{key}' is not a setting this installation lets the portal set."));
+                return Observable.Throw<InstanceSecretStatus>(InstanceSecretException.Of(
+                    $"'{key}' is not a setting this installation lets the portal set.",
+                    "secret.error.notSettable", ("key", key)));
             var access = hub.ServiceProvider.GetService<AccessService>();
             var user = (access?.Context ?? access?.CircuitContext)?.ObjectId;
             if (string.IsNullOrEmpty(user))
-                return Observable.Throw<InstanceSecretStatus>(new InvalidOperationException(
-                    "No signed-in user, so nothing was saved."));
+                return Observable.Throw<InstanceSecretStatus>(InstanceSecretException.Of(
+                    "No signed-in user, so nothing was saved.", "secret.error.noUser"));
             var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
             var catalog = hub.ServiceProvider.GetRequiredService<InstanceSecretCatalog>();
             var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var path = PathOf(key);
-            if (mustExist && catalog.Entry(key) is null)
-                return Observable.Throw<InstanceSecretStatus>(new InvalidOperationException(
-                    $"Nothing is set in the portal for '{key}'."));
 
             IObservable<InstanceSecretContent> Update() =>
                 hub.GetWorkspace().GetMeshNodeStream(path)
@@ -596,12 +634,18 @@ public static class InstanceSecrets
                         : Observable.Throw<InstanceSecretContent>(ex));
             }
 
+            // Rights first, as the caller. Presence is decided only once the catalog has READ the
+            // store: before its first listing, "no entry" means "not read yet", not "absent".
             return hub.IsGlobalAdmin(user)
                 .TakeDecisionOutsideGate()
                 .SelectMany(isAdmin => isAdmin
-                    ? access.RunAsSystem(() => catalog.Entry(key) is null ? Create() : Update())
-                    : Observable.Throw<InstanceSecretContent>(new InvalidOperationException(
-                        "Only a global administrator can change this secret. Nothing was saved.")))
+                    ? catalog.WhenLoaded
+                    : Observable.Throw<Unit>(InstanceSecretException.Of(
+                        "Only a global administrator can change this secret. Nothing was saved.", "secret.error.notAdmin")))
+                .SelectMany(_ => mustExist && catalog.Entry(key) is null
+                    ? Observable.Throw<InstanceSecretContent>(InstanceSecretException.Of(
+                        $"Nothing is set in the portal for '{key}'.", "secret.error.notSet", ("key", key)))
+                    : access.RunAsSystem(() => catalog.Entry(key) is null ? Create() : Update()))
                 .Select(content => StatusOf(key, InstanceSecretCatalog.CatalogEntry.From(path, content,
                         protector is null ? null : protector.Unprotect, DateTimeOffset.UtcNow),
                     hub.ServiceProvider.GetService<IConfiguration>()?[key]));
@@ -643,8 +687,11 @@ public sealed class InstanceSecretCatalog : IDisposable
         /// </summary>
         public static CatalogEntry From(string path, InstanceSecretContent content, Func<string?, string?>? unprotect, DateTimeOffset now)
         {
+            // 🚨 Only `enc:`-tagged ciphertext is ever a value. The protector passes an UNTAGGED
+            // input through unchanged (legacy plaintext), so a node written around the write path
+            // with a plain value would otherwise be used as a key.
             string? Decrypt(string? stored) =>
-                string.IsNullOrEmpty(stored) || unprotect is null ? null
+                string.IsNullOrEmpty(stored) || unprotect is null || !stored.StartsWith("enc:", StringComparison.Ordinal) ? null
                 : unprotect(stored) is { Length: > 0 } plain && !plain.StartsWith("enc:", StringComparison.Ordinal) ? plain
                 : null;
             var previousOpen = content.PreviousUntil is not { } until || until > now;
@@ -705,15 +752,12 @@ public sealed class InstanceSecretCatalog : IDisposable
         return state.Value.TryGetValue(configKey.Trim(), out var entry) ? Refresh(entry) : null;
     }
 
-    /// <summary>Every entry, keyed by configuration key (for an inventory view). Carries values only inside the entries.</summary>
-    public ImmutableList<CatalogEntry> Entries
-    {
-        get
-        {
-            EnsureSubscribed();
-            return state.Value.Values.Select(Refresh).ToImmutableList();
-        }
-    }
+    /// <summary>
+    /// True once the catalog's live query has FAULTED. The snapshot can then no longer see a
+    /// revocation, so a verifier must fail CLOSED (<see cref="InstanceSecrets.Candidates"/> offers no
+    /// per-sender key at all) until the process restarts and the subscription is re-established.
+    /// </summary>
+    public bool Faulted { get; private set; }
 
     /// <summary>Every entry whose key is a direct child of <paramref name="section"/>, keyed by the child name.</summary>
     public IEnumerable<(string Child, CatalogEntry Entry)> ChildrenOf(string section)
@@ -752,18 +796,20 @@ public sealed class InstanceSecretCatalog : IDisposable
                 loaded.OnNext(true);
                 return;
             }
-            using (accessService?.ImpersonateAsSystem())
-            {
-                subscription = meshService
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery(InstanceSecrets.CatalogQuery))
-                    .Subscribe(OnChange, ex =>
-                    {
-                        logger?.LogWarning(ex,
-                            "[InstanceSecrets] catalog query faulted; portal-set secrets frozen at the last known set");
-                        // Release waiters: they proceed with what is known, and the fault is logged above.
-                        loaded.OnNext(true);
-                    });
-            }
+            // RunAsSystem, not a `using` scope around Subscribe: the subscription outlives this
+            // method, and the seal stamps the system identity on the query operation itself.
+            subscription = accessService
+                .RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(InstanceSecrets.CatalogQuery)))
+                .Subscribe(OnChange, ex =>
+                {
+                    // 🚨 Fail CLOSED: a dead feed can no longer deliver a revocation, so every
+                    // per-sender key stops verifying (Candidates) until a restart re-subscribes.
+                    Faulted = true;
+                    logger?.LogError(ex,
+                        "[InstanceSecrets] catalog query FAULTED; per-sender keys are refused until this process restarts");
+                    loaded.OnNext(true);
+                    state.OnNext(state.Value);
+                });
         }
     }
 

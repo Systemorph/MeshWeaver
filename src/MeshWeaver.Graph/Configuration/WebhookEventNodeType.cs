@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -390,8 +391,10 @@ public static class WebhookInbox
                 // verified, and — the first time the CURRENT key verifies — the end of its rotation.
                 InstanceSecrets.RecordUse(hub, $"{secretConfigKey}:{sender.Sender}", ok: true,
                         result: verifyOnly
-                            ? $"test signature verified as '{sender.Sender}'"
-                            : $"announcement verified as '{sender.Sender}'",
+                            ? LocalizableText.Keyed($"test signature verified as '{sender.Sender}'",
+                                "secret.use.testVerified", ("sender", sender.Sender))
+                            : LocalizableText.Keyed($"announcement verified as '{sender.Sender}'",
+                                "secret.use.announcementVerified", ("sender", sender.Sender)),
                         verifiedWithCurrent: sender.WithCurrent)
                     .Subscribe(_ => { }, _ => { });
             }

@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh.Threading;
@@ -366,8 +367,12 @@ public class SelfUpdateHandover
     /// <param name="Sender">As whom it verified: the per-sender key's name (e.g. the deployment id),
     /// or null when the fleet-wide secret verified it.</param>
     /// <param name="Destination">The inbox URL that answered.</param>
-    /// <param name="Detail">What came back, in one sentence. Never a value.</param>
-    public sealed record TestOutcome(bool Accepted, string? Sender, string Destination, string Detail);
+    /// <param name="Text">What came back, in one sentence, keyed for the viewer's language. Never a value.</param>
+    public sealed record TestOutcome(bool Accepted, string? Sender, string Destination, LocalizableText Text)
+    {
+        /// <summary>The English rendering of <see cref="Text"/>, for logs and tests.</summary>
+        public string Detail => Text.English;
+    }
 
     /// <summary>The event a key test carries. The inbox never stores a test, so no consumer ever sees it.</summary>
     public const string TestEvent = "self-update-key-test";
@@ -379,7 +384,9 @@ public class SelfUpdateHandover
     /// as the key's last use. Cold. Fails when no inbox route exists, naming what is missing.
     /// </summary>
     public IObservable<TestOutcome> Test() =>
-        Observable.Defer(() =>
+        // The portal-entered key is read from a live catalog: wait for its first listing, or the
+        // test would sign with the mounted key (or none) during the first moments after a start.
+        CatalogLoaded().SelectMany(_ =>
         {
             var settings = ReadSettings();
             if (RouteFor(settings) != Route.Post)
@@ -408,9 +415,14 @@ public class SelfUpdateHandover
                     return TestOutcomeOf(url, (int)response.StatusCode, answer);
                 })
                 .SelectMany(outcome => InstanceSecrets
-                    .RecordUse(hub, SecretKey, outcome.Accepted, outcome.Detail)
+                    .RecordUse(hub, SecretKey, outcome.Accepted, outcome.Text)
                     .Select(_ => outcome));
         });
+
+    /// <summary>Emits once the portal-entered keys have been read (immediately when there is no catalog).</summary>
+    private IObservable<System.Reactive.Unit> CatalogLoaded() =>
+        hub.ServiceProvider.GetService<InstanceSecretCatalog>()?.WhenLoaded
+        ?? Observable.Return(System.Reactive.Unit.Default);
 
     /// <summary>
     /// Reads a key test's answer. Accepted only on a 2xx whose body says <c>verified</c> for both
@@ -422,16 +434,25 @@ public class SelfUpdateHandover
         var sender = SenderOf(answer);
         if (statusCode is >= 200 and < 300 && status == "verified" && signature == "verified")
             return new TestOutcome(true, sender, url, sender is null
-                ? "accepted by the control instance (verified with the fleet-wide secret, not a key of this deployment's own)"
-                : $"accepted by the control instance as '{sender}'");
+                ? LocalizableText.Keyed(
+                    "accepted by the control instance (verified with the fleet-wide secret, not a key of this deployment's own)",
+                    "secret.test.fleet")
+                : LocalizableText.Keyed($"accepted by the control instance as '{sender}'",
+                    "secret.test.accepted", ("sender", sender)));
         if (statusCode == 401)
-            return new TestOutcome(false, null, url,
-                "refused by the control instance (401): it holds no key matching this one — the two fingerprints differ");
+            return new TestOutcome(false, null, url, LocalizableText.Keyed(
+                "refused by the control instance (401): it holds no key matching this one — the two fingerprints differ",
+                "secret.test.refused"));
         if (statusCode is >= 200 and < 300)
             return new TestOutcome(false, sender, url, status == "accepted"
-                ? "the control instance does not support key tests yet (it stored the test instead of only verifying it)"
-                : $"the control instance answered {statusCode} but did not report a verified signature (signature: {signature ?? "unreadable"})");
-        return new TestOutcome(false, null, url, $"the control instance answered {statusCode}");
+                ? LocalizableText.Keyed(
+                    "the control instance does not support key tests yet (it stored the test instead of only verifying it)",
+                    "secret.test.unsupported")
+                : LocalizableText.Keyed(
+                    $"the control instance answered {statusCode} but did not report a verified signature (signature: {signature ?? "unreadable"})",
+                    "secret.test.unverified", ("code", statusCode), ("signature", signature ?? "unreadable")));
+        return new TestOutcome(false, null, url, LocalizableText.Keyed(
+            $"the control instance answered {statusCode}", "secret.test.status", ("code", statusCode)));
     }
 
     /// <summary>The <c>sender</c> field of an inbox answer, or null. Pure.</summary>
@@ -463,7 +484,9 @@ public class SelfUpdateHandover
     /// <see cref="Route.None"/> made the decision <see cref="ApplyModeFor"/> exists to make.
     /// </summary>
     public IObservable<Outcome> Announce(Announcement announcement) =>
-        Observable.Defer(() =>
+        // Wait for the portal-entered key to be READ before choosing a route and a key: before the
+        // catalog's first listing, a portal key (or a portal revocation) would be missed.
+        CatalogLoaded().SelectMany(_ =>
         {
             var settings = ReadSettings();
             var body = Body(announcement with { Deployment = settings.Deployment, Instance = announcement.Instance ?? settings.Instance });
@@ -518,18 +541,24 @@ public class SelfUpdateHandover
                             ? "the answer is not the inbox contract"
                             : "the inbox did not accept the event as a verified delivery"));
             var sender = SenderOf(answer);
-            return new Outcome(Route.Post, url, sender is null
+            return (Outcome: new Outcome(Route.Post, url, sender is null
                 ? $"accepted ({(int)response.StatusCode}), signature verified"
-                : $"accepted ({(int)response.StatusCode}), signature verified as '{sender}'");
+                : $"accepted ({(int)response.StatusCode}), signature verified as '{sender}'"), Sender: sender);
         })
         // The announcement's result is the key's LAST USE, shown beside its fingerprint in
-        // Settings ▸ Control lane. Recorded only for a portal-set key (a no-op otherwise).
-        .SelectMany(outcome => InstanceSecrets
-            .RecordUse(hub, SecretKey, ok: true, $"announcement {outcome.Detail}")
-            .Select(_ => outcome))
-        .Catch<Outcome, SelfUpdateHandoverRejectedException>(rejected => InstanceSecrets
-            .RecordUse(hub, SecretKey, ok: false, rejected.Message)
-            .SelectMany(_ => Observable.Throw<Outcome>(rejected)));
+        // Settings ▸ Control lane. Recorded only for a portal-set key (a no-op otherwise) — on
+        // EVERY outcome: a refusal, and equally a transport failure or a cancellation.
+        .SelectMany(done => InstanceSecrets
+            .RecordUse(hub, SecretKey, ok: true, done.Sender is { } sender
+                ? LocalizableText.Keyed($"announcement accepted by the control instance as '{sender}'",
+                    "secret.use.announcementAccepted", ("sender", sender))
+                : LocalizableText.Keyed("announcement accepted by the control instance (fleet-wide secret)",
+                    "secret.use.announcementAcceptedFleet"))
+            .Select(_ => done.Outcome))
+        .Catch<Outcome, Exception>(failure => InstanceSecrets
+            .RecordUse(hub, SecretKey, ok: false, LocalizableText.Keyed(
+                $"announcement not accepted: {failure.Message}", "secret.use.announcementFailed", ("reason", failure.Message)))
+            .SelectMany(_ => Observable.Throw<Outcome>(failure)));
     }
 
     private IObservable<Outcome> DeliverLocally(string body)

@@ -123,7 +123,7 @@ public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMes
         var outcome = await Handover().Test().FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
         Assert.True(outcome.Accepted, outcome.Detail);
         Assert.Equal(Deployment, outcome.Sender);
-        Assert.Contains("Match", ControlLaneSettingsTab.TestMarkdown(outcome, (k, a) => k == "ui.controlLaneTestMatch" ? "Match " + a[0] : k));
+        Assert.Contains("Match", ControlLaneSettingsTab.TestMarkdown(outcome, (k, a) => k == "ui.controlLaneTestMatch" ? "Match " + a[0] : k, "en"));
 
         // The test is recorded on BOTH ends: pearl's last use, and the control's last verification.
         await Catalog.Changes
@@ -138,12 +138,12 @@ public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMes
         var mismatch = await Handover().Test().FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
         Assert.False(mismatch.Accepted);
         Assert.Contains("401", mismatch.Detail);
+        // The verdict renders in the viewer's language: the German reads the German catalog entry.
+        Assert.Contains("abgelehnt", ControlLaneSettingsTab.TestMarkdown(mismatch, (k, a) => k + " " + string.Join(" ", a), "de"));
 
         // Nothing was stored by either test: a key test is verify-only.
-        var stored = await Observable.Using(
-                () => Access.ImpersonateAsSystem(),
-                _ => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{SelfUpdateHandover.InboxTarget}/{WebhookInbox.InboxContainer} scope:children")).Take(1))
+        var stored = await Access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{SelfUpdateHandover.InboxTarget}/{WebhookInbox.InboxContainer} scope:children")).Take(1))
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
         Assert.Empty(stored.Items);
 
@@ -157,7 +157,7 @@ public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMes
         var key = SecretFingerprint.Generate();
         var status = InstanceSecrets.StatusOf(SelfUpdateHandover.SecretKey, null, key);
         var markdown = WriteOnlySecretSection.StatusMarkdown(status.Secret, (k, a) => k + " " + string.Join(" | ", a))
-            + ControlLaneSettingsTab.DetailMarkdown(status, (k, a) => k + " " + string.Join(" | ", a));
+            + ControlLaneSettingsTab.DetailMarkdown(status, (k, a) => k + " " + string.Join(" | ", a), "en");
         Assert.Contains(SecretFingerprint.Of(key)!, markdown);
         Assert.DoesNotContain(key, markdown);
         Assert.DoesNotContain(key[..16], markdown);

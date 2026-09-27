@@ -393,6 +393,10 @@ public static class GraphConfigurationExtensions
                 // fan-out pays no read. Scoped, like the other content-integrity validators.
                 services.AddScoped<INodeValidator, CreatableTypesCreationValidator>();
 
+                // Instance secrets are written only through the InstanceSecrets verbs (rights,
+                // slot and encryption checked, then written as system); a direct write is refused.
+                services.AddScoped<INodeValidator, InstanceSecretWriteGuard>();
+
                 // Delivery for the compile pipeline's parked-failure bell. The pipeline lives in
                 // MeshWeaver.Compiler and cannot reference NotificationService (it reads the
                 // Notification* node types), so it resolves this seam optionally — registered

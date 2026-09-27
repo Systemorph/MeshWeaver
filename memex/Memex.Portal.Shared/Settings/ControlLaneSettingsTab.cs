@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -53,7 +54,7 @@ public static class ControlLaneSettingsTab
                 Intro = host.Localize("ui.mdControlLaneIntro"),
                 InputLabel = host.Localize("ui.controlLaneKeyLabel"),
                 Placeholder = host.Localize("ui.controlLaneKeyPlaceholder"),
-                Detail = status.Select(s => DetailMarkdown(s, (k, a) => host.Localize(k, a))),
+                Detail = status.Select(s => DetailMarkdown(s, (k, a) => host.Localize(k, a), host.ViewerLocale())),
                 Verbs = new SecretSectionVerbs
                 {
                     Save = value => InstanceSecrets.Set(host.Hub, key, value).Select(s => s.Secret),
@@ -76,24 +77,28 @@ public static class ControlLaneSettingsTab
         host.UpdateData(TestResultId, host.Localize("ui.controlLaneTesting"));
         new SelfUpdateHandover(host.Hub).Test()
             .Subscribe(
-                outcome => host.UpdateData(TestResultId, TestMarkdown(outcome, (k, a) => host.Localize(k, a))),
-                ex => host.UpdateData(TestResultId, host.Localize("ui.controlLaneTestFailed", ex.Message)));
+                outcome => host.UpdateData(TestResultId,
+                    TestMarkdown(outcome, (k, a) => host.Localize(k, a), host.ViewerLocale())),
+                // A keyed refusal renders in the viewer's language; a transport failure is the
+                // network stack's own words, shown verbatim (LocalizableText.Verbatim's rule).
+                ex => host.UpdateData(TestResultId,
+                    host.Localize("ui.controlLaneTestFailed", WriteOnlySecretSection.Describe(ex, host.ViewerLocale()))));
     }
 
     /// <summary>The test's verdict as one paragraph. A refusal reads as a MISMATCH to re-enter. Pure over the localizer.</summary>
-    internal static string TestMarkdown(SelfUpdateHandover.TestOutcome outcome, Func<string, object?[], string> localize) =>
+    internal static string TestMarkdown(SelfUpdateHandover.TestOutcome outcome, Func<string, object?[], string> localize, string? locale) =>
         outcome.Accepted
             ? outcome.Sender is { } sender
                 ? localize("ui.controlLaneTestMatch", [sender])
                 : localize("ui.controlLaneTestFleet", [])
-            : localize("ui.controlLaneTestMismatch", [outcome.Detail]);
+            : localize("ui.controlLaneTestMismatch", [outcome.Text.Localize(locale)]);
 
     /// <summary>
     /// What the standard status does not say: that the key comes from the deployment configuration
     /// rather than this page, that no key means no hand-over, and the last announcement's result.
     /// Names and instants only — never a value. Pure over the localizer.
     /// </summary>
-    internal static string DetailMarkdown(InstanceSecretStatus status, Func<string, object?[], string> localize)
+    internal static string DetailMarkdown(InstanceSecretStatus status, Func<string, object?[], string> localize, string? locale)
     {
         var lines = new List<string>();
         if (status.Origin == InstanceSecretStatus.FromConfiguration)
@@ -102,7 +107,7 @@ public static class ControlLaneSettingsTab
             lines.Add(localize("ui.controlLaneKeyNone", []));
         if (status.LastUsedAt is { } used)
             lines.Add(localize(status.LastUseOk == true ? "ui.controlLaneLastOk" : "ui.controlLaneLastFailed",
-                [WriteOnlySecretSection.Stamp(used), status.LastUseResult ?? ""]));
+                [WriteOnlySecretSection.Stamp(used), status.LastUseResult?.Localize(locale) ?? ""]));
         return string.Join("\n\n", lines);
     }
 }

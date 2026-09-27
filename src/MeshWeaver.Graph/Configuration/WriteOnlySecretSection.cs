@@ -205,7 +205,7 @@ public static class WriteOnlySecretSection
         host.UpdateData(ResultId(id), host.Localize("secret.working"));
         Observable.Defer(verb).Take(1).Subscribe(
             _ => host.UpdateData(ResultId(id), host.Localize("secret.done")),
-            ex => host.UpdateData(ResultId(id), host.Localize("secret.failed", ex.Message)));
+            ex => host.UpdateData(ResultId(id), host.Localize("secret.failed", Describe(ex, host.ViewerLocale()))));
     }
 
     /// <summary>
@@ -220,13 +220,15 @@ public static class WriteOnlySecretSection
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(20))
             .Select(form => (form is not null && form.TryGetValue(ValueField, out var v) ? v?.ToString() : null)?.Trim() ?? "")
-            .Do(_ => host.UpdateData(FormId(id), new Dictionary<string, object?> { [ValueField] = "" }))
+            // Cleared on EVERY termination of the read — a value, a timeout or a fault — so the
+            // typed secret never lingers in the layout data.
+            .Finally(() => host.UpdateData(FormId(id), new Dictionary<string, object?> { [ValueField] = "" }))
             .SelectMany(value => value.Length == 0
                 ? Observable.Throw<SecretStatus>(new InvalidOperationException(host.Localize("secret.empty")))
                 : save(value).Take(1))
             .Subscribe(
                 status => host.UpdateData(ResultId(id), host.Localize("secret.saved", status.Fingerprint ?? "")),
-                ex => host.UpdateData(ResultId(id), host.Localize("secret.failed", ex.Message)));
+                ex => host.UpdateData(ResultId(id), host.Localize("secret.failed", Describe(ex, host.ViewerLocale()))));
     }
 
     /// <summary>Generate: the value comes back ONCE and is shown in a dialog; closing it removes it from the layout.</summary>
@@ -256,7 +258,7 @@ public static class WriteOnlySecretSection
                 host.UpdateArea(DialogControl.DialogArea,
                     Controls.Dialog(body, host.Localize("secret.generatedTitle")).WithSize("M").WithActions(close));
             },
-            ex => host.UpdateData(ResultId(id), host.Localize("secret.failed", ex.Message)));
+            ex => host.UpdateData(ResultId(id), host.Localize("secret.failed", Describe(ex, host.ViewerLocale()))));
     }
 
     private static void ConfirmDelete(LayoutAreaHost host, string id, Func<IObservable<SecretStatus>> delete)
@@ -298,11 +300,31 @@ public static class WriteOnlySecretSection
         if (status.Enabled == false && !status.Deleted)
             lines.Add(localize("secret.status.disabled", []));
         if (status.SetAt is not null || status.SetBy is not null)
-            lines.Add(localize("secret.status.setBy", [Stamp(status.SetAt), status.SetBy ?? "?", status.Source ?? "?"]));
+            lines.Add(localize("secret.status.setBy", [Stamp(status.SetAt), status.SetBy ?? "?", SourceLabel(status.Source, localize)]));
         if (status.Expires is { } expires)
             lines.Add(localize("secret.status.expires", [Stamp(expires)]));
         return string.Join("\n\n", lines);
     }
+
+    /// <summary>
+    /// Why a verb failed, in <paramref name="locale"/>: a refusal from the secret store is keyed
+    /// (<see cref="InstanceSecretException"/>) and rendered in the viewer's language; any other
+    /// failure is upstream text (a transport error, the mesh's own words), shown verbatim.
+    /// </summary>
+    public static string Describe(Exception error, string? locale) =>
+        error is InstanceSecretException refusal ? refusal.Text.Localize(locale) : error.Message;
+
+    /// <summary>
+    /// A <see cref="SecretStatus.Source"/> for display: the known values localized, an unknown one
+    /// shown as it is (the vocabulary is open), and an absent one as "?". Pure over the localizer.
+    /// </summary>
+    public static string SourceLabel(string? source, Func<string, object?[], string> localize) => source switch
+    {
+        SecretSources.Paste => localize("secret.source.paste", []),
+        SecretSources.Generate => localize("secret.source.generate", []),
+        null or "" => "?",
+        _ => source,
+    };
 
     /// <summary>An instant as <c>yyyy-MM-dd HH:mm UTC</c>, culture-invariant (never the thread culture).</summary>
     public static string Stamp(DateTimeOffset? instant) =>
