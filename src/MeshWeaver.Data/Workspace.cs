@@ -521,11 +521,33 @@ public class Workspace : IWorkspace
 
     private sealed class RemoteStreamLeaseState
     {
-        internal int Count;
+        private LeaseSnapshot snapshot = new(0);
 
-        internal bool TryUpdate(int value, int expected) =>
-            Interlocked.CompareExchange(ref Count, value, expected) == expected;
+        internal LeaseSnapshot Snapshot => Volatile.Read(ref snapshot);
+
+        internal bool TryUpdate(int value, int expected)
+        {
+            var observed = Snapshot;
+            return observed.Count == expected && TryReplace(value, observed);
+        }
+
+        internal bool TryReplace(int value, LeaseSnapshot observed) =>
+            ReferenceEquals(Interlocked.CompareExchange(ref snapshot, new(value), observed), observed);
+
+        internal void Detach()
+        {
+            while (true)
+            {
+                var observed = Snapshot;
+                // A fresh snapshot supersedes even a reclaim that has not yet written its token.
+                // Positive holder counts survive; a negative token belongs to the old ownership.
+                if (TryReplace(Math.Max(0, observed.Count), observed))
+                    return;
+            }
+        }
     }
+
+    private sealed record LeaseSnapshot(int Count);
 
     /// <summary>
     /// Resolves the remote stream for (<paramref name="owner"/>, <paramref name="reference"/>)
@@ -589,6 +611,9 @@ public class Workspace : IWorkspace
     /// </summary>
     internal Action<ISynchronizationStream>? ReclaimClaimed { get; set; }
 
+    /// <summary>Test seam after observing parked ownership and before claiming its zero count.</summary>
+    internal Action<ISynchronizationStream>? ReclaimBeforeClaim { get; set; }
+
     /// <summary>
     /// Mints the CLAIM TOKEN a reclaim writes into a stream's lease count: a fresh negative value
     /// per claim. 🚨 Systemorph/MeshWeaver#5087: the reclaim used to READ the count, then remove the
@@ -616,7 +641,7 @@ public class Workspace : IWorkspace
         var state = _remoteStreamLeases.GetValue(stream, _ => new RemoteStreamLeaseState());
         while (true)
         {
-            var count = Volatile.Read(ref state.Count);
+            var count = state.Snapshot.Count;
             if (count < 0)
                 return null;    // claimed by a reclaim — never hand out a hold on it
             if (state.TryUpdate(count + 1, count))
@@ -630,7 +655,7 @@ public class Workspace : IWorkspace
             {
                 // Release the SAME count the lease incremented. Detach/re-park never resets a
                 // positive count, so an older release cannot consume a newer holder's lease.
-                var current = Volatile.Read(ref state.Count);
+                var current = state.Snapshot.Count;
                 if (current <= 0)
                     return;
                 var remaining = current - 1;
@@ -654,15 +679,19 @@ public class Workspace : IWorkspace
     /// </summary>
     private void ReclaimIfUnheld(ISynchronizationStream stream)
     {
-        // Parked first: a stream still in the cache is adoptable, and claiming it would refuse
-        // leases on a live, cached mirror.
+        // Capture ownership BEFORE observing the parking entry. Detach replaces this snapshot
+        // even at count zero, so an observation of old parking cannot claim a re-parked stream.
+        if (!_remoteStreamLeases.TryGetValue(stream, out var state))
+            return;
+        var observed = state.Snapshot;
         if (!_evictedRemoteStreams.ContainsKey(stream))
             return;
         // The atomic claim. Fails when a holder remains (count > 0), when another reclaim already
         // claimed it (a negative token), or when nobody ever leased it (no entry — an undeclared
         // holder may still read it; see the _remoteStreamLeases note).
         var claim = -Interlocked.Increment(ref _reclaimClaims);
-        if (!_remoteStreamLeases.TryGetValue(stream, out var state) || !state.TryUpdate(claim, 0))
+        ReclaimBeforeClaim?.Invoke(stream);
+        if (observed.Count != 0 || !state.TryReplace(claim, observed))
             return;
         ReclaimClaimed?.Invoke(stream);
         if (!_evictedRemoteStreams.TryRemove(stream, out _))
@@ -673,7 +702,7 @@ public class Workspace : IWorkspace
             state.TryUpdate(0, claim);
             return;
         }
-        if (Volatile.Read(ref state.Count) != claim)
+        if (state.Snapshot.Count != claim)
         {
             // The parking entry we just took is NOT the one we claimed: ownership was handed out
             // (DetachRemoteStreams cancelled our token) and back (ParkRemoteStreams) inside the claim.
@@ -955,12 +984,7 @@ public class Workspace : IWorkspace
         {
             if (!_remoteStreamLeases.TryGetValue(stream, out var state))
                 continue;
-            while (true)
-            {
-                var count = Volatile.Read(ref state.Count);
-                if (count >= 0 || state.TryUpdate(0, count))
-                    break;
-            }
+            state.Detach();
         }
         return detached;
     }

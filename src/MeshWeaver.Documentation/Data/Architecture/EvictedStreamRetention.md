@@ -324,6 +324,14 @@ by real-mesh tests in `ReclaimLeaseAtomicityTest`, including completion of the o
 after the final holder releases. This proves the lifetime defect; it does not by itself prove the
 cause of a particular production heartbeat freeze.
 
+**A reclaim must also match the ownership it observed before claiming.** A parking check alone is
+a snapshot: detach/re-park can land after that check but before the zero-count CAS. Each count is
+held in an immutable snapshot, and detach replaces the snapshot even when its count is already
+zero. The reclaim CAS matches the exact snapshot captured before reading the parking set, so a
+claim begun against old ownership fails after handover. The pre-claim regression first failed on
+the holder-preserving repair, then passed with this ownership check; it also verifies that a new
+holder can release the mirror under the current ownership, so the check does not disable reclamation.
+
 What this does NOT cover: the other two producers of the same message (a `ReplaySubject` that never
 carried a value, and the write path's `Where(Value is not null)` filter — see
 [Write Verdict Totality](../WriteVerdictTotality)) produce byte-identical text, so a recurrence of the

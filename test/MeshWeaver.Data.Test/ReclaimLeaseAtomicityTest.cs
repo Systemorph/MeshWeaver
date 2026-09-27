@@ -292,6 +292,40 @@ public class ReclaimLeaseAtomicityTest(ITestOutputHelper output) : HubTestBase(o
         StreamLiveness.IsUsable(mirror).Should().BeFalse("the final release reclaims the parked mirror");
     }
 
+    /// <summary>A parking observation made before handover cannot claim the new ownership.</summary>
+    [HubFact]
+    public async Task ADetachAndRePark_BeforeTheClaim_SupersedesTheParkingObservation()
+    {
+        var (workspace, changeFeed) = await StartAndSettleAsync();
+        var ws = (Workspace)workspace;
+        var reference = new CollectionReference(nameof(BusinessUnit));
+        var baselineSubscribes = Volatile.Read(ref _subscribeCount);
+        var (mirror, lease) = ws.AcquireRemoteStreamUnchecked<InstanceCollection, CollectionReference>(
+            CreateHostAddress(), reference);
+        using var holder = lease;
+        await AwaitSubscribesAsync(baselineSubscribes + 1, "the mirror must reach the owner");
+        PublishOwnerChange(changeFeed);
+        var handedOver = 0;
+        ws.ReclaimBeforeClaim = stream =>
+        {
+            if (!ReferenceEquals(stream, mirror) || Interlocked.Exchange(ref handedOver, 1) != 0)
+                return;
+            var detached = ws.DetachRemoteStreams(CreateHostAddress(), reference);
+            detached.Should().Contain(mirror, "the handover must take the observed parking entry");
+            ws.ParkRemoteStreams(detached);
+        };
+        try { lease.Dispose(); }
+        finally { ws.ReclaimBeforeClaim = null; }
+
+        Volatile.Read(ref handedOver).Should().Be(1, "the handover must land before the claim");
+        StreamLiveness.IsUsable(mirror).Should().BeTrue("a stale parking observation cannot reclaim the new ownership");
+
+        using var nextHolder = ws.TryLeaseResolved(mirror);
+        nextHolder.Should().NotBeNull("the new ownership grants a real hold");
+        nextHolder!.Dispose();
+        StreamLiveness.IsUsable(mirror).Should().BeFalse("a reclaim of the current ownership still releases the unheld mirror");
+    }
+
     /// <summary>Activates both hubs and waits for the owner's initial snapshot.</summary>
     private async Task<(IWorkspace Workspace, IMeshChangeFeed ChangeFeed)> StartAndSettleAsync()
     {
