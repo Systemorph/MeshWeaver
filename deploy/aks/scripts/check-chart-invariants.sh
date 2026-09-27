@@ -163,6 +163,10 @@ COMBOS=(
   # Auth:GlobalAdmins (MeshWeaver#5217): a padded id, a blank one and a whitespace-only one. The
   # evidence check below asserts only the first renders, trimmed.
   "platform admins seeded by Auth:GlobalAdmins (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.global-admins.yaml"
+  # EU-only AI processing (policy ai-eu-only-processing): the instance switch, a declared route per
+  # catalog section, OpenRouter's endpoint and the OpenRouterEU section — set, blank and
+  # whitespace-only values. The evidence check below asserts which of them render, trimmed.
+  "EU-only AI processing keys (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.eu-ai-residency.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -245,6 +249,39 @@ if [ -f "$admins_render" ] && [ -f "$defaults_render" ] \
   ok "Auth:GlobalAdmins reaches the ConfigMap trimmed, and only when set — a blank id renders no key"
 else
   report "Auth:GlobalAdmins: the fixture must render exactly Auth__GlobalAdmins__0=\"admin-id\" (trimmed) and no __1/__2, and the chart defaults must render no Auth__GlobalAdmins key — a blank id reaching the pod would seed an Admin grant for the empty username"
+fi
+
+# The EU-only AI processing evidence (policy ai-eu-only-processing). Read by NAME: the fixture's set
+# values render TRIMMED; its blank and whitespace-only ones render NO key (an "" endpoint would
+# replace a section's default endpoint with nothing); OpenRouterEU renders no ApiKey (it takes the
+# account key through credentialFrom); and the chart defaults render none of these keys, so a record
+# that declares nothing changes nothing. A regression to an unconditional or untrimmed line would
+# otherwise pass every invariant above.
+eu_render="$(render_of "EU-only AI processing keys (fixture)")"
+eu_keys='^  (AI__RequiredDataResidency|(Anthropic|AzureFoundry|OpenRouter|OpenRouterEU|AzureOpenAI|OpenAI|OpenAICompatible)__Data(Residency|Retention)|OpenRouter__Endpoint|OpenRouterEU__.*|Features__Ai__Providers__OpenRouterEU):'
+if [ -f "$eu_render" ] && [ -f "$defaults_render" ] \
+   && grep -q '^  AI__RequiredDataResidency: "Eu"$' "$eu_render" \
+   && grep -q '^  Anthropic__DataResidency: "Global"$' "$eu_render" \
+   && grep -q '^  OpenRouter__Endpoint: "https://openrouter.ai/api/v1"$' "$eu_render" \
+   && grep -q '^  OpenRouter__DataResidency: "Global"$' "$eu_render" \
+   && grep -q '^  OpenRouterEU__Endpoint: "https://eu.openrouter.ai/api/v1"$' "$eu_render" \
+   && grep -q '^  OpenRouterEU__DataResidency: "Eu"$' "$eu_render" \
+   && grep -q '^  OpenRouterEU__DataRetention: "ZDR"$' "$eu_render" \
+   && grep -q '^  OpenRouterEU__Models__0: "z-ai/glm-5.3"$' "$eu_render" \
+   && grep -q '^  OpenRouterEU__Models__15: "mistralai/mistral-large"$' "$eu_render" \
+   && grep -q '^  AzureOpenAI__DataResidency: "Eu"$' "$eu_render" \
+   && grep -q '^  OpenAI__DataResidency: "Global"$' "$eu_render" \
+   && grep -q '^  OpenAICompatible__DataResidency: "Unknown"$' "$eu_render" \
+   && grep -q '^  OpenAICompatible__DataRetention: "self-hosted"$' "$eu_render" \
+   && grep -q '^  Features__Ai__Providers__OpenRouterEU: "true"$' "$eu_render" \
+   && ! grep -q '^  Anthropic__DataRetention:' "$eu_render" \
+   && ! grep -q '^  AzureFoundry__DataResidency:' "$eu_render" \
+   && ! grep -q '^  OpenRouterEU__Models__1:' "$eu_render" \
+   && ! grep -q 'OpenRouterEU__ApiKey' "$eu_render" \
+   && ! grep -Eq "$eu_keys" "$defaults_render"; then
+  ok "the EU-only AI keys reach the ConfigMap trimmed, and only when set — blank renders no key, OpenRouterEU carries no ApiKey, the defaults render none"
+else
+  report "EU-only AI keys: the fixture must render its set values trimmed (AI__RequiredDataResidency=\"Eu\", the {Section}__DataResidency/__DataRetention it declares, OpenRouter__Endpoint, OpenRouterEU__Endpoint/__Models__0/__Models__15, Features__Ai__Providers__OpenRouterEU), NO key for its blank or whitespace-only values, no OpenRouterEU__ApiKey, and the chart defaults must render none of these keys — a blank endpoint reaching the pod replaces the section's default endpoint with nothing"
 fi
 
 # The bake-gate evidence (MeshWeaver#4588, #5544). Invariant 10b — an armed PreWarm__GateReadiness
