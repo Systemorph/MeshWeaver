@@ -159,8 +159,13 @@ never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` and
   more right before the dispose and refuses unless it is the bound set; an INCOMPLETE network is
   refused at planning, before anything is disposed.
 - **DeleteSpace** binds what the in-process action binds: the space, schema, root shape, every grant,
-  GitSync node, content root and NodeType, the outside dependents and the store route. Row counts are
-  shown, never bound. The query index is used only to list nodes and establish path existence (by
+  GitSync node and NodeType, the outside dependents and the teardown. Row counts are shown, never
+  bound. The content, grants and store go in ONE `PartitionTeardown.TearDownPartition` as system,
+  whatever the size — never a per-node recursive delete, whose pre-validation fan-out stalled on a
+  31,138-descendant space ([Partition Teardown](../PartitionTeardown) → *The direct teardown*). The
+  plan is offered only after `SpaceDeletion.Preflight` — rights as system, the per-node GitSync leg
+  within `PerNodeDeleteBound`, the no-store sweep within `SweepBound`, the teardown's own refusal —
+  answers none (policy `governed-action-preflight`). The query index is used only to list nodes and establish path existence (by
   listing a parent and filtering for its child, never by an exact-path query); the
   root and `Admin/Partition/{space}` definition are then read from their live node streams before
   their type/creator or table mappings enter the plan. A framework delete that completes WITHOUT an

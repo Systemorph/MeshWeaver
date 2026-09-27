@@ -63,7 +63,7 @@ public static class PartitionTeardown
     /// Read at PLAN time by a governed operation so it refuses before anything is touched, and again
     /// by <see cref="TearDownPartition"/> itself. Names each reason: not the system identity, not a
     /// valid partition segment, a database-populated mirror, a partition served by configuration, a
-    /// deletion of it already in flight, or no storage provider to drop it on.
+    /// deletion of it already in flight, or a hub with neither a storage provider nor a storage adapter.
     /// </summary>
     /// <param name="hub">The hub whose services decide.</param>
     /// <param name="partition">The partition (first path segment).</param>
@@ -95,8 +95,11 @@ public static class PartitionTeardown
                    + "partition definition) — it has no store to drop";
         if (hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>().IsUnderActiveDeletion(partition, out var root))
             return $"a deletion of '{root}' is already in flight — one teardown at a time";
-        if (!hub.ServiceProvider.GetServices<IPartitionStorageProvider>().Any())
-            return "this hub has no partition storage provider, so there is no store to drop";
+        // A backend with no partition provider at all (a single in-memory adapter) is still torn down —
+        // by the sweep below the pipeline. Only a hub with neither has nothing to act on.
+        if (!hub.ServiceProvider.GetServices<IPartitionStorageProvider>().Any()
+            && hub.ServiceProvider.GetService<IStorageAdapter>() is null)
+            return "this hub has neither a partition storage provider nor a storage adapter, so there is no store to drop";
         return null;
     }
 

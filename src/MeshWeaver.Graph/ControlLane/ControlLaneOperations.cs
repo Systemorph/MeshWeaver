@@ -74,8 +74,7 @@ public sealed class DeleteSpaceOperation : IControlLaneOperation
         var space = request.Target;
         return SpaceDeletion.Inventory(hub, space).Select(inventory =>
         {
-            if (SpaceDeletion.PlanRefusal(inventory, SpaceDeletion.OperationalSpace(hub),
-                    ControlLaneAdmission.LedgerPath(request.RequestId), SpaceDeletion.ServedByConfiguration(hub, space)) is { } refused)
+            if (SpaceDeletion.Preflight(hub, ControlLaneAdmission.LedgerPath(request.RequestId), inventory) is { } refused)
                 throw new InvalidOperationException(refused);
             var (steps, notes) = SpaceDeletion.PlanSteps(inventory);
             var plan = ControlLanePlan.OfSteps(Operation, request.Deployment, steps, notes);
