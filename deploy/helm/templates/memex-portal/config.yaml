@@ -465,6 +465,130 @@ data:
   AzureFoundry__Models__1: "{{ .Values.config.memex_portal.AzureFoundry__Models__1 }}"
   AzureFoundry__Models__2: "{{ .Values.config.memex_portal.AzureFoundry__Models__2 }}"
   AzureFoundry__Models__3: "{{ .Values.config.memex_portal.AzureFoundry__Models__3 }}"
+  # ── EU-only processing: the instance switch and each section's declared route ───────────────
+  # Policy `ai-eu-only-processing` (and `code-review-eu-only` for the PR review model); manual
+  # Doc/AI/ModelDataResidency in MeshWeaver.Plugins. The catalog seeder (BuiltInLanguageModelProvider)
+  # reads `{Section}:DataResidency` / `{Section}:DataRetention` and marks every model it seeds from
+  # that section; an UNDECLARED section is marked from its endpoint host where the host implies it
+  # (eu.openrouter.ai → Eu, a known global host such as openrouter.ai → Global), otherwise Unknown —
+  # never Eu. `AI:RequiredDataResidency=Eu` makes the instance EU-only: the picker, tier resolution,
+  # Auto and the round refuse every model not marked Eu, failing closed. Blank/absent = no
+  # requirement.
+  #
+  # 🚨 EMITTED ONLY WHEN NON-BLANK (and TRIMMED, like Auth__GlobalAdmins__N), never `default ""`.
+  # A whitespace-only value renders no key at all. For these keys blank and absent mean the SAME
+  # thing to the consumer ("not declared"), so rendering "" would only add noise — and for the
+  # Endpoint keys below it would be WRONG: the seeder does `endpoint ??= source.DefaultEndpoint`, and
+  # an empty string is not null, so a rendered "" would replace the section's default endpoint with
+  # nothing. Declaring nothing on a record therefore renders none of these keys, and every portal
+  # keeps exactly the configuration it has today.
+  {{- if (.Values.config.memex_portal.AI__RequiredDataResidency | default "" | trim) }}
+  AI__RequiredDataResidency: "{{ .Values.config.memex_portal.AI__RequiredDataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.Anthropic__DataResidency | default "" | trim) }}
+  Anthropic__DataResidency: "{{ .Values.config.memex_portal.Anthropic__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.Anthropic__DataRetention | default "" | trim) }}
+  Anthropic__DataRetention: "{{ .Values.config.memex_portal.Anthropic__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureFoundry__DataResidency | default "" | trim) }}
+  AzureFoundry__DataResidency: "{{ .Values.config.memex_portal.AzureFoundry__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureFoundry__DataRetention | default "" | trim) }}
+  AzureFoundry__DataRetention: "{{ .Values.config.memex_portal.AzureFoundry__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouter__DataResidency | default "" | trim) }}
+  OpenRouter__DataResidency: "{{ .Values.config.memex_portal.OpenRouter__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouter__DataRetention | default "" | trim) }}
+  OpenRouter__DataRetention: "{{ .Values.config.memex_portal.OpenRouter__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__DataResidency | default "" | trim) }}
+  OpenRouterEU__DataResidency: "{{ .Values.config.memex_portal.OpenRouterEU__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__DataRetention | default "" | trim) }}
+  OpenRouterEU__DataRetention: "{{ .Values.config.memex_portal.OpenRouterEU__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureOpenAI__DataResidency | default "" | trim) }}
+  AzureOpenAI__DataResidency: "{{ .Values.config.memex_portal.AzureOpenAI__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureOpenAI__DataRetention | default "" | trim) }}
+  AzureOpenAI__DataRetention: "{{ .Values.config.memex_portal.AzureOpenAI__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAI__DataResidency | default "" | trim) }}
+  OpenAI__DataResidency: "{{ .Values.config.memex_portal.OpenAI__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAI__DataRetention | default "" | trim) }}
+  OpenAI__DataRetention: "{{ .Values.config.memex_portal.OpenAI__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAICompatible__DataResidency | default "" | trim) }}
+  OpenAICompatible__DataResidency: "{{ .Values.config.memex_portal.OpenAICompatible__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAICompatible__DataRetention | default "" | trim) }}
+  OpenAICompatible__DataRetention: "{{ .Values.config.memex_portal.OpenAICompatible__DataRetention | trim }}"
+  {{- end }}
+  # OpenRouter's endpoint was rendered by nothing until now, so every portal used the section's
+  # default (openrouter.ai). Same guard, same reason as above.
+  {{- if (.Values.config.memex_portal.OpenRouter__Endpoint | default "" | trim) }}
+  OpenRouter__Endpoint: "{{ .Values.config.memex_portal.OpenRouter__Endpoint | trim }}"
+  {{- end }}
+  # ── OpenRouterEU: OpenRouter's EU region (https://eu.openrouter.ai/api/v1) ─────────────────
+  # A SECOND OpenRouter catalog section, shaped like OpenRouter above: an endpoint and a model list,
+  # written INDEX BY INDEX per this ConfigMap's contract (0..15, the same ceiling as OpenRouter;
+  # extending it is one guarded pair per index). It has NO ApiKey key of its own, deliberately: an
+  # OpenRouter key is account-level, and the Provider/OpenRouterEU node takes it from
+  # Provider/OpenRouter through `credentialFrom` — so there is no secret companion to deliver.
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Endpoint | default "" | trim) }}
+  OpenRouterEU__Endpoint: "{{ .Values.config.memex_portal.OpenRouterEU__Endpoint | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__0 | default "" | trim) }}
+  OpenRouterEU__Models__0: "{{ .Values.config.memex_portal.OpenRouterEU__Models__0 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__1 | default "" | trim) }}
+  OpenRouterEU__Models__1: "{{ .Values.config.memex_portal.OpenRouterEU__Models__1 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__2 | default "" | trim) }}
+  OpenRouterEU__Models__2: "{{ .Values.config.memex_portal.OpenRouterEU__Models__2 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__3 | default "" | trim) }}
+  OpenRouterEU__Models__3: "{{ .Values.config.memex_portal.OpenRouterEU__Models__3 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__4 | default "" | trim) }}
+  OpenRouterEU__Models__4: "{{ .Values.config.memex_portal.OpenRouterEU__Models__4 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__5 | default "" | trim) }}
+  OpenRouterEU__Models__5: "{{ .Values.config.memex_portal.OpenRouterEU__Models__5 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__6 | default "" | trim) }}
+  OpenRouterEU__Models__6: "{{ .Values.config.memex_portal.OpenRouterEU__Models__6 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__7 | default "" | trim) }}
+  OpenRouterEU__Models__7: "{{ .Values.config.memex_portal.OpenRouterEU__Models__7 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__8 | default "" | trim) }}
+  OpenRouterEU__Models__8: "{{ .Values.config.memex_portal.OpenRouterEU__Models__8 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__9 | default "" | trim) }}
+  OpenRouterEU__Models__9: "{{ .Values.config.memex_portal.OpenRouterEU__Models__9 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__10 | default "" | trim) }}
+  OpenRouterEU__Models__10: "{{ .Values.config.memex_portal.OpenRouterEU__Models__10 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__11 | default "" | trim) }}
+  OpenRouterEU__Models__11: "{{ .Values.config.memex_portal.OpenRouterEU__Models__11 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__12 | default "" | trim) }}
+  OpenRouterEU__Models__12: "{{ .Values.config.memex_portal.OpenRouterEU__Models__12 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__13 | default "" | trim) }}
+  OpenRouterEU__Models__13: "{{ .Values.config.memex_portal.OpenRouterEU__Models__13 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__14 | default "" | trim) }}
+  OpenRouterEU__Models__14: "{{ .Values.config.memex_portal.OpenRouterEU__Models__14 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__15 | default "" | trim) }}
+  OpenRouterEU__Models__15: "{{ .Values.config.memex_portal.OpenRouterEU__Models__15 | trim }}"
+  {{- end }}
   # 🚨 A values key this template omits reaches NO container, with no error anywhere: the
   # ConfigMap names every key explicitly, there is no catch-all range over config.memex_portal,
   # and the Deployment's only env path is envFrom on this ConfigMap. Both keys below were set in
@@ -841,6 +965,13 @@ data:
   {{- end }}
   {{- if hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenRouter" }}
   Features__Ai__Providers__OpenRouter: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenRouter }}"
+  {{- end }}
+  # The EU-region OpenRouter section (OpenRouterEU, above) — same opt-in gate shape. Delivered here so
+  # a record can declare it; it takes effect once the host reads it when registering that section.
+  # Bound as a Boolean, so a blank value must not reach the binder: hasKey keeps an explicit `false`,
+  # the trimmed-non-blank test drops "" and "   " (they render no key), and the value renders trimmed.
+  {{- if and (hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenRouterEU") (.Values.config.memex_portal.Features__Ai__Providers__OpenRouterEU | toString | trim) }}
+  Features__Ai__Providers__OpenRouterEU: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenRouterEU | toString | trim }}"
   {{- end }}
   # The co-hosted CLI harnesses (Claude Code, GitHub Copilot) — same gate shape, same reasoning.
   {{- if hasKey .Values.config.memex_portal "Features__Ai__Clis__ClaudeCode" }}
