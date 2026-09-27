@@ -58,7 +58,7 @@ every request.
 Registration itself is self-service (Settings ▸ Instances issues an `mwi_` instance key), but it is
 **identity, not entitlement**: what an instance may pull is decided per `(source, package)` by a
 platform admin in `Admin/_PluginGrant/{instanceId}` nodes the instance's owner cannot write
-(Settings ▸ Administration ▸ Instance grants). The one qualification: the registry operator may opt
+(Admin app `/Admin` ▸ Instance grants). The one qualification: the registry operator may opt
 specific sources into every **new** registration via `PluginCatalog:DefaultGrants` (a list of
 `Source/Package` entries, e.g. `["Plugins/*"]` so a fresh install gets the platform plugin repo
 with no admin step). Registration then *seeds* those entries into the grant node — the node stays
@@ -66,7 +66,7 @@ the single authority, so an admin can still revoke or extend per instance — an
 sources are never listed there. With no defaults configured, registering grants exactly nothing.
 
 **First-startup auto-registration** removes the remaining hand-off. A platform admin mints a
-*registration key* (`mwr_…` — Settings ▸ Administration ▸ Instance grants ▸ Registration keys;
+*registration key* (`mwr_…` — Admin app `/Admin` ▸ Instance grants ▸ Registration keys;
 reusable, revocable, optionally expiring) and puts it in the deployment scaffold. A new install
 configured with `PluginCatalog:BootstrapKey` + `PluginCatalog:InstanceId` then registers **itself**
 on first boot via `POST /api/instances/register`: the bootstrap key resolves to its minting admin,

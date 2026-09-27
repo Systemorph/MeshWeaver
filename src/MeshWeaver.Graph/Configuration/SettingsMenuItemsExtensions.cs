@@ -47,6 +47,22 @@ public static class SettingsMenuItemsExtensions
     }
 
     /// <summary>
+    /// Hides the named tabs on this hub's settings page, whoever registered them. For a node type
+    /// whose settings page is an APP rather than node management (the Admin app hides the default
+    /// Metadata / Files / … tabs): the defaults are registered on every node hub, so the only
+    /// order-independent way to leave them out is to filter them where the page collects its tabs.
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="tabIds">The tab ids to hide.</param>
+    public static MessageHubConfiguration HideSettingsTabs(
+        this MessageHubConfiguration config, params string[] tabIds)
+    {
+        var existing = config.Get<HiddenSettingsTabs>()
+            ?? new HiddenSettingsTabs(System.Collections.Immutable.ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase));
+        return config.Set(existing with { Ids = existing.Ids.Union(tabIds) });
+    }
+
+    /// <summary>
     /// The live, UNFILTERED settings-tab set: every registered provider subscribed once
     /// (subscribe-all-upfront via <c>CombineLatest</c>), merged and sorted by <c>Order</c>,
     /// re-emitting whenever any provider's live check (e.g. global-admin, a GitHub probe)
@@ -87,13 +103,14 @@ public static class SettingsMenuItemsExtensions
             .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
                 _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
 
+        var hidden = config.Get<HiddenSettingsTabs>();
         return Observable.CombineLatest(streams)
             .Select(lists =>
             {
                 var items = new List<SettingsMenuItemDefinition>();
                 foreach (var list in lists)
                     if (list is not null)
-                        items.AddRange(list);
+                        items.AddRange(hidden is null ? list : list.Where(i => !hidden.Ids.Contains(i.Id)));
                 items.Sort((a, b) => a.Order.CompareTo(b.Order));
                 return (IReadOnlyList<SettingsMenuItemDefinition>)items;
             });
@@ -279,3 +296,9 @@ internal record SettingsMenuProviderCollection(
         IEnumerable<SettingsMenuItemProvider> newProviders)
         => new(Providers.Concat(newProviders).ToList());
 }
+
+/// <summary>
+/// Tab ids a hub's settings page leaves out (<see cref="SettingsMenuItemsExtensions.HideSettingsTabs"/>).
+/// </summary>
+/// <param name="Ids">The hidden tab ids.</param>
+internal sealed record HiddenSettingsTabs(System.Collections.Immutable.ImmutableHashSet<string> Ids);

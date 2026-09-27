@@ -49,6 +49,11 @@ public static class SettingsLayoutArea
         // (Metadata) tab while the nav still highlights the URL tab.
         var tabId = host.Reference.Id?.ToString()?.Split('?')[0];
 
+        // A tab that moved into the Admin app answers an old link with a redirect into the app,
+        // rather than silently falling back to this page's first tab.
+        if (AdminAppNodeType.RedirectIfRelocated(host, tabId) is { } redirect)
+            return Observable.Return<UiControl?>(redirect);
+
         var ownNode = host.Workspace.GetMeshNodeStream();
         var permsStream = host.Hub.GetEffectivePermissions(hubPath);
         var itemsStream = host.Hub.Configuration.ObserveSettingsMenuItems(host, ctx);

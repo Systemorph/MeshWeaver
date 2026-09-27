@@ -994,6 +994,9 @@ public static class MemexConfiguration
                         // layout areas; the menu entries are seeded UiContribution nodes
                         // (AddPlatformSettingsTabContributions on the mesh builder above).
                         .AddPlatformSettingsTabAreas()
+                        // The Admin app's landing tab (/Admin): this instance's facts + About.
+                        // Inert on every hub but the Admin app's (AdminAppNodeType.AddAdminAppTab).
+                        .AddAdminAppOverviewTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
                         // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.

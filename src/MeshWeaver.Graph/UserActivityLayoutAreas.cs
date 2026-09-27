@@ -1063,6 +1063,7 @@ public static class UserActivityLayoutAreas
             ["Store"] = ("Store", "/static/NodeTypeIcons/shopping-bag.svg"),
             ["Doc"] = ("Documentation", "/static/NodeTypeIcons/book.svg"),
             ["~/" + ChatArea] = ("Threads", ThreadsIcon),
+            ["~/" + InboxLayoutArea.AreaName] = ("Inbox", InboxIcon),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -1101,6 +1102,17 @@ public static class UserActivityLayoutAreas
         path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
 
     /// <summary>The blueprint of one platform-default app record.</summary>
+    /// <summary>The Inbox tile's icon — an embedded NodeTypeIcons asset.</summary>
+    internal const string InboxIcon = "/static/NodeTypeIcons/mail.svg";
+
+    /// <summary>
+    /// The Inbox app's record for <paramref name="ownerId"/> — a <c>~/Inbox</c> app like the Threads
+    /// app, opening <see cref="InboxLayoutArea"/> on the owner's own hub. Seeded for every user by
+    /// <c>SeedInboxAppLogonAction</c>, independently of <c>Admin/HomeConfig.DefaultApps</c>.
+    /// </summary>
+    internal static AppRecordSpec InboxAppSpec(string ownerId)
+        => AppRecordSpecs(new HomeConfig { DefaultApps = ["~/" + InboxLayoutArea.AreaName] }, ownerId)[0];
+
     internal sealed record AppRecordSpec(
         string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source)
     {
