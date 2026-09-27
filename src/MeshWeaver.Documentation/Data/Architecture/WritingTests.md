@@ -170,6 +170,8 @@ case from a stuck one and nothing naming the case. It now streams:
   Static methods: `MeshTestRunner.Area(host, suite, cases)` over `MeshTestCase.Of(name, method)`
   (synchronous) and `MeshTestCase.Live(name, () => observable, timeout)` (hosted, passes on first
   emission); either overload hands the body a line writer whose output streams into the row.
+  `[MeshTheory]` rows come from `[MeshInlineData(...)]`; `[MeshInlineData(null)]` is one row containing
+  a null argument, which the runner preserves as `[null]` rather than a null row array.
 - **From a terminal or an agent — run it as an ACTIVITY, never by polling the area.** 🚨 Rendering
   the area RUNS the suite, and every one-shot `get @<node>/area/Tests` opens a fresh subscription.
   Measured on memex.meshweaver.cloud (`Admin/Maintenance/refresh-app-tiles-20260828-mainnode-3`): two

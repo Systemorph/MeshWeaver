@@ -217,7 +217,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithGitHubApp(clientId, installationId, installationOwner)` | `GitHubApp.ClientId`, `GitHubApp.InstallationId`, `GitHubApp.InstallationOwner` | `config.memex_portal.GitHub__App__*` | `GitHub__App__ClientId`, `GitHub__App__InstallationId`, `GitHub__App__InstallationOwner` |
 | `WithOpsGitHubApp(clientId, installationId, installationOwner, privateKeySecret, privateKeyConfigKey)` | `OpsGitHubApp.ClientId`, `OpsGitHubApp.InstallationId`, `OpsGitHubApp.InstallationOwner`, `OpsGitHubApp.PrivateKeySecret`, `OpsGitHubApp.PrivateKeyConfigKey` | — (never rendered into this deployment's own portal) | — (the CONTROL instance reads it ABOUT this deployment) |
 | `WithSocialLinkedIn(clientId)` | `SocialLinkedInClientId` | `config.memex_portal.Social__LinkedIn__ClientId` | `Social__LinkedIn__ClientId` |
-| `WithAi(configure)` | `Ai.OpenRouter`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light`, `Ai.Tiers.Utility` | `config.memex_portal.<Provider>__*`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
+| `WithAi(configure)` | `Ai.OpenRouter`, `Ai.OpenRouterEU`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.RequiredDataResidency`, `Ai.Anthropic.DataResidency`, `Ai.Anthropic.DataRetention`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light`, `Ai.Tiers.Utility` | `config.memex_portal.<Provider>__*`, `config.memex_portal.AI__RequiredDataResidency`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `OpenRouterEU__Models__0`, `OpenRouterEU__Endpoint`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Anthropic__DataResidency`, `Anthropic__DataRetention`, `AI__RequiredDataResidency`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
 | `WithOperator(enabled, ns, serviceAccount, image, environment)` | `Operator.Enabled`, `Operator.Namespace`, `Operator.ServiceAccount`, `Operator.Image`, `Operator.Environment` | `hostingOperator` | `Hosting__Operator__Enabled` |
 | `WithOperatorExecutor(executor, maintainer)` | `Operator.Executor`, `Operator.Maintainer` | `hostingOperator.executor`, `hostingOperator.maintainer` (rendered outside `enabled`: the Actions executor runs with the operator Job off) | `Hosting__Operator__Executor`, `Hosting__Operator__Maintainer` |
 | `WithRegistry(configure)` | `Registry.Host`, `Registry.Image`, `Registry.AuthImage`, `Registry.Issuer`, `Registry.StorageAccountName`, `Registry.StorageContainer`, `Registry.ServiceAccount`, `Registry.KeyVault`, `Registry.PublisherUsername`, `Registry.PublisherPasswordBcrypt`, `Registry.ValidationUrl`, `Registry.NotificationsUrl`, `Registry.Replicas` | `registry` | — |
@@ -229,8 +229,8 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithPortalConfig(key, value)` | `ExtraPortalConfig` | `config.memex_portal.<key>` — the advanced rung, any key the typed surface does not carry | `Embedding__*` (for instance) |
 
 The nested builders these rows lean on: `KeyVaultSecretsSpec.Map(key, vaultSecret)`;
-`AiProviders.OpenRouter(models, endpoint, order, enabled)` / `.Anthropic(…)` / `.AzureFoundry(…)`
-/ `.AzureAis(…)` / `.Tiers(heavy, standard, light, utility)`; `WithStorageLayout(s => s with {…})`
+`AiProviders.OpenRouter(models, endpoint, order, enabled)` / `.OpenRouterEU(models, endpoint)` / `.Anthropic(…)` / `.AzureFoundry(…)`
+/ `.AzureAis(…)` / `.RequiredDataResidency(region)` / `.Tiers(heavy, standard, light, utility)` (a tier may name a model by node path, e.g. `Provider/OpenRouterEU/z-ai/glm-5.3`, the only unambiguous name when two routes carry the same wire id); `WithStorageLayout(s => s with {…})`
 and `WithRegistry(r => r with {…})` take the spec record directly.
 
 Fields no method sets — the operator writes them, or they are a legacy shape kept for records that
@@ -397,6 +397,8 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `ModelProvider` | `Models` | Models, by slot | Modelle, nach Slot |
 | `ModelProvider` | `Order` | Order among providers (0 first) | Reihenfolge unter den Anbietern (0 zuerst) |
 | `ModelProvider` | `Enabled` | Enabled | Aktiviert |
+| `ModelProvider` | `DataResidency` | Processing region of the endpoint (Eu, Global, …) — blank = not stated | Verarbeitungsregion des Endpunkts (Eu, Global, …) — leer = nicht angegeben |
+| `ModelProvider` | `DataRetention` | Retention note, e.g. ZDR — blank = not stated | Aufbewahrungshinweis, z. B. ZDR — leer = nicht angegeben |
 | `ModelTiers` | `Heavy` | Heavy tier model | Modell der Stufe „Heavy“ |
 | `ModelTiers` | `Standard` | Standard tier model | Modell der Stufe „Standard“ |
 | `ModelTiers` | `Light` | Light tier model | Modell der Stufe „Light“ |
@@ -405,6 +407,8 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `AiProviders` | `AzureAis` | Azure AI Services | Azure AI Services |
 | `AiProviders` | `AzureFoundry` | Azure AI Foundry (models only) | Azure AI Foundry (nur Modelle) |
 | `AiProviders` | `OpenRouter` | OpenRouter | OpenRouter |
+| `AiProviders` | `OpenRouterEU` | OpenRouter (EU route, the account key by reference) | OpenRouter (EU-Route, der Konto-Schlüssel per Verweis) |
+| `AiProviders` | `RequiredDataResidency` | Required processing region for every model (e.g. Eu) — blank = none | Geforderte Verarbeitungsregion für jedes Modell (z. B. Eu) — leer = keine |
 | `AiProviders` | `Tiers` | Model tiers | Modellstufen |
 | `SignInSpec` | `Provider` | Provider (Custom) | Anbieter (Custom) |
 | `SignInSpec` | `EnableDevLogin` | Enable developer login | Entwickler-Anmeldung aktivieren |

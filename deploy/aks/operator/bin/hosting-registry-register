@@ -67,7 +67,11 @@ command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image
 self="${registry}/api/instances/self"
 manual="curl -sS -X POST ${registry}/api/instances/register -H 'content-type: application/json' -d '{\"bootstrapKey\":\"\",\"instanceId\":\"${instance}\",\"displayName\":\"${display}\",\"homeUrl\":\"${home}\"}' | jq -r .instanceKey > <file>; then paste it on the control instance's record page for this instance (Set Key Vault secrets…) as ${object} — never a hand-run vault command (policy secrets-write-only-entry), and rm <file>"
 
-kv_exists() { az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1; }
+kv_exists() {
+  hosting::kv_exists "$vault" "$1"; local rc=$?
+  [ "$rc" -eq 2 ] && hosting::die "could not LIST vault ${vault} to see whether $1 exists — refusing to read a refused listing as 'absent'. The identity needs \`list\` on ${vault}."
+  return "$rc"
+}
 
 # ── present: prove the key the vault holds is this instance's ─────────────────────────────────
 if kv_exists "$object"; then

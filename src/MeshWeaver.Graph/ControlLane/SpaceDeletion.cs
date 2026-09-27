@@ -75,6 +75,9 @@ public sealed record SpaceDeletionInventory
     public bool IsGone => TotalRows == 0 && Grants.Count == 0 && GitSync.Count == 0 && !RecordExists && StoreExists != true;
 }
 
+/// <summary>A point read from the owning node stream, or a named reason it could not be read.</summary>
+internal sealed record AuthoritativeNodeRead(string Path, MeshNode? Node, string? Error);
+
 /// <summary>
 /// THE engine of a governed space deletion — the break-glass removal of a space no user identity may
 /// delete, AS SYSTEM, through the framework's own deletes and the platform's partition teardown,
@@ -146,9 +149,6 @@ public static class SpaceDeletion
 
     /// <summary>How many index reads run at once.</summary>
     public const int ReadConcurrency = 4;
-
-    /// <summary>How many outside dependents the plan names (the count is always stated whole).</summary>
-    public const int NamedDependents = 20;
 
     // ───────────────────────────── pure rules ─────────────────────────────
 
@@ -320,30 +320,58 @@ public static class SpaceDeletion
 
     /// <summary>
     /// The steps of a space deletion — what the approver reads and the approval binds — and the notes
-    /// beside them, the per-step pre-flight among them. What is bound is what decides the blast radius;
-    /// the per-table ROW COUNTS are in the notes and are NOT bound (a stranded space keeps being written
-    /// into while it waits). Pure.
+    /// beside them, the per-step pre-flight among them. 🚨 A plan never contains a listing: every set
+    /// a step acts on is a TARGET, an anchored, scoped query with its count
+    /// (<see cref="ControlLanePlanTarget"/>) — the space's own address, its NodeTypes, grants and
+    /// GitSync nodes with counts, the whole subtree with NO count (its rows move while a stranded space
+    /// waits, so they are shown in the notes and never bound), and the outside dependents as a count in
+    /// the command only. The content, grants and store go in ONE partition teardown (policy
+    /// <c>governed-action-preflight</c>). The same plan MeshWeaver.Plugins' in-process
+    /// <c>DeleteSpaceRunner.PlanOf</c> shows. Pure.
     /// </summary>
-    public static (ImmutableList<(string Name, string Command, bool Destructive)> Steps, ImmutableList<string> Notes) StepsOf(
-        SpaceDeletionInventory inventory)
+    public static (ImmutableList<ControlLanePlanStep> Steps, ImmutableList<string> Notes) PlanSteps(SpaceDeletionInventory inventory)
     {
         var space = inventory.Space;
-        var steps = ImmutableList.CreateBuilder<(string Name, string Command, bool Destructive)>();
-        var disposeTargets = new[] { space }.Concat(inventory.NodeTypes).ToList();
-        steps.Add(("Dispose the space's hubs",
-            "DisposeRequest as system, from the node-operation hub, to:\n" + string.Join("\n", disposeTargets)
-            + (inventory.NodeTypes.Count == 0 ? "" : "\n(a NodeType definition's dispose cascades to its dependency network)"),
-            false));
+        var steps = ImmutableList.CreateBuilder<ControlLanePlanStep>();
+        var nodeTypes = Target(TargetNodeTypes, NodeTypesQuery(space), inventory.NodeTypes.Count);
+        steps.Add(new ControlLanePlanStep
+        {
+            Name = "Dispose the space's hubs",
+            Command = "DisposeRequest as system, from the node-operation hub, to the space's own address and to every NodeType defined in it"
+                + (inventory.NodeTypes.Count == 0 ? "" : " (a NodeType definition's dispose cascades to its dependency network)"),
+            Targets = inventory.NodeTypes.Count == 0
+                ? [Target(TargetSpaceRoot, SpaceTargetQuery(space), 1)]
+                : [Target(TargetSpaceRoot, SpaceTargetQuery(space), 1), nodeTypes],
+        });
         if (inventory.GitSync.Count > 0)
-            steps.Add(("Remove GitSync configuration",
-                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system — first, so no sync source re-imports while the "
-                + $"space is torn down — {inventory.GitSync.Count} node(s):\n" + string.Join("\n", inventory.GitSync),
-                true));
-        steps.Add(("Tear down the partition", TeardownCommand(inventory), true));
-        steps.Add(("Verify and write the audit record",
-            $"dispose again; re-read every table, the grants, the GitSync configuration, Admin/Partition/{space} and "
-            + $"the store '{inventory.Schema}' as system — any residue FAILS the run; the audit record is written on this node",
-            false));
+            steps.Add(new ControlLanePlanStep
+            {
+                Name = "Remove GitSync configuration",
+                Command = $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system for each GitSync configuration node — "
+                    + "first, so no sync source re-imports while the space is torn down; the ONE per-node leg, "
+                    + $"{inventory.GitSyncRows.ToString(CultureInfo.InvariantCulture)} row(s) ≤ bound {PerNodeDeleteBound.ToString(CultureInfo.InvariantCulture)}",
+                Destructive = true,
+                Targets = [Target(TargetGitSync, GitSyncQuery(space), inventory.GitSync.Count)],
+            });
+        var teardownTargets = ImmutableList.CreateBuilder<ControlLanePlanTarget>();
+        if (inventory.Grants.Count > 0)
+            teardownTargets.Add(Target(TargetGrants, GrantsQuery(space), inventory.Grants.Count));
+        teardownTargets.Add(Target(TargetSubtree, SubtreeQuery(space), null));
+        if (inventory.NodeTypes.Count > 0)
+            teardownTargets.Add(nodeTypes);
+        steps.Add(new ControlLanePlanStep
+        {
+            Name = "Tear down the partition",
+            Command = TeardownCommand(inventory),
+            Destructive = true,
+            Targets = teardownTargets.ToImmutable(),
+        });
+        steps.Add(new ControlLanePlanStep
+        {
+            Name = "Verify and write the audit record",
+            Command = $"dispose again; re-read every table, the grants, the GitSync configuration, Admin/Partition/{space} and "
+                + $"the store '{inventory.Schema}' as system — any residue FAILS the run; the audit record is written on this node",
+        });
 
         var notes = ImmutableList.Create(
             "Rows per table (shown, not bound — the build queue and compile watcher of a stranded space keep writing "
@@ -354,7 +382,7 @@ public static class SpaceDeletion
             $"Admin/Partition/{space}: {(inventory.RecordExists ? "present" : "absent")}. Store '{inventory.Schema}': "
             + (inventory.StoreExists switch { true => "present", false => "absent", _ => "no provider can tell" }) + ".",
             "PRE-FLIGHT (policy governed-action-preflight — checked before the plan is offered, every step as system):",
-            $"• Dispose: DisposeRequest as system to {disposeTargets.Count} address(es) — one message each, no bound.",
+            $"• Dispose: DisposeRequest as system to {1 + inventory.NodeTypes.Count} address(es) — one message each, no bound.",
             inventory.GitSync.Count == 0
                 ? "• GitSync removal: nothing to remove."
                 : $"• GitSync removal: per-node recursive delete as system, {inventory.GitSyncRows} row(s) ≤ bound {PerNodeDeleteBound}.",
@@ -365,9 +393,50 @@ public static class SpaceDeletion
         return (steps.ToImmutable(), notes);
     }
 
+    /// <summary>Target label key: the space's own address.</summary>
+    public const string TargetSpaceRoot = "space-root";
+
+    /// <summary>Target label key: the NodeTypes the space defines.</summary>
+    public const string TargetNodeTypes = "nodetypes";
+
+    /// <summary>Target label key: the space's access grants.</summary>
+    public const string TargetGrants = "grants";
+
+    /// <summary>Target label key: the space's GitSync configuration.</summary>
+    public const string TargetGitSync = "gitsync";
+
+    /// <summary>Target label key: the content roots (kept for stored plans that name them).</summary>
+    public const string TargetContentRoots = "content-roots";
+
+    /// <summary>Target label key: everything beneath them — uncounted, the rows are in the notes.</summary>
+    public const string TargetSubtree = "subtree";
+
+    private static ControlLanePlanTarget Target(string label, string query, int? count) =>
+        new() { Label = label, Query = query, Count = count };
+
+    /// <summary>The space's own address, as a PLAN TARGET (a set of one the reader can test). Not
+    /// <see cref="RootQuery"/>, which is the existence LISTING the inventory reads it through. Pure.</summary>
+    public static string SpaceTargetQuery(string space) => $"path:{space}";
+
+    /// <summary>The space's direct children — a rootless space's content roots. Pure.</summary>
+    public static string ChildrenQuery(string space) => $"namespace:{space} scope:children";
+
+    /// <summary>Everything in the space, root included. Pure.</summary>
+    public static string SubtreeQuery(string space) => $"path:{space} scope:subtree";
+
+    /// <summary>Every NodeType the space defines. Pure.</summary>
+    public static string NodeTypesQuery(string space) => $"namespace:{space} scope:descendants nodeType:{MeshNode.NodeTypePath}";
+
+    /// <summary>Every access grant in the space. Pure.</summary>
+    public static string GrantsQuery(string space) =>
+        $"namespace:{space} scope:descendants nodeType:{AccessAssignmentGuard.AccessAssignmentNodeType}";
+
+    /// <summary>Every GitSync configuration node in the space. Pure.</summary>
+    public static string GitSyncQuery(string space) => $"namespace:{space} scope:descendants nodeType:{GitSyncNodeType}";
+
     /// <summary>
     /// The teardown step's command, as the plan states and the approval binds it: the mechanism, and
-    /// everything that goes with the store. Pure.
+    /// what goes with the store — as counts; the sets themselves are the step's targets. Pure.
     /// </summary>
     public static string TeardownCommand(SpaceDeletionInventory inventory)
     {
@@ -375,17 +444,14 @@ public static class SpaceDeletion
         return $"PartitionTeardown.TearDownPartition(\"{space}\") as system — {TeardownMechanism(inventory)}, then "
             + $"Admin/Partition/{space} deleted inside the same claim. Never a per-node recursive delete of the content, never raw SQL. "
             + (inventory.Root is null
-                ? "The space has NO root."
-                : $"The root is a {inventory.Root.NodeType ?? "(untyped)"} created by {inventory.Root.CreatedBy ?? "(unattributed)"}.")
+                ? "The space has NO root. "
+                : $"The root is a {inventory.Root.NodeType ?? "(untyped)"} created by {inventory.Root.CreatedBy ?? "(unattributed)"}. ")
             + (inventory.Grants.Count == 0
-                ? "\nNo access grant is left."
-                : $"\nAccess grants that go with it ({inventory.Grants.Count}):\n" + string.Join("\n", inventory.Grants))
-            + (inventory.NodeTypes.Count == 0 ? "" : $"\nNodeTypes defined here ({inventory.NodeTypes.Count}):\n" + string.Join("\n", inventory.NodeTypes))
+                ? "No access grant is left. "
+                : $"{inventory.Grants.Count.ToString(CultureInfo.InvariantCulture)} access grant(s) go with it. ")
             + (inventory.Dependents.Count == 0
-                ? "\nNo address outside the space depends on them."
-                : $"\n{inventory.Dependents.Count} address(es) OUTSIDE the space depend on them and lose a type or a dependency:\n"
-                  + string.Join("\n", inventory.Dependents.Take(NamedDependents))
-                  + (inventory.Dependents.Count > NamedDependents ? $"\n… and {inventory.Dependents.Count - NamedDependents} more" : ""));
+                ? "No address outside the space depends on its NodeTypes."
+                : $"{inventory.Dependents.Count.ToString(CultureInfo.InvariantCulture)} address(es) OUTSIDE the space depend on its NodeTypes and lose a type or a dependency.");
     }
 
     /// <summary>The residue a verification found, or null when the space is gone. Pure.</summary>
@@ -419,15 +485,26 @@ public static class SpaceDeletion
         definition.TableMappings is { } mappings
         && mappings.Keys.Any(segment => segment.StartsWith('_') && path.Split('/').Contains(segment, StringComparer.Ordinal));
 
-    /// <summary>The query that reads the space's <c>Admin/Partition</c> record. Pure.</summary>
-    public static string RecordQuery(string space) => $"path:{PartitionNodeType.Namespace}/{space} limit:1";
+    /// <summary>The complete direct-child listing that establishes whether <paramref name="path"/> exists. Pure.</summary>
+    public static string ParentListingQuery(string path)
+    {
+        var separator = path.LastIndexOf('/');
+        var parent = separator < 0 ? "" : path[..separator];
+        return $"path:{parent} scope:children select:path";
+    }
+
+    /// <summary>The listing that establishes whether the space's <c>Admin/Partition</c> record exists. Pure.</summary>
+    public static string RecordQuery(string space) => ParentListingQuery($"{PartitionNodeType.Namespace}/{space}");
+
+    /// <summary>The listing that establishes whether the space root exists. Pure.</summary>
+    public static string RootQuery(string space) => ParentListingQuery(space);
 
     /// <summary>The queries one inventory runs: the root, the main rows, one per satellite NodeType (defaults AND custom). Pure.</summary>
     public static IReadOnlyList<string> InventoryQueries(string space, PartitionDefinition? definition = null)
     {
         var queries = new List<string>
         {
-            $"path:{space} select:path,id,namespace,nodeType,name,createdBy limit:1",
+            RootQuery(space),
             $"namespace:{space} scope:descendants select:path,id,namespace,nodeType",
         };
         var custom = (definition?.NodeTypeTableMappings ?? new Dictionary<string, string>())
@@ -473,38 +550,80 @@ public static class SpaceDeletion
             .Zip(AsSystem(hub, () => MeshReading.Read(mesh, RecordQuery(space))), (store, record) => (store, record))
             .SelectMany(first =>
             {
-                var recordNode = first.record.Rows
+                var listedRecord = first.record.Rows
                     .FirstOrDefault(r => string.Equals(r.Path, recordPath, StringComparison.OrdinalIgnoreCase));
-                var definition = recordNode?.ContentAs<PartitionDefinition>(hub.JsonSerializerOptions);
-                var unreadRecord = first.record.IsAnswer ? [] : new[] { $"{first.record.Query}: {first.record.WhyNotAnAnswer}" };
-                var definitionUnread = recordNode is not null && definition is null
-                    ? new[] { $"{recordPath}: the record exists but its content is not a readable PartitionDefinition" }
-                    : [];
-                var queries = first.store == false ? [] : InventoryQueries(space, definition).ToArray();
-                var rootQuery = queries.FirstOrDefault();
-                return queries
-                    .Select(q => AsSystem(hub, () => MeshReading.Read(mesh, q)))
-                    .MergeBounded(ReadConcurrency)
-                    .ToList()
-                    .SelectMany(readings =>
+                var recordRead = !first.record.IsAnswer || listedRecord is null
+                    ? Observable.Return(new AuthoritativeNodeRead(recordPath, null, null))
+                    : ReadCurrentNode(hub, recordPath);
+                return recordRead.SelectMany(currentRecord =>
+                {
+                    var definition = currentRecord.Node?.ContentAs<PartitionDefinition>(hub.JsonSerializerOptions);
+                    var unreadRecord = first.record.IsAnswer
+                        ? []
+                        : new[] { $"{first.record.Query}: {first.record.WhyNotAnAnswer}" };
+                    var liveRecordUnread = first.record.IsAnswer && listedRecord is not null && currentRecord.Node is null
+                        ? new[] { $"{recordPath}: the record was listed but its current node could not be read — {currentRecord.Error}" }
+                        : [];
+                    var definitionUnread = listedRecord is not null && currentRecord.Node is not null && definition is null
+                        ? new[] { $"{recordPath}: the current node exists but its content is not a readable PartitionDefinition" }
+                        : [];
+                    var queries = first.store == false ? [] : InventoryQueries(space, definition).ToArray();
+                    var rootQuery = RootQuery(space);
+                    var readings = queries
+                        .Select(q => AsSystem(hub, () => MeshReading.Read(mesh, q)))
+                        .MergeBounded(ReadConcurrency)
+                        .ToList();
+                    return readings.SelectMany(items =>
                     {
-                        var unread = unreadRecord.Concat(definitionUnread)
-                            .Concat(readings.Where(r => !r.IsAnswer).Select(r => $"{r.Query}: {r.WhyNotAnAnswer}"))
-                            .ToList();
-                        var root = readings.Where(r => r.Query == rootQuery).SelectMany(r => r.Rows)
-                            .FirstOrDefault(r => string.Equals(r.Path, space, StringComparison.Ordinal));
-                        var rows = readings.SelectMany(r => r.Rows)
-                            .Where(r => string.Equals(r.Path, space, StringComparison.Ordinal)
-                                        || r.Path.StartsWith(space + "/", StringComparison.Ordinal))
-                            .ToList();
-                        var nodeTypes = rows.Where(r => string.Equals(r.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
-                            .Select(r => r.Path).Distinct(StringComparer.Ordinal).ToList();
-                        return Networks(hub, nodeTypes).Select(network => Fold(
-                            space, root, rows, recordNode is not null, first.store, network.Addresses,
-                            unread.Concat(network.Unread), definition));
+                        var listing = items.FirstOrDefault(r => r.Query == rootQuery);
+                        var rootRead = listing is null
+                            ? Observable.Return(new AuthoritativeNodeRead(space, null,
+                                first.store == false ? null : "the root listing was not returned"))
+                            : !listing.IsAnswer
+                                ? Observable.Return(new AuthoritativeNodeRead(space, null,
+                                    $"the root listing did not answer — {listing.WhyNotAnAnswer}"))
+                                : listing.Rows.FirstOrDefault(r => string.Equals(r.Path, space, StringComparison.Ordinal)) is null
+                                    ? Observable.Return(new AuthoritativeNodeRead(space, null, null))
+                                    : ReadCurrentNode(hub, space);
+                        return rootRead.SelectMany(rootReadResult =>
+                        {
+                            var unread = unreadRecord.Concat(liveRecordUnread).Concat(definitionUnread)
+                                .Concat(items.Where(r => !r.IsAnswer).Select(r => $"{r.Query}: {r.WhyNotAnAnswer}"))
+                                .ToList();
+                            if (rootReadResult.Error is not null)
+                                unread.Add($"{space}: the root listing or current node could not be read — {rootReadResult.Error}");
+                            var root = rootReadResult.Node;
+                            // The root's indexed row is existence evidence only. Do not let its stale
+                            // NodeType/CreatedBy/Name contribute to the deletion plan.
+                            var rows = items.Where(r => r.Query != rootQuery).SelectMany(r => r.Rows)
+                                .Where(r => !string.Equals(r.Path, space, StringComparison.Ordinal)
+                                            && r.Path.StartsWith(space + "/", StringComparison.Ordinal))
+                                .Concat(root is null ? [] : new[] { root })
+                                .ToList();
+                            var nodeTypes = rows.Where(r => string.Equals(r.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+                                .Select(r => r.Path).Distinct(StringComparer.Ordinal).ToList();
+                            return Networks(hub, nodeTypes).Select(network => Fold(
+                                space, root, rows, listedRecord is not null, first.store, network.Addresses,
+                                unread.Concat(network.Unread), definition));
+                        });
                     });
+                });
             });
     }
+
+    /// <summary>
+    /// Reads current node content from its owning stream. Call only after a complete listing has
+    /// established that the path exists; an empty/faulted/timeout stream is not evidence that the
+    /// listed node is absent and must leave the deletion plan unreadable.
+    /// </summary>
+    internal static IObservable<AuthoritativeNodeRead> ReadCurrentNode(IMessageHub hub, string path) =>
+        AsSystem(hub, () => hub.GetMeshNodeStream(path)
+            .Take(1)
+            .Timeout(MeshReading.DefaultBudget)
+            .Select(node => new AuthoritativeNodeRead(path, node, null))
+            .DefaultIfEmpty(new AuthoritativeNodeRead(path, null, "the node stream completed without a node"))
+            .Catch((Exception ex) => Observable.Return(new AuthoritativeNodeRead(
+                path, null, $"{ex.GetType().Name}: {ex.Message}"))));
 
     /// <summary>The union of the NodeTypes' dependency networks and the legs that could not be read. Never errors. Cold.</summary>
     private static IObservable<(ImmutableList<string> Addresses, ImmutableList<string> Unread)> Networks(
