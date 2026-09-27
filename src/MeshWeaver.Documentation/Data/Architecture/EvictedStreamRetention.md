@@ -280,7 +280,7 @@ mirror ended without ever carrying the node's state"*, the terminal #5087 was fi
 **The fix is a claim token, not a lock.** The reclaim CLAIMS the stream with a compare-exchange of
 its lease count from `0` to a fresh negative token (`-Interlocked.Increment(ref _reclaimClaims)`),
 and a lease is taken only by a compare-exchange from a non-negative count. Both decisions are over
-the SAME dictionary slot, so exactly one wins:
+the SAME stream's lease state, so exactly one wins:
 
 | lands first | outcome |
 |---|---|
@@ -289,7 +289,7 @@ the SAME dictionary slot, so exactly one wins:
 
 **Why a token per claim and not a shared `-1`.** Ownership can be handed out and back INSIDE a claim:
 the mesh-node cache's idle release calls `DetachRemoteStreams` (which takes the parking entry and
-drops the lease entry — the claim with it) and, when it loses its own zero-subscriber race, hands the
+cancels a negative reclaim claim, while preserving positive holder counts) and, when it loses its own zero-subscriber race, hands the
 stream back with `ParkRemoteStreams`. That re-park is a NEW ownership. With a shared sentinel the
 reclaim could not tell it from its own claim, would take the new parking entry and dispose a stream a
 consumer had just re-attached to. So after taking the parking entry the reclaim re-reads the slot:
@@ -297,9 +297,9 @@ its own token means no handover happened and it disposes; anything else means it
 superseded, and it puts the parking entry back and leaves the stream alone. After that re-read the
 stream is out of `_evictedRemoteStreams`, so no detach can reach it before the dispose.
 
-The token is removed only AFTER `Dispose`, so a lease attempted later finds a dead stream, fails its
-re-check and resolves a fresh one; the zero entry that attempt would otherwise leave is removed
-conditionally on `0`, so no other holder's count is touched. A claim that loses
+The token is reset only AFTER `Dispose`, so a lease attempted later finds a dead stream, fails its
+re-check and resolves a fresh one. The state is keyed weakly by its stream, so it cannot retain a
+disposed stream after ownership leaves the workspace. A claim that loses
 `_evictedRemoteStreams.TryRemove` to another owner hands the slot back (token → `0`, only if still
 its own).
 
@@ -313,6 +313,24 @@ through the `ReclaimClaimed` seam, which runs at the instant the claim has lande
   re-parked mirror was disposed; with the token it survives;
 - **the control** — a lease taken before the last release keeps the evicted mirror alive until that
   lease, too, is released, so the refusal is not overbroad.
+
+**Detach must preserve existing holders.** Removing the lease entry at detach erased every
+outstanding lease even when the cache lost its idle-release race and re-parked the stream. A caller
+that had already resolved that same mirror could then take a new lease, starting the count at one.
+Releasing either the old or the new lease consumed that single count and disposed the mirror under
+the other reader, completing its observation silently. The lease state now belongs to the stream
+through the handover; detach cancels only a negative reclaim token. Both release orders are pinned
+by real-mesh tests in `ReclaimLeaseAtomicityTest`, including completion of the original observer only
+after the final holder releases. This proves the lifetime defect; it does not by itself prove the
+cause of a particular production heartbeat freeze.
+
+**A reclaim must also match the ownership it observed before claiming.** A parking check alone is
+a snapshot: detach/re-park can land after that check but before the zero-count CAS. Each count is
+held in an immutable snapshot, and detach replaces the snapshot even when its count is already
+zero. The reclaim CAS matches the exact snapshot captured before reading the parking set, so a
+claim begun against old ownership fails after handover. The pre-claim regression first failed on
+the holder-preserving repair, then passed with this ownership check; it also verifies that a new
+holder can release the mirror under the current ownership, so the check does not disable reclamation.
 
 What this does NOT cover: the other two producers of the same message (a `ReplaySubject` that never
 carried a value, and the write path's `Where(Value is not null)` filter — see
