@@ -110,7 +110,9 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var planned = await Terminal(dry, ct);
         planned.Status.Should().Be(ControlLaneStatus.Planned, planned.Message);
         planned.Plan.Should().NotBeNull();
-        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Delete content");
+        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Tear down the partition",
+            "a space's content goes with its store in ONE teardown, never a per-node delete (policy governed-action-preflight)");
+        planned.Plan.Steps.Select(s => s.Name).Should().NotContain("Delete content");
         planned.PlanDigest.Should().Be(planned.Plan.Digest());
         (await target.Exists("Doomed/Page")).Should().BeTrue("a dry run changes nothing");
 

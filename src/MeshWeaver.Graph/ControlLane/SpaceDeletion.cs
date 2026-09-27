@@ -43,6 +43,13 @@ public sealed record SpaceDeletionInventory
     /// <summary>The GitSync configuration nodes anywhere in the space.</summary>
     public ImmutableList<string> GitSync { get; init; } = [];
 
+    /// <summary>
+    /// How many rows the per-node GitSync removal covers — every row at or under a GitSync path. It is
+    /// the ONE per-node leg of a space deletion, bounded at plan time by
+    /// <see cref="SpaceDeletion.PerNodeDeleteBound"/>.
+    /// </summary>
+    public int GitSyncRows { get; init; }
+
     /// <summary>The NodeType definitions the space holds.</summary>
     public ImmutableList<string> NodeTypes { get; init; } = [];
 
@@ -75,6 +82,14 @@ public sealed record SpaceDeletionInventory
 /// (MeshWeaver.Plugins <c>Hosting/DeleteSpaceAction</c>) and the control lane's remote execution
 /// (<see cref="DeleteSpaceOperation"/>) run the SAME reads, the SAME plan and the SAME deletes.
 ///
+/// <para>🚨 SYSTEM CREDENTIALS FROM THE FIRST STEP, PRE-FLIGHT AT PARK (policy
+/// <c>governed-action-preflight</c>). Every step runs as system, and <see cref="Preflight"/> — asked
+/// before the plan is offered and again before the run touches anything — checks that each step is
+/// feasible as system and within its mechanism's bound. The content, grants and store go in ONE
+/// <see cref="PartitionTeardown.TearDownPartition"/>, whatever the size: a per-node
+/// recursive delete of a 31,138-descendant space stalled in its pre-validation fan-out after its grant
+/// and GitSync configuration were already gone, leaving it half removed.</para>
+///
 /// <para>🚨 IDEMPOTENT FROM THE TOP: every step acts on what a fresh inventory lists, and every
 /// framework delete is idempotent; a failure stops where it stands and a re-request plans what is
 /// left.</para>
@@ -105,11 +120,20 @@ public static class SpaceDeletion
     /// <summary>Budget for one dependency-network derivation.</summary>
     public static readonly TimeSpan NetworkBudget = TimeSpan.FromMinutes(2);
 
-    /// <summary>Budget for one framework delete — a content root is a RECURSIVE delete of its whole subtree.</summary>
-    public static readonly TimeSpan DeleteBudget = TimeSpan.FromMinutes(10);
+    /// <summary>Budget for one per-node framework delete (a GitSync configuration node and its subtree).</summary>
+    public static readonly TimeSpan DeleteBudget = TimeSpan.FromMinutes(2);
 
-    /// <summary>Budget for the record write that hands a stranded store to the platform's teardown.</summary>
-    public static readonly TimeSpan WriteBudget = TimeSpan.FromSeconds(60);
+    /// <summary>Budget for the whole-partition teardown — one drop per provider, whatever the size.</summary>
+    public static readonly TimeSpan TeardownBudget = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// The most rows a PER-NODE recursive delete may cover in a space deletion. Such a delete
+    /// pre-validates every descendant (a <c>ValidateDeleteRequest</c> fan-out, at most 64 in flight,
+    /// the whole of it bounded at 25 s), and 1,740 posted requests did not settle in that bound. The
+    /// content never takes that path; the bound applies to the GitSync removal alone, and a plan over it
+    /// is refused before it is offered.
+    /// </summary>
+    public const int PerNodeDeleteBound = 200;
 
     /// <summary>How many index reads run at once.</summary>
     public const int ReadConcurrency = 4;
@@ -196,6 +220,9 @@ public static class SpaceDeletion
             .Where(r => string.Equals(r.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType, StringComparison.Ordinal))
             .Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
         var gitSync = distinct.Where(IsGitSync).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
+        var gitSyncRoots = MinimalRoots(gitSync);
+        var gitSyncRows = distinct.Count(r => gitSyncRoots.Any(g =>
+            string.Equals(r.Path, g, StringComparison.Ordinal) || r.Path.StartsWith(g + "/", StringComparison.Ordinal)));
         var nodeTypes = distinct
             .Where(r => string.Equals(r.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
             .Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
@@ -217,6 +244,7 @@ public static class SpaceDeletion
             Tables = tables,
             Grants = grants,
             GitSync = gitSync,
+            GitSyncRows = gitSyncRows,
             NodeTypes = nodeTypes,
             ContentRoots = MinimalRoots(content),
             Dependents = dependents,
@@ -227,9 +255,49 @@ public static class SpaceDeletion
     }
 
     /// <summary>
+    /// Why the plan of <paramref name="inventory"/> may NOT be offered on SCALE grounds, or null. Pure.
+    /// The content goes with the partition's store in one teardown whatever its size, so the only
+    /// per-node leg is the GitSync removal; one over <see cref="PerNodeDeleteBound"/> is refused here
+    /// rather than timing out mid-run.
+    /// </summary>
+    public static string? PreflightRefusal(SpaceDeletionInventory inventory) =>
+        inventory.GitSyncRows > PerNodeDeleteBound
+            ? $"PRE-FLIGHT: removing the GitSync configuration of '{inventory.Space}' is a per-node recursive delete of "
+              + $"{inventory.GitSyncRows} row(s), over the bound of {PerNodeDeleteBound} such a delete can pre-validate — it "
+              + "would stall mid-run and leave the space half removed. Refused at park; nothing was touched"
+            : null;
+
+    /// <summary>
+    /// The WHOLE pre-flight, asked AS SYSTEM (policy <c>governed-action-preflight</c>): what may never be
+    /// deleted (<see cref="PlanRefusal"/>), the scale of the per-node leg (<see cref="PreflightRefusal"/>)
+    /// and whether the platform's whole-partition teardown will run for this space under the identity
+    /// every step runs with (<see cref="PartitionTeardown.Refusal"/>). Null when every step
+    /// is feasible.
+    /// </summary>
+    /// <param name="hub">The hub the deletion runs on.</param>
+    /// <param name="callerPath">The path the caller runs from (never deleted).</param>
+    /// <param name="inventory">What the space holds, read as system.</param>
+    public static string? Preflight(IMessageHub hub, string callerPath, SpaceDeletionInventory inventory)
+    {
+        var space = inventory.Space;
+        if (PlanRefusal(inventory, OperationalSpace(hub), callerPath, ServedByConfiguration(hub, space)) is { } refused)
+            return refused;
+        if (PreflightRefusal(inventory) is { } tooLarge)
+            return tooLarge;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        if (access is null)
+            return "PRE-FLIGHT: this hub has no AccessService, so no step can run as system — nothing was touched";
+        using (access.ImpersonateAsSystem())
+            return PartitionTeardown.Refusal(hub, space) is { } teardown
+                ? $"PRE-FLIGHT: the partition teardown of '{space}' would be refused as system — {teardown}. Nothing was touched"
+                : null;
+    }
+
+    /// <summary>
     /// The steps of a space deletion — what the approver reads and the approval binds — and the notes
-    /// beside them. What is bound is what decides the blast radius; the per-table ROW COUNTS are in
-    /// the notes and are NOT bound (a stranded space keeps being written into while it waits). Pure.
+    /// beside them, the per-step pre-flight among them. What is bound is what decides the blast radius;
+    /// the per-table ROW COUNTS are in the notes and are NOT bound (a stranded space keeps being written
+    /// into while it waits). Pure.
     /// </summary>
     public static (ImmutableList<(string Name, string Command, bool Destructive)> Steps, ImmutableList<string> Notes) StepsOf(
         SpaceDeletionInventory inventory)
@@ -241,28 +309,12 @@ public static class SpaceDeletion
             "DisposeRequest as system, from the node-operation hub, to:\n" + string.Join("\n", disposeTargets)
             + (inventory.NodeTypes.Count == 0 ? "" : "\n(a NodeType definition's dispose cascades to its dependency network)"),
             false));
-        if (inventory.Grants.Count > 0)
-            steps.Add(("Remove access grants",
-                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system — the space is going away, so the keep-an-admin invariant is moot — {inventory.Grants.Count} grant(s):\n" + string.Join("\n", inventory.Grants),
-                true));
         if (inventory.GitSync.Count > 0)
             steps.Add(("Remove GitSync configuration",
-                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system, {inventory.GitSync.Count} node(s):\n" + string.Join("\n", inventory.GitSync),
+                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system — first, so no sync source re-imports while the "
+                + $"space is torn down — {inventory.GitSync.Count} node(s):\n" + string.Join("\n", inventory.GitSync),
                 true));
-        if (inventory.ContentRoots.Count > 0)
-            steps.Add(("Delete content",
-                $"DeleteNodeRequest(recursive, CascadeRootPath={space}) as system per content root, "
-                + $"{(inventory.Root is null ? "the space has NO root" : $"the root is a {inventory.Root.NodeType ?? "(untyped)"} created by {inventory.Root.CreatedBy ?? "(unattributed)"}")}:\n"
-                + string.Join("\n", inventory.ContentRoots)
-                + (inventory.NodeTypes.Count == 0 ? "" : $"\nNodeTypes defined here ({inventory.NodeTypes.Count}):\n" + string.Join("\n", inventory.NodeTypes))
-                + (inventory.Dependents.Count == 0
-                    ? "\nNo address outside the space depends on them."
-                    : $"\n{inventory.Dependents.Count} address(es) OUTSIDE the space depend on them and lose a type or a dependency:\n"
-                      + string.Join("\n", inventory.Dependents.Take(NamedDependents))
-                      + (inventory.Dependents.Count > NamedDependents ? $"\n… and {inventory.Dependents.Count - NamedDependents} more" : "")),
-                true));
-        if (inventory.StoreExists != false || inventory.RecordExists)
-            steps.Add(("Drop the partition store", StoreRoute(inventory), true));
+        steps.Add(("Tear down the partition", TeardownCommand(inventory), true));
         steps.Add(("Verify and write the audit record",
             $"dispose again; re-read every table, the grants, the GitSync configuration, Admin/Partition/{space} and "
             + $"the store '{inventory.Schema}' as system — any residue FAILS the run; the audit record is written on this node",
@@ -276,26 +328,40 @@ public static class SpaceDeletion
             + $" — {inventory.TotalRows.ToString(CultureInfo.InvariantCulture)} in all.",
             $"Admin/Partition/{space}: {(inventory.RecordExists ? "present" : "absent")}. Store '{inventory.Schema}': "
             + (inventory.StoreExists switch { true => "present", false => "absent", _ => "no provider can tell" }) + ".",
+            "PRE-FLIGHT (policy governed-action-preflight — checked before the plan is offered, every step as system):",
+            $"• Dispose: DisposeRequest as system to {disposeTargets.Count} address(es) — one message each, no bound.",
+            inventory.GitSync.Count == 0
+                ? "• GitSync removal: nothing to remove."
+                : $"• GitSync removal: per-node recursive delete as system, {inventory.GitSyncRows} row(s) ≤ bound {PerNodeDeleteBound}.",
+            "• Teardown: PartitionTeardown.TearDownPartition as system — ONE drop per provider whatever the size "
+            + $"({inventory.TotalRows.ToString(CultureInfo.InvariantCulture)} row(s) now); PartitionTeardown.Refusal answered none.",
+            "• Verify: read as system; any residue fails the run.",
             "Not touched: the build coordinator's own bookkeeping (Admin/Build/…) — it stops scheduling the space once its store is gone.");
         return (steps.ToImmutable(), notes);
     }
 
-    /// <summary>How the store is dropped, as the plan states it. Pure.</summary>
-    public static string StoreRoute(SpaceDeletionInventory inventory)
+    /// <summary>
+    /// The teardown step's command, as the plan states and the approval binds it: the mechanism, and
+    /// everything that goes with the store. Pure.
+    /// </summary>
+    public static string TeardownCommand(SpaceDeletionInventory inventory)
     {
         var space = inventory.Space;
-        var drop = $"the platform's partition teardown drops the store '{inventory.Schema}' on every provider "
-            + "(Postgres: DROP SCHEMA … CASCADE, satellite tables included) and evicts its cached queries — never raw SQL";
-        if (inventory.Root is not null)
-            return $"the root delete above runs PartitionDropPostDeletionHandler: {drop}, then removes Admin/Partition/{space}. "
-                + $"If the store or the record survives it: meshService.DeleteNode(\"Admin/Partition/{space}\") as system — "
-                + "StrandedPartitionTeardownValidator drops the store of a partition that is now rootless and ownerless";
-        return inventory.RecordExists
-            ? $"meshService.DeleteNode(\"Admin/Partition/{space}\") as system — the space is rootless and, once the "
-              + $"grants and GitSync configuration are gone, ownerless, so StrandedPartitionTeardownValidator runs: {drop}"
-            : $"meshService.CreateOrUpdateNode(Admin/Partition/{space}) as system (PartitionOwnership.PartitionDefinitionNode — "
-              + $"the record the space lost), then meshService.DeleteNode(\"Admin/Partition/{space}\") — the record is the "
-              + $"handle StrandedPartitionTeardownValidator acts on for a rootless, ownerless partition: {drop}";
+        return $"PartitionTeardown.TearDownPartition(\"{space}\") as system — ONE drop of the store '{inventory.Schema}' on every "
+            + "provider (Postgres: DROP SCHEMA … CASCADE — every table, satellites included), whatever its size, then "
+            + $"Admin/Partition/{space} deleted inside the same claim. Never a per-node recursive delete of the content, never raw SQL. "
+            + (inventory.Root is null
+                ? "The space has NO root."
+                : $"The root is a {inventory.Root.NodeType ?? "(untyped)"} created by {inventory.Root.CreatedBy ?? "(unattributed)"}.")
+            + (inventory.Grants.Count == 0
+                ? "\nNo access grant is left."
+                : $"\nAccess grants that go with it ({inventory.Grants.Count}):\n" + string.Join("\n", inventory.Grants))
+            + (inventory.NodeTypes.Count == 0 ? "" : $"\nNodeTypes defined here ({inventory.NodeTypes.Count}):\n" + string.Join("\n", inventory.NodeTypes))
+            + (inventory.Dependents.Count == 0
+                ? "\nNo address outside the space depends on them."
+                : $"\n{inventory.Dependents.Count} address(es) OUTSIDE the space depend on them and lose a type or a dependency:\n"
+                  + string.Join("\n", inventory.Dependents.Take(NamedDependents))
+                  + (inventory.Dependents.Count > NamedDependents ? $"\n… and {inventory.Dependents.Count - NamedDependents} more" : ""));
     }
 
     /// <summary>The residue a verification found, or null when the space is gone. Pure.</summary>
@@ -523,52 +589,28 @@ public static class SpaceDeletion
                     $"{delivery.Message.RejectionReason}: {delivery.Message.Error ?? "the delete was refused"}"))));
 
     /// <summary>
-    /// Hands whatever store and record survive the content delete to the PLATFORM's teardown: the
-    /// record deleted directly, written first when the space lost it, so
-    /// <c>StrandedPartitionTeardownValidator</c> drops the store. Nothing here drops anything itself.
+    /// The space's content, grants and store, removed as ONE operation: the platform's whole-partition
+    /// teardown (<see cref="PartitionTeardown.TearDownPartition"/>), AS SYSTEM — one drop
+    /// per provider whatever the size, then the <c>Admin/Partition</c> record. Idempotent. Cold.
     /// </summary>
-    public static IObservable<string> DropStore(IMessageHub hub, string space)
-    {
-        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var recordPath = $"{PartitionNodeType.Namespace}/{space}";
-        return StoreExists(hub, space)
-            .Zip(AsSystem(hub, () => MeshReading.Read(mesh, RecordQuery(space))), (store, record) => (store, record))
-            .SelectMany(read =>
-            {
-                if (!read.record.IsAnswer)
-                    return Observable.Throw<string>(new InvalidOperationException(
-                        $"could not establish whether {recordPath} exists — {read.record.WhyNotAnAnswer}"));
-                var recordExists = read.record.Rows.Any(r => string.Equals(r.Path, recordPath, StringComparison.OrdinalIgnoreCase));
-                if (read.store != true && !recordExists)
-                    return Observable.Return(
-                        $"the store of '{space}' is {(read.store == false ? "gone" : "not reported by any provider")} and "
-                        + $"{recordPath} is absent — nothing to hand to the platform's teardown");
-                var write = recordExists
-                    ? Observable.Return(Unit.Default)
-                    : AsSystem(hub, () => mesh.CreateOrUpdateNode(PartitionOwnership.PartitionDefinitionNode(
-                            new MeshNode(space) { Name = space },
-                            "Written by a governed space deletion as the handle for the platform's stranded-partition teardown")))
-                        .Take(1).Timeout(WriteBudget).Select(_ => Unit.Default);
-                return write
-                    .SelectMany(_ => AsSystem(hub, () => mesh.DeleteNode(recordPath)).Take(1).Timeout(DeleteBudget))
-                    .Select(_ => $"{recordPath} {(recordExists ? "deleted" : "written and deleted")} as system — "
-                                 + "StrandedPartitionTeardownValidator drops the store of a rootless, ownerless partition; "
-                                 + "the verification reads whether it did");
-            });
-    }
+    public static IObservable<string> TearDown(IMessageHub hub, string space, string because) =>
+        AsSystem(hub, () => hub.TearDownPartition(space, because))
+            .Take(1)
+            .Timeout(TeardownBudget)
+            .Select(outcome => $"partition '{space}' torn down as system — one drop across {outcome.Providers} provider(s), "
+                               + $"Admin/Partition/{space} {(outcome.RecordDeleted ? "deleted" : "already absent")}; "
+                               + "the verification reads whether anything is left");
 
     /// <summary>
-    /// The whole deletion after the plan was verified: dispose, grants, GitSync, content, store,
-    /// then dispose again, re-read and verify — any residue FAILS. Emits one line per step and, last,
+    /// The whole deletion after the plan was verified: dispose, GitSync, ONE partition teardown (content,
+    /// grants and store together), then dispose again, re-read and verify — any residue FAILS. Emits one line per step and, last,
     /// the verified <c>after</c> inventory as the final line's subject. Cold.
     /// </summary>
     public static IObservable<(string Line, SpaceDeletionInventory? After)> Run(
         IMessageHub hub, SpaceDeletionInventory before, string disposeReason) =>
         Dispose(hub, before, disposeReason).Select(Line)
-            .Concat(Observable.Defer(() => DeleteEach(hub, before.Space, "grant", before.Grants).Select(Line)))
             .Concat(Observable.Defer(() => DeleteEach(hub, before.Space, "GitSync node", before.GitSync).Select(Line)))
-            .Concat(Observable.Defer(() => DeleteEach(hub, before.Space, "content root", before.ContentRoots).Select(Line)))
-            .Concat(Observable.Defer(() => DropStore(hub, before.Space).Select(Line)))
+            .Concat(Observable.Defer(() => TearDown(hub, before.Space, disposeReason).Select(Line)))
             .Concat(Observable.Defer(() => Dispose(hub, before, disposeReason).Select(Line)))
             .Concat(Observable.Defer(() => Inventory(hub, before.Space)
                 .SelectMany(after => Residue(after) is { } residue
