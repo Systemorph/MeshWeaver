@@ -56,8 +56,16 @@ public static class ControlLaneSettingsTab
                 InputLabel = host.Localize("ui.controlLaneKeyLabel"),
                 Placeholder = host.Localize("ui.controlLaneKeyPlaceholder"),
                 Detail = status.Select(s => DetailMarkdown(s, (k, a) => host.Localize(k, a), host.ViewerLocale())),
+                GenerateLabel = host.Localize("ui.controlLaneGenerate"),
+                RegenerateLabel = host.Localize("ui.controlLaneRegenerate"),
                 Verbs = new SecretSectionVerbs
                 {
+                    // The key is generated HERE, on this instance, on the server, and shown ONCE with
+                    // its fingerprint; the administrator hands it to Systemorph over a secure
+                    // channel, and Systemorph registers it on the control instance. Until then the
+                    // control instance refuses this instance's announcements (Test connection says so).
+                    Generate = () => InstanceSecrets.Generate(host.Hub, key)
+                        .Select(g => new SecretGenerated(g.Value, g.Status.Secret, host.Localize("ui.controlLaneGeneratedNote"))),
                     Save = value => InstanceSecrets.Set(host.Hub, key, value).Select(s => s.Secret),
                 },
                 ExtraButtons = [test],

@@ -349,7 +349,7 @@ public class SelfUpdateHandover
         ReadSettings(hub.ServiceProvider.GetService<IConfiguration>(), hub.ServiceProvider.GetService<PluginCatalogOptions>())
             with
             {
-                // The signing key may be set in the PORTAL (Settings ▸ Control lane) rather than
+                // The signing key may be set in the PORTAL (/Admin/Settings/ControlLane) rather than
                 // mounted — and a key revoked there counts as absent even if one is mounted.
                 SecretPresent = SigningSecret().Length > 0,
             };
@@ -546,7 +546,7 @@ public class SelfUpdateHandover
                 : $"accepted ({(int)response.StatusCode}), signature verified as '{sender}'"), Sender: sender);
         })
         // The announcement's result is the key's LAST USE, shown beside its fingerprint in
-        // Settings ▸ Control lane. Recorded only for a portal-set key (a no-op otherwise) — on
+        // /Admin/Settings/ControlLane. Recorded only for a portal-set key (a no-op otherwise) — on
         // EVERY outcome: a refusal, and equally a transport failure or a cancellation.
         .SelectMany(done => InstanceSecrets
             .RecordUse(hub, SecretKey, ok: true, done.Sender is { } sender

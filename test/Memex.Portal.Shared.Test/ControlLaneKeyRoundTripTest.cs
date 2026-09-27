@@ -151,6 +151,37 @@ public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMes
         Assert.DoesNotContain(logs.Messages, m => m.Contains(issued[..16], StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The REVERSED flow the pearl rollout uses: the deployment GENERATES its key (shown once, with
+    /// its fingerprint), Systemorph registers that value on the control instance, the fingerprints
+    /// agree, and Test connection answers a match — with nothing shown again afterwards.
+    /// </summary>
+    [Fact]
+    public async Task The_deployment_generates_the_key_and_the_control_instance_registers_it()
+    {
+        var controlKey = $"{SelfUpdateHandover.LocalSecretKey}:{Deployment}";
+        InstanceSecrets.Generated generated;
+        using (Access.SwitchAccessContext(new AccessContext { ObjectId = PlatformAdmin, Name = PlatformAdmin }))
+            generated = await InstanceSecrets.Generate(Mesh, SelfUpdateHandover.SecretKey).FirstAsync().Timeout(Budget)
+                .Await(TestContext.Current.CancellationToken);
+        Assert.Equal(SecretSources.Generate, generated.Status.Secret.Source);
+
+        // Before the control instance registers it, the test reads as a mismatch.
+        await Live(SelfUpdateHandover.SecretKey, generated.Value);
+        var before = await Handover().Test().FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        Assert.False(before.Accepted);
+
+        // Systemorph pastes what the deployment's administrator sent over the secure channel.
+        var registered = await SaveAsAdmin(controlKey, generated.Value);
+        Assert.Equal(generated.Status.Secret.Fingerprint, registered.Secret.Fingerprint);
+        await Live(controlKey, generated.Value);
+
+        var after = await Handover().Test().FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        Assert.True(after.Accepted, after.Detail);
+        Assert.Equal(Deployment, after.Sender);
+        Assert.DoesNotContain(logs.Messages, m => m.Contains(generated.Value[..16], StringComparison.Ordinal));
+    }
+
     [Fact]
     public void The_status_block_shows_the_fingerprint_and_never_a_value()
     {
