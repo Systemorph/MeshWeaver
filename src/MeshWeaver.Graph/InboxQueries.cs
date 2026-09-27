@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
@@ -28,6 +29,17 @@ public static class InboxQueries
     public const string RowProjection = "select:path,name,nodeType,icon,lastModified";
 
     /// <summary>
+    /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum
+    /// DEFAULT, and the serializer omits defaults from stored JSON — so a positive
+    /// <c>content.status:Running</c> matches nothing that is actually running, and a negated
+    /// <c>-content.status:Running</c> never excludes it (the trap <c>OutboundEmailWatchQueryTest</c>
+    /// pins). The two bands are therefore split on the explicitly STAMPED terminal states: Running
+    /// negates each of them, Recent matches any of them.
+    /// </summary>
+    internal static readonly ImmutableArray<string> TerminalActivityStatuses =
+        [nameof(ActivityStatus.Succeeded), nameof(ActivityStatus.Warning), nameof(ActivityStatus.Failed), nameof(ActivityStatus.Cancelled)];
+
+    /// <summary>
     /// The legs core itself brings. Packages add their own; these are not a registry of what may exist.
     ///
     /// <para>Every one is anchored on <see cref="ViewerToken"/>, so each resolves to exactly one
@@ -48,14 +60,20 @@ public static class InboxQueries
             Source = "Activities",
             Band = InboxBand.Running,
             Order = 10,
-            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity sort:LastModified-desc {RowProjection}",
+            // Not terminal — every stamped terminal state negated (Running itself is omitted).
+            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "
+                    + string.Join(" ", TerminalActivityStatuses.Select(s => $"-content.status:{s}"))
+                    + $" sort:LastModified-desc {RowProjection}",
         },
         new()
         {
             Source = "Activities",
             Band = InboxBand.Recent,
             Order = 20,
-            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity sort:LastModified-desc {RowProjection}",
+            // Terminal — any stamped terminal state.
+            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "
+                    + $"content.status:{string.Join("|", TerminalActivityStatuses)}"
+                    + $" sort:LastModified-desc {RowProjection}",
         },
     ];
 

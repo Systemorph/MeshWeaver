@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -45,8 +46,15 @@ public sealed class SeedInboxAppLogonAction : ILogonAction
         if (mesh is null || string.IsNullOrEmpty(ownerId))
             return Observable.Return(LogonActionOutcome.Nothing);
 
-        var node = UserActivityLayoutAreas.BuildAppRecord(ownerId, UserActivityLayoutAreas.InboxAppSpec(ownerId));
-        return mesh.CreateNode(node)
+        var node = UserActivityLayoutAreas.BuildAppRecord(
+            ownerId, UserActivityLayoutAreas.InboxAppSpec(ownerId, context.Identity.Locale));
+        var access = context.Hub.ServiceProvider.GetService<AccessService>();
+        // Re-establish the identity AT THE WRITE, as LogonActionRunner.Commit does: the runner
+        // Concats the actions, so this cold create may be subscribed on whichever thread the previous
+        // action completed on, after RunFor's ambient scope is gone — and CreateNode captures the
+        // context when it is subscribed, so a write with none fails CLOSED (the tile would never land
+        // and the unrecorded action would retry on every logon).
+        return access.RunAs(context.Identity, () => mesh.CreateNode(node))
             .Select(_ => LogonActionOutcome.Nothing)
             .Catch((Exception exception) =>
             {

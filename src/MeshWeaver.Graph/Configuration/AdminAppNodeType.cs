@@ -51,11 +51,18 @@ public static class AdminAppNodeType
     public const string AdministrationGroupKey = "settings.groupAdministration";
 
     /// <summary>
-    /// How long a tab waits for a POSITIVE <c>IsGlobalAdmin</c> answer before it stays hidden. The
-    /// grant is a runtime AccessAssignment row, so the evaluator emits an empty seed first and the
-    /// admin answer arrives with the synced query — the same bound every admin tab used before.
+    /// The viewer's platform-admin verdict, LIVE: <c>false</c> first (the menu renders at once),
+    /// then every change the evaluator reports — a grant arriving AND a grant being revoked —
+    /// de-duplicated, failing closed to <c>false</c> on a fault. Never a one-shot: a stream that
+    /// feeds a live view must keep answering (never <c>.Take(1)</c>).
     /// </summary>
-    private static readonly TimeSpan AdminCheckBound = TimeSpan.FromSeconds(5);
+    /// <param name="hub">The hub to evaluate on.</param>
+    /// <param name="viewerId">The viewer.</param>
+    public static IObservable<bool> LiveAdminVerdict(IMessageHub hub, string viewerId)
+        => hub.IsGlobalAdmin(viewerId)
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .StartWith(false)
+            .DistinctUntilChanged();
 
     /// <summary>
     /// The href of one tab inside the Admin app: <c>/Admin/Settings/{tabId}</c>. Built through
@@ -125,10 +132,12 @@ public static class AdminAppNodeType
     }
 
     /// <summary>
-    /// The admin gate for one tab: nothing off the Admin hub; on it, the tab once the viewer is
-    /// confirmed a platform admin. Waits for the POSITIVE answer (the evaluator's first emission can
-    /// be the premature empty seed) within <see cref="AdminCheckBound"/>, and starts empty so the
-    /// menu renders at once. Public so a module whose provider is itself public API can delegate to
+    /// The admin gate for one tab: nothing off the Admin hub; on it, the tab exactly while the viewer
+    /// IS a platform admin. The admin verdict is observed LIVE for the life of the menu — a grant
+    /// that arrives adds the tab, a grant that is revoked removes it again — so the menu never
+    /// latches an earlier answer (a one-shot positive would keep offering administration after the
+    /// grant is gone). It starts empty so the menu renders at once, and a faulted verdict stream
+    /// fails CLOSED to no tab. Public so a module whose provider is itself public API can delegate to
     /// it; everything else registers through <see cref="AddAdminAppTab"/>.
     /// </summary>
     /// <param name="host">The layout host of the settings page being rendered.</param>
@@ -143,13 +152,8 @@ public static class AdminAppNodeType
         if (string.IsNullOrEmpty(viewerId))
             return Observable.Return(none);
 
-        return host.Hub.IsGlobalAdmin(viewerId)
-            .Where(isAdmin => isAdmin)
-            .Take(1)
-            .Select(_ => (IReadOnlyList<SettingsMenuItemDefinition>)[tab])
-            .Timeout(AdminCheckBound)
-            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
-            .StartWith(none);
+        return LiveAdminVerdict(host.Hub, viewerId)
+            .Select(isAdmin => isAdmin ? (IReadOnlyList<SettingsMenuItemDefinition>)[tab] : none);
     }
 
     /// <summary>

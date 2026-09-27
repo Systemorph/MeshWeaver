@@ -1110,11 +1110,18 @@ public static class UserActivityLayoutAreas
     /// app, opening <see cref="InboxLayoutArea"/> on the owner's own hub. Seeded for every user by
     /// <c>SeedInboxAppLogonAction</c>, independently of <c>Admin/HomeConfig.DefaultApps</c>.
     /// </summary>
-    internal static AppRecordSpec InboxAppSpec(string ownerId)
-        => AppRecordSpecs(new HomeConfig { DefaultApps = ["~/" + InboxLayoutArea.AreaName] }, ownerId)[0];
+    /// <param name="ownerId">The owner's partition.</param>
+    /// <param name="locale">The OWNER's language — the tile is theirs alone, so its stored name is
+    /// seeded in it; the launcher resolves <see cref="InboxLabelKey"/> for whoever views it.</param>
+    internal static AppRecordSpec InboxAppSpec(string ownerId, string? locale = null)
+        => AppRecordSpecs(new HomeConfig { DefaultApps = ["~/" + InboxLayoutArea.AreaName] }, ownerId)[0]
+            with { Name = LocalizationCatalog.Get(InboxLabelKey, locale), LabelKey = InboxLabelKey };
+
+    /// <summary>The Inbox tile's label key (<see cref="App.LabelKey"/>).</summary>
+    internal const string InboxLabelKey = "inbox.title";
 
     internal sealed record AppRecordSpec(
-        string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source)
+        string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source, string? LabelKey = null)
     {
         /// <summary>The record's navigation target — the app's path, or the owner-hub area path
         /// for a <c>~/</c> app. Stamped as the record's <see cref="MeshNode.MainNode"/> so an icon
@@ -1186,6 +1193,7 @@ public static class UserActivityLayoutAreas
                 Plugin = spec.Plugin ?? "",
                 OpenPath = spec.OpenPath,
                 Source = spec.Source,
+                LabelKey = spec.LabelKey,
             },
         };
 

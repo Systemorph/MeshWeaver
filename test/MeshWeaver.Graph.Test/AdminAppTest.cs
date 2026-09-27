@@ -99,14 +99,19 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     /// <summary>
     /// The Admin partition root resolves to the Admin app. Before this change nothing registered a
     /// node at <c>Admin</c>, so the query below found nothing and <c>/Admin</c> was a typeless
-    /// placeholder rendering an empty page.
+    /// placeholder rendering an empty page. Read through the node stream — the authoritative read of
+    /// one known path — never the eventually consistent query index.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task TheAdminRoot_IsTheAdminApp()
     {
-        var nodes = await QueryAs(PlatformAdmin, $"path:{AdminAppNodeType.Path}", TestContext.Current.CancellationToken);
+        ActAs(PlatformAdmin);
+        var admin = await Mesh.GetWorkspace().GetMeshNodeStream(AdminAppNodeType.Path)
+            .Where(n => n is not null)
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
 
-        var admin = nodes.Should().ContainSingle(n => n.Path == AdminAppNodeType.Path).Subject;
         admin.NodeType.Should().Be(AdminAppNodeType.NodeType, "the Admin root is an app, never a Space");
         admin.ExcludeFromContext.Should().Contain("content").And.Contain("search");
     }
@@ -221,6 +226,47 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
                 TestContext.Current.CancellationToken);
 
         page.Should().NotContain("preferences");
+    }
+
+    /// <summary>
+    /// The admin verdict every Admin-app tab and the "Who am I" grid are driven by is LIVE, never
+    /// latched: a grant revoked while it is observed turns the verdict back to <c>false</c>, which
+    /// removes the tab and turns the grid's Yes into No. The one-shot shape it replaced
+    /// (<c>.Where(true).Take(1)</c>) completed on the first positive and never saw the revocation.
+    ///
+    /// <para>Asserted on the verdict stream rather than on a rendered page: once the grant is gone the
+    /// viewer may no longer read the Admin node at all, so the page's own stream is refused — which
+    /// is the partition doing its job, and not what this pins.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheAdminVerdict_FollowsARevokedGrant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string revoked = "adminapp-revoked";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grant = AssignmentNodeFactory.UserRole(revoked, "Admin", AdminAppNodeType.Path);
+        await access.RunAsSystem(() => mesh.CreateNode(grant)).FirstAsync().Timeout(Budget).Await(ct);
+
+        var verdict = AdminAppNodeType.LiveAdminVerdict(Mesh, revoked).Replay();
+        using var connection = verdict.Connect();
+        await verdict.Should().Within(Budget).Match(isAdmin => isAdmin, "the control: granted", ct);
+
+        await access.RunAsSystem(() => mesh.DeleteNode(grant.Path!)).FirstAsync().Timeout(Budget).Await(ct);
+
+        await verdict.Skip(1).Should().Within(Budget).Match(isAdmin => !isAdmin,
+            "the verdict follows the revocation — it is not latched on the first positive", ct);
+    }
+
+    /// <summary>The "Who am I" rows are recomputed from each verdict: No is shown for No.</summary>
+    [Fact]
+    public void TheWhoAmIRows_ShowTheCurrentVerdict()
+    {
+        var session = new WhoAmISettingsTab.Session("u", "U", "u@x", false, null);
+        string Admin(bool v) => WhoAmISettingsTab.Rows(session, v, Permission.None, Permission.None, k => k)
+            .Single(r => r.Fact == "whoAmI.platformAdmin").Value;
+        Admin(true).Should().Contain("whoAmI.yes");
+        Admin(false).Should().Be("whoAmI.no");
     }
 
     /// <summary>An old link to an administration tab on the admin's own page redirects into the app.</summary>

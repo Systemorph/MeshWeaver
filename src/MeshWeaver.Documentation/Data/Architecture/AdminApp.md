@@ -42,7 +42,9 @@ content listings. Long-lived databases are retyped by migration **V59** (MeshWea
 removed; nothing else in the partition is touched.
 
 A module adds a tab with `config.AddAdminAppTab(definition)`: the tab appears only on the Admin hub
-and only once `IsGlobalAdmin` confirms the viewer positively. A data-contributed tab (a
+and exactly while `IsGlobalAdmin` says the viewer is a platform admin — the verdict is observed LIVE
+(`AdminAppNodeType.LiveAdminVerdict`), so a grant revoked while the app is open removes the tab, and
+the "Who am I" grid follows the same stream. A data-contributed tab (a
 `UiContribution`) uses `Context: NodeSettings` with `Gates: { AdminOnly: true, NodeTypes: [AdminApp] }`.
 
 **A non-admin opening `/Admin`** is refused by the partition itself — the Admin partition is readable
@@ -111,7 +113,13 @@ a pre-v10 path.)
 ## The Inbox app — installed for every user
 
 `/{user}/Inbox` renders the inbox legs (`InboxQueries`) for the owner — Needs you, Running, Recent — each
-anchored on the owner's own partition and projected, each distinct query once. The tile
+anchored on the owner's own partition and projected, each distinct query once. Running and Recent split
+the owner's activities on the explicitly STAMPED terminal states (Running negates them, Recent matches
+any of them): `Running` is the enum default and is omitted from stored content, so neither a positive
+nor a negated match on it can tell the two apart. The tile's label is catalog text: the record carries
+`App.LabelKey = inbox.title`, which the launcher resolves in the viewer's language, and its stored name
+is seeded in the owner's. The seed's write re-establishes the owner's identity at the write site
+(`RunAs`), since the runner may subscribe it on another action's completion thread. The tile
 `{user}/_App/Inbox` is seeded by the run-once logon action `seed-inbox-app`, for the first
 administrator of a fresh instance and every invited user alike, independently of
 `Admin/HomeConfig.DefaultApps` (a deployment's own list cannot leave it out). Create-if-absent: a

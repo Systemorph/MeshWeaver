@@ -94,14 +94,9 @@ public static class WhoAmISettingsTab
             return stack.WithView(Controls.Markdown(host.Localize("whoAmI.anonymous")));
 
         var hub = host.Hub;
-        // Positive-wait on the admin verdict (the evaluator's first emission can be the empty
-        // seed); the permission folds stay live so the grid follows their enrichment.
-        var isAdmin = hub.IsGlobalAdmin(session.UserId)
-            .Where(a => a).Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
-            .Catch<bool, Exception>(_ => Observable.Return(false))
-            .StartWith(false)
-            .DistinctUntilChanged();
+        // Every input stays LIVE — the admin verdict included — so the rows are recomputed on each
+        // emission: a grant revoked while the page is open turns "Yes" back into "No".
+        var isAdmin = AdminAppNodeType.LiveAdminVerdict(hub, session.UserId);
         var ownPartition = hub.GetEffectivePermissions(session.UserId, session.UserId).StartWith(Permission.None);
         var adminPartition = hub.GetEffectivePermissions(AdminAppNodeType.Path, session.UserId).StartWith(Permission.None);
 
