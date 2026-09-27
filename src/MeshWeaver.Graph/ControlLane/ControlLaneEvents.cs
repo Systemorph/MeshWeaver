@@ -181,7 +181,10 @@ public static class ControlLaneEvents
     /// <summary>
     /// Stores an ADMITTED event: the target node must exist (the inbox anchors under a real owner),
     /// then the inbox node is CREATED — its creation is the single-use claim, so a replay is
-    /// <see cref="ControlLaneVerdict.Replayed"/>. As system. Cold; never errors — a refusal is data.
+    /// <see cref="ControlLaneVerdict.Replayed"/>. Existence is read as a LISTING of the target's
+    /// parent's children (never a point read of a path whose existence is the question), and a
+    /// listing that is not an ANSWER refuses by name rather than reading as "absent". As system.
+    /// Cold; never errors — a refusal is data.
     /// </summary>
     /// <param name="hub">The target's mesh hub.</param>
     /// <param name="evt">The admitted event.</param>
@@ -190,20 +193,35 @@ public static class ControlLaneEvents
     {
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var target = WebhookInbox.NormalizeTarget(evt.Target)!;
-        return SpaceDeletion.AsSystem(hub, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{target}")))
-            .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-            .Take(1)
-            .Timeout(MeshReading.DefaultBudget)
-            .SelectMany(change => change.Items.Any(n => n.Path == target)
-                ? SpaceDeletion.AsSystem(hub, () => mesh.CreateNode(InboxNode(evt, now)))
+        return SpaceDeletion.AsSystem(hub, () => MeshReading.Read(mesh, ExistenceQuery(target)))
+            .SelectMany(reading =>
+            {
+                if (!reading.IsAnswer)
+                    return Observable.Return(new ControlLaneReceipt(ControlLaneVerdict.Refused,
+                        $"whether the target '{target}' exists could not be established ({reading.WhyNotAnAnswer}), so the event was not stored",
+                        evt.EventId));
+                if (!reading.Rows.Any(n => n.Path == target))
+                    return Observable.Return(new ControlLaneReceipt(ControlLaneVerdict.Refused,
+                        $"the target '{target}' does not exist on this instance, so there is no inbox to store the event in", evt.EventId));
+                return SpaceDeletion.AsSystem(hub, () => mesh.CreateNode(InboxNode(evt, now)))
                     .Take(1)
                     .Timeout(MeshReading.DefaultBudget)
-                    .Select(_ => new ControlLaneReceipt(ControlLaneVerdict.Accepted, null, evt.EventId))
-                : Observable.Return(new ControlLaneReceipt(ControlLaneVerdict.Refused,
-                    $"the target '{target}' does not exist on this instance, so there is no inbox to store the event in", evt.EventId)))
+                    .Select(_ => new ControlLaneReceipt(ControlLaneVerdict.Accepted, null, evt.EventId));
+            })
             .Catch((Exception ex) => Observable.Return(ex.IsNodeAlreadyExists()
                 ? new ControlLaneReceipt(ControlLaneVerdict.Replayed, $"event {evt.EventId} was already received — a forwarded event is single use", evt.EventId)
                 : new ControlLaneReceipt(ControlLaneVerdict.Refused,
                     $"the event could not be stored ({ex.GetType().Name}: {ex.Message})", evt.EventId)));
+    }
+
+    /// <summary>
+    /// The listing that establishes whether <paramref name="target"/> exists: its parent's
+    /// children, or — for a partition root, which has no parent — the root's own path. Pure.
+    /// </summary>
+    /// <param name="target">A normalized target path.</param>
+    public static string ExistenceQuery(string target)
+    {
+        var slash = target.LastIndexOf('/');
+        return slash > 0 ? $"path:{target[..slash]} scope:children" : $"path:{target}";
     }
 }

@@ -291,7 +291,7 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var refused = await Forward(undeclared, ct);
         refused.Verdict.Should().Be(ControlLaneVerdict.Refused,
             "the lane stores only into an inbox the target declared for it — not even its own public webhook inbox");
-        (await target.Stored(undeclared.EventId, "TestData/OwnInbox")).Should().BeNull();
+        (await target.AnyStored(undeclared.EventId, "TestData/OwnInbox")).Should().BeFalse();
 
         var elsewhere = ControlLaneClient.NewEvent("other-deployment", ControlLaneEventSource.GitHub, "pull_request", EventInbox, "{}", now);
         var body = ControlLaneWire.Body(elsewhere);
@@ -303,7 +303,7 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         foreach (var wrongKey in new[] { FleetSecret, OtherDeploymentKey })
             (await target.Receiver.Receive(forgedBody, ControlLaneWire.Sign(forgedBody, wrongKey)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
                 .Verdict.Should().Be(ControlLaneVerdict.SignatureInvalid, "only this deployment's own key forwards to it");
-        (await target.Stored(forged.EventId)).Should().BeNull();
+        (await target.AnyStored(forged.EventId)).Should().BeFalse();
 
         var stale = ControlLaneClient.NewEvent(Deployment, ControlLaneEventSource.GitHub, "pull_request", EventInbox, "{}", now.AddMinutes(-20));
         (await Forward(stale, ct)).Verdict.Should().Be(ControlLaneVerdict.Expired);
@@ -528,11 +528,18 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             return reading.Rows.Any(r => r.Path == path);
         }
 
-        public async Task<WebhookEvent?> Stored(string eventId, string inbox = EventInbox)
+        /// <summary>An ACCEPTED event's stored node, read through its own authoritative stream (never the index, which may lag the create).</summary>
+        public Task<WebhookEvent?> Stored(string eventId, string inbox = EventInbox) =>
+            AsSystem(Mesh, () => Mesh.GetMeshNodeStream($"{inbox}/{WebhookInbox.InboxContainer}/{eventId}")
+                .Where(node => node is not null)
+                .Select(node => node!.ContentAs<WebhookEvent>(Mesh.JsonSerializerOptions)));
+
+        /// <summary>Whether a REFUSED event left anything behind — a listing of the inbox, asserted to be an answer.</summary>
+        public async Task<bool> AnyStored(string eventId, string inbox = EventInbox)
         {
-            var path = $"{inbox}/{WebhookInbox.InboxContainer}/{eventId}";
-            var reading = await AsSystem(Mesh, () => MeshReading.Read(MeshQuery, $"path:{path} limit:1"));
-            return reading.Rows.FirstOrDefault(r => r.Path == path)?.ContentAs<WebhookEvent>(Mesh.JsonSerializerOptions);
+            var reading = await AsSystem(Mesh, () => MeshReading.Read(MeshQuery, $"path:{inbox}/{WebhookInbox.InboxContainer} scope:children"));
+            reading.IsAnswer.Should().BeTrue(reading.WhyNotAnAnswer ?? "");
+            return reading.Rows.Any(r => r.Id == eventId);
         }
 
         public async Task<ControlLaneRecord?> Ledger(string requestId)
