@@ -21,16 +21,18 @@ namespace MeshWeaver.Documentation.Test;
 ///
 /// <para><b>And the exemption must stay EVENT-shaped.</b> <c>AGENTS.md</c> → "A gate NEVER tests its
 /// own inputs": an <c>if:</c> that asks whether a secret is set turns "the credential is missing"
-/// into a green tick, because GitHub paints a skipped job the same colour as a passed one. The two
-/// sanctioned exemptions both name a situation in which GitHub withholds the credential BY DESIGN —
-/// a fork PR, and a Dependabot PR (whose runs read the separate <c>dependabot</c> secrets scope) —
-/// so the job genuinely cannot run. That is a statement about the event, not about the input.</para>
+/// into a green tick, because GitHub paints a skipped job the same colour as a passed one. The ONE
+/// sanctioned exemption names a situation in which GitHub withholds the credential BY DESIGN — a
+/// fork PR — so the job genuinely cannot run. That is a statement about the event, not the input.</para>
 ///
-/// <para>Dependabot was missing until 2026-08-31 and did not look like a missing exemption: a
-/// dependabot branch lives in this repo, so <c>head.repo.fork</c> is false, the job ran, the
-/// credential assertion fired exactly as designed, and the gate went red naming two secrets that are
-/// in fact provisioned. Because the gate is required, every dependabot PR was permanently
-/// unmergeable.</para>
+/// <para>🚨 <b>Dependabot is NOT exempt any more, and this guard now forbids the clause</b> (policy
+/// <c>merge-on-own-green</c>). From 2026-08-31 both sites carried
+/// <c>github.actor != 'dependabot[bot]'</c>, and it was sound for ONE reason: the workflow also ran on
+/// <c>merge_group</c>, where the Actions secret store is available, so a Dependabot PR still had
+/// these gates checked before it landed. With core's merge queue retired a PR lands on its OWN green,
+/// so the same clause would skip the gate outright — a skip that reads as a pass. The credential
+/// (<c>FLEET_READER_APP_*</c>) is provisioned in the Dependabot store, so a Dependabot PR runs the
+/// gate like any other; were it missing there, the gate's own assertion reds naming it.</para>
 /// </summary>
 public class SharedRuleExemptionIsOneEventPredicateGuard
 {
@@ -40,8 +42,10 @@ public class SharedRuleExemptionIsOneEventPredicateGuard
     private static readonly string[] ExemptionClauses =
     [
         "github.event.pull_request.head.repo.fork != true",
-        "github.actor != 'dependabot[bot]'",
     ];
+
+    /// <summary>A clause no site may carry: with no merge queue it would skip the gate outright.</summary>
+    private const string RetiredDependabotClause = "dependabot[bot]";
 
     private static string WorkflowText() =>
         File.ReadAllText(Path.Combine(FindRepoRoot(), ".github", "workflows", Workflow));
@@ -80,6 +84,24 @@ public class SharedRuleExemptionIsOneEventPredicateGuard
     }
 
     [Fact]
+    public void NoSiteExemptsDependabot_ThereIsNoQueueToMoveTheGateTo()
+    {
+        var offenders = ExemptionIfExpressions(WorkflowText())
+            .Where(s => s.Contains(RetiredDependabotClause, StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(offenders.Length == 0,
+            "a site exempts Dependabot again. That was sound only while this workflow also ran on "
+            + "`merge_group` (policy merge-on-own-green retired the queue): now it SKIPS the gate on "
+            + "every Dependabot PR, and a skipped gate reads as a passed one. Provision the credential "
+            + "in the Dependabot store instead. Offending:\n  " + string.Join("\n  ", offenders));
+
+        // Negative control: the detector must fire on the retired shape.
+        Assert.Contains("if: ${{ github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' }}",
+            ExemptionIfExpressions("    if: ${{ github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' }}\n")
+                .Where(x => x.Contains(RetiredDependabotClause, StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void TheExemptionNeverAsksWhetherASecretIsSet()
     {
         var offenders = ExemptionIfExpressions(WorkflowText())
@@ -105,10 +127,10 @@ public class SharedRuleExemptionIsOneEventPredicateGuard
         Assert.True(sites.Length >= 2, $"the matcher found {sites.Length} site(s) in {Workflow}");
 
         // And it must reject a doctored line, or "contains the clause" proves nothing.
-        var doctored = new[] { "if: ${{ github.event.pull_request.head.repo.fork != true }}" };
-        Assert.DoesNotContain(doctored[0], sites.Where(s => s.Contains("dependabot", StringComparison.Ordinal)));
-        Assert.False(doctored[0].Contains("dependabot[bot]", StringComparison.Ordinal),
+        var doctored = "if: ${{ github.event.pull_request.head.repo.fork == false }}";
+        Assert.False(doctored.Contains(ExemptionClauses[0], StringComparison.Ordinal),
             "the negative control must genuinely lack the clause the guard requires");
+        Assert.Single(ExemptionIfExpressions("    " + doctored + "\n"));
     }
 
     private static string FindRepoRoot()

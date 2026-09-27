@@ -156,6 +156,14 @@ any ruleset and no merge-queue block in classic branch protection. Several satel
 `merge_group:` trigger in `ci.yml`, which is the trap: **the trigger exists, the event never fires.**
 Copying core's `if:` into them would move the gate to an event that has no path to `main`.
 
+🚨 **And core no longer meets it either** (policy `merge-on-own-green`). Core's `merge_queue` rule was
+removed from ruleset 2128472 on 2026-09-27: a pull request now lands on its OWN green, so there is no
+`merge_group` run left for an exempted gate to move to — the precondition above is gone, and the
+exemption with it. `shared-rules` and `cross-repo-pair` run on a Dependabot pull request like on any
+other; they can, because their one credential (`FLEET_READER_APP_ID` / `_PRIVATE_KEY`) is provisioned
+in the Dependabot store (measured 2026-09-27, `repos/Systemorph/MeshWeaver/dependabot/secrets`). If it
+goes missing there, the gates' own assertion reds naming it — a provisioning task, never an `if:`.
+
 **3 · And in a satellite the skipped gate would not even look skipped.** The satellites' required
 contexts are the gate jobs themselves (`compile-check / …`, `test-repos / …`), not a single
 `collect-results`. A required context that never appears counts as **satisfied**
@@ -404,7 +412,8 @@ preflight assertions (or three reasoned allow-file lines) in `MeshWeaver.Plugins
 
 - [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) — why an absent required context counts
   as satisfied, which is what makes an ill-considered exemption dangerous rather than merely lax.
-- [The Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) — the other core gate carrying the
-  dependabot actor exemption, for the same credential and under the same merge-queue precondition.
+- [The Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) — the other core gate that carried the
+  dependabot actor exemption, for the same credential and under the same merge-queue precondition
+  (both exemptions removed with the queue, policy `merge-on-own-green`).
 - [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) — the shared
   `workflow_call` lanes every satellite's `preflight` feeds.

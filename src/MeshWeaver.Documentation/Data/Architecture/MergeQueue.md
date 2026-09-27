@@ -1,11 +1,35 @@
 ---
 Name: The Merge Queue
 Category: Architecture
-Description: Why main needs a queue, what the first outing measured (the churn window; hand re-queues), the settings that remove the churn, and the steward that re-queues on evidence so nobody runs after the queue.
+Description: RETIRED — core main merges on each pull request's own green (policy merge-on-own-green). Why the queue existed, why it was removed, what now catches a landed combination that is red, and the queue-era record (the churn window, the steward) kept as evidence.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
 ---
 
 # The Merge Queue
+
+> 🚨 **RETIRED — core `main` no longer merges through a queue** (policy
+> [`merge-on-own-green`](../PolicyNotProse)). On 2026-09-27 the `merge_queue` rule was removed from
+> ruleset `2128472`; a pull request now lands on its OWN green — the required contexts are
+> `Consolidate test results` and `Automatic review answered`, `strict: false` — with no rebuild on top
+> of `main` and no dependent suites per entry. `auto-arm.yml` still arms every non-draft pull request;
+> without a queue that simply IS auto-merge on green. The steward (`merge-queue-steward.yml`, its
+> script, its guard and `.github/known-flakes.json`) was removed with the queue: there are no
+> `dequeued` events left for it to act on.
+>
+> **Why.** The queue re-built every entry on top of `main` and, from 2026-09-25, ran
+> MeshWeaver.Plugins' candidate suites per entry too. On 2026-09-27, with the CI cluster at its Azure
+> quota, that stalled `main` for eight hours (`2bb14d8db9` from 08:25Z) and starved Plugins' own CI.
+> The maintainer's question was *"why do we have to build all again in main?"*.
+>
+> **What now catches what the queue caught.** Two independently-green pull requests that are red
+> together still land — that is the cost accepted. They are caught AFTER landing, by two nets:
+> `main`'s own push run of Build and Test (never cancelled on `main`, so every landed combination is
+> compiled and tested — `MainRunsAreNeverCancelledGuard` holds that), and the release gate, which measures MeshWeaver.Plugins' suites against every platform
+> set before `promote` ([The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's suites run
+> once per platform set"). A red `main` publishes nothing (CD keys on `Consolidate test results` for
+> that commit), so neither net lets a broken combination reach the fleet.
+>
+> Everything below is the queue-era manual, kept as the record of what was measured.
 
 **A merge queue builds the combination that is about to land, before it lands.** With
 `strict: false` branch protection every pull request is tested against the `main` it branched from,
@@ -77,30 +101,15 @@ running. `max_entries_to_build` was cut to 2 by hand at ~16:00Z.
 
 Policy [`dependent-suites-per-release`](../PolicyNotProse) removed the measurement from the queue.
 The dependent's suites run ONCE per platform set, in `main-cd.yml` before `promote`, against the
-bundle of every merge since the last promoted set — so the fleet is protected where the fleet is
+bundle of every merge since the last sealed set — so the fleet is protected where the fleet is
 reached, and a queue entry is decided by core-only gates again: the cross-repo pair, interface
 additions, satellite pins, closing keywords and the platform-compatibility ladder, all `needs:` of
 `Consolidate test results` ([The Cross-Repo Pair Gate](../CrossRepoPairGate) § "The dependent's
 suites run once per platform set"). A queue build is back to core's own run (~20 minutes).
 
-**What that means for the ruleset** (a maintainer's edit; nothing here applies it). The required
-contexts do not change — `Dependent suites` was never one, it failed `Consolidate test results`
-through a `needs:`. `check_response_timeout_minutes` can return to the 45 in the table above: with
-no waiter, a queue build that has not reported in 45 minutes is stuck by the fleet's own doctrine,
-and 120 only delays the steward's re-queue of a genuinely dead build by 75 minutes.
-`max_entries_to_build` is a throughput choice again rather than a quota defence. Read the live values
-with `merge-queue-steward.py status` (it prints the drift from the table above). The exact edit
-(`PUT` replaces the whole ruleset, so everything else is read back unchanged):
-
-```bash
-gh api repos/Systemorph/MeshWeaver/rulesets/2128472 \
-  --jq '{name, target, enforcement, conditions, bypass_actors,
-         rules: [.rules[] | if .type == "merge_queue"
-                             then .parameters.check_response_timeout_minutes = 45
-                             else . end]}' > /tmp/ruleset-2128472.json
-gh api -X PUT repos/Systemorph/MeshWeaver/rulesets/2128472 --input /tmp/ruleset-2128472.json
-gh api repos/Systemorph/MeshWeaver/rulesets/2128472 --jq '.rules[]|select(.type=="merge_queue").parameters'
-```
+The same day the queue itself was removed (the banner at the top); the required contexts were never
+changed by either step — `Dependent suites` was never one, it failed `Consolidate test results`
+through a `needs:`.
 
 ### Enabling it
 

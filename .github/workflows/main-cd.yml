@@ -422,9 +422,6 @@ jobs:
       # Reconcile found the images complete: no image build is due, but the content bake still
       # is — the images being present says nothing about whether the bundles are.
       bake_only: ${{ steps.decide.outputs.bake_only }}
-      # The seven-character commit of the newest PROMOTED platform set, read from ACR before this
-      # run promotes anything — the base of the bundle `dependent-suites` measures. Empty = unknown.
-      published_short: ${{ steps.relevance.outputs.published_short }}
       # The version of the ALREADY-PROMOTED set, read off its portal image — empty on every
       # publishing run, where `portal-image` mints the version instead. Resolved ONCE here because
       # two consumers need it (the platform bake's release marker, and the seal probe) and because
@@ -910,11 +907,6 @@ jobs:
           fi
           echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant"
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          # The same read names the commit of the newest PROMOTED set — the BASE of the bundle the
-          # release gate (`dependent-suites`) measures. Every set promoted since that gate existed
-          # passed it, so "since the newest promoted set" is exactly "since the last set the
-          # dependent's suites vouched for". Empty = unknown; the gate then says so and falls back.
-          echo "published_short=${newest_short}" >> "$GITHUB_OUTPUT"
       - name: "Decide"
         id: decide
         env:
@@ -2423,9 +2415,12 @@ jobs:
   # FLEET, and the fleet reaches a core change only through `promote`.
   #
   # WHAT IT MEASURES. The platform SET this run is about to promote (`<PlatformVersion>-ci.<run>`),
-  # its core commit (the candidate), and the core commit of the newest set ALREADY promoted (the
-  # base, read by `gate` from ACR before anything is tagged). base..candidate is the BUNDLE — every
-  # core merge since the last set the fleet could roll to. MeshWeaver.Plugins' `core-candidate.yml`
+  # its core commit (the candidate), and the core commit of the newest set already SEALED — promoted,
+  # verified and platform-baked, which since this gate exists means it also passed this gate (the
+  # base, from resolve-platform.py: the same definition every satellite resolves, read from the
+  # jobs' conclusions and the bake's own source receipt, never from a tag a half-finished promote
+  # can leave behind). base..candidate is the BUNDLE — every core merge since the last set the
+  # fleet could roll to. MeshWeaver.Plugins' `core-candidate.yml`
   # selects the suites that bundle can reach, builds them FROM SOURCE against the candidate, re-runs
   # only what failed at the base (so a red that already exists in Plugins never holds core), writes
   # its verdict at `refs/core-candidate/<key>` in ITS repository, and — on a red — files the failing
@@ -2456,6 +2451,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      actions: read     # resolve-platform.py --verify-source reads the bake's source receipt from its job log
     outputs:
       set: ${{ steps.bundle.outputs.set }}
       # The ledger entry `release-held` files when the set is held — PUBLIC facts only (this
@@ -2473,6 +2469,17 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: "Prove the waiter cannot pass on silence (self-test)"
         run: python3 .github/scripts/await-dependent-verdict.py --self-test
+      # 🚨 THE BASE IS THE NEWEST SEALED SET, AND AN UNKNOWN BASE HOLDS THE SET. Not the newest
+      # `<short sha>` tag: promote writes that in phase A, before the version tag, so a promote that
+      # failed later leaves an orphaned sha tag naming a commit nobody vouched for — and a bundle
+      # measured from it would silently omit that commit. Not the candidate's first parent either:
+      # with several merges since the last sealed set, that measures one commit and lets the others
+      # through unmeasured. So an unreadable resolution is RED here, never a fallback.
+      - name: "The newest SEALED platform set — the bundle's base"
+        id: promoted
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/resolve-platform.py --no-registry --verify-source
       # The set's name is a pure function of the commit's `PlatformVersion` and this run's number —
       # `$(Version)` = `$(PlatformVersion)-ci.$(GITHUB_RUN_NUMBER)` under CIRun (Directory.Build.props),
       # the same computation every image leg makes. `promote` re-checks it against the legs' own
@@ -2482,26 +2489,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ needs.gate.outputs.sha }}
-          PUBLISHED_SHORT: ${{ needs.gate.outputs.published_short }}
+          BASE: ${{ steps.promoted.outputs.sha }}
+          BASE_SET: ${{ steps.promoted.outputs.set }}
         run: |
           set -euo pipefail
           pv=$(sed -n "s#.*<PlatformVersion Condition=\"'\$(PlatformVersion)' == ''\">\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</PlatformVersion>.*#\1#p" Directory.Build.props | head -1)
           [ -n "$pv" ] || { echo "::error::could not read <PlatformVersion> from Directory.Build.props at $CANDIDATE — the set cannot be named, so no verdict could be bound to it"; exit 1; }
           set_id="${pv}-ci.${GITHUB_RUN_NUMBER}"
           [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::gate named candidate '$CANDIDATE', not a 40-hex commit"; exit 1; }
-          base=""
-          if [ -n "$PUBLISHED_SHORT" ]; then
-            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$PUBLISHED_SHORT" --jq .sha) || base=""
+          base="$BASE"
+          [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::resolve-platform.py named no sealed set to measure from (sha='$base') — the bundle's base is unknown, so the set is HELD rather than measured from a guess"; exit 1; }
+          if [ "$base" = "$CANDIDATE" ]; then
+            # A re-publish of the commit already sealed (`rebuild`): nothing in the bundle is new.
+            # The measurement still runs (an empty diff selects the FULL universe in Plugins' scope)
+            # — never a skip.
+            echo "::notice title=Bundle base::$CANDIDATE is already the newest sealed set ($BASE_SET) — the bundle is empty, Plugins measures its full universe"
           fi
-          if [ -z "$base" ] || [ "$base" = "$CANDIDATE" ]; then
-            # No promoted set could be read (ACR unreadable, first publish), or this run re-publishes
-            # the very commit already promoted (`rebuild`). The bundle is then the candidate's own
-            # change against its first parent — the per-commit measurement, said out loud.
-            parent=$(gh api "repos/$GITHUB_REPOSITORY/commits/$CANDIDATE" --jq '.parents[0].sha')
-            echo "::notice title=Bundle base::no distinct promoted set to measure from (published='${PUBLISHED_SHORT:-<none>}') — measuring $CANDIDATE against its first parent ${parent:0:9}"
-            base="$parent"
-          fi
-          [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the bundle base '$base' is not a 40-hex commit"; exit 1; }
           key="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           { echo "set=$set_id"; echo "candidate=$CANDIDATE"; echo "base=$base"; echo "key=$key"; } >> "$GITHUB_OUTPUT"
           # The bundle, by pull request — public facts (core is public), printed so a red is
@@ -2515,7 +2518,7 @@ jobs:
           {
             echo "### Release gate — set \`$set_id\`"
             echo
-            echo "candidate \`${CANDIDATE:0:9}\` · base (newest promoted set) \`${base:0:9}\` · key \`$key\`"
+            echo "candidate \`${CANDIDATE:0:9}\` · base (newest sealed set, \`$BASE_SET\`) \`${base:0:9}\` · key \`$key\`"
             echo
             echo "Bundle: ${prs:-<no merge commits between base and candidate>}"
           } >> "$GITHUB_STEP_SUMMARY"

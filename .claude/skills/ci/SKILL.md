@@ -50,15 +50,16 @@ does exactly what it should: it fails RED naming a secret the maintainer can see
 remediation line must therefore name the STORE** — `Settings → Secrets → Actions` is misleading
 here — and the fix is to provision the same names into the Dependabot store, never an `if:`.
 
-Core's `dotnet-test.yml` *does* carry `github.actor != 'dependabot[bot]'` on `shared-rules` and
-`cross-repo-pair`. That is legitimate for exactly one reason, and it is a **precondition, not a
-precedent**: those gates also trigger on `merge_group`, where the Actions store IS available, and
-the merge queue is the only path to `main` — *the exemption moves WHERE the gate runs, never
-WHETHER it runs*. **Measured 2026-09-06: only `Systemorph/MeshWeaver` has a `merge_queue` rule.**
-Plugins, Reinsurance, SocialMedia, Crm, Manufacturing, Education and Memex have none — several
-carry a `merge_group:` trigger whose event never fires, which is the trap. Copying that `if:` into
-a satellite is a skip-trapdoor, and a silent one: the satellites' required contexts are the gate
-jobs themselves, and an absent required context counts as SATISFIED.
+Core's `dotnet-test.yml` *used to* carry `github.actor != 'dependabot[bot]'` on `shared-rules` and
+`cross-repo-pair`. That was legitimate for exactly one reason, a **precondition, not a precedent**:
+those gates also triggered on `merge_group`, where the Actions store IS available, and the merge
+queue was the only path to `main` — *the exemption moved WHERE the gate ran, never WHETHER it ran*.
+**The queue is retired (policy `merge-on-own-green`), so the precondition is gone and so is the
+exemption**: a Dependabot PR runs both gates, their credential (`FLEET_READER_APP_*`) provisioned in
+the Dependabot store. **No repository in the fleet has a `merge_queue` rule now**; several carry a
+`merge_group:` trigger whose event never fires, which is the trap. Copying that `if:` anywhere is a
+skip-trapdoor, and a silent one: the satellites' required contexts are the gate jobs themselves, and
+a SKIPPED required context counts as SATISFIED.
 
 🚨 **Two traps that make this read as a workflow bug.** (1) **Only `secrets.` is doubled** — there
 is no Dependabot *variables* store (`GET /repos/{o}/{r}/dependabot/variables` → 404), so
@@ -362,7 +363,7 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
 - **Core dispatches ONE thing to a plugin repository: a request to test a PLATFORM SET before it
   is promoted** (policy `dependent-suites-per-release`). `main-cd.yml`'s `Dependent suites
   (MeshWeaver.Plugins) against this platform set` sends `core-candidate-suites` naming the set, its
-  core commit and the newest promoted set's commit (the bundle is everything between), and waits for
+  core commit and the newest sealed set's commit (the bundle is everything between), and waits for
   the verdict Plugins writes at `refs/core-candidate/<key>` — green only when no suite that passes at
   the base fails at the candidate, and only about exactly that set. `promote` needs it, so a red or
   missing verdict HOLDS the set from the fleet; `release-held` files it (label `core-release-held`)

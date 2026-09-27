@@ -797,7 +797,7 @@ test this PR rewrites"* — is judged on its length alone, as before.
 
 **Policy [`dependent-suites-per-release`](../PolicyNotProse): a platform set reaches the fleet only
 after MeshWeaver.Plugins' suites that the set's BUNDLE can reach pass against it.** The bundle is every
-core merge since the newest set already promoted. It supersedes policy `dependent-suites-gate`, which
+core merge since the newest set already sealed. It supersedes policy `dependent-suites-gate`, which
 ran the same measurement for every merge-queue entry.
 
 ### Why it exists
@@ -822,7 +822,9 @@ candidate legs took the capacity. The cost scaled with core's merge rate, while 
 promotion and runs once per set, which the hourly publication cadence (`CD_BATCH_WINDOW_MINUTES`)
 already bundles.
 
-What the merge queue still runs is everything core can decide alone, fast, and without a skip:
+What a pull request still runs — and, since core merges on each pull request's own green (policy
+`merge-on-own-green`; the merge queue is retired), what decides the merge — is everything core can
+decide alone, fast, and without a skip:
 `Cross-repo pair (public surface)`, `Interface additions (implementers declared)`,
 `Satellite package pins (removal declared)`, the closing-keyword gate and the platform-compatibility
 ladder (`platform-compat` — deployed plugin bytes on the candidate platform). Each is a `needs:` of
@@ -832,11 +834,12 @@ ladder (`platform-compat` — deployed plugin bytes on the candidate platform). 
 
 | step | where | what |
 |---|---|---|
-| decide | `main-cd.yml` → `gate` | a run that publishes names its target commit and, from ACR before anything is tagged, the commit of the newest PROMOTED set (`published_short`) |
-| request | `main-cd.yml` → `Dependent suites (MeshWeaver.Plugins) against this platform set` | names the set (`<PlatformVersion>-ci.<run>`), the candidate (the target commit) and the base (the newest promoted set's commit — the bundle is `base..candidate`); proves the receiver exists on Plugins' default branch AND reads `client_payload.set`; sends ONE `repository_dispatch core-candidate-suites`; prints the bundle's pull requests |
+| decide | `main-cd.yml` → `gate` | a run that publishes names its target commit |
+| base | same job → `resolve-platform.py --no-registry --verify-source` | the newest SEALED set — promote, verify and platform bake all succeeded, its commit read from the bake's own source receipt — the same definition every satellite resolves. Never the newest sha TAG (promote writes that before its version tag, so a promote that failed later leaves an orphan naming a commit nobody vouched for) and never the candidate's first parent (that would measure one commit of a multi-merge bundle). An unresolvable base is RED — the set is held, never measured from a guess |
+| request | `main-cd.yml` → `Dependent suites (MeshWeaver.Plugins) against this platform set` | names the set (`<PlatformVersion>-ci.<run>`), the candidate (the target commit) and the base (the newest sealed set's commit — the bundle is `base..candidate`); proves the receiver exists on Plugins' default branch AND reads `client_payload.set`; sends ONE `repository_dispatch core-candidate-suites`; prints the bundle's pull requests |
 | scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | selects the suites whose compiled closure can reach `base..candidate`; the **full** universe on any uncertainty |
 | candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (the set is not promoted yet, so there is no image to take it from) and run |
-| control arm | the same arm, at the base | **only** what the candidate did not pass — a test already red in Plugins against the last promoted set is reported and never holds the set |
+| control arm | the same arm, at the base | **only** what the candidate did not pass — a test already red in Plugins against the last sealed set is reported and never holds the set |
 | verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift or on ANY missing evidence; echoes the set; written at `refs/core-candidate/<key>` in Plugins |
 | attribution | Plugins `core-candidate.yml` → `Release gate: attribute …` (private) | for each drifted suite, the bundle's pull requests whose OWN diff can reach it (`scripts/core-release-attribution.py`) — in that run's summary, because suite names are private |
 | wait | `main-cd.yml`, same job → `.github/scripts/await-dependent-verdict.py --set` | polls the ref read-only over REST; green only for `success` about exactly this key, candidate, base AND set; silence by the deadline is red |
@@ -868,14 +871,14 @@ base does not move).
   attributed; a suite reached by several lists them all — narrow it by dispatching
   `core-candidate.yml` by hand (`workflow_dispatch`: candidate, base, key) over a shorter range.
   Bisection is deliberately not automatic: every step is a full candidate run on the same quota the
-  gate was moved off the queue to relieve.
+  gate was moved off the merge path to relieve.
 - **The handoff does not re-dispatch a held HEAD.** A publisher dispatched minutes later would
   re-measure the same bundle; a new merge or the hourly reconcile (within its per-commit heal budget)
   re-measures it, and the reconcile also picks up an adaptation that landed in Plugins meanwhile.
 
 ### Testing a risky change BEFORE it merges
 
-The queue no longer asks Plugins. An author who wants the verdict first dispatches Plugins'
+Nothing on the pull request asks Plugins. An author who wants the verdict first dispatches Plugins'
 `core-candidate.yml` by hand with the PR's merge commit as `candidate`, its first parent as `base`,
 and any key; the verdict lands at `refs/core-candidate/<key>` and the run names the suites. That is an
 opt-in measurement, never a gate.

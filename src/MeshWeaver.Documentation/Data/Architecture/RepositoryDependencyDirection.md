@@ -119,7 +119,7 @@ The THIRD edge of this class is `main-cd.yml`'s release gate, `Dependent suites 
 against this platform set` (policy [`dependent-suites-per-release`](../PolicyNotProse), #2689's
 acceptance criterion). Once per platform set — before `promote` tags it for the fleet — it sends ONE
 `repository_dispatch core-candidate-suites` to MeshWeaver.Plugins naming the set, its core commit and
-the commit of the newest promoted set, and then READS the verdict that repository writes at
+the commit of the newest sealed set, and then READS the verdict that repository writes at
 `refs/core-candidate/<key>` after building its reachable suites from source against the set's
 bundle. Plugins' source never enters core's build and Plugins writes nothing into core: the dispatch
 is a test REQUEST about a set nobody may roll to yet, and the read is a fact about it — see

@@ -9,7 +9,7 @@ The waiting half of the release gate `Dependent suites (MeshWeaver.Plugins)` in 
 (policy `dependent-suites-per-release`; Doc/Architecture/CrossRepoPairGate § "The dependent's suites
 run once per platform set"). The step before it sent `repository_dispatch core-candidate-suites` to
 MeshWeaver.Plugins naming the platform SET, its core commit (the candidate) and the core commit of
-the last PROMOTED set (the base) — so the change measured is the whole bundle of merges since then.
+the last SEALED set (the base) — so the change measured is the whole bundle of merges since then.
 That repository's `core-candidate.yml` builds its reachable suites against the candidate from
 source, re-runs only what failed at the base, and writes its verdict as a commit message at
 `refs/core-candidate/<key>`. This script polls that ref over REST (never GraphQL — AGENTS.md), once
