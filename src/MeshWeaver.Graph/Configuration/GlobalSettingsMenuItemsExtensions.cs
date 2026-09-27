@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -111,25 +110,20 @@ public static class GlobalSettingsMenuItemsExtensions
     }
 
     /// <summary>
-    /// Registers the default global settings menu items (Data Sources).
-    /// Guarded to avoid double registration.
+    /// Registers the default global settings menu items. Guarded to avoid double registration.
+    ///
+    /// <para>The global settings page keeps only what every signed-in viewer may read (About,
+    /// What's New). Its former first tab, Data Sources, is platform configuration and lives in the
+    /// Admin app (<see cref="AdminAppNodeType"/>); the relocation is recorded here so an old
+    /// <c>/_Setting/GlobalSettings/DataSources</c> link redirects into the app.</para>
     /// </summary>
     public static MessageHubConfiguration AddDefaultGlobalSettingsMenuItems(
         this MessageHubConfiguration config)
     {
         if (config.Get<bool>(nameof(AddDefaultGlobalSettingsMenuItems)))
             return config;
-        config = config.Set(true, nameof(AddDefaultGlobalSettingsMenuItems));
-
-        return config.AddGlobalSettingsMenuItems(
-            new GlobalSettingsMenuItemDefinition(
-                Id: GlobalSettingsLayoutArea.DataSourcesTab,
-                Label: "Data Sources",
-                ContentBuilder: GlobalSettingsLayoutArea.BuildDataSourcesTab,
-                Icon: FluentIcons.Database(),
-                Order: 0)
-            { LabelKey = "settings.dataSources" }
-        );
+        return config.Set(true, nameof(AddDefaultGlobalSettingsMenuItems))
+            .RelocateSettingsTabsToAdminApp(GlobalSettingsLayoutArea.DataSourcesTab);
     }
 }
 

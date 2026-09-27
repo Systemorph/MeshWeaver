@@ -207,7 +207,7 @@ hub.IsGlobalAdmin(userId)    // explicit user
 // ≡ hub.GetEffectivePermissions("Admin", userId).Select(p => p.HasFlag(Permission.All))
 ```
 
-Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeType.GetGlobalAdminTabAsync` (Global Administration tab), `UserProfile`.
+Readers that gate on it: `AdminAppNodeType.AdminOnlyTab` (every tab of the [Admin app](../AdminApp)), `AdminMenuGate` (the admin-gated settings areas), `UserProfile`.
 
 ### Asking "what may I do HERE?" — `whoami` at an address (#5189)
 

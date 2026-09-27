@@ -100,7 +100,9 @@ public static class GraphConfigurationExtensions
                 .AddMeshWeaverInstanceType()
                 .AddMeshDataSourceType()
                 .AddPartitionType()
-                .AddGlobalSettingsType();
+                .AddGlobalSettingsType()
+                // The Admin partition root as the Admin app (never an empty Space).
+                .AddAdminAppType();
 
             // Data-contributed menu entries (UiContribution nodes, #1645) + the mesh-scoped live
             // catalog the menu aggregation maps (one query subscription per silo).
