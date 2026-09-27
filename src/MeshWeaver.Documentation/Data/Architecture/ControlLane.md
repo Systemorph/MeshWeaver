@@ -160,6 +160,38 @@ never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` and
   shown, never bound. A framework delete that completes WITHOUT an answer fails the run — no answer
   is not "already gone".
 
+## Forwarded events
+
+The lane's third kind, beside a request and a report: a **forwarded event**
+(`ControlLaneEvent`, `"kind": "control-lane-event"`). The control instance received and verified a
+delivery on its own inbox, and hands it to the instance that consumes it. The first use is the ONE
+GitHub organisation webhook: it posts pull-request and check events to the control instance, which
+forwards them to the build instance, where the PR steward's heal/observe half
+(MeshWeaver.Plugins `Hosting/PrBabysitter`) consumes them (policy `pr-babysitter-cadence`).
+
+| part | what it is |
+|---|---|
+| **The envelope** | `eventId` (16–64 letters, digits, dashes), `deployment`, `source` (open vocabulary, `ControlLaneEventSource.GitHub`), `name` (for GitHub, the `X-GitHub-Event` value), `target` (a local inbox owner), `payload` (the verified body, verbatim), `issuedAt`/`expiresAt`. Signed exactly like a request, with the target deployment's OWN key. |
+| **The control half** | `ControlLaneClient.NewEvent` + `ControlLaneClient.Forward`. It uses the same key rule (`ControlKeyFor`), the same transport and the same signed-acceptance check as `Send`. |
+| **The target half** | `ControlLaneReceiver.Receive`, on the same endpoint. Checks 1 and 2 (armed, signature) are shared. Then `ControlLaneEvents.Admit` runs: a well-formed envelope, this deployment, a window of at most 15 minutes, a target this instance DECLARED under `ControlLane:EventTargets`, and a payload within the inbox's size cap. Last, `ControlLaneEvents.Store` creates `{target}/_Inbox/{eventId}` as a `WebhookEvent`. |
+| **Single use** | The inbox node's CREATION is the claim, so a replay answers `replayed` (409). |
+
+What it deliberately does NOT have, and why that is safe:
+
+- **No operation, plan, approval or report.** The target runs nothing for it. Its whole effect is
+  one node in an inbox the target opened to the lane. The consumer treats the payload as a trigger
+  and re-reads the live state itself. It never takes an action on the payload's word.
+- **Not the public inbox list.** `ControlLane:EventTargets` is separate from `WebhookInbox:Targets`.
+  An armed lane with no declared event target accepts no event, and a lane target need not be
+  reachable from the internet.
+- **No inbox signature.** The stored node carries `X-Control-Lane-Event`, `X-Control-Lane-Source` and
+  `X-GitHub-Event`, but no `X-Hub-Signature-256`. A consumer that verifies an inbox HMAC (the
+  platform-build watcher) therefore drops a forwarded event, even if one were misrouted to it.
+
+Wiring a target (Systemorph/Memex record): the lane key as above, plus
+`ControlLane__EventTargets__0` naming the inbox owner (build: `Hosting/Babysitter`). The node must
+exist on the target, or the event is refused.
+
 ## Audited on both sides
 
 - **Target:** the ledger node carries the verified request, every status and step, and whether each
