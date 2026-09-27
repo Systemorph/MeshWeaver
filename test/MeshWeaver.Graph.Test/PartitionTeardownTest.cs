@@ -80,12 +80,24 @@ public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestB
         });
     }
 
+    /// <summary>A shipped content partition: read-only, with a FIXED partition definition, its nodes children of it.</summary>
+    private sealed class ShippedContent(IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        public const string Partition = "ShippedTeardownContent";
+        public string Name => "test-shipped-content";
+        public bool IsReadOnly => true;
+        public IStorageAdapter Adapter => adapter;
+        public PartitionDefinition? PartitionDefinition => new() { Namespace = Partition };
+    }
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .ConfigureServices(services => services
                 .AddSingleton<IPartitionStorageProvider>(sp =>
-                    new PartitionStore(sp.GetRequiredService<IStorageAdapter>())));
+                    new PartitionStore(sp.GetRequiredService<IStorageAdapter>()))
+                .AddSingleton<IPartitionStorageProvider>(sp =>
+                    new ShippedContent(sp.GetRequiredService<IStorageAdapter>())));
 
     private PartitionStore Store => Mesh.ServiceProvider.GetServices<IPartitionStorageProvider>().OfType<PartitionStore>().Single();
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -159,14 +171,17 @@ public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestB
         Store.Events.Should().NotContain($"drop:{partition}");
     }
 
-    /// <summary>Invalid segments and the database-populated mirrors are refused by name, whatever the identity.</summary>
+    /// <summary>Invalid segments, the database-populated mirrors and shipped read-only content are refused by name, whatever the identity.</summary>
     [Fact(Timeout = 60000)]
-    public void InvalidSegmentsAndMirrors_AreRefusedByName()
+    public void InvalidSegmentsMirrorsAndShippedContent_AreRefusedByName()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         PartitionTeardown.Refusal(Mesh, "a/b", requireSystem: false).Should().Contain("not a valid partition segment");
         PartitionTeardown.Refusal(Mesh, "_Access", requireSystem: false).Should().Contain("not a valid partition segment");
         PartitionTeardown.Refusal(Mesh, "Auth", requireSystem: false).Should().Contain("mirror");
+        PartitionTeardown.Refusal(Mesh, ShippedContent.Partition, requireSystem: false).Should().Contain("read-only provider",
+            "shipped content (Doc, …) is served by a read-only provider with a fixed definition — there is no store to drop, "
+            + "and a teardown would only remove its record");
         PartitionTeardown.Refusal(Mesh, NewPartition(), requireSystem: false).Should().BeNull("an ordinary partition may be torn down");
     }
 

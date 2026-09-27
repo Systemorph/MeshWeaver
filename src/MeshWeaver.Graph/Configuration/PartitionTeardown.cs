@@ -85,6 +85,14 @@ public static class PartitionTeardown
         }
         if (hub.ServiceProvider.FindStaticNode(partition) is { IsDefinitionOnly: false })
             return $"'{partition}' is served by configuration (a static partition) — it has no store to drop";
+        // A shipped content partition (Doc, …) is a READ-ONLY provider with a FIXED partition
+        // definition; its nodes are children (Doc/Architecture), so the static-node probe above is
+        // null for it. Dropping "its store" would only remove the record and leave the content.
+        if (hub.ServiceProvider.GetServices<IPartitionStorageProvider>().FirstOrDefault(p =>
+                p.IsReadOnly && string.Equals(p.PartitionDefinition?.Namespace, partition, StringComparison.OrdinalIgnoreCase))
+            is { } fixedProvider)
+            return $"'{partition}' is served by the read-only provider '{fixedProvider.Name}' (shipped content with a fixed "
+                   + "partition definition) — it has no store to drop";
         if (hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>().IsUnderActiveDeletion(partition, out var root))
             return $"a deletion of '{root}' is already in flight — one teardown at a time";
         if (!hub.ServiceProvider.GetServices<IPartitionStorageProvider>().Any())
