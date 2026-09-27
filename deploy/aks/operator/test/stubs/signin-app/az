@@ -28,6 +28,11 @@ case "${1:-} ${2:-} ${3:-}" in
              printf '%s\n' "$SECRET"; exit 0 ;;
       list)  printf '2027-09-12T00:00:00Z\n'; exit 0 ;;
     esac ;;
+  "keyvault secret list")
+    [ "${HOSTING_SA_LIST_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) secrets list permission" >&2; exit 1; }
+    for e in ${HOSTING_SA_EXISTING:-}; do printf '%s\n' "$e"; done
+    for f in "$state"/set.*; do [ -e "$f" ] && printf '%s\n' "${f##*/set.}"; done
+    exit 0 ;;
   "keyvault secret show")
     name=""; while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; *) shift ;; esac; done
     for e in ${HOSTING_SA_EXISTING:-}; do [ "$e" = "$name" ] && { printf 'https://vault.test/secrets/%s/0\n' "$name"; exit 0; }; done
