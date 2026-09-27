@@ -650,6 +650,21 @@ public static class DeploymentPortalConfig
             Provider(c, "AzureAIS", ai.AzureAis, null);
             Provider(c, "AzureFoundry", ai.AzureFoundry, "Features__Ai__Providers__AzureFoundry");
             Provider(c, "OpenRouter", ai.OpenRouter, null);
+            // The EU route renders models, endpoint override and the processing marks — never an
+            // Order or a feature flag: the chart carries neither for it, and nothing binds them.
+            // Its keys are new, so they take the chart's contract outright: only non-blank values,
+            // trimmed. There is no "" = off here — a blank endpoint means the EU default, and a blank
+            // model slot names nothing. (The older sections keep their explicit-empty semantics.)
+            Provider(c, "OpenRouterEU", ai.OpenRouterEU is { } eu
+                ? eu with
+                {
+                    Endpoint = string.IsNullOrWhiteSpace(eu.Endpoint) ? null : eu.Endpoint.Trim(),
+                    Models = eu.Models.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()).ToImmutableList(),
+                    Order = null,
+                    Enabled = null,
+                }
+                : null, null);
+            Set("AI__RequiredDataResidency", string.IsNullOrWhiteSpace(ai.RequiredDataResidency) ? null : ai.RequiredDataResidency.Trim());
             Set("ModelTier__Heavy", ai.Tiers?.Heavy);
             Set("ModelTier__Standard", ai.Tiers?.Standard);
             Set("ModelTier__Light", ai.Tiers?.Light);
@@ -709,6 +724,8 @@ public static class DeploymentPortalConfig
         for (var i = 0; i < p.Models.Count; i++) c[$"{section}__Models__{i}"] = p.Models[i] ?? "";
         if (p.Order is int order) c[$"{section}__Order"] = order.ToString();
         if (flagKey is not null && p.Enabled is bool enabled) c[flagKey] = enabled ? "true" : "false";
+        if (!string.IsNullOrWhiteSpace(p.DataResidency)) c[$"{section}__DataResidency"] = p.DataResidency.Trim();
+        if (!string.IsNullOrWhiteSpace(p.DataRetention)) c[$"{section}__DataRetention"] = p.DataRetention.Trim();
     }
 
     /// <summary>The platform self-update policies the portal binds (<c>UpdatePolicyKind</c>), in the casing the binder reads.</summary>
