@@ -36,6 +36,13 @@ those two can never disagree. Both now pass the same, once-resolved plugins sha 
 index that lost a leg still resolves for one architecture, and a swallowed cancellation in
 `Microsoft.NET.Build.Containers` is exactly how a leg goes missing while its job reports success.
 
+The portal's two architecture publishes run in sequence inside its one build job. The .NET
+container target otherwise starts both inner builds in parallel, while their shared project
+references write to the same non-RID `bin/Release/net10.0` directory. In run 36357110477,
+`MeshWeaver.Blazor.Portal` built twice there and `Memex.Portal.Gui` then failed with MSB3030 while
+copying the Portal XML documentation file that had disappeared. `ContainerPublishInParallel=false`
+serializes those inner builds; the other image jobs remain parallel.
+
 A partial set is worse than no set: the self-updater sees a new `memex-portal-ai` version and rolls
 the portal onto it, while the migration image or the bake certification for that commit does not
 exist. That is how a portal increment the bake gate never certified reached production.
