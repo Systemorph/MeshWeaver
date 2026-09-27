@@ -75,7 +75,8 @@ public static class BoundedMergeExtensions
 
     /// <summary>
     /// <see cref="MergeBounded{T}(IObservable{IObservable{T}}, int)"/> over an in-memory sequence of
-    /// inners — the <c>items.Select(Work).ToObservable().Merge(n)</c> shape.
+    /// inners. The sequence is enumerated inline so subscribing from inside a current-thread
+    /// trampoline does not defer the entire fan-out until after the caller can dispose it.
     /// </summary>
     /// <typeparam name="T">Element type.</typeparam>
     /// <param name="sources">The inner observables, subscribed in enumeration order.</param>
@@ -84,7 +85,8 @@ public static class BoundedMergeExtensions
     public static IObservable<T> MergeBounded<T>(this IEnumerable<IObservable<T>> sources, int maxConcurrent)
     {
         ArgumentNullException.ThrowIfNull(sources);
-        return sources.ToObservable().MergeBounded(maxConcurrent);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxConcurrent, 1);
+        return Observable.Create<T>(observer => new BoundedMerge<T>(observer, maxConcurrent).Run(sources));
     }
 
     /// <summary>One subscription of <see cref="MergeBounded{T}(IObservable{IObservable{T}}, int)"/>.</summary>
@@ -108,6 +110,60 @@ public static class BoundedMergeExtensions
             subscriptions.Add(outer);
             outer.Disposable = sources.Subscribe(OnOuterNext, Fail, OnOuterCompleted);
             return subscriptions;
+        }
+
+        public IDisposable Run(IEnumerable<IObservable<T>> sources)
+        {
+            IEnumerator<IObservable<T>> enumerator;
+            try
+            {
+                enumerator = sources.GetEnumerator();
+            }
+            catch (Exception sourceError)
+            {
+                Fail(sourceError);
+                return subscriptions;
+            }
+
+            Exception? error = null;
+            try
+            {
+                while (!IsTerminated())
+                {
+                    if (!enumerator.MoveNext())
+                        break;
+
+                    OnOuterNext(enumerator.Current);
+                }
+            }
+            catch (Exception iterationError)
+            {
+                error = iterationError;
+            }
+            finally
+            {
+                try
+                {
+                    enumerator.Dispose();
+                }
+                catch (Exception disposeError)
+                {
+                    error ??= disposeError;
+                }
+            }
+
+            if (error is not null)
+                Fail(error);
+            else if (!IsTerminated())
+                OnOuterCompleted();
+
+            return subscriptions;
+        }
+
+        private bool IsTerminated()
+        {
+            lock (gate)
+                return terminated;
         }
 
         private void OnOuterNext(IObservable<T> inner)
