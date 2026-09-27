@@ -24,11 +24,13 @@ public class ClickActionCompletionAckTest(ITestOutputHelper output) : HubTestBas
     private const string FailingArea = Area + "/Failing";
     private const string ThrowingArea = Area + "/Throwing";
     private const string NavigatingArea = Area + "/Navigating";
+    private const string ReRenderingArea = Area + "/ReRendering";
     private const string AcceptedTarget = "/Hosting/Actions/a1/Execution";
 
     private readonly Subject<Unit> reactiveWork = new();
     private readonly Subject<Unit> failingWork = new();
     private readonly AsyncSubject<Unit> failingInvoked = new();
+    private readonly Subject<Unit> reRenderingWork = new();
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -53,7 +55,15 @@ public class ClickActionCompletionAckTest(ITestOutputHelper output) : HubTestBas
                     .WithView(Controls.Button("Throw").WithClickAction(ThrowSynchronously), "Throwing")
                     .WithView(Controls.Button("Go")
                         .WithReactiveClickAction(_ => Observable.Return(Unit.Default))
-                        .WithNavigateOnAccepted(AcceptedTarget), "Navigating")));
+                        .WithNavigateOnAccepted(AcceptedTarget), "Navigating")
+                    .WithView(Controls.Button("Approve and hide")
+                        .WithReactiveClickAction(ctx =>
+                        {
+                            // What an approval does to its own page: the write re-renders the area
+                            // that held the button (here: its parent), BEFORE the write's confirmation arrives.
+                            ctx.Host.UpdateArea(Area, Controls.Markdown("approved"));
+                            return reRenderingWork.AsObservable();
+                        }), "ReRendering")));
 
     private static Task ThrowSynchronously(UiActionContext _) =>
         throw new InvalidOperationException("synchronous click failure");
@@ -87,6 +97,36 @@ public class ClickActionCompletionAckTest(ITestOutputHelper output) : HubTestBas
             TestContext.Current.CancellationToken);
         await refused.Should().NotEmit(200.Milliseconds(),
             "an accepted click is never also refused", TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// 🚨 The click action's subscription belongs to the HOST, not to the clicked area: a click whose
+    /// own effect re-renders (clears) the area that held the button must still be answered when its
+    /// work completes. Owned by the area, the re-render would dispose it and strand the button in
+    /// its pending state forever (review of MeshWeaver#5783).
+    /// </summary>
+    [HubFact]
+    public async Task AClickWhoseActionClearsItsOwnAreaIsStillAnswered()
+    {
+        var stream = await OpenStream(ReRenderingArea);
+        var accepted = new AsyncSubject<Unit>();
+
+        stream.SubmitUserAction(
+            new ClickedEvent(ReRenderingArea, stream.StreamId),
+            actingUser: null,
+            onRefused: null,
+            onAccepted: () => { accepted.OnNext(Unit.Default); accepted.OnCompleted(); });
+
+        await stream.GetControlStream(Area).Should().Within(10.Seconds()).Match(
+            c => c is MarkdownControl,
+            "the click's own effect re-rendered the page and cleared the button's area", TestContext.Current.CancellationToken);
+
+        reRenderingWork.OnNext(Unit.Default);
+        reRenderingWork.OnCompleted();
+
+        await accepted.Should().Within(10.Seconds()).Emit(
+            "the re-render must not have released the pending click — its completion still answers",
+            TestContext.Current.CancellationToken);
     }
 
     [HubFact]

@@ -647,12 +647,27 @@ public record LayoutAreaHost : IDisposable
 
         // Exactly one answer per click: onError and onCompleted are mutually exclusive, and values
         // are ignored — only the terminal signal means anything.
-        completion.Subscribe(
+        //
+        // 🚨 The subscription is OWNED BY THIS HOST, not by the clicked area. A click's own write
+        // routinely re-renders the page and clears the area that held the button (an approval
+        // removes the Approve section) — possibly before the write's confirmation arrives; an
+        // area-owned subscription would be disposed right there and the receipt would never be
+        // sent, stranding the button in its pending state. Host-owned, it is released when the
+        // stream (and with it the page) goes away, and dropped from the set as soon as it settles.
+        var subscription = new SingleAssignmentDisposable();
+        pendingClickActions.Add(subscription);
+        subscription.Disposable = completion.Subscribe(
             _ => { },
-            ex => FailRequest(ex, request),
-            () => AcceptUserAction(request));
+            ex => { FailRequest(ex, request); pendingClickActions.Remove(subscription); },
+            () => { AcceptUserAction(request); pendingClickActions.Remove(subscription); });
         return request.Processed();
     }
+
+    /// <summary>
+    /// The click actions still running (see <see cref="OnClick"/>), disposed with this host. A
+    /// settled one removes itself, so the set holds only what is actually pending.
+    /// </summary>
+    private readonly CompositeDisposable pendingClickActions = new();
 
     private IMessageDelivery OnCloseDialog(IMessageDelivery<CloseDialogEvent> request)
     {
@@ -1305,6 +1320,9 @@ public record LayoutAreaHost : IDisposable
         foreach (var disposable in disposablesByArea.ToArray())
             disposable.Value.ForEach(d => d.Dispose());
         disposablesByArea.Clear();
+        // Held apart from disposablesByArea on purpose: no area re-render may release a pending
+        // click action — only the host's own teardown (see OnClick).
+        pendingClickActions.Dispose();
     }
 
     /// <summary>
