@@ -126,7 +126,7 @@ public sealed class RecycleOperation : IControlLaneOperation
     {
         var target = request.Target;
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var query = $"path:{target} select:path limit:1";
+        var query = SpaceDeletion.ParentListingQuery(target);
         return SpaceDeletion.AsSystem(hub, () => MeshReading.Read(mesh, query))
             .SelectMany(reading =>
             {

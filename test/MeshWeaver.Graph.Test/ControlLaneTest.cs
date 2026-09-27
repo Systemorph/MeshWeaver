@@ -368,8 +368,9 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public void SpaceDeletionExistenceQueriesDoNotProjectRootOrPartitionContent()
     {
-        SpaceDeletion.RootQuery("LiveInventory").Should().Be("path:LiveInventory select:path limit:1");
-        SpaceDeletion.RecordQuery("LiveInventory").Should().Be("path:Admin/Partition/LiveInventory select:path limit:1");
+        SpaceDeletion.ParentListingQuery("TestData/Recyclable").Should().Be("path:TestData scope:children select:path");
+        SpaceDeletion.RootQuery("LiveInventory").Should().Be("path: scope:children select:path");
+        SpaceDeletion.RecordQuery("LiveInventory").Should().Be("path:Admin/Partition scope:children select:path");
         SpaceDeletion.InventoryQueries("LiveInventory").First().Should().Be(SpaceDeletion.RootQuery("LiveInventory"));
     }
 

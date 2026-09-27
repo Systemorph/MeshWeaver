@@ -332,11 +332,19 @@ public static class SpaceDeletion
         definition.TableMappings is { } mappings
         && mappings.Keys.Any(segment => segment.StartsWith('_') && path.Split('/').Contains(segment, StringComparer.Ordinal));
 
+    /// <summary>The complete direct-child listing that establishes whether <paramref name="path"/> exists. Pure.</summary>
+    public static string ParentListingQuery(string path)
+    {
+        var separator = path.LastIndexOf('/');
+        var parent = separator < 0 ? "" : path[..separator];
+        return $"path:{parent} scope:children select:path";
+    }
+
     /// <summary>The listing that establishes whether the space's <c>Admin/Partition</c> record exists. Pure.</summary>
-    public static string RecordQuery(string space) => $"path:{PartitionNodeType.Namespace}/{space} select:path limit:1";
+    public static string RecordQuery(string space) => ParentListingQuery($"{PartitionNodeType.Namespace}/{space}");
 
     /// <summary>The listing that establishes whether the space root exists. Pure.</summary>
-    public static string RootQuery(string space) => $"path:{space} select:path limit:1";
+    public static string RootQuery(string space) => ParentListingQuery(space);
 
     /// <summary>The queries one inventory runs: the root, the main rows, one per satellite NodeType (defaults AND custom). Pure.</summary>
     public static IReadOnlyList<string> InventoryQueries(string space, PartitionDefinition? definition = null)
