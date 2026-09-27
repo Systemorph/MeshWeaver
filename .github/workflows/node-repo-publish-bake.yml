@@ -738,6 +738,25 @@ jobs:
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
           fetch-depth: ${{ inputs.narrow-by-affected && '0' || '1' }}
+      # 🚨 The seal carries every package's manifest.lock, and a GitSynced portal decides per module
+      # by that lock's content hash whether anything changed (ModuleSyncDecision). A main-owned
+      # repo's merge commit still carries the locks of the commit before it until its settle job
+      # lands — a seal of those would tell every portal "unchanged" about the new content. The
+      # materialized locks are this tree's (a no-op on a settled or branch-owned tree), written by
+      # the generator at this lane's scripts ref (a disposable checkout the action removes, so it
+      # never rides into the seal).
+      - name: Check out the lock generator at the lane's scripts ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          path: .materialize-generator
+          sparse-checkout: .github/scripts/gen-manifests.py
+          sparse-checkout-cone-mode: false
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          generator: .materialize-generator/.github/scripts/gen-manifests.py
       # 🚨 The CONTENT commit, not $GITHUB_SHA. They differ exactly when content-repository is set
       # (the platform baking Plugins), and the publication records the content's commit — the
       # bake-scope baseline is compared against it on the next run, so stamping the caller's sha

@@ -1,0 +1,70 @@
+name: Materialize main-owned manifest locks
+description: >-
+  Before a job READS a package's manifest.lock, write the locks this checkout's tree implies —
+  for a repo whose locks are main-owned (`lockOwner: main` in scripts/gen-manifests.config.json).
+  Local, deterministic, never committed; a byte no-op on a settled tree and on a branch-owned repo.
+# 🚨 WHY EVERY LOCK-READING JOB NEEDS THIS (Doc/Architecture/ModuleVersioning → "Who writes the lock").
+# A main-owned repo's pull requests commit NO lock, and main's merge commit carries the locks of the
+# commit before it until the settle job lands. So the committed lock is not this tree's, and every
+# reader downstream would be wrong in a way nothing reports: `module-build-key.py` would key a NEW
+# tree with the OLD moduleVersion and reuse the old bundle (a PR testing code it does not contain),
+# the pack would name a bundle with the old version, and a seal built from it would carry a lock
+# whose content hash tells a GitSynced portal "unchanged" (ModuleSyncDecision). The materialized
+# lock is a pure function of the tree plus the committed (settled) lock, so every job of one run
+# arrives at the same bytes, and `--settle` asserts main commits exactly these numbers.
+#
+# 🚨 THE GENERATOR COMES FROM THE LANE'S PINNED REF, never from wherever this action resolved.
+# `uses:` cannot take an expression, so this action is always named `@main`; the bytes it writes
+# must not depend on what `main` holds at the moment each job of a run starts. Every caller checks
+# out the canonical `.github/scripts/gen-manifests.py` at the SAME ref the rest of its job uses
+# (build-logic-ref / scripts-ref) and passes it as `generator`. The action's own sibling copy is
+# only a fallback for a caller that has no pinned MeshWeaver checkout — and says so when used.
+inputs:
+  root:
+    description: The content repository's checkout (the directory holding scripts/gen-manifests.config.json).
+    default: .
+  generator:
+    description: >-
+      Path to the canonical gen-manifests.py checked out at the lane's pinned ref. A generator
+      checked out under `<root>/.materialize-generator` is removed afterwards, so it never rides
+      into a mount, a bake or a bundle.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Materialize main-owned manifest locks
+      shell: bash
+      env:
+        MATERIALIZE_ACTION_PATH: ${{ github.action_path }}
+        MATERIALIZE_ROOT: ${{ inputs.root }}
+        MATERIALIZE_GENERATOR: ${{ inputs.generator }}
+      run: |
+        set -euo pipefail
+        root="$(cd "$MATERIALIZE_ROOT" && pwd)"
+        cleanup() { rm -rf "$root/.materialize-generator"; }
+        trap cleanup EXIT
+        config="$root/scripts/gen-manifests.config.json"
+        # A repo with no allow-file has not adopted the canonical generator; its locks are committed
+        # by its branches and verified by its own validate lane. Nothing here can apply to it — the
+        # line says so rather than printing nothing.
+        if [ ! -f "$config" ]; then
+          echo "no scripts/gen-manifests.config.json — this repo's locks are branch-owned; nothing to materialize"
+          exit 0
+        fi
+        owner="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("lockOwner", "branch"))' "$config")"
+        if [ "$owner" != "main" ]; then
+          echo "lockOwner: $owner — every commit carries its own locks; nothing to materialize"
+          exit 0
+        fi
+        if [ -n "$MATERIALIZE_GENERATOR" ]; then
+          script="$MATERIALIZE_GENERATOR"
+          case "$script" in /*) ;; *) script="$GITHUB_WORKSPACE/$script" ;; esac
+          [ -f "$script" ] || { echo "::error::the pinned gen-manifests.py this job named is missing ($MATERIALIZE_GENERATOR)"; exit 1; }
+        else
+          script="$MATERIALIZE_ACTION_PATH/../../scripts/gen-manifests.py"
+          [ -f "$script" ] || { echo "::error::the canonical gen-manifests.py is missing beside this action ($script)"; exit 1; }
+          echo "::notice::materializing with the generator beside this action (@main) — this job passed no pinned generator"
+        fi
+        grep -q -- '--materialize' "$script" \
+          || { echo "::error::the pinned gen-manifests.py ($script) predates --materialize, but this repo declares lockOwner: main — the lane's pin must include MeshWeaver's lockOwner change"; exit 1; }
+        MW_REPO_ROOT="$root" python3 "$script" --materialize

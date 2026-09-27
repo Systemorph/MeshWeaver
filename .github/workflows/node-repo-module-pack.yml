@@ -1097,6 +1097,17 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}
           path: build-logic
+      # 🚨 The scope scripts and module-build-key.py below READ every package's manifest.lock
+      # (moduleVersion keys the build; version names the bundle). A main-owned repo's pull request
+      # commits no lock, so its committed one describes the BASE tree — keyed on it, a changed
+      # module would reuse the base's bundle. The materialized lock is this tree's (no-op on a
+      # settled or branch-owned tree), written by the generator at the build-logic ref, so every
+      # job of this lane that reads a lock runs the same generator and writes the same bytes.
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          root: repo
+          generator: build-logic/.github/scripts/gen-manifests.py
       # The next step also verifies HEAD against the resolved job.workflow_sha before trusting the
       # file as structural evidence, so neither build-logic-ref nor a moving @main can substitute.
       - name: Check out the exact reusable workflow that defines this job
@@ -1730,6 +1741,21 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      # The workspace build reads each package's lock (see `select`): this tree's, never the base's,
+      # by the generator at the build-logic ref (a disposable checkout the action removes, so it
+      # never enters the workspace mount).
+      - name: Check out the lock generator at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: .materialize-generator
+          sparse-checkout: .github/scripts/gen-manifests.py
+          sparse-checkout-cone-mode: false
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          generator: .materialize-generator/.github/scripts/gen-manifests.py
       # The registry helper is lane orchestration too, but the global compiler mounts the whole
       # workspace as its source tree. Fetch this one pre-build helper into a disposable path, then
       # remove it before the mount; the durable tools checkout lands after the build below.
@@ -2123,6 +2149,12 @@ jobs:
           ref: ${{ needs.select.outputs.build-logic-ref }}
           path: build-logic
           sparse-checkout: .github/scripts
+      # The pack names each bundle from `{package}/manifest.lock`'s version: this tree's lock, by
+      # the generator at the build-logic ref (the one `select` used).
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          generator: build-logic/.github/scripts/gen-manifests.py
       # ───────────── THIS LEG'S MODULES — enumerated once, from the matrix batch ─────────────
       # The state file every step below drives; `init` refuses an empty or duplicated batch. The
       # module list is printed here so a leg's log opens with what it owns.
@@ -4372,6 +4404,11 @@ jobs:
           ref: ${{ needs.select.outputs.build-logic-ref }}
           path: build-logic
           sparse-checkout: .github/scripts
+      # The test host installs the content tree and stamps each install with its lock's version.
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          generator: build-logic/.github/scripts/gen-manifests.py
       - name: This leg's modules
         env:
           BATCH: ${{ toJSON(matrix.batch) }}
