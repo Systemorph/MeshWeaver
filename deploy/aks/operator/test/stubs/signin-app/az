@@ -29,6 +29,7 @@ case "${1:-} ${2:-} ${3:-}" in
       list)  printf '2027-09-12T00:00:00Z\n'; exit 0 ;;
     esac ;;
   "keyvault secret list")
+    [ "${HOSTING_SA_LIST_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) secrets list permission" >&2; exit 1; }
     for e in ${HOSTING_SA_EXISTING:-}; do printf '%s\n' "$e"; done
     for f in "$state"/set.*; do [ -e "$f" ] && printf '%s\n' "${f##*/set.}"; done
     exit 0 ;;
