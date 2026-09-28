@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -56,12 +57,15 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
     private record OlderAi(string[] Tiers);
     private record NestedDeploymentContent(SealedSecrets KeyVaultSecrets);
     private sealed record SealedSecrets(string Name);
+    private record NonSealedSecrets(string Name);
+    private record NestedNonSealedDeploymentContent(NonSealedSecrets KeyVaultSecrets);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddGitHubSyncTypes()
             .WithMeshType<OlderDeploymentContent>()
             .WithMeshType<NestedDeploymentContent>()
+            .WithMeshType<NestedNonSealedDeploymentContent>()
             .WithMeshType<DeploymentContent>()
             .ConfigureServices(services =>
             {
@@ -245,14 +249,44 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
             .Materialize()
             .Where(n => n.Kind == System.Reactive.NotificationKind.OnError)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        refusal.Exception!.Message.Should().Contain("futureOnlyField");
+        var error = refusal.Exception ?? throw new InvalidOperationException("Expected a refused import.");
+        error.Message.Should().Contain("futureOnlyField");
         var config = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
             .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is
                 { LastSyncOutcome: GitHubSyncService.RefusedOutcome })
-            .Select(n => n!.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)!)
+            .Select(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)
+                ?? throw new InvalidOperationException("Expected a GitSync configuration."))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         config.LastSyncNote.Should().Contain("futureOnlyField");
         config.LastSyncCommitSha.Should().NotBe(HeadSha);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ASerializedNonSealedNestedRecord_ImportsWithItsDiscriminator()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        var contentJson = JsonSerializer.Serialize(
+            new NestedNonSealedDeploymentContent(new NonSealedSecrets("vault")),
+            Mesh.JsonSerializerOptions);
+        using (var document = JsonDocument.Parse(contentJson))
+            document.RootElement.GetProperty("keyVaultSecrets").GetProperty("$type")
+                .GetString().Should().Be(nameof(NonSealedSecrets));
+        repoClient.Files =
+        [
+            new RepoFile("build.json", $$"""
+                {"id":"build","nodeType":"Markdown","content":{{contentJson}}}
+                """),
+        ];
+
+        await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var imported = await Mesh.GetWorkspace().GetMeshNodeStream($"{space}/build")
+            .Where(n => n?.ContentAs<NestedNonSealedDeploymentContent>(Mesh.JsonSerializerOptions)
+                is { KeyVaultSecrets.Name: "vault" })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        imported.Should().NotBeNull();
     }
 
     [Fact(Timeout = 120_000)]
