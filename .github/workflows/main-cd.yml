@@ -2541,6 +2541,13 @@ jobs:
       # moved to `arm`, which writes them only for a set whose MeshWeaver.Plugins dependent suites
       # passed against exactly this PAIR (core + the Plugins commit gate built it with). This step
       # hands `arm` — in this run or any later one — the facts it needs, as a record.
+      # 🚨 THE BUNDLE'S BASE IS THE NEWEST ARMED SET, not the first parent. A promoted set usually
+      # carries several core merges, and ALL of them reach the fleet when it is armed; a first-parent
+      # base would diff, and control-arm, only the last one. `arm-promoted-set.py armed-base` names the
+      # newest armed set from memex-portal-ai's manifests (its version tag shares a manifest with the
+      # sha tag). `base_kind` records which rule produced `base`, and an UNRESOLVED base still promotes
+      # for CI but is never armed and never measured (see the script's header) — CI is never held, and
+      # the fleet never receives merges nobody measured.
       - name: "Promotion record (what `arm` needs to arm this set later)"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2549,13 +2556,36 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$CORE_SHA" --jq '.parents[0].sha')
-          [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot read the first parent of $CORE_SHA ('$base')"; exit 1; }
+          parent=$(gh api "repos/$GITHUB_REPOSITORY/commits/$CORE_SHA" --jq '.parents[0].sha')
+          [[ "$parent" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot read the first parent of $CORE_SHA ('$parent')"; exit 1; }
+          base="$parent"; kind=unresolved; why=""
+          if az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+               -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json" \
+             && armed=$(python3 .github/scripts/arm-promoted-set.py armed-base --manifests "$RUNNER_TEMP/portal-manifests.json"); then
+            a_short=$(printf '%s' "$armed" | jq -r '.armed_short'); a_version=$(printf '%s' "$armed" | jq -r '.armed_version')
+            if [ -z "$a_short" ]; then
+              kind=first-parent; why="no set has ever been armed"
+            elif a_full=$(gh api "repos/$GITHUB_REPOSITORY/commits/$a_short" --jq .sha) && [[ "$a_full" =~ ^[0-9a-f]{40}$ ]]; then
+              if [ "$a_full" = "$CORE_SHA" ]; then
+                kind=first-parent; why="this commit IS the armed set $a_version"
+              elif st=$(gh api "repos/$GITHUB_REPOSITORY/compare/$a_full...$CORE_SHA" --jq .status) && [ "$st" = ahead ]; then
+                base="$a_full"; kind=armed; why="newest armed set $a_version"
+              else
+                why="the armed set $a_version ($a_short) is not an ancestor of $CORE_SHA (compare: ${st:-unreadable})"
+              fi
+            else
+              why="the armed set's commit $a_short could not be resolved"
+            fi
+          else
+            why="the newest armed set could not be read from memex-portal-ai"
+          fi
+          [ "$kind" != unresolved ] || echo "::warning title=Promotion base unresolved::$why — this set is promoted for CI but will NOT be armed or measured; the next promoted set retries"
+          echo "bundle base: $kind — ${why}; base $base"
           mkdir -p "$RUNNER_TEMP/promotion-record"
-          jq -n --argjson n "$RUN_NUMBER" --arg c "$CORE_SHA" --arg b "$base" --arg p "$PLUGINS_SHA" \
+          jq -n --argjson n "$RUN_NUMBER" --arg c "$CORE_SHA" --arg b "$base" --arg bk "$kind" --arg p "$PLUGINS_SHA" \
                 --arg s "$SHA" --arg ps "$PLUGINS_SHORT" --arg st "$STAGING" \
                 --arg vp "$V_PORTAL" --arg vm "$V_MIGRATION" --arg vt "$V_PLUGIN" \
-            '{run_number: $n, core_sha: $c, base: $b, plugins_sha: $p, short: $s, plugins_short: $ps,
+            '{run_number: $n, core_sha: $c, base: $b, base_kind: $bk, plugins_sha: $p, short: $s, plugins_short: $ps,
               staging: $st, v_portal: $vp, v_migration: $vm, v_plugin: $vt, key: ("pair-" + $s + "-p" + $ps)}' \
             > "$RUNNER_TEMP/promotion-record/promotion-record.json"
           cat "$RUNNER_TEMP/promotion-record/promotion-record.json"
