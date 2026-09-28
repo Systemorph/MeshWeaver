@@ -26,6 +26,7 @@ Inputs (environment): ``NAME_CHECK_URL`` — base URL of the CRM-owning instance
 
     check-client-names.py --base origin/main          # a pull request
     check-client-names.py                             # the whole tree
+    check-client-names.py --unchecked warn            # a private repository: a hit fails, "not checked" warns
     check-client-names.py --self-test                 # both arms, against a fake instance
 """
 from __future__ import annotations
@@ -323,6 +324,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--root", default=".")
     ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "local/repo"))
     ap.add_argument("--report-only", action="store_true", help="private repositories: warn instead of failing")
+    ap.add_argument("--unchecked", choices=("fail", "warn"), default="fail",
+                    help="what 'not checked' does: fail (default, public repositories) or warn (a private repository "
+                         "whose Dependabot PRs cannot reach the secret) — a HIT still fails either way")
     ap.add_argument("--path", action="append", default=[], metavar="PATHSPEC",
                     help="limit the check to these git pathspecs (repeatable; ':(exclude)x' excludes). Default: everything")
     ap.add_argument("--self-test", action="store_true")
@@ -349,11 +353,12 @@ def main(argv: list[str]) -> int:
             answers = submit_and_wait(Mesh(url, token), a.repo, sha, run, chunks(lines))
             status, hits = report(answers)
     except NotChecked as exc:
-        level = "warning" if a.report_only else "error"
+        lenient = a.report_only or a.unchecked == "warn"
+        level = "warning" if lenient else "error"
         print(f"::{level}::No client names — NOT CHECKED: {exc}")
         if step_summary:
             Path(step_summary).open("a").write(summary("NotChecked", [], len(lines), str(exc)))
-        return 0 if a.report_only else 1
+        return 0 if lenient else 1
     if step_summary:
         Path(step_summary).open("a").write(summary(status, hits, len(lines)))
     print(f"No client names: {status} — {len(lines)} line(s), {len(hits)} hit(s).")
@@ -504,6 +509,13 @@ def self_test() -> int:
         check("🚨 no answer in time FAILS closed", rc == 1 and "no answer within" in out)
         rc, out = run(ok_env, "--base", "HEAD~1", "--report-only")
         check("--report-only downgrades not-checked to a warning", rc == 0 and "::warning::" in out)
+        rc, out = run({}, "--base", "HEAD~1", "--unchecked", "warn")
+        check("--unchecked warn: a missing secret warns", rc == 0 and "::warning::" in out)
+        flags["answer"] = True
+        (r / "b.md").write_text("new text\nzorblax\n")
+        subprocess.run(["git", "-C", str(r), "commit", "-qam", "hit"], check=True)
+        rc, out = run(ok_env, "--base", "HEAD~1", "--unchecked", "warn")
+        check("--unchecked warn: a HIT still fails", rc == 1 and "client#1" in out)
     srv.shutdown()
     print(f"\n{'FAILED' if failures else 'OK'}: {len(failures)} failure(s)")
     return 1 if failures else 0

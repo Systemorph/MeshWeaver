@@ -21,6 +21,10 @@ on:
         description: "Warn instead of failing (private repositories)."
         type: boolean
         default: false
+      unchecked:
+        description: "What 'not checked' does: fail (public repositories) or warn (a hit still fails)."
+        type: string
+        default: fail
       paths:
         description: "Newline-separated git pathspecs to check (':(exclude)x' excludes). Empty = the whole change."
         type: string
@@ -63,9 +67,10 @@ jobs:
         BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         REPORT_ONLY: ${{ inputs.report-only }}
         PATHS: ${{ inputs.paths }}
+        UNCHECKED: ${{ inputs.unchecked }}
       run: |
         set -euo pipefail
-        args=()
+        args=(--unchecked "${UNCHECKED:-fail}")
         [ "$REPORT_ONLY" = "true" ] && args+=(--report-only)
         while IFS= read -r p; do [ -n "$p" ] && args+=(--path "$p"); done <<< "${PATHS:-}"
         # A push whose `before` is all zeros (a new branch) or unknown checks the whole tree.
