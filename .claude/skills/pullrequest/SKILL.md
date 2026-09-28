@@ -398,6 +398,12 @@ enough today.
 
 ## 🚦 The merge queue — `--auto` enqueues, the steward re-queues, you never re-order
 
+> 🚨 **The queue is OFF on core `main`** (measured 2026-09-27: `enqueuePullRequest` → "No merge
+> queue found for branch 'main'"; no `merge_queue` rule on the ruleset). `--auto` ARMS auto-merge and
+> GitHub merges when the required set is green; no step of the merge waits on another repository
+> (policy `core-merge-never-blocked`, Doc/Architecture/OnePromotionGate). The section below is how
+> the queue works when it is enabled.
+
 Core `main` merges through GitHub's **merge queue** (ruleset `main pr protection`, rule
 `merge_queue`; the full manual is
 [MergeQueue.md](../../../src/MeshWeaver.Documentation/Data/Architecture/MergeQueue.md)). Each

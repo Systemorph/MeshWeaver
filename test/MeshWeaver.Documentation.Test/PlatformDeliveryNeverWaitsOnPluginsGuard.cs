@@ -25,6 +25,13 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>plugins-modules</c> as an ancestor); and the Plugins seal is judged by a report job no platform
 /// job needs, which records a failure on a durable ledger.</para>
 ///
+/// <para>🚨 ONE deliberate reading of a Plugins VERDICT, and it is not a job edge (policy
+/// <c>one-promotion-gate</c>): <c>arm</c> writes the fleet's arming tags only
+/// for a promoted set whose MeshWeaver.Plugins dependent suites passed, and
+/// <c>notify-platform-update</c> follows <c>arm</c>. Neither is a need of <c>delivery-verdict</c>
+/// (<see cref="TheArmingIsNeverAPlatformDeliveryLeg"/>), so the platform set is still promoted,
+/// verified, baked and judged on its own — what waits for Plugins is only the fleet's roll.</para>
+///
 /// <para>Measured before the split: CD 9309/9311/9313/9315/9316/9317/9320 each went red on
 /// <c>Plugins: pack … / Module tests</c> — a MeshWeaver.Plugins unit test — over platform sets that
 /// were promoted, verified and baked; the red handed HEAD on to a full re-publish and filed
@@ -61,8 +68,8 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
 
         // 1. a Plugins job as a DIRECT need of the verdict.
         Assert.Contains(Problems(Mutate(text,
-                "            publish-bake, notify-platform-update, verify-images]",
-                "            publish-bake, notify-platform-update, verify-images, plugins-bake]")),
+                "            publish-bake, verify-images]",
+                "            publish-bake, verify-images, plugins-bake]")),
             p => p.Contains("delivery-verdict", StringComparison.Ordinal) && p.Contains("plugins-bake", StringComparison.Ordinal));
 
         // 2. a Plugins job reached TRANSITIVELY — through a need of a need (publish-bake → plugins-modules).
@@ -86,6 +93,25 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
         // 5. the report job deleted — a Plugins red would then be judged by nobody.
         Assert.Contains(Problems(Mutate(text, "\n  report-plugins-seal:\n", "\n  report-plugins-seal-gone:\n")),
             p => p.Contains(ReportJob, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The promotion gate reads a Plugins verdict — so it must stay OUT of the platform delivery
+    /// verdict, directly and through its only dependant, or a Plugins red would once again turn a
+    /// platform delivery red (the CD 9309…9320 shape, one level up).
+    /// </summary>
+    [Fact]
+    public void TheArmingIsNeverAPlatformDeliveryLeg()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        var start = text.IndexOf("\n  delivery-verdict:", StringComparison.Ordinal);
+        Assert.True(start >= 0, "delivery-verdict is gone from main-cd.yml");
+        var m = Regex.Match(text[start..], @"\n    needs:\s*\[(?<n>[^\]]*)\]");
+        Assert.True(m.Success, "delivery-verdict has no `needs: [...]` list");
+        var needs = m.Groups["n"].Value.Split(',').Select(n => n.Trim()).ToArray();
+        Assert.Contains("promote", needs);
+        Assert.DoesNotContain("arm", needs);
+        Assert.DoesNotContain("notify-platform-update", needs);
     }
 
     /// <summary>
