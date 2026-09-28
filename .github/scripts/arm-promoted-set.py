@@ -51,7 +51,7 @@ every one of them reaches the fleet when the set is armed. So the record's `base
 Plugins run diffs from and re-runs its control arm at, and the one the verdict is pinned to — is the
 core commit of the newest ARMED set: `base..candidate` is then exactly the merges the fleet has not
 seen. `armed-base` resolves it from memex-portal-ai's manifests (the armed version tag shares its
-manifest with the seven-character sha tag). The record says which rule produced `base` in
+manifest with a core sha or pair tag). The record says which rule produced `base` in
 `base_kind`:
 
   * `armed`         — the newest armed set's commit (the normal case);
@@ -101,6 +101,7 @@ RECORD_KEYS = ("run_number", "core_sha", "base", "plugins_sha", "short", "plugin
                "v_portal", "v_migration", "v_plugin", "key")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHORT_SHA_TAG = re.compile(r"^[0-9a-f]{7}$")
+PAIR_TAG = re.compile(r"^([0-9a-f]{7})-p[0-9a-f]{7}$")
 BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
 
@@ -172,9 +173,10 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
     metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
     tag at all (nothing was ever armed). Pure.
 
-    The version tag is written by `arm` onto the promoted image's manifest, which already carries the
-    sha tag from `promote`, so both are on ONE manifest. A newest armed manifest WITHOUT a sha tag is
-    a fact this cannot interpret — ValueError, never a guess (a wrong base narrows the bundle)."""
+    The version tag is written by `arm` onto the promoted image's manifest. `promote` writes both a
+    core sha tag and a core/Plugins pair tag, but a later pair for the SAME core moves the sha tag
+    to that later manifest. The pair tag remains on the armed manifest and still names its core.
+    Conflicting or missing identities are errors, never guesses (a wrong base narrows the bundle)."""
     if not isinstance(manifests, list):
         raise ValueError("the manifest metadata is not a JSON list")
     best: tuple[int, str, list[str]] | None = None
@@ -190,11 +192,12 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
         return None
     if not require_sha:
         return best[1], ""
-    shas = [t for t in best[2] if SHORT_SHA_TAG.match(t)]
+    shas = {t for t in best[2] if SHORT_SHA_TAG.match(t)}
+    shas.update(m.group(1) for t in best[2] if (m := PAIR_TAG.match(t)))
     if len(shas) != 1:
-        raise ValueError(f"the newest armed manifest {best[1]} carries {len(shas)} seven-character sha tag(s) "
+        raise ValueError(f"the newest armed manifest {best[1]} names {len(shas)} distinct core commits "
                          f"({best[2]}) — cannot name its core commit")
-    return best[1], shas[0]
+    return best[1], next(iter(shas))
 
 
 # ───────────────────────────────── transport ──────────────────────────────────────────────
@@ -485,14 +488,19 @@ def self_test() -> int:
         {"tags": ["3.0.0-ci.9535", "9357060", "9357060-p90f70cd"]},
         {"tags": None},
     ]
-    check("armed-base: the NEWEST version tag's manifest names the base (its seven-character sha tag)",
+    check("armed-base: the NEWEST version tag's manifest names the base (its core sha tag)",
           armed_commit(live) == ("3.0.0-ci.9538", "b9fe5ed"), str(armed_commit(live)))
+    pair_only = [{"tags": ["3.0.0-ci.9564", "f0f9a7b-p217aa51", "arm-complete-3.0.0-ci.9564"]},
+                 {"tags": ["f0f9a7b", "f0f9a7b-pb7390a0"]}]
+    check("armed-base: pair tag names the armed core after its bare sha tag moves to a newer pair",
+          armed_commit(pair_only) == ("3.0.0-ci.9564", "f0f9a7b"))
     check("armed-base: newest by RUN NUMBER, not by listing order",
           armed_commit(list(reversed(live))) == ("3.0.0-ci.9538", "b9fe5ed"))
     check("armed-base: no version tag anywhere means nothing was ever armed (None, not a guess)",
           armed_commit([{"tags": ["main", "b9fe5ed"]}]) is None)
-    for bad, why in (([{"tags": ["3.0.0-ci.9538", "main"]}], "no sha tag"),
+    for bad, why in (([{"tags": ["3.0.0-ci.9538", "main"]}], "no identity tag"),
                      ([{"tags": ["3.0.0-ci.9538", "b9fe5ed", "a1b2c3d"]}], "two sha tags"),
+                     ([{"tags": ["3.0.0-ci.9538", "b9fe5ed", "a1b2c3d-p217aa51"]}], "conflicting sha and pair tags"),
                      ({"tags": []}, "not a list")):
         try:
             armed_commit(bad)
