@@ -163,4 +163,39 @@ public class PlatformSettingsTabSeedTest
             [sample with { NodeType = "Markdown" }],
             registeredAreas: PlatformSettingsTabAreas.Areas));
     }
+
+    /// <summary>
+    /// Every Administration seed names the ADMIN APP section it belongs to — group, group key and
+    /// an order inside that section's band — so the nav groups it beside the compiled tabs of the
+    /// same section rather than in a stray group of its own. (That the page then actually RENDERS a
+    /// seeded tab in its section, for a viewer resolved on the render turn, is pinned end to end in
+    /// <c>AdminAppTest.ASeededAdminTab_ShowsInItsSection</c> and
+    /// <c>AdminAppTest.SeededAdminTabs_SurviveASubscriptionOffTheViewersDelivery</c>.)
+    /// </summary>
+    [Fact]
+    public void Every_Admin_Seed_Names_Its_Admin_App_Section()
+    {
+        var expected = new Dictionary<string, (string Group, string GroupKey, int Band)>
+        {
+            [InvitationsSettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
+            [PrivacySettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
+            [PublishedSettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
+            [UpdatePolicySettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
+            [ControlLaneSettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
+            [InboxSettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
+        };
+        Assert.Equal(AdminTabIds.OrderBy(i => i, StringComparer.Ordinal),
+            expected.Keys.OrderBy(i => i, StringComparer.Ordinal));
+
+        var adminSeeds = PlatformSettingsTabAreas.Seeds.Where(s => AdminTabIds.Contains(s.Id)).ToList();
+        Assert.Equal(AdminTabIds.Length, adminSeeds.Count);
+        Assert.All(adminSeeds, seed =>
+        {
+            var contribution = Assert.IsType<UiContribution>(seed.Content);
+            var (group, groupKey, band) = expected[seed.Id];
+            Assert.Equal(group, contribution.Group);
+            Assert.Equal(groupKey, contribution.GroupKey);
+            Assert.InRange(contribution.Order, band, band + 99);
+        });
+    }
 }

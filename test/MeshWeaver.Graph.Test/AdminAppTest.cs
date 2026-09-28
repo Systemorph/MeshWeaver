@@ -6,6 +6,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -51,7 +52,28 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             AssignmentNodeFactory.UserRole(Other, "Admin", Other),
             // A real workspace the admin can see — the positive control of the Spaces query.
             new MeshNode(Workspace) { Name = "Admin App Workspace", NodeType = "Space" },
-            AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", Workspace));
+            AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", Workspace),
+            SeededAdminTab);
+
+    /// <summary>A DATA-contributed Admin-app tab, seeded exactly as the platform seeds its own
+    /// (Invitations, Updates, …): NodeSettings context, gated to the AdminApp type and AdminOnly.</summary>
+    private static MeshNode SeededAdminTab { get; } = new("SeededProbe", "Admin/UiContribution")
+    {
+        NodeType = UiContributionNodeType.NodeType,
+        Name = "Seeded probe",
+        Content = new UiContribution
+        {
+            Context = UiContribution.NodeSettingsContext,
+            Area = "SeededProbeArea",
+            Label = "Seeded probe",
+            Icon = "Mail",
+            Group = AdminAppNodeType.PeopleGroup,
+            GroupKey = AdminAppNodeType.PeopleGroupKey,
+            GroupIcon = "People",
+            Order = AdminAppNodeType.PeopleOrder + 10,
+            Gates = new UiContributionGates { AdminOnly = true, NodeTypes = [AdminAppNodeType.NodeType] },
+        },
+    };
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -164,6 +186,81 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .Should().Within(Budget)
             .Match(json => json.Contains(Tab("people \\u0026 sign-in")) && json.Contains(Tab("operations")),
                 "the tabs sit in the instance app's sections", TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// A DATA-contributed Admin-app tab (a <c>UiContribution</c> seed — how the platform ships
+    /// Invitations, Privacy, Published to the web, Updates, Control lane and Inbox) shows in the
+    /// app's nav, inside the SECTION its seed names.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ASeededAdminTab_ShowsInItsSection()
+    {
+        var page = await Render(PlatformAdmin, AdminAppNodeType.Path, Settings())
+            .Should().Within(Budget)
+            .Match(json => json.Contains(Tab("seeded probe")),
+                "a data-contributed Admin-app tab is in the nav", TestContext.Current.CancellationToken);
+
+        // In the People & sign-in NavGroup, not loose and not in another section: the group control
+        // lists its entries' area ids, and the probe's NavLink is one of them.
+        using var doc = JsonDocument.Parse(page);
+        var areas = doc.RootElement.GetProperty("areas");
+        string? probeArea = null, peopleGroup = null;
+        foreach (var area in areas.EnumerateObject())
+        {
+            if (area.Value.TryGetProperty("title", out var t) && t.GetString() == "seeded probe")
+                probeArea = JsonSerializer.Deserialize<string>(area.Name);
+            if (area.Value.TryGetProperty("$type", out var type) && type.GetString() == "navgroupcontrol"
+                && area.Value.GetProperty("title").GetString() == "people & sign-in")
+                peopleGroup = JsonSerializer.Deserialize<string>(area.Name);
+        }
+        probeArea.Should().NotBeNull();
+        peopleGroup.Should().NotBeNull("the People & sign-in section renders");
+        probeArea!.Should().StartWith(peopleGroup + "/", "the seed names the People & sign-in section");
+    }
+
+    /// <summary>
+    /// 🚨 The production defect: the contributed lane resolved the viewer's platform-admin verdict
+    /// when the tab stream was SUBSCRIBED, not when the page was rendered. On a distributed mesh the
+    /// subscription runs off the viewer's delivery, where <see cref="AccessService.Context"/> is
+    /// empty — so the viewer read as anonymous, <c>AdminOnly</c> never passed, and every seeded
+    /// Admin-app tab was missing from the nav while the same seeds passed the same gates in the
+    /// node menu (which resolves the viewer on the render turn). Pinned by building the tab stream
+    /// with the viewer set and subscribing it with the viewer gone.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SeededAdminTabs_SurviveASubscriptionOffTheViewersDelivery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Activate the Admin hub the way a person does, so it is hosted.
+        await Render(PlatformAdmin, AdminAppNodeType.Path, Settings())
+            .Should().Within(Budget)
+            .Match(json => json.Contains(Tab("administrators")), "the Admin app is up", ct);
+        var hub = Mesh.GetHostedHub(new Address(AdminAppNodeType.Path), HostedHubCreation.Never);
+        hub.Should().NotBeNull();
+
+        var access = hub!.ServiceProvider.GetRequiredService<AccessService>();
+        var host = new LayoutAreaHost(hub.GetWorkspace(), Settings(),
+            hub.ServiceProvider.GetRequiredService<IUiControlService>(), null);
+        access.SetContext(new AccessContext
+            { ObjectId = PlatformAdmin, Name = PlatformAdmin, Email = $"{PlatformAdmin}@meshweaver.io" });
+        IObservable<IReadOnlyList<SettingsMenuItemDefinition>> tabs;
+        try
+        {
+            tabs = hub.Configuration.ObserveSettingsMenuItems(host, new RenderingContext(MeshNodeLayoutAreas.SettingsArea));
+        }
+        finally
+        {
+            // Off the delivery: no request context and — unlike this single-identity test host —
+            // no process-wide fallback identity either, which is what a multi-user server has.
+            access.SetContext(null);
+            access.SetHostIdentity(null);
+        }
+
+        await tabs.Select(items => items.Select(i => i.Id).ToList())
+            .Should().Within(Budget)
+            .Match(ids => ids.Contains(SeededAdminTab.Id),
+                "the viewer is resolved on the render turn, so the seeded tab passes AdminOnly", ct);
+    }
 
     /// <summary>The Admin node's old Access Control link lands on the ONE Administrators tab.</summary>
     [Fact(Timeout = 60000)]

@@ -1895,6 +1895,8 @@
   "settings.groupCommercial": "Commercial",
   "settings.groupFleet": "Fleet",
   "settings.aiUsageCost": "AI usage & cost",
+  "settings.signInProviders": "Sign-in providers",
+  "settings.fleet": "Fleet",
   "settings.connectedInstances": "Connected instances",
   "effectiveAccess.intro": "Check what a person can do on **this node**: enter their user id and press Check."
 }
