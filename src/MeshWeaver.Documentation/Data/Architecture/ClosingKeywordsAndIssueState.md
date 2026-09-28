@@ -88,8 +88,10 @@ only for explicit references to `Systemorph/MeshWeaver` (`Systemorph/MeshWeaver#
 issue URL). An unqualified `#N` remains a reference in the satellite itself and is outside this
 cross-repository scan. This closes the fleet gap where a satellite merge could close a core
 `sev:B`/`sev:H` without core CI ever seeing the body. The lane fetches the canonical checker at
-its pinned `scripts-ref` and runs its self-test before the scan; each caller must bump that pin to
-adopt the guard.
+its `scripts-ref` and runs its self-test before the scan. Callers using immutable workflow refs
+must advance the workflow and script refs together. The seven live node-repo callers currently use
+`node-repo-validate.yml@main` with `scripts-ref: main`, so a core merge reaches their next PR run
+without a caller change.
 
 The satellite lane reads core issue labels through GitHub's public REST API without a token. It
 first proves both directions: known core issue #5011 must be readable, and the impossible issue
