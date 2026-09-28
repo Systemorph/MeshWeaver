@@ -1,0 +1,15 @@
+{
+  "id": "LaunchBudget",
+  "namespace": "Doc/Architecture/ATypicalNodeType/Budget",
+  "name": "Launch budget",
+  "nodeType": "Doc/Architecture/ATypicalNodeType/Budget",
+  "description": "Example: what a product launch may spend, and what it has spent so far",
+  "isPersistent": true,
+  "content": {
+    "$type": "Budget",
+    "purpose": "Product launch campaign",
+    "currency": "CHF",
+    "planned": 120000,
+    "spent": 87500
+  }
+}
