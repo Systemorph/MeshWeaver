@@ -13,7 +13,7 @@ public class FluentBuilderTest
 {
     /// <summary>
     /// A new instance ASKS FOR ITS CERTIFICATE without anyone saying so. The issuer is a record
-    /// default, not something an overlay writes as an annotation: pearl.meshweaver.cloud had the
+    /// default, not something an overlay writes as an annotation: fabrikam.example.com had the
     /// annotation in its checked-in overlay and not on its record, a Provision renders from the
     /// record, and the host was served another instance's certificate for nine hours
     /// (2026-09-15). The default is what makes that shape unreachable for the next instance.

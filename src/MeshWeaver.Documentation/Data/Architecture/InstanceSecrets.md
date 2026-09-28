@@ -50,7 +50,7 @@ builder.AddInstanceSecretSlot("Hosting:PlatformWebhookSecret:*"); // one more se
 
 A `:*` slot admits exactly one more segment of letters, digits, `-`, `_` or `.`, and never the
 section key itself. So the slot above lets the control instance hold a per-deployment
-announcement key (`Hosting:PlatformWebhookSecret:pearl`) and can never replace the fleet-wide inbox
+announcement key (`Hosting:PlatformWebhookSecret:fabrikam`) and can never replace the fleet-wide inbox
 secret (`Hosting:PlatformWebhookSecret`). A key no slot admits is refused, so the portal can never
 override an arbitrary setting such as `Auth:GlobalAdmins`.
 

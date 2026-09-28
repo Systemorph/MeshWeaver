@@ -9,7 +9,7 @@ Icon: /static/DocContent/Architecture/icon.svg
 > A partition is a first path segment, so a top-level node **is** its partition's root, whatever its
 > type. Deleting one drops the partition's backing store on every `IPartitionStorageProvider` and
 > removes `Admin/Partition/{id}`. Keying that on a NodeType string left four partitions on the
-> systemorph staff portal with live Postgres schemas after their roots were deleted.
+> control instance (the company's staff portal) with live Postgres schemas after their roots were deleted.
 
 This page is the deletion-side companion to [Partition Storage Routing](../PartitionStorageRouting)
 and [Postgres Schema Architecture](../PostgresSchemaArchitecture).
@@ -37,9 +37,9 @@ recursive delete removes the `mesh_nodes` rows and answers `Ok`, and only the sc
 
 It happened twice.
 
-- **2026-07-19, memex-cloud.** A `User` home was deleted and its whole partition was left behind.
+- **2026-07-19, the public instance.** A `User` home was deleted and its whole partition was left behind.
   The fix applied was a **second** hand-written registration, in `AddUserType`.
-- **2026-09-06, systemorph.** `AgenticPrimerDe`, `DataImportExport`, `DataModeling` and
+- **2026-09-06, the control instance.** `AgenticPrimerDe`, `DataImportExport`, `DataModeling` and
   `ThinkInStreams` — four partitions rooted at **`Store/Plugin`** nodes — were deleted. Their nodes
   went; their schemas and their `Admin/Partition` definitions stayed. Every `Space`-rooted partition
   in the same run (the whole Reinsurance family, `AdvancedBusinessRules`, `AgenticEngineering`) was
@@ -59,8 +59,8 @@ The obvious generalisation — "register the teardown for every NodeType whose d
    need one — `PackageInstaller` provisions the target partition itself. So a runtime scan for
    `OwnsPartition == true` would have skipped it too.
 
-The same is true of `Crm/Client` (`ATIOZ`, `HowdenRe`, `PartnerRe`, `PearlTechnology`, `Scheuchzer`,
-`VIGRe`, `PG3`) and of `Store/Catalog` (the `Store` partition itself) — three families of in-mesh
+The same is true of `Crm/Client` (the client partitions — `Globex`, `Fabrikam`, `Initech`, `Hooli`,
+`Umbrella`, …) and of `Store/Catalog` (the `Store` partition itself) — three families of in-mesh
 partition-root types on one portal, none of them visible to `src/`.
 
 The only predicate with no blind spot is the structural one:
@@ -335,8 +335,8 @@ A package's install record lives at `Plugins/{packageId}` — in the RECORDS par
 package's own — so deleting the installed partition left the record behind, aimed at nothing.
 `InstalledPackageRepairService` then re-drove `PackageInstaller.EnsureDeclaredAccess` at that dead
 partition on **every boot**: a permanent per-boot error for every partition anyone had ever deleted
-— and the #3436 census counted **21 partition definitions with no live root** on the systemorph
-staff portal, which is the upper bound on how many such records a single portal can be carrying —
+— and the #3436 census counted **21 partition definitions with no live root** on the control
+instance, which is the upper bound on how many such records a single portal can be carrying —
 and, before the change above, the writer that re-armed the resurrection race on every restart.
 
 Core deliberately knows nothing about `Plugins/Package`; teaching the delete pipeline about it would

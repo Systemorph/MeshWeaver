@@ -215,8 +215,8 @@ public static class WebhookInbox
     /// The per-SENDER key a delivery verifies against when the target's own shared secret does not:
     /// the name of the first child of <paramref name="secretConfigKey"/>'s configuration section
     /// whose value verifies <paramref name="signatureHeader"/> over <paramref name="body"/> — e.g.
-    /// <c>Hosting:PlatformWebhookSecret:pearl</c> (env
-    /// <c>Hosting__PlatformWebhookSecret__pearl</c>) answers <c>pearl</c>. Null when none does.
+    /// <c>Hosting:PlatformWebhookSecret:fabrikam</c> (env
+    /// <c>Hosting__PlatformWebhookSecret__fabrikam</c>) answers <c>fabrikam</c>. Null when none does.
     ///
     /// <para>🚨 The same shape <c>Hosting:ModuleReportSecret:{deployment}</c> already has, and for
     /// the same reason: a secret held by every sender proves possession, not identity

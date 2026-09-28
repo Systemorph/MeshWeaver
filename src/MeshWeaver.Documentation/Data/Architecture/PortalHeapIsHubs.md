@@ -2,7 +2,7 @@
 Name: The Portal Heap Is Hubs
 Category: Architecture
 Description: >-
-  Five heap dumps from a live memex-cloud replica: the retention is 9,386 MessageHub instances (89.6%
+  Five heap dumps from a live replica of the public instance: the retention is 9,386 MessageHub instances (89.6%
   sync/ stream hubs), 1,496 of them fully disposed corpses held by SynchronizationStream.Hub after the
   parent killed the hub under a stream that was never told; 45% of the live heap is per-hub Autofac
   and TypeRegistry metadata; the ALC, lazy-compile and GC-fragmentation candidates are all falsified.
@@ -13,7 +13,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Portal Heap Is Hubs
 
-A `memex-cloud` portal replica grows ~215 MB/h, monotonically, through hundreds of full
+A portal replica of the public instance grows ~215 MB/h, monotonically, through hundreds of full
 collections, and never returns to an earlier floor. This page is the heap-dump evidence for
 **what is actually in that memory**, taken read-only from a live production pod on
 2026-09-04. It exists because the answer contradicts every hypothesis the investigation was
@@ -27,7 +27,7 @@ because of Roslyn, and not because of GC fragmentation.
 
 ## The specimen
 
-`memex-cloud/memex-portal-deployment-5b9cbf46dd-gs6j6`, 26 h old, working set 6 859 MiB,
+`<namespace>/memex-portal-deployment-5b9cbf46dd-gs6j6`, 26 h old, working set 6 859 MiB,
 container limit 16 Gi. A `dotnet-dump collect --type Heap` through an ephemeral
 `--profile=sysadmin` container (the recipe is in
 [Debugging Disposal, Storms and Leaks](/Doc/Architecture/DebuggingDisposalAndLeaks)), then
@@ -373,7 +373,7 @@ than its ceiling and the per-hub cost below is the whole story.
 - **No deployment carries the `Dead`-half fix yet.** #3427 merged as `f41f8bda` at 15:49Z; CD run
   7905 was that commit and was *cancelled*, so the earliest published image carrying it is
   **`3.0.0-ci.7906`** (`71c194ca9` — confirmed an ancestor-of check plus the tag present in ACR).
-  Both `memex` and `memex-cloud` run **`3.0.0-rc9.ci.7693`**, 213 CD runs older, because prod was
+  Both the control instance and the public instance run **`3.0.0-rc9.ci.7693`**, 213 CD runs older, because prod was
   rolled back by hand that evening. 🚨 Mind the two tag lines when reading those side by side: the
   running tag carries an `rc9.` segment that current CD tags no longer use, so compare the CD run
   NUMBER, not the string. A dump taken now therefore measures the *pre*-step-3 population and
@@ -396,7 +396,7 @@ arrive with load and never leave, so an idle pod *holds* its history without add
 
 ## The dump is not free — it costs a container restart at this heap size
 
-Measured 2026-09-06 on `memex-cloud/memex-portal-deployment-58c859d4cc-gqqg7` (8 h old, working
+Measured 2026-09-06 on `<namespace>/memex-portal-deployment-58c859d4cc-gqqg7` (8 h old, working
 set 6 609 MiB, image `3.0.0-rc9.ci.7693`), while attempting the referrer walk this page's *What is
 still open* section asks for.
 

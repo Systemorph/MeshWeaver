@@ -205,7 +205,7 @@ The `@` prefix is a **Unified Content Reference** — it exists inside markdown,
 |---|---|---|
 | Native markdown link | `[Reinsurance](@/Systemorph/Reinsurance)` | — *(Markdig strips the `@` automatically)* |
 | Raw HTML inside markdown | `<a href="/Systemorph/Reinsurance">` | `<a href="@/Systemorph/Reinsurance">` |
-| HTTP URL / shared link | `https://memex.meshweaver.cloud/Systemorph/Reinsurance` | `https://memex.meshweaver.cloud/@/Systemorph/Reinsurance` |
+| HTTP URL / shared link | `https://portal.example.com/Systemorph/Reinsurance` | `https://portal.example.com/@/Systemorph/Reinsurance` |
 | Agent tool call | `Get('@/Systemorph/Reinsurance')` | — |
 | Autocomplete search | `@Syst…` | — |
 

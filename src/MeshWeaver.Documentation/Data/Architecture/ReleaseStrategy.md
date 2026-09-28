@@ -138,7 +138,7 @@ pattern field bound straight to the node). Default **Stable** — clean releases
 | **Continuous** | **required**, e.g. `3.0.1-ci*` | Roll to the newest sealed continuous build the pattern admits — latest by CD run number, not by version string ([why](/Doc/Architecture/SelfUpdateTargetSelection)). `3.0.0-ci*` never selects `3.0.1`: following a line ends when its release is tagged. **Without a pattern this is Stable**, and the poller says so once at Warning. |
 | **None** | *(ignored)* | Never auto-update. Apply updates manually (operator, or the admin tab's *Apply available update now*). |
 
-Fleet today (no clean release above `3.0.0` yet): `memex` and `memex-cloud` carry `Continuous` +
+Fleet today (no clean release above `3.0.0` yet): every portal instance carries `Continuous` +
 `3.0.0-ci*`, to be changed the day `3.0.1` is tagged. The record shapes and the semver rule are in
 [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) → "Which build an install takes".
 
@@ -153,7 +153,7 @@ applies the update.
 
 | Target | What "update" does |
 |---|---|
-| **AKS** (the fleet) | The portal **detects** the release and **hands it to the control instance** — one signed `self-update-available` event into `memex.systemorph.com`'s inbox — and the control plane opens the `Roll` that `aks-ops.yml` executes: unattended when the record already pins that tag, behind an approval in the mesh otherwise. The portal holds NO right on the cluster (MeshWeaver#4098; [Self-Update on the Control Lane](../SelfUpdateControlLane)). |
+| **AKS** (the fleet) | The portal **detects** the release and **hands it to the control instance** — one signed `self-update-available` event into the control instance's inbox — and the control plane opens the `Roll` that `aks-ops.yml` executes: unattended when the record already pins that tag, behind an approval in the mesh otherwise. The portal holds NO right on the cluster (MeshWeaver#4098; [Self-Update on the Control Lane](../SelfUpdateControlLane)). |
 | **A standalone Kubernetes install** (`selfUpdate.canPatch: true`) | The pre-#4098 shape: the portal **patches its own Deployment image from inside the pod** (Kubernetes API, projected service-account token), rolling the **portal AND migration** deployments to the new tag together; k8s does the rolling update. Only with a chart that renders the self-patch Role. |
 | **Local k3s on Mac** | `memex-local` rolls host-side (`autoroll`, `deploy/homebrew/README.md`); the in-pod patch is not used. (A version-specific tag pulls even under `imagePullPolicy: IfNotPresent` because the tag isn't cached. A pure local-build dev loop without ACR is effectively `None`.) See [LocalColimaMac](/Doc/Architecture/LocalColimaMac). |
 | **Monolith** (non-k8s) | No self-patch (no service-account token) → detect-only: records `LatestAvailableTag` for visibility; the operator updates the binary. |

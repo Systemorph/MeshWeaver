@@ -13,11 +13,11 @@ Warning a minute per dead address, each summarising hundreds of refusals logged 
 ```
 [ROUTE] Directed delivery to pod hub 'portal/Wyf_5FmQ…' was refused: no silo in this cluster is
 currently serving that hub. Transient — … so a retry is the correct response. … Message RawJson
-(…) from mkleiner was NOT posted to the Orleans stream … Surfacing a transient DeliveryFailure to
+(…) from user-b was NOT posted to the Orleans stream … Surfacing a transient DeliveryFailure to
 the sender instead. 1169 earlier refusal(s) of this address since the last such line were logged at Debug.
 ```
 
-## The measurement (memex, 2026-09-03)
+## The measurement (the control instance, 2026-09-03)
 
 | Fact | Value |
 |---|---|
@@ -26,7 +26,7 @@ the sender instead. 1169 earlier refusal(s) of this address since the last such 
 | Last refusal | ~16:40Z — **46 minutes** after the tab closed |
 | Rate | 300–1,169 refusals per minute, every minute |
 | `routing reported subscriber … as unserved` (the eviction's one log line) | **0** on every pod |
-| Same shape, other users, same day | rsalzmann 07:34–07:44 (11 min); mkleiner 09:30–09:43 (12 min) |
+| Same shape, other users, same day | user-a 07:34–07:44 (11 min); user-b 09:30–09:43 (12 min) |
 
 The sender in every line is the **owner** — the user's partition hub — pushing `DataChangedEvent`
 frames to a subscriber that no longer exists. The two shorter storms ended when the server-side

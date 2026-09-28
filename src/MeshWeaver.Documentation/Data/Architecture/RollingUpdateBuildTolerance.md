@@ -13,7 +13,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 ## The incident, measured
 
-On 2026-09-12 at 06:25Z `https://memex.meshweaver.cloud/DeepSign` — an instance of the `Store/Plugin` NodeType — rendered:
+On 2026-09-12 at 06:25Z `https://portal.example.com/DeepSign` on the public instance — an instance of the `Store/Plugin` NodeType — rendered:
 
 > This item's type has not finished compilation yet, so its page couldn't be built. **NodeType 'Store/Plugin' build did not settle within 30s.** Instance 'DeepSign' is rendering this fallback until the type's build settles.
 
@@ -23,9 +23,9 @@ What the mesh recorded:
 
 | Time (UTC) | Fact | Where |
 |---|---|---|
-| 06:10:48 → 06:14:48 | Rolling update `ci.8372` → `ci.8399` on `memex-cloud/memex-portal-deployment` (`maxSurge 1, maxUnavailable 0`); the three old pods get `Killing` at 06:12:22, 06:13:35, 06:14:48 | `kubectl get events` |
+| 06:10:48 → 06:14:48 | Rolling update `ci.8372` → `ci.8399` on `<namespace>/memex-portal-deployment` (`maxSurge 1, maxUnavailable 0`); the three old pods get `Killing` at 06:12:22, 06:13:35, 06:14:48 | `kubectl get events` |
 | — | `terminationGracePeriodSeconds: 1800` with a `preStop` that waits on `/drain` for up to 1680 s — **the old generation keeps serving hubs for up to 30 minutes after `Killing`** | Deployment spec |
-| — | `ci.8399` announces framework identity **`sa74cfbd…`** (`DynamicTypePreWarmer: … framework identity sa74cfbdd57e3a4f4440792fd1800aa3d, build g4c99ec26…`); `ci.8372` (still running as memex.systemorph.com) announces **`s6649734…`** | pod logs |
+| — | `ci.8399` announces framework identity **`sa74cfbd…`** (`DynamicTypePreWarmer: … framework identity sa74cfbdd57e3a4f4440792fd1800aa3d, build g4c99ec26…`); `ci.8372` (still running on the control instance) announces **`s6649734…`** | pod logs |
 | 06:17:48 / 06:17:50 / 06:18:02 | Three concurrent `Update Store to the built commit 38ebf08e` activities (one per new pod) | `Store/_Activity` |
 | 06:18:38 | Release `X3ICiS9-`: an **adoption** under `sa74cfbd` (`v13825-sa74cfbd-…dll`, no compile activity) — the CI bundle for the live identity was on `/data/prebuilt-bundles/sa74cfbd…` | `Store/Plugin/Release` |
 | 06:18:58 … 06:23:08 | **Eight compiles, all producing `s6649734`-tagged assemblies** (`v13834`, `v13839`, `v13843`, `v13847`, `v13855`, `v13859`, `v13863`) — the per-NodeType hub's owner grain was on a *draining old-generation pod*, and every activation on a new pod read the record as ABI-stale, flipped it Pending, and the old owner rebuilt it under its own identity | `Store/Plugin/_Activity/compile-*`, Release artifacts |
@@ -34,7 +34,7 @@ What the mesh recorded:
 | 06:25 → 06:44 | Activations on the new pods **still** time out — the instance page stays on the fallback; `get @DeepSign/layoutAreas/` times out | pod logs, MCP |
 | ≈ 06:45 | The last old pod's grace expires; `DeepSign` resolves again (its page still shows the overlay it bound earlier until the instance is recycled) | MCP |
 
-The same shape on 2026-09-11 18:47–18:55Z (`ci.8323` → `ci.8372`) and on 2026-09-10 14:40–14:47Z. `Store/Plugin` on memex is at node version 13 870; on systemorph, which rolls less often, 2 895.
+The same shape on 2026-09-11 18:47–18:55Z (`ci.8323` → `ci.8372`) and on 2026-09-10 14:40–14:47Z. `Store/Plugin` on the public instance is at node version 13 870; on the control instance, which rolls less often, 2 895.
 
 The seeder's line names the second defect. On every new pod:
 

@@ -126,12 +126,12 @@ the fault is, *what* it is, and *which* one it is:
 and `samples[]` keep folding — across DEPLOYMENTS.** The auto-filed issue prints that stale
 `namespace` in its evidence table as though it described every occurrence, and it is the first thing
 a reader uses to pick which portal to go and look at. Measured on the control instance,
-2026-09-11 — `Admin/_LogIncident/c0b1424c7beb28e0`, `content.namespace: "memex"`, `occurrences: 62`:
+2026-09-11 — `Admin/_LogIncident/c0b1424c7beb28e0`, `content.namespace: "<control-ns>"`, `occurrences: 62`:
 
 | pod, from that incident's `pods[]` | actually in namespace | established by |
 |---|---|---|
-| `memex-portal-deployment-7f74766b8d-rltnt` | **`memex`** | `Ops/Logs/memex-1789108640040221110-766b8d-rltnt` — `deployment: memex`, selector `{namespace="memex"}` |
-| `memex-portal-deployment-6d7497cb58-jc296` | **`memex-cloud`** | `Ops/Logs/memex-cloud-1789104559148633219-97cb58-jc296` — `deployment: memex-cloud`, selector `{namespace="memex-cloud"}` |
+| `memex-portal-deployment-7f74766b8d-rltnt` | **`<control-ns>`** | `Ops/Logs/<control>-1789108640040221110-766b8d-rltnt` — `deployment: <control>`, selector `{namespace="<control-ns>"}` |
+| `memex-portal-deployment-6d7497cb58-jc296` | **`<public-ns>`** | `Ops/Logs/<public>-1789104559148633219-97cb58-jc296` — `deployment: <public>`, selector `{namespace="<public-ns>"}` |
 
 Both portals, one incident, one namespace label. And because the normaliser masks the varying node
 path (`Failed to compile assembly for node '{value}'`), that incident's ten most recent `samples[]`
@@ -163,7 +163,7 @@ about what reopened it:
 🚨 **The line that reopened #2387 was read as a SUCCESS on 2026-09-14 — and that reading was wrong.**
 `Feedback/Feedback/Source/FeedbackHandover` was named ABSENT at 22:02:37.818Z and its `lastModified`
 in the mesh was 22:02:45.036Z, eight seconds later. The write landed; the repair did not **hold**.
-Re-measured on memex.meshweaver.cloud 2026-09-16, the same node, at the same module version
+Re-measured on the public instance 2026-09-16, the same node, at the same module version
 (`caffd87567c65b4f`), was named ABSENT on **eleven boots** — 2026-09-13T22:02Z through
 2026-09-16T21:33Z, each matched one-to-one by a `Plugins/Feedback` record version (v18…v28) — and at 22:05Z,
 thirty minutes after the last "repair", `get` answered `Not found`. What removed it each time is the
@@ -199,7 +199,7 @@ the post-#4257 line is a Warning and ends *"…Whether the repair worked is repo
 it has (MeshWeaver#3485)."* So a sample carrying the first sentence was emitted by an image that does
 not contain `83cb0dd932`, whatever its pod name says — measured on this incident 2026-09-16: all ten
 retained samples (occurrences 54→63, through 22:54:35Z) carry it, and the only fleet portal without
-that commit was memex.meshweaver.cloud on core `c84c6c05`. **Read the LINE for the image, the
+that commit was the public instance on core `c84c6c05`. **Read the LINE for the image, the
 `namespace`/`pods` fields for neither** — both portals name their deployment
 `memex-portal-deployment`, so the pod suffix discriminates nothing.
 
@@ -390,7 +390,7 @@ first and fall back to `samples[]` only for a node minted before the ledger exis
 
 ### The two cases this has to get right
 
-Both are measured, both from `memex-cloud` on 2026-08-17 (#1787), and
+Both are measured, both from the public instance on 2026-08-17 (#1787), and
 `ProdRedLogFixtureTest` pins them on verbatim production lines:
 
 | Input | Result | Why |
@@ -518,7 +518,7 @@ this subsystem's normal operating condition, not a hypothetical. Same argument a
 `LogIncidentReportSanity`: a classification only one side enforces is not enforced.
 
 **🚨 Raising `QueryLimit` is not the fix for truncation.** The number in the watcher's log is a *cap*,
-not a count: on 2026-08-17 several consecutive `memex-cloud` windows reported exactly `5000` and
+not a count: on 2026-08-17 several consecutive public-instance windows reported exactly `5000` and
 nothing said so anywhere a verdict is read. A higher cap moves the ceiling; the finding is that one
 namespace out-talks its watcher, and the actionable number is the **backlog** the report carries —
 because a backlog that keeps growing ends at the `MaxCatchUp` floor, which is the row above that
@@ -527,8 +527,8 @@ loses data for good.
 The per-window summary distinguishes the counts that used to be conflated:
 
 ```
-memex-cloud: 5 distinct fingerprint(s) from 7 red burst(s) (2934 line(s) read)
-memex-cloud: 3 distinct fingerprint(s) from 41 red burst(s) (5000 line(s) read — TRUNCATED at the query limit)
+<public-ns>: 5 distinct fingerprint(s) from 7 red burst(s) (2934 line(s) read)
+<public-ns>: 3 distinct fingerprint(s) from 41 red burst(s) (5000 line(s) read — TRUNCATED at the query limit)
 ```
 
 The old line read `"1 distinct fingerprint(s) from 5000 red line(s)"` with `5000` bound to the
@@ -544,7 +544,7 @@ the same structural reason — they are scoped to an *instance*, and the watcher
 - there is no `Deployments/mw-log-watcher` record, so `Sample` (which is what reports per-replica
   images) has nothing to target;
 - `Logs` builds its stream selector from the deployment record's own namespace
-  (`LokiQuery.ForNamespace`; every executed action's `logQl` field reads `{namespace="memex"} …`) and
+  (`LokiQuery.ForNamespace`; every executed action's `logQl` field reads `{namespace="<namespace>"} …`) and
   the `query` field is only the pipeline appended after it — the watcher runs in `monitoring`;
 - `Audit` is likewise scoped to the instance's own helm release.
 
@@ -605,7 +605,7 @@ surfaces inside `MessageHub.HandleMessageAsync`**, the most-travelled method in 
 filed from such an id is titled after whichever fault arrived first, and two occurrences of it can
 share nothing but the method they died in.
 
-Measured 2026-09-14 against `Admin/_LogIncident/log-burst-header-only-{memex,memex-cloud}` on the
+Measured 2026-09-14 against `Admin/_LogIncident/log-burst-header-only-{<control>,<public>}` on the
 control instance, every refused fingerprint on both namespaces reproduced from the **first** row:
 
 ```
@@ -641,7 +641,7 @@ not read it as "processed within a poll interval of the line". One-sided is enou
 later only strengthens the conclusion: whenever that window was read, an old-format binary was doing
 the reading, and that cannot have been before the lines existed.
 
-Measured 2026-09-14: `log-burst-header-only-memex` carries the 2026-08-09 payload over lines stamped
+Measured 2026-09-14: `log-burst-header-only-<control>` carries the 2026-08-09 payload over lines stamped
 `14:24:01Z`–`14:24:18Z` that same day — so an old-format binary was running **on or after** that
 instant, about 18 hours after the holdback image was published. A queued backlog cannot account for
 it either: a report cannot be older than the lines it contains.
@@ -665,7 +665,7 @@ Two things this is good for beyond dating:
 Because the discriminator switches on the pair, a site that emits *both* shapes — some lines with an
 exception body attached, some bodyless — takes **two different branches of the table above** and mints
 **two** fingerprints, each of which then files its own GitHub issue about the same defect class.
-Measured 2026-09-19 on memex.systemorph.com,
+Measured 2026-09-19 on the control instance,
 `MeshWeaver.Hosting.PostgreSql.PostgreSqlPartitionedMeshQuery` has exactly two, both reproducible
 locally (the site logs no application frame either way, so these are the exception-only and
 neither-present rows):
@@ -735,8 +735,8 @@ control**, because neither covers the whole window:
    own health.
 
 Worked example, the one that closed #3545: `d4c8f6f74ecfa422` froze at `2026-09-19T05:15:30Z`,
-re-addressing went live at `11:41Z`, the category sweep finds no successor, and memex-cloud lines
-were captured at `06:30:42Z` and `08:54:16Z` with a memex-cloud incident still updating at
+re-addressing went live at `11:41Z`, the category sweep finds no successor, and public-instance lines
+were captured at `06:30:42Z` and `08:54:16Z` with a public-instance incident still updating at
 `19:00:24Z`. Zero unanchored fan-out lines on that portal after 05:15:30Z, with no hole in the
 window.
 
@@ -747,10 +747,10 @@ shares a fingerprint whether it has a body or not. The report then takes its `no
 whichever burst came *first*; if that one was bodyless, the whole report is undiagnosable and the
 portal refuses all of it — bodies included.
 
-That is not a theory. `log-burst-header-only-memex` (2026-09-14) carries `occurrences: 4` whose
+That is not a theory. `log-burst-header-only-<control>` (2026-09-14) carries `occurrences: 4` whose
 samples are **one** bare `crit: …RoutingGrain[0]` header and **three** full `[ROUTE] Routing
 back-pressure` bodies: three diagnosable red logs that got no ticket of their own. The
-`memex-cloud` sibling shows the same shape from one pod 33 ms apart on 2026-09-08.
+public-instance sibling shows the same shape from one pod 33 ms apart on 2026-09-08.
 
 🚨 **Be precise about which half of that the evidence settles, because both issues were filed on the
 other half.** They read the samples as multi-pod interleaving cutting a burst up. Interleaving is a
@@ -858,7 +858,7 @@ something. The issue thread shows nothing — no error, no gap marker — so **a
 because the commenter was refused reads exactly like a fault that stopped firing.** It fails toward
 "fine".
 
-Measured on `memex.systemorph.com` on 2026-09-11
+Measured on the control instance on 2026-09-11
 ([#4022](https://github.com/Systemorph/MeshWeaver/issues/4022)): `Admin/_LogIncident/af1ee515fdf60bd1`
 stood at `occurrences: 7`, `occurrencesAtLastComment: 5`, `status: Failed`,
 `error: "Resource not accessible by integration"` against issue #3876 — two occurrences that never
@@ -948,7 +948,7 @@ its draft and asks to `File`. Nothing in the table above can leave it, and the i
 rule re-triages `New` and `Failed` but never `Triaging` — it cannot tell "the round is running"
 from "the round died". So a round that ends without writing back parks the incident permanently:
 invisible, un-ticketed, and still parked after the cause is fixed. That is what a missing triage
-agent looks like — nineteen incidents accumulated that way on `memex.systemorph.com` while
+agent looks like — nineteen incidents accumulated that way on the control instance while
 `LogTriage` was absent from the served agent catalog.
 
 The control plane therefore **reconciles** a `Triaging` incident against the thread it is waiting

@@ -288,7 +288,7 @@ Health check nodetype_bake: 'NodeType bake in progress — enumerating dynamic N
 that is not the system working slowly. It is the fallback, and it means **no bundle matched this
 image's framework identity**. Treat it as a missing artifact, never as "boots are slow here".
 
-### Where the files actually come from (measured on memex, 2026-08-22)
+### Where the files actually come from (measured on the control instance, 2026-08-22)
 
 There are two adoption sources. On the date in the heading exactly one of them was carrying anything —
 and which one is a property of the image and the volume in front of you, so the table is a
@@ -311,7 +311,7 @@ since 2026-08-18. What it does not fix on a busy trunk:
 🚨 **`MW_TEST_IMAGE` is `mw-plugin-test:latest`, a MOVING tag.** The bake resolves it at run time;
 the instance later rolls to the newest *portal* tag. On a trunk that builds every few minutes those
 are different commits, so the bake seals identity A while the instance wants identity B. Three bakes
-in one morning published `s429a849…`, `s14290dce…` and `se78f65ed…` while memex held for
+in one morning published `s429a849…`, `s14290dce…` and `se78f65ed…` while the control instance held for
 `se3bf749…` — every job green throughout.
 
 The half that makes this converge is the CONSUMER: an instance must roll to the newest release that
@@ -437,7 +437,7 @@ surface manifest does not record at all.** `ComputeSurfaceIdentity` hashes every
 `absent`. So a host that stops *compiling against* an assembly stops recording it — and forks its
 identity away from every other host — while its binaries are otherwise identical.
 
-That is what took memex.meshweaver.cloud's course covers down for two hours on 2026-08-17. The
+That is what took the public instance's course covers down for two hours on 2026-08-17. The
 sequence, measured:
 
 * `feat: Excel/CSV import becomes its own module` (`82481e024`, merged 18:46 that evening) moved
@@ -583,7 +583,7 @@ pipeline, **after** the static repo import settles (the nodes a bundle names mus
 
 > 🚨 **Step 4 is not an optimisation detail — adoption is expensive.** `Seed` opens the type's own
 > mesh-node stream, which **activates its per-node hub**, then re-uploads the bytes and writes the
-> node. Before the skip, memex-cloud re-adopted all 43 of its assemblies on every boot — 43
+> node. Before the skip, the public instance re-adopted all 43 of its assemblies on every boot — 43
 > activations, 43 uploads, 43 writes, **13.5 s of a 101 s warm-up** — to establish that nothing had
 > changed since the previous pod did the same. The framework identity is an API-surface hash and is
 > stable across internal-only merges, so that is the *common* roll. It also grew the assembly cache
@@ -653,7 +653,7 @@ coverage collapse in the logs of the *first* pod of a bad roll.
 
 > 🚨 **Do not "fix" this by gating on full adoption coverage.** `uncovered > 0` is the normal steady
 > state of a real portal: users author NodeTypes in their own partitions, and those have no CI bake
-> by construction — the live `memex` share holds two such types under `rbuergi`. A coverage gate
+> by construction — the control instance's live share holds two such types under one user's partition. A coverage gate
 > would never go ready.
 
 > 🚨 **A `PreWarm__*` key in a values file does nothing until the configmap renders it.**
@@ -709,7 +709,7 @@ itself (`Memex.Portal.Shared` references `MeshWeaver.Documentation`). Nothing el
 | Content | Who bakes it | Why not CD |
 |---|---|---|
 | node-repo content (Plugins, Education, Reinsurance, SocialMedia) and **Store** packages | each repo's own `node-repo-publish-bake` lane, against the same image ⇒ the same identity | it arrives **already compiled** and is adopted; `main-cd.yml` checks out no other repository, so it could not compile them even by accident |
-| `samples/Graph/Data` | nobody — compile-**gated** only | no deployment embeds them, and memex receives them over the GitHub link into the `MeshWeaver` partition, where node paths read `MeshWeaver/samples/Graph/Data/ACME/…` while bundles are keyed `ACME/…`. The seeder matches by node **path**, so the bundles are inert everywhere. Measured: 7 packages / 24 assemblies per CD run for bytes nothing can adopt |
+| `samples/Graph/Data` | nobody — compile-**gated** only | no deployment embeds them, and the control instance receives them over the GitHub link into the `MeshWeaver` partition, where node paths read `MeshWeaver/samples/Graph/Data/ACME/…` while bundles are keyed `ACME/…`. The seeder matches by node **path**, so the bundles are inert everywhere. Measured: 7 packages / 24 assemblies per CD run for bytes nothing can adopt |
 
 So the CD bake is **1 package / 4 assemblies**, down from 8 / 28 when it also baked the samples.
 Correctness of the samples content is unaffected — `dotnet-test.yml`'s doc-gate still compiles,
@@ -747,7 +747,7 @@ It supersedes the earlier request to keep ten CI builds. Module repositories res
 the released platform at run time; retention must not restore platform pins.
 
 Every CI build that publishes a bake adds one `<root>/<identity>/` directory to the store, and until
-this pass nothing ever removed one. Measured 2026-09-08 on memex.systemorph.com through the memex
+this pass nothing ever removed one. Measured 2026-09-08 on the control instance through its
 API: the `/data` share (16384 MiB) had **3 MiB free**; `prebuilt-bundles` held **13398 MiB in 482
 identity directories**, `modules` 2269 MiB, `assembly-cache` 704 MiB. A full share truncates writes
 silently and reports the failure far from the cause — every runtime NodeType recompile landed as
@@ -846,7 +846,7 @@ adoption is staged: core is wired now, the six satellites wire it in follow-up P
 on `main`.** Every satellite runs its full build on `push: [main]` and once a day on `schedule` (the
 per-build platform wave was switched off the same day), and a red run there is attached to no pull
 request, no reviewer and no check list: it updates nothing and pages nobody. Maintainer, 2026-09-12:
-*"put the ci-failure on all repos, in main; triaging is done by systemorph-com; communicate via MCP —
+*"put the ci-failure on all repos, in main; triaging is done by [the control instance]; communicate via MCP —
 open a thread with a triage agent; pool such connections by portal."* The caller is two jobs at the
 end of `ci.yml` (`ci-failure` on `failure()`, `ci-green` on `success()`, both `needs:` every gate
 job, both statically unreachable from a pull request; the template is in the lane's header, and each
@@ -864,8 +864,8 @@ public fields); anything else is logged and left alone, and the label is deliber
 a CD heal close the CI ledger while CI is still red. Each way the lane POSTs a signed event
 (`ci-failure` / `ci-green`, HMAC-SHA256 over the exact body in `X-Hub-Signature-256`, the same shape
 as the build fact) to the control portal's inbox at `vars.CONTROL_WEBHOOK_URL` —
-`https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds` — after validating that the URL is
-https, on `control-webhook-host` (default `memex.systemorph.com`) and under `/api/hooks/`, so a
+`https://control.example.com/api/hooks/Hosting/PlatformBuilds` — after validating that the URL is
+https, on `control-webhook-host` (the control instance's host) and under `/api/hooks/`, so a
 signature never travels to an arbitrary host; it then judges the inbox's `"signature"` verdict the
 same three-way way. The issue writes use the caller's `secrets.GITHUB_TOKEN` with `issues: write`
 granted on the caller job, never a GitHub App token (the installation holds no `issues` grant, and an
@@ -1162,7 +1162,7 @@ as historical.
 > Plugins#1707) and no satellite lists the type; each repo's daily `schedule` resolves the newest
 > SEALED set itself (`scripts/resolve-platform.py`, #3842 — not the `:main` tag the table below
 > names) and runs the full bake against it. The four-part shape below remains the reason a satellite
-> carries the poll at all; the cadence rationale is `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+> carries the poll at all; the cadence rationale is `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the control instance's MCP).
 
 **This is the single defect that makes a fleet boot on an identity nobody baked, and it has been
 rediscovered at least four times. Read this before touching a bake trigger.**
@@ -1179,7 +1179,7 @@ An instance self-updates to the newest release tag. If no satellite baked agains
 sweep, and the boot takes minutes instead of seconds. **The bundles are not missing because
 publication is broken — they are missing because nothing told the satellites a release happened.**
 
-So a satellite must **follow the release**. The event is memex's: the registry's
+So a satellite must **follow the release**. The event comes from the registry instance: its
 `PlatformBuildInboxWatcher` dispatches `meshweaver-framework-released` to every repository the
 `Hosting/Deployment` records name as a registry source, from the build fact core CD POSTs into
 `Hosting/PlatformBuilds` — core itself dispatches to no repository (its `notify-dependents` fan-out,
@@ -1357,7 +1357,7 @@ one rather than counting it.
 When this is missing you do not see a red gate. You see:
 
 - an instance **held** on an old version, or rolling and then taking minutes per pod to boot;
-- `/data/prebuilt-bundles` holding **many** identities (101 on memex-cloud, 2026-08-21) and **none**
+- `/data/prebuilt-bundles` holding **many** identities (101 on the public instance, 2026-08-21) and **none**
   of them the one the booting pod resolves;
 - `/app/prebuilt` **empty** — the image lane contributes nothing, so the store is the only source;
 - boot logs showing a full Roslyn sweep (`compiled=<N>`) instead of `adopted … from … sealed bundles`.
@@ -1370,7 +1370,7 @@ dispatch was REMOVED rather than provisioned: a publisher must not know its read
 credential to tell them is not worth holding.
 
 **Measured in production, 2026-08-17** — for satellite content the lane is not a design any more,
-it is observed behaviour. On `memex` running `3.0.0-rc4.ci.4049` (identity
+it is observed behaviour. On the control instance running `3.0.0-rc4.ci.4049` (identity
 `s377941f549f721e01ac764e0fb8db84a`), boot
 **adopted 68 prebuilt assemblies from 31 sealed bundles in 18.9 s**
 and Roslyn-compiled **zero** healthy types (warm-up 32.1 s, `compiled=0`, `alreadyBaked=84`).
@@ -1386,7 +1386,7 @@ types. The satellites escape it precisely because they bake INSIDE the image.
 - **DB-resident types** (user/partition content CI cannot see) stay on the runtime bake.
 - **A bundle is matched to a deployment by node PATH**, so a portal that mounts a tree somewhere
   other than its canonical root adopts nothing from it. That is why CD no longer bakes the samples
-  trees at all (see "CD compiles ONLY what the image embeds"): memex holds them under
+  trees at all (see "CD compiles ONLY what the image embeds"): the control instance holds them under
   `MeshWeaver/samples/Graph/Data/ACME/…` while a bundle from that tree is keyed `ACME/…`. If a
   deployment ever wants them prebuilt, the fix is to agree one canonical path per shipped tree — a
   content-layout question, not an identity one.

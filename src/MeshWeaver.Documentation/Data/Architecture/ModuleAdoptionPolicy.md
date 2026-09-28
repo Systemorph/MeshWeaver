@@ -73,7 +73,7 @@ reported, and the report names the image copy it could not substitute, so nobody
 as "the image had nothing" (the mechanism is on
 [The Module Platform Link Gate](../ModulePlatformLinkGate)).
 
-The rule was measured against on 2026-09-08 (memex.systemorph.com, image `3.0.0-ci.8079`): the
+The rule was measured against on 2026-09-08 (the control instance, image `3.0.0-ci.8079`): the
 module set pinned a two-week-old store generation of `MeshWeaver.Blazor.Views`, an assembly the
 image also ships. The boot's link probe refused it correctly — it referenced
 `MeshWeaver.Graph.AnchoredComment`, a type the platform had since removed — but the boot union had
@@ -170,7 +170,7 @@ carries all three bounds as negative controls.
 ## A declined bundle risks stale TYPES, not just a slower boot
 
 The bullets above treat *no adopted bundle* as a cost paid in boot time, because the content then
-compiles in the mesh. Measured on 2026-09-10 (memex.systemorph.com, `3.0.0-ci.8238`, core
+compiles in the mesh. Measured on 2026-09-10 (the control instance, `3.0.0-ci.8238`, core
 `2287decb`, identity `s546f29f9…`) that is not the whole story: a module whose bundle is declined
 can keep serving **types built from source older than the source the instance has installed**,
 while the package's own install record reads installed, current and up to date.
@@ -217,7 +217,7 @@ so a fix aimed at the shelf would be aimed at bytes this instance never ran.
 
 ## The registry shelf: arrival order is not version order (#3996)
 
-R1–R3 describe the consumer. A registry instance is also where producers publish: CI uploads module bundles to it (`POST /api/plugins/bundles/{plugin}` → `ModuleLandingService.ShelveModule`), and since #3461 two lanes publish the same module — core CD's `plugins-bake` at the gate's Plugins commit, and the module repository's own publication. Core CD runs take 40–50 minutes, so the **older** build routinely arrives **last**. Until #3996 every accepted upload moved the registry's activation head. Measured on memex.meshweaver.cloud on 2026-09-11: `MeshWeaver.Mail.MicrosoftGraph` 1.7.0 landed at 02:49Z and 1.6.1 displaced it at 03:00Z; the activation entry read `Version=1.6.1 PreviousVersion=1.7.0`, so the next restart would have silently un-shipped a merged change. `MeshWeaver.AI` showed the same shape that night.
+R1–R3 describe the consumer. A registry instance is also where producers publish: CI uploads module bundles to it (`POST /api/plugins/bundles/{plugin}` → `ModuleLandingService.ShelveModule`), and since #3461 two lanes publish the same module — core CD's `plugins-bake` at the gate's Plugins commit, and the module repository's own publication. Core CD runs take 40–50 minutes, so the **older** build routinely arrives **last**. Until #3996 every accepted upload moved the registry's activation head. Measured on the plugin registry instance on 2026-09-11: `MeshWeaver.Mail.MicrosoftGraph` 1.7.0 landed at 02:49Z and 1.6.1 displaced it at 03:00Z; the activation entry read `Version=1.6.1 PreviousVersion=1.7.0`, so the next restart would have silently un-shipped a merged change. `MeshWeaver.AI` showed the same shape that night.
 
 The rule is the consumer's "never roll back unattended", applied to the publish route: **the head is the highest version the shelf holds, never the last upload to arrive.** The order is `NuGetVersionComparer`'s — the comparer `SkipOlder` uses — so a registry's head and its consumers' update decisions cannot disagree about which version is newer.
 
@@ -237,7 +237,7 @@ The rule is the consumer's "never roll back unattended", applied to the publish 
 
 **Deliberate rollback.** Re-publishing an older version no longer rolls a registry back: the publish route has no operator, only build jobs, and a build job never intends a rollback. Roll forward instead (publish the fix under a higher version), or uninstall the module on that registry first (`ModuleLandingService.RemoveModule` disables the entry, so the next publish is a first landing). The Store's adopt path (`LandModule`) does not carry this rule; the unattended lane that could reach an older version is already refused by `SkipOlder`.
 
-**A record that already regressed** — the 2026-09-11 memex.meshweaver.cloud state, head `1.6.1` with `1.7.0` as its fallback — is not rewritten by an older or equal upload; the newer generation stays retained as the fallback. It heals on the next publish of `1.7.0` or higher, which the next core CD cycle delivers once its gate carries that version.
+**A record that already regressed** — the 2026-09-11 state of the plugin registry instance, head `1.6.1` with `1.7.0` as its fallback — is not rewritten by an older or equal upload; the newer generation stays retained as the fallback. It heals on the next publish of `1.7.0` or higher, which the next core CD cycle delivers once its gate carries that version.
 
 **Covered: two replicas at once (#4026).** Landings are serialised within one process, and across replicas the rule used to be last-writer-wins: two replicas landing the same module within the same few seconds each decided against the entry they read before the other wrote. A landing no longer decides that way. It writes an immutable record of its own facts — its lane included, so the shelf's "never regress" and the adopt path's "an operator asked for it" both survive — and the head and fallback are DERIVED from every record present by replaying this rule in arrival order, so every replica reaches the same answer whatever order the writes landed in. [Module Activation Head Ownership](../ModuleActivationHeadOwnership) carries the on-disk format, why it stays readable by images already deployed, and the retention rule.
 

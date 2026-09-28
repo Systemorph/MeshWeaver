@@ -11,10 +11,10 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 mesh for the candidate partition roots and then asking the **anonymous permission gate** about each
 one; the roots that pass contribute themselves and their page-shaped descendants.
 
-For roughly a day the synthetic probe against `memex.meshweaver.cloud` failed 9 times in 100 runs
+For roughly a day the synthetic probe against the public instance failed 9 times in 100 runs
 with a message worth reading twice:
 
-> `memex.meshweaver.cloud served a well-formed sitemap that declares ZERO public roots. Either the
+> `portal.example.com served a well-formed sitemap that declares ZERO public roots. Either the
 > portal publishes nothing anonymously or SeoEndpoints' candidate query came back empty; either
 > way this probe checked no content and must not read green.`
 
@@ -96,7 +96,7 @@ The obvious hypothesis was that the permission fold had gone undetermined. `Anon
 logs a warning on exactly that outcome, naming the path and the classifier's reason, and that line is
 present in the image the instance runs — so it is checkable.
 
-Over 24 hours of `memex-cloud` logs, `reached NO verdict` returned **zero lines**. A zero has two
+Over 24 hours of the public instance's logs, `reached NO verdict` returned **zero lines**. A zero has two
 causes, so the denominator was measured separately: the namespace does reach Loki, and the matched
 control lines bracket **18:20Z–21:03Z on 2026-09-18**, which contains the most recent probe failure
 at **18:26:48Z**. For that occurrence, with coverage, the gate warning did not fire.

@@ -92,7 +92,7 @@ public record InstanceSecretContent
     /// <summary>Whether that use succeeded, for example whether the other end accepted the signature.</summary>
     public bool? LastUseOk { get; init; }
 
-    /// <summary>One sentence about that use, e.g. "accepted by the control instance as 'pearl'" —
+    /// <summary>One sentence about that use, e.g. "accepted by the control instance as 'fabrikam'" —
     /// keyed, so it renders in the viewer's language. Never a value.</summary>
     public LocalizableText? LastUseResult { get; init; }
 }

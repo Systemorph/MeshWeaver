@@ -121,7 +121,7 @@ For completeness, the two anonymous URLs that already exist were both measured o
 **404**: the old core release asset, and the portal content route
 `/api/content/MeshWeaver/static/Speech/ggml-swiss-german-turbo-q5_0.bin` documented in
 [On-device voice](/Doc/Architecture/OnDeviceVoice). The second is *expected* to 404 — that page's own
-serving caveat says the `static-assets` share is not yet mounted on the memex-cloud portal — and it is an
+serving caveat says the `static-assets` share is not yet mounted on the public instance's portal — and it is an
 **access-controlled** route in any case, so it was never an anonymous channel to begin with.
 
 ### ✅ 3. Stage the model into the image
@@ -167,12 +167,12 @@ Anything that names this asset is a consumer, and a move must visit all of them 
 | `deploy/whisper/docker-compose.yml` | the same file — it is a **build** input, not a runtime mount |
 | `deploy/whisper/helm/templates/deployment.yaml` | nothing at run time; the model is in the image |
 | `deploy/whisper/helm/values.yaml` | an `image.tag` whose image was built **with** a model |
-| `Systemorph/Memex` → `deployments/aks/memex-cloud/whisper/helm/` | a **verbatim vendored copy** of the chart above — it drifts silently and must be mirrored |
+| `Systemorph/Memex` → `deployments/aks/<env>/whisper/helm/` | a **verbatim vendored copy** of the chart above — it drifts silently and must be mirrored |
 | `clients/voice-gateway/run-local.sh` + README | `gh release download` into `$WHISPER_MODEL` |
 | `.gitignore` | keeps `deploy/whisper/models/` untracked (GitHub rejects any blob over 100 MB) |
 | MAUI `VoiceModelCatalog` | its own catalog URL — see [On-device voice](/Doc/Architecture/OnDeviceVoice) |
 
-🚨 **The Memex overlay is a COPY, not a dependency.** `deployments/aks/memex-cloud/whisper/helm` in the
+🚨 **The Memex overlay is a COPY, not a dependency.** `deployments/aks/<env>/whisper/helm` in the
 private Memex repo is a byte-for-byte fork of this chart, including its values. Nothing makes the two agree,
 and a fix applied only here leaves the deployed one broken — which is the same half-fix shape #2593
 committed, one repository over.

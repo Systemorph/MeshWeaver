@@ -174,10 +174,10 @@ measures it rather than rediscovering it from a screenshot.
 
 ```bash
 # the head declares all three
-curl -s https://memex.meshweaver.cloud/Chess | grep -oE '<link rel="(icon|apple-touch-icon)"[^>]*>'
+curl -s https://portal.example.com/Chess | grep -oE '<link rel="(icon|apple-touch-icon)"[^>]*>'
 
 # and the raster route really answers with a PNG of that size
-curl -s "https://memex.meshweaver.cloud/api/icon/Chess.png?size=180" | file -
+curl -s "https://portal.example.com/api/icon/Chess.png?size=180" | file -
 ```
 
 A node with no mark answering 404 on that second command is the design, not a failure — check its

@@ -142,7 +142,7 @@ a stored value that is already a live instance of a differently-named record —
 the snapshot is correctly left alone, and `As` logs that refusal at **Error** as a failed recovery:
 
 ```text
-As<MarkdownContent> for PartnerRe/Esl/EmailDraft-DueDiligence-2026-09-05:
+As<MarkdownContent> for Globex/Team/EmailDraft-DueDiligence-2026-09-05:
     value is EmailContent (DynamicNode_Essentials_Email), not convertible
 ```
 

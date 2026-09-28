@@ -2,7 +2,7 @@
 
 MeshWeaver is an open-source framework for building **data meshes**: documents, data, code, AI agents, and UI live together as addressable nodes on a mesh — versioned, collaboratively editable, vector-searchable, and processed by an actor-model message hub with a reactive Blazor UI. **Memex**, the portal application included in this repository, is a knowledge portal built on it where people and AI agents work on the same content.
 
-**See it live at [memex.meshweaver.cloud](https://memex.meshweaver.cloud)** — try the portal and read the full documentation at [memex.meshweaver.cloud/Doc](https://memex.meshweaver.cloud/Doc). The same docs are in this repo under [`src/MeshWeaver.Documentation/Data/`](src/MeshWeaver.Documentation/Data/).
+Read the full documentation online at [memex.meshweaver.cloud/Doc](https://memex.meshweaver.cloud/Doc). The same docs are in this repo under [`src/MeshWeaver.Documentation/Data/`](src/MeshWeaver.Documentation/Data/).
 
 ## Installation
 
@@ -79,7 +79,7 @@ record of what runs where live in the private
 The `memex` CLI operates any portal's mesh over the REST API — read, search, mutate, compile, and mirror nodes from the shell. It is not published as a dotnet tool; run it from a checkout:
 
 ```bash
-dotnet run --project src/MeshWeaver.Cli -- login mw_yourtoken --base-url https://memex.meshweaver.cloud
+dotnet run --project src/MeshWeaver.Cli -- login mw_yourtoken --base-url https://portal.example.com
 dotnet run --project src/MeshWeaver.Cli -- search "nodeType:Agent"
 ```
 

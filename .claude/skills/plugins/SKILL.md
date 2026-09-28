@@ -16,7 +16,7 @@ one install holds a git credential**.
 
 ```
 Systemorph/MeshWeaver.Plugins ─┐
-                               ├─→ REGISTRY (memex-cloud)  ── GET /api/plugins ──→ CONSUMER
+                               ├─→ REGISTRY (public inst.) ── GET /api/plugins ──→ CONSUMER
 Systemorph/education ──────────┘   holds the ONE credential   POST /api/plugins/files   no git access
 ```
 
@@ -31,9 +31,9 @@ npm/NuGet-style: the registry has source access, clients just speak HTTP. Model:
 | Holds git credential | ✅ | ❌ never |
 | Helm values | `pluginCatalog.sources` | `pluginCatalog.registryUrl` (or `.registries`) |
 | Secret | `PluginCatalog__RegistryTokens` (the list it **accepts**) | `PluginCatalog__RegistryToken` (the one it **sends**) |
-| Today | `memex-cloud` | every other deployment |
+| Today | the public instance (the plugin registry instance) | every other deployment |
 
-A registry is also a consumer of itself — `memex-cloud` sets both.
+A registry is also a consumer of itself — the plugin registry instance sets both.
 
 ## Consumer wiring
 
@@ -44,7 +44,7 @@ key serves a whole scaffold, revocable), receives its `mwi_` instance key and st
 
 ```yaml
 pluginCatalog:
-  registryUrl: "https://memex.meshweaver.cloud"
+  registryUrl: "https://registry.example.com"
   instanceId: "<this install's logical App ID>"   # REQUIRED with a bootstrap key; never derived
 config:
   memex_portal:
@@ -70,7 +70,7 @@ Several registries instead of one:
 ```yaml
 pluginCatalog:
   registries:
-    - {name: Plugins,   url: "https://memex.meshweaver.cloud"}
+    - {name: Plugins,   url: "https://registry.example.com"}
     - {name: Education, url: "https://<other-registry>"}
 ```
 
@@ -112,7 +112,7 @@ curl -sS -X POST https://<registry-host>/api/plugins/files \
 `200` unauthenticated = every private plugin repo behind that registry is public to anyone with the
 URL. Issue tokens and set `RegistryTokens`.
 
-> As of 2026-08-06 `https://memex.meshweaver.cloud/api/plugins` returns **200 with 28 packages** to an
+> As of 2026-08-06 the plugin registry instance's `/api/plugins` returned **200 with 28 packages** to an
 > unauthenticated caller, including paid course content from `Systemorph/education`. Fixing it means
 > issuing each install a token, setting `RegistryTokens` on the registry, and rolling — in that order,
 > or consumers lose their catalog in the gap.
@@ -155,7 +155,7 @@ kubectl -n <env> get configmap memex-portal-config -o jsonpath='{.data}' | tr ',
 
 **The #1 cause: the chart only emits keys it templates.** Before `pluginCatalog` existed in
 `values.yaml`, every plugin key except `AutoUpdateByDefault` was silently dropped — which is why
-`memex-cloud`'s registry config was hand-applied as raw Deployment env vars that no redeploy
+the plugin registry instance's registry config was hand-applied as raw Deployment env vars that no redeploy
 reproduces. If a key isn't in `deploy/helm/templates/memex-portal/config.yaml`, it does not reach the
 pod. Verify by rendering:
 

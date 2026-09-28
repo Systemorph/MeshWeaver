@@ -34,7 +34,7 @@ It stopped finishing. Every check timed out, every new version was held, and the
 
 Because that reads as a *compatibility* refusal rather than "the check ran out of time", it is easy to
 look at and conclude the new version is genuinely unsafe. It was not. The public portal
-`memex.meshweaver.cloud` stayed on a six-day-old build this way while fresh versions kept being
+stayed on a six-day-old build this way while fresh versions kept being
 published every half hour, and several of its Store pages failed to compile against that older build
 as a result.
 
