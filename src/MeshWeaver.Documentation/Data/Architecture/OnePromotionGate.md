@@ -81,6 +81,17 @@ endpoint, which answers 404 for this repository.
   green set is taken. Plugins pull requests no longer hold back to the set Plugins `main` last
   passed on by default; the label `platform:main-passed` asks for that ceiling.
 
+### Page-one freshness
+
+GitHub can return a cached page 1 of core main-CD runs that is stale but still younger than the
+12-hour age guard. That made a consumer quietly choose an older sealed set even though newer sets
+had completed (#73). For resolutions without a caller-supplied main-passed ceiling, the resolver
+now compares page 1 with a second query for main-CD runs created within that same 12-hour window.
+A higher run number is a positive witness that page 1 omitted a run; the resolver re-reads page 1
+up to the bounded retry limit and refuses to resolve from it if it remains stale. If the independent
+query cannot be read, freshness is unverified and the resolver fails closed. A successful query
+with no newer run proves nothing, so the existing age and ceiling rules still decide the result.
+
 ### One promotion gate
 
 `promote` (phases A and B) makes a set usable by CI. It no longer ARMS it. The arming writes —
