@@ -1147,6 +1147,37 @@ def merge_roster(committed: dict, private: dict) -> dict:
     return merged
 
 
+def mask_private_roster() -> list[str]:
+    """Register every identifier the PRIVATE roster carries as a GitHub Actions log mask.
+
+    This repository's run logs are public, and the lane's diagnostics name repositories,
+    registries and installations verbatim — so an identifier that is private in the secret must
+    not reappear in plain text on a red run. Called once from `main()` (never from the
+    self-test, whose fixtures would mask ordinary words); a no-op outside GitHub Actions or
+    without the secret. Returns the masked values so the caller can say how many."""
+    extra = os.environ.get(PRIVATE_ROSTER_ENV, "").strip()
+    if not extra or os.environ.get("GITHUB_ACTIONS") != "true":
+        return []
+    try:
+        private = json.loads(extra)
+    except ValueError:
+        return []              # the readers refuse it by name; nothing identifiable to mask
+    values: set[str] = set()
+    if isinstance(private, dict):
+        for table in ("repositories", "registries"):
+            if isinstance(private.get(table), dict):
+                values.update(str(k) for k in private[table])
+        for entry in private.get("instances") or []:
+            if isinstance(entry, dict):
+                values.update(str(entry.get(k, "")) for k in ("id", "repo", "host"))
+    masked = sorted(v.strip() for v in values if len(v.strip()) >= 4)
+    for value in masked:
+        print(f"::add-mask::{value}")
+        if "/" in value:       # an owner/name repository also appears as its bare name
+            print(f"::add-mask::{value.split('/', 1)[1]}")
+    return masked
+
+
 def read_roster_document(path: Path) -> dict:
     """`instances.json` as every reader sees it: the committed file plus the private additions.
 
@@ -6893,6 +6924,9 @@ def main() -> int:
         repos = (consistency.discover_repos() if args.discover
                  else [r.strip() for r in args.repos.split(",") if r.strip()])
 
+    masked = mask_private_roster()
+    if masked:
+        print(f"private roster: {len(masked)} identifier(s) registered as log masks")
     release_enabled = (args.release_unpinned
                        or os.environ.get("MW_ACR_RELEASE_UNPINNED", "").strip().lower() == "true")
     print(f"scanning {len(repos)} repository(ies) on both pin axes: {', '.join(repos)}")
