@@ -1030,12 +1030,12 @@ def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
     try:
         if settle(root, fetch=True) != 0:
             return ["the generated settlement does not pass gen-manifests.py --settle against current main"]
-        remaining = git(root, ["diff", "--name-only", "HEAD", "--", "*/manifest.lock"])
+        remaining = git(root, ["status", "--porcelain", "--untracked-files=all", "--", "*/manifest.lock"])
         if remaining is None:
             return ["cannot verify the generated settlement output against the PR head"]
         if remaining.strip():
             return ["the PR's manifest.lock files differ from the locks generated for its tree: "
-                    + ", ".join(remaining.splitlines()[:12])]
+                    + ", ".join(line[3:].strip() for line in remaining.splitlines()[:12])]
         return []
     finally:
         # Validation is read-only from the PR's point of view, even when a bad lock fails the
@@ -2455,6 +2455,12 @@ def _self_test_main_owned(repo: Path) -> list[str]:
         if not any("differ from the locks generated" in error
                    for error in check_untouched(settlement_repo, settlement_base)):
             failures.append("main-owned: the settlement PR must refuse a lock that --settle would change")
+        sg("checkout", "-qb", "settlement-with-deleted-lock")
+        sg("rm", "-q", "Mod/manifest.lock")
+        sg("commit", "-qm", "settlement: delete generated lock")
+        if not any("differ from the locks generated" in error
+                   for error in check_untouched(settlement_repo, settlement_base)):
+            failures.append("main-owned: the settlement PR must refuse a deleted lock recreated as untracked")
 
         sg("checkout", "-q", "main")
         (settlement_repo / "Other.txt").write_text("advance main\n")
