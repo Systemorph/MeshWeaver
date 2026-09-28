@@ -91,7 +91,7 @@ and arms the newest promoted set that is
 
 1. newer than every set already armed (never backwards — re-checked at the pointer write), and
 2. carries a `success` verdict from MeshWeaver.Plugins for exactly its pair — key, core commit, base
-   (the core commit's first parent) and Plugins commit all checked
+   (the core commit of the newest ARMED set — below) and Plugins commit all checked
    (`.github/scripts/arm-promoted-set.py`, `--self-test`).
 
 A missing verdict WAITS, a red one is REFUSED, a newer green one supersedes both. The verdict is
@@ -100,6 +100,31 @@ promoted-but-unarmed pair without a verdict and runs `core-candidate.yml` agains
 finishes it dispatches main-cd so the arming does not wait for the hourly reconcile. Core sends
 nothing to Plugins for this (`CoreDispatchesToNoRepository` stands); it only READS the verdict ref,
 which is ledgered in `PlatformNeverDependsOnPluginsGuard.ApiReadLedger`.
+
+### The bundle's base is the newest ARMED set, never the first parent
+
+A promoted set usually carries several core merges — the batch window coalesces them, and `pending`
+takes only the newest unarmed pair and supersedes the older ones instead of queueing them — and ALL
+of them reach the fleet the moment the set is armed. The record's `base` is what MeshWeaver.Plugins
+diffs from to SELECT its suites and re-runs its control arm AT, and the verdict is pinned to it. A
+first-parent base would therefore measure one merge of the bundle and arm every other merge
+unmeasured — exactly how #5635/#5647/#5655 would reach the fleet if they landed in one set.
+
+So `promote`'s record step takes `base` from the newest armed set: `arm-promoted-set.py armed-base`
+reads memex-portal-ai's manifests (the armed `<version>` tag shares its manifest with the
+seven-character sha tag — measured on `3.0.0-ci.9538` / `b9fe5ed`), the commit is resolved and
+checked to be an ANCESTOR of the candidate, and `base..candidate` is then exactly the merges the fleet
+has not seen. The record says which rule produced `base` in `base_kind`:
+
+| `base_kind` | when | what happens |
+|---|---|---|
+| `armed` | the normal case | measured and armed as usual |
+| `first-parent` | nothing was ever armed, or this commit IS the armed set | measured and armed; nothing wider exists |
+| `unresolved` | the armed set could not be read, resolved, or is not an ancestor | promoted for CI as always, but `select` REFUSES to arm it and `pending` does not measure it (a warning names why); the next promoted set retries |
+
+An `unresolved` base never holds CI and never arms merges nobody measured. A record written before
+this rule carries no `base_kind` and is judged as before, so no set promoted during the transition is
+stranded.
 
 **What the gate does not hold:** promote, `verify-images`, the platform bake, the Plugins seal, the
 satellites' compatibility legs and every CI resolver. `delivery-verdict` judges platform delivery
