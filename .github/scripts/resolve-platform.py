@@ -2328,6 +2328,23 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
                         _registry(purged), tester, portal, log=logs.append),
          lambda c: c.sha == B and any("purged" in l and "#8207" in l for l in logs))
+    # 5b — policy `build-latest-green`: the newest GREEN core main build is taken — a set that is
+    # promoted for CI but not yet ARMED for the fleet (policy `one-promotion-gate`: the portal's
+    # `<version>` is written by main-cd `arm` only after MeshWeaver.Plugins' dependent suites pass)
+    # resolves by the portal's IDENTITY tag. CI never waits for the fleet's gate.
+    unarmed = {k: v for k, v in full.items() if k != ("memex-portal-ai", "3.0.0-ci.8207")}
+    case("newest green set, promoted but NOT armed → taken by its identity tag", True,
+         lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
+                        _registry(unarmed), tester, portal, log=logs.append),
+         lambda c: c.sha == A and c.digests == {"image-digest": D1, "portal-image-digest": D2})
+    # 5c — policy `build-latest-green`: a RED core main never resolves forward into red. A newest
+    # run that FAILED before promote published nothing, and the last green set is taken.
+    case("newest core main RED (failed before promote) → the last green set, said so", True,
+         lambda: choose(_fetch_for([_run(8207, A, conclusion="failure"), _run(8203, B)],
+                                   {1000 + 8207: _jobs("absent", "absent", "absent", "absent"),
+                                    1000 + 8203: _jobs()}),
+                        _registry(full), tester, portal, log=logs.append),
+         lambda c: c.sha == B and any("#8207" in l and "NOT sealed" in l for l in logs))
     # 6 — no version tag (line unreadable) but the identity tag exists: taken by sha tag.
     sha_only = {k: v for k, v in full.items() if "ci." not in k[1]}
     case("version unknown → identity tag", True,
