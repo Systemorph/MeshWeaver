@@ -2081,6 +2081,31 @@ jobs:
     - name: Check dependency licences
       run: python3 .github/scripts/check-licenses.py --report
 
+  confidential-terms:
+    name: "Confidential terms"
+    # This repository is PUBLIC: a client name, a client person or a client infrastructure id
+    # (tenant, subscription, vault, registry, host) must never land in it. The denylist is itself
+    # confidential, so it is the CONFIDENTIAL_TERMS secret — never a file here — and the script
+    # prints only `path:line` for a hit, never the term or the line. Its presence is asserted by
+    # `preflight` (red naming it), and the fork / Dependabot exemption is the same EVENT condition.
+    # 🚨 NO `continue-on-error`. It is a NEEDS of `Consolidate test results` with an explicit fail
+    # step there, like every other gate: a gate whose verdict nothing reads is decorative.
+    needs: [precheck]
+    # The fork / Dependabot exemption is the EVENT, stated exactly as `preflight` states it — never
+    # "the secret is empty". On every other run `preflight` has asserted the secret is present.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+    - name: Prove the checker can fail (synthetic terms, no secret)
+      run: python3 .github/scripts/check-confidential-terms.py --self-test
+    - name: No confidential term in the tree
+      env:
+        CONFIDENTIAL_TERMS: ${{ secrets.CONFIDENTIAL_TERMS }}
+      run: python3 .github/scripts/check-confidential-terms.py .
+
   workflow-shell:
     name: "CI's own shell"
     # 🚨 THE GAP THIS CLOSES: `main-cd.yml` is 2000 lines of shell that decides what is built,
@@ -3617,8 +3642,10 @@ jobs:
       env:
         DEPENDENT_DISPATCH_APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
         DEPENDENT_DISPATCH_APP_PRIVATE_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+        CONFIDENTIAL_TERMS: ${{ secrets.CONFIDENTIAL_TERMS }}
       run: |
         missing=()
+        [ -n "${CONFIDENTIAL_TERMS:-}" ] || missing+=("secrets.CONFIDENTIAL_TERMS                  the confidential-term denylist the 'Confidential terms' gate reads (newline-separated, case-insensitive; 'word:<term>' for whole-word) — Settings → Secrets → Actions (and Dependabot)")
         [ -n "${DEPENDENT_DISPATCH_APP_ID:-}" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID           app id of the org's meshweaver-cloud GitHub App (Contents: write on MeshWeaver.Plugins, to send repository_dispatch) — Settings → Secrets → Actions")
         [ -n "${DEPENDENT_DISPATCH_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY  that App's private key (PEM) — Settings → Secrets → Actions")
         if [ ${#missing[@]} -gt 0 ]; then
@@ -3852,7 +3879,7 @@ jobs:
     # compiled plugin calls compiles clean everywhere in this repo and throws MissingMethodException in a
     # portal. The ladder's rung 2 — deployed plugin bytes on this platform — must be able to fail the
     # required check, or it is a notification.
-    needs: [precheck, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, preflight, dependent-suites-dispatch, dependent-suites]
+    needs: [precheck, build, test, doc-gate, platform-compat, licence-gate, confidential-terms, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, preflight, dependent-suites-dispatch, dependent-suites]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4193,6 +4220,13 @@ jobs:
       run: |
         echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT — see the 'Dependency licences' job for the offending package(s) and their licence."
         echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
+        exit 1
+
+    # ── …and a confidential term in the tree decides it too ─────────────────────────────────
+    - name: Fail if the confidential-terms gate failed
+      if: needs.precheck.outputs.skip != 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) && needs.confidential-terms.result != 'success'
+      run: |
+        echo "::error::A confidential term (a client name, person or infrastructure id) is in the tree — see the 'Confidential terms' job for the path:line of each hit. Replace it with a neutral placeholder (AGENTS.md, 'Confidential terms')."
         exit 1
 
     # ── …and a BINARY-COMPATIBILITY break decides it too ────────────────────────────────────
