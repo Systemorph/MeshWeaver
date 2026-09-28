@@ -83,6 +83,44 @@ own message and its own remedy:
 | **release-blocking close** | a keyword bound to an issue currently labelled `sev:H` or `sev:B` | `Refs #N` now, close it after the roll — or declare the escape below |
 | **possessive reference** | a keyword bound to `#N` immediately followed by `'s` | `Fixes the <half> of #N` — the keyword is no longer before the number, so nothing closes and the sentence still reads |
 
+The reusable `node-repo-validate.yml` lane also runs this gate on satellite pull requests, but
+only for explicit references to `Systemorph/MeshWeaver` (`Systemorph/MeshWeaver#N` or a full core
+issue URL). An unqualified `#N` remains a reference in the satellite itself and is outside this
+cross-repository scan. It checks the PR body carried by the event that starts the run; it does not
+inspect source commit messages or a merge message edited at merge time. GitHub also supports
+closing issues from commit messages, so this lane's guarantee is specifically about references in
+the PR body, not every way GitHub can close an issue.
+
+The event is another part of the guarantee: GitHub's default `pull_request` activity types are
+`opened`, `synchronize`, and `reopened`, not `edited` ([workflow event docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)).
+Each caller must include `edited` in its `pull_request.types`; otherwise a body edit after a green
+run is not rescanned and the old check can remain green. During the 2026-09-28 fleet audit, all
+seven live node-repo callers had a plain `pull_request:` trigger. Companion PRs in this rollout
+add `edited` to each trigger; until those changes merge, the core gate only checks runs it actually
+receives. The core change alone therefore does not close the fleet gap; the caller trigger updates
+are part of the same delivery.
+
+The lane fetches the canonical checker at its `scripts-ref` and runs its self-test before the
+scan. Callers using immutable workflow refs must advance the workflow and script refs together.
+The seven live node-repo callers currently use `node-repo-validate.yml@main` with
+`scripts-ref: main`, so a core merge activates this gate on each caller's next PR run without a
+caller code change; that floating shared-workflow contract is separate from the `edited` trigger
+requirement.
+
+The satellite lane reads core issue labels through GitHub's public REST API without a token. It
+first proves both directions: known core issue #5011 must be readable, and the impossible issue
+#2147483647 must return 404. Any failed control, rate limit, network error, or unreadable labels
+fails closed as `Undecidable`; only after both controls pass may a 404 for the referenced issue
+mean absent. The core repository's own gate continues to use its established authenticated
+same-repository reader.
+
+Unauthenticated REST requests are limited to 60 per hour per originating IP, so the satellite scan
+caps one PR at 20 distinct core issues (at most 22 requests including both controls). A GitHub
+403/429 rate-limit response remains red, but is reported explicitly with the reset/retry-after
+header when present; the gate does not retry automatically. Split a PR with more than 20 core
+targets, and rerun a rate-limited scan only after the indicated window. See [GitHub REST API rate
+limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
+
 🚨 **Three checks and not two, because two would have missed one of the three incidents.** Measured
 at the state each pull request had AT ITS MERGE: the negation check catches #5201 alone; the
 severity check catches #5201 and #5190; **#5174 is caught by neither**, because #2299 was labelled
@@ -105,9 +143,11 @@ than the thing it guards produces verdicts an author cannot act on:
   lets this page and the gate's own docstring quote the syntax without firing;
 - **a keyword anywhere else fires** — headings, tables, future tense, past-tense narration, a
   disclaimer;
-- **`owner/repo#N` closes in that repository.** The gate reads its own repository's issues only; a
-  cross-repository reference is named in the run output and label-checked nowhere. That limit is
-  printed on every run rather than being silent.
+- **`owner/repo#N` closes in that repository.** The default gate reads its own repository's issues;
+  the satellite lane additionally reads only the explicitly protected public core repository.
+  Other cross-repository references are named and left unlabelled by the default gate. In
+  protected-repository-only satellite mode, unconfigured cross-repository references are ignored
+  rather than checked. An unqualified number is never reinterpreted as a core issue.
 
 ### The escape
 
@@ -118,6 +158,11 @@ happened — declares it in the body, per issue:
 Verified-closing: #5057 — verified on the rolled portal: the release node now names the
 attempted id, and the pre-fix wording has not recurred in ten minutes of logs.
 ```
+
+In a satellite PR, the declaration must name the explicit protected repository, for example
+`Verified-closing: Systemorph/MeshWeaver#5011 — verified on the running core portal after its
+roll; the incident has not recurred in the logs.` The satellite lane does not use a local
+`Verified-closing: #N` declaration to release a core close.
 
 The shape is the house's declaration idiom (`Pairs-with:`, `Implementers:`, `Mirror-sync:`) and its
 spirit is [Transitional Allow Entries](/Doc/Architecture/TransitionalAllowEntries): it names exactly what it releases
