@@ -201,12 +201,22 @@ public static class SettingsMenuItemsExtensions
 
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var viewer = accessService?.Context ?? accessService?.CircuitContext;
-        var isAuthenticated = !string.IsNullOrEmpty(viewer?.ObjectId) && viewer?.IsVirtual != true;
-        if (!isAuthenticated)
+        // The pattern binds the viewer's id for the admin verdict below, so "no authenticated
+        // viewer" and "no id to evaluate" are one test — never a null-forgiven dereference.
+        if (viewer is not { ObjectId: { Length: > 0 } viewerObjectId, IsVirtual: false })
             return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
 
         var viewerId = accessService.ViewerId();
         var menuPath = host.Hub.Address.ToString();
+        // 🚨 The admin verdict is bound to the viewer resolved HERE, on the render turn — never
+        // inside the Defer below. The parameterless IsGlobalAdmin() reads the ambient
+        // AccessService context at the moment it is called; inside the Defer that is SUBSCRIBE
+        // time, which on a distributed mesh runs off the viewer's delivery with no context, so the
+        // viewer read as anonymous, AdminOnly never passed, and every seeded Admin-app tab
+        // (Invitations, Privacy, Published, Updates, Control lane, Inbox) was missing from the
+        // nav — while the same seeds passed the same gates in the node menu, which resolves the
+        // viewer eagerly. AdminAppTest.SeededAdminTabs_SurviveASubscriptionOffTheViewersDelivery.
+        var adminVerdict = AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerObjectId);
 
         // Deferred so a hub without a MeshDataSource — where GetMeshNodeStream() throws
         // SYNCHRONOUSLY — surfaces as OnError into the caller's Catch rather than as a throw out
@@ -216,7 +226,7 @@ public static class SettingsMenuItemsExtensions
             var ownNode = host.Workspace.GetMeshNodeStream()
                 .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
             return catalog.Contributions
-                .CombineLatest(ownNode, host.Hub.IsGlobalAdmin().StartWith(false),
+                .CombineLatest(ownNode, adminVerdict,
                     (contributions, node, isAdmin) => UiContributionProjection
                         .ProjectNodeSettingsTabs(contributions, menuPath, node, isAdmin, viewerId));
         });
