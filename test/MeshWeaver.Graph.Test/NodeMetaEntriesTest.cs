@@ -133,7 +133,7 @@ public class NodeMetaEntriesTest
                 created: new DateTimeOffset(2026, 8, 27, 7, 59, 0, TimeSpan.Zero), createdBy: "sglauser",
                 modified: new DateTimeOffset(2026, 8, 28, 14, 30, 0, TimeSpan.Zero), modifiedBy: "system-security"),
             Zone,
-            new NodeActivity(new DateTimeOffset(2026, 9, 8, 11, 5, 0, TimeSpan.Zero), "mkleiner", "Reply from Jörg"));
+            new NodeActivity(new DateTimeOffset(2026, 9, 8, 11, 5, 0, TimeSpan.Zero), "user-b", "Reply from Alex"));
 
         entries.Select(e => e.LabelKey).Should().Equal(
             MeshNodeLayoutAreas.MetaTypeKey,
@@ -144,10 +144,10 @@ public class NodeMetaEntriesTest
         entries.Should().NotContain(e => e.LabelKey == MeshNodeLayoutAreas.MetaUpdatedKey);
         var activity = entries.Single(e => e.LabelKey == MeshNodeLayoutAreas.MetaLastActivityKey);
         activity.Text.Should().Be("2026-09-08 13:05");
-        activity.By.Should().Be("mkleiner");
+        activity.By.Should().Be("user-b");
         // Author-written, so it renders AS AUTHORED — including the umlaut, which is the case that
         // catches an encoding slip on the way through the renderer.
-        activity.What.Should().Be("Reply from Jörg");
+        activity.What.Should().Be("Reply from Alex");
     }
 
     [Fact]
@@ -157,11 +157,11 @@ public class NodeMetaEntriesTest
         var entries = MeshNodeLayoutAreas.BuildMetaEntries(
             Node(created: new DateTimeOffset(2026, 8, 27, 7, 59, 0, TimeSpan.Zero), createdBy: "sglauser"),
             Zone,
-            new NodeActivity(new DateTimeOffset(2026, 9, 8, 11, 5, 0, TimeSpan.Zero), "mkleiner"));
+            new NodeActivity(new DateTimeOffset(2026, 9, 8, 11, 5, 0, TimeSpan.Zero), "user-b"));
 
         var activity = entries.Single(e => e.LabelKey == MeshNodeLayoutAreas.MetaLastActivityKey);
         activity.Text.Should().Be("2026-09-08 13:05");
-        activity.By.Should().Be("mkleiner");
+        activity.By.Should().Be("user-b");
         activity.What.Should().BeNull("no description was recorded — the segment simply ends");
     }
 

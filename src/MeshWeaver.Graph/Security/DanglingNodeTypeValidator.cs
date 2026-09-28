@@ -18,7 +18,7 @@ namespace MeshWeaver.Graph.Security;
 /// orphan condition: an instance whose type resolves to nothing has no per-node hub, which means
 /// every read of it times out as <c>Unavailable</c> rather than failing, the view renders empty,
 /// and nothing anywhere names the cause. A live example on production was
-/// <c>rbuergi/_Draft/PartnerRe_EslProposalQA</c> carrying <c>nodeType: EmailDraft</c>.</para>
+/// <c>rbuergi/_Draft/Globex_TeamProposalQA</c> carrying <c>nodeType: EmailDraft</c>.</para>
 ///
 /// <para><b>It judges a CHANGE, never a state</b> (<see cref="NodeTypeResolution.ChangesNodeType"/>).
 /// An update that keeps the node's current NodeType passes even when that type is already dangling

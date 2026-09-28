@@ -272,7 +272,7 @@ It is left unchanged on purpose, and the reason is worth keeping:
 ## The reading traps these two incidents taught
 
 - 🚨 **A `LogIncident`'s `namespace` field is the FIRST-seen namespace, not a per-sample one.** Both
-  incidents read `memex-cloud`; their newest samples are on pod generations that portal never ran. A
+  incidents read the public instance's namespace; their newest samples are on pod generations that portal never ran. A
   closure argued on *"that portal is pinned to an older image, so it cannot carry the fix"* would be
   reading the wrong deployment.
 - 🚨 **An incident fingerprinted on a DEPENDENCY's logger counts what the dependency saw, not what we

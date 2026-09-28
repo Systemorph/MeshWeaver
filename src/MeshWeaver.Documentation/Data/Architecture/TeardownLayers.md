@@ -45,7 +45,7 @@ things were true of that design and both were measured:
   `OwnerDisposing` NACK for a patch in flight at teardown could only be minted **after** the force
   had fired, so the waiting caller's whole budget was "the watchdog plus two seconds" — and a
   loaded CI shard lost those two seconds (run 33847949620).
-- **It ran in production dozens of times per shutdown, and while serving.** Loki on `memex-cloud`
+- **It ran in production dozens of times per shutdown, and while serving.** Loki on the public instance
   (2026-08-29 → 09-03) shows `DISPOSAL DEADLOCK DETECTED: Hub sync/… (last progress: sync/… →
   ShutDown). RunLevel=ShutDown` followed by `[FORCE-TEARDOWN] … out-of-band teardown complete
   after 22706ms`, on sync-stream hubs and on the node hubs above them (`AgenticBusiness/Handbook`,
@@ -342,7 +342,7 @@ keep their existing verdicts, and a killed run is logged where the test author w
 
 ---
 
-## What production measured (Loki, memex / memex-cloud, 2026-08-28 → 09-04)
+## What production measured (Loki, control and public instances, 2026-08-28 → 09-04)
 
 The maintainer's report was *"blocked rolls — disposal seems to be keeping something"*. Two
 different things were keeping pods, at two different scales:

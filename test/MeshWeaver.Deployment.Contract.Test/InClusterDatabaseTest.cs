@@ -10,13 +10,13 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// </summary>
 public class InClusterDatabaseTest
 {
-    private static readonly DeploymentContent Pearl = new DeploymentContent()
-        .WithNamespace("pearl").WithDatabase("pearl");
+    private static readonly DeploymentContent Fabrikam = new DeploymentContent()
+        .WithNamespace("fabrikam").WithDatabase("fabrikam");
 
     [Fact]
     public void ARecordWithoutADatabaseReleaseKeepsTheServerDerivation()
     {
-        var d = Pearl.WithDatabase("pearl", server: "memexaks-pg", username: "memexadmin");
+        var d = Fabrikam.WithDatabase("fabrikam", server: "memexaks-pg", username: "memexadmin");
         Assert.Null(DeploymentPortalConfig.DatabaseRelease(d));
         // The managed-database SUFFIX appears here as the expected RETURN of a pure derivation over
         // an in-memory record, never as something this test connects to. TestsAreLocalOnlyGuard's
@@ -32,14 +32,14 @@ public class InClusterDatabaseTest
     [Fact]
     public void ABlankReleaseIsNamespaceDashDbAndThePortalConnectsToItsPrimary()
     {
-        var d = Pearl.WithInClusterDatabase();
-        Assert.Equal("pearl-db", DeploymentPortalConfig.DatabaseRelease(d));
-        Assert.Equal("pearl-db-rw", DeploymentPortalConfig.DatabaseHost(d));
+        var d = Fabrikam.WithInClusterDatabase();
+        Assert.Equal("fabrikam-db", DeploymentPortalConfig.DatabaseRelease(d));
+        Assert.Equal("fabrikam-db-rw", DeploymentPortalConfig.DatabaseHost(d));
         Assert.Equal("memex", DeploymentPortalConfig.DatabaseUsername(d));
         Assert.Equal(2, DeploymentPortalConfig.DatabaseReleaseInstances(d));
         Assert.Equal("32Gi", DeploymentPortalConfig.DatabaseReleaseSize(d));
         Assert.Equal("memex-db-premiumv2", DeploymentPortalConfig.DatabaseReleaseStorageClass(d));
-        Assert.Equal("jdbc:postgresql://pearl-db-rw:5432/pearl", DeploymentPortalConfig.JdbcConnectionString(d));
+        Assert.Equal("jdbc:postgresql://fabrikam-db-rw:5432/fabrikam", DeploymentPortalConfig.JdbcConnectionString(d));
     }
 
     [Fact]
@@ -47,8 +47,8 @@ public class InClusterDatabaseTest
     {
         // The exclusivity is a SpecProblem in the Hosting renderer; the derivation itself must still
         // answer with the release, never the shared server — the data rule the pattern exists for.
-        var d = Pearl.WithDatabase("pearl", server: "memexaks-pg").WithInClusterDatabase("pearl-main", 3, "64Gi", "fast");
-        Assert.Equal("pearl-main-rw", DeploymentPortalConfig.DatabaseHost(d));
+        var d = Fabrikam.WithDatabase("fabrikam", server: "memexaks-pg").WithInClusterDatabase("fabrikam-main", 3, "64Gi", "fast");
+        Assert.Equal("fabrikam-main-rw", DeploymentPortalConfig.DatabaseHost(d));
         Assert.Equal(3, DeploymentPortalConfig.DatabaseReleaseInstances(d));
         Assert.Equal("64Gi", DeploymentPortalConfig.DatabaseReleaseSize(d));
         Assert.Equal("fast", DeploymentPortalConfig.DatabaseReleaseStorageClass(d));
@@ -57,8 +57,8 @@ public class InClusterDatabaseTest
     [Fact]
     public void TheSharedHelmConfigCarriesTheReleaseHost()
     {
-        var c = DeploymentPortalConfig.PortalConfig(Pearl.WithInClusterDatabase(), PortalConfigOptions.Helm);
-        Assert.Equal("pearl-db-rw", c["MEMEX_HOST"]);
+        var c = DeploymentPortalConfig.PortalConfig(Fabrikam.WithInClusterDatabase(), PortalConfigOptions.Helm);
+        Assert.Equal("fabrikam-db-rw", c["MEMEX_HOST"]);
         Assert.Equal("memex", c["MEMEX_USERNAME"]);
     }
 

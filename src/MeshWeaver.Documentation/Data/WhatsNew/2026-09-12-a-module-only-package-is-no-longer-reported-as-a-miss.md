@@ -17,7 +17,7 @@ Until now the portal read that emptiness as a failure. Every one of those packag
 **miss** — rendered on `/health` as *"content the registry was meant to serve is compiled here
 instead"* — when nothing had been missed and nothing was being compiled in its place.
 
-Measured on memex.systemorph.com on 2026-09-12, immediately after the identity-selection fix made
+Measured on the control instance on 2026-09-12, immediately after the identity-selection fix made
 the underlying state visible:
 
 ```

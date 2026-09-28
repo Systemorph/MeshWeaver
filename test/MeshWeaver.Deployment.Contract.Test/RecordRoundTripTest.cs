@@ -13,7 +13,7 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// </summary>
 public class RecordRoundTripTest
 {
-    public static TheoryData<string> Fixtures => new() { "memex.json", "pearl.json", "memex-cloud.json" };
+    public static TheoryData<string> Fixtures => new() { "memex.json", "fabrikam.json", "memex-cloud.json" };
 
     [Theory]
     [MemberData(nameof(Fixtures))]
@@ -52,7 +52,7 @@ public class RecordRoundTripTest
     }
 
     /// <summary>
-    /// The record's computed getters, which a node at rest MAY carry (the mesh wrote pearl's
+    /// The record's computed getters, which a node at rest MAY carry (the mesh wrote fabrikam's
     /// <c>startupProbe.budgetSeconds</c> once) and which the contract never writes
     /// (<c>DeploymentRecordJson.Options.IgnoreReadOnlyProperties</c>): derivations, not fields.
     /// </summary>

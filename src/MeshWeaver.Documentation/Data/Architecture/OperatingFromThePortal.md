@@ -7,35 +7,36 @@ Icon: Cloud
 
 # Operating from the portal, not the cluster
 
-**Maintainer directive, 2026-09-08:** *"do all the operations through the memex api"* · *"no direct
+**Maintainer directive, 2026-09-08:** *"do all the operations through the [portal] api"* · *"no direct
 access of aks etc"* · *"build the api in a way that you don't need any az access"*.
 
-An instance is a **record** (`Deployments/<name>`, a `Hosting/Deployment` node on the control
-instance **`memex.systemorph.com`**, GitSynced to the private `Systemorph/Memex` repo), and every
+An instance is a **record** (`Deployments/<name>`, a `Hosting/Deployment` node on the **control
+instance**, GitSynced to the operator's private deployments repository), and every
 change to it is an **action node** (`Hosting/InstanceAction`) that the control instance's operator
 executes **in-cluster** under its own service account. The operator's credential lives in the
 cluster; the person or agent who asks holds none. That is the whole design: an operator who never
 had `az`, `kubectl` or a Loki endpoint can still roll, restart, suspend, audit and reconcile an
 instance — and can read what it is running.
 
-### 🚨 Which portal am I talking to? The MCP server named `memex` is NOT the instance named `memex`
+### 🚨 Which portal am I talking to? An MCP server's NAME need not match the instance it talks to
 
 Measured 2026-09-10, and it cost two sessions an hour on the same morning:
 
 | MCP server | Host | What it is |
 |---|---|---|
-| `systemorph` | `memex.systemorph.com` | the **control instance** — the live, GitSynced `Deployments` space |
-| `memex` | `memex.meshweaver.cloud` | the public portal and the **plugin registry** |
+| named after the operator | `https://control.example.com` | the **control instance** — the live, GitSynced `Deployments` space |
+| named after the product | `https://portal.example.com` | the public portal and the **plugin registry** |
 
-The instance *named* `memex` is `memex.systemorph.com`, so the server named after it is the *other*
-one. Both portals hold nodes at `Deployments/<name>`, and **only the control instance's copy is
-authoritative**: on 2026-09-10 the control instance's `Deployments/memex-cloud` was version 60,
-`createdDate` 2026-08-10, `lastModifiedBy` `system-security`, written 64 s after the config-repo
-merge; `memex.meshweaver.cloud`'s was version 9, `createdDate` 2026-08-30, and 40 versions behind.
+The instance whose *deployment name* matched the product-named server was the control instance, so
+the server named after it was the *other* one. Both portals hold nodes at `Deployments/<name>`, and
+**only the control instance's copy is authoritative**: on 2026-09-10 the control instance's
+`Deployments/<public>` was version 60, `createdDate` 2026-08-10, `lastModifiedBy` `system-security`,
+written 64 s after the config-repo merge; the public instance's was version 9, `createdDate`
+2026-08-30, and 40 versions behind.
 
 That second copy is **not unsynced** — an earlier revision of this page called it "not a sync
-target at all", and that was wrong. `memex.meshweaver.cloud` carries its own `Deployments/_GitSync`,
-a `GitHubSyncConfig` for the SAME folder (`Systemorph/Memex`, `mesh/Deployments`, `twoWay: true`,
+target at all", and that was wrong. The public instance carries its own `Deployments/_GitSync`,
+a `GitHubSyncConfig` for the SAME folder (the deployments repository, `mesh/Deployments`, `twoWay: true`,
 created 2026-08-30). Measured 2026-09-11:
 
 | Field | Reading |
@@ -54,12 +55,12 @@ delivery retries. Here it is `true`: a SETTLED divergence. Either this portal's 
 its own server-newer `Deployments/*` nodes over the repository's, or it refused some of the
 repository's content; the sync's activity log says which. So the copy is synced AND disagrees with
 the record, by design — which is exactly why it is not the record. It is scheduled for retirement
-with the GitHub App split; until then read `Deployments/*` on the control instance only. Three facts settle which portal is which without guessing: the `Deployments/memex`
+with the GitHub App split; until then read `Deployments/*` on the control instance only. Three facts settle which portal is which without guessing: the control instance's `Deployments/<name>`
 record's own `host` and `purpose`, and every other
-instance's `Hosting__ReportTo`, which points at `https://memex.systemorph.com`.
+instance's `Hosting__ReportTo`, which points at the control instance (e.g. `https://control.example.com`).
 
 **So confirm the portal before drawing any conclusion from a read of it** — `/api/version`, or the
-MCP server's configured URL. This is the same class as the `namespace: memex` confusion in #3883,
+MCP server's configured URL. This is the same class as the `namespace: <control-ns>` confusion in #3883,
 where the word named a Kubernetes namespace rather than an instance.
 
 The rest of this doc tree still carries `az aks command invoke …` / `kubectl …` recipes. **They are
@@ -80,16 +81,16 @@ gives you:
 | **`Deployments/<name>`** (`Hosting/Deployment`) | the record — host, namespace, cluster, database, image repository, key-vault classes, env precedence, operator settings. The record's image pin **is** the roll. |
 | **`Hosting/InstanceAction`** kinds | `Provision`, `Teardown`, `Backup`, `Restore`, `Suspend`, `Reactivate`, `HelmRelease` (`helmAction: capture\|adopt\|deploy` — dispatches the config repo's `helm-release.yml` and follows it), `Roll` (set image to `imageTag`, else the record's pin, then WAIT for the rollout), `Restart` (rolling restart, then WAIT), `InstallAddOn`, `Audit`, `RotateRegistryKey` (two-phase, at the registry that holds the instance — [Registry-key rotation](../RegistryKeyRotation)), `RevokeRegistryKey` (a key named by the Secret it sits in stops authenticating, nobody reading it), `Reconcile` (converge a drifted instance back onto its record — the reconcile loop), `Recycle` (`recycleTarget` + a required `reason`, optional `recycleForce`: disposes ONE address as system — a NodeType with its dependency network, or any node — so a system-owned partition such as `Hosting` can be re-bound without restarting the instance; always behind one approval that binds the target, and run in-process on the instance it targets, so it is filed on that instance's own mesh — Hosting's `Hosting/RecycleAction`, [Stale State Until a Recycle](../StaleStateUntilRecycle)), `DeleteSpace` (`deleteSpaceTarget` + the space id repeated in `deleteSpaceConfirmation` + a required `reason`: the break-glass deletion of a space no person may delete — a space whose owner is gone, or a stranded partition — as system; it parks with the full plan (rows per table, grants, GitSync configuration, record, schema, NodeTypes and their outside dependents), one approval binds that plan, and it removes the space through the framework's deletes and the platform's partition teardown, verifies nothing is left and writes an audit record; it refuses system and fleet partitions, a user's home and a package's partition, and runs in-process on the instance it targets — Hosting's `Hosting/DeleteSpaceAction`, [Access Control](../AccessControl)). Each run carries phases, a log and the invoker's identity. A MUTATING run a person files also carries the name-the-instance `confirmation` — the READ-ONLY kinds ask none — `Sample` and `Logs` (the row below) and `Audit`, which `Refusal()` answers before it reaches the question. A DRY RUN is not one of them: it still names the instance, exactly as the example below does. 🚨 Measured 2026-09-17, the ONE machine exception: a `Roll`/`Restart` the control inbox routed from a portal's own self-update announcement carries no confirmation and must not — it declares `origin: "self-update"` instead, honoured only on a node the framework stamped `createdBy: system-security` ([Self-Update on the Control Lane](../SelfUpdateControlLane), [#4607](https://github.com/Systemorph/MeshWeaver/issues/4607)). |
 | **`Hosting/DeploymentStatus`**, **`Hosting/LogEntry`**, **`Hosting/Issue`** (types) | the designed observation surfaces — one status sample per deployment (ready/desired replicas, restarts, health, RUNNING image, last activity), structured log records pulled from the logging backend, filed issues. |
-| **`Sample`** and **`Logs`** (`Hosting/InstanceAction` kinds — Systemorph/MeshWeaver.Plugins#1521, the delivery of the paragraphs below) | READ-ONLY, no operator job, no confirmation: `Sample` writes `Ops/Status/<id>` with `replicas[]` — per pod the image, ready, restarts, started, phase, terminating, generation, how the previous run ended (`lastTerminationReason`, `lastExitCode`, `containerStartedAt` — Systemorph/MeshWeaver.Plugins#2397, so a startup-probe kill, a crash and an OOM kill are told apart without `kubectl`), and what the pod's OWN `/health` says (verdict, detail, `version`, `frameworkIdentity`, `pluginCount`) — plus `generations`, `converged` and `warnings[]` (unknown is never zero). 🚨 **`replicas[]` is POPULATED again — this reversed inside two days, so measure it rather than reading either claim.** It was empty fleet-wide while kube-state-metrics had no series for the portal namespaces ([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218); `Ops/Status/memex` v1100, 2026-09-15 12:57Z: `notScraped: true`, `replicas: []`), and on v1457, 2026-09-17 18:18Z, the same node reads `notScraped: false` with a row per pod carrying `pod`, `image`, `generation` and `startedAt`. While it is empty the node carries the public host's ONE `/health` body in `healthDetail` and no per-pod rows, so read `notScraped` before trusting a per-pod answer either way; `Logs` + `query`/`sinceMinutes`/`limit`/`pod` lands a Loki window as `Hosting/LogEntry` nodes under `Ops/Logs` with the exact LogQL, the count and whether it was CUT on the run. Both read Prometheus and Loki from the control instance's own pod, where they are credential-free. |
+| **`Sample`** and **`Logs`** (`Hosting/InstanceAction` kinds — Systemorph/MeshWeaver.Plugins#1521, the delivery of the paragraphs below) | READ-ONLY, no operator job, no confirmation: `Sample` writes `Ops/Status/<id>` with `replicas[]` — per pod the image, ready, restarts, started, phase, terminating, generation, how the previous run ended (`lastTerminationReason`, `lastExitCode`, `containerStartedAt` — Systemorph/MeshWeaver.Plugins#2397, so a startup-probe kill, a crash and an OOM kill are told apart without `kubectl`), and what the pod's OWN `/health` says (verdict, detail, `version`, `frameworkIdentity`, `pluginCount`) — plus `generations`, `converged` and `warnings[]` (unknown is never zero). 🚨 **`replicas[]` is POPULATED again — this reversed inside two days, so measure it rather than reading either claim.** It was empty fleet-wide while kube-state-metrics had no series for the portal namespaces ([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218); `Ops/Status/<control>` v1100, 2026-09-15 12:57Z: `notScraped: true`, `replicas: []`), and on v1457, 2026-09-17 18:18Z, the same node reads `notScraped: false` with a row per pod carrying `pod`, `image`, `generation` and `startedAt`. While it is empty the node carries the public host's ONE `/health` body in `healthDetail` and no per-pod rows, so read `notScraped` before trusting a per-pod answer either way; `Logs` + `query`/`sinceMinutes`/`limit`/`pod` lands a Loki window as `Hosting/LogEntry` nodes under `Ops/Logs` with the exact LogQL, the count and whether it was CUT on the run. Both read Prometheus and Loki from the control instance's own pod, where they are credential-free. |
 
 An action is one node:
 
 ```json
-{ "id": "roll-memex", "namespace": "Ops/Actions", "name": "Roll memex",
+{ "id": "roll-portal", "namespace": "Ops/Actions", "name": "Roll portal",
   "nodeType": "Hosting/InstanceAction",
   "content": { "$type": "InstanceActionContent",
-    "deployment": "memex", "requestedAction": "Roll", "imageTag": "3.0.0-ci.8079",
-    "confirmation": "memex", "reason": "…", "dryRun": true } }
+    "deployment": "portal", "requestedAction": "Roll", "imageTag": "3.0.0-ci.8079",
+    "confirmation": "portal", "reason": "…", "dryRun": true } }
 ```
 
 Start with `dryRun: true` — it renders the exact commands and changes nothing. Then watch the same
@@ -110,10 +111,10 @@ lands on the control instance":
 
 | Question | Before (break-glass read) | After #1521 (one node, no credential) |
 |---|---|---|
-| *What image / how many restarts / how old is each replica — and is an old process still a cluster member?* | `az aks command invoke … kubectl -n <ns> get pods -o wide` | `{ "requestedAction": "Sample" }` → `Ops/Status/<id>`: `replicas[]` with image, ready, restarts, started, phase, `terminating`, `generation`; `generations` and `converged` on the node — **only while kube-state-metrics scrapes the namespace (#4218); read `notScraped` on the node to know, it flipped back to `false` for `memex` between 2026-09-15 12:57Z and 2026-09-17 18:18Z**. A roll (`Roll`/`Restart`/`Reconcile`/`Reactivate`) now ends with **Verify one generation** and refuses Done while a previous-generation pod is still a member — the 8059-after-8079 measurement. |
+| *What image / how many restarts / how old is each replica — and is an old process still a cluster member?* | `az aks command invoke … kubectl -n <ns> get pods -o wide` | `{ "requestedAction": "Sample" }` → `Ops/Status/<id>`: `replicas[]` with image, ready, restarts, started, phase, `terminating`, `generation`; `generations` and `converged` on the node — **only while kube-state-metrics scrapes the namespace (#4218); read `notScraped` on the node to know, it flipped back to `false` for the control instance between 2026-09-15 12:57Z and 2026-09-17 18:18Z**. A roll (`Roll`/`Restart`/`Reconcile`/`Reactivate`) now ends with **Verify one generation** and refuses Done while a previous-generation pod is still a member — the 8059-after-8079 measurement. |
 | *What did the process log at time T?* | `az aks command invoke … curl loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range …` — the invoke shell has `curl` but **no `sed`/`python3`** | `{ "requestedAction": "Logs", "query": "…", "sinceMinutes": 60, "limit": 300 }` → `logQl`, `entryCount`, `truncated` on the run; lines under `Ops/Logs`, the Deployment page's Logs area. 🚨 Zero entries with a `logQl` is an answer only once a **same-text positive control** passes — measured 2026-09-11, three in-window zeros for lines LogWatch held samples of from the same namespace under three hours earlier ([Log entries are a query result](/Doc/Architecture/LogEntriesAreAQueryResult)). |
 | *Can THIS replica load NodeType X?* | `kubectl exec … ls /tmp/MeshWeaver/.mesh-cache/<Type>*` on EACH replica — a live compile is pod-local (`local` = `FileSystemAssemblyStore`), see [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) | **the core half has landed.** `/health` is a system-side census, public and past RLS, and the `Sample` keeps each pod's whole body (one body, the public host's, whenever `replicas[]` is empty — #4218; check `notScraped` first): `content-types` names every type this replica could not TYPE; `bake-report` (census-tagged, so it prints CLEAN too) carries `total`/`baked`/`pending`, the per-state breakdown and `ClassifiedFromLocalAdoption`; `source-discovery` carries the fold's chunk count and largest inter-chunk gap. **Read the LIVE half of `bake-report` for a type nobody has opened** (#4632): `content-types` records a degradation only when a read degrades, and every other `bake-report` line is a boot-time reading — but its `LIVE RECORD CENSUS` sentence is refreshed on every catalog emission and names, per partition and framework identity, the records keyed to a framework this replica does not run, split into stamped-before-boot (the ordinary previous-image state) and **stamped-since-boot** (a replica on another image re-keyed the type — Degraded). See [Compiled Against Another Platform](/Doc/Architecture/CompiledAgainstAnotherPlatform) → "The live record census". A Ready process reporting **0 plugins** already degrades the sample, which is the shape that outage wore. |
-| *Is a roll stuck, or is a portal behind the newest promoted build — and would anybody be told?* | a person reading `/api/version` by hand, which is how memex's three-day stuck roll (2026-09-22 → 09-25: a `ci.9260`/`ci.9321` template whose pods never became Ready while `ci.9218` pods served `2/2 ready`, every self-update Roll reporting `Done`) and memex-cloud's 20+ hours on `ci.9291` were found | **delivered by Systemorph/MeshWeaver.Plugins#2370, NOT by #1521** — a control instance carrying #1521 without #2370 has no such alarm; check `Hosting/RollAlarms` exists there before relying on it. **The fleet watch's roll alarms** (`get Hosting/RollAlarms`): `StuckRoll` — template image ≠ the ready pods' image past the roll's OWN requested budget (the record's startup probe × replicas, `RequestedRolloutSeconds`; one operator Job waits only `min(that, Job deadline − elapsed)` and then hands the rollout to the control plane, which keeps observing — see [Applying Is Not Rolling Out](../ApplyingIsNotRollingOut) — so the roll as a whole is held to the requested budget, not to one Job's window), a new pod not Ready after its startup budget, or restarts climbing on the new ReplicaSet, naming the Deployment, both images and the unready pod's readiness message; `StalePortal` — serving a build older than the newest promoted compatible one by more than two of its own CD cycles, naming the blocker (a pin, the Roll action's state such as `AwaitingApproval`, a Roll `Done` that never converged, a self-updater that never announced, a held seal). Both land as `Ops/Issue/<id>__<Kind>`, ring the bell, log ONE `Error` line the log watcher turns into a ticket, and lead the Fleet Console. A declared hold (`updatePolicy: None`) never alarms; **a pin is not a hold and never silences it**. "Could not judge" is its own incident (`RollUnobserved`, `StalenessUnobserved`), and a not-scraped sample (`notScraped`) leaves both alarms exactly as they stand. |
+| *Is a roll stuck, or is a portal behind the newest promoted build — and would anybody be told?* | a person reading `/api/version` by hand, which is how the control instance's three-day stuck roll (2026-09-22 → 09-25: a `ci.9260`/`ci.9321` template whose pods never became Ready while `ci.9218` pods served `2/2 ready`, every self-update Roll reporting `Done`) and the public instance's 20+ hours on `ci.9291` were found | **delivered by Systemorph/MeshWeaver.Plugins#2370, NOT by #1521** — a control instance carrying #1521 without #2370 has no such alarm; check `Hosting/RollAlarms` exists there before relying on it. **The fleet watch's roll alarms** (`get Hosting/RollAlarms`): `StuckRoll` — template image ≠ the ready pods' image past the roll's OWN requested budget (the record's startup probe × replicas, `RequestedRolloutSeconds`; one operator Job waits only `min(that, Job deadline − elapsed)` and then hands the rollout to the control plane, which keeps observing — see [Applying Is Not Rolling Out](../ApplyingIsNotRollingOut) — so the roll as a whole is held to the requested budget, not to one Job's window), a new pod not Ready after its startup budget, or restarts climbing on the new ReplicaSet, naming the Deployment, both images and the unready pod's readiness message; `StalePortal` — serving a build older than the newest promoted compatible one by more than two of its own CD cycles, naming the blocker (a pin, the Roll action's state such as `AwaitingApproval`, a Roll `Done` that never converged, a self-updater that never announced, a held seal). Both land as `Ops/Issue/<id>__<Kind>`, ring the bell, log ONE `Error` line the log watcher turns into a ticket, and lead the Fleet Console. A declared hold (`updatePolicy: None`) never alarms; **a pin is not a hold and never silences it**. "Could not judge" is its own incident (`RollUnobserved`, `StalenessUnobserved`), and a not-scraped sample (`notScraped`) leaves both alarms exactly as they stand. |
 | *Who may create the first action?* | nobody — `Ops` did not exist and no grant path existed | the Hosting module provisions `Ops` and mirrors every `Admin` on `Admin/_Access` as `Admin` on `Ops/_Access` at start (`OperationalSpaceProvisioning`, on the always-activated `Hosting/PlatformBuilds` hub). |
 
 Until #1521 is on the control instance, the "before" column is what you have; see
@@ -184,14 +185,14 @@ separate act (MeshWeaver#3201 is the worked example).
 
 - **The Deployment record is the ONE input.** Aspire and Helm render from it; the image receives
   it as configuration (`Deployment:Record`); Aspire emits a record, never a chart. The record is
-  built fluently (`AddMemex("memex").WithImage(…).WithPluginRepo(…)`), the adapter's own copy of
+  built fluently (`AddMemex("portal").WithImage(…).WithPluginRepo(…)`), the adapter's own copy of
   it (`MemexOptions`) is gone, and generating the chart from Aspire (#3646) is retired —
   [ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire).
 - **Volume capacity is a record property:** `volumes[].size` on the Deployment record is what a
   claim holds. `Provision` and `Reconcile` grow every declared claim to it through
   `hosting-pv-resize` (grow-only, read back from the claim's status, refuses a class that cannot
   expand); `Audit` reports a claim that has fallen below its record. The 16Gi `/data` share that
-  measured FULL on `memex.systemorph.com` at 13:51Z that day is the case —
+  measured FULL on the control instance at 13:51Z that day is the case —
   [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Volume capacity is a record property".
 - **A platform roll must not need every satellite re-baked first:** `Modules:VersionStrictness`
   (`Exact` / `Family` / `Minimum`, dev = `Minimum`) and "a sealed publication syncs its own sources"

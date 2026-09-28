@@ -13,9 +13,9 @@ namespace MeshWeaver.Data.Test;
 /// <see cref="HubDisposingException"/> ("Hub X is shutting down — retry") for EVERY null hub,
 /// including a sub-hub whose construction RAN and FAULTED on a host that was fully alive.
 ///
-/// <para><b>The production reading.</b> <c>mkleiner/_Install/SocialMedia</c> logged
+/// <para><b>The production reading.</b> <c>user-b/_Install/SocialMedia</c> logged
 /// <c>initialization failed — BuildupAction 1 of 2 (DataExtensions.StartDataSourcesAndOpenGate)
-/// faulted (HubDisposingException: Hub mkleiner/_Install/SocialMedia is shutting down …)</c>.
+/// faulted (HubDisposingException: Hub user-b/_Install/SocialMedia is shutting down …)</c>.
 /// That line comes from the arm of <c>MessageHub.HandleInitialize</c> that runs only when
 /// <c>IsShuttingDown</c> is FALSE, so the host was not shutting down. <c>IsShuttingDown</c> reads
 /// the same monotonic flags the creation freeze reads, so the only null that can arrive with it

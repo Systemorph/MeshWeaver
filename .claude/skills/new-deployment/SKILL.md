@@ -1,6 +1,6 @@
 ---
 name: new-deployment
-description: "Bring up a NEW MeshWeaver instance the ONLY sanctioned way: a Hosting/Deployment record in the private Systemorph/Memex repo, provisioned by the control instance's Hosting plugin (a Provision InstanceAction on memex.systemorph.com) — never kubectl, never deploy.sh, never the ACR image: images come from the fleet's own registry cr.meshweaver.cloud. Use when standing up a customer/internal portal, when a Provision refuses or fails, or when auditing whether an instance is wired the way its record says. Covers the human-done prerequisites (Entra app, registry instance key, db-connection secret, a tag present in cr), what the operator's Provision plan does in what order, the refusals that are ANSWERS not errors, and the traps that read as success."
+description: "Bring up a NEW MeshWeaver instance the ONLY sanctioned way: a Hosting/Deployment record in the estate's private deployments repository, provisioned by the control instance's Hosting plugin (a Provision InstanceAction on the control instance) — never kubectl, never deploy.sh, never the ACR image: images come from the fleet's own registry cr.meshweaver.cloud. Use when standing up a customer/internal portal, when a Provision refuses or fails, or when auditing whether an instance is wired the way its record says. Covers the human-done prerequisites (Entra app, registry instance key, db-connection secret, a tag present in cr), what the operator's Provision plan does in what order, the refusals that are ANSWERS not errors, and the traps that read as success."
 user-invocable: true
 allowed-tools:
   - Bash
@@ -9,28 +9,29 @@ allowed-tools:
   - Grep
 ---
 
-# /new-deployment — a new instance is a record, provisioned by memex
+# /new-deployment — a new instance is a record, provisioned by the control instance
 
-A deployment is **one Hosting/Deployment record** — `mesh/Deployments/<id>.json` in the PRIVATE
-`Systemorph/Memex` repo — that the **control instance** (`memex.systemorph.com`, record `memex`,
+A deployment is **one Hosting/Deployment record** — `mesh/Deployments/<id>.json` in the estate's PRIVATE
+deployments repository — that the **control instance** (e.g. `https://control.example.com`, its own record carrying
 `operator.enabled: true`) turns into a namespace, a database, DNS, a Helm release and a certificate
 when a global admin files a **Provision** action against it. Everything else — cluster, ingress,
 Postgres server, Key Vault, the registry, observability — already exists and is shared.
 
-> 🔒 **The inventory is private.** Hosts, namespaces and database names live in `Systemorph/Memex`
-> (`mesh/Deployments/*.json`, `docs/inventory.md`, the Deployments tab). The public MeshWeaver repo
+> 🔒 **The inventory is private.** Hosts, namespaces and database names live in the estate's private
+> deployments repository (`mesh/Deployments/*.json`, its inventory, the Deployments tab) — see "Where an
+> estate's instances are declared" in [Instances.md](../../../src/MeshWeaver.Documentation/Data/Architecture/Instances.md). The public MeshWeaver repo
 > carries the *mechanism* (chart, operator scripts, the Hosting plugin's sources) and must never
 > carry *who runs what*.
 
-🚨 **The maintained runbook is `docs/new-deployment.md` in `Systemorph/Memex`.** It is authoritative
+🚨 **The maintained runbook is `docs/new-deployment.md` in the estate's private deployments repository.** It is authoritative
 wherever it and this page disagree; this page is the map, not a copy of the commands.
 
 ## Where the work happens — and where it does not
 
 | | who | how |
 |---|---|---|
-| the record | a human, by PR | `mesh/Deployments/<id>.json` (GitSynced to both portals; a mesh-side edit is written back as a PR by `DeploymentGitSync`) |
-| secrets an instance cannot mint for itself | a human, once | Key Vault `Systemorph`, names `<keyVaultSecretPrefix><Section>-<Key>` |
+| the record | a human, by PR | `mesh/Deployments/<id>.json` (GitSynced to the portals; a mesh-side edit is written back as a PR by `DeploymentGitSync`) |
+| secrets an instance cannot mint for itself | a human, once | Key Vault `<vault>`, names `<keyVaultSecretPrefix><Section>-<Key>` |
 | namespace, database, identity, DNS, pull secret, release, TLS | **the operator**, from the Provision plan | a `Hosting/InstanceAction` node on the control instance |
 | the cluster | nobody by hand | `kubectl` is not part of this procedure; a step that needs it is a defect in the lane, file it |
 
@@ -50,7 +51,7 @@ Every one of these is a **prerequisite the Provision REFUSES without**, so do th
    paste it from that file into the dialog, then `rm`. Never `cat` a stderr capture from a
    minting verb.
 2. **The registry instance key** — ONE key, two jobs (plugin catalog AND image pull):
-   `POST https://memex.meshweaver.cloud/api/instances/register` with
+   `POST https://<plugin-registry-instance>/api/instances/register` with
    `{"bootstrapKey":"","instanceId":"<id>","displayName":"…","homeUrl":"https://<host>"}` (open
    registration = the `free` plan; an admin raises it under Admin ▸ Instance grants). Paste
    `.instanceKey` into the same **Set Key Vault secrets…** dialog as `<prefix>PluginCatalog-RegistryToken`.
@@ -59,7 +60,7 @@ Every one of these is a **prerequisite the Provision REFUSES without**, so do th
    an empty Store with no error".
 3. **The database connection string** — `<prefix>db-connection`
    (`InstanceSpec.DatabaseSecretName`), composed from the shared admin password in vault object
-   `memex-postgres-password`: `Host=memexaks-pg.postgres.database.azure.com;Port=5432;Username=memexadmin;Password=…;Database=<db>;SslMode=Require;Trust Server Certificate=true`.
+   `memex-postgres-password`: `Host=<pg-server>.postgres.database.azure.com;Port=5432;Username=<pg-admin>;Password=…;Database=<db>;SslMode=Require;Trust Server Certificate=true`.
    **FQDN, never an IP** — Azure moves the backing instance and DNS follows it. Mapped on the
    record's `keyVaultSecrets.secrets` as `ConnectionStrings__memex`.
 4. **An image tag that EXISTS in `cr.meshweaver.cloud`.** `imageRepository:
@@ -76,11 +77,11 @@ Every one of these is a **prerequisite the Provision REFUSES without**, so do th
    emptyDir and every restart wipes it; `keyVaultSecrets` naming the
    three vault objects above plus `<prefix>Ai-KeyProtection-MasterKey` (GENERATED by
    `hosting-kv-ensure`, never regenerated — it seals every stored `enc:` provider key);
-   `pluginRepos[0] = { name: "Plugins", url: "https://memex.meshweaver.cloud" }` (the name is the
+   `pluginRepos[0] = { name: "Plugins", url: "https://<plugin-registry-instance>" }` (the name is the
    REGISTRY's name, never the instance's — a bare `preInstall` id is qualified against it and the
    catalog FAILS CLOSED on a mismatch); `preInstall: ["Essentials"]`; `updatePolicy: Stable` for a
    customer; `extraPortalConfig` with `Hosting__Deployment: <id>` and `Hosting__ReportTo:
-   https://memex.systemorph.com`.
+   https://control.example.com` (the control instance).
    Gates that read it: `check-record-renders-overlay.py` (record ↔ `values.<release>.public.yaml`,
    `extraPortalConfig` one way, `keyVaultSecrets` both ways), `check-image-pins.py` (resolves every
    pin — `cr.meshweaver.cloud` pins need `MW_REGISTRY_KEY`), `config-key-coverage`.
@@ -111,7 +112,7 @@ fail-fast, the failing STEP named on the node:
 
 ## 3. Filing it
 
-On the control instance (MCP server for memex.systemorph.com), create under `Deployments/`:
+On the control instance (through its own MCP server), create under `Deployments/`:
 
 ```json
 { "id": "<id>-provision", "namespace": "Deployments", "nodeType": "Hosting/InstanceAction",
@@ -131,8 +132,9 @@ fix the cause and file again.
 - **A cold instance recompiles every dynamic NodeType.** The startup budget on the record
   (`startupProbe.budgetSeconds`, 3 h on the siblings) exists for this; a pod `0/1` during the bake
   is the gate doing its job. Do not cycle pods while it warms.
-- Register the GitHub Environment and a deployments entry on `Systemorph/Memex`, add the
-  `docs/inventory.md` row, set `Admin/UpdatePolicy` (**Stable** for a customer). A deployment nobody
+- Register the GitHub Environment and a deployments entry in the estate's private deployments
+  repository, add the inventory row (see "Where an estate's instances are declared" in
+  [Instances.md](../../../src/MeshWeaver.Documentation/Data/Architecture/Instances.md)), set `Admin/UpdatePolicy` (**Stable** for a customer). A deployment nobody
   recorded is a deployment nobody will remember to patch.
 
 ## 🚨 Traps that read as success

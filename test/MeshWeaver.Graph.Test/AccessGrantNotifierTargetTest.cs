@@ -9,7 +9,7 @@ namespace MeshWeaver.Graph.Test;
 /// Pins <see cref="AccessGrantNotifier.ResolveGrantedNode"/> — the node an access-granted
 /// notification names and links to. It must ALWAYS be the governed node, never the <c>_Access</c>
 /// satellite container: the reported bug was a mail reading "You've been given access to
-/// CollaborationNotus/_Access" whose button opened <c>/CollaborationNotus/_Access</c> instead of the
+/// CollaborationInitech/_Access" whose button opened <c>/CollaborationInitech/_Access</c> instead of the
 /// space. Cause: the notifier used <see cref="MeshNode.MainNode"/>, which an assignment written
 /// without an explicit MainNode gets auto-stamped to its NAMESPACE — the container.
 /// </summary>
@@ -35,12 +35,12 @@ public class AccessGrantNotifierTargetTest
     public void AutoStampedMainNode_StripsTheAccessContainer()
     {
         // The reported shape: no explicit MainNode at write time → auto-stamped to the namespace.
-        var node = Assignment("alice", "CollaborationNotus/_Access", "CollaborationNotus/_Access");
+        var node = Assignment("alice", "CollaborationInitech/_Access", "CollaborationInitech/_Access");
 
         Assert.True(AccessGrantNotifier.TryResolveGrant(
             node, Options, out var recipient, out var granted, out var roleText));
         Assert.Equal("alice", recipient);
-        Assert.Equal("CollaborationNotus", granted);
+        Assert.Equal("CollaborationInitech", granted);
         Assert.Equal("Admin", roleText);
     }
 

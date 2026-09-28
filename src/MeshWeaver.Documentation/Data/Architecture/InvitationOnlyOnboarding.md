@@ -105,7 +105,7 @@ the lookup carries its own bound. The consequence is that the request the middle
 already be dead.
 
 It therefore checks `RequestAborted` **after** the decision arrives and, when the connection is gone,
-hands nothing to the endpoint. Before that check (#4859) a burst of five requests on memex-cloud was
+hands nothing to the endpoint. Before that check (#4859) a burst of five requests on the public instance was
 passed to a JSON endpoint after Kestrel's shutdown had aborted their connections and disposed its
 transport; every response write rented from the dead pool and died on
 `ObjectDisposedException: 'MemoryPool'` at `Http1OutputProducer.GetFakeMemory`, attributed to this

@@ -102,7 +102,7 @@ gh pr merge PR_NUMBER --merge
 ## 🚨🚨🚨 The one rule: main must be GREEN before you merge
 
 **The pull-based self-update deploys `main`.** The `memex-local autoroll` watches the moving
-`*-local:latest` image, and the AKS portals (memex / memex-cloud) self-roll to the latest
+`*-local:latest` image, and the AKS portals self-roll to the latest
 green CI image. So `main`'s CI is not a formality — it is the source of the image that ships.
 
 - **Red main** (build/test failure) → no valid image is produced → the self-update **cannot roll

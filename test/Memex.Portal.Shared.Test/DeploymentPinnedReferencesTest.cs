@@ -24,10 +24,10 @@ public class DeploymentPinnedReferencesTest
     [Fact]
     public void ADeploymentRecordsPin_IsAReference_WhateverJsonShapeTheContentTook()
     {
-        var asNode = new MeshNode("pearl", "Deployments")
+        var asNode = new MeshNode("fabrikam", "Deployments")
         {
             NodeType = DeploymentPinnedReferences.DeploymentNodeType,
-            Content = JsonNode.Parse("""{ "host": "pearl.example", "pinnedImageTag": "memex-portal-ai:3.0.0-ci.8080" }"""),
+            Content = JsonNode.Parse("""{ "host": "fabrikam.example", "pinnedImageTag": "memex-portal-ai:3.0.0-ci.8080" }"""),
         };
         var asElement = asNode with
         {
@@ -35,7 +35,7 @@ public class DeploymentPinnedReferencesTest
         };
 
         var fromNode = DeploymentPinnedReferences.DeploymentPinOf(asNode, Options)!;
-        fromNode.Origin.Should().Be("Deployment Deployments/pearl");
+        fromNode.Origin.Should().Be("Deployment Deployments/fabrikam");
         fromNode.Version.Should().Be("memex-portal-ai:3.0.0-ci.8080");
         fromNode.Identity.Should().BeNull();
         PlatformVersionLine.Normalize(fromNode.Version).Should().Be("3.0.0-ci.8080");
@@ -60,18 +60,18 @@ public class DeploymentPinnedReferencesTest
     {
         var report = new DeploymentReport
         {
-            Deployment = "atioz",
+            Deployment = "initech",
             PlatformVersion = "3.0.0-ci.7000+deadbeef",
             FrameworkIdentity = "s9c0b05d61cb34bbffde9ad7a32ab1a8b",
         };
-        var node = new MeshNode("atioz", "Deployments/Modules")
+        var node = new MeshNode("initech", "Deployments/Modules")
         {
             NodeType = DeploymentReportService.InventoryNodeType,
             Content = JsonNode.Parse(JsonSerializer.Serialize(report, Options)),
         };
 
         var reference = DeploymentPinnedReferences.ReportedBuildOf(node, Options)!;
-        reference.Origin.Should().Be("instance report Deployments/Modules/atioz");
+        reference.Origin.Should().Be("instance report Deployments/Modules/initech");
         reference.Version.Should().Be("3.0.0-ci.7000+deadbeef");
         reference.Identity.Should().Be("s9c0b05d61cb34bbffde9ad7a32ab1a8b");
     }
@@ -201,10 +201,10 @@ public class DeploymentPinnedReferencesTest
     public void AnExpectedInstanceThatHasNeverReported_RefusesTheWholePass_NamingIt()
     {
         var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
-            [Deployment("memex"), Deployment("pearl")],
+            [Deployment("memex"), Deployment("fabrikam")],
             [Report("memex", TimeSpan.FromMinutes(5))]));
 
-        refusal.Message.Should().Contain("INCOMPLETE").And.Contain("Deployments/pearl");
+        refusal.Message.Should().Contain("INCOMPLETE").And.Contain("Deployments/fabrikam");
         refusal.Message.Should().Contain("1 refusal(s) over 2 expected instance(s)",
             because: "the denominator belongs in the refusal, not only in a log line — and a refusal "
                      + "COUNT is not a fraction of the expected set, because an orphan report can be "
@@ -240,8 +240,8 @@ public class DeploymentPinnedReferencesTest
     [Fact]
     public void AnExplicitlyRetiredInstance_LeavesTheExpectedSet_AndItsSilenceIsNotARefusal()
     {
-        Resolve([Deployment("pearl", extra: """{ "retired": true }""")], []).Should().BeEmpty();
-        Resolve([Deployment("pearl", extra: """{ "retiredAt": "2026-09-01T00:00:00Z" }""")], []).Should().BeEmpty();
+        Resolve([Deployment("fabrikam", extra: """{ "retired": true }""")], []).Should().BeEmpty();
+        Resolve([Deployment("fabrikam", extra: """{ "retiredAt": "2026-09-01T00:00:00Z" }""")], []).Should().BeEmpty();
     }
 
     [Fact]
@@ -250,7 +250,7 @@ public class DeploymentPinnedReferencesTest
         // The distinction #3858 asks for: retirement is a declaration on the record, never an
         // inference from silence. A portal that is down reports nothing, and so does a portal that
         // was decommissioned — only one of them may have its artifacts collected.
-        Assert.Throws<InvalidOperationException>(() => Resolve([Deployment("pearl")], []));
+        Assert.Throws<InvalidOperationException>(() => Resolve([Deployment("fabrikam")], []));
     }
 
     [Fact]

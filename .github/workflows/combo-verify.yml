@@ -177,6 +177,8 @@ jobs:
         id: derive
         env:
           GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+          # A client estate's roster lines are private — see lock-pinned-digests.py PRIVATE_ROSTER_ENV.
+          MW_ACR_PRIVATE_ROSTER: ${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}
         run: |
           set -euo pipefail
           python3 .github/scripts/derive-combo-instances.py --discover

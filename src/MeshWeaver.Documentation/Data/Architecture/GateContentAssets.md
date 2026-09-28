@@ -31,7 +31,7 @@ Three hosts, three different answers, and it is worth being precise about which 
 
 | Host | Where the handler comes from | Where the `content` collection comes from |
 |---|---|---|
-| Portal (`memex`, `memex-cloud`) | `MemexConfiguration`'s `ConfigureDefaultNodeHub` maps `attachments` on **every** per-node hub, which calls `AddContentCollections()` | the same lambda mounts a writable `content` collection on the partition ROOT only (`!nodePath.Contains('/')`), `ExposeInChildren = true` |
+| Portal (every Memex portal instance) | `MemexConfiguration`'s `ConfigureDefaultNodeHub` maps `attachments` on **every** per-node hub, which calls `AddContentCollections()` | the same lambda mounts a writable `content` collection on the partition ROOT only (`!nodePath.Contains('/')`), `ExposeInChildren = true` |
 | A `Space`-typed root anywhere | `SpaceNodeType`'s own `HubConfiguration` calls `AddContentCollections()` | nothing — the handler answers, then fails *"Target content collection 'content' not found"* |
 | The gate mesh, before #3424 | nothing: `AddGraph()`'s default node chain does not call it, and neither does the `Store/Plugin` NodeType most package roots declare | nothing |
 

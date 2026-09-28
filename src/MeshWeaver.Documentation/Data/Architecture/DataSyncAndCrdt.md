@@ -291,7 +291,7 @@ these lines from the *same window* before blaming the sync protocol:
 | `[ROUTE] Stream-routed delivery to '…' has no live subscriber` + `ClientSubscriptionEviction` | the owner evicted that subscriber's server-side streams on the router's `TargetUnserved` verdict (#2620). Correct when the subscriber is dead — one gap per cycle when it is not |
 | `Stream {StreamId}: owner {Owner} … — resubscribing for fresh snapshot` | an owner recycle / `StreamEndedEvent`; the re-assert re-bases the chain |
 
-That correlation is the recorded disposition of the memex-cloud storm on **#2641**
+That correlation is the recorded disposition of the public instance's storm on **#2641**
 (847 lines / 30 min): the frame-loss count was the *symptom* of an attach latch and the
 eviction cycle it caused, not a defect of the chain. See also
 [Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) — the
@@ -433,7 +433,7 @@ the process's life. The `Resync has not converged` Warning above is the only tra
 **log line is not an API** — nothing downstream of the stream is told anything, so nothing
 can re-establish.
 
-Measured on memex-cloud, 2026-09-01, on `Event/SavGeneralversammlung2026/Talk`:
+Measured on the public instance, 2026-09-01, on `Event/SavGeneralversammlung2026/Talk`:
 
 ```
 [SYNC_STREAM] Frame loss detected for G4LJWZjBXkWdULLsT-5N5g: incoming Patch v13 chains onto v12

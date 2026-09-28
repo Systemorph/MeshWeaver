@@ -141,11 +141,11 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Theory]
     [InlineData("Hosting:ControlInbox:Secret", "Hosting:ControlInbox:Secret", true)]
     [InlineData("Hosting:ControlInbox:Secret", "hosting:controlinbox:secret", true)]
-    [InlineData("Hosting:PlatformWebhookSecret:*", "Hosting:PlatformWebhookSecret:pearl", true)]
+    [InlineData("Hosting:PlatformWebhookSecret:*", "Hosting:PlatformWebhookSecret:fabrikam", true)]
     // The section itself — the FLEET secret — is never admitted by a child slot.
     [InlineData("Hosting:PlatformWebhookSecret:*", "Hosting:PlatformWebhookSecret", false)]
     // Exactly one more segment: no grandchildren, no empty child, no odd characters.
-    [InlineData("Hosting:PlatformWebhookSecret:*", "Hosting:PlatformWebhookSecret:pearl:Previous", false)]
+    [InlineData("Hosting:PlatformWebhookSecret:*", "Hosting:PlatformWebhookSecret:fabrikam:Previous", false)]
     [InlineData("Hosting:PlatformWebhookSecret:*", "Hosting:PlatformWebhookSecret:", false)]
     [InlineData("Hosting:PlatformWebhookSecret:*", "Hosting:PlatformWebhookSecret:pe arl", false)]
     [InlineData("Hosting:ControlInbox:Secret", "Auth:GlobalAdmins:0", false)]
@@ -243,17 +243,17 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
     {
         await CreateTarget();
         var key = SecretFingerprint.Generate();
-        await SetAs(PlatformAdmin, $"{InboxKey}:pearl", key);
-        await WaitForCatalog(c => c.Entry($"{InboxKey}:pearl")?.Current == key, "the issued key is live");
+        await SetAs(PlatformAdmin, $"{InboxKey}:fabrikam", key);
+        await WaitForCatalog(c => c.Entry($"{InboxKey}:fabrikam")?.Current == key, "the issued key is live");
 
-        const string body = """{"event":"self-update-available","deployment":"pearl"}""";
+        const string body = """{"event":"self-update-available","deployment":"fabrikam"}""";
         var result = await Deliver(body, Sign(body, key));
 
         Assert.Equal(WebhookInbox.DeliveryStatus.Accepted, result.Status);
         Assert.True(result.SignatureVerified);
-        Assert.Equal("pearl", result.SenderKey);
+        Assert.Equal("fabrikam", result.SenderKey);
 
-        await WaitForCatalog(c => c.Entry($"{InboxKey}:pearl")?.Content.LastUseOk == true,
+        await WaitForCatalog(c => c.Entry($"{InboxKey}:fabrikam")?.Content.LastUseOk == true,
             "a verified delivery is recorded as the key's last verified use");
 
         // A key nobody issued is still refused, and stores nothing.
@@ -268,18 +268,18 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
     {
         await CreateTarget();
         var key = SecretFingerprint.Generate();
-        await SetAs(PlatformAdmin, $"{InboxKey}:pearl", key);
-        await WaitForCatalog(c => c.Entry($"{InboxKey}:pearl")?.Current == key, "the issued key is live");
+        await SetAs(PlatformAdmin, $"{InboxKey}:fabrikam", key);
+        await WaitForCatalog(c => c.Entry($"{InboxKey}:fabrikam")?.Current == key, "the issued key is live");
         var before = await InboxCount();
 
-        const string body = """{"event":"self-update-key-test","deployment":"pearl"}""";
+        const string body = """{"event":"self-update-key-test","deployment":"fabrikam"}""";
         var verifyOnly = new KeyValuePair<string, string>(WebhookInbox.VerifyOnlyHeader, "true");
 
         var accepted = await Deliver(body, Sign(body, key), verifyOnly);
         Assert.Equal(WebhookInbox.DeliveryStatus.Accepted, accepted.Status);
         Assert.True(accepted.VerifyOnly);
         Assert.True(accepted.SignatureVerified);
-        Assert.Equal("pearl", accepted.SenderKey);
+        Assert.Equal("fabrikam", accepted.SenderKey);
         Assert.Null(accepted.NodePath);
 
         var mismatch = await Deliver(body, Sign(body, "a-key-typed-wrong"), verifyOnly);
@@ -294,24 +294,24 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
         await CreateTarget();
         var oldKey = SecretFingerprint.Generate();
         var newKey = SecretFingerprint.Generate();
-        await SetAs(PlatformAdmin, $"{InboxKey}:pearl", oldKey);
-        await WaitForCatalog(c => c.Entry($"{InboxKey}:pearl")?.Current == oldKey, "the first key is live");
+        await SetAs(PlatformAdmin, $"{InboxKey}:fabrikam", oldKey);
+        await WaitForCatalog(c => c.Entry($"{InboxKey}:fabrikam")?.Current == oldKey, "the first key is live");
 
-        var rotated = await SetAs(PlatformAdmin, $"{InboxKey}:pearl", newKey, keepPrevious: TimeSpan.FromDays(1));
+        var rotated = await SetAs(PlatformAdmin, $"{InboxKey}:fabrikam", newKey, keepPrevious: TimeSpan.FromDays(1));
         Assert.Equal(SecretFingerprint.Of(oldKey), rotated.PreviousFingerprint);
-        await WaitForCatalog(c => c.Entry($"{InboxKey}:pearl") is { Current: var cur, Previous: var prev }
+        await WaitForCatalog(c => c.Entry($"{InboxKey}:fabrikam") is { Current: var cur, Previous: var prev }
                                   && cur == newKey && prev == oldKey,
             "during a rotation the catalog holds both keys");
 
         // The deployment has not re-entered its key yet: its OLD key still announces.
-        const string body = """{"event":"self-update-available","deployment":"pearl"}""";
+        const string body = """{"event":"self-update-available","deployment":"fabrikam"}""";
         var withOld = await Deliver(body, Sign(body, oldKey));
-        Assert.Equal("pearl", withOld.SenderKey);
+        Assert.Equal("fabrikam", withOld.SenderKey);
 
         // Its first delivery with the NEW key completes the rotation: the old key stops verifying.
         var withNew = await Deliver(body, Sign(body, newKey));
-        Assert.Equal("pearl", withNew.SenderKey);
-        await WaitForCatalog(c => c.Entry($"{InboxKey}:pearl")?.Previous is null,
+        Assert.Equal("fabrikam", withNew.SenderKey);
+        await WaitForCatalog(c => c.Entry($"{InboxKey}:fabrikam")?.Previous is null,
             "the first use of the new key ends the rotation");
         var oldAgain = await Deliver(body, Sign(body, oldKey));
         Assert.Equal(WebhookInbox.DeliveryStatus.SignatureInvalid, oldAgain.Status);
@@ -419,12 +419,12 @@ public class InstanceSecretsTest(ITestOutputHelper output) : MonolithMeshTestBas
 
     [Fact]
     public void Two_spellings_of_one_key_address_one_node() =>
-        Assert.Equal(InstanceSecrets.PathOf("Test:InboxSecret:Pearl"), InstanceSecrets.PathOf("test:inboxsecret:pearl"));
+        Assert.Equal(InstanceSecrets.PathOf("Test:InboxSecret:Fabrikam"), InstanceSecrets.PathOf("test:inboxsecret:fabrikam"));
 
     [Fact]
     public async Task A_rotation_overlap_is_clamped_to_the_maximum()
     {
-        var key = $"{InboxKey}:pearl";
+        var key = $"{InboxKey}:fabrikam";
         await SetAs(PlatformAdmin, key, SecretFingerprint.Generate());
         await WaitForCatalog(c => c.Entry(key) is not null, "the first key is live");
         var rotated = await SetAs(PlatformAdmin, key, SecretFingerprint.Generate(), keepPrevious: TimeSpan.FromDays(3650));

@@ -33,23 +33,23 @@ namespace Memex.Portal.Shared.Test;
 /// The whole announcement-key round trip (Doc/Architecture/SelfUpdateAnnouncementKey), with no
 /// operator and no restart:
 /// <list type="number">
-/// <item>the CONTROL instance issues a key for <c>pearl</c> (a portal-set per-sender key);</item>
-/// <item>pearl's administrator SAVES the same key in Settings ▸ Control lane;</item>
+/// <item>the CONTROL instance issues a key for <c>fabrikam</c> (a portal-set per-sender key);</item>
+/// <item>fabrikam's administrator SAVES the same key in Settings ▸ Control lane;</item>
 /// <item>the two fingerprints match;</item>
 /// <item><b>Test connection</b> sends a signed, verify-only test, and the control inbox answers
-/// "verified as pearl" and stores nothing;</item>
+/// "verified as fabrikam" and stores nothing;</item>
 /// <item>a mistyped key answers a MISMATCH;</item>
 /// <item>no log line carries the key.</item>
 /// </list>
 /// Both roles share one mesh: the sender signs with <c>Hosting:ControlInbox:Secret</c>, and the
-/// inbox verifies with <c>Hosting:PlatformWebhookSecret:pearl</c>. The HTTP hop is an in-process
+/// inbox verifies with <c>Hosting:PlatformWebhookSecret:fabrikam</c>. The HTTP hop is an in-process
 /// handler that answers exactly as <see cref="WebhookInboxEndpoints"/> does.
 /// </summary>
 public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string AdminPartition = "Admin";
     private const string PlatformAdmin = "platform-boss";
-    private const string Deployment = "pearl";
+    private const string Deployment = "fabrikam";
     private const string InboxUrl = "https://control.test" + SelfUpdateHandover.InboxRoute;
     private const string FleetSecret = "the-fleet-wide-secret";
 
@@ -105,27 +105,27 @@ public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMes
         var issued = SecretFingerprint.Generate();
         var controlKey = $"{SelfUpdateHandover.LocalSecretKey}:{Deployment}";
 
-        // 1. The control instance issues pearl's key.
+        // 1. The control instance issues fabrikam's key.
         var controlStatus = await SaveAsAdmin(controlKey, issued);
-        // 2. Pearl's administrator pastes it and saves.
-        var pearlStatus = await SaveAsAdmin(SelfUpdateHandover.SecretKey, issued);
+        // 2. Fabrikam's administrator pastes it and saves.
+        var fabrikamStatus = await SaveAsAdmin(SelfUpdateHandover.SecretKey, issued);
         await Live(controlKey, issued);
         await Live(SelfUpdateHandover.SecretKey, issued);
 
         // 3. The pair: the two fingerprints are the same, and neither is the key.
-        Assert.Equal(controlStatus.Secret.Fingerprint, pearlStatus.Secret.Fingerprint);
-        Assert.DoesNotContain(issued, pearlStatus.Secret.Fingerprint!);
+        Assert.Equal(controlStatus.Secret.Fingerprint, fabrikamStatus.Secret.Fingerprint);
+        Assert.DoesNotContain(issued, fabrikamStatus.Secret.Fingerprint!);
 
         // The self-updater now has a route to the control instance — no restart, no mount.
         Assert.Equal(SelfUpdateHandover.Route.Post, SelfUpdateHandover.RouteFor(Handover().ReadSettings()));
 
-        // 4. Test connection: verified as pearl.
+        // 4. Test connection: verified as fabrikam.
         var outcome = await Handover().Test().FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
         Assert.True(outcome.Accepted, outcome.Detail);
         Assert.Equal(Deployment, outcome.Sender);
         Assert.Contains("Match", ControlLaneSettingsTab.TestMarkdown(outcome, (k, a) => k == "ui.controlLaneTestMatch" ? "Match " + a[0] : k, "en"));
 
-        // The test is recorded on BOTH ends: pearl's last use, and the control's last verification.
+        // The test is recorded on BOTH ends: fabrikam's last use, and the control's last verification.
         await Catalog.Changes
             .Where(_ => Catalog.Entry(SelfUpdateHandover.SecretKey)?.Content.LastUseOk == true
                         && Catalog.Entry(controlKey)?.Content.LastUseOk == true)
@@ -152,7 +152,7 @@ public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// The REVERSED flow the pearl rollout uses: the deployment GENERATES its key (shown once, with
+    /// The REVERSED flow the fabrikam rollout uses: the deployment GENERATES its key (shown once, with
     /// its fingerprint), Systemorph registers that value on the control instance, the fingerprints
     /// agree, and Test connection answers a match — with nothing shown again afterwards.
     /// </summary>
@@ -195,7 +195,7 @@ public class ControlLaneKeyRoundTripTest(ITestOutputHelper output) : MonolithMes
     }
 
     [Theory]
-    [InlineData(200, """{"status":"verified","signature":"verified","sender":"pearl"}""", true, "pearl")]
+    [InlineData(200, """{"status":"verified","signature":"verified","sender":"fabrikam"}""", true, "fabrikam")]
     [InlineData(200, """{"status":"verified","signature":"verified","sender":null}""", true, null)]
     [InlineData(401, "", false, null)]
     // An older control instance that does not know the verify-only header STORES the test instead.

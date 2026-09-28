@@ -8,7 +8,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 # Notification Retention
 
 **Nothing on this platform expired, and notifications were the reason it had to start.**
-`nodeType:Notification` was measured at **4 476 rows** on memex-cloud on 2026-09-03 — every
+`nodeType:Notification` was measured at **4 476 rows** on the public instance on 2026-09-03 — every
 notification ever raised, versioned, kept, since the platform's first day. There was no retention
 pass of any kind, for notifications or for anything else
 ([#3250](https://github.com/Systemorph/MeshWeaver/issues/3250)).

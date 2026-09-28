@@ -339,7 +339,7 @@ things followed, and both were wrong:
 
 1. a package this instance had not itself installed had **no binding at all**, so it could not be
    served however plainly its content sat here — which is the permanent state of a registry that
-   provisions its packages as Spaces (memex-cloud never runs the catalog install, so it has no
+   provisions its packages as Spaces (the plugin registry instance never runs the catalog install, so it has no
    install records);
 2. "I cannot tell which source this is from" was answered as **"you are not entitled to it"** — a
    check whose inability to answer is indistinguishable from a negative answer, applied to the most

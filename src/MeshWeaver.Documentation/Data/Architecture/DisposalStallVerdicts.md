@@ -32,7 +32,7 @@ report**.
 
 ## The report that started this
 
-On a `memex-cloud` pod, 47 `sync/*` hubs logged event **7313** at the same moment:
+On a public-instance pod, 47 `sync/*` hubs logged event **7313** at the same moment:
 
 ```text
 DISPOSAL DEADLOCK DETECTED: Hub sync/XXXX made no teardown progress for 00:00:08

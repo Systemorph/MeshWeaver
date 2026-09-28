@@ -270,7 +270,7 @@ Two things about its history matter, because both were once wrong the other way:
   `hostedHubs.Dispose()`, `CancelCallbacks()`, `DisposeImpl()` and
   `messageService.Dispose()` from the timer thread and signalled `Dead` while the
   wedged turn was still executing. A parent then advanced against a subtree that was
-  mid-flight; production (`memex-cloud`, 2026-08-29 → 09-03) showed it firing dozens of
+  mid-flight; production (the public instance, 2026-08-29 → 09-03) showed it firing dozens of
   times per shutdown and on pods that were not shutting down. Its own predecessor
   merely **signalled** completion and leaked every child (the 2026-07-01 zombie
   portal-hub storm). Now a hub either finishes its phases or stays *pending* and says
@@ -737,8 +737,8 @@ convergence branch. They can decide to recycle before the gates open. The overla
 it routinely: with no type node in hand it fires on the first usable replay of the NodeType
 stream. A `DisposeRequest` posted at that moment overtakes every request the activation has
 already parked behind `[DataContextInit, MeshNodeInit]`, and the disposal answers each one
-`ShuttingDown` with a `[DISPOSE-DISCARD]` Error. Measured on memex-cloud (#5356):
-`Deployments/build` discarded a cache client's two `SubscribeRequest`s and its
+`ShuttingDown` with a `[DISPOSE-DISCARD]` Error. Measured on the public instance (#5356):
+`Deployments/<build-record>` (the build instance's record) discarded a cache client's two `SubscribeRequest`s and its
 `UnsubscribeRequest` in one millisecond. The hub was going down for a reason it had decided
 itself, with work it had accepted still in its own queue.
 

@@ -16,7 +16,7 @@ lines and a delayed answer.**
 
 ## What was measured
 
-memex.systemorph.com, 2026-09-17
+The control instance, 2026-09-17
 ([#4613](https://github.com/Systemorph/MeshWeaver/issues/4613)). Two outbound fetches — an agent
 reading a company's website through the WebSearch plugin's `FetchWebPage` tool — failed like this:
 

@@ -311,7 +311,7 @@ public sealed record IngressSpec
     /// asks cert-manager for nothing, deliberately.</para>
     ///
     /// <para>Why it is typed rather than "just an annotation": a Provision renders the values from
-    /// THIS record, never from a repository overlay. pearl.meshweaver.cloud had the issuer in its
+    /// THIS record, never from a repository overlay. fabrikam.example.com had the issuer in its
     /// overlay and not on its record, so the rendered ingress asked for no certificate and the
     /// controller served another host's for nine hours (2026-09-15).</para>
     /// </summary>

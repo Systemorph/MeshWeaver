@@ -103,7 +103,7 @@ by scope inheritance. It looks harmless in the node tree.
 > Closing this remaining path means rescoping the harness's call sites first — a mechanical change
 > worth doing, and one that should land on its own rather than inside a boundary fix.
 
-### What it actually confers (measured, memex 2026-07-28)
+### What it actually confers (measured, the control instance 2026-07-28)
 
 Identical permission sets; only the **scope** differs:
 
@@ -170,7 +170,7 @@ Admin/_Access/{user}_Access   →   AccessObject = {user}, Roles = [ Admin ],  M
 > where node_path_prefix = 'Admin' order by user_id;
 > ```
 >
-> This is not hypothetical. On 2026-07-28 memex had **43 accounts with an empty `node_path_prefix`**
+> This is not hypothetical. On 2026-07-28 the control instance had **43 accounts with an empty `node_path_prefix`**
 > — holding `Delete`, `Update`, `Create`, `Compile`, `Execute` and `Export` on everything —
 > against exactly **one** correctly-scoped platform admin. Most were created minutes after the
 > holder first signed in, so **user onboarding was minting mesh-wide superusers**, including
@@ -220,7 +220,7 @@ It is derived at read time from the **same evaluator the gates consult** (`GetEf
 
 ### The two type-scoped exceptions: a Space the platform itself owns
 
-"Not a data superuser" holds for every partition a **person** owns — there is always somebody to ask for a grant. It has no answer for a partition **nobody** can own: a Space with a ONE-WAY `_GitSync` is **system-owned** (`AccessAssignmentGuard.IsSystemOwned`) — the repo rewrites it on every sync, `IsForbiddenOnSystemOwned` refuses every Admin/Editor grant on it and `SystemOwnedAccessRetractionHandler` retracts the ones that predate the sync. Measured on memex.meshweaver.cloud 2026-09-12: `MeshWeaver/_GitSync`, created by the platform in a Space owned by `system-security`, re-imported the whole core repository on every green build (Memex#237), and the platform admin got `Not found` on `get` and *"Delete permission denied for 'MeshWeaver/_GitSync'"* on `delete` — no human could remove it through any API.
+"Not a data superuser" holds for every partition a **person** owns — there is always somebody to ask for a grant. It has no answer for a partition **nobody** can own: a Space with a ONE-WAY `_GitSync` is **system-owned** (`AccessAssignmentGuard.IsSystemOwned`) — the repo rewrites it on every sync, `IsForbiddenOnSystemOwned` refuses every Admin/Editor grant on it and `SystemOwnedAccessRetractionHandler` retracts the ones that predate the sync. Measured on the public instance 2026-09-12: `MeshWeaver/_GitSync`, created by the platform in a Space owned by `system-security`, re-imported the whole core repository on every green build (Memex#237), and the platform admin got `Not found` on `get` and *"Delete permission denied for 'MeshWeaver/_GitSync'"* on `delete` — no human could remove it through any API.
 
 So two node types carry an `INodeTypeAccessRule` whose non-admin leg is the ordinary fold and whose second leg is `hub.IsGlobalAdmin(userId)` — the same OR `GitHubActivityExtensions.TriggerAuthorizedAsSystem` already applies to every sync trigger ("triggering a sync is a platform action"):
 
@@ -530,7 +530,7 @@ worked case (issue #1186) with the measurements.
 
 Making a *silent* starvation produce that error is a **query-layer** change, not a fold change, and it
 has been made: policy [`query-fanin-stall-terminal`](../PolicyNotProse). `MeshQuery`'s
-`InitialStallProbe` had **detected** this for a long time and only logged — on `memex`, over the 400
+`InitialStallProbe` had **detected** this for a long time and only logged — on the control instance, over the 400
 minutes to 2026-09-21T04:12Z, it emitted 200+ warnings whose own text reads *"the query is silently
 stalled on its all-providers Initial gate and its consumer hangs with no error"*, alongside 95
 `No MeshNode emitted for` faults (~14/hour), and nothing acted on any of them. It now **terminates**
@@ -960,7 +960,7 @@ write a deny for every non-public child to claw it back.
 
 ## Why not materialise it per instance
 
-Measured on memex, 2026-07-28 (issue #701), the per-instance shape failed three separate ways:
+Measured on the control instance, 2026-07-28 (issue #701), the per-instance shape failed three separate ways:
 
 - **Churn.** The reconcile pass rewrote `_Policy` until its version counter reached six figures
   (`AgenticEngineering` 254,760), every write by `system-security`, as pure bookkeeping.
@@ -1534,7 +1534,7 @@ A create is decided on its PARENT, and a top-level node has none: the standard c
 | `OwnsPartitionProvisioningValidator` | type not static → schema never provisioned | reads the declaration and provisions before the root write |
 | post-creation | no handler matched `Crm/Client` → no owner, no `Admin/Partition/{id}` | `InMeshPartitionOwnerPostCreationHandler` — the creator gets Admin and the partition definition is written, as for a Space |
 
-Measured on memex.systemorph.com, 2026-09-15: nobody — platform admins included — could create a new CRM client; the only way in was to create a Space and retype its root. The declaration is now read wherever it lives, through ONE resolver (`PartitionOwningTypes.OwnsPartition`): a static type answers synchronously with no read; an in-mesh type costs one anchored, unfiltered query of its definition, and only for a TOP-LEVEL create — the only create that can root a partition. A definition that does not answer is reported as an availability failure (`Unavailable`), never as "does not own a partition".
+Measured on the control instance, 2026-09-15: nobody — platform admins included — could create a new CRM client; the only way in was to create a Space and retype its root. The declaration is now read wherever it lives, through ONE resolver (`PartitionOwningTypes.OwnsPartition`): a static type answers synchronously with no read; an in-mesh type costs one anchored, unfiltered query of its definition, and only for a TOP-LEVEL create — the only create that can root a partition. A definition that does not answer is reported as an availability failure (`Unavailable`), never as "does not own a partition".
 
 What it grants is what any signed-in user already had — creating a partition, with themselves as its Admin. A non-owning type is still refused at the root. The logged-out caller (who arrives NAMED `Anonymous`) is refused OUTRIGHT, never handed to the permission fold where an `Anonymous` grant could decide it — and the **own-scope shortcut** ("every user owns the partition named after their id") now requires an authenticated identity: it used to accept any non-empty id, so an anonymous caller creating a root named `Anonymous` bypassed every rule. Space and User keep their own rules and handlers; the in-mesh handler matches STRUCTURALLY (a partition root whose type is not registered in `src/`), the creation-side twin of the [partition teardown](/Doc/Architecture/PartitionTeardown), and for a non-System creator it FAILS the create unless ownership is positively re-established — a quiet skip would return an ownerless partition. Pinned by `InMeshPartitionOwnerTopLevelCreateTest`.
 
@@ -1776,7 +1776,7 @@ decision has now been made, because the un-widened gate is a live defect** — a
 defect #2913 fixed one seam earlier, which is precisely the shape a rule stated as "every path that
 decides this node type's access consults it" exists to prevent.
 
-**Measured, memex 2026-09-02 (#3061).** A recursive delete of the orphan NodeType `Edu/Course` was
+**Measured, the control instance 2026-09-02 (#3061).** A recursive delete of the orphan NodeType `Edu/Course` was
 refused with
 
 ```

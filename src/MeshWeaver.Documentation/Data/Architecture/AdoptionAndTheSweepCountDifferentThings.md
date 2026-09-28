@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Adoption and the Sweep Count Different Things
 
-On memex, 2026-09-08, one cold boot printed these two lines ten seconds apart, from the same
+On the control instance, 2026-09-08, one cold boot printed these two lines ten seconds apart, from the same
 process, on the same framework identity:
 
 ```
@@ -159,25 +159,25 @@ The reading this fix was waiting for is a cold boot on a NEW framework identity,
 `bake-report` entry `/health` publishes (system-side, past RLS, its own denominator — see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation)). Both live portals rolled to
 `c84c6c055` on 2026-09-12 and booted on framework `sd608997`; read 2026-09-13 07:06:01–07:06:38Z,
-six `GET /health` calls per portal. On memex.systemorph.com the six bodies split 3/3 across two
-replicas; on memex.meshweaver.cloud they split 2/3 across two replicas plus **one empty response**
+six `GET /health` calls per portal. On the control instance the six bodies split 3/3 across two
+replicas; on the public instance they split 2/3 across two replicas plus **one empty response**
 (0 bytes — a failed transport, no body to attribute, excluded from the sample). So the denominator
 below is **two sampled replicas per portal**; a portal running more than two has replicas this
 sample did not reach, and only `Sample` on the deployment record reads every pod:
 
 | portal, replica (boot) | `bake-report` | adoption stamps held |
 |---|---|---:|
-| memex.systemorph.com, 16:49:06Z | `total=215 baked=214 pending=1 previouslybroken=1` | 59 |
-| memex.systemorph.com, 16:51:56Z | `total=215 baked=214 pending=1 previouslybroken=1` | 1 |
-| memex.meshweaver.cloud, 12:55:11Z | `total=353 baked=295 pending=58 frameworkstale=55 previouslybroken=3` | 105 |
-| memex.meshweaver.cloud, 17:28:10Z | `total=353 baked=350 pending=3 previouslybroken=3` | 68 |
+| control instance, 16:49:06Z | `total=215 baked=214 pending=1 previouslybroken=1` | 59 |
+| control instance, 16:51:56Z | `total=215 baked=214 pending=1 previouslybroken=1` | 1 |
+| public instance, 12:55:11Z | `total=353 baked=295 pending=58 frameworkstale=55 previouslybroken=3` | 105 |
+| public instance, 17:28:10Z | `total=353 baked=350 pending=3 previouslybroken=3` | 68 |
 
 All four sampled replicas read `Healthy`, which on this check means
 `ClassifiedFromLocalAdoption == 0` — no sampled replica's enumeration snapshot predated its own
 adoptions. Against the boot this page opens with
 (`baked=5 pending=204 frameworkstale=201` with 78 adopted), the seeding replica of the control
 instance classified 214 of 215 as baked with 59 stamps of its own; the one pending type is the
-standing `previouslybroken`. The first memex-cloud replica on the new framework still reports
+standing `previouslybroken`. The first public-instance replica on the new framework still reports
 `frameworkstale=55`: a 353-type mesh where only module content ships in bundles, read by the first
 process on the identity, so 55 authored types had no bytes under the new tag anywhere yet — the
 compile that is supposed to happen, not the disagreement this page is about. Its sibling five
