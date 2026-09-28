@@ -3,6 +3,7 @@
 
     python3 .github/scripts/arm-promoted-set.py select --armed-max N [--override SET]
     python3 .github/scripts/arm-promoted-set.py pending            # MeshWeaver.Plugins' poller
+    python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
     python3 .github/scripts/arm-promoted-set.py --self-test
 
 Policy `one-promotion-gate` (register: Doc/Architecture/PolicyNotProse). Design of record:
@@ -31,6 +32,26 @@ the control instance. main-cd's `arm` job writes those, for the set this script 
 
 A set whose verdict is absent is WAITING, one whose verdict is red is REFUSED: neither is armed,
 and a newer set with a green verdict supersedes both. Silence is never a pass.
+
+THE BUNDLE'S BASE — the newest ARMED set, never the first parent. A promoted set usually carries
+several core merges (the batch window; `pending` supersedes older pairs instead of queueing them), and
+every one of them reaches the fleet when the set is armed. So the record's `base` — the commit the
+Plugins run diffs from and re-runs its control arm at, and the one the verdict is pinned to — is the
+core commit of the newest ARMED set: `base..candidate` is then exactly the merges the fleet has not
+seen. `armed-base` resolves it from memex-portal-ai's manifests (the armed version tag shares its
+manifest with the seven-character sha tag). The record says which rule produced `base` in
+`base_kind`:
+
+  * `armed`         — the newest armed set's commit (the normal case);
+  * `first-parent`  — no set has ever been armed, or the candidate IS the armed set: nothing wider
+                      exists to measure, said out loud;
+  * `unresolved`    — the armed set could not be read. The record keeps the first parent so CI still
+                      promotes, but `select` REFUSES to arm it and `pending` does not measure it: a
+                      narrower bundle than the truth would arm merges nobody measured. The next
+                      promoted set tries again.
+
+A record written before this rule carries no `base_kind` and is judged as before (legacy, first
+parent), so a set promoted in the transition is never stranded.
 
 `pending` is the other consumer's half: MeshWeaver.Plugins' `promotion-candidate.yml` asks it for
 the newest promoted-but-unarmed pair that has NO verdict yet, and runs its suites against it. So a
@@ -67,6 +88,8 @@ RUNS_EXAMINED = 40
 RECORD_KEYS = ("run_number", "core_sha", "base", "plugins_sha", "short", "plugins_short", "staging",
                "v_portal", "v_migration", "v_plugin", "key")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+SHORT_SHA_TAG = re.compile(r"^[0-9a-f]{7}$")
+BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
 
 # The waiter's validation is THE definition of a valid verdict — imported, never restated.
@@ -106,7 +129,37 @@ def check_record(rec: object) -> str | None:
         return f"the key {rec['key']!r} is not {verdict_key(rec['short'], rec['plugins_short'])!r}"
     if run_number_of(str(rec["v_portal"])) != int(rec["run_number"]):
         return f"v_portal {rec['v_portal']!r} does not carry run number {rec['run_number']}"
+    if "base_kind" in rec and rec["base_kind"] not in BASE_KINDS:
+        return f"base_kind {rec['base_kind']!r} is not one of {BASE_KINDS}"
     return None
+
+
+def armed_commit(manifests: object) -> tuple[str, str] | None:
+    """(the newest ARMED version, its seven-character core sha) from memex-portal-ai's manifest
+    metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
+    tag at all (nothing was ever armed). Pure.
+
+    The version tag is written by `arm` onto the promoted image's manifest, which already carries the
+    sha tag from `promote`, so both are on ONE manifest. A newest armed manifest WITHOUT a sha tag is
+    a fact this cannot interpret — ValueError, never a guess (a wrong base narrows the bundle)."""
+    if not isinstance(manifests, list):
+        raise ValueError("the manifest metadata is not a JSON list")
+    best: tuple[int, str, list[str]] | None = None
+    for row in manifests:
+        tags = row.get("tags") if isinstance(row, dict) else None
+        if not isinstance(tags, list):
+            continue
+        for t in tags:
+            n = run_number_of(str(t))
+            if n is not None and (best is None or n > best[0]):
+                best = (n, str(t), [str(x) for x in tags])
+    if best is None:
+        return None
+    shas = [t for t in best[2] if SHORT_SHA_TAG.match(t)]
+    if len(shas) != 1:
+        raise ValueError(f"the newest armed manifest {best[1]} carries {len(shas)} seven-character sha tag(s) "
+                         f"({best[2]}) — cannot name its core commit")
+    return best[1], shas[0]
 
 
 # ───────────────────────────────── transport ──────────────────────────────────────────────
@@ -194,6 +247,9 @@ def read_verdict(get: Get, plugins_token: str, key: str) -> tuple[object | None,
 
 def judge(rec: dict, verdict: object | None, why: str) -> tuple[str, str]:
     """(state, sentence): state is `green`, `waiting` or `refused`. Pure."""
+    if rec.get("base_kind") == "unresolved":
+        return "refused", ("its bundle base could not be resolved when it was promoted (the newest armed set was "
+                           "unreadable), so its verdict would cover fewer merges than the fleet would receive")
     if verdict is None:
         return ("waiting" if why == "no verdict yet" else "refused"), why
     ok, text = validate_verdict(verdict, rec["key"], rec["core_sha"], rec["base"])
@@ -236,6 +292,8 @@ def pending(records: list[dict], verdicts: dict[str, tuple[object | None, str]],
     if not newer:
         return None
     top = newer[0]
+    if top.get("base_kind") == "unresolved":
+        return None
     v, why = verdicts.get(top["key"], (None, "not read"))
     return top if v is None and why == "no verdict yet" else None
 
@@ -353,6 +411,35 @@ def self_test() -> int:
           [r["run_number"] for r in got] == [9460], str(got))
     check("read_records never reads a run at or below the armed set",
           not any("runs/0/" in u for u in seen), str(seen))
+    # the bundle base — the newest ARMED set
+    live = [  # the shape measured on memex-portal-ai, 2026-09-28
+        {"tags": ["3-latest", "3.0-latest", "3.0.0-ci.9538", "3.0.0-latest", "b9fe5ed", "b9fe5ed-pb7390a0", "main"]},
+        {"tags": ["staging-9357060-36379800125"]},
+        {"tags": ["3.0.0-ci.9535", "9357060", "9357060-p90f70cd"]},
+        {"tags": None},
+    ]
+    check("armed-base: the NEWEST version tag's manifest names the base (its seven-character sha tag)",
+          armed_commit(live) == ("3.0.0-ci.9538", "b9fe5ed"), str(armed_commit(live)))
+    check("armed-base: newest by RUN NUMBER, not by listing order",
+          armed_commit(list(reversed(live))) == ("3.0.0-ci.9538", "b9fe5ed"))
+    check("armed-base: no version tag anywhere means nothing was ever armed (None, not a guess)",
+          armed_commit([{"tags": ["main", "b9fe5ed"]}]) is None)
+    for bad, why in (([{"tags": ["3.0.0-ci.9538", "main"]}], "no sha tag"),
+                     ([{"tags": ["3.0.0-ci.9538", "b9fe5ed", "a1b2c3d"]}], "two sha tags"),
+                     ({"tags": []}, "not a list")):
+        try:
+            armed_commit(bad)
+            check(f"armed-base: an uninterpretable manifest ({why}) is RED", False)
+        except ValueError:
+            check(f"armed-base: an uninterpretable manifest ({why}) is RED, never a guess", True)
+    u = {**c, "base_kind": "unresolved"}
+    check("a record with an unknown base_kind is refused", check_record({**a, "base_kind": "nope"}) is not None)
+    check("an `armed` and a legacy (no base_kind) record are both accepted",
+          check_record({**a, "base_kind": "armed"}) is None and check_record(a) is None)
+    chosen, lines = select([u, b], {u["key"]: green(u), b["key"]: green(b)}, armed_max=9458)
+    check("an UNRESOLVED base is never armed, even green — the next older green set is taken", chosen is b, "\n".join(lines))
+    check("pending: an UNRESOLVED newest record is not measured (the next promotion retries)",
+          pending([u, b, a], {u["key"]: (None, "no verdict yet")}, armed_max=9458) is None)
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -362,7 +449,8 @@ def self_test() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("command", nargs="?", choices=("select", "pending"))
+    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base"))
+    ap.add_argument("--manifests", type=Path, help="armed-base: memex-portal-ai manifest metadata (JSON list)")
     ap.add_argument("--armed-max", type=int, default=0,
                     help="run number of the newest ARMED set (memex-portal-ai's newest version tag)")
     ap.add_argument("--override", default="", help="arm exactly this set name, verdict or not")
@@ -371,6 +459,22 @@ def main() -> int:
         return self_test()
     if not a.command:
         ap.error("a command is required")
+    if a.command == "armed-base":
+        # Offline and pure: the caller reads the registry; this only interprets. Exit 1 = cannot say.
+        try:
+            got = armed_commit(json.loads(a.manifests.read_text())) if a.manifests else None
+        except (OSError, ValueError) as e:
+            print(f"::error::the newest armed set cannot be named: {e}")
+            return 1
+        if a.manifests is None:
+            ap.error("armed-base needs --manifests")
+        rows = {"armed_version": got[0], "armed_short": got[1]} if got else {"armed_version": "", "armed_short": ""}
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a") as f:
+                f.writelines(f"{k}={v}\n" for k, v in rows.items())
+        print(json.dumps(rows))
+        return 0
     core_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
     plugins_token = os.environ.get("PLUGINS_TOKEN") or core_token
     if not core_token:
