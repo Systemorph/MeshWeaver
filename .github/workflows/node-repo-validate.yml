@@ -14,13 +14,14 @@ name: Node repo validate (reusable)
 #   validate:
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-validate.yml@<40-char platform commit sha>
 #
-# 🔒 PIN THE REF — `@main` is wrong here. The image is pinned by digest so CI is reproducible;
-# the CI logic is pinned for the same reason and with a wider blast radius, since one edit here
-# would otherwise change EVERY satellite's gates at once and make "did my change break this, or
-# did the shared workflow move?" unanswerable. A mutable TAG does not fix that — only a commit
-# sha makes the bump a commit in the CALLER. GitHub forbids an expression in `uses:`, so the sha
-# is literal in each caller and they are bumped together. Procedure: CiContentBake.md ->
-# "Node repos run the same lane" -> "The workflow ref is PINNED".
+# REF CONTRACT DEPENDS ON THE CALLER. Reproducible callers pin `uses:` and the script refs to a
+# commit sha and bump them together (CiContentBake.md -> "The workflow ref is PINNED"). The
+# platform-resolved node-repo callers instead intentionally follow shared CI logic at `@main` and
+# pass `scripts-ref: main`: their tested platform is resolved separately, while central policy
+# updates reach the next run without a manual pin. A fetched helper script follows that caller's
+# `scripts-ref`; it does not add a new trust root beyond the reusable workflow ref the caller has
+# already selected. The fetch step alone gets the caller-scoped token; the checker runs in a later
+# step without that token.
 
 on:
   workflow_call:
