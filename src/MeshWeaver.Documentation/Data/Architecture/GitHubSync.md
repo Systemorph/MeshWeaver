@@ -217,8 +217,8 @@ the suppressions are there, and why **the horizon must never be made to track "w
 sync"**.
 
 > 🚨 **A frozen `lastSyncedAt` beside a fresh `lastSyncCommitSha` is not a bug.** Measured on
-> 2026-09-07, `Edu/_GitSync` read a `lastSyncedAt` of 2026-07-11 (memex) and 2026-08-07
-> (memex-cloud) beside a `lastSyncCommitSha` from that same morning. Both were correct: every sync
+> 2026-09-07, `Edu/_GitSync` read a `lastSyncedAt` of 2026-07-11 (control instance) and 2026-08-07
+> (public instance) beside a `lastSyncCommitSha` from that same morning. Both were correct: every sync
 > in between had been a no-op at unchanged content, which advances the commit and holds the
 > horizon. What was missing was the third fact — nothing recorded that a sync had run at all, so
 > the only way to date one was to compare node timestamps against image tags in a container
@@ -343,7 +343,7 @@ never asked what that segment was. `check` and `update` need only **Read**, and 
 is exempt from the "no partition, no write" guard, so **any readable first segment became a
 System-owned `{segment}/_Activity/{id}` create.**
 
-Measured on memex.meshweaver.cloud: `42P01: relation "whatsnew.activities" does not exist` for
+Measured on the public instance: `42P01: relation "whatsnew.activities" does not exist` for
 `WhatsNew/_Activity/cc667f2e` (2026-09-18 15:35:29.421Z), reported as *"the WhatsNew namespace was
 never provisioned"*. It was not a provisioning gap. The same pod logged
 `MCP github_sync check failed for WhatsNew` **one millisecond later** (…29.422Z): an MCP caller
@@ -557,7 +557,7 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    once: the first expiry minted a new token, every later expiry compared against the stale
    capture and handed the expired token back. Two token lifetimes after boot every private
    source read as `401 Bad credentials` until the process restarted (Systemorph/Memex#165 —
-   measured on memex-cloud as the first failure 2 h 01 min after the container started).
+   measured on the public instance as the first failure 2 h 01 min after the container started).
    `GitHubAppTokenRefreshTest` in `Memex.Portal.Shared.Test` holds the invariant with an
    injected clock: the second and third refresh mint, a fresh token replays.
 

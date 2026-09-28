@@ -61,7 +61,7 @@ Kubernetes has no opinion about at all.
 
 ### Measured
 
-`memex-cloud`, 2026-09-04, replica `5nqbz`, 28 h old, from the runtime's own watchdog line:
+The public instance, 2026-09-04, replica `5nqbz`, 28 h old, from the runtime's own watchdog line:
 
 ```
 .NET Runtime Platform stalled for 00:00:03.37. Total GC Pause duration during that period:
@@ -176,7 +176,7 @@ coverage rather than by supersession.
 detector, and it was chosen deliberately — its comment argues that *"a namespace whose replicas all
 sit at 12 GB is a sizing question, not this incident"*.
 
-Today's measurement falsifies that premise. `memex` runs two replicas, both 28 h old:
+Today's measurement falsifies that premise. The control instance runs two replicas, both 28 h old:
 
 ```
 memex-portal-deployment-77898c4947-6mffn   195m   9936Mi
@@ -204,13 +204,13 @@ scrape:
 
 | namespace | divergence `max / min` (fires > 3) | headroom `working set / limit` (fires > 0.75) | actually degraded? |
 |---|---|---|---|
-| `memex-cloud` | **8.45** — fires | **0.851** — fires | yes: 14 GB replicas, `Platform stalled` in the log |
-| `memex` | 1.06 — blind | 0.605 — quiet | not yet: 9.4–9.9 GB, ~0.2 cores, no stalls |
+| public instance | **8.45** — fires | **0.851** — fires | yes: 14 GB replicas, `Platform stalled` in the log |
+| control instance | 1.06 — blind | 0.605 — quiet | not yet: 9.4–9.9 GB, ~0.2 cores, no stalls |
 
 Read the table as four results, not two. Both rules **fire** on the namespace that is degraded and
 both stay **quiet** on the one that is not — so neither is a rule that fires on everything, and the
 new one is not merely a restatement of the old. The complementarity is in the first column:
-`memex`'s ratio is **1.06 today and will not rise**, because its two replicas are converging rather
+the control instance's ratio is **1.06 today and will not rise**, because its two replicas are converging rather
 than diverging. When they reach the defence band the divergence rule will still read ~1.0 and the
 headroom rule will fire. That is the case that was uncovered.
 

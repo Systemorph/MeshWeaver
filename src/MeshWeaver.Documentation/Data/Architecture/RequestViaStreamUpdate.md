@@ -131,7 +131,7 @@ node, so before #3153 a request filed *by* a create was never seen: it sat at `R
 error, no failed state, no log line** — and then ran, correctly and immediately, the next time
 anything happened to open the node (a page view, a stream subscription, an MCP `get`).
 
-Measured on memex.meshweaver.cloud: a `Store/Subscription` created via MCP sat untouched for **4.5
+Measured on the public instance: a `Store/Subscription` created via MCP sat untouched for **4.5
 hours** and completed 20 s after the first read. The same node created from the admin UI activated in
 31 s — because the open page held a stream handle, which activated the owner as a side effect.
 

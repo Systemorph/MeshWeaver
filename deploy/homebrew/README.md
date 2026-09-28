@@ -49,7 +49,7 @@ install --HEAD systemorph/memex-dev/memex-local`). A brew install's wrapper pins
 | **Self-registry** (§16) | `SELF-REGISTRY MODE` | served from a `MeshWeaver.Plugins` **checkout** beside `MEMEX_REPO` | 🚨 **never** — a checkout has source, not assemblies (MeshWeaver#2417); the five required ones are blanked | built from source (Option B) |
 
 Registry mode is one command, and needs **no key by default** — an un-keyed registration is
-an *open* one, which memex.meshweaver.cloud enrols into its default plan, the **free tier**:
+an *open* one, which the default public registry enrols into its default plan, the **free tier**:
 
 ```bash
 memex-local registry https://memex.meshweaver.cloud [--id my-mac]      # free tier, no key

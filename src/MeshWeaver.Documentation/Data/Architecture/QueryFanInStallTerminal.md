@@ -21,7 +21,7 @@ The third row is what this page is about. Policy
 
 A stalled provider produced a consumer that hung with **no error, no consumer-side log line and
 nothing to grep**. The only trace was a warning from `MeshQuery`'s own `InitialStallProbe`, which
-detected the condition at 20 s and deliberately only logged it. Measured on `memex` over the 400
+detected the condition at 20 s and deliberately only logged it. Measured on the control instance over the 400
 minutes to 2026-09-21T04:12Z: **200+ of those warnings**, alongside 95 `No MeshNode emitted for`
 faults (~14/hour) — and nothing acted on any of them, because a warning is not a terminal and the
 consumers that could have acted were the ones parked.
@@ -220,7 +220,7 @@ silent evaluator to yield **503, not 404**, and `PermissionSwallowRatchetGuard` 
 ## The terminal reached a subscriber with no error arm — and killed the process (2026-09-23, #5650)
 
 The "compatible already" sweep above said Plugins had **no `Subscribe(onNext)` without an `onError`
-arm on a mesh-query chain**. That was wrong: it did not reach the `.razor` components. Two memex-cloud
+arm on a mesh-query chain**. That was wrong: it did not reach the `.razor` components. Two public-instance
 replicas died of it — `…-wl8mv` at 17:57:09Z and `…-n7g6b` at 18:10:36Z — with `createdump` reporting
 `Unwind: exception type MeshWeaver.Mesh.QueryProviderStalledException`. The runtime's stderr trace
 (a `Logs` action filtered to `stream="stderr"`) is the same on both:
@@ -265,7 +265,7 @@ copy it counts only a visible lambda — a `Subscribe(MethodGroup)` is textually
 ### Production verification of the subscriber fix (2026-09-27)
 
 The control instance's `Ops/Actions/verify-5650-memex-20260927-unwind` ran a real `Logs` action
-at 10:54Z over the preceding 1,440 minutes in namespace `memex`. Its query was
+at 10:54Z over the preceding 1,440 minutes in the control instance's namespace. Its query was
 `Unwind: exception type|Stack overflow|Gathering state for process`. It finished `Done`, with
 **0 lines read, 0 failed writes, and `truncated: false`**. This window starts after the
 2026-09-26 04:06Z deployment of the subscriber fix, meeting #5650's required 24-hour window.
@@ -308,7 +308,7 @@ tests run on an in-memory monolith, so what is measured is the fan-in, the fold 
 not a real partitioned provider's timing. The 15 s default is calibrated against the healthy worst
 case *recorded in the probe's own comment*, not against a fresh measurement of the deployed fleet.
 
-## The first fleet readings (memex-cloud, 2026-09-22)
+## The first fleet readings (the public instance, 2026-09-22)
 
 The terminal's first day on a PostgreSQL fleet filed four incidents: #5315, #5345, #5390 and #5393.
 They read as "the Postgres provider stalls", and the question each one asks is whether to fix the
@@ -358,7 +358,7 @@ connection-pool wait cannot be excluded as contributors. The portal's Npgsql poo
 while the query leaves run on the 256-slot `FileSystem` IoPool and bypass the per-adapter
 `pg-read:` cap, so connection waits under a burst are *possible*; nothing here shows they happened.
 Whether #5327 alone ends the starvation episodes is the post-roll question: read
-`MeshWeaver.Hosting.Orleans.MessageHubGrain` `QueryProviderStalledException` lines on `memex-cloud`
+`MeshWeaver.Hosting.Orleans.MessageHubGrain` `QueryProviderStalledException` lines on the public instance
 over a window that includes a roll of an image carrying #5327.
 
 ## What the Initial queues behind: one full re-read per change (2026-09-23)
@@ -380,7 +380,7 @@ budget covers the SQL and also every queue the read waits in before it runs.
 
 This corrects the sentence above that said the leaves "bypass the per-adapter `pg-read:` cap". They do
 not bypass it. They hold a `FileSystem` slot while they wait for a `pg-read` slot. The one reading of
-that pool's queue ([Controlled IO Pooling](../ControlledIoPooling), memex.systemorph.com, 828 minutes):
+that pool's queue ([Controlled IO Pooling](../ControlledIoPooling), the control instance, 828 minutes):
 
 - 31.9 M admissions, about 640 per second;
 - mean wait **342 ms**;
@@ -438,7 +438,7 @@ The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
 
 ## One request of many exact paths: one read, not one per query (2026-09-25)
 
-The coalescing above was live on memex-cloud (image `3.0.0-ci.9291`, core #5615 + Plugins#2337) and
+The coalescing above was live on the public instance (image `3.0.0-ci.9291`, core #5615 + Plugins#2337) and
 the terminal fired again: 12 lines on pod `589ff8f895-ghgjt`, 2026-09-24 14:17:44Z–14:30:51Z, in
 four bursts of three, each naming only `StorageAdapterMeshQueryProvider` and a query of the shape
 `path:AppleMaps/_Entitlements/{user} select:path` for a different user (`iser.steinmetz`,
@@ -494,14 +494,14 @@ The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
 
 **Not established.**
 
-- The count of free packs on memex-cloud, and so the exact query count per prefetch, is inferred
+- The count of free packs on the public instance, and so the exact query count per prefetch, is inferred
   from the `…/_Entitlements/morenocaro` writes one onboarding logged, not read from the catalogue.
 - On Postgres the one `ReadMany` still becomes one pooled point read per path, in parallel:
   `PostgreSqlPathRoutingAdapter` (MeshWeaver.Plugins) has no `ReadMany` override, so the interface
   default fans out to `Read`. The per-schema adapter's batched `ReadMany` (one statement per table)
   is not reached. The core change turns thirty serial round-trips into thirty parallel ones; a
   routing override would make them one per schema and table.
-- Whether this ends the terminal on memex-cloud. A `Logs` reading over every pod
+- Whether this ends the terminal on the public instance. A `Logs` reading over every pod
   (`|~ "did not emit an Initial"`, 885 minutes to 05:05Z on 2026-09-25,
   `Ops/logs-memexcloud-20260925-entstall-f-allstall`) read 18 lines, none after 14:30:51Z on
   2026-09-24. The sweep that stalls runs rarely, so a quiet window says little; the next reading has

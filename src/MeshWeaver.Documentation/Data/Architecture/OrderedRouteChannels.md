@@ -53,7 +53,7 @@ frame. The arrival rate of a busy portal's change fan-out is not.
 
 ### What production measured
 
-memex-cloud, 2026-09-20, 19:07–20:34Z, both portal pods, 17 crossings of the 64-slot reporting
+The public instance, 2026-09-20, 19:07–20:34Z, both portal pods, 17 crossings of the 64-slot reporting
 threshold:
 
 | Pod | In flight | Destinations queued | Deepest queue | Target that crossed |

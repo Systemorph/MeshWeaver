@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.Test;
 /// perfectly. The loss happened at IMPORT.</para>
 ///
 /// <para>🚨 <b>And it is that file's own YAML that does it</b> — not a missing parser. Its
-/// <c>description:</c> value contains <c>PG3: fund reporting pilot</c>, a <c>": "</c> inside a plain
+/// <c>description:</c> value contains <c>Initech: fund reporting pilot</c>, a <c>": "</c> inside a plain
 /// scalar, which YAML does not permit;
 /// <see cref="TheLiveFilesYamlIsRefused_AndTheRescueDoesNotRecoverDescription"/> reproduces the
 /// refusal locally. Its sibling <c>Crm/Skill/crm</c> — read the same day — is degraded IDENTICALLY
@@ -53,7 +53,7 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
         nodeType: Agent
         name: CrmAssistant
         displayName: CRM Assistant
-        description: Keeps the client pipeline honest from a conversation — "Howden confirmed the workshop for 14 Sept", "new deal at PG3: fund reporting pilot, 45k", "Thomas asked not to be emailed". Reads the client, the deal and the board, makes exactly the record change the process names, and answers pipeline questions from the records rather than from memory.
+        description: Keeps the client pipeline honest from a conversation — "Hooli confirmed the workshop for 14 Sept", "new deal at Initech: fund reporting pilot, 45k", "Sam asked not to be emailed". Reads the client, the deal and the board, makes exactly the record change the process names, and answers pipeline questions from the records rather than from memory.
         icon: <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor'/></svg>
         category: Crm
         exposedInNavigator: true
@@ -108,7 +108,7 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
     /// REFUSED by the deserializer, and the defensive extractor that rescues the parse does not
     /// rescue <c>description</c>.
     ///
-    /// <para>The `description:` value contains <c>PG3: fund reporting pilot</c> — a <c>": "</c>
+    /// <para>The `description:` value contains <c>Initech: fund reporting pilot</c> — a <c>": "</c>
     /// inside a plain scalar, which YAML does not permit. <c>Parse</c> catches that and falls back
     /// to its regex recovery, which recovers <c>NodeType</c>, <c>Name</c>/<c>Title</c>,
     /// <c>Category</c>, <c>Icon</c>/<c>Thumbnail</c>, <c>State</c> and <c>Order</c> — and NOT

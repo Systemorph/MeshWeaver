@@ -53,7 +53,7 @@ listing shows is correct. Only the keys the *declared type* added — the ones t
 
 ## The live case
 
-`Crm/Agent/crm-assistant` on `memex.meshweaver.cloud`, measured 2026-09-14. The source file in
+`Crm/Agent/crm-assistant` on the public instance, measured 2026-09-14. The source file in
 `Systemorph/MeshWeaver.Crm` authors nine front-matter keys:
 
 ```yaml
@@ -81,7 +81,7 @@ human noticing a blank description in the agent dropdown.
 Its absence is therefore not a discarded key — it is evidence that the deserializer never ran to
 completion.
 
-Look at the value: `… "new deal at PG3: fund reporting pilot, 45k" …`. A `": "` inside a plain
+Look at the value: `… "new deal at Initech: fund reporting pilot, 45k" …`. A `": "` inside a plain
 scalar is not valid YAML. `MarkdownFileParser.Parse` catches the failure and falls back to its
 **defensive regex extractor**, which recovers `NodeType`, `Name`/`Title`, `Category`,
 `Icon`/`Thumbnail`, `State` and `Order` — and **not** `Description`/`Abstract`. That is exactly the
@@ -97,12 +97,12 @@ verbatim front matter.
 
 `Crm/Skill/crm`, read the same day, is degraded **identically**: `content.$type: MarkdownContent`,
 no description, with `name: /crm`, `category: Skills`, `icon: 🤝` and `order: 12` intact. Its file
-carries the same malformed `description:` (`"/crm new deal at PG3: fund reporting pilot"`). An
+carries the same malformed `description:` (`"/crm new deal at Initech: fund reporting pilot"`). An
 earlier reading of this page used it as a control for "the two files met different parser sets" —
 that reading was wrong, and measuring the sibling's content is what falsified it.
 
 🚨 **`Crm` having no `_GitSync` entry is not the cause and not a defect either.** That space is
-populated by the PLUGIN CATALOG — `memex-cloud`'s deployment record lists `Crm` under both
+populated by the PLUGIN CATALOG — the public instance's deployment record lists `Crm` under both
 `pluginRepos[].isRegistrySource` and `preInstall` — and a package-installed space has no `_GitSync`
 by design. Nor is its content stale: 15 of the space's 29 children carry a 2026-09-14 timestamp, and
 `Crm/Incidents` reached the mesh 38 minutes after it was committed. Only the two malformed files are

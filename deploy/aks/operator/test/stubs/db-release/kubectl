@@ -54,11 +54,11 @@ westeurope-2"; fi
     case "$absent" in *" nodes "*) exit 0 ;; esac
     printf 'node/aks-db-1\nnode/aks-db-2\n' ;;
   *"wait cluster.postgresql.cnpg.io/"*)
-    echo 'cluster.postgresql.cnpg.io/pearl-db condition met' ;;
+    echo 'cluster.postgresql.cnpg.io/fabrikam-db condition met' ;;
   *"get secret "*)
     case "$forbid" in *" secret "*) deny secrets ;; esac
     case "$absent" in *" secret "*)
-      echo 'Error from server (NotFound): secrets "pearl-db-app" not found' >&2
+      echo 'Error from server (NotFound): secrets "fabrikam-db-app" not found' >&2
       exit 1 ;;
     esac
     # The Secret exists but has no `password` key: kubectl exits 0 and prints nothing.

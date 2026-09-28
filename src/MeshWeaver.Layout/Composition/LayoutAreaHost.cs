@@ -1792,9 +1792,9 @@ public record LayoutAreaHost : IDisposable
     /// intended answer is Overview — and picking it explicitly is what stops a newly-installed
     /// plugin from silently becoming the landing page of every node on the mesh.</para>
     ///
-    /// <para>Measured on memex 2026-09-08: <c>/PartnerRe/</c> (a <c>Space</c>) resolved its default
+    /// <para>Measured on memex 2026-09-08: <c>/Globex/</c> (a <c>Space</c>) resolved its default
     /// to <c>Workspace</c> — an area no layout on that hub registers — and rendered
-    /// "Area not found", while <c>/PartnerRe/Overview</c> rendered the full page. Nothing anywhere
+    /// "Area not found", while <c>/Globex/Overview</c> rendered the full page. Nothing anywhere
     /// calls <c>WithDefaultArea("Workspace")</c>; the composed definition simply had no default and
     /// the order fallback picked a foreign area. A node whose own Overview renders perfectly must
     /// not land on another type's area because of registration order.</para>

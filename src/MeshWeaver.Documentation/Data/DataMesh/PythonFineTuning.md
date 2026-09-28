@@ -29,7 +29,7 @@ The working code is `clients/python/meshweaver/examples/finetune.py`; every mesh
 cd clients/python
 pip install -e ".[dev]"
 python -m meshweaver.examples.finetune collect \
-    --url https://memex.meshweaver.cloud --token mw_… \
+    --url https://portal.example.com --token mw_… \
     --query "namespace:Doc nodeType:Markdown" \
     --target PythonDemo/FineTune/TrainingData
 ```
@@ -56,7 +56,7 @@ The result is written with `mesh.create_or_update` as a Markdown node whose body
 ```bash
 pip install -e ".[finetune]"          # torch + transformers + peft + datasets (heavy, train-only)
 python -m meshweaver.examples.finetune train \
-    --url https://memex.meshweaver.cloud --token mw_… \
+    --url https://portal.example.com --token mw_… \
     --data PythonDemo/FineTune/TrainingData \
     --model Qwen/Qwen2.5-0.5B-Instruct --epochs 3
 ```

@@ -308,7 +308,7 @@ The portal pulls a partition when the repository's green `main` build arrives as
 webhook (`GitHubWebhookProcessor`); a `push` only logs that a build is coming. A repository created
 without a hook to a portal therefore syncs exactly as often as somebody triggers it by hand — and
 nothing measures the gap. `MeshWeaver.Crm` (created 2026-08-28, no hooks) last synced to
-`memex.systemorph.com` on 08-30; by 09-07 the repository was 54 commits ahead, the portal still held
+the control instance on 08-30; by 09-07 the repository was 54 commits ahead, the portal still held
 files the repository had retired, every prebuilt Crm bundle was refused by the source-fingerprint
 gate (the bundle was built from the newer files), and every Crm page compiled the stale copy on
 first use. The fix is a hook per live portal with that portal's own secret, proven by a ping delivery

@@ -47,7 +47,7 @@ the *lane*, not of the source — see
 
 ### The outage it produced
 
-Measured on `memex.meshweaver.cloud`, 2026-09-10. One pod held
+Measured on the public instance, 2026-09-10. One pod held
 `MeshWeaver.Markdown.Collaboration` in 15 copies and **three builds** — the three independent
 compilations a MeshWeaver.Plugins publication is composed from. The bake host loaded whichever copy
 arrived first and stamped *that* MVID into every record; the pods loaded a different one.
@@ -57,7 +57,7 @@ arrived first and stamped *that* MVID into every record; the pods loaded a diffe
   surfaces and `!toolchain` agreeing. For the `socialmedia` bundle it was **all six** declines.
 * A declined bundle means the content compiles **in-portal**, which sets
   `latestAssemblyCollection: "local"` — documented by `FileSystemAssemblyStore` as *"the bytes live
-  in the local filesystem cache only; cross-silo readers must recompile"*. memex runs 2 replicas, so
+  in the local filesystem cache only; cross-silo readers must recompile"*. The instance ran 2 replicas, so
   the type was dark on whichever pod lacked the bytes.
 * Each replica then declined the other's stamp, recompiled, and stamped its own —
   `v2031 → v2050 → v2053`, two `compiledModulesHash` values alternating with

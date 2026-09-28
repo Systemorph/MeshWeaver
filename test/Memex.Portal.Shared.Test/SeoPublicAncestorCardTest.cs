@@ -13,8 +13,8 @@ namespace Memex.Portal.Shared.Test;
 /// mesh.
 ///
 /// <para><b>The measurement that motivates it.</b> On <c>www.meshweaver.cloud</c>, 2026-09-20:
-/// <c>/PG3Reporting</c> unfurled completely (<c>og:title "Fund Reporting"</c>, a description,
-/// <c>og:image /api/og/PG3Reporting.png</c>) while every descendant — <c>…/Funds</c>,
+/// <c>/InitechReporting</c> unfurled completely (<c>og:title "Fund Reporting"</c>, a description,
+/// <c>og:image /api/og/InitechReporting.png</c>) while every descendant — <c>…/Funds</c>,
 /// <c>…/Funds/InsuranceCore</c>, <c>…/Funds/InsuranceCore/2026-06-30</c> — fell back to
 /// <c>og:title "MeshWeaver"</c> and <c>/api/og.png</c>. It was never depth: deep public pages
 /// (<c>/Doc/Architecture/AccessControl</c>) unfurled fully on the same host at the same minute. It

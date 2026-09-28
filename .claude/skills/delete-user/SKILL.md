@@ -16,7 +16,7 @@ allowed-tools:
 >   | jq -r '"AKS_RG=\(.cluster.resourceGroup) AKS_CLUSTER=\(.cluster.name) NAMESPACES=\"\([.environments[].ns]|join(" "))\""')"
 > ```
 >
-> Verified to set all three (`memex-aks-rg` / `memexaks-cluster` / the three namespaces) on
+> Verified to set all three (resource group / cluster name / the namespaces) on
 > 2026-08-19. Reading it from the source of truth also means a new environment shows up here
 > automatically instead of this file going quietly stale.
 
@@ -37,8 +37,8 @@ So you cannot delete a user via `delete @<user>`. You drop their **Postgres sche
 `public.mesh_nodes` is empty by design; **each partition is its own PG schema** (`{id}.mesh_nodes` + satellite tables `access`, `threads`, `activities`, …). A user typically has **TWO** schemas — one by **id** and one by **email**:
 
 ```
-rbuergi                     rbuergi@systemorph.com
-mkleiner                    …
+user-a                      user-a@example.com
+user-b                      …
 ```
 
 So dropping `<id>` alone can leave `<id>@<domain>` behind. Drop **both**.
@@ -59,7 +59,7 @@ The private AKS cluster: `kubectl` only via `az aks command invoke -g "$AKS_RG" 
 
 **The DB password is inline in the portal's `ConnectionStrings__memex` env — NOT the `POSTGRES_PASSWORD` secret** (that secret is a *different, unused* value; using it gives `password authentication failed`). Parse the real one out of the portal env and hand it to a `postgres:16` client pod (the invoke shell has **no `sed`/`tr`/`python3`** — use bash parameter expansion only). Pass SQL to the pod **base64-encoded** to dodge four levels of quoting.
 
-Connection string shape: `Host=10.42.18.4;Port=5432;Username=memexadmin;Password=…;Database=memex;SslMode=Require;…`
+Connection string shape: `Host=<db-host>;Port=5432;Username=<db-admin>;Password=…;Database=<database>;SslMode=Require;…`
 
 ## 4. FIND the user's footprint first (never drop blind)
 
@@ -94,7 +94,7 @@ DROP SCHEMA "roland.buergi@gmail.com" CASCADE;   -- if it exists
 
 # 2) clear the in-memory copy so it can't resurrect
 az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
-  "kubectl -n memex rollout restart deployment/memex-portal-deployment; kubectl -n memex rollout status deployment/memex-portal-deployment --timeout=300s"
+  "kubectl -n <namespace> rollout restart deployment/memex-portal-deployment; kubectl -n <namespace> rollout status deployment/memex-portal-deployment --timeout=300s"
 ```
 
 After the restart, `get @<user>` should be **Not found**, and the user re-onboards on next login.
@@ -105,7 +105,7 @@ Put this in your script; it pulls the connection from the portal env and runs a 
 
 ```bash
 run_psql_pod() {  # $1 = path to a .sql file
-  local NS=memex SQLFILE="$1"
+  local NS="${NS:?set NS to the portal namespace}" SQLFILE="$1"
   local CS host user pass db B64
   CS=$(kubectl -n $NS exec deploy/memex-portal-deployment -c memex-portal -- printenv ConnectionStrings__memex 2>/dev/null)
   host=${CS#*Host=};     host=${host%%;*}

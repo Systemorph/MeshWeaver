@@ -1512,9 +1512,9 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
 /// the whole area-name SET: installing a plugin that adds one more area silently re-rolls it.
 /// Measured here — over the ten-area set below the un-fixed resolver answers <c>"Details"</c>.</para>
 ///
-/// <para>Measured on memex 2026-09-08: <c>/PartnerRe/</c> (a <c>Space</c>) resolved its default to
+/// <para>Measured on memex 2026-09-08: <c>/Globex/</c> (a <c>Space</c>) resolved its default to
 /// <c>Workspace</c>, an area no layout on that hub registers, and rendered "Area not found" — while
-/// <c>/PartnerRe/Overview</c> rendered the complete page. Nothing anywhere calls
+/// <c>/Globex/Overview</c> rendered the complete page. Nothing anywhere calls
 /// <c>WithDefaultArea("Workspace")</c>; the composed definition simply carried no default.</para>
 ///
 /// <para>The foreign area is registered FIRST here on purpose: under the old rule it wins, so this

@@ -154,7 +154,7 @@ public sealed class LogonActionRunner(IMessageHub hub, ILogger<LogonActionRunner
     /// nothing runs, and that is the whole fix.
     ///
     /// <para>🚨 <b>A logon action must never be the thing that creates a user's partition.</b>
-    /// Measured on a brand-new instance (PartnerRe, 2026-09-18 10:04Z): the first person signed in
+    /// Measured on a brand-new instance (an enterprise client, 2026-09-18 10:04Z): the first person signed in
     /// with Microsoft, <c>UserContextMiddleware</c> fell back to the email local-part for the
     /// partition key ("the mesh user index has not received its first snapshot yet" — the normal
     /// state of an instance with no users), the runner found no profile, read that as "no action

@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Test;
 /// string is a PROXY for the real precondition, which is that the two sides carry the same content
 /// RECORD, and the proxy comes apart whenever a writer proposes a different record under an
 /// unchanged (or omitted) NodeType. Production does that routinely, and #4597 is the measurement:
-/// <c>PartnerRe/Esl/EmailDraft-DueDiligence-2026-09-05</c>, a node whose stored content is the
+/// <c>Globex/Team/EmailDraft-DueDiligence-2026-09-05</c>, a node whose stored content is the
 /// Essentials/Email plugin's <c>EmailContent</c>, updated with a <c>MarkdownContent</c>.</para>
 ///
 /// <para><b>The harm, and it is silent.</b> <see cref="JsonSerializer"/> deserialising into a

@@ -310,13 +310,13 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4617">#4617</see>, which are ONE
     /// defect seen from both ends.</b>
     ///
-    /// <para>Production filed three tickets, minutes apart, off one <c>PearlTechnology/CompanyProfile</c>
+    /// <para>Production filed three tickets, minutes apart, off one <c>Fabrikam/CompanyProfile</c>
     /// render on <c>memex</c> at 2026-09-17 12:58:47Z:</para>
     ///
     /// <code>
-    /// ORIGIN: SubscribeRequest  … as sender (sender: mesh/q8f5…, target: PearlTechnology/CompanyProfile)
-    /// ORIGIN: SubscribeAck      … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)
-    /// ORIGIN: StreamEndedEvent  … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)
+    /// ORIGIN: SubscribeRequest  … as sender (sender: mesh/q8f5…, target: Fabrikam/CompanyProfile)
+    /// ORIGIN: SubscribeAck      … as target (sender: Fabrikam/CompanyProfile, target: mesh/q8f5…)
+    /// ORIGIN: StreamEndedEvent  … as target (sender: Fabrikam/CompanyProfile, target: mesh/q8f5…)
     /// </code>
     ///
     /// <para>The second and third are not separate defects and cannot be fixed where they are

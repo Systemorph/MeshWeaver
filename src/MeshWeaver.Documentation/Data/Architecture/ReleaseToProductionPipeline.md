@@ -38,7 +38,7 @@ predates the fix (C).
 > event. A node repo builds, tests and publishes against the newest SEALED set on its own pushes and
 > once a day; that daily run is the full run and is what validates a platform build. The map from
 > a core push to a self-updated portal, what runs when and on whose minutes, and the known gap in the
-> compatibility assumption (#4083): `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+> compatibility assumption (#4083): `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` through the mesh MCP).
 
 ## (A) Two content channels, one destination
 
@@ -196,7 +196,7 @@ This is the part that surprises people, so it is worth stating plainly:
 > **A module is on a mesh only because something put it there — a per-Space GitSync config or an
 > install record. Neither is implied by a green repo.**
 
-This was measured on `memex.meshweaver.cloud` in mid-2026: **37 `{Space}/_GitSync` configs** — one
+This was measured on the public instance in mid-2026: **37 `{Space}/_GitSync` configs** — one
 per deployed Space, each naming a repo and a subdirectory — and **no install records at all**; every
 reinsurance and education Space was there because it had a sync entry. That snapshot is no longer the
 whole picture (`PluginCatalog:InstallPreInstalledPackages` and `InstallByDefault` now write install

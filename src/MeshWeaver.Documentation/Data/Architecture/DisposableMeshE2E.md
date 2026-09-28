@@ -68,7 +68,7 @@ the local checkouts:
 
 The portal's `PluginCatalog__RegistryUrl` points at the stub, so the admin tab lists and
 installs the checkouts exactly like a production instance installs from
-`memex.meshweaver.cloud`.
+the plugin registry instance.
 
 > ✅ **Fixed in core — the `Plugins` records partition no longer needs a bootstrap package.**
 > `PackageInstaller` used to write its install record to `Plugins/{id}` *without provisioning that

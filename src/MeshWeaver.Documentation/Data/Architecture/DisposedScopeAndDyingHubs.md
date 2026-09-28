@@ -384,7 +384,7 @@ fault the teardown it describes.
 ### 🚨 A pre-flight on a hub a recycle disposes
 
 This is R3 where the scope is closed by someone else — an **unrelated recycle**, not the operation
-itself. It refused a governed DeleteSpace on memex.systemorph.com (2026-09-27 05:26:38–41Z, pod
+itself. It refused a governed DeleteSpace on the control instance (2026-09-27 05:26:38–41Z, pod
 `memex-portal-deployment-5db78dfc99-d2cpk`):
 
 ```text
@@ -527,7 +527,7 @@ a report that names it.
 
 The route side has named its legs since #2843, and three occurrences on
 [#2833](https://github.com/Systemorph/MeshWeaver/issues/2833) printed populated lists
-(`stream-routed → cache/…`, `dispatch → RiskTransfer`, five × `dispatch → Ops/Status/partnerre`) —
+(`stream-routed → cache/…`, `dispatch → RiskTransfer`, five × `dispatch → Ops/Status/<client>`) —
 and still could not be read, because **every leg's own terminal bound is at least the 30 s hold
 budget**: path resolution (`RoutingGrain.ResolveTimeout`, 30 s), an Orleans grain call's response
 timeout (30 s per attempt), a memory-stream post (`StreamPostTimeout`, 60 s). A label at expiry is

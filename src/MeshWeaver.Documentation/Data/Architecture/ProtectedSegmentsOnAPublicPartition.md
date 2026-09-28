@@ -98,7 +98,7 @@ have published *anyway*: no policy yet (its original create), a policy that decl
 the legacy fingerprint the heal deliberately opens on. On a partition whose policy already withholds
 public read, the step writes the gate and nothing else.
 
-That distinction is not decoration. On the control instance `memex.systemorph.com`, `Feedback/_Policy`
+That distinction is not decoration. On the control instance, `Feedback/_Policy`
 carries no `publicRead` and the partition holds no `_Submissions` at all; without the rule, the
 declaration would have handed an anonymous reader a partition somebody had closed — a widening
 introduced by the fix for an exposure, which is the worst shape a security change can take.
@@ -153,7 +153,7 @@ read.
 🚨 **But that filter is only safe because the failure is now reported as UNKNOWN, and this is the sharper
 half.** The query shape is a *measured live stall*: `path:<partition> scope:subtree
 nodeType:AccessAssignment limit:2000` as `system-security` is the verbatim query in the fan-in's
-20-second stall warning, with 200+ occurrences in a 400-minute window on `memex` (truncated at the log
+20-second stall warning, with 200+ occurrences in a 400-minute window on the control instance (truncated at the log
 limit), because `StorageAdapterMeshQueryProvider.DefersToNativeProvider` is false for satellite reads and
 the pedestrian walk emits nothing at all until every per-path read completes. So on a Postgres portal the
 `Initial` can genuinely never arrive — and a filter that turned that into *"the read says there are no

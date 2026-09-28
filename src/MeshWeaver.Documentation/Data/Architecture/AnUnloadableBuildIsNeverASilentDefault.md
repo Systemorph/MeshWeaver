@@ -21,7 +21,7 @@ build whose bytes the store could not resolve. The branch where the bytes **are*
 fail to load kept the old behaviour until
 [#4471](https://github.com/Systemorph/MeshWeaver/issues/4471).
 
-## What was measured — memex.systemorph.com, 2026-09-16
+## What was measured — the control instance, 2026-09-16
 
 | when (UTC) | what |
 |---|---|
@@ -34,7 +34,7 @@ fail to load kept the old behaviour until
 | 21:2x | the `Inbox` area on `Hosting/PlatformBuilds` reads *"Watcher armed … seen 303, processed 303, deferred 0"*; `_Inbox` is empty |
 
 The log lines were read from `Ops/Logs` entries an earlier `Logs` action had already landed (selector
-`{namespace="memex"} |~ "(?i)(…|fail|exception|…)"`); nothing was written to take them.
+`{namespace="<namespace>"} |~ "(?i)(…|fail|exception|…)"`); nothing was written to take them.
 
 Two facts carry the diagnosis. The hub **was** activated — it served a 172,350-character read at
 08:30 — yet not one of its type's initialisers ran; and the types whose instances were re-activated
@@ -98,7 +98,7 @@ only the **record** — the verdict appended to the compile's log. The `Error` l
 error …, or missing dependency"* and never which one applied.
 
 That mattered because the record is the wrong place to look for this failure. Measured on
-memex.meshweaver.cloud, 2026-09-23 05:31Z → 2026-09-24 01:49Z (incident `e114ad743fe17da3`,
+the public instance, 2026-09-23 05:31Z → 2026-09-24 01:49Z (incident `e114ad743fe17da3`,
 routed to [#1126](https://github.com/Systemorph/MeshWeaver/issues/1126)): **166** sightings over a
 dozen NodeTypes (`Edu/Page`, `Edu/Module`, `Publish/Slide`, `DoublePendulum/Pendulum`,
 `AgenticOffice/*`, `SocialMedia/*` …), and the types read `compilationStatus: Ok` again seconds

@@ -139,7 +139,7 @@ node", and the rollback stands down on the row it had just written. The caller i
 partially-created node is still present and must be removed by hand — the exact unrecoverable ghost
 #638 exists to prevent, now wearing the costume of a safety feature.
 
-**Measured, not reasoned.** On memex.meshweaver.cloud (2026-09-16), one node —
+**Measured, not reasoned.** On the public instance (2026-09-16), one node —
 `Doc/_Activity/import-f7f86c9f5020ab36` — carries both halves of the proof in a single payload:
 
 | where the timestamp lives | value | precision |
@@ -175,7 +175,7 @@ On Postgres the authorship columns exist only on `mesh_nodes`; every satellite t
 `_Thread`, `_Activity`, `_Comment`, `Source`, …) is read with `NULL::timestamptz AS created_date`. A
 rollback aimed at a satellite path therefore reads `default` for **every** row, its own included.
 
-Measured on memex.meshweaver.cloud (2026-09-16): `Store/_Activity/4ad7e757`, a real satellite-table
+Measured on the public instance (2026-09-16): `Store/_Activity/4ad7e757`, a real satellite-table
 row, comes back carrying `lastModified` — that column does exist there — and **no `createdDate` and
 no `createdBy` at all**. It is only the authorship trio that is missing, and it is missing for every
 row of every satellite table, so there is nothing for the lineage check to compare.

@@ -133,7 +133,7 @@ public record DeploymentContent
 
     /// <summary>
     /// Key Vault secret NAME of this deployment's OWN announcement key (MeshWeaver.Plugins#1913) —
-    /// e.g. <c>pearl-Hosting-AnnouncementKey</c>. A NAME, never a value. The same vault object is
+    /// e.g. <c>fabrikam-Hosting-AnnouncementKey</c>. A NAME, never a value. The same vault object is
     /// mounted twice: into this deployment's pod as <c>Hosting__ControlInbox__Secret</c> (so its
     /// self-updater signs with it) and into the control instance as
     /// <c>Hosting__PlatformWebhookSecret__{deploymentId}</c> (so the inbox can verify it).

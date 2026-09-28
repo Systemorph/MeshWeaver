@@ -10,7 +10,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 The prebuilt-bundle store is where CI's published NodeType bake lands on a portal's data volume —
 `<PreWarm:PrebuiltBundleRoot>/<framework-identity>/<source>/…`, one identity directory per platform
 build. It grows by one directory per CI build for ever, and on 2026-09-08 it filled
-memex.systemorph.com's 16 GiB `/data` to **3 MiB free**: 482 identity directories, 13 398 MiB. A full
+the control instance's 16 GiB `/data` to **3 MiB free**: 482 identity directories, 13 398 MiB. A full
 Azure Files share **truncates writes silently**, so every runtime recompile landed as `Bad IL format`
 and the bake read-back answered `ResourceNotFound` for 39 of 45 files, with nothing reporting a fault
 until somebody looked at the free space.
@@ -75,7 +75,7 @@ a deployment overlay, or a `Hosting/Deployment` record's `extraPortalConfig` set
 shape that left the CI-bake lane inert for months (#1660 WS3) and dropped twelve OpenRouter model
 keys (#2203) — except that here the omission does not disable a feature, it **deletes**.
 
-Measured on the live control instance 2026-09-10: both `memex` and `memex-cloud` carry
+Measured on the live control instance 2026-09-10: both the control instance and the public instance carry
 `PreWarm__PrebuiltBundleRoot=/data/prebuilt-bundles` and **no** `…Delete` key anywhere — record,
 overlay, ConfigMap or inline env. `deploy/aks/values.aks.yaml` and
 `deploy/homebrew/share/values.local.defaults.yaml` mount the same root, so every AKS instance and
@@ -138,7 +138,7 @@ That is precisely the #3876 failure mode (a pruned identity directory breaking a
 the registry-side twin Memex#219 (*"ACR retention can delete a tag a committed overlay or a live
 workload references — twice now"*). Closing it means giving the satellites a first-class reference —
 a pin source that reads the fleet's `MW_PLATFORM_REF` values, or a report a satellite lane files the
-way an instance does. Until then, **arming deletion on the registry (memex-cloud) is the dangerous
+way an instance does. Until then, **arming deletion on the plugin registry instance is the dangerous
 half**, because that is the store a satellite's gate pulls from over the HTTP prebuilt surface; the
 gap must be closed, or the arming scoped to instances no CI lane pulls from.
 
@@ -146,7 +146,7 @@ gap must be closed, or the arming scoped to instances no CI lane pulls from.
 
 1. **Report-only, everywhere** — the chart default above. The sweep runs, plans and writes its
    ledger line; nothing is removed. This is the state the platform ships in.
-2. **Read a real report** on memex and on memex-cloud, and confirm the protected set is what it
+2. **Read a real report** on the control instance and on the plugin registry instance, and confirm the protected set is what it
    should be. Do not skip this by reasoning about the rules: the rules are unit-tested against a
    temp tree, while what has never been checked on a live portal is whether the *reference inventory*
    reads completely — `StampedIdentities()` throws with no mesh hub or `IMeshService`, and a

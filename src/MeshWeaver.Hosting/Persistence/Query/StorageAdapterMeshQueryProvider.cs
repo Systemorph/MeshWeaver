@@ -1205,7 +1205,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // @-reference drill-down enumerated names, paths and node types out of partitions
         // the caller cannot `get`. It is the SAME storage and the SAME query shape as the
         // secured read; only these two inputs differed, which is what made autocomplete a
-        // witness to other people's content (measured on memex 2026-09-10: `@/Helvetia/`
+        // witness to other people's content (measured on memex 2026-09-10: `@/Initech/`
         // named five nodes for an identity whose `get` and `search` on the very same paths
         // answered nothing).
         //
@@ -1239,7 +1239,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // over-fetch above is filtered, not narrowed: there is no "partitions this user may
         // read" oracle to narrow with (the native SQL providers express it as an inline
         // predicate, never as a list), and a partition-level narrowing would be wrong anyway
-        // — grants exist BELOW a partition root, so a caller denied `Helvetia` may still hold
+        // — grants exist BELOW a partition root, so a caller denied `Initech` may still hold
         // Read on one node inside it. RlsNodeValidator short-circuits synchronously for the
         // caller's own partition, which is the common drill-down.
         return RunQueryNodes(queryRequest, options, useSecurityFilter: true)
