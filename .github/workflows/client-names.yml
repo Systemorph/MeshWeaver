@@ -1,0 +1,69 @@
+name: No client names
+
+# The build side of the confidentiality check, callable from every repository in the fleet.
+#
+# WHO is a client is decided by the CRM, and the CRM is never read from a build (maintainer,
+# 2026-09-28: "build system should not have access to crm"). This job holds NO terms: it sends the
+# added lines (with file:line) to the instance that owns the CRM, as the build's own service user,
+# and reads back pass/fail with masked positions (`client#n`). The matcher, the aliases, the
+# deployment identifiers and the verdicts all stay on that instance (`Governance/NameCheck`).
+#
+# 🚨 FAIL CLOSED: no secret, an unreachable endpoint, a refused token, a timeout or a `NotChecked`
+# answer FAILS the job. A private repository passes `report-only: true` to be warned instead.
+#
+# Secrets (org level): NAME_CHECK_URL — base URL of the CRM-owning instance; NAME_CHECK_TOKEN —
+# the `mw_` token of a service user whose ONLY grant is create + read on `Governance/NameChecks`.
+
+on:
+  workflow_call:
+    inputs:
+      report-only:
+        description: "Warn instead of failing (private repositories)."
+        type: boolean
+        default: false
+      script-ref:
+        description: "Ref of Systemorph/MeshWeaver to take the checker from."
+        type: string
+        default: main
+    secrets:
+      NAME_CHECK_URL:
+        required: false
+      NAME_CHECK_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  client-names:
+    name: "No client names"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 0 }
+    - name: Take the checker from the platform repository
+      uses: actions/checkout@v7
+      with:
+        repository: Systemorph/MeshWeaver
+        ref: ${{ inputs.script-ref }}
+        path: .client-names-checker
+        sparse-checkout: .github/scripts/check-client-names.py
+        sparse-checkout-cone-mode: false
+    - name: Prove the checker fails closed (fake instance, synthetic term)
+      run: python3 .client-names-checker/.github/scripts/check-client-names.py --self-test
+    - name: No client names in what this change adds
+      env:
+        NAME_CHECK_URL: ${{ secrets.NAME_CHECK_URL }}
+        NAME_CHECK_TOKEN: ${{ secrets.NAME_CHECK_TOKEN }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        REPORT_ONLY: ${{ inputs.report-only }}
+      run: |
+        set -euo pipefail
+        args=()
+        [ "$REPORT_ONLY" = "true" ] && args+=(--report-only)
+        # A push whose `before` is all zeros (a new branch) or unknown checks the whole tree.
+        if [ -n "${BASE_SHA:-}" ] && [ "${BASE_SHA}" != "0000000000000000000000000000000000000000" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          args+=(--base "$BASE_SHA")
+        fi
+        python3 .client-names-checker/.github/scripts/check-client-names.py "${args[@]}"
