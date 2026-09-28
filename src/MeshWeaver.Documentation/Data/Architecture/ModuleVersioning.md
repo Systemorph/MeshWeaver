@@ -529,6 +529,14 @@ required checks and merges, the resulting `main` run sees the settled locks and 
 what `--settle` derives. MeshWeaver.Plugins' `settle-locks` job and its `own` output are the reference
 shape.
 
+🚨 **A run that withholds its publication must say so, or it becomes the next run's baseline.**
+`node-repo-publication-base.py` narrows a push's selection to `git log <baseline>..HEAD`, where the
+baseline is the newest *successful* main push. An unsettled merge's run is successful and publishes
+nothing, so taken as the baseline it would narrow the settle merge's run to the lock-only diff and
+none of the merge's modules would ever publish. Such a run uploads a marker artifact and the caller
+passes `--withheld-marker <name>`; a marked run is walked past like a failed one, and the history
+union from the older baseline carries its changes into the run that does publish.
+
 🚨 **The merge commit on `main` carries the locks of the commit before it until the settlement PR
 lands.** Everything in CI reads the materialized lock, so no bundle, seal or key sees the stale one;
 what reads `main`'s committed tree directly — a GitSynced portal importing `main` unsealed — sees the
