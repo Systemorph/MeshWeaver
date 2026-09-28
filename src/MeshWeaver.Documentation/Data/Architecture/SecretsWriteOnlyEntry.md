@@ -89,20 +89,37 @@ already soft-deleted). Their behaviour tests run against a stub `az` that plays 
 ### Interim: the value-free verbs on the Actions lane
 
 🚧 **TRANSITIONAL** (policy `secret-actions-interim-actions-lane`). The writer identity is not provisioned
-yet, and the control instance runs its actions on the Actions executor (Systemorph/Memex `aks-ops.yml`),
-not as in-cluster Jobs. Until the writer exists, the two verbs that carry **no value** run on that lane as
-`hosting-operator`, which already holds vault set and list:
+yet. The control instance runs its actions on the Actions executor (Systemorph/Memex `aks-ops.yml`), not as
+in-cluster Jobs. So until the writer exists and every secret action moves to the in-cluster Job under it,
+the two verbs that carry **no value** run on that lane as `hosting-operator`:
 
 - **Generate** (`SetSecrets` with only `generate:`): the lane runs `hosting-kv-set --generate`. The value is
-  minted inside the run and written through a file, and it is never shown. The action still parks for approval.
-- **Read status** (`SecretStatus`): the lane runs `hosting-kv-status`, a metadata read.
+  minted inside the run, written through a mode-600 file and never shown. It is never in the dispatch payload
+  or the bundle. Like every `SetSecrets`, the action **parks on the control instance for a second global
+  administrator's approval** (the governed action's own approval gate, the same one a Roll waits on). The
+  lane then re-verifies that approval token before it runs.
+- **Read status** (`SecretStatus`): the lane runs `hosting-kv-status`, a metadata read. It needs no approval.
 
-Each such run records a `writerIdentityNote` beginning `TRANSITIONAL` on its node and in its log. A **pasted**
-value and every **lifecycle** verb stay refused on that lane. A paste's value would sit in a dispatch payload
-anyone reading the repo's Actions can decode. The lane's classifier refuses such a bundle as well
-(`--object` on a write, or `HOSTING_SECRETS` in its environment). The whole exception, including its lines in
-`.github/manual-keyvault.allow`, is removed when the writer identity is provisioned and every secret action
-moves to the in-cluster Job under it.
+**The accepted interim risk.** This path does not have the property the design exists for: the identity
+that writes cannot read. `hosting-operator` holds **get, list, set** on the vault (the table in *Where the fleet
+stands*, below), and also the inert *Key Vault Secrets Officer* RBAC role. So during the interim a secret is
+written by an identity that *could* read it back. The two verbs never do: their scripts call only
+`list`/`list-versions`/`set` (the behaviour tests' stub `az` refuses `secret show`), and no value crosses the
+lane. What compensates is that nothing value-bearing travels, and the run is approved in the mesh. Each
+such run records a `writerIdentityNote` beginning `TRANSITIONAL` on its node and in its log, so a reader can
+tell it apart from a writer-identity run. The invariants above (*exactly two kinds of access*; *one operator
+Job under the writer identity*) are the target. For these two verbs they do not hold until the exception ends.
+
+**What stays refused on that lane:** a **pasted** value and every **lifecycle** verb. A paste's value would sit
+in a dispatch payload anyone reading the repo's Actions can decode. The lane's classifier refuses such a
+bundle as well (`--object` on a write, or `HOSTING_SECRETS` in its environment). This leaves one **accepted
+gap**: a secret a **third party must hold too** (below: minted in the portal, shown once, then filed like a
+paste) has **no write path** during the interim. Such secrets wait for the writer identity. None may be
+entered by hand in the meantime; break-glass (below) is the only exception.
+
+The whole exception ends when the writer identity is provisioned **and** every secret action runs in the
+in-cluster Job under it. That covers this section, the policy row and the TRANSITIONAL mark on
+`hosting-kv-set` in `.github/manual-keyvault.allow`.
 
 ### Generate: shown once, or never
 
