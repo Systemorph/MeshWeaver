@@ -554,6 +554,7 @@ def main() -> int:
 
     print(f"deriving the combo-verification roster from {len(repos)} repository(ies): "
           + ", ".join(repos))
+    lock.mask_private_roster()      # public log: the private roster's identifiers stay private
     roster, roster_problems = lock.read_instance_roster(args.root or ".")
     scans = read_scans(repos, args.root)
     rows, excluded, blockers = derive(scans, roster)
