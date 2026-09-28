@@ -488,7 +488,7 @@ which pull requests do not write locks. So:
 |---|---|---|
 | a pull request | commits NO lock change | `--check` reds a diff that touches any package's `manifest.lock`, naming the one-line fix (`git checkout <base> -- <locks>`) |
 | every CI job that READS a lock | reads the lock THIS tree implies | the lanes run `.github/actions/materialize-locks` after the content checkout: `gen-manifests.py --materialize`, local and network-free, never committed; a byte no-op on a settled tree |
-| `main` | the only writer of a committed lock | the caller's settle job runs `gen-manifests.py --settle` on the merged tree and commits the result |
+| `main` | the only writer of a committed lock | the caller's settle job opens or refreshes the reserved bot settlement PR; normal required checks validate the generated locks before they merge |
 | a developer | nothing | the bare generator writes nothing on a main-owned repo (so the `post-merge` hook commits nothing); `--materialize` gives a local view that must not be committed |
 
 `--materialize` derives the version from the **committed** lock alone — same patch when the content
@@ -518,20 +518,22 @@ What the other checks do on a main-owned tree:
 
 🚨 **A caller that declares `lockOwner: main` MUST settle FIRST and publish only what its own settle
 claimed.** `--materialize` names a changed module `patch+1` over the committed lock, so two merges that
-touch one module and both land before either settle would each materialize the SAME number for
-DIFFERENT trees. What makes that harmless is the order, not the derivation: the settle job is the
-first job of every `main` run and pushes the claim at once (git's push is the compare-and-swap); the
-next merge descends from that claim and materializes `patch+2`; and a run whose push lost the race
-settles the NEWER tip instead — whose tree contains its own — and reports that it does not own the
-settled tree, so it publishes, seals and tags nothing. A run whose settle did land publishes exactly
-what it materialized (`--settle` asserts the two agree). MeshWeaver.Plugins' `settle-locks` job and its
-`own` output are the reference shape.
+touch one module before settlement would otherwise claim the same number for different trees. The
+first job of every `main` run therefore opens or refreshes one reserved bot PR from the generated
+lock files; it never pushes to protected `main`. The validator grants this PR a narrow exception
+only when its author, branch, same-repository origin, base branch, changed paths, and generated
+contents all match, and its base is the current verified `main` tip. Every other PR that changes a
+lock stays red. If locks need settlement, that main run reports that it does not own the settled
+tree and publishes, seals, and tags nothing. After the bot PR passes the repository's ordinary
+required checks and merges, the resulting `main` run sees the settled locks and publishes exactly
+what `--settle` derives. MeshWeaver.Plugins' `settle-locks` job and its `own` output are the reference
+shape.
 
-🚨 **The merge commit on `main` carries the locks of the commit before it until the settle commit
+🚨 **The merge commit on `main` carries the locks of the commit before it until the settlement PR
 lands.** Everything in CI reads the materialized lock, so no bundle, seal or key sees the stale one;
 what reads `main`'s committed tree directly — a GitSynced portal importing `main` unsealed — sees the
-new content under the old lock for the minutes until the settle commit, and treats that module as
-unchanged until then (`ModuleSyncDecision`). A settle job that fails is red on `main`, never silent.
+new content under the old lock until settlement and treats that module as unchanged until then
+(`ModuleSyncDecision`). A failed settlement workflow is red on `main`, never silent.
 
 ## Before you open the PR
 
