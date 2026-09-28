@@ -91,7 +91,7 @@ two agree, and the resolver is what retires the copy:
     python3 scripts/platform-script.py gen-manifests.py --resolve     # finish a merge whose ONLY conflicts are locks
     …and for a repo whose config declares `lockOwner: main` (see LOCK_OWNERS):
     python3 scripts/platform-script.py gen-manifests.py --materialize # write THIS tree's locks, no network, never commit
-    python3 scripts/platform-script.py gen-manifests.py --settle      # MAIN only: write + prove the claim, then commit
+    python3 scripts/platform-script.py gen-manifests.py --settle      # MAIN only: write + prove the claim for its settlement PR
     …plus --no-fetch on either deriving command: still VERIFY the baseline against the remote, just
     never write to the object/tag database. It can only make the run stricter — a stale checkout
     fails instead of catching itself up.
@@ -163,8 +163,9 @@ SCHEMA = "mw-manifest/1"
 #           regenerates and commits them and `--check` fails a stale one. The historical contract.
 #   main    the lock is a MAIN artifact. A pull request commits NO lock change (`--check` fails one
 #           that does); main's settle job (`--settle`) regenerates the locks over the merged tree
-#           and commits them; a CI job that reads a lock off a tree main has not settled yet runs
-#           `--materialize` first (local, deterministic, never committed).
+#           and opens/refreshes the required-check settlement PR; a CI job that reads a lock off a
+#           tree main has not settled yet runs `--materialize` first (local, deterministic, never
+#           committed).
 #
 # Why `main` exists: a lock's trailer (`moduleVersion`, `sourceCommit`, `version`) changes on EVERY
 # content change to its module, and its `files` lines are neighbours, so two pull requests touching
@@ -176,6 +177,8 @@ SCHEMA = "mw-manifest/1"
 LOCK_OWNER_BRANCH = "branch"
 LOCK_OWNER_MAIN = "main"
 LOCK_OWNERS = {LOCK_OWNER_BRANCH, LOCK_OWNER_MAIN}
+SETTLEMENT_PR_BRANCH = "ci/settle-manifest-locks"
+SETTLEMENT_PR_AUTHOR = "meshweaver-cloud[bot]"
 # The caller's allow-file. Named by MW_MANIFEST_CONFIG when the lane places it elsewhere; otherwise
 # it sits beside the caller's other policy files.
 CONFIG_NAME = "gen-manifests.config.json"
@@ -922,7 +925,7 @@ def materialize(root: Path) -> int:
         print(f"  ✎ {plugin.name}: v{version}, moduleVersion {content_hash}  (committed: {was})")
         written += 1
     print(f"✓ materialized {written} of {len(modules)} lock(s) for this tree — main-owned locks: "
-          f"these are NOT to be committed (main's settle job commits them after the merge)")
+          f"these are NOT to be committed on this PR (main's settle job proposes them after the merge)")
     return 0
 
 
@@ -958,8 +961,101 @@ def _lock_base(root: Path) -> tuple[str | None, str | None]:
                   f"answered nothing. Fetch the base branch (or set MW_LOCK_BASE) and re-run.")
 
 
+def is_manifest_lock_settlement_pr() -> bool:
+    """True only for the dedicated, same-repository App PR used to settle main-owned locks.
+
+    The author and branch are both load-bearing. A normal PR — including one that happens to use
+    the reserved branch name — still cannot commit generated locks. This is a very narrow alternate
+    check for the CI-created lock PR, not a general opt-out from the main-owned rule.
+    """
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        return False
+    event_path = os.environ.get("GITHUB_EVENT_PATH", "").strip()
+    if not event_path:
+        return False
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    pr = event.get("pull_request") if isinstance(event, dict) else None
+    if not isinstance(pr, dict):
+        return False
+    head, base = pr.get("head"), pr.get("base")
+    repository = event.get("repository")
+    head_repo = head.get("repo") if isinstance(head, dict) else None
+    base_repo = base.get("repo") if isinstance(base, dict) else None
+    repository_name = os.environ.get("GITHUB_REPOSITORY", "").casefold()
+    return bool(
+        repository_name
+        and isinstance(repository, dict)
+        and isinstance(head, dict)
+        and isinstance(base, dict)
+        and isinstance(head_repo, dict)
+        and isinstance(base_repo, dict)
+        and str(repository.get("full_name", "")).casefold() == repository_name
+        and str(head_repo.get("full_name", "")).casefold() == repository_name
+        and str(base_repo.get("full_name", "")).casefold() == repository_name
+        and head.get("ref") == SETTLEMENT_PR_BRANCH
+        and base.get("ref") == "main"
+        and isinstance(pr.get("user"), dict)
+        and pr["user"].get("login") == SETTLEMENT_PR_AUTHOR
+    )
+
+
+def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
+    """Verify the CI-owned lock PR is only the exact settlement the current main tree requires."""
+    changed = git(root, ["diff", "--name-only", base, "HEAD"])
+    if changed is None:
+        return [f"cannot read the settlement PR diff against {base[:12]} — refusing to accept it"]
+    paths = sorted(p.strip() for p in changed.splitlines() if p.strip())
+    expected = {f"{plugin.name}/manifest.lock" for plugin in plugin_dirs(root)}
+    unexpected = [path for path in paths if path not in expected]
+    if not paths or unexpected:
+        details = ", ".join(unexpected[:12]) if unexpected else "the PR changes no manifest.lock files"
+        return [f"the generated settlement PR must change only existing package manifest.lock files; "
+                f"found {details}"]
+
+    # The lock claim is valid only for the exact main tree its version baseline came from. If main
+    # advanced after this PR was opened, the main push's own run will refresh the one settlement
+    # branch; this run must not bless a stale claim under loose branch protection.
+    trunk, errors = derivation_inputs(root, fetch=True)
+    if errors:
+        return [f"cannot verify the settlement PR's baseline: {error}" for error in errors]
+    if trunk is None or trunk != base:
+        return [f"main advanced after this settlement PR was based on {base[:12]} "
+                f"(current verified main: {trunk[:12] if trunk else 'unavailable'}) — "
+                "the next main run must refresh the generated lock branch"]
+
+    # `settle()` delegates its writes to `generate(..., settling=True)`, whose only write target is
+    # each enumerated plugin's manifest.lock; the postconditions are reads. The positive self-test
+    # also asserts the entire checkout is clean after this validator returns.
+    lock_files = [plugin / "manifest.lock" for plugin in plugin_dirs(root)]
+    before = {path: path.read_bytes() if path.is_file() else None for path in lock_files}
+    try:
+        if settle(root, fetch=True) != 0:
+            return ["the generated settlement does not pass gen-manifests.py --settle against current main"]
+        remaining = git(root, ["status", "--porcelain", "--untracked-files=all", "--", "*/manifest.lock"])
+        if remaining is None:
+            return ["cannot verify the generated settlement output against the PR head"]
+        if remaining.strip():
+            return ["the PR's manifest.lock files differ from the locks generated for its tree: "
+                    + ", ".join(line[3:].strip() for line in remaining.splitlines()[:12])]
+        return []
+    finally:
+        # Validation is read-only from the PR's point of view, even when a bad lock fails the
+        # generated comparison. The next checks in the shared lane must see the original checkout.
+        for path, contents in before.items():
+            if contents is None:
+                if path.exists():
+                    path.unlink()
+            else:
+                path.write_bytes(contents)
+
+
 def check_untouched(root: Path, base: str) -> list[str]:
     """Under `lockOwner: main`, a pull request's diff must change no package's `manifest.lock`."""
+    if is_manifest_lock_settlement_pr():
+        return check_generated_lock_settlement(root, base)
     generated = {f"{d.name}/manifest.lock" for d in plugin_dirs(root)}
     out = git(root, ["diff", "--name-only", base, "HEAD", "--", "*/manifest.lock"])
     if out is None:
@@ -972,7 +1068,7 @@ def check_untouched(root: Path, base: str) -> list[str]:
     if not touched:
         return []
     return [f"this pull request changes {len(touched)} manifest.lock file(s), and this repo's locks "
-            f"are MAIN-owned (lockOwner: main) — main's settle job writes them after the merge, and a "
+            f"are MAIN-owned (lockOwner: main) — main's settle job proposes them after the merge, and a "
             f"lock committed here is exactly what turns every other open pull request DIRTY: "
             + ", ".join(touched[:12]) + (" …" if len(touched) > 12 else ""),
             f"fix: git checkout {base[:12]} -- {' '.join(touched[:12])}"
@@ -1165,7 +1261,7 @@ def generate(root: Path, fetch: bool = True, settling: bool = False) -> int:
         # Not an error: the post-merge hook and a habitual `gen-manifests.py` both land here, and
         # the right outcome for both is to write NOTHING a commit could sweep up.
         print("  = this repo's locks are MAIN-owned (lockOwner: main) — nothing written. A pull "
-              "request commits no lock; main's settle job writes them after the merge.")
+              "request commits no lock; main's settle job proposes them in a required-check PR after the merge.")
         print("    For a local view of this tree's locks (never to be committed): --materialize")
         return 0
     # Deriving a version from a stale tag database is the ORIGINAL sin: the wrong number is written
@@ -2281,6 +2377,111 @@ def _self_test_main_owned(repo: Path) -> list[str]:
     if resolved != base or why:
         failures.append(f"main-owned: MW_LOCK_BASE must resolve to the base commit, got {resolved} / {why}")
 
+    # D2. The reserved App-authored PR is the sole exception: it must be lock-only, current with
+    # main, and byte-for-byte what --settle generates. The same locks from a human or a stale base
+    # remain red.
+    settlement_repo = repo.parent / "settlement-pr"
+    settlement_remote = repo.parent / "settlement-remote.git"
+    settlement_repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(settlement_repo)], capture_output=True)
+    def sg(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(settlement_repo), *args],
+                              capture_output=True, text=True)
+    sg("config", "user.email", "t@example.com")
+    sg("config", "user.name", "t")
+    (settlement_repo / "scripts").mkdir()
+    (settlement_repo / "scripts" / CONFIG_NAME).write_text(json.dumps(
+        {"skip": ["scripts"], "hashModuleSources": False, "lockOwner": LOCK_OWNER_MAIN}) + "\n")
+    _CONFIG_CACHE.pop(settlement_repo.resolve(), None)
+    (settlement_repo / "Mod").mkdir()
+    (settlement_repo / "Mod" / "index.json").write_text('{"content": {"version": "1.2"}}\n')
+    (settlement_repo / "Mod" / "src.cs").write_text("base\n")
+    quiet(settle, settlement_repo, False)
+    sg("add", "-A")
+    sg("commit", "-qm", "base: settled")
+    (settlement_repo / "Mod" / "src.cs").write_text("main content\n")
+    sg("commit", "-qam", "main: content awaiting settlement")
+    settlement_base = sg("rev-parse", "HEAD").stdout.strip()
+    subprocess.run(["git", "init", "-q", "--bare", str(settlement_remote)], capture_output=True)
+    subprocess.run(["git", "-C", str(settlement_remote), "symbolic-ref", "HEAD", "refs/heads/main"],
+                   capture_output=True)
+    sg("remote", "add", "origin", str(settlement_remote))
+    sg("push", "-qu", "origin", "main")
+    sg("checkout", "-qb", SETTLEMENT_PR_BRANCH)
+    quiet(settle, settlement_repo, False)
+    sg("add", "-A")
+    sg("commit", "-qm", "settle: main-owned locks")
+    settlement_event_path = settlement_repo.parent / "event.json"
+    settlement_event = {
+        "repository": {"full_name": "Systemorph/MeshWeaver.Plugins"},
+        "pull_request": {
+            "user": {"login": SETTLEMENT_PR_AUTHOR},
+            "head": {"ref": SETTLEMENT_PR_BRANCH,
+                     "repo": {"full_name": "Systemorph/MeshWeaver.Plugins"}},
+            "base": {"ref": "main", "sha": settlement_base,
+                     "repo": {"full_name": "Systemorph/MeshWeaver.Plugins"}},
+        },
+    }
+    settlement_event_path.write_text(json.dumps(settlement_event), encoding="utf-8")
+    old_env = {key: os.environ.get(key) for key in
+               ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_REPOSITORY", "MW_LOCK_BASE")}
+    os.environ.update({
+        "GITHUB_EVENT_NAME": "pull_request",
+        "GITHUB_EVENT_PATH": str(settlement_event_path),
+        "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "MW_LOCK_BASE": settlement_base,
+    })
+    try:
+        if not is_manifest_lock_settlement_pr() or check_untouched(settlement_repo, settlement_base):
+            failures.append("main-owned: a fresh, exact App settlement PR must pass")
+        if sg("status", "--porcelain").stdout.strip():
+            failures.append("main-owned: verifying an exact settlement PR must not modify its locks")
+
+        settlement_event["pull_request"]["user"]["login"] = "rbuergi"
+        settlement_event_path.write_text(json.dumps(settlement_event), encoding="utf-8")
+        if is_manifest_lock_settlement_pr() or not check_untouched(settlement_repo, settlement_base):
+            failures.append("control: the reserved settlement branch must not exempt a human PR")
+        settlement_event["pull_request"]["user"]["login"] = SETTLEMENT_PR_AUTHOR
+        settlement_event_path.write_text(json.dumps(settlement_event), encoding="utf-8")
+
+        sg("checkout", "-qb", "settlement-with-extra-file")
+        (settlement_repo / "README.md").write_text("not a generated lock\n")
+        sg("add", "README.md")
+        sg("commit", "-qm", "settlement: unexpected file")
+        if not check_untouched(settlement_repo, settlement_base):
+            failures.append("main-owned: the settlement PR must refuse any non-lock file")
+        sg("checkout", "-q", SETTLEMENT_PR_BRANCH)
+
+        bad_lock = read_existing(settlement_repo / "Mod" / "manifest.lock") or {}
+        bad_lock["moduleVersion"] = "0000000000000000"
+        (settlement_repo / "Mod" / "manifest.lock").write_text(serialize(bad_lock), encoding="utf-8")
+        sg("commit", "-qam", "settlement: incorrect lock")
+        if not any("differ from the locks generated" in error
+                   for error in check_untouched(settlement_repo, settlement_base)):
+            failures.append("main-owned: the settlement PR must refuse a lock that --settle would change")
+        sg("checkout", "-qb", "settlement-with-deleted-lock")
+        sg("rm", "-q", "Mod/manifest.lock")
+        sg("commit", "-qm", "settlement: delete generated lock")
+        if not any("differ from the locks generated" in error
+                   for error in check_untouched(settlement_repo, settlement_base)):
+            failures.append("main-owned: the settlement PR must refuse a deleted lock recreated as untracked")
+
+        sg("checkout", "-q", "main")
+        (settlement_repo / "Other.txt").write_text("advance main\n")
+        sg("add", "Other.txt")
+        sg("commit", "-qm", "main: unrelated advance")
+        sg("push", "-q", "origin", "main")
+        sg("checkout", "-q", SETTLEMENT_PR_BRANCH)
+        stale = check_untouched(settlement_repo, settlement_base)
+        if not any("main advanced" in error for error in stale):
+            failures.append(f"main-owned: a lock settlement based on stale main must be refused, got {stale}")
+    finally:
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
     # E. A hand-edited lock is refused; the unsettled module is NAMED by --check-versions, not failed.
     good = lock_text()
     edited = json.loads(good)
@@ -2399,8 +2600,12 @@ def main() -> int:
                 for e in errors:
                     print(f"  - {e}")
                 return 1
-            print("✓ main-owned locks: none changed by this pull request, every committed lock is "
-                  "self-consistent, and this tree's locks materialize without moving a version back")
+            if is_manifest_lock_settlement_pr():
+                print("✓ generated main-owned lock settlement: only current manifest.lock files "
+                      "changed, and they exactly match --settle against the current main tree")
+            else:
+                print("✓ main-owned locks: none changed by this pull request, every committed lock is "
+                      "self-consistent, and this tree's locks materialize without moving a version back")
             return 0
         if errors:
             print(f"✗ {len(errors) - 1} stale/missing manifest(s):")
