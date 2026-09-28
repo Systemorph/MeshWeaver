@@ -1128,7 +1128,21 @@ def settle(root: Path, fetch: bool = True) -> int:
     `--materialize` gives every other job of the run from the committed lock alone — the property
     that lets a pull request's bundle, named at PR time, be the one main publishes.
     """
-    rc = generate(root, fetch, settling=True)
+    # 🚨 ONE trunk for the write AND its postcondition, resolved while the tree is still CLEAN.
+    # `_trunk_commit` derives a clean checkout that is an older trunk commit against ITSELF (#1426)
+    # and a dirty one against the live tip — and writing the locks dirties the tree. Resolving the
+    # trunk a second time after the write therefore compared the claim against a DIFFERENT baseline
+    # whenever main had moved past this checkout: measured on MeshWeaver.Plugins main run
+    # 36357560255 — generate wrote Hosting 1.33.5 against the checkout, the postcondition re-derived
+    # against a newer tip whose own lock already said 1.33.5 and demanded 1.33.6, and the settle
+    # went red over a claim that was consistent with the baseline it was written against.
+    trunk, unvouchable = derivation_inputs(root, fetch)
+    if unvouchable:
+        print("✗ --settle: refusing to derive versions from a baseline that cannot be vouched for:")
+        for e in unvouchable:
+            print(f"  - {e}")
+        return 1
+    rc = generate(root, fetch, settling=True, trunk_resolved=(trunk,))
     if rc != 0:
         return rc
     failures: list[str] = []
@@ -1136,21 +1150,18 @@ def settle(root: Path, fetch: bool = True) -> int:
         files = hash_files(plugin, root)
         if not _current(read_existing(plugin / "manifest.lock"), plugin, files, module_version(files)):
             failures.append(f"{plugin.name}: the lock does not describe the tree after settling")
-    trunk, unvouchable = derivation_inputs(root, fetch)
-    failures += unvouchable
-    if not unvouchable:
-        failures += check_versions(root, trunk)
-        head = git(root, ["rev-parse", "HEAD"])
-        if lock_owner(root) == LOCK_OWNER_MAIN and trunk and trunk == head:
-            for plugin in plugin_dirs(root):
-                written = read_existing(plugin / "manifest.lock") or {}
-                before = _lock_at(root, "HEAD", plugin.name)
-                expected = materialized_version(plugin, str(written.get("moduleVersion")), before)
-                if written.get("version") != expected:
-                    failures.append(
-                        f"{plugin.name}: settled v{written.get('version')} but --materialize derives "
-                        f"v{expected} from the committed lock — the two derivations disagree, so a "
-                        f"bundle named at pull-request time would not be the one main publishes")
+    failures += check_versions(root, trunk)
+    head = git(root, ["rev-parse", "HEAD"])
+    if lock_owner(root) == LOCK_OWNER_MAIN and trunk and trunk == head:
+        for plugin in plugin_dirs(root):
+            written = read_existing(plugin / "manifest.lock") or {}
+            before = _lock_at(root, "HEAD", plugin.name)
+            expected = materialized_version(plugin, str(written.get("moduleVersion")), before)
+            if written.get("version") != expected:
+                failures.append(
+                    f"{plugin.name}: settled v{written.get('version')} but --materialize derives "
+                    f"v{expected} from the committed lock — the two derivations disagree, so a "
+                    f"bundle named at pull-request time would not be the one main publishes")
     if failures:
         print("✗ --settle: the settled locks are not a claim this tree can make:")
         for f in failures:
@@ -1160,7 +1171,8 @@ def settle(root: Path, fetch: bool = True) -> int:
     return 0
 
 
-def generate(root: Path, fetch: bool = True, settling: bool = False) -> int:
+def generate(root: Path, fetch: bool = True, settling: bool = False,
+             trunk_resolved: tuple[str | None] | None = None) -> int:
     if lock_owner(root) == LOCK_OWNER_MAIN and not settling:
         # Not an error: the post-merge hook and a habitual `gen-manifests.py` both land here, and
         # the right outcome for both is to write NOTHING a commit could sweep up.
@@ -1171,8 +1183,10 @@ def generate(root: Path, fetch: bool = True, settling: bool = False) -> int:
     # Deriving a version from a stale tag database is the ORIGINAL sin: the wrong number is written
     # into manifest.lock, and every later check — reading the same stale tags — agrees with it. So
     # both witnesses (the published tags AND the trunk's committed locks) are proven current BEFORE
-    # anything is written, not after.
-    trunk, unvouchable = derivation_inputs(root, fetch)
+    # anything is written, not after. `--settle` has already verified them and hands the trunk in,
+    # so the write and its postcondition read the same baseline.
+    trunk, unvouchable = (trunk_resolved[0], []) if trunk_resolved is not None \
+        else derivation_inputs(root, fetch)
     if unvouchable:
         print("✗ refusing to derive versions from a baseline that cannot be vouched for:")
         for e in unvouchable:
@@ -2319,6 +2333,13 @@ def _self_test_main_owned(repo: Path) -> list[str]:
     if diff:
         failures.append(f"main-owned: after --resolve the branch must touch no lock, still: {diff}")
 
+    # H. 🚨 --settle on a checkout main has ALREADY moved past (Plugins main run 36357560255): the
+    # write and its postcondition must read ONE trunk. The checkout is a clean older trunk commit,
+    # so it derives against itself (#1426); the tip's own lock already claims the next number for
+    # different content. Re-resolving the trunk after the write (a dirty tree ⇒ the tip) demanded
+    # a number the write never derived, and the settle went red over a consistent claim.
+    failures.extend(_self_test_settle_behind_tip(repo.parent / "settle-behind-tip"))
+
     # G. An unknown owner is refused, never read as the default.
     (repo / "scripts" / CONFIG_NAME).write_text(json.dumps(
         {"skip": ["scripts"], "lockOwner": "Main"}) + "\n")
@@ -2329,6 +2350,61 @@ def _self_test_main_owned(repo: Path) -> list[str]:
     except SystemExit:
         pass
     _CONFIG_CACHE.pop(repo.resolve(), None)
+    return failures
+
+
+def _self_test_settle_behind_tip(tmp: Path) -> list[str]:
+    """`--settle` on a clean checkout that main has moved past must pass (see case H above)."""
+    import contextlib
+    import io as _io
+    failures: list[str] = []
+    origin, work = tmp / "origin.git", tmp / "work"
+    tmp.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], capture_output=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], capture_output=True)
+
+    def g(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(work), *args], capture_output=True, text=True).stdout.strip()
+
+    def quiet(fn, *a, **kw):
+        with contextlib.redirect_stdout(_io.StringIO()):
+            return fn(*a, **kw)
+
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (work / "scripts").mkdir()
+    (work / "scripts" / CONFIG_NAME).write_text(json.dumps(
+        {"skip": ["scripts"], "lockOwner": LOCK_OWNER_MAIN}) + "\n")
+    (work / "Mod").mkdir()
+    (work / "Mod" / "index.json").write_text('{"content": {"version": "1.0"}}\n')
+    (work / "Mod" / "src.cs").write_text("base\n")
+    _CONFIG_CACHE.pop(work.resolve(), None)
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    g("push", "-q", "origin", "HEAD:main")
+    if quiet(settle, work, True) != 0:                           # base: Mod 1.0.0, settled
+        failures.append("settle-behind-tip fixture: the base must settle")
+    g("add", "-A")
+    g("commit", "-qm", "base, settled")
+    g("push", "-q", "origin", "HEAD:main")
+    (work / "Mod" / "src.cs").write_text("first\n")              # M1: an unsettled merge
+    g("commit", "-qam", "M1")
+    g("push", "-q", "origin", "HEAD:main")
+    m1 = g("rev-parse", "HEAD")
+    (work / "Mod" / "src.cs").write_text("second\n")             # M2: a legacy merge whose lock
+    quiet(generate, work, True, settling=True)                   # claims the next number (1.0.1)
+    g("commit", "-qam", "M2 (legacy lock commit)")
+    g("push", "-q", "origin", "HEAD:main")
+    if (read_existing(work / "Mod" / "manifest.lock") or {}).get("version") != "1.0.1":
+        failures.append("settle-behind-tip fixture: the tip's lock should claim 1.0.1")
+    g("checkout", "-q", "--detach", m1)                          # the run of M1, behind the tip
+    rc = quiet(settle, work, True)
+    if rc != 0:
+        failures.append("--settle on a clean checkout behind the tip must derive the write AND its "
+                        "postcondition against ONE trunk — it went red over its own consistent claim")
+    elif (read_existing(work / "Mod" / "manifest.lock") or {}).get("version") != "1.0.1":
+        failures.append("--settle behind the tip must derive against ITSELF (#1426): M1 claims 1.0.1")
+    _CONFIG_CACHE.pop(work.resolve(), None)
     return failures
 
 
