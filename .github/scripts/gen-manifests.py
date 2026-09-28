@@ -106,6 +106,7 @@ import os
 import re
 import subprocess
 import sys
+from typing import NamedTuple
 from pathlib import Path
 
 # 🚨 ONE answer to "what does this module's bundle contain", not two. The CALLER's
@@ -1136,13 +1137,14 @@ def settle(root: Path, fetch: bool = True) -> int:
     # 36357560255 — generate wrote Hosting 1.33.5 against the checkout, the postcondition re-derived
     # against a newer tip whose own lock already said 1.33.5 and demanded 1.33.6, and the settle
     # went red over a claim that was consistent with the baseline it was written against.
-    trunk, unvouchable = derivation_inputs(root, fetch)
-    if unvouchable:
+    vouched, unvouchable = vouch_trunk(root, fetch)
+    if vouched is None:
         print("✗ --settle: refusing to derive versions from a baseline that cannot be vouched for:")
         for e in unvouchable:
             print(f"  - {e}")
         return 1
-    rc = generate(root, fetch, settling=True, trunk_resolved=(trunk,))
+    trunk = vouched.commit
+    rc = generate(root, fetch, settling=True, vouched=vouched)
     if rc != 0:
         return rc
     failures: list[str] = []
@@ -1171,8 +1173,21 @@ def settle(root: Path, fetch: bool = True) -> int:
     return 0
 
 
+class VouchedTrunk(NamedTuple):
+    """A trunk commit whose witnesses `derivation_inputs` has ALREADY verified against the remote
+    (`commit` is None for a repo with no remote — tags alone, as ever). Made only by `vouch_trunk`,
+    so a caller cannot hand `generate` an unverified baseline by passing a bare sha."""
+    commit: str | None
+
+
+def vouch_trunk(root: Path, fetch: bool = True) -> tuple[VouchedTrunk | None, list[str]]:
+    """`derivation_inputs`, packaged: a VouchedTrunk when nothing is unvouchable, else the errors."""
+    trunk, errors = derivation_inputs(root, fetch)
+    return (None, errors) if errors else (VouchedTrunk(trunk), [])
+
+
 def generate(root: Path, fetch: bool = True, settling: bool = False,
-             trunk_resolved: tuple[str | None] | None = None) -> int:
+             vouched: VouchedTrunk | None = None) -> int:
     if lock_owner(root) == LOCK_OWNER_MAIN and not settling:
         # Not an error: the post-merge hook and a habitual `gen-manifests.py` both land here, and
         # the right outcome for both is to write NOTHING a commit could sweep up.
@@ -1183,9 +1198,11 @@ def generate(root: Path, fetch: bool = True, settling: bool = False,
     # Deriving a version from a stale tag database is the ORIGINAL sin: the wrong number is written
     # into manifest.lock, and every later check — reading the same stale tags — agrees with it. So
     # both witnesses (the published tags AND the trunk's committed locks) are proven current BEFORE
-    # anything is written, not after. `--settle` has already verified them and hands the trunk in,
-    # so the write and its postcondition read the same baseline.
-    trunk, unvouchable = (trunk_resolved[0], []) if trunk_resolved is not None \
+    # anything is written, not after. `--settle` has already verified them and hands the VOUCHED
+    # trunk in (only `vouch_trunk` makes one), so the write and its postcondition read one baseline.
+    if vouched is not None and not isinstance(vouched, VouchedTrunk):
+        raise TypeError("generate(vouched=…) takes a VouchedTrunk from vouch_trunk(), never a bare ref")
+    trunk, unvouchable = (vouched.commit, []) if vouched is not None \
         else derivation_inputs(root, fetch)
     if unvouchable:
         print("✗ refusing to derive versions from a baseline that cannot be vouched for:")
