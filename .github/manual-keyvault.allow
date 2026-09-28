@@ -9,7 +9,7 @@
 # the line goes when that rewrite lands.
 
 # The writer's own verbs: set with tags, status from metadata, lifecycle. None reads a value.
-deploy/aks/operator/bin/hosting-kv-set  — writer verb: writes through --file, confirms by list-versions
+deploy/aks/operator/bin/hosting-kv-set  — writer verb: writes through --file, confirms by list-versions. TRANSITIONAL (policy secret-actions-interim-actions-lane): its --generate mode also runs as hosting-operator on the aks-ops lane until the writer identity exists
 deploy/aks/operator/bin/hosting-kv-state  — writer verb: set-attributes / delete / recover / purge, no value
 deploy/aks/operator/bin/hosting-kv-purge  — teardown verb: deletes an instance's objects by prefix, no value read
 

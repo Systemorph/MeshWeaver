@@ -86,6 +86,24 @@ The verbs are `hosting-kv-set` (set, `--generate`), `hosting-kv-status` (status 
 already soft-deleted). Their behaviour tests run against a stub `az` that plays the writer: it **refuses**
 `secret show`, so a verb that reads a value is red in CI.
 
+### Interim: the value-free verbs on the Actions lane
+
+🚧 **TRANSITIONAL** (policy `secret-actions-interim-actions-lane`). The writer identity is not provisioned
+yet, and the control instance runs its actions on the Actions executor (Systemorph/Memex `aks-ops.yml`),
+not as in-cluster Jobs. Until the writer exists, the two verbs that carry **no value** run on that lane as
+`hosting-operator`, which already holds vault set and list:
+
+- **Generate** (`SetSecrets` with only `generate:`): the lane runs `hosting-kv-set --generate`. The value is
+  minted inside the run and written through a file, and it is never shown. The action still parks for approval.
+- **Read status** (`SecretStatus`): the lane runs `hosting-kv-status`, a metadata read.
+
+Each such run records a `writerIdentityNote` beginning `TRANSITIONAL` on its node and in its log. A **pasted**
+value and every **lifecycle** verb stay refused on that lane. A paste's value would sit in a dispatch payload
+anyone reading the repo's Actions can decode. The lane's classifier refuses such a bundle as well
+(`--object` on a write, or `HOSTING_SECRETS` in its environment). The whole exception, including its lines in
+`.github/manual-keyvault.allow`, is removed when the writer identity is provisioned and every secret action
+moves to the in-cluster Job under it.
+
 ### Generate: shown once, or never
 
 - A secret that **no third party has to paste anywhere** (a master key, a bootstrap secret, an in-fleet
