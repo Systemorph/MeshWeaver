@@ -29,6 +29,9 @@ public class EmitCanaryPrivateCompilerLegTest(ITestOutputHelper output)
             "a healthy process must be able to emit through a fresh copy of Roslyn — any other "
             + "reading here means the control cannot run, and a control that cannot run answers "
             + "nothing on the occurrence it exists for");
+        verdict.Should().Contain("held=EMITS(64/64",
+            "the first invocation must exercise repeated emits inside one held private copy; "
+            + "another cold copy on each call would not measure the warm path");
 
         // The context is collectible and is unloaded after the emit; a second run must load a
         // fresh copy again rather than fail on a context that was left behind.
