@@ -100,6 +100,14 @@ per container that actually exists** — typically none — instead of one per s
 query that fails is *not* caught: it fails the copy, so the move's delete leg never runs. Swallowing
 it would rebuild the same defect one level down.
 
+The storage inventory can complete on an IO thread. The main and satellite queries run **after**
+that emission, when the request's ambient `AccessContext` may be gone. Each query therefore carries
+the viewer ID captured from the copy request itself; it never guesses from the callback thread.
+An unresolved viewer, a query error, or an incomplete first snapshot is a refusal, not proof that
+the source is absent. This distinction matters for a move from a private user space into a shared
+Inbox: reporting “source not found” for a node storage still holds leaves the submitted record in
+the user's space and prevents its destination watcher from handing it over.
+
 ## The refusal — `RequireComplete`
 
 Carrying satellites fixes the case we know about. The rule the operation actually needs is stronger,

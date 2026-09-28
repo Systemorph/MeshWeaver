@@ -7374,6 +7374,18 @@ public static class MeshExtensions
         IObservable<MeshNode> CreateUnderCaller(MeshNode node) =>
             accessService.RunAs(callerAccessContext, () => meshService.CreateNode(node));
 
+        // The storage inventory below emits on its own scheduler on a persistent store. Query is
+        // constructed AFTER that emission, so MeshService cannot recover the request's AsyncLocal
+        // identity there. Pin the viewer captured from this delivery on both the main and satellite
+        // queries; an unresolved viewer must fail, not turn a present source into "not found".
+        IObservable<QueryResultChange<MeshNode>> QueryUnderCaller(string query)
+        {
+            var requestQuery = MeshQueryRequest.FromQuery(query).Complete();
+            return meshService.Query<MeshNode>(callerAccessContext?.ObjectId is { } viewer
+                ? requestQuery.ForViewer(viewer)
+                : requestQuery.RequireViewer());
+        }
+
         // 🚨 A completeness check with nothing to check against would PASS — the one shape a guard
         // must never have. RequireComplete asserts the copy covers what STORAGE holds; with no
         // storage adapter there is no inventory, the difference is empty for want of a left-hand
@@ -7521,13 +7533,14 @@ public static class MeshExtensions
                 // No .Catch here on purpose: a container query that fails must FAIL THE COPY, so the
                 // move's delete leg never runs. Swallowing it would rebuild the very defect this
                 // sweep exists to close, one level down.
-                .SelectMany(container => meshService
-                    .Query<MeshNode>(MeshQueryRequest
-                        .FromQuery($"path:{container} scope:subtree").Complete())
+                .SelectMany(container => QueryUnderCaller($"path:{container} scope:subtree")
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(15))
-                    .SelectMany(change =>
-                        change?.Items ?? (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()))
+                    .SelectMany(change => copyRequest.RequireComplete
+                        && (change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 })
+                            ? Observable.Throw<MeshNode>(new InvalidOperationException(
+                                $"{CopyNodeRequest.IncompleteCopyRefusal} the query of satellite container '{container}' returned an incomplete snapshot."))
+                            : change.Items.ToObservable()))
                 .Where(n => n is not null && !alreadyCarried.Contains(n.Path))
                 .Distinct(n => n.Path, StringComparer.OrdinalIgnoreCase)
                 .ToList()
@@ -7557,19 +7570,17 @@ public static class MeshExtensions
                 }
 
                 return StoredSubtreePaths().SelectMany(storedPaths =>
-                    meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{sourcePath} scope:subtree").Complete())
+                    QueryUnderCaller($"path:{sourcePath} scope:subtree")
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
-            .Catch<QueryResultChange<MeshNode>, Exception>(ex =>
-            {
-                logger.LogWarning(ex, "[CopyNode] source query {Path} failed", sourcePath);
-                return Observable.Empty<QueryResultChange<MeshNode>>();
-            })
             .DefaultIfEmpty()
             .SelectMany(change =>
             {
-                var nodes = change?.Items ?? (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>();
+                if (change is null || change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 })
+                    return Observable.Throw<(MeshNode Root, int Desc, int Sat)>(new InvalidOperationException(
+                        $"{CopyNodeRequest.IncompleteCopyRefusal} the source query for '{sourcePath}' returned no complete snapshot."));
+
+                var nodes = change.Items;
                 logger.LogDebug("[CopyNode] subtree returned {Count} nodes", nodes.Count);
                 var sourceNode = nodes.FirstOrDefault(n =>
                     string.Equals(n.Path, sourcePath, StringComparison.Ordinal));
