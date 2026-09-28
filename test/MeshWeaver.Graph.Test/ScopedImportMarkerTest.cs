@@ -138,6 +138,22 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
         reimport.WrittenPaths.Should().NotContain(path);
         (await Body(path)).Should().Contain("local-edit",
             "the newer server-authored node must remain authoritative under two-way sync");
+
+        // A PRESERVED drifted node was not written, so the manifest may not claim its new source
+        // token (#1326's rule, the two-way direction). Were it claimed, a later pass in which the
+        // server copy no longer wins — here: no two-way policy at all, e.g. the local edit was
+        // discarded — would read "already at this content", skip the node, and leave it divergent
+        // from the source for good. Keeping the prior token is what makes this pass evaluate it.
+        var afterDiscard = await StaticRepoImporter.ImportSource(
+                Mesh,
+                source,
+                changedNodePaths: new HashSet<string>())
+            .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
+        afterDiscard.WrittenPaths.Should().Contain(path,
+            "the preserved pass must not have recorded repo-v2's token in the manifest; the node "
+            + "still differs from what the manifest last saw land, so it must be re-evaluated");
+        (await Body(path)).Should().Contain("repo-v2",
+            "once the server copy no longer wins, the source must converge the node");
     }
 
     /// <summary>
