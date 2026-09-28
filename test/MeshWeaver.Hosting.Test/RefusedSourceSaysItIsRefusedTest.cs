@@ -51,10 +51,13 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
     private const string HeadSha = "061976bc0000000000000000000000000000abcd";
 
     private readonly EmptySnapshotRepoClient repoClient = new();
+    private record OlderDeploymentContent(OlderAi Ai);
+    private record OlderAi(string[] Tiers);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddGitHubSyncTypes()
+            .WithMeshType<OlderDeploymentContent>()
             .ConfigureServices(services =>
             {
                 services.AddGitHubSyncServices();
@@ -129,7 +132,72 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
             + "this refusal never imported");
     }
 
-    private async Task<string> ArmedSpace(CancellationToken ct)
+    [Fact(Timeout = 120_000)]
+    public async Task ANewerRecord_RefusesTheSnapshotWithoutAdvancingTheCommit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        repoClient.Files =
+        [
+            new RepoFile("build.json", """
+                {"id":"build","nodeType":"Markdown","content":{"$type":"OlderDeploymentContent","ai":{"tiers":["Standard"],"openRouterEU":{"models":["eu-model"]},"requiredDataResidency":"Eu"}}}
+                """),
+        ];
+
+        var refusal = await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .Materialize()
+            .Where(n => n.Kind == System.Reactive.NotificationKind.OnError)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+        refusal.Exception.Should().BeAssignableTo<InvalidOperationException>();
+        refusal.Exception!.Message.Should().Contain("build.json");
+        refusal.Exception.Message.Should().Contain("openRouterEU");
+        var config = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is
+                { LastSyncOutcome: GitHubSyncService.RefusedOutcome })
+            .Select(n => n!.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)!)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        config.LastSyncNote.Should().Contain("openRouterEU",
+            "the operator must see which authored field this image could not import");
+        config.LastAttemptedCommitSha.Should().Be(HeadSha);
+        config.LastAttemptWasFinal.Should().BeFalse(
+            "a newer image must retry these same repository bytes");
+        config.LastSyncCommitSha.Should().NotBe(HeadSha,
+            "a rejected record must remain in the next cumulative git diff after this image upgrades");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ACompatibleRecord_ImportsAndAdvancesTheCommit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        repoClient.Files =
+        [
+            new RepoFile("build.json", """
+                {"id":"build","nodeType":"Markdown","content":{"$type":"OlderDeploymentContent","ai":{"tiers":["Standard"]}}}
+                """),
+        ];
+
+        await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+        var config = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is
+                { LastSyncCommitSha: HeadSha })
+            .Select(n => n!.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)!)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        config.LastSyncCommitSha.Should().Be(HeadSha);
+    }
+
+    private async Task<string> ArmedSpace(CancellationToken ct, string? subdirectory = MissingSubdirectory)
     {
         var space = "Refused" + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
@@ -143,7 +211,7 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
         // The subdirectory is the point: the guard fires only when one is configured, because a
         // genuinely empty repo with no subdirectory is a legitimate first-sync state.
         var configNode = await Sync
-            .SaveConfig(space, RepoUrl, "main", MissingSubdirectory,
+            .SaveConfig(space, RepoUrl, "main", subdirectory,
                 createBranchIfMissing: false, createRepoIfMissing: false)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
@@ -172,9 +240,11 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
     /// caller depending on another operation is told rather than served a fake.</summary>
     private sealed class EmptySnapshotRepoClient : IGitHubRepoClient
     {
+        public IReadOnlyList<RepoFile> Files { get; set; } = Array.Empty<RepoFile>();
+
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
-            => Observable.Return(new RepoSnapshot(commitish, Array.Empty<RepoFile>()));
+            => Observable.Return(new RepoSnapshot(commitish, Files));
 
         public IObservable<GitHubPushResult> Push(GitHubPushRequest request) => NotUsed<GitHubPushResult>();
         public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)

@@ -30,6 +30,12 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     // (register full name FIRST, short name LAST) that WithGraphTypes / AddAITypes / AddMeshTypes rely on.
     private record AliasedContent(bool PublicRead);
 
+    private record LegacyDeploymentContent(LegacyAi Ai);
+
+    private record LegacyAi(string[] Tiers);
+
+    private sealed record SealedLegacyContent(string Name);
+
     protected override MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
     ) => configuration.WithTypes(typeof(GenericRequest<>), typeof(List<>));
@@ -137,6 +143,47 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         // Write: the hub emits the SHORT name (so it never re-introduces full-name nodes).
         typeRegistry.TryGetCollectionName(typeof(AliasedContent), out var writeName).Should().BeTrue();
         writeName.Should().Be(nameof(AliasedContent));
+    }
+
+    /// <summary>
+    /// GitSync uses strict deserialization for authored node files. The polymorphic object
+    /// converter must let an unknown nested member fail that read instead of recovering it as raw
+    /// JSON and letting the import acknowledge a record this image cannot understand.
+    /// </summary>
+    [Fact]
+    public void StrictRegisteredContentType_RejectsUnknownNestedMembers()
+    {
+        var host = GetHost();
+        var registry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        registry.WithType(typeof(LegacyDeploymentContent), nameof(LegacyDeploymentContent));
+        var options = new JsonSerializerOptions(host.JsonSerializerOptions)
+        {
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        };
+        const string incoming = """
+            {"$type":"LegacyDeploymentContent","ai":{"tiers":["Standard"],"openRouterEU":{"models":["eu-model"]},"requiredDataResidency":"Eu"}}
+            """;
+
+        Action read = () => _ = JsonSerializer.Deserialize<object>(incoming, options);
+        read.Should().Throw<JsonException>().WithMessage("*openRouterEU*");
+    }
+
+    [Fact]
+    public void StrictRegisteredSealedContent_AcceptsItsDiscriminator()
+    {
+        var host = GetHost();
+        host.ServiceProvider.GetRequiredService<ITypeRegistry>()
+            .WithType(typeof(SealedLegacyContent), nameof(SealedLegacyContent));
+        var options = new JsonSerializerOptions(host.JsonSerializerOptions)
+        {
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        };
+
+        var read = JsonSerializer.Deserialize<object>(
+            """{"$type":"SealedLegacyContent","name":"still valid"}""", options);
+
+        read.Should().BeOfType<SealedLegacyContent>()
+            .Which.Name.Should().Be("still valid");
     }
 
     /// <summary>

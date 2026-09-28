@@ -196,6 +196,14 @@ another's question is how an investigation goes wrong. They are deliberately ind
 | `lastSyncedAt` | *When were mesh and repo last RECONCILED?* — the two-way **conflict horizon** | Only on an import that really reconciled: **not** on a fingerprint-matched no-op, **not** when server-newer nodes were preserved, **not** when something failed to land. |
 | `lastAttemptedCommitSha` + `lastAttemptWasFinal` (+ `lastAttemptedConfigFingerprint`) | *Have we already LOOKED at exactly these bytes, as this source is configured now, and could looking again change the answer?* | On every import conclusion, a refusal included; **cleared** by an export and by a hold. This is the pair that makes a green build or a publication announcement free for a source that cannot converge, and the fingerprint is what lets an edit of the source re-attempt at the same commit — see [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost). |
 
+GitSync reads authored JSON with strict member matching. If a repository record contains a
+field the running image does not know, it refuses the **whole snapshot** before writing nodes.
+The activity and the source's `lastSyncNote` name the offending file and field;
+`lastSyncCommitSha` and `lastSyncedAt` stay put. The attempted SHA is recorded with
+`lastAttemptWasFinal = false`, so the same commit remains eligible after the image gains the
+new record type. A malformed node file follows the same all-or-nothing rule; files with no
+node parser, such as ordinary `.py` files, remain outside the import.
+
 The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
 and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms
 exactly the protection two-way exists for — a later push would then delete that work. That is why
