@@ -131,12 +131,12 @@ public static class PlatformSettingsTabAreas
             Icon = "Info",
             Order = 900,
         }),
-        // Administration group — tabs of the ADMIN APP (/Admin/Settings/{id}), platform admins only:
-        // the per-node settings lane (NodeSettings) gated to the AdminApp node type and AdminOnly,
-        // and the area re-asserts the gate for direct URLs. They used to be global-settings tabs
-        // (/_Setting/GlobalSettings/{id}); an old link redirects into the app (see
-        // AddPlatformSettingsTabAreas). Ordered by tab Order within the group. (Gates.AdminOnly on the entry, and the
-        // area re-asserts the gate for direct URLs). Ordered by tab Order within the group.
+        // Tabs of the ADMIN APP (/Admin/Settings/{id}), platform admins only, in the app's sections —
+        // "People & sign-in" (Invitations, Privacy, Published) and "Operations" (Updates, Control
+        // lane, Inbox): the per-node settings lane (NodeSettings) gated to the AdminApp node type and
+        // AdminOnly, and the area re-asserts the gate for direct URLs. They used to be global-settings
+        // tabs (/_Setting/GlobalSettings/{id}); an old link redirects into the app (see
+        // AddPlatformSettingsTabAreas). Ordered by tab Order within the section.
         Seed(InvitationsSettingsTab.TabId, "Invitations", new UiContribution
         {
             Context = UiContribution.NodeSettingsContext,
@@ -144,10 +144,10 @@ public static class PlatformSettingsTabAreas
             Label = "Invitations",
             LabelKey = "settings.invitations",
             Icon = "Mail",
-            Group = "Administration",
-            GroupKey = "settings.groupAdministration",
-            GroupIcon = "Shield",
-            Order = 310,
+            Group = AdminAppNodeType.PeopleGroup,
+            GroupKey = AdminAppNodeType.PeopleGroupKey,
+            GroupIcon = "People",
+            Order = AdminAppNodeType.PeopleOrder + 10,
             Gates = AdminAppOnly,
         }),
         Seed(InboxSettingsTab.TabId, "Inbox", new UiContribution
@@ -157,10 +157,10 @@ public static class PlatformSettingsTabAreas
             Label = "Inbox",
             LabelKey = "settings.inbox",
             Icon = "Mail",
-            Group = "Administration",
-            GroupKey = "settings.groupAdministration",
-            GroupIcon = "Shield",
-            Order = 320,
+            Group = AdminAppNodeType.OperationsGroup,
+            GroupKey = AdminAppNodeType.OperationsGroupKey,
+            GroupIcon = "Wrench",
+            Order = AdminAppNodeType.OperationsOrder + 40,
             Gates = AdminAppOnly,
         }),
         Seed(UpdatePolicySettingsTab.TabId, "Updates", new UiContribution
@@ -170,10 +170,10 @@ public static class PlatformSettingsTabAreas
             Label = "Updates",
             LabelKey = "settings.updates",
             Icon = "ArrowSync",
-            Group = "Administration",
-            GroupKey = "settings.groupAdministration",
-            GroupIcon = "Shield",
-            Order = 320,
+            Group = AdminAppNodeType.OperationsGroup,
+            GroupKey = AdminAppNodeType.OperationsGroupKey,
+            GroupIcon = "Wrench",
+            Order = AdminAppNodeType.OperationsOrder,
             Gates = AdminAppOnly,
         }),
         Seed(ControlLaneSettingsTab.TabId, "Control lane", new UiContribution
@@ -183,10 +183,10 @@ public static class PlatformSettingsTabAreas
             Label = "Control lane",
             LabelKey = "settings.controlLane",
             Icon = "Key",
-            Group = "Administration",
-            GroupKey = "settings.groupAdministration",
-            GroupIcon = "Shield",
-            Order = 320,
+            Group = AdminAppNodeType.OperationsGroup,
+            GroupKey = AdminAppNodeType.OperationsGroupKey,
+            GroupIcon = "Wrench",
+            Order = AdminAppNodeType.OperationsOrder + 10,
             Gates = AdminAppOnly,
         }),
         Seed(PublishedSettingsTab.TabId, "Published to the web", new UiContribution
@@ -196,10 +196,10 @@ public static class PlatformSettingsTabAreas
             Label = "Published to the web",
             LabelKey = "settings.published",
             Icon = "Globe",
-            Group = "Administration",
-            GroupKey = "settings.groupAdministration",
-            GroupIcon = "Shield",
-            Order = 320,
+            Group = AdminAppNodeType.PeopleGroup,
+            GroupKey = AdminAppNodeType.PeopleGroupKey,
+            GroupIcon = "People",
+            Order = AdminAppNodeType.PeopleOrder + 30,
             Gates = AdminAppOnly,
         }),
         Seed(PrivacySettingsTab.TabId, "Privacy", new UiContribution
@@ -209,10 +209,10 @@ public static class PlatformSettingsTabAreas
             Label = "Privacy",
             LabelKey = "settings.privacy",
             Icon = "Shield",
-            Group = "Administration",
-            GroupKey = "settings.groupAdministration",
-            GroupIcon = "Shield",
-            Order = 330,
+            Group = AdminAppNodeType.PeopleGroup,
+            GroupKey = AdminAppNodeType.PeopleGroupKey,
+            GroupIcon = "People",
+            Order = AdminAppNodeType.PeopleOrder + 20,
             Gates = AdminAppOnly,
         }),
     ];
