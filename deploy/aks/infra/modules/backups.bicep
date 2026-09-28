@@ -193,10 +193,10 @@ resource operatorPostgresRole 'Microsoft.Authorization/roleAssignments@2022-04-0
 }
 
 // 🚨 THE TWO GRANTS PROVISIONING NEEDS, measured missing on 2026-09-09 (the first Provision ever run
-// through the lane, Deployments/pearl-provision-20260909-b): step 3/14 `hosting-federate` —
+// through the lane, Deployments/fabrikam-provision-20260909-b): step 3/14 `hosting-federate` —
 //   AuthorizationFailed: … does not have authorization to perform action
 //   'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write' over
-//   …/userAssignedIdentities/memexaks-portal-mi/federatedIdentityCredentials/hosting-pearl
+//   …/userAssignedIdentities/memexaks-portal-mi/federatedIdentityCredentials/hosting-fabrikam
 // The operator creates ONE federated credential per instance namespace on the PORTAL identity
 // (subject system:serviceaccount:<ns>:memex-portal-sa) so the new portal can reach Key Vault and
 // storage as that identity. That is a write on the portal identity resource — Managed Identity

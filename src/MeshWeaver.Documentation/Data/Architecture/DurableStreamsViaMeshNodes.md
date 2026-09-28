@@ -341,21 +341,21 @@ checked against it:
 ```
 # 🚨 Must be EMPTY, always, not merely after a roll: only an address type DECLARED client-hosted
 # can reach this line, and production declares none. A hit means somebody added a declaration.
-{namespace="memex-cloud"} |= "falling back to the stream publish"
+{namespace="<namespace>"} |= "falling back to the stream publish"
 
 # THE instrument now — a hub whose claim has not landed, once per claim, naming the address.
 # The claim keeps retrying, so a matching "landed after its initial budget was exhausted" line
 # for the same address is the resolution; one without it is a hub still on no transport at all.
-{namespace="memex-cloud"} |= "Pod-hub claim for" |= "did not land"
+{namespace="<namespace>"} |= "Pod-hub claim for" |= "did not land"
 
 # the transient NACK that replaced the publish — windowed to one Warning per address per 60 s
-{namespace="memex-cloud"} |= "was refused: no silo in this cluster is currently serving that hub"
+{namespace="<namespace>"} |= "was refused: no silo in this cluster is currently serving that hub"
 
 # the database feed is up on every pod — one line per pod per LISTEN (re)connect
-{namespace="memex-cloud"} |= "PostgreSQL LISTEN started on mesh_node_changes"
+{namespace="<namespace>"} |= "PostgreSQL LISTEN started on mesh_node_changes"
 
 # the stream-provider failure family this design retires
-{namespace="memex-cloud"} |~ "RegisterAsStreamProducer failed|memorystreamqueue.*Enqueue"
+{namespace="<namespace>"} |~ "RegisterAsStreamProducer failed|memorystreamqueue.*Enqueue"
 ```
 
 ## Stale claims this page corrects

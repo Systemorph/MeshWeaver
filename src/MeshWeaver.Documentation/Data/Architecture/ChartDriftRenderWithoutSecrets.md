@@ -163,8 +163,8 @@ Run 2026-09-18 with this workflow's exact command line against both namespaces:
 
 | namespace | verdict |
 |---|---|
-| `memex` | 19 divergences across 209 compared fields — 15 `SHADOWS`, 1 `CHART-ONLY`, 3 `DIFFERS` |
-| `memex-cloud` | 29 divergences across 233 compared fields — 29 `SHADOWS` |
+| the control instance's | 19 divergences across 209 compared fields — 15 `SHADOWS`, 1 `CHART-ONLY`, 3 `DIFFERS` |
+| the public instance's | 29 divergences across 233 compared fields — 29 `SHADOWS` |
 
 Most are the known `SHADOWS` backlog triaged in [ChartDriftSemantics](../ChartDriftSemantics) — an
 inline `env:` entry duplicating a ConfigMap key the chart also renders, agreeing today and dead
@@ -174,12 +174,12 @@ tomorrow. But the first verdict immediately surfaced something no committed sour
 > **The NodeType bake readiness gate — the one instrument that stops a bad roll — is not in force
 > on either production namespace, for two different reasons.**
 
-- **`memex-cloud`**: the ConfigMap carries `PreWarm__GateReadiness=true` and the pod carries an
+- **The public instance**: the ConfigMap carries `PreWarm__GateReadiness=true` and the pod carries an
   **inline `env` of `false`**. An inline env overrides `envFrom`, so the gate is **off on the pod**
   while the chart, the values files and the ConfigMap all say it is on. This is the
   [#2235](https://github.com/Systemorph/MeshWeaver/issues/2235) shape exactly: every signal green,
   the pod running something else.
-- **`memex`**: the gate is armed on both sides, and the live `startupProbe` was hand-moved to
+- **The control instance**: the gate is armed on both sides, and the live `startupProbe` was hand-moved to
   `/ready` while the chart and the record say `/health` (`DIFFERS startupProbe`: chart
   `/health` timeout 30, live `/ready` timeout 5). `/ready` does not run the `nodetype_bake` check,
   so **the gate is armed and has no reader** — the chart's own comment beside the probe path warns

@@ -44,7 +44,7 @@ Read-only, bounded, and it runs in ~10 ms. It is the same class of instrument as
 🚨 **A run lands on whichever replica hosts the activity hub.** Two runs are comparable only when the
 `pod` and `pid` printed by the census match; a differing pod is a different population, not a trend.
 
-## 2. The decomposition (memex.meshweaver.cloud, pod `…-sd7p4`, 2026-09-10 17:34Z)
+## 2. The decomposition (the public instance, pod `…-sd7p4`, 2026-09-10 17:34Z)
 
 Uptime 89.8 min, working set 5,382 MiB, GC heap 2,396 MiB.
 
@@ -115,7 +115,7 @@ primary stream, retained by nothing that indexes them.
 
 ## 4b. It is NOT [#3593](https://github.com/Systemorph/MeshWeaver/issues/3593) — measured, not assumed
 
-#3593 reports a mass event on one memex-cloud pod in which every affected hub was also a `sync/` hub
+#3593 reports a mass event on one public-instance pod in which every affected hub was also a `sync/` hub
 also at `RunLevel=Started`, reading `Disposal=Pending`, `buffer=1`, `exec=0`: `Dispose()` HAD been
 called and the action block never dequeued the buffered `ShutdownRequest`, so teardown never started
 and *"each pending hub pins its stream, subscriptions and object graph until restart."* Same family,

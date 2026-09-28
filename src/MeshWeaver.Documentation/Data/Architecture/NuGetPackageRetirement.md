@@ -165,8 +165,8 @@ safe to automate at all:
 | `Systemorph/Memex` | `3.0.0-rc2` |
 | `Systemorph/ILS` | `3.0.0-preview1` |
 | `Systemorph/CreditReRate` | `2.5.0` |
-| `Systemorph/PartnerRe.Aviation` | `2.4.0` |
-| `Systemorph/PartnerRe.PropertyFac` | `2.4.0` |
+| a client-specific repository (`<client-repo-a>`) | `2.4.0` |
+| a client-specific repository (`<client-repo-b>`) | `2.4.0` |
 | `Systemorph/Solar` | `1.0.0` / `1.0.1` |
 
 > 🚨 **A floating range is what unlisting would break** — `Version="2.*"`, a versionless

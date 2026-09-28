@@ -26,7 +26,7 @@ in the 34 minutes between two readings.**
 Every comment on #3432 from 2026-09-13 onwards was blocked on the same precondition: a replica
 running a build that carries the fixes, and the census re-run on it. That precondition is now met.
 
-**memex.systemorph.com, pod `memex-portal-deployment-7cb6684584-ztqz8`, pid 1, image
+**The control instance, pod `memex-portal-deployment-7cb6684584-ztqz8`, pid 1, image
 `afde4eabe0740ff658f3dae8a3073c33a2b3ea02`** — which carries `f41f8bda` (#3427),
 [#3952](../ReadPathStreamMinting), `#4300` and `dbdaaacc3` ([#4163](../AHubThatPinsItsOwnCacheEntry)).
 Five readings on the same pod and pid:
@@ -48,7 +48,7 @@ replicas showed (≈16 `sync/` hubs per minute, ≈985/h). **Do not read a slope
 the boundedness — and then read §4, where ONE group inside this flat total is monotone.**
 
 For scale, and stated as the non-comparison it is: the pre-fix readings in #3432 were taken on
-**memex.meshweaver.cloud** — 8 420 `sync/` hubs at 26 h, 4 687 at 90 min, 8 595 at 55 min. This one
+**the public instance** — 8 420 `sync/` hubs at 26 h, 4 687 at 90 min, 8 595 at 55 min. This one
 is a different instance with different load and **cannot be differenced against them**. What it can
 establish, and does, is that on fixed code a replica 14.5 hours old holds 312.
 
@@ -94,8 +94,8 @@ explicit visit budget whose exhaustion is its own bucket — reads every hub on 
     62  CollectionsReference                       39  portal              17  DeepSign
     46  CollectionReference                        28  Doc                 16  Hosting
     30  EntityReference                            28  cache               15  Edu
-    24  ContentCollectionReference                 24  CollaborationNotus  13  Approvals
-    23  LayoutAreaReference                        22  rsalzmann           13  PartnerRe
+    24  ContentCollectionReference                 24  CollaborationInitech  13  Approvals
+    23  LayoutAreaReference                        22  rsalzmann           13  Globex   
     12  JsonPointerReference
      1  SchemaReference
 ```
@@ -269,7 +269,7 @@ restarts and the state being measured is destroyed. The census runs in ~10 ms.
 - **Not a slope.** Five readings minutes apart, each of which the census itself perturbed, measure
   boundedness, not a rate. A rate needs readings hours apart on an unperturbed pod.
 - **Not a like-for-like comparison with #3432's own baselines**, which were taken on
-  memex.meshweaver.cloud — still on `c84c6c05`, still unrolled. The comparative reading this thread
+  the public instance — still on `c84c6c05`, still unrolled. The comparative reading this thread
   has wanted since 2026-09-13 still needs that instance rolled.
 - **Not that `Doc/Architecture` was the only victim.** 24 is what one node hub on one replica had
   accumulated; the defect is in the reference type, so its cost is per content-enabled node hub and

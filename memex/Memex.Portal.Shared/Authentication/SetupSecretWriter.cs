@@ -28,7 +28,7 @@ public interface ISetupSecretWriter
 /// <para>🚨 <b>This needs a write grant the control instance does not have — and the obvious way to
 /// give it is wrong.</b> Measured 2026-09-16 on <c>memexaks-portal-mi</c> (subscription 7ecc5974,
 /// resource group memex-aks-rg): that ONE managed identity carries five federated credentials —
-/// <c>system:serviceaccount:{atioz,memex,memex-cloud,build,pearl}:memex-portal-sa</c>. It is not the
+/// <c>system:serviceaccount:{initech,memex,memex-cloud,build,fabrikam}:memex-portal-sa</c>. It is not the
 /// control instance's identity; it is every portal's identity on that cluster. Granting it
 /// <i>Secrets Officer</i> on the <c>Systemorph</c> vault would give WRITE over every object in that
 /// vault to every instance on the cluster, a CLIENT instance included — the exact opposite of why

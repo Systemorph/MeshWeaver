@@ -27,13 +27,13 @@ public class TokenProvisionedInstanceIsKeyedTest
     [Fact]
     public void ALegacyRegistryToken_IsOperatorProvisioning()
     {
-        // The partnerre-memex shape: PluginCatalog__RegistryUrl + PluginCatalog__RegistryToken from
+        // The client-estate shape: PluginCatalog__RegistryUrl + PluginCatalog__RegistryToken from
         // the client's Key Vault, an instance id, and no BootstrapKey.
         var options = new PluginCatalogOptions
         {
             RegistryUrl = RegistryUrl,
             RegistryToken = "mwi_operator-issued",
-            InstanceId = "partnerre-memex",
+            InstanceId = "globex-memex",
         };
         Assert.True(Keyed(options), "a configured registry token is operator provisioning — no consent step applies");
     }
@@ -41,7 +41,7 @@ public class TokenProvisionedInstanceIsKeyedTest
     [Fact]
     public void ANamedRegistrysOwnToken_IsOperatorProvisioning()
     {
-        var options = new PluginCatalogOptions { InstanceId = "partnerre-memex" };
+        var options = new PluginCatalogOptions { InstanceId = "globex-memex" };
         options.Registries.Add(new PluginRegistryReference { Url = RegistryUrl, Token = "mwi_operator-issued" });
         Assert.True(Keyed(options));
     }

@@ -13,7 +13,7 @@ it on every sync, so nobody but the importer may write it, and the platform refu
 every Admin or Editor grant on it. That rule is right, and it has one blind spot: a Space the
 **platform itself** created.
 
-On 2026-09-12 memex.meshweaver.cloud carried exactly that: `MeshWeaver/_GitSync`, wired by the
+On 2026-09-12 the public instance carried exactly that: `MeshWeaver/_GitSync`, wired by the
 platform in a Space owned by `system-security`, importing the **entire** core repository on every
 green build — hundreds of refused nodes per pass, and pods at 9.9 GiB. The platform administrator
 tried to delete it and got:

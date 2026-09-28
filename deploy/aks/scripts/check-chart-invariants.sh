@@ -125,13 +125,13 @@ COMBOS=(
   # gate was blind to — the probe read config.MEMEX_HOST while the boot opened two SECRET
   # connection strings naming neither. Invariant 16 asserts the probe covers both.
   "a dedicated orleans server (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.dedicated-orleans-host.yaml"
-  # 🚨 The Key Vault case (pearl, 2026-09-15): an external database whose connection string comes
+  # 🚨 The Key Vault case (fabrikam, 2026-09-15): an external database whose connection string comes
   # from a CSI SecretProviderClass, not from the values — the shape of EVERY record-driven Provision,
   # and the one no combination here rendered. #4173 derived the probe from the values' string, which
-  # here is the chart's in-cluster default, and pearl's pods waited forever for memex-postgres-service.
+  # here is the chart's in-cluster default, and fabrikam's pods waited forever for memex-postgres-service.
   # Invariants 16 and 17 assert the probe is the record-rendered MEMEX_HOST and never that Service.
-  "a Key Vault connection string, record-driven (the pearl shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
-  # 🚨 A public host and its certificate (pearl, 2026-09-15). The ingress must ASK cert-manager for
+  "a Key Vault connection string, record-driven (the fabrikam shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
+  # 🚨 A public host and its certificate (fabrikam, 2026-09-15). The ingress must ASK cert-manager for
   # the Secret it names in spec.tls; an ingress that names one nobody issues is served the
   # controller's fallback — another instance's certificate — and every browser refuses it. The
   # opt-out shape is here too, because "no issuer" must be a statement, never an omission.
@@ -142,7 +142,7 @@ COMBOS=(
   # connection strings are COMPOSED in the containers' env from a Secret the chart does not render.
   # Invariant 19 asserts the credentials are defined before the strings that expand them, and that
   # the gate probes the host those strings name.
-  "the instance's own database release (the pearl shape after 2026-09-15, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.incluster-db-release.yaml"
+  "the instance's own database release (the fabrikam shape after 2026-09-15, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.incluster-db-release.yaml"
   # 🚨 The control instance on the ACTIONS executor (Plugins#1738): the operator Job OFF and the
   # executor switched to aks-ops.yml through the GitHub App. The only combination that sets
   # `hostingOperator.executor`, so without it the one render that must carry
@@ -320,9 +320,9 @@ fi
 # ---------------------------------------------------------------------------
 REFUSALS=(
   "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
-  "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
+  "an external database with neither a values connection string nor a MEMEX_HOST (the fabrikam refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
   "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
-  "a TLS secret with no issuer reaching the ingress (the pearl certificate refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-no-issuer.yaml|NO issuer reaches the ingress"
+  "a TLS secret with no issuer reaching the ingress (the fabrikam certificate refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-no-issuer.yaml|NO issuer reaches the ingress"
   "a database release AND the bundled Postgres (two answers to which database)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.db-release-with-bundled-postgres.yaml|exclusive with postgres.enabled"
   # Plugins#1738: an executor the portal would silently read as Job must fail the render.
   "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
@@ -371,7 +371,7 @@ fi
 DB_CHART="$REPO/deploy/helm-db"
 if [ -d "$DB_CHART" ]; then
   db_out="$WORK/db-release.yaml"
-  if helm template pearl-db "$DB_CHART" --namespace pearl --set database=pearl > "$db_out" 2> "$db_out.err"; then
+  if helm template fabrikam-db "$DB_CHART" --namespace fabrikam --set database=fabrikam > "$db_out" 2> "$db_out.err"; then
     db_ok=1
     for want in 'kind: Cluster' 'instances: 2' 'podAntiAffinityType: "required"' 'topologyKey: topology.kubernetes.io/zone' \
                 'workload: db' 'effect: NoSchedule' 'CREATE EXTENSION IF NOT EXISTS vector' 'storageClass: "memex-db-premiumv2"'; do
@@ -385,7 +385,7 @@ if [ -d "$DB_CHART" ]; then
     report "the database release chart does not render at all:"
     sed 's/^/    /' "$db_out.err"
   fi
-  if helm template pearl-db "$DB_CHART" --namespace pearl > "$db_out" 2> "$db_out.err"; then
+  if helm template fabrikam-db "$DB_CHART" --namespace fabrikam > "$db_out" 2> "$db_out.err"; then
     report "the database release chart RENDERED with no database name — it must refuse instead"
   elif grep -q "must be a plain lower-case PostgreSQL identifier" "$db_out.err"; then
     ok "the database release chart — refuses a release with no database name"

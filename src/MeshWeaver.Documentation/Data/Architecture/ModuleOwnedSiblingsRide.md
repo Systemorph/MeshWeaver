@@ -297,7 +297,7 @@ the whole catalog. Core CD's four composed modules opt into that workspace expli
 `Northwind` and `Blazor.Chat` use it instead of rebuilding their shared siblings through the SDK
 path. The three rows above remain the measured failure, not the resulting topology.
 
-Measured on `memex.meshweaver.cloud`, 2026-09-10: **one pod held
+Measured on the public instance, 2026-09-10: **one pod held
 `MeshWeaver.Markdown.Collaboration` in 15 copies and THREE builds**, and the three groups match the
 three compilations entry for entry — 12 copies riding the `rest` lane's container modules, 2 sharing
 the `floor` lane's build (the declared module and its ride inside `MeshWeaver.AI`), 1 riding the one
@@ -309,7 +309,7 @@ Two consequences, both measured:
 * **The bake host picks one by arrival order, and its pick becomes the contract.** The gate and bake
   lanes compose every module into `/ext/<Name>/` and hand them all to one process, which loads the
   first copy it sees and stamps `mvid:` of THAT build into every NodeType's dependency record. On
-  memex the bundles named a build (`798f92a0…`) that was on no pod at all.
+  the control instance the bundles named a build (`798f92a0…`) that was on no pod at all.
 * **Two replicas holding two builds never converge.** Each declines the other's record
   (`HasStaleFrameworkBuild`), recompiles locally, stamps its own — `v2031 → v2050 → v2053`,
   alternating between two `compiledModulesHash` values with `currentSourceFingerprint` constant. Every

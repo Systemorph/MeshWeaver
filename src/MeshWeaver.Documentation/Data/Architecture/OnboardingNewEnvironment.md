@@ -9,7 +9,7 @@ Category: Architecture
 
 A "new environment" is an additional Memex portal — its own domain, database, and
 sign-in — running on the **shared AKS cluster** (`<aks-cluster>` / `<aks-resource-group>`,
-swedencentral).
+`<region>`).
 
 > 🚨 **This page is the MECHANISM, not the runbook.** Per-environment folders moved OUT of this
 > repository on 2026-08-08/09 (commit `a69959165`) — their directory names are tenant identities.
@@ -59,7 +59,7 @@ each one carries:
 ## 2. Provision Azure (control-plane; no cluster access needed)
 
 ```bash
-RG=<aks-resource-group>; PG=<pg-server>; KV=Systemorph; ZONE=meshweaver.cloud
+RG=<aks-resource-group>; PG=<pg-server>; KV=<vault>; ZONE=<dns-zone>
 INGRESS_IP=$(az aks command invoke -g $RG -n <aks-cluster> \
   --command "kubectl get svc -n app-routing-system nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'" --query logs -o tsv | tr -d '\r\n ')
 # 1. Database on the shared server
@@ -223,8 +223,8 @@ secrets:
   env can never lock itself out — then invites others. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding).
 - **Email** (`Email__Enabled=true` + Graph `Mail.Send` app): invitations email. The mailbox the
   portal sends and receives as (`Email__MailboxAddress`) must be a **real mailbox in the tenant**
-  (`meshweaver.cloud` is not a mailbox domain; `no-reply@systemorph.com` does not exist — use a
-  real/shared mailbox). The Graph app needs the **`Mail.Send` application permission + admin
+  (a DNS zone that only serves portals is not a mailbox domain, and an invented `no-reply@…` address
+  does not exist — use a real/shared mailbox). The Graph app needs the **`Mail.Send` application permission + admin
   consent** (plus **`Mail.ReadWrite`** if you also enable the inbound channel via
   `Email__InboundEnabled=true`).
 

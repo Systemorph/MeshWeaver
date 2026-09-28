@@ -27,7 +27,7 @@ learns which file is missing. This page is the other direction — the operator 
 
 ## What it cost
 
-**Measured on `memex.systemorph.com`, 2026-09-15.** One file —
+**Measured on the control instance, 2026-09-15.** One file —
 `Hosting/Deployment/Source/SelfUpdateRouting.cs` — contained a literal NUL byte (0x00), which
 PostgreSQL cannot store in a text column. That one row was refused while forty landed. Five Hosting
 NodeTypes parked on the symbol it would have declared, and **only one of them owned the file**:

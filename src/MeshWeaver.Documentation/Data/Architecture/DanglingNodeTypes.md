@@ -17,7 +17,7 @@ An instance can carry a `nodeType` that resolves to **nothing**. It is not an er
 > the node reads as `Unavailable` rather than *failing*, the view renders empty, and a reactive wait
 > never completes. Nothing in that picture names the type that is missing.
 
-That is why the live example on production — `rbuergi/_Draft/PartnerRe_EslProposalQA`, carrying
+That is why the live example on production — `rbuergi/_Draft/Globex_TeamProposalQA`, carrying
 `nodeType: EmailDraft` — sat unexplained. There were **two** ways to get there, and each had a real
 counterparty, which is why issue #2993 was filed as a decision rather than fixed as a patch.
 
@@ -147,11 +147,11 @@ fix.
 
 **The first decision (2026-08-28) was "prune, and report": the deletion proceeded and the instances
 it stranded were named.** It was revised on 2026-09-08 after it did exactly that on
-`memex.systemorph.com`:
+the control instance:
 
 ```
 20:29:14Z [StaticRepoImport] Crm: ⚠ Pruned 1 NodeType(s) that still have instances — those instances
-          are now STRANDED … 'Crm/Mail' (1): PartnerRe/Esl/DueDiligenceMail.
+          are now STRANDED … 'Crm/Mail' (1): Globex/Team/DueDiligenceMail.
 ```
 
 The Crm repository had retired `Crm/Mail` two days earlier — deliberately, with its one live record
@@ -303,7 +303,7 @@ quotes. Refusing the bare form costs nothing that works, and that reading is wha
 The predicate refuses writes, so the thing it may never refuse is the platform's own node types.
 Measured read-only across both meshes:
 
-| bare value | control instance | memex-cloud | what `get @<value>` returns |
+| bare value | control instance | public instance | what `get @<value>` returns |
 |---|---|---|---|
 | `Feedback` | 22 over 107 readable partitions | 1 over 129 | a `Store/Plugin` node (`PluginContent`) |
 | `Agent` | 43 | 48 | a **`Space`** node |

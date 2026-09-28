@@ -781,7 +781,7 @@ def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label, cfg_obj=None):
                 f"('{cfg_host or 'blank'}')",
                 "the connection string then arrives from Key Vault, whose host the chart cannot read, "
                 "so MEMEX_HOST is the only rendered address of the server the process opens. Without "
-                "it the gate waits for a Service this release does not render (pearl, 2026-09-15).",
+                "it the gate waits for a Service this release does not render (fabrikam, 2026-09-15).",
             )
         for key in shadowed:
             unshadowed, opaque = _shadowing(obj, kind_name, key)
@@ -832,7 +832,7 @@ _probe_coverage(
 )
 
 # ---- 17. the in-cluster Postgres is probed ONLY when the chart renders it ----
-# 🚨 pearl, 2026-09-15: a record-driven instance (connection string in Key Vault, none in values) on
+# 🚨 fabrikam, 2026-09-15: a record-driven instance (connection string in Key Vault, none in values) on
 # chart 0a45bccfc rendered `for g in memex-postgres-service:5432` into BOTH init containers, on a
 # release that renders no such Service. `nc` never resolves it, so the gate neither passes nor
 # fails — it spins, and the rollout waits until its deadline with nothing red anywhere.

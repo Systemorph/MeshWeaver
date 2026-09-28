@@ -103,7 +103,7 @@ One extension turns any hub configuration into a participant. Give the hub a **p
 ```csharp
 var participant = host.CreateMessageHub(
     AddressExtensions.CreatePortalAddress("my-device"),
-    config => config.UseSignalRClient("https://memex.meshweaver.cloud/signalr",
+    config => config.UseSignalRClient("https://portal.example.com/signalr",
         builder => builder.WithUrl(/* … Bearer token … */)));
 ```
 

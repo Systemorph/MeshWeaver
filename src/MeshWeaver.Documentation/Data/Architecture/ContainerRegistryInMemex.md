@@ -49,7 +49,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > **CONSUMED (2026-09-08, maintainer directive):** every installation EXCEPT the one hosting the
 > registry pulls its platform images from `cr.meshweaver.cloud` — when it is created AND when it
 > self-updates. The consumption order is fixed by the bootstrap constraint below: **the hosting
-> instance (`memex.meshweaver.cloud`, whose release runs the registry pods) stays on ACR until the
+> instance (the plugin registry instance, whose release runs the registry pods) stays on ACR until the
 > registry serves its own boot image from outside the cluster; every other instance moves now.** What this increment adds, per repo:
 >
 > * **Chart** (`deploy/helm`, this repo): `selfUpdate.registry` → `SelfUpdate__Registry`
@@ -95,7 +95,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 >
 > **PUBLISHED (2026-09-08): CD publishes every image AND every sealed bundle publication to
 > `cr.meshweaver.cloud`, beside ACR** — the last step of the fleet-registry program (#3353).
-> Nothing is rebuilt for the second registry and ACR is not dropped: `memex.meshweaver.cloud`
+> Nothing is rebuilt for the second registry and ACR is not dropped: the plugin registry instance
 > hosts the registry pods and keeps pulling from ACR (the bootstrap constraint above), while
 > every other installation pulls from cr.
 >
@@ -127,7 +127,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 >   the push when it is unset — and provisioned in BOTH secret stores (Actions AND Dependabot) of
 >   every repository that calls the lane. `registry-login.sh` refuses a rejected password
 >   immediately rather than retrying it for the transport window.
-> * **Still on ACR, by design:** `memex.meshweaver.cloud` itself (bootstrap); `gate`'s
+> * **Still on ACR, by design:** the hosting instance itself (bootstrap); `gate`'s
 >   completeness probe and `verify-images` (`check-image-set.sh` reads ACR through ARM — the set's
 >   completeness is decided on the producer's first registry, and cr holds the same digests by the
 >   readback above); the release promotion (`release.yml` retags ACR + GHCR — promoting a sealed
@@ -169,7 +169,7 @@ config and the identity are both correct. The pin is 3.1.1.
    in a `POST` with an empty JSON body to `registry.validationUrl` — by default the portal's
    key→token exchange, `https://memex.meshweaver.cloud/api/instances/token` (the
    `SyncTokenPayloads` contract; an empty body is a valid request). The plugin catalog is not the
-   validator because it renders in full — measured 2026-09-08 against `memex.meshweaver.cloud`,
+   validator because it renders in full — measured 2026-09-08 against the plugin registry instance,
    14–18 s for a valid key against the validator's 10 s cap, while the exchange answers a valid
    key in 0.2 s and a bad one in 0.1 s. `200` authenticates, `401`/`403` denies,
    and **anything else is exit 3, an ERROR, never a pass** — a DNS failure, a timeout or a 5xx
@@ -181,7 +181,7 @@ registry with the same key it already holds for the plugin registry — the cred
 argument above, closed without the mirror.
 
 🚨 **And because the validator is ANOTHER host, the consuming side needs a declaration.** The image
-registry (`cr.meshweaver.cloud`) and the plugin registry (`memex.meshweaver.cloud`) are two different
+registry (`cr.meshweaver.cloud`) and the plugin registry (the portal that hosts the plugin catalog) are two different
 hosts by design, so an installation's self-updater will not present its key to the registry until the
 record declares which portal validates it there — `SelfUpdate:RegistryValidationUrl`, this registry's
 own `validationUrl`. Without it the instance boots, pulls, and then never self-updates (#4093). The

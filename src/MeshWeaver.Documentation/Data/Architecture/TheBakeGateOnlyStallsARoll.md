@@ -1,7 +1,7 @@
 ---
 Name: The Bake Gate Only Stalls a Roll
 Category: Architecture
-Description: Why the NodeType bake readiness gate took memex.systemorph.com fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, and why its verdict is read by readiness alone and never by the startup probe.
+Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, and why its verdict is read by readiness alone and never by the startup probe.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
 ---
 
@@ -13,7 +13,7 @@ whole control instance down ([#5544](https://github.com/Systemorph/MeshWeaver/is
 
 ## What happened
 
-After the V58 migration on `memex.systemorph.com`:
+After the V58 migration on the control instance:
 
 - the new `ci.9332` pod refused readiness with `1 NodeType(s) regressed on this image: BinaryClickerV2/BinaryToggle`;
 - the last pod of the previous image (`ci.9218`) then restarted and refused ITS OWN readiness with
@@ -97,7 +97,7 @@ finally says `Error`. That ends the loop in defect 2.
 ## What the refusal looked like from outside: a death every 3.03 hours
 
 The refusal had one more cost, and it was mistaken for a separate fault. Between 2026-09-25 ~18:00Z
-and the break-glass at 04:05Z, every memex portal container on both images died about **3.03 h after
+and the break-glass at 04:05Z, every control-instance portal container on both images died about **3.03 h after
 it booted**. There was no crash dump for these deaths. Silo departures of this kind produce the
 Orleans timeout family filed as [#5704](https://github.com/Systemorph/MeshWeaver/issues/5704)
 (folding #5709, #5730, #5705). That issue was opened from earlier, 2026-09-24 samples, so most of
@@ -112,7 +112,7 @@ budget.** The readings, all taken 2026-09-26:
 
 | reading | value |
 |---|---|
-| memex `startupProbe` (from the record, `deployments/aks/memex/values.memex.public.yaml`) | `/health`, `periodSeconds: 10`, `failureThreshold: 1080`, so **10 800 s = 3 h** |
+| the control instance's `startupProbe` (from the record, its `values.<instance>.public.yaml` overlay) | `/health`, `periodSeconds: 10`, `failureThreshold: 1080`, so **10 800 s = 3 h** |
 | boots of `7bd794f9b5-ggf88` (`[PlatformStartup]`) | 17:58 → 20:59 → 00:01 → 03:03, a 3 h 01–02 m period |
 | its `[LIVENESS]` heartbeat (10 s) | reaches tick ~1085 and never 1088+, so death comes at about 10 850 s |
 | its log, once per 10 s up to its last minute (e.g. 05:51:57Z) | `Health check nodetype_bake with status Unhealthy … 1 NodeType(s) regressed on this image: BinaryClickerV2/BinaryToggle` |
@@ -161,7 +161,7 @@ serving, and nothing is killed. A restarted pod of the previous image keeps serv
 the startup probe it must pass no longer carries the verdict.
 
 The two rules above made the gate unable to refuse on the serving image. They could not stop the
-second failure: the verdict rode the startup probe. On memex the startup probe read `/health` with
+second failure: the verdict rode the startup probe. On the control instance the startup probe read `/health` with
 `periodSeconds 10 × failureThreshold 1080`, a three-hour budget. A startup probe that never records
 a success kills the container at the end of that budget and restarts it into the same verdict. So
 from 2026-09-25 ~18:00Z every portal container of both images died 3.03 h after it booted, and a
@@ -205,15 +205,15 @@ restarted pod of the serving image had to pass the same probe. The control insta
 
 With the gate on readiness, the startup budget no longer has to cover a bake. It covers a plain cold
 boot only. Both AKS instances that ran the three-hour budget now carry **`failureThreshold: 60`**
-(`periodSeconds: 10`, so **600 s**) in their records in Systemorph/Memex:
-`deployments/aks/memex/values.memex.public.yaml` (Memex #547) and
-`deployments/aks/memex-cloud/values.memexcloud.public.yaml` (Memex #549). The records keep the old
+(`periodSeconds: 10`, so **600 s**) in their records in the deployments repository:
+the control instance's `values.<instance>.public.yaml` (Memex #547) and
+the public instance's (Memex #549). The records keep the old
 1080 rationale as a comment, marked superseded, so a reader who finds 1080 in an older render knows
 why it existed.
 
 That budget is safe only on an image that carries the WHOLE readiness-only split: #5749 for the bake
 gate and #5754 for `required_modules`. On an image missing #5749 the gate still rides `/health`, and
-a bake outlasts 600 s: on memex-cloud a pod's bake-report sweep was stamped about 21.5 min after the
+a bake outlasts 600 s: on the public instance a pod's bake-report sweep was stamped about 21.5 min after the
 pod booted. On an image missing #5754, a required module that arrives late still fails the startup
 probe inside the shorter budget. So arm the gate on an instance only once its running image carries
 both, and never roll such an instance back to an older image with the gate
@@ -268,7 +268,7 @@ later incident can see what was already fixed.
 |---|---|
 | A type that had never built (`BinaryClickerV2/BinaryToggle`, #3883) read as a regression, and the serving image refused its own readiness | #5725: the two rules. A regression needs a working build from an older image, and an image that has served here never refuses itself |
 | The gate's verdict rode the startup probe, so every refused container was killed at `periodSeconds × failureThreshold` (10 s × 1080 = 3 h), on both images | #5749: the gate holds readiness only (policy `bake-gate-readiness-only`). #5754 put `required_modules` under the same rule (policy `required-modules-readiness-only`). Sample reports how each container's previous run ended (Plugins #2397) |
-| The previous image was not a safe fallback: a serving pod that crashed for another reason (#4654) had to pass the same probe, and could not | the same split: a restarted previous-image pod no longer meets the verdict on its startup probe. The startup budget went back to a cold boot, 600 s, on memex and memex-cloud (Memex #547, #549) |
+| The previous image was not a safe fallback: a serving pod that crashed for another reason (#4654) had to pass the same probe, and could not | the same split: a restarted previous-image pod no longer meets the verdict on its startup probe. The startup budget went back to a cold boot, 600 s, on the control and public instances (Memex #547, #549) |
 
 Two conditions made the recovery slower than the fix. The migrate-first roll plan could not reach
 the control instance, because the Hosting sources that carried it were held behind a seal; see

@@ -19,7 +19,7 @@ live incident, and the data carried its own refutation the whole time.
 ## The measured case
 
 [#3931](https://github.com/Systemorph/MeshWeaver/issues/3931) — every cold `/api/content` read on
-`memex.meshweaver.cloud` 503ing after ~10.2 s — needed the discriminator from
+the public instance 503ing after ~10.2 s — needed the discriminator from
 [The /api/content 503](../ContentRoute503). The issue reports:
 
 > `search 'nodeType:Hosting/LogEntry partitions:all'` on that portal returns only `Received
@@ -33,10 +33,10 @@ this node, `Ops/AssessmentRoutingLogs20260909`, created the previous evening and
 
 ```json
 { "$type": "InstanceActionContent",
-  "deployment": "Deployments/memex-cloud",
+  "deployment": "Deployments/<public>",
   "query": "SelfAssessment|LearningJourney|OrleansMeshChangeFeed",
   "sinceMinutes": 30, "limit": 100,
-  "logQl": "{namespace=\"memex-cloud\"} |~ \"(?i)SelfAssessment|LearningJourney|OrleansMeshChangeFeed\"",
+  "logQl": "{namespace=\"<public-ns>\"} |~ \"(?i)SelfAssessment|LearningJourney|OrleansMeshChangeFeed\"",
   "entryCount": 13, "truncated": false, "state": "Done" }
 ```
 
@@ -49,7 +49,7 @@ window because the run ended two hours before it.
 🚨 **The entry itself says so.** `LogEntryContent.Selector` exists for exactly this — *"kept so an
 entry can always be traced back to the query that produced it — and so a bad selector is diagnosable
 from the data it wrote"* — and every one of the 13 rows carries
-`{namespace="memex-cloud"} |~ "(?i)SelfAssessment|LearningJourney|OrleansMeshChangeFeed"`. A
+`{namespace="<public-ns>"} |~ "(?i)SelfAssessment|LearningJourney|OrleansMeshChangeFeed"`. A
 regex naming three unrelated subsystems is not an ingest rule. **Read `content.selector` before
 reading a `Hosting/LogEntry` population as evidence**; it is the denominator, printed on every row.
 
@@ -57,11 +57,11 @@ reading a `Hosting/LogEntry` population as evidence**; it is the denominator, pr
 
 | Portal | `Ops/Logs` rows | Produced by |
 |---|---|---|
-| memex.meshweaver.cloud | **13** | ONE `Logs` action (above): `entryCount: 13`, `truncated: false` — a complete answer to a question about assessment routing |
-| memex.systemorph.com (control instance) | **2 498** | many runs — three of them the `Hosting/Script/ingest-logs` script, recognisable because its bursts are exactly 120 × namespaces (360 on 08-12, 240 on 09-03, 240 on 09-08); the rest `Logs` actions |
+| the public instance | **13** | ONE `Logs` action (above): `entryCount: 13`, `truncated: false` — a complete answer to a question about assessment routing |
+| the control instance | **2 498** | many runs — three of them the `Hosting/Script/ingest-logs` script, recognisable because its bursts are exactly 120 × namespaces (360 on 08-12, 240 on 09-03, 240 on 09-08); the rest `Logs` actions |
 
-**Every one of the 30 actions named `Logs …` on the control instance targets `memex` — 24 of them
-that same day, and not one has ever targeted `memex-cloud`.** That is the whole reason the incident
+**Every one of the 30 actions named `Logs …` on the control instance targets the control instance's own namespace — 24 of them
+that same day, and not one has ever targeted the public instance.** That is the whole reason the incident
 portal's `Ops/Logs` looked empty of everything: the instrument is in daily use, and it had simply
 never been pointed there.
 
@@ -95,8 +95,8 @@ two adjacent nodes 68 µs apart:
 
 | Node | `content.level` | `content.category` | `content.message` |
 |---|---|---|---|
-| `Ops/Logs/memex-1789041621188149431-fd958f-b2z6v` | `Information` | `MeshWeaver.Mesh.CreateNode` | `info: MeshWeaver.Mesh.CreateNode[0]` |
-| `Ops/Logs/memex-1789041621188217895-fd958f-b2z6v` | *(empty)* | *(empty)* | `      Node created at Admin/_Notification/… by system-security` |
+| `Ops/Logs/<ns>-1789041621188149431-fd958f-b2z6v` | `Information` | `MeshWeaver.Mesh.CreateNode` | `info: MeshWeaver.Mesh.CreateNode[0]` |
+| `Ops/Logs/<ns>-1789041621188217895-fd958f-b2z6v` | *(empty)* | *(empty)* | `      Node created at Admin/_Notification/… by system-security` |
 
 Three consequences, all of them things a reader will otherwise get wrong:
 
@@ -140,11 +140,11 @@ queue depth.
 Ask for that line:
 
 ```json
-{ "id": "memex-cloud-logs-contentroute", "namespace": "Ops/Actions",
-  "name": "Logs memex-cloud — the /api/content read budget lapse and its Reader snapshot",
+{ "id": "public-logs-contentroute", "namespace": "Ops/Actions",
+  "name": "Logs <public> — the /api/content read budget lapse and its Reader snapshot",
   "nodeType": "Hosting/InstanceAction",
   "content": { "$type": "InstanceActionContent",
-    "deployment": "Deployments/memex-cloud",
+    "deployment": "Deployments/<public>",
     "requestedAction": "Logs",
     "query": "Reading content collection config from",
     "sinceMinutes": 240, "limit": 200,
@@ -177,15 +177,15 @@ ran there**, which is why the same query answers 2 498 rows on one and 13 on the
 
 🚨 **Two different naming systems collide here, and reading one as the other is the mistake.**
 
-| Thing | `memex` names… | `memex-cloud` / `systemorph` names… |
-|---|---|---|
-| **MCP server name** | memex.**meshweaver.cloud** — the public portal | `systemorph` → memex.systemorph.com, the control instance |
-| **`Deployments/<id>` record** | a record whose `Logs` runs resolve to `{namespace="memex"}` — not the public portal | `Deployments/memex-cloud`: `content.host` reads **memex.meshweaver.cloud**, namespace `memex-cloud` (measured 2026-09-10) |
+| Thing | What it names |
+|---|---|
+| **MCP server name** | the portal the server connects to — on the fleet measured here, the MCP server named after the product was the PUBLIC instance, and the control instance's server carried a different name |
+| **`Deployments/<id>` record** | a record whose `Logs` runs resolve to `{namespace="<ns>"}` of the record's own choosing — measured 2026-09-10, the record sharing the public MCP server's name was NOT the public portal, and the public instance's record ran in a namespace with a third name |
 
-So the MCP server called `memex` and the deployment record called `memex` are **different portals**.
+So an MCP server and a deployment record with the same name can be **different portals**.
 Never infer a namespace from a name — the `ingest-logs` script carries the same warning for the
-older record ids (*"the record called `meshweaver` runs in namespace `memex-cloud`, and
-`systemorph` runs in `memex`"*), and a `Logs` run attributes one portal's lines to another exactly
+older record ids (one record id ran in a namespace named after another), and a `Logs` run
+attributes one portal's lines to another exactly
 as confidently as a correct one. Confirm the portal (`/api/version`, or the record's own `host`)
 before drawing any conclusion from a read — see
 [Operating from the portal, not the cluster](../OperatingFromThePortal).
@@ -214,16 +214,16 @@ instance, within four minutes of each other, `truncated: false` throughout:
 
 | run | LogQL | `sinceMinutes` | `entryCount` |
 |---|---|---|---|
-| 07:42:03Z | `{namespace="memex"} \|~ "(?i)Failed to compile assembly for node"` | 2880 | **0** |
-| 08:10:13Z | `{namespace="memex-cloud"} \|~ "(?i)Failed to compile assembly for node"` | 2880 | **0** |
-| 08:12:05Z | `{namespace="memex-cloud"} \|~ "(?i)ObserverExpiryTests"` | 2880 | **0** |
-| 08:11:25Z | `{namespace="memex"} \|~ "(?i)Health check content-types"` | 60 | 2 |
-| 08:11:29Z | `{namespace="memex"} \|~ "(?i)Health check content-types"` | 2880 | 14 |
+| 07:42:03Z | `{namespace="<control-ns>"} \|~ "(?i)Failed to compile assembly for node"` | 2880 | **0** |
+| 08:10:13Z | `{namespace="<public-ns>"} \|~ "(?i)Failed to compile assembly for node"` | 2880 | **0** |
+| 08:12:05Z | `{namespace="<public-ns>"} \|~ "(?i)ObserverExpiryTests"` | 2880 | **0** |
+| 08:11:25Z | `{namespace="<control-ns>"} \|~ "(?i)Health check content-types"` | 60 | 2 |
+| 08:11:29Z | `{namespace="<control-ns>"} \|~ "(?i)Health check content-types"` | 2880 | 14 |
 
 The last pair is the window control: 2 lines at an hour, 14 at 48 — **`sinceMinutes` is honoured and
 is not silently capped**, so the three zeros were asked over a window that really does reach back.
 And the lines they asked for exist: `Admin/_LogIncident/c0b1424c7beb28e0` holds LogWatch `samples[]`
-captured from `memex-cloud` pod `memex-portal-deployment-6d7497cb58-jc296` at **05:20:34Z** and
+captured from a public-instance pod `memex-portal-deployment-6d7497cb58-jc296` at **05:20:34Z** and
 **05:22:40Z** the same morning — under three hours before the queries — each one beginning
 `fail: MeshWeaver.Graph.Configuration.MeshNodeCompilationService[0]` and carrying both
 `Failed to compile assembly for node 'Hosting/InstanceAction'.` and

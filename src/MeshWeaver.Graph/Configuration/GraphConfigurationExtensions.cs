@@ -341,7 +341,7 @@ public static class GraphConfigurationExtensions
                 // has always refused a NodeType that names nothing; update refused nothing, so
                 // `update` was a supported route to CREATE a node whose type resolves to nothing —
                 // which has no per-node hub, reads as Unavailable rather than failing, and renders
-                // empty with nothing naming why (prod: rbuergi/_Draft/PartnerRe_EslProposalQA,
+                // empty with nothing naming why (prod: rbuergi/_Draft/Globex_TeamProposalQA,
                 // nodeType 'EmailDraft'). It judges a CHANGE of NodeType, never a state, so the
                 // one repair route for an already-mistyped node (a full-node update naming a type
                 // that DOES resolve — `patch` refuses nodeType outright) stays open. Scoped, like

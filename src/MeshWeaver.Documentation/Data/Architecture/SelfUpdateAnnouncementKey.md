@@ -16,8 +16,8 @@ failures with, and every portal's Feedback plugin signs feedback with. A signatu
 **possession, not identity** (MeshWeaver.Plugins#1913).
 
 That is tolerable for a portal Systemorph administers. It is not for a customer-administered pod
-(`pearl`): handing it the fleet secret would let whoever administers that pod forge build facts,
-triage events and self-update announcements for **any** deployment. So `pearl` stayed on hand rolls
+(an SME client instance, `fabrikam`): handing it the fleet secret would let whoever administers that pod forge build facts,
+triage events and self-update announcements for **any** deployment. So that instance stayed on hand rolls
 (MeshWeaver#5757) until it could announce with a key of its own.
 
 ## The shape
@@ -39,7 +39,7 @@ triage events and self-update announcements for **any** deployment. So `pearl` s
    build fact, a bundle publication, a triage/feedback event or an aks-ops callback that verifies
    only with a deployment key is refused, logged and deleted: it opens nothing.
 2. **The key is selected by the deployment the event NAMES**, so a key can only ever verify events
-   naming its own deployment. `pearl`'s key signing an event that names `build` verifies with no key
+   naming its own deployment. `fabrikam`'s key signing an event that names the build instance verifies with no key
    and is refused.
 3. **The record must claim the key.** A deployment-key announcement is acted on only when the record
    it resolves to IS that deployment and declares `announcementKeySecret`; otherwise it is refused
@@ -47,7 +47,7 @@ triage events and self-update announcements for **any** deployment. So `pearl` s
 4. **A record that declares its own key is no longer announceable with the fleet secret.** This is
    the per-record half of Plugins#1913's phase 3: possession of the fleet secret no longer announces
    for that deployment. A record that declares nothing keeps the fleet-secret path — the migration
-   bridge for the instances that hold it today (`memex-cloud`, `build`).
+   bridge for the instances that hold it today (the public instance, the build instance).
 
 ## Generating, registering and testing the key — in the portal
 
@@ -55,7 +55,7 @@ The key is generated WHERE IT IS USED TO SIGN — on the deployment, by its own 
 the control instance only registers it. Nobody mints, copies or mounts it by hand, and nobody needs
 vault access or cluster access.
 
-1. **The record declares the key.** `Deployments/<id>` carries `announcementKeySecret` (e.g. `pearl-Hosting-AnnouncementKey` — the claim; it names
+1. **The record declares the key.** `Deployments/<id>` carries `announcementKeySecret` (e.g. `fabrikam-Hosting-AnnouncementKey` — the claim; it names
    the object an OPTIONAL mount would read, below). Without the
    declaration, rule 3 refuses every announcement signed with the key, and the Announcement key section says so.
 2. **Generate** (the deployment, its own global administrator). **/Admin/Settings/ControlLane** →
@@ -121,8 +121,8 @@ The declaration switches the fleet secret off for that record (rule 4). For a FL
 announces with the fleet secret today, have its administrator generate the key and register it BEFORE the
 declaration merges. Otherwise its announcements are refused until the key is registered.
 
-**Where this stands:** read `/Hosting/Integrations/Deployment/pearl` on the control instance. Its
-**Announcement key** section says whether a key is registered and when pearl last verified with it. That is the reading, not
+**Where this stands:** read `/Hosting/Integrations/Deployment/<id>` on the control instance. Its
+**Announcement key** section says whether a key is registered and when that deployment last verified with it. That is the reading, not
 this page.
 
 ## Owner actions — all in the portal

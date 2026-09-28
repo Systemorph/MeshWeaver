@@ -24,7 +24,7 @@ last two is the whole design: an `Absent` is a verdict the endpoint renders as 4
 ## What was wrong (#3119)
 
 Until 2026-09-02 each leg was a one-shot `GetDataRequest` to the owning per-node hub with a ten-second
-budget, and the verdict was memoised for one minute per key. Measured on memex-cloud, 14:05–15:25Z:
+budget, and the verdict was memoised for one minute per key. Measured on the public instance, 14:05–15:25Z:
 the portal pods were running the unanchored cross-schema fan-outs inventoried on #2194 (`[CrossSchema]
 SLOW` 810 / 552 / 783 per ten minutes on three pods, one pod at 11.7 GB with 104 GC stalls in half an
 hour), and under that load the owning hub of the CI instance's node did not answer inside ten seconds.

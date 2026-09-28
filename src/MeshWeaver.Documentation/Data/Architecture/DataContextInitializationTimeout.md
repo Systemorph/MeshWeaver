@@ -112,7 +112,7 @@ The claim just above — that the leg "separates a storage read never came back 
 never answered" — was not true for the case that matters most. A per-node hub has ONE leg, `…/MeshNode`,
 and that leg is `MeshNodeTypeSource.Initialize`: the durable read **concatenated ahead of** the
 routing-supplied own-node stream (above). The first attributed production sample after the ledger
-shipped, `Collaboration` on memex-cloud (2026-09-21 17:06:24Z, Systemorph/MeshWeaver#1122), read
+shipped, `Collaboration` on the public instance (2026-09-21 17:06:24Z, Systemorph/MeshWeaver#1122), read
 *"type-source legs still outstanding: 7j8ehN2m0UCo51iBcrGL2A/MeshNode"* — and could be either.
 
 A type source that implements `IReportsInitialLoadProgress` now has its own sentence appended to its
