@@ -131,6 +131,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // cannot drift the way WriteVerdictBound's prose and this path's real cost did (#3477).
     internal const int MaxOwnerDisposingReenqueues = 2;
 
+    /// <summary>
+    /// True when a patch's response wait ended with the owner REFUSING the delivery as
+    /// <see cref="ErrorType.ShuttingDown"/> — refused before any handler ran, so the patch provably
+    /// never applied. The routed twin of <see cref="MeshNodeErrorCode.OwnerDisposing"/> (#5011,
+    /// MeshWeaver.Plugins#2403). Pure.
+    /// </summary>
+    /// <param name="error">The terminal of the response wait.</param>
+    internal static bool IsShuttingDownRefusal(Exception error) =>
+        error is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown };
+
     // 🚨 How long a CONFLICT re-attempt waits for this hub's mirror to carry state the owner has
     // not already refused. Not a retry interval and not a backoff — it is the bound on ONE wait
     // for a fact that is already on its way: the owner committed the winning write BEFORE it
@@ -2605,6 +2615,26 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         failure.Message ?? $"Access denied updating '{_path}'"));
                                     return;
                                 }
+                                if (failure.ErrorType == ErrorType.ShuttingDown
+                                    && attempt < MaxOwnerDisposingReenqueues)
+                                {
+                                    // The routed OwnerDisposing, late — see IsShuttingDownRefusal.
+                                    diagLogger?.LogWarning(
+                                        "[UpdateRemote] LATE_SHUTTING_DOWN_REENQUEUE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — the owner refused the patch before handling it; re-enqueueing against the next activation",
+                                        _workspace.Hub.Address, _path, attempt + 1, corr);
+                                    using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
+                                        ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
+                                        : null)
+                                    {
+                                        ChainTerminal(
+                                            UpdateRemote(update, attempt + 1, 0,
+                                                onLocalState: null,
+                                                correlationId: corr,
+                                                ownerSaidNeverApplied: true),
+                                            attachToCaller: false);
+                                    }
+                                    return;
+                                }
                                 diagLogger?.LogWarning(
                                     "[UpdateRemote] LATE_DELIVERY_FAILURE hub={Hub} target={Path} errorType={ErrorType} msg={Msg}",
                                     _workspace.Hub.Address, _path, failure.ErrorType, failure.Message);
@@ -2914,6 +2944,39 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                         + "re-read the node and re-apply if the change is required. "
                                                         + $"Request trail: {trail}")));
                                                 }));
+                                        }
+                                        else if (IsShuttingDownRefusal(ex)
+                                                 && attempt < MaxOwnerDisposingReenqueues)
+                                        {
+                                            // 🚨 A ShuttingDown refusal is the ROUTED form of
+                                            // OwnerDisposing (#5011, Plugins#2403): the delivery
+                                            // was refused before any handler ran — by a hub past
+                                            // DisposeHostedHubs, or by a grain whose host is
+                                            // stopping, which hands the address off in the same
+                                            // breath (MessageHubGrain.RefuseBecauseTheHostIsLeaving).
+                                            // ErrorType.ShuttingDown's own contract is "retry-
+                                            // worthy, never terminal". This arm used to map it to
+                                            // Unknown and fault the caller, so EVERY write that
+                                            // landed on an owner during a pod roll was lost with a
+                                            // terminal error, while the same fact carried as a
+                                            // PatchDataResponse was re-driven. Same bounded
+                                            // re-enqueue, same never-applied base rule.
+                                            lateRegistry?.Complete(requestId);
+                                            diagLogger?.LogWarning(
+                                                "[UpdateRemote] OWNER_SHUTTING_DOWN_REENQUEUE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — the owner refused the patch before handling it (ShuttingDown); re-enqueueing against the next activation",
+                                                _workspace.Hub.Address, _path, attempt + 1, corr);
+                                            using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
+                                                ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
+                                                : null)
+                                            {
+                                                ChainTerminal(UpdateRemote(update, attempt + 1, 0,
+                                                        onLocalState: onLocalState is null
+                                                            ? null
+                                                            : _ => onLocalState(null),
+                                                        correlationId: corr,
+                                                        ownerSaidNeverApplied: true),
+                                                    attachToCaller: true);
+                                            }
                                         }
                                         else
                                         {
