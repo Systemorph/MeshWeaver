@@ -1500,6 +1500,15 @@ own types by full name and fills every optional parameter with its declared defa
 is unloaded after the emit. Cost: ~1 s on a healthy process including both loads, on the
 already-failing path only.
 
+The first successful private-copy control in a process also emits the same source 63 more times
+before unloading that **same** copy. Its `held=` suffix reports the first failed attempt and
+throw site, a non-emit diagnostic, or `EMITS(64/64)`. Later failures keep the cold control
+without repeating this work. `held=THREW` after a successful cold emit is direct evidence that
+the fault can develop inside one compiler copy. `held=EMITS(64/64)` is deliberately weaker:
+the probe does not independently observe a JIT promotion, so 64 successful calls alone do not
+exclude a tiering fault or establish a bad image mapping. Calling `Emit` repeatedly would instead
+load 64 cold copies and cannot make this measurement.
+
 🚨 **The control that cannot run is the trap this leg is most exposed to**, and
 `EmitCanaryPrivateCompilerLegTest` is the guard: on a healthy process the only acceptable reading
 is `PRIVATE-COPY-EMITS`, twice in a row (the context is re-created per run). A Roslyn upgrade that

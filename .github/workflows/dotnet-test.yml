@@ -1907,6 +1907,25 @@ jobs:
           fi
           exit 1
         fi
+    # 🚨 The gate decides "this type has a Tests area" by reading the configuration lambda as TEXT
+    # for a literal `WithView("Tests"` — so a type whose suite is registered any other way reports
+    # `tests=skipped`, `ok`, green, and its Test/ folder runs nowhere. This step reads the TREE the
+    # gate judged and the gate's own log together: every NodeType owning a Test/ folder must report
+    # `tests=ok` with an `N/M passed` count, N == M > 0. The Doc tree must carry at least one
+    # (Doc/Architecture/ATypicalNodeType/Budget, the showcase that page embeds live), so deleting it
+    # cannot make this vacuous. It runs even when the gate step failed — an absent log is RED, never
+    # a skip.
+    - name: "Every Test/ folder's Tests area ran and counted its cases"
+      if: ${{ !cancelled() }}
+      run: |
+        set -euo pipefail
+        status=0
+        python3 .github/scripts/check-tests-area-verdicts.py \
+          --gate-log "${RUNNER_TEMP:-/tmp}/doc-gate.log" --tree "${RUNNER_TEMP:-/tmp}/doc" \
+          --require-tests || status=1
+        python3 .github/scripts/check-tests-area-verdicts.py \
+          --gate-log "${RUNNER_TEMP:-/tmp}/samples-gate.log" --tree "${RUNNER_TEMP:-/tmp}/samples" || status=1
+        exit "$status"
     # A green gate that produced no bake identity is a bake-stage REGRESSION — fail RED (no
     # continue-on-error, no "is the file there?" skip: the gate above already proved the tester ran
     # green, so the identity file is a POSTcondition). This is the whole point of keeping the bake
@@ -2207,6 +2226,15 @@ jobs:
     - name: "The local node-test harness compiles what the gate compiles (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/run-node-tests.py --self-test
+
+    # The doc-gate job's "every Test/ folder ran" check (check-tests-area-verdicts.py) reads the
+    # gate's stdout, so a changed log format would make it see nothing. Its self-test pins both
+    # directions — inputs that must PASS, and inputs that must FAIL (skipped, failed, no count,
+    # short count, zero cases, absent type, no header, truncated log, orphan Test/ folder, required
+    # but missing). Doc/Architecture/ATypicalNodeType.
+    - name: "A Test/ folder whose Tests area did not run is caught (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-tests-area-verdicts.py --self-test
 
     # 🚨 The module-pack lane's static-asset assertion (#2384). It replaced
     # `staticAssets | length > 0`, which was blind twice over: OpenStreetMap's 7 vendored Leaflet

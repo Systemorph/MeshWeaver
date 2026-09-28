@@ -274,6 +274,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Node types
 
 - **Start here:** [Adding a New Node Type](AddingANewNodeType)
+- [A Typical NodeType](ATypicalNodeType) — `Budget`, shipped beside the page: the files (NodeType json, `Source/`, `Test/`), the rules, how the bake and the gate compile it and EXECUTE its Tests area on every pull request, what green means, and the traps already paid for — with the live run embedded
 - [NodeType Supersession](NodeTypeSupersession) — a retired NodeType names its successor and how its content maps; an instance re-types itself when its hub next activates, which removes the migration script, converges LAZILY and therefore still needs a sweep, and requires the migrating activation to recycle itself
 - [Creatable Types](CreatableTypes) — what may be created under a node: the one provider the Create form asks, what a parent NodeType restricts, what it extends, and why a parent that declares nothing must never narrow the menu
 - [Retiring a NodeType](RetiringANodeType) — the prune keeps the definition and deletes its sources

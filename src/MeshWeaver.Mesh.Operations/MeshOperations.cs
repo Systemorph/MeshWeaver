@@ -1955,8 +1955,16 @@ public partial class MeshOperations
         if (string.IsNullOrWhiteSpace(path))
             return Observable.Return("Error: path is required.");
 
+        // The node read and schema check answer on later reactive callbacks. Capture the tool's
+        // authenticated writer at CALL time, not from whichever identity happens to be ambient
+        // when those callbacks eventually issue UpdateNode. Without this, an agent's System write
+        // can arrive with no writer (or inherit another circuit user) even though the patch lands.
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context ?? access?.CircuitContext
+            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
         return Observable.Defer(() =>
         {
+            using var callerScope = access?.SwitchAccessContext(caller);
             var resolvedPath = ResolvePath(path);
             if (string.IsNullOrWhiteSpace(resolvedPath))
                 return Observable.Return("Error: path is required.");
@@ -1986,7 +1994,9 @@ public partial class MeshOperations
             // Read-merge-write via DataChangeRequest. FetchNode returns null when the
             // path doesn't resolve (now with path-match verification so we don't
             // accidentally patch an ancestor hub).
-            return FetchNode(resolvedPath).SelectMany(outcome =>
+            return FetchNode(resolvedPath)
+                .CarryAccessContext(hub.ServiceProvider, caller)
+                .SelectMany(outcome =>
             {
                 // 🚨 The read-before-write MUST NOT report a stall as "node not found" (#974) —
                 // that message tells the caller to go create the node instead, which duplicates a
@@ -2088,7 +2098,9 @@ public partial class MeshOperations
                 var expectedFields = ProjectTouched(mergedJson, callerDelta);
 
                 var versionBefore = existing.Version;
-                return validationObs.SelectMany(validationError =>
+                return validationObs
+                    .CarryAccessContext(hub.ServiceProvider, caller)
+                    .SelectMany(validationError =>
                     validationError != null
                         ? Observable.Return(validationError)
                         : mesh.UpdateNode(merged)

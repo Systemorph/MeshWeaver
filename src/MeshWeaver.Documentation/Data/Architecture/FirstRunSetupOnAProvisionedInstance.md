@@ -214,13 +214,22 @@ overlay, 2026-09-16:
 | `preInstall` = `["Essentials"]` | record | **both**, with the manifest's `preInstalled` flag shown for what it is (below) |
 | `ConnectionStrings__memex` → `fabrikam-db-connection` | vault object, operator-written | **record + platform.** On SME the database is ours: provided, never asked |
 | `Ai__KeyProtection__MasterKey` | vault object, operator-written, never regenerated | **platform.** It seals the instance's stored values; a wizard must not offer to change it |
-| `PluginCatalog__RegistryToken` | vault object, operator-written | **platform** |
+| `PluginCatalog__RegistryToken` | vault object, operator-written when the deployment consumes a plugin registry or image pull Secret | **platform** |
 | `Features__Onboarding__InvitationOnly`, `Hosting__Deployment`, `Hosting__ReportTo`, `PreWarm__*` | record | **record.** Fleet decisions about how the instance is operated, not about the client |
 
 The rule behind the table: **what the client's world answers goes in the wizard; what the fleet
 decides about operating the instance stays on the record; what the estate supplies is platform.** An
 instance that states none of the wizard half must be fully configurable through the wizard rather
 than refusing to start; an instance we pre-configure keeps stating them.
+
+The registry token is **not a prerequisite for every deployment**. Provision requires it when the
+record maps `PluginCatalog__RegistryToken` (or its per-registry token key), when Provision registers
+the instance at a consumer registry, or when an `imagePullSecret` will be written from it. The plan
+passes the mapped vault and object to the operator, so the check is for the same object the pod
+mounts. A record with no such mapping, no registry consumer and no pull Secret explicitly skips the
+check; direct legacy calls to `hosting-kv-ensure` still require the conventional object unless they
+opt out. This is why a catalog-less control record can provision without a key the portal does not
+mount.
 
 ## Which requirements are asked, by tier
 
