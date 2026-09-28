@@ -371,6 +371,15 @@ post-as-System escalation. Read/query pipelines default to `false` — a null ca
 unwrapped, preserving whatever identity is ambient at emission. Flipping that default to clamp is
 blocked on migrating the ops/MCP call sites that currently depend on the leaked ambient identity.
 
+An operation assembled from several reads and writes must also preserve identity **between** its
+own stages. `MeshOperations.Patch` captures the caller at the method call, establishes it when the
+cold operation constructs its authoritative node read, and restores it on the read and schema
+validation emissions before calling `UpdateNode`. Without those handoffs, a review agent's
+`PostReview` request could land with `LastModifiedBy` missing, and the control plane correctly
+refused to post an unattributed GitHub review. A real-mesh regression test constructs the patch
+under System, subscribes after that scope ends under the test host's different identity, and
+requires the stored writer to remain System.
+
 This is applied by every mesh write primitive — `MeshService.CreateNode/Update/Delete/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update`, and the content-file writes `hub.ImportContent(path)…Post()` / `hub.SyncContentFiles(path)…Post()` — so callers keep writing the natural shape:
 
 ```csharp
