@@ -73,10 +73,18 @@ def store_listing(store, repo, run_id, name="", expected_store_id=None):
         raise ArtifactStoreError(f"declared artifact store returned an invalid listing: {exc}") from exc
 
 
-def baseline(runs, branch, ancestor, current_run=""):
+def baseline(runs, branch, ancestor, current_run="", withheld=lambda run: False):
     """The newest successful main push that is an ancestor of HEAD, plus the ids of the publishing
     runs NEWER than it (failed, cancelled, in flight) whose toolchain the caller must still check.
-    `runs` is the API's newest-first listing. Pure: `ancestor(sha)` is the only question asked."""
+    `runs` is the API's newest-first listing. Pure: `ancestor(sha)` and `withheld(run)` are the only
+    questions asked.
+
+    🚨 A SUCCESSFUL run that WITHHELD its publication is not a baseline. A caller whose main runs
+    may deliberately publish nothing (MeshWeaver.Plugins: a merge whose manifest locks main has not
+    settled yet publishes only once its settle pull request lands) marks such a run, and it is
+    walked past exactly like a failed one — the history union from the older baseline carries its
+    changes into the next run that does publish. Counting it as a baseline would narrow that next
+    run to the lock-only settle diff and publish none of the merge's modules."""
     publishing = {"push", "repository_dispatch", "schedule"}
     between = []
     for run in runs:
@@ -85,9 +93,10 @@ def baseline(runs, branch, ancestor, current_run=""):
         sha = run.get("head_sha", "")
         if (run.get("event") == "push" and run.get("status") == "completed"
                 and run.get("conclusion") == "success" and re.fullmatch(r"[0-9a-f]{40}", sha)):
-            if ancestor(sha):
+            if not ancestor(sha):
+                break
+            if not withheld(run):
                 return {"sha": sha, "run": run["id"], "url": run["html_url"], "between": between}
-            break
         between.append(run["id"])
     return {"sha": "", "run": "", "url": "", "between": between}
 
@@ -139,6 +148,16 @@ def self_test():
     got = baseline([newer(conclusion="failure")], "main", yes)
     check(got["sha"] == "" and got["between"] == [2], "no success at all is a full build")
     check(baseline([], "main", yes)["sha"] == "", "an empty listing is a full build")
+    # WITHHELD: a successful run that published nothing on purpose is walked past like a failure.
+    held = lambda run: str(run.get("id")) == "2"  # noqa: E731
+    got = baseline([newer(), good], "main", yes, withheld=held)
+    check(got["run"] == 1 and got["between"] == [2], f"a withheld success is walked past: {got}")
+    got = baseline([newer()], "main", yes, withheld=held)
+    check(got["sha"] == "" and got["between"] == [2], "only withheld successes is a full build")
+    got = baseline([newer(), good], "main", yes, withheld=lambda run: False)
+    check(got["run"] == 2, "control: the same run NOT withheld is the baseline")
+    got = baseline([newer(), good], "main", lambda sha: sha != "b" * 40, withheld=held)
+    check(got["sha"] == "", "a withheld run off HEAD's line still stops the walk (full), never skips it")
 
     same = {"platform": "p1", "portal": "d1", "tester": "t1", "logic": "l1"}
     moved = {**same, "platform": "p2"}
@@ -156,6 +175,15 @@ def self_test():
 def gh_json(path):
     out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=60, check=True)
     return json.loads(out.stdout)
+
+
+def carries_marker(repo, run_id, name, artifact_store="", expected_store_id=None):
+    """True when run `run_id` uploaded an artifact called `name` (expired ones included — the
+    marker's PRESENCE is the fact, not its bytes). Read from the same store as the attestations."""
+    if artifact_store and artifact_store != "gha":
+        return bool(store_listing(artifact_store, repo, run_id, name, expected_store_id))
+    listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={quote(name, safe='')}")
+    return bool(listing.get("total_count"))
 
 
 def attested_inputs(repo, run_id, artifact_store="", expected_store_id=None):
@@ -201,6 +229,9 @@ def main():
                    help="explicit named artifact store; empty/gha keeps GitHub storage, no fallback when declared")
     p.add_argument("--self-test", action="store_true")
     p.add_argument("--expect-store-id", default=None, help="physical store identity resolved by this run's first producer")
+    p.add_argument("--withheld-marker", default="",
+                   help="artifact name a SUCCESSFUL run uploads when it deliberately published nothing; "
+                        "such a run is walked past, never taken as the baseline")
     a = p.parse_args()
     if a.self_test:
         self_test()
@@ -224,9 +255,13 @@ def main():
         runs = gh_json(endpoint)["workflow_runs"]
         if not isinstance(runs, list):
             raise ValueError("workflow_runs is not a list")
+        withheld = (lambda run: carries_marker(a.repo, run["id"], a.withheld_marker,
+                                               a.artifact_store, a.expect_store_id)) \
+            if a.withheld_marker else (lambda run: False)
         result = baseline(runs, a.branch, lambda sha: subprocess.run(
             ["git", "merge-base", "--is-ancestor", sha, "HEAD"], cwd=a.root,
-            capture_output=True, timeout=30).returncode == 0, os.environ.get("GITHUB_RUN_ID", ""))
+            capture_output=True, timeout=30).returncode == 0, os.environ.get("GITHUB_RUN_ID", ""),
+            withheld)
         if result["run"] and len(result["between"]) > MAX_UNSETTLED:
             print(f"{len(result['between'])} unsettled runs since the last success (more than "
                   f"{MAX_UNSETTLED}) — full build", file=sys.stderr)
