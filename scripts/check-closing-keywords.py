@@ -180,6 +180,9 @@ BLOCKING_LABELS = ("sev:B", "sev:H")
 # path uses. The worst of the 99 merged bodies measured (two days to 2026-09-22T11:17Z) resolves
 # TWO subjects, so this sits ~30x above anything real and cannot become a wall.
 MAX_RESOLVED_SUBJECTS = 60
+# Anonymous REST is limited to 60 requests/hour per source IP. The protected satellite path needs
+# two controlled reads plus one per distinct issue, so keep one PR well below that shared ceiling.
+MAX_ANONYMOUS_ISSUE_SUBJECTS = 20
 PUBLIC_ISSUE_READ_PROBES = {"systemorph/meshweaver": 5011}
 PUBLIC_ISSUE_NOT_FOUND_SENTINEL = 2147483647
 
@@ -351,8 +354,9 @@ def escapes(
         # A local Verified-closing declaration belongs to the caller's own gate, not the
         # cross-repository-only satellite scan. It cannot release a core issue because no
         # unqualified reference is interpreted as Systemorph/MeshWeaver in that mode.
-        mentions_checked_repository = any(target_repo in block.lower() for target_repo in checked)
-        if only_checked_repositories and not targets and not mentions_checked_repository:
+        # Cross-only mode ignores declarations with no parsed protected target. The declaration
+        # cannot release anything in scope without such a target, and reason prose is not a target.
+        if only_checked_repositories and not targets:
             continue
         if not targets:
             refused.append(
@@ -436,6 +440,28 @@ def _public_issue_request(repo: str, number: int) -> dict | None:
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
+        response_body = exc.read(1024).decode("utf-8", errors="replace")
+        headers = exc.headers or {}
+        remaining = headers.get("X-RateLimit-Remaining", "")
+        reset = headers.get("X-RateLimit-Reset", "")
+        retry_after = headers.get("Retry-After", "")
+        if (
+            exc.code == 429
+            or remaining == "0"
+            or "rate limit" in str(exc.reason).lower()
+            or "rate limit" in response_body.lower()
+        ):
+            details = ", ".join(
+                part for part in (
+                    f"x-ratelimit-reset={reset}" if reset else "",
+                    f"retry-after={retry_after}s" if retry_after else "",
+                ) if part
+            )
+            raise Undecidable(
+                f"anonymous GitHub REST read of {repo}#{number} was rate-limited "
+                f"(HTTP {exc.code}{'; ' + details if details else ''}); no retry was attempted. "
+                "Wait until the indicated window resets before rerunning the gate."
+            ) from exc
         raise Undecidable(
             f"anonymous GitHub REST read of {repo}#{number} returned HTTP {exc.code}; "
             "only a controlled 404 proves absence."
@@ -541,12 +567,15 @@ def evaluate(
 
     # Bound by distinct repository/issue pairs before any REST work begins.
     subjects = {(r.slug.lower(), r.number) for r in refs if r.slug.lower() in checked}
-    if len(subjects) > MAX_RESOLVED_SUBJECTS:
+    subject_limit = (
+        MAX_ANONYMOUS_ISSUE_SUBJECTS if only_checked_repositories else MAX_RESOLVED_SUBJECTS
+    )
+    if len(subjects) > subject_limit:
         raise Undecidable(
             f"this body binds closing keywords to {len(subjects)} distinct issues in "
-            f"{', '.join(sorted(checked))}, over the cap of {MAX_RESOLVED_SUBJECTS}. Each distinct "
+            f"{', '.join(sorted(checked))}, over the cap of {subject_limit}. Each distinct "
             "issue costs one API read, and a job killed at its cap produces no verdict at all. "
-            "Refusing up front instead."
+            "Refusing up front instead. Split this into smaller pull requests."
         )
 
     resolved: dict[tuple[str, int], dict | None] = {}
@@ -993,7 +1022,7 @@ def self_test() -> int:
         failures.append(f"an explicit verified core close must release only that core issue: {errors}, {honoured}")
 
     errors, _, _ = evaluate(
-        "Closes #5011\n\nVerified-closing: #5011 — verified on the satellite portal after its roll.",
+        "Closes #5011\n\nVerified-closing: #5011 — verified against the Systemorph/MeshWeaver core build after its roll.",
         satellite_repo,
         _fake_resolve,
         protected,
@@ -1013,14 +1042,37 @@ def self_test() -> int:
         failures.append(f"cross-only mode must not inspect unconfigured repositories: {errors}")
 
     errors, _, _ = evaluate(
-        "Closes #5011\n\nVerified-closing: Systemorph/MeshWeaver#not-an-issue — verified on the core portal after its roll.",
+        "Closes Systemorph/MeshWeaver#5011\n\nVerified-closing: Systemorph/MeshWeaver#not-an-issue — verified on the core portal after its roll.",
         satellite_repo,
         _fake_resolve,
         protected,
         only_checked_repositories=True,
     )
-    if not any("Verified-closing:" in error for error in errors):
-        failures.append(f"a malformed escape that names core must fail rather than be ignored: {errors}")
+    if not any("RELEASE-BLOCKING ISSUE CLOSED BY A MERGE" in error for error in errors):
+        failures.append(f"a malformed core escape must not release a real protected close: {errors}")
+
+    at_public_cap = "\n".join(
+        f"Closes {REPO}#{number}"
+        for number in range(12000, 12000 + MAX_ANONYMOUS_ISSUE_SUBJECTS)
+    )
+    try:
+        errors, _, _ = evaluate(
+            at_public_cap, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
+        )
+        if errors:
+            failures.append(f"exactly {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be evaluated: {errors}")
+    except Undecidable as exc:
+        failures.append(f"exactly {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be within the cap: {exc}")
+
+    over_public_cap = f"{at_public_cap}\nCloses {REPO}#{12000 + MAX_ANONYMOUS_ISSUE_SUBJECTS}"
+    try:
+        evaluate(
+            over_public_cap, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
+        )
+        failures.append(f"more than {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be refused")
+    except Undecidable as exc:
+        if f"over the cap of {MAX_ANONYMOUS_ISSUE_SUBJECTS}" not in str(exc):
+            failures.append(f"public subject cap refusal must name its bound: {exc}")
 
     # The public resolver must exercise both controls before returning a verdict, cache the
     # positive read, and fail closed if either control stops proving its promised status.
@@ -1063,6 +1115,27 @@ def self_test() -> int:
             failures.append("public resolver must fail when its negative control is not absent")
         except Undecidable:
             pass
+
+    from email.message import Message
+    from io import BytesIO
+
+    rate_headers = Message()
+    rate_headers["X-RateLimit-Remaining"] = "0"
+    rate_headers["X-RateLimit-Reset"] = "1893456000"
+    rate_error = urllib.error.HTTPError(
+        "https://api.github.com/repos/Systemorph/MeshWeaver/issues/5057",
+        403,
+        "Forbidden",
+        rate_headers,
+        BytesIO(b'{"message":"API rate limit exceeded"}'),
+    )
+    with patch(__name__ + ".urllib.request.urlopen", side_effect=rate_error):
+        try:
+            _public_issue_request(REPO, 5057)
+            failures.append("a REST rate-limit response must be Undecidable")
+        except Undecidable as exc:
+            if "rate-limited" not in str(exc) or "x-ratelimit-reset=1893456000" not in str(exc):
+                failures.append(f"a REST rate-limit response must explain its reset, got: {exc}")
 
     # 🚨 THE WORK IS BOUNDED BY DISTINCT SUBJECTS, not by matches, not by problem-kind. Counted by
     # a resolver that records what it was asked, because "it is memoised" is the kind of claim that

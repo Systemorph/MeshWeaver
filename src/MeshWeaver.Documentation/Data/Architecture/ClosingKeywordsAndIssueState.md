@@ -100,6 +100,13 @@ fails closed as `Undecidable`; only after both controls pass may a 404 for the r
 mean absent. The core repository's own gate continues to use its established authenticated
 same-repository reader.
 
+Unauthenticated REST requests are limited to 60 per hour per originating IP, so the satellite scan
+caps one PR at 20 distinct core issues (at most 22 requests including both controls). A GitHub
+403/429 rate-limit response remains red, but is reported explicitly with the reset/retry-after
+header when present; the gate does not retry automatically. Split a PR with more than 20 core
+targets, and rerun a rate-limited scan only after the indicated window. See [GitHub REST API rate
+limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
+
 🚨 **Three checks and not two, because two would have missed one of the three incidents.** Measured
 at the state each pull request had AT ITS MERGE: the negation check catches #5201 alone; the
 severity check catches #5201 and #5190; **#5174 is caught by neither**, because #2299 was labelled
