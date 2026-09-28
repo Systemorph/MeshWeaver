@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fail when a confidential term appears anywhere in the tracked tree — in a file's CONTENT or its PATH.
+"""Fail when a confidential term appears in the tracked tree — in a TEXT file's content or in any file's PATH.
+
+Binary files (images, PDFs, office documents, UTF-16 text) are checked by path only: `git grep -I`
+skips their content. A confidential identifier inside a binary artifact is out of this gate's reach
+and has to be caught in review.
 
 This repository is public. Client names, client staff names and client infrastructure identifiers
 (tenants, subscriptions, vaults, registries, hosts) must never be committed to it. The list of what
@@ -80,7 +84,12 @@ def find_hits(root: str, terms: list[str]) -> tuple[list[str], int]:
             # With -z the fields are NUL-separated: path \0 line \0 content.
             parts = record.split(b"\0", 2)
             if len(parts) >= 2:
-                hit = f"{parts[0].decode('utf-8', 'surrogateescape')}:{parts[1].decode()}"
+                # 🚨 Only DIGITS leave as the line number. Verified layout (git 2.50):
+                # `path\0line\0content\n`. Should a git ever emit `path\0line:content`, the
+                # content is cut here rather than printed — a leak must be impossible, not unlikely.
+                line_no = re.match(rb"\d+", parts[1])
+                where = parts[0].decode("utf-8", "surrogateescape")
+                hit = f"{where}:{line_no.group().decode()}" if line_no else where
                 if hit not in seen:
                     seen.add(hit)
                     hits.append(hit)
@@ -125,23 +134,26 @@ def self_test() -> int:
             subprocess.run(["git", "-C", scratch, *args], check=True, capture_output=True)
         git("init", "-q")
         (Path(scratch) / "clean.md").write_text("nothing to see\n", encoding="utf-8")
-        (Path(scratch) / "notes.md").write_text("line one\nmeet the aCmE team\n", encoding="utf-8")
+        (Path(scratch) / "notes.md").write_text("line one\nmeet the aCmE team\nacme again\n",
+                                                encoding="utf-8")
         (Path(scratch) / "globex-record.json").write_text("{}\n", encoding="utf-8")
         (Path(scratch) / "blob.bin").write_bytes(b"\x00\x01acme\x00")
         git("add", "-A")
         hits, scanned = find_hits(scratch, ["ACME", "globex"])
         expect(scanned == 4, f"every tracked file is scanned ({scanned})")
         expect("notes.md:2" in hits, f"a content hit is reported as path:line, case-insensitively: {hits}")
+        expect("notes.md:3" in hits and len([h for h in hits if h.startswith("notes.md")]) == 2,
+               f"EVERY content hit in a file is reported, not only the first: {hits}")
         expect("globex-record.json (file path)" in hits, f"a hit in a file PATH is reported: {hits}")
         expect(not any(h.startswith("blob.bin") for h in hits), "binary files are skipped")
         expect(not any("acme" in h.lower().replace("notes.md", "") for h in hits),
                "no reported hit carries the matched term or line content")
-        (Path(scratch) / "words.md").write_text("NotUsed here\nthe Initech team\n", encoding="utf-8")
+        (Path(scratch) / "words.md").write_text("Unzorblaxed here\nthe Initech team\n", encoding="utf-8")
         git("add", "-A")
-        hits, _ = find_hits(scratch, ["word:initech", "word:notus"])
+        hits, _ = find_hits(scratch, ["word:initech", "word:zorblax"])
         expect(hits == ["words.md:2"],
                f"a `word:` term matches whole words only, never inside an identifier: {hits}")
-        hits, _ = find_hits(scratch, ["notus"])
+        hits, _ = find_hits(scratch, ["zorblax"])
         expect(hits == ["words.md:1"], f"a plain term is a substring match: {hits}")
         hits, _ = find_hits(scratch, ["no-such-term"])
         expect(hits == [], "no hit when no term matches")
