@@ -4764,6 +4764,23 @@ public static class MeshExtensions
                 return Observable.Return(false);
             });
 
+    /// <summary>End the pre-flight on its first refusal, or null after every leg has answered.
+    /// The timeout observes ALL leg answers before valid ones are filtered, so it measures a gap
+    /// in progress rather than the total duration of a large, bounded fan-out. The scheduler seam
+    /// drives that ordering in virtual time without changing the production clock.</summary>
+    internal static IObservable<T?> FinishDeletePreflight<T>(
+        IObservable<T?> answers,
+        TimeSpan timeout,
+        Func<TimeoutException> onTimeout,
+        IScheduler? scheduler = null) where T : struct
+    {
+        var failure = Observable.Defer(() => Observable.Throw<T?>(onTimeout()));
+        var timed = scheduler is null
+            ? answers.Timeout(timeout, failure)
+            : answers.Timeout(timeout, failure, scheduler);
+        return timed.Where(answer => answer.HasValue).Take(1).DefaultIfEmpty(null);
+    }
+
     /// <summary>
     /// 🚨 RIDE OUT A RECYCLING LEAF — the rider both halves of a recursive delete use for a leg
     /// that answers <see cref="ErrorType.ShuttingDown"/>.
@@ -4858,19 +4875,17 @@ public static class MeshExtensions
     ///
     /// <para>🚨 <b>Every leg carries its OWN bound (<paramref name="legTimeout"/>), and the whole
     /// fan-out is capped at <see cref="PreValidateFanOutConcurrency"/> in flight</b> — the
-    /// behavioural half of issue #1198. <paramref name="timeout"/> is now a BACKSTOP over a set of
-    /// individually-bounded legs, not the fan-out's only terminal: a descendant whose per-node hub
-    /// never answers is refused by NAME, at a rung strictly inside the stage, while its siblings
-    /// finish normally. Before this, one silent hub spent the entire subtree's budget and the only
-    /// report was an anonymous "7 of 83 descendant(s) did not answer" — the diagnostic list #1294
-    /// added, with nothing to attribute it to.</para>
+    /// behavioural half of issue #1198. <paramref name="timeout"/> measures the GAP between leg
+    /// answers, not the total duration: a healthy 31k-node space cannot finish inside a 25-second
+    /// total cap with only 64 legs in flight. A descendant whose per-node hub never answers is
+    /// refused by NAME, at a rung strictly inside the stage, while its siblings finish normally.</para>
     /// </summary>
     /// <param name="issuingHub">The off-router issuing hub that posts every leg.</param>
     /// <param name="rootPath">The subtree root being deleted.</param>
     /// <param name="allPaths">The delete plan; the root is excluded here.</param>
     /// <param name="callerAccessContext">Stamped on every leg — see the remarks.</param>
-    /// <param name="timeout">The STAGE backstop: fires only if the fan-out itself stops
-    /// progressing, since every leg terminates within <paramref name="legTimeout"/>.</param>
+    /// <param name="timeout">The STAGE no-progress backstop: resets on every leg answer,
+    /// including a valid answer that carries no refusal.</param>
     /// <param name="legTimeout">One leg's bound. Must be strictly smaller than
     /// <paramref name="timeout"/> — derive it with <c>MeshOperationOptions.Nest</c> rather than
     /// configuring a second value, because equal budgets are not an ordering (#1198).</param>
@@ -5079,17 +5094,8 @@ public static class MeshExtensions
         // per-leaf hubs validate in parallel; the failure with the lowest
         // emission order wins via FirstOrDefault. Bounded: see
         // PreValidateFanOutConcurrency for why an unbounded fan-out is a storm.
-        return perPath.MergeBounded(PreValidateFanOutConcurrency)
-            .Where(r => r.HasValue)
-            .Take(1)
-            .DefaultIfEmpty(null)
-            // 🚨 A BACKSTOP, no longer the fan-out's only bound. Every leg above terminates within
-            // `legTimeout`, so reaching this one means the fan-out ITSELF stopped progressing —
-            // and the report has to say what it actually knows: how many posted legs are still
-            // outstanding, out of how many were posted, out of how many were planned. Those are
-            // three different numbers once the merge is capped, and collapsing them was how the
-            // pre-flight used to claim a leaf "did not answer" a request it had never sent.
-            .TimeoutAtStage(timeout, () =>
+        return FinishDeletePreflight(perPath.MergeBounded(PreValidateFanOutConcurrency), timeout,
+            () =>
             {
                 var pending = unanswered.Keys
                     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
@@ -5097,13 +5103,11 @@ public static class MeshExtensions
                 var sent = System.Threading.Volatile.Read(ref posted);
                 var ex = DeleteStageTimeout(
                     DeleteStage.PreValidateDescendants,
-                    $"the pre-flight fan-out for '{rootPath}' did not settle within "
+                    $"the pre-flight fan-out for '{rootPath}' made no progress for "
                     + $"{timeout.TotalSeconds:0}s: {pending.Length} of {sent} posted "
                     + $"ValidateDeleteRequest(s) still outstanding ({descendants.Length} descendant(s) "
                     + $"planned, at most {PreValidateFanOutConcurrency} in flight). Each leg carries "
-                    + $"its own {legTimeout.TotalSeconds:0}s bound and reports itself by name, so "
-                    + "reaching THIS bound means the fan-out as a whole stalled, not that one leaf "
-                    + "was slow"
+                    + $"its own {legTimeout.TotalSeconds:0}s bound and reports itself by name"
                     + (pending.Length == 0
                         ? string.Empty
                         : $": {string.Join(", ", pending.Take(10))}"
