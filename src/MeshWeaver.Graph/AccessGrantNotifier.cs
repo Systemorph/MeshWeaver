@@ -181,7 +181,7 @@ public sealed class AccessGrantNotifier(
     ///
     /// <para>🚨 Derived from the NAMESPACE, not read from MainNode, because rows written before that
     /// stamp was fixed still carry the <c>_Access</c> CONTAINER there — which is how the recipient
-    /// got "You've been given access to CollaborationNotus/_Access" with a link to the container
+    /// got "You've been given access to CollaborationInitech/_Access" with a link to the container
     /// instead of the space. MainNode is only a fallback for an assignment with no namespace.</para>
     ///
     /// <para>A ROOT-scope grant (namespace <c>_Access</c> or empty — e.g. the global-admin seed)

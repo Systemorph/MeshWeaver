@@ -25,7 +25,7 @@ finish the update — for a type that no longer existed, which nothing could eve
 keeps opening, and the sync activity says exactly what it is waiting for:
 
 > ⏸ Held Crm/Mail — the repository no longer carries this NodeType, but the mesh still has 1
-> instance(s) of it (PartnerRe/Esl/DueDiligenceMail). Not pruned: retype or delete the instances and
+> instance(s) of it (Globex/Team/DueDiligenceMail). Not pruned: retype or delete the instances and
 > the next sync completes the retirement.
 
 The same note appears on the repository's settings tab, so you can see at a glance that your portal

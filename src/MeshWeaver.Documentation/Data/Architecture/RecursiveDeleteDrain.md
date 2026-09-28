@@ -221,7 +221,7 @@ could therefore starve one drain for a whole budget with zero removals, which is
 ### The reading, 2026-09-16 — and it does not support that
 
 `IIoPool.QueueWait` made the queue readable; the first reading was taken on
-**memex.systemorph.com**, pod `memex-portal-deployment-7cb6684584-jdw7v`, image
+**the control instance**, pod `memex-portal-deployment-7cb6684584-jdw7v`, image
 `3.0.0+afde4eab` — the first image to carry the instrument — after **828 minutes** of uptime:
 
 | pool | cap | admissions | mean wait | max wait | ≥ 1 s | ≥ 10 s |
@@ -242,7 +242,7 @@ read, a permission fold, a descendant enumeration and an existence probe before 
 If pool queueing delays a drain, this is where it comes from.
 
 **What the reading does not settle.** Its denominator is ONE portal, ONE pod, ONE process lifetime —
-and it is not the portal that produced any logged occurrence. memex-cloud, where all of them
+and it is not the portal that produced any logged occurrence. The public instance, where all of them
 happened, runs an image from 2026-09-12 that predates the instrument, so the question cannot yet be
 asked there. And a high mean on `pg-read` is not by itself a cap that is too small: `InvokeStream`
 holds one slot for a whole enumeration, so long-held slots and too-few slots produce the same mean

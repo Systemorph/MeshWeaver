@@ -39,7 +39,7 @@ token at `/api/instances/token`. On the fleet's shape the declared validator **i
 endpoint, and it refuses a token by design (a token may never mint its successor;
 `InstanceTokenEndpoints`). So a lister resolving through `ResolveToken` would present `mwa_…` to
 `cr.meshweaver.cloud`, be refused on every check, and fix only the installations with a raw `Token`
-configured — `build` and `pearl` — while the auto-registered ones stayed frozen (review of #4094).
+configured — the build instance and an SME client instance — while the auto-registered ones stayed frozen (review of #4094).
 The second row therefore resolves through `ResolveDurableKey`: the configured token, else the stored
 key decrypted, **no exchange**. The first row is unchanged — a portal's own `/v2` mirror runs the same
 authenticator the plugin registry does and accepts both shapes. `OciTagListerTest` pins it with the
@@ -154,8 +154,8 @@ consuming side rather than inventing a new concept.
 ## Where the running portal learns the pairing
 
 🚨 **It does not learn it by itself, and that is deliberate.** `RegistrySpec` lives on the record of
-the instance that **HOSTS** the registry (`Deployments/memex-cloud`), on the control instance. A
-CONSUMER's record (`build`, `pearl`) has no `registry` block at all, `HelmValues` renders
+the instance that **HOSTS** the registry (the plugin registry instance's `Deployments/…` record), on the control instance. A
+CONSUMER's record (the build instance's, an SME client instance's) has no `registry` block at all, `HelmValues` renders
 `registry.validationUrl` only for the hosting record, and reaching across instances to read it would
 put a network dependency inside the credential path — a lookup that fails open, or fails the update.
 
@@ -171,13 +171,13 @@ So the pairing is an **explicit declaration the operator sets**, in the consumer
 keeps a `Hosting/Deployment` record and the overlay it renders, and
 `scripts/check-record-renders-overlay.py` compares `extraPortalConfig` ↔ `config.memex_portal` in
 both directions over an allow list that is deliberately empty — so declaring on one side alone is a
-red naming the key. The two fleet-registry consumers (`build`, `pearl`) declare it in
-`Systemorph/Memex#454`; `memex` and `memex-cloud` pull from ACR and are untouched, which is the
+red naming the key. The two fleet-registry consumers (the build instance and an SME client instance) declare it in
+`Systemorph/Memex#454`; the instances that pull from ACR are untouched, which is the
 whole population: the discriminator is computable from the record — the `imageRepository` host is
 neither ACR nor any host the record mounts a plugin registry on.
 
 🚨 **And it is read by NOTHING until that instance runs an image whose core sha has `830c8c402`
-(#4094) as an ancestor.** Measured 2026-09-21 08:45Z: `build` served `3.0.0+c84c6c05` and `pearl`
+(#4094) as an ancestor.** Measured 2026-09-21 08:45Z: the build instance served `3.0.0+c84c6c05` and the SME client instance
 `3.0.0+67cbbe0e`, both of which predate that merge, so both still refuse exactly as this page
 describes. Declaring early is harmless and is the correct order — the roll is the other half, and
 neither the declaration's merge nor a green config-repo run is evidence that self-update works.
@@ -197,19 +197,19 @@ The two consumers demonstrated both sides within hours of each other:
 
 | instance | record carries the key | last render of its ConfigMap | running image | both halves? |
 |---|---|---|---|---|
-| `pearl` | yes, from v76 | helm **revision 6**, values *"rendered from the record"*, and that run's own audit reports the live `memex-portal-config` with `liveOnlyKeys: []`, `manifestOnlyKeys: []`, `differingKeys: []` | `746b4e48`, which has `830c8c402` as an ancestor | **yes** |
-| `build` | yes, from v31 — later the same day | its Provision, helm **revision 2**, nine days *before* the record gained the key | `c84c6c05`, which predates `830c8c402` | no — it needs both |
+| the SME client instance | yes, from v76 | helm **revision 6**, values *"rendered from the record"*, and that run's own audit reports the live `memex-portal-config` with `liveOnlyKeys: []`, `manifestOnlyKeys: []`, `differingKeys: []` | `746b4e48`, which has `830c8c402` as an ancestor | **yes** |
+| the build instance | yes, from v31 — later the same day | its Provision, helm **revision 2**, nine days *before* the record gained the key | `c84c6c05`, which predates `830c8c402` | no — it needs both |
 
-`pearl` arrived there by luck of sequencing: the `Reconcile` that carried the key was filed to run a
+The SME client instance arrived there by luck of sequencing: the `Reconcile` that carried the key was filed to run a
 database migration, not for this. So the order to state is **declare → `Roll` → `Reconcile`** (a
 `Reconcile` keeps the running image, so it is safe to put last), and what confirms it is the positive
 `Information` line naming the presented pairing — never the disappearance of the refusal, which an
 unrendered ConfigMap reproduces exactly.
 
 The value is the registry record's `validationUrl`, copied verbatim
-(`https://memex.meshweaver.cloud/api/instances/token`); a bare host means the same thing. **Only the
+(`https://registry.example.com/api/instances/token`); a bare host means the same thing. **Only the
 host is ever read**, and it is read whole: a non-default port is part of it, and a value carrying
-userinfo (`https://memex.meshweaver.cloud@evil.example`) declares NOTHING rather than a pairing with
+userinfo (`https://registry.example.com@evil.example`) declares NOTHING rather than a pairing with
 the host a human would not have read. An empty value — the default — declares nothing and refuses.
 
 🚨 **"Declared" and "readable" are two questions, and the refusal says which one failed.** A value
@@ -253,7 +253,7 @@ produce a line.
 Two diagnoses exist so that a wrong one is never given:
 
 - **A plugin registry that EXISTS on the host, but whose URL carries credentials**
-  (`https://instance:mwi_…@memex.meshweaver.cloud`). `HostOf` refuses userinfo, so such a registry
+  (`https://instance:mwi_…@registry.example.com`). `HostOf` refuses userinfo, so such a registry
   matches on neither row — the pre-#4094 reader tolerated it — and without its own diagnosis the
   refusal would claim "no plugin registry is configured on that host" about a registry the catalog is
   already talking to. The message names the host, says the URL carries credentials, and names the fix

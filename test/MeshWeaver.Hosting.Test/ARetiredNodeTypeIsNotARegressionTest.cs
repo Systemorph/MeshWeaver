@@ -141,7 +141,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
         var held = new NodeTypeDefinition
         {
             Configuration = "config => config",
-            PendingRetirement = "Retired by Crm import abc at 2026-09-08T20:29:14Z; held for 1 instance(s): PartnerRe/Esl/DueDiligenceMail.",
+            PendingRetirement = "Retired by Crm import abc at 2026-09-08T20:29:14Z; held for 1 instance(s): Globex/Team/DueDiligenceMail.",
             // Sources still match (the shared folder is non-empty), a build once succeeded:
             // without the stamp this is the textbook gating CompileError.
             CurrentSourceVersions = new Dictionary<string, long> { ["Crm/Source/Contact.cs"] = 1 },

@@ -123,8 +123,8 @@ The routing back-pressure flood of 2026-09-22 (core issues #5226–#5307) was re
 in each issue's evidence table. Of the **65** distinct crossings quoted in those bodies that printed
 `waiting for a pool slot` ≥ 45 with `subscribing` ≤ 1 — the thread-shortage reading — **63** were
 logged while two or more ReplicaSets of the same deployment were live within ±10 minutes, i.e. during
-a roll (memex-cloud went through five ReplicaSets between 10:50Z and 13:05Z; memex rolled at 17:33Z).
-The two exceptions are both memex at 18:20Z, where no second ReplicaSet appears in the sample. The
+a roll (the public instance went through five ReplicaSets between 10:50Z and 13:05Z; the control
+instance rolled at 17:33Z). The two exceptions are both on the control instance at 18:20Z, where no second ReplicaSet appears in the sample. The
 starved pod was as often a SURVIVOR of the old ReplicaSet (`5c89c7f5f9-sddb5`, 12:34–13:02Z, while
 `7cc85f47c` rolled in) as a freshly booted one (`7bc86fb6f-qnznf`, 11:32–11:43Z), so this is "during a
 roll", not "on the new pod". The `[ReleasePostCondition]` compile lines on `…-sddb5` at 12:38Z fall
@@ -132,7 +132,7 @@ inside its starvation window. A roll is exactly when compiles happen on serving 
 identity change makes NodeTypes framework-stale, and release requests and first activations compile.
 
 Read the 63/65 against its base rate: the sample is the log lines the incident filer quoted (at most
-five per issue), and on memex-cloud a roll was in progress for most of the sampled day, so "during a
+five per issue), and on the public instance a roll was in progress for most of the sampled day, so "during a
 roll" is the expected state of most samples, not a rare one.
 
 What was NOT established: the portal's own ThreadPool metrics for those windows (the control instance

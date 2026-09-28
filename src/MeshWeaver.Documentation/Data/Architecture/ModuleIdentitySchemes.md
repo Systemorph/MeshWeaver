@@ -1,7 +1,7 @@
 ---
 Name: Two Identity Schemes, One Comparison
 Category: Architecture
-Description: A module bundle states the framework build it was compiled against as a COMMIT identity (g<sha>); a portal resolves its own as an API-SURFACE identity (s<hash>). Comparing the two with ordinal equality answers "different" for every pair that exists, so the store copy of every module the image also ships was declined on every boot — and reported as "landed but not yet loaded, a restart activates them", which two operators acted on for nothing. Measured on memex.systemorph.com, 2026-09-16.
+Description: A module bundle states the framework build it was compiled against as a COMMIT identity (g<sha>); a portal resolves its own as an API-SURFACE identity (s<hash>). Comparing the two with ordinal equality answers "different" for every pair that exists, so the store copy of every module the image also ships was declined on every boot — and reported as "landed but not yet loaded, a restart activates them", which two operators acted on for nothing. Measured on the control instance, 2026-09-16.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3 8 4-16 3 8h6"/></svg>
 ---
 
@@ -19,7 +19,7 @@ compared them with ordinal equality.
 
 ## What that produced, measured
 
-`memex.systemorph.com`, 2026-09-16, image `3.0.0-ci.8710`:
+The control instance, 2026-09-16, image `3.0.0-ci.8710`:
 
 ```
 /health → pending_module_activation: Degraded — 8 module(s) are landed but not yet loaded in

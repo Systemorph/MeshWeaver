@@ -12,7 +12,7 @@ so three apps:
 
 | App | Where | Titled with | Who opens it | What it holds |
 |---|---|---|---|---|
-| **Instance app** | `/Admin` (node type `AdminApp`) | the instance's name — its public host, e.g. `memex.systemorph.com` (`AdminAppNodeType.InstanceName`) | platform admins only | what changes the INSTANCE |
+| **Instance app** | `/Admin` (node type `AdminApp`) | the instance's name — its public host, e.g. `portal.example.com` (`AdminAppNodeType.InstanceName`) | platform admins only | what changes the INSTANCE |
 | **Person app** | `/{user}/Settings` (the person's own partition root) | the person's name | the person only | what changes the PERSON |
 | **Node settings** | the node's ⋯ menu → **Settings…** (`/{node}/Settings`) | the node's name | anyone who may read the node; each tab under its own permission | what changes THAT node |
 

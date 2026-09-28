@@ -23,7 +23,7 @@ namespace MeshWeaver.Graph.Test;
 /// nothing, so <c>update</c> was a supported route to produce an instance with no per-node hub: it
 /// does not error, it reads as <c>Unavailable</c> on a timeout, renders empty, and never reaches a
 /// verdict — with nothing anywhere naming the type that is missing. Live example on production:
-/// <c>rbuergi/_Draft/PartnerRe_EslProposalQA</c> carrying <c>nodeType: EmailDraft</c>.</para>
+/// <c>rbuergi/_Draft/Globex_TeamProposalQA</c> carrying <c>nodeType: EmailDraft</c>.</para>
 ///
 /// <para>Both update verbs are covered here, because they are two different pipelines:
 /// <c>IMeshService.UpdateNode</c> (what the MCP <c>update</c> tool calls) runs

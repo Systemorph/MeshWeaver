@@ -41,7 +41,7 @@ The receiver-side line carries two addresses and nothing else. A stack captured 
 machinery, not the code that made the mistake — and the payload type does not help either, because a
 delivery that crossed a silo arrives packed, so the honest report is `RawJson`.
 
-That is not a theoretical cost. On `memex` the same finding was filed as
+That is not a theoretical cost. On the control instance the same finding was filed as
 [#1113](https://github.com/Systemorph/MeshWeaver/issues/1113),
 [#1121](https://github.com/Systemorph/MeshWeaver/issues/1121),
 [#1136](https://github.com/Systemorph/MeshWeaver/issues/1136) and
@@ -119,7 +119,7 @@ generic advice would have done.
 🚨 **Scope: this reaches the ORIGIN site, and the receiver site only for a delivery that never left
 the process.** `ReportRouterTraffic` runs at the top of `DeliverMessage` (`MessageHub.cs:2007`),
 *before* `RouteMessageAsync` unpacks — and a cross-hub delivery arrives packed, so at that point its
-`Message` is `RawJson` and no message-typed exclusion can match it. Measured on `memex` the same day
+`Message` is `RawJson` and no message-typed exclusion can match it. Measured on the control instance the same day
 this was written, the two lines are exactly that pair:
 
 ```
@@ -249,7 +249,7 @@ local or a cached property.
 > a literal list of six node-CRUD names. `DisposeRequest` — a teardown, the most router-hostile
 > lifecycle message there is — was not on it, so when `MeshOperations.RecycleCore` posted one
 > straight off the DI-injected hub, **only the runtime ORIGIN detector saw it**
-> ([#4463](https://github.com/Systemorph/MeshWeaver/issues/4463), measured on `memex`
+> ([#4463](https://github.com/Systemorph/MeshWeaver/issues/4463), measured on the control instance
 > 2026-09-16 01:10:13Z). Adding one more name would have bought exactly one more message.
 
 So the guard now **reads its denominator out of production** instead of restating it. A message is
@@ -366,13 +366,13 @@ lifecycle only — a target-less node CRUD post on the router is the wedge, not 
 ### A SUBSCRIPTION is one violation seen from both ends (#4614 / #4615 / #4617)
 
 > 🚨 **Three tickets, one delivery family, and two of the three name a call site that can never be
-> the fix.** On 2026-09-17 12:58:47Z a single `PearlTechnology/CompanyProfile` render on `memex`
+> the fix.** On 2026-09-17 12:58:47Z a single `Fabrikam/CompanyProfile` render on the control instance
 > filed three ORIGIN reports within the same second:
 >
 > ```
-> SubscribeRequest  … as sender (sender: mesh/q8f5…, target: PearlTechnology/CompanyProfile)   #4614
-> SubscribeAck      … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)   #4615
-> StreamEndedEvent  … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)   #4617
+> SubscribeRequest  … as sender (sender: mesh/q8f5…, target: Fabrikam/CompanyProfile)   #4614
+> SubscribeAck      … as target (sender: Fabrikam/CompanyProfile, target: mesh/q8f5…)   #4615
+> StreamEndedEvent  … as target (sender: Fabrikam/CompanyProfile, target: mesh/q8f5…)   #4617
 > ```
 
 The second and third are the OWNER answering the first. `CreateSynchronizationStream` acks with

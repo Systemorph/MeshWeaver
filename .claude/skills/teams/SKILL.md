@@ -1,6 +1,6 @@
 ---
 name: teams
-description: Microsoft Teams access from MeshWeaver — what the shipped Teams integration actually is (a bot people message; it reads and sends NOTHING on a user's behalf), and what reading or sending a user's teams, channels and chats needs — the delegated Graph scopes on the Executive Assistant consent link, the tools on the EA plugin, the consent rules, and the TENANT wall that makes "can you see PartnerRe ESL?" a different question from "can you see my teams?". Use when someone asks whether an agent can see, read, summarise or post to Teams, when adding Teams scopes or tools, or when a Teams-related answer from an agent has to be checked against what is wired.
+description: Microsoft Teams access from MeshWeaver — what the shipped Teams integration actually is (a bot people message; it reads and sends NOTHING on a user's behalf), and what reading or sending a user's teams, channels and chats needs — the delegated Graph scopes on the Executive Assistant consent link, the tools on the EA plugin, the consent rules, and the TENANT wall that makes "can you see the client's team?" a different question from "can you see my teams?". Use when someone asks whether an agent can see, read, summarise or post to Teams, when adding Teams scopes or tools, or when a Teams-related answer from an agent has to be checked against what is wired.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -10,8 +10,8 @@ allowed-tools:
 
 # /teams — reading and sending Teams on a user's behalf
 
-**Measured 2026-09-09** by asking the Executive Assistant on memex "can you see my Teams channels,
-in particular PartnerRe ESL?": it answered no, and it was right — then. Since Mail 1.5/1.6 (read,
+**Measured 2026-09-09** by asking the Executive Assistant on the control instance "can you see my Teams channels,
+in particular the enterprise client's team?": it answered no, and it was right — then. Since Mail 1.5/1.6 (read,
 2026-09-09/10) and Mail 1.7 (post, 2026-09-10) the EA reads a user's own-tenant teams, channels and
 chats, and posts to them where the deployment sets `Teams:AgentSend=Send`. This skill records what
 exists, what the ask needs, and the one wall that no scope can climb.
@@ -22,7 +22,7 @@ exists, what the ask needs, and the one wall that no scope can climb.
 documented in `Doc/AI/TeamsBot`: a person messages the bot in Teams, `TeamsInboundProcessor`
 finds-or-creates one agent thread per conversation, `TeamsReplySender` posts the agent's reply
 back. Its outbound credential is an **app-only connector token** for `api.botframework.com` — it
-can answer in a conversation the bot is part of and nothing else. On memex it is inert
+can answer in a conversation the bot is part of and nothing else. On the control instance it is inert
 (`Teams:Enabled=false`, zero `TeamsConversation` nodes).
 
 The Executive Assistant (`src/MeshWeaver.Mail.MicrosoftGraph/ExecutiveAssistantPlugin.cs`) has
@@ -82,8 +82,8 @@ Send); a Teams post is immediate and irreversible. The gate is the same shape: `
 defaults to `Off`, in which `PostChannelMessage` / `ReplyToChannelMessage` / `SendChatMessage` are
 never handed to the model (and refuse by name when reached directly); `Send` hands them over, with
 no per-message confirmation — the boundary `Email:AgentSend=Send` has too. The scopes are consented
-regardless of the mode, so flipping the mode later costs nobody a reconnect. memex-cloud runs
-`Teams__AgentSend: "Send"` (Memex values); memex.systemorph.com does not.
+regardless of the mode, so flipping the mode later costs nobody a reconnect. The public instance runs
+`Teams__AgentSend: "Send"` (its deployment values); the control instance does not.
 
 ### The three pieces (built 2026-09-09/10)
 
@@ -98,7 +98,7 @@ regardless of the mode, so flipping the mode later costs nobody a reconnect. mem
 3. **Plugins repo:** `src/MeshWeaver.AI/Data/Agent/ExecutiveAssistant.md` names the surface, or the
    agent keeps answering "I have no Teams tool" from its instructions.
 
-## 🚨 The wall: "PartnerRe ESL" lives in PartnerRe's tenant
+## 🚨 The wall: a client's team lives in the client's tenant
 
 A delegated token is minted by the user's **home** tenant. A team the user reaches as a **guest**
 (B2B) lives in the **resource** tenant, and Graph does not cross that line on a home-tenant token:
@@ -106,21 +106,21 @@ A delegated token is minted by the user's **home** tenant. A team the user reach
 measured and documented by others
 ([Q&A](https://learn.microsoft.com/en-us/answers/questions/48733/read-teams-channels-using-graph-api-as-a-b2b-%28gues),
 [Tech Community](https://techcommunity.microsoft.com/t5/teams-developer/read-teams-channels-using-graph-api-as-a-b2b-or-guest-user/m-p/1502502)).
-So the scopes above make the EA see **Systemorph's** teams. PartnerRe ESL needs one of:
+So the scopes above make the EA see **Systemorph's** teams. A client's team (e.g. `Globex/Team`) needs one of:
 
-- **A token for PartnerRe's tenant.** Run the same consent flow against
-  `login.microsoftonline.com/<partnerre tenant id>` (the app registration must be multi-tenant),
+- **A token for the client's tenant.** Run the same consent flow against
+  `login.microsoftonline.com/<tenant-id>` (the app registration must be multi-tenant),
   store the resulting refresh token per (user, tenant), and route calls for that team through it.
-  `ChannelMessage.Read.All` then needs **PartnerRe's** admin to consent to the Memex app in their
-  tenant — a conversation with Thomas Mager and their security team (Lucas Mebold), not a setting
+  `ChannelMessage.Read.All` then needs **the client's** admin to consent to the Memex app in their
+  tenant — a conversation with the client's IT owner and their security lead, not a setting
   on our side.
 - **The bot, installed in their team.** The existing `MeshWeaver.Teams` bot with resource-specific
-  consent (`ChannelMessage.Read.Group`) in its manifest, added to the PartnerRe ESL team by a team
+  consent (`ChannelMessage.Read.Group`) in its manifest, added to the client's team by a team
   owner. Messages are then PUSHED to `/api/teams/messages` as they happen; nothing is enumerated.
-  Needs `Teams:Enabled` on the receiving portal and PartnerRe's app-upload policy to allow it.
+  Needs `Teams:Enabled` on the receiving portal and the client's app-upload policy to allow it.
 - **Their export.** Ask for a channel export; ingest it as content. No integration at all.
 
-Do not promise "I'll read the PartnerRe channel" until one of these exists; the honest answer today
+Do not promise "I'll read the client's channel" until one of these exists; the honest answer today
 is the Graph-visible substitute — the mailbox — which the EA already gives.
 
 ## Checking what an agent says about Teams

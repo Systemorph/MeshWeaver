@@ -79,7 +79,7 @@ What that means in practice:
 
 - **Every store cover unfurls.** Plugin roots are anonymous-readable by design (the cover *is*
   the marketing surface; provisioning writes the Anonymous/Public grants). Measured 2026-08-30:
-  all 81 catalog covers on `memex.meshweaver.cloud` served complete cards, and cover media —
+  all 81 catalog covers on the public instance served complete cards, and cover media —
   posters, `<video>` sources — streamed anonymously with range requests.
 - **The documentation unfurls.** `Doc/_Policy` carries `PublicRead = true` (it GitSyncs from the
   public MeshWeaver repository, so anonymous read reveals nothing not already on github.com).
@@ -111,14 +111,14 @@ Measured on `www.meshweaver.cloud`, 2026-09-20:
 
 | URL | `og:title` | `og:image` |
 |---|---|---|
-| `/PG3Reporting` | Fund Reporting | `/api/og/PG3Reporting.png` |
-| `/PG3Reporting/Funds` | MeshWeaver | `/api/og.png` |
-| `/PG3Reporting/Funds/InsuranceCore` | MeshWeaver | `/api/og.png` |
-| `/PG3Reporting/Funds/InsuranceCore/2026-06-30` | MeshWeaver | `/api/og.png` |
+| `/InitechReporting` | Fund Reporting | `/api/og/InitechReporting.png` |
+| `/InitechReporting/Funds` | MeshWeaver | `/api/og.png` |
+| `/InitechReporting/Funds/InsuranceCore` | MeshWeaver | `/api/og.png` |
+| `/InitechReporting/Funds/InsuranceCore/2026-06-30` | MeshWeaver | `/api/og.png` |
 | `/Doc/Architecture/AccessControl` | Access Control Architecture | `/api/og/Doc/…png` |
 
-The last row is the control: **it was never about depth.** `PG3Reporting/_Policy` is a
-`PartitionAccessPolicy` with a `RedirectOnDenied` of `PG3Reporting/Subscribe` and no `PublicRead`, so
+The last row is the control: **it was never about depth.** `InitechReporting/_Policy` is a
+`PartitionAccessPolicy` with a `RedirectOnDenied` of `InitechReporting/Subscribe` and no `PublicRead`, so
 the root is a public listing and everything under it is gated — and the head, gating through the
 `AnonymousGate`, had nothing to say about any of it.
 
@@ -159,7 +159,7 @@ field of the card.
 
 **When no ancestor is public either, the site card stays** — unless the partition opted in (next
 section). That floor is reached more often than it looks: measured on a control instance,
-`/PG3/LocalHardwareOffer` unfurled as the site card **and so did `/PG3` itself**, so there was no
+`/Initech/LocalHardwareOffer` unfurled as the site card **and so did `/Initech` itself**, so there was no
 public ancestor anywhere on that chain and the fallback above correctly had nothing to offer. A
 partition that is gated all the way up needs the opt-in, not the walk.
 
@@ -286,7 +286,7 @@ Fetch the page as a crawler would and read the head — the same check the platf
 
 ```bash
 curl -sL -A "Mozilla/5.0 (compatible; SkypeUriPreview Preview/0.5)" \
-  https://memex.meshweaver.cloud/Chess | grep -o '<meta[^>]*og:[^>]*>'
+  https://portal.example.com/Chess | grep -o '<meta[^>]*og:[^>]*>'
 ```
 
 A page that unfurls shows the full `og:*` set and an `og:image` you can fetch anonymously. A page

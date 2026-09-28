@@ -306,28 +306,28 @@ Whichever is chosen, the alarm is no longer the thing that has to be silenced to
 ## No link to the stale portals
 
 The issue body claims every self-updating install stays on the previous image. Measured on the
-control instance (`memex.systemorph.com`) on 2026-09-18, the fleet is behind for reasons this
+control instance on 2026-09-18, the fleet is behind for reasons this
 defect neither causes nor would fix:
 
-* **memex-cloud** runs `3.0.0-ci.8411` (built 2026-09-12). Its own `Admin/UpdatePolicy` reads
+* **The public instance** runs `3.0.0-ci.8411` (built 2026-09-12). Its own `Admin/UpdatePolicy` reads
   *"updates are disabled on this install (Admin/UpdatePolicy = None); the registry was not listed"*,
   with a `heldTag` of `3.0.0-ci.8339` held since 2026-09-11 over ~25 modules unloadable on that
   framework identity. **Self-update is off**; a fresher image would not move it.
-* **pearl** runs `3.0.0-ci.8080` behind a deliberate pin that its record calls *"a FLOOR and the
+* **An SME client instance** runs `3.0.0-ci.8080` behind a deliberate pin that its record calls *"a FLOOR and the
   anchor the ACR retention lock protects"*.
-* **build** runs `3.0.0-ci.8411` behind its provisioning pin, and its record notes the self-updater
+* **The build instance** runs `3.0.0-ci.8411` behind its provisioning pin, and its record notes the self-updater
   cannot check for updates on an instance pulling from `cr.meshweaver.cloud`
   ([#4093](https://github.com/Systemorph/MeshWeaver/issues/4093)).
-* **memex** (the control instance) runs `3.0.0-ci.8844`, 13 tags behind the newest.
+* **The control instance** runs `3.0.0-ci.8844`, 13 tags behind the newest.
 
 If anything, the loop has been *over*-supplying images. What holds the portals is update policy and
 pins, and those are operational decisions, not this lane.
 
-**What is NOT established here**, said plainly: only `memex-cloud`'s instance-side
-`Admin/UpdatePolicy` was read directly. `pearl` and `build` have no MCP endpoint in reach, so their
+**What is NOT established here**, said plainly: only the public instance's instance-side
+`Admin/UpdatePolicy` was read directly. The SME client instance and the build instance have no MCP endpoint in reach, so their
 records' `updatePolicy: Continuous` is *intent* — and both records warn in as many words that the
 field alone changes nothing the instance does, because the operative setting is the instance's own
-node. `partnerre` reads `notScraped: true` with an empty replica list, so its live state is unknown
+node. The enterprise client's instance reads `notScraped: true` with an empty replica list, so its live state is unknown
 rather than empty. None of that changes the finding — a fresher image cannot move an install that is
 not rolling — but it is three instances taken from their records rather than from themselves.
 

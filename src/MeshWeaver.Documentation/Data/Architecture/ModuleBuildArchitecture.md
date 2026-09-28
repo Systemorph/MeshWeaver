@@ -614,7 +614,7 @@ keeps the supersede model in the next section.
 > **Repos on per-module deploy (above) do not cancel `main` runs at all** — this section is the
 > model for every repo that has not adopted it.
 
-**Maintainer directives, 2026-09-08** (during the memex roll block): *"cancel superseded"*,
+**Maintainer directives, 2026-09-08** (during the control instance's roll block): *"cancel superseded"*,
 *"superseded means overlapping code"*, *"they are monorepos — walk the dependency tree, find all
 affected code including Roslyn dependencies"*, *"we need to build the compile tree anyway, it's not
 even wasted time"*. This section is the rule; the lane implements it.
@@ -887,8 +887,8 @@ morning, with no diff in any repo:
 
 | where | what the record said | what the consumer held | outcome |
 |---|---|---|---|
-| every satellite gate (Reinsurance 33727661313, Manufacturing 33727661850) | `'MeshWeaver.Maps' built against mvid:4d04617…` | `live is ref:1D8FDE5B…` | 4 of 240 DECLINED, `GATE FAILED`, nothing sealed, memex-cloud `HOLDING` |
-| memex.meshweaver.cloud on ci.7621 | `'MeshWeaver.Markdown.Collaboration' built against mvid:A` | `live is mvid:B` | SocialMedia adopted 0/4, `/Posts` rendered empty (#3174) |
+| every satellite gate (Reinsurance 33727661313, Manufacturing 33727661850) | `'MeshWeaver.Maps' built against mvid:4d04617…` | `live is ref:1D8FDE5B…` | 4 of 240 DECLINED, `GATE FAILED`, nothing sealed, the public instance `HOLDING` |
+| the public instance on ci.7621 | `'MeshWeaver.Markdown.Collaboration' built against mvid:A` | `live is mvid:B` | SocialMedia adopted 0/4, `/Posts` rendered empty (#3174) |
 
 The first row is a **second producer in space**: a portal host had taken a direct project reference
 to `MeshWeaver.Maps`, a Store module. The bake composed Maps with `--module` — the id resolver puts
@@ -1149,7 +1149,7 @@ expensive says so rather than merely being slow.
 > longer list the type (Plugins#1709 and the five satellite PRs of the same day). A node repository
 > follows the platform by its daily `schedule` against the newest SEALED set — the recommended setup
 > for every repo and every install; the wave is the MAJOR-bump exception. Full reference:
-> `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+> `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the control instance's MCP).
 
 **The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
 register release and publish event"*) is three sentences:**

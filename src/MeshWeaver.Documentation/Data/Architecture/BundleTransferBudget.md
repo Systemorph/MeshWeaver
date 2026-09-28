@@ -13,7 +13,7 @@ disagreed with each other and with the thing they were supposed to bound.
 
 ## What was measured
 
-On memex.systemorph.com, 2026-09-17, reading Loki through the control instance's `Logs` action.
+On the control instance, 2026-09-17, reading Loki through the control instance's `Logs` action.
 
 | | |
 |---|---|
@@ -90,16 +90,16 @@ occurrence will say which of the two it was. Settling #4528 needs that evidence.
 The paragraph above expected the next occurrence to be informative. It was informative in the
 direction nobody wrote down: **the shape fix did not stop the attempt timeout.**
 
-Read-only, from `Ops/Status/{memex,memex-cloud}` on the control instance and the incident node the log
+Read-only, from `Ops/Status/{<control>,<public>}` on the control instance and the incident node the log
 watcher folds these events onto. Each reading carries the sample time of the object it came from, so
 every number below is attributable to one read rather than to a session window:
-`Ops/Status/memex` **sampled 2026-09-19T18:53:11Z**, `Ops/Status/memex-cloud` **sampled
+`Ops/Status/<control>` **sampled 2026-09-19T18:53:11Z**, `Ops/Status/<public>` **sampled
 2026-09-19T19:03:22Z**, and the incident node **re-read at 2026-09-19T19:07:24Z**.
 
 | deployment | image | commit | replicas | pods started | carries the shape fix? |
 |---|---|---|---|---|---|
-| `memex` | `3.0.0-ci.8968` | `96f88406` | 2/2, `converged: true` | 2026-09-19T08:10:37Z, 08:11:39Z | **yes** |
-| `memex-cloud` | `3.0.0-ci.8969` | `c25f86ae` | 3/3, `converged: true` | 2026-09-19T08:34:53Z, 08:39:58Z, 08:39:59Z | **yes** |
+| control instance | `3.0.0-ci.8968` | `96f88406` | 2/2, `converged: true` | 2026-09-19T08:10:37Z, 08:11:39Z | **yes** |
+| public instance | `3.0.0-ci.8969` | `c25f86ae` | 3/3, `converged: true` | 2026-09-19T08:34:53Z, 08:39:58Z, 08:39:59Z | **yes** |
 
 All ten retained samples on the incident read
 `Source: 'plugin-registry-bundles-standard//Standard-AttemptTimeout'`, spanning

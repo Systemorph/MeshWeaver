@@ -17,7 +17,7 @@ That failure is completely silent. There is no exception and no error line: cons
 `content is Invitation` simply see `null`, the view renders empty, and a reactive wait times out
 with nothing to point at.
 
-It was found on `memex.systemorph.com`, where the portal logged at boot that
+It was found on the control instance, where the portal logged at boot that
 `Admin/_GraphSubscription/inbox` *"stayed an untyped JsonElement after deserialization"*. That node
 carries the state of the inbound-mail subscription, so the renewal could not see its own record and
 inbound mail on that install was dead — with every health signal green.

@@ -69,7 +69,7 @@ THE PIN SET IS THE UNION OF TWO AXES, AND ONE OF THEM IS INVISIBLE TO THE OTHER
 
 Measured 2026-09-07: axis 2 is `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.7926` and its
 migration twin (memex + memex-cloud), `memex-portal-next:3.0.0-next.43`, `hosting-operator:1.0.0`,
-the pearl overlay's `3.0.0-rc9.ci.7601` pair, and core's `whisper-swiss-german:1.7.4`.
+the fabrikam overlay's `3.0.0-rc9.ci.7601` pair, and core's `whisper-swiss-german:1.7.4`.
 
 🚨 NO SECOND EXTRACTOR FOR AXIS 1. This script IMPORTS `check-pin-set-consistency.py` and uses its
 `extract()`, so there is exactly one definition in this repository of what a digest pin IS.
@@ -194,7 +194,7 @@ OVERLAY_TAG_RE = re.compile(
 # NOTHING, and AXIS 3 said so in as many words: *"installation `build` runs core c84c6c0 and its
 # overlay pins no image at all"*. That sentence was FALSE on 2026-09-13 — the overlay pins
 # `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411` and its migration twin — and the fleet's own
-# registry is where new installations are provisioned (`pearl` pins there too). An instrument that
+# registry is where new installations are provisioned (`fabrikam` pins there too). An instrument that
 # answers "pins nothing" about an overlay with two pins in it is the confidently-wrong shape this
 # whole family of gates exists to remove, and it reads as a broken extractor rather than as an
 # installation outside this registry.
@@ -289,7 +289,7 @@ def is_overlay_path(path: str) -> bool:
 #      `repo:tag` rule can see even once the file IS read.
 #
 # Measured over the five committed records: FOUR carry a portal pin the overlay extractor does not
-# see — `memex` 3.0.0-ci.8692, `pearl` 3.0.0-ci.8080, `build` 3.0.0-ci.8411, and `memex-cloud` with
+# see — `memex` 3.0.0-ci.8692, `fabrikam` 3.0.0-ci.8080, `build` 3.0.0-ci.8411, and `memex-cloud` with
 # an EMPTY tag (floating, and reported as such rather than as a pin). That is the exact shape this
 # module's own docstring warns about: *"an overlay that pins its images somewhere else then extracts
 # as pinning NOTHING"* — a confidently wrong zero.
@@ -901,9 +901,9 @@ class Instance:
     """One installation the fleet is expected to have, and what it turned out to be running.
 
     🚨 THE IDENTITY IS `gh_repo:id`, NOT `id` (#3438, 2026-09-15). `Hosting__Deployment` is unique
-    inside ONE deployments repository and inside nothing larger: `Systemorph/PartnerRe.Memex` was
+    inside ONE deployments repository and inside nothing larger: `Systemorph/Umbrella.Memex` was
     created at 2026-09-14T21:30Z and its control instance is `memex` too, which is correct — it is
-    PartnerRe's memex — and it took this lane down the same night, because a bare id keyed both to
+    the client's memex — and it took this lane down the same night, because a bare id keyed both to
     one slot and the second one read as "declared by two overlays, so which host answers for it is
     ambiguous". Neither installation was then asked anything, `memex` — the installation actually
     exposed to the ACR purge — got no locks either, and the red sat on `pause.reEnableWhen`.
@@ -1105,6 +1105,94 @@ def build_plan(axis1: list, axis2: list[OverlayScan]) -> Plan:
 # in cached third-party images or independently versioned helpers are not MW releases.
 # --check-retention-record checks this set against the publisher's explicit repo loops.
 ROSTER_PATH = "instances.json"
+# 🚨 A CLIENT ESTATE IS NOT DECLARED IN THIS (PUBLIC) REPOSITORY. Its deployments repository, its
+# registry and its installations are the client's identity, so their roster lines live in a
+# private source and reach this lane through the environment — the workflow maps the
+# `ACR_RETENTION_PRIVATE_ROSTER` secret into this variable. The value is a JSON document of the
+# SAME shape as `instances.json` (`repositories`, `registries`, `instances`), merged over the
+# committed one. Absent (a fork, a local run) means "the committed fleet only": a client
+# repository the scan then reaches is an UNDECLARED repository and reds, as it should.
+PRIVATE_ROSTER_ENV = "MW_ACR_PRIVATE_ROSTER"
+
+
+def merge_roster(committed: dict, private: dict) -> dict:
+    """The committed roster with the private one laid over it — never silently overriding it.
+
+    `repositories` and `registries` are keyed tables, and a key present in BOTH is a ValueError:
+    two declarations of one host or repository would let the private line quietly replace the
+    reviewed public one. `instances` lists are concatenated; the instance reader already reds on
+    a key declared twice."""
+    if not isinstance(private, dict):
+        raise ValueError(f"{PRIVATE_ROSTER_ENV} is not a JSON object")
+    merged = dict(committed)
+    for table in ("repositories", "registries"):
+        extra = private.get(table)
+        if extra is None:
+            continue
+        if not isinstance(extra, dict):
+            raise ValueError(f"{PRIVATE_ROSTER_ENV}: `{table}` is not an object")
+        base = merged.get(table)
+        if base is not None and not isinstance(base, dict):
+            # Fail closed: filling a malformed COMMITTED table from the private one would hand the
+            # readers' shape checks a valid object and hide the committed file's corruption.
+            raise ValueError(f"instances.json: `{table}` is not an object")
+        base = dict(base) if base is not None else {}
+        clash = sorted(set(base) & set(extra))
+        if clash:
+            raise ValueError(f"{PRIVATE_ROSTER_ENV}: `{table}` re-declares {len(clash)} key(s) the "
+                             "committed roster already declares")
+        base.update(extra)
+        merged[table] = base
+    extra_instances = private.get("instances")
+    if extra_instances is not None:
+        if not isinstance(extra_instances, list):
+            raise ValueError(f"{PRIVATE_ROSTER_ENV}: `instances` is not a list")
+        merged["instances"] = list(merged.get("instances") or []) + extra_instances
+    return merged
+
+
+def mask_private_roster() -> list[str]:
+    """Register every identifier the PRIVATE roster carries as a GitHub Actions log mask.
+
+    This repository's run logs are public, and the lane's diagnostics name repositories,
+    registries and installations verbatim — so an identifier that is private in the secret must
+    not reappear in plain text on a red run. Called once from `main()` (never from the
+    self-test, whose fixtures would mask ordinary words); a no-op outside GitHub Actions or
+    without the secret. Returns the masked values so the caller can say how many."""
+    extra = os.environ.get(PRIVATE_ROSTER_ENV, "").strip()
+    if not extra or os.environ.get("GITHUB_ACTIONS") != "true":
+        return []
+    try:
+        private = json.loads(extra)
+    except ValueError:
+        return []              # the readers refuse it by name; nothing identifiable to mask
+    values: set[str] = set()
+    if isinstance(private, dict):
+        for table in ("repositories", "registries"):
+            if isinstance(private.get(table), dict):
+                values.update(str(k) for k in private[table])
+        for entry in private.get("instances") or []:
+            if isinstance(entry, dict):
+                values.update(str(entry.get(k, "")) for k in ("id", "repo", "host"))
+    masked = sorted(v.strip() for v in values if len(v.strip()) >= 4)
+    for value in masked:
+        print(f"::add-mask::{value}")
+        if "/" in value:       # an owner/name repository also appears as its bare name
+            print(f"::add-mask::{value.split('/', 1)[1]}")
+    return masked
+
+
+def read_roster_document(path: Path) -> dict:
+    """`instances.json` as every reader sees it: the committed file plus the private additions.
+
+    Raises OSError / ValueError (json.JSONDecodeError is one) like `json.loads` did, so each reader
+    keeps its own refusal for an unreadable roster — a malformed private roster is unreadable too,
+    never an empty one."""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    extra = os.environ.get(PRIVATE_ROSTER_ENV, "").strip()
+    if not extra:
+        return document
+    return merge_roster(document, json.loads(extra))
 ROSTER_STATES = {"live", "not-installed", "retired"}
 INSTANCE_PROBE_TIMEOUT = 25
 VERSION_ROUTE = "/api/version"
@@ -1139,8 +1227,8 @@ def read_registry_dispositions(root: str) -> tuple[dict[str, tuple[str, str]], l
     if not path.is_file():
         return {}, []          # the roster reader already reds on a missing file
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        document = read_roster_document(path)
+    except (OSError, ValueError):
         return {}, []          # …and on an unreadable one
     table: dict[str, tuple[str, str]] = {}
     problems: list[str] = []
@@ -1181,12 +1269,12 @@ def check_registry_roster(referenced: set[str], declared: dict[str, tuple[str, s
     it. `registries` was the only one of this file's three tables checked in ONE direction. The
     strict half — an undeclared host is a blocker — is `classify_foreign_registries`, and it worked:
     it refused, correctly, on 2026-09-17. What nothing checked was the half that had gone wrong
-    FIRST. PartnerRe's estate was deleted on 2026-09-16 and rebuilt on 2026-09-17 in PartnerRe's own
-    subscription and tenant, minting a new ACR (`memexaksacr43rzd6faaix36`); the overlay moved to it
-    the same morning and the declaration stayed on `memexaksacrqoqqdqnhlaksg`, a registry that no
+    FIRST. A client's estate was deleted on 2026-09-16 and rebuilt on 2026-09-17 in the client's own
+    subscription and tenant, minting a new ACR (`clientacr2`); the overlay moved to it
+    the same morning and the declaration stayed on `clientacr1`, a registry that no
     longer exists in any subscription. The record went on validating green — a `disposition`, a
     `reason`, an `out-of-estate` retention block, all well-formed prose about nothing — while the
-    lane reported the NEW host as unknown. PartnerRe.Memex's own commit for the twin defect in its
+    lane reported the NEW host as unknown. Umbrella.Memex's own commit for the twin defect in its
     records says it in four words: *"and nothing could tell us"*.
 
     It is the same doctrine `check_repository_roster` and `check_publication_accounting` already
@@ -1241,7 +1329,7 @@ def check_registry_roster(referenced: set[str], declared: dict[str, tuple[str, s
             continue
         if not complete or unreadable:
             continue
-        # 🚨 THE DIAGNOSTIC NAMES ONLY THIS HOST (#5156 review). It used to carry the PartnerRe
+        # 🚨 THE DIAGNOSTIC NAMES ONLY THIS HOST (#5156 review). It used to carry the client-estate
         # incident inline — including *"while the lane refused over the ACR that replaced it"*,
         # which on any OTHER stale host is not a stale example but a false assertion that a
         # replacement exists, sending an operator to a registry that has nothing to do with it.
@@ -1279,8 +1367,8 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], li
         return {}, [f"the instance roster {path} is missing, so no installation can be declared "
                     "retired or not-yet-installed and every one of them is expected to answer."]
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        document = read_roster_document(path)
+    except (OSError, ValueError) as exc:
         return {}, [f"the instance roster {path} could not be read: {exc}. An unreadable roster is "
                     "not an empty one."]
     roster: dict[str, tuple[str, str, str]] = {}
@@ -1344,7 +1432,7 @@ def read_repository_roster(root: str) -> tuple[dict[str, str], list[str]]:
 
     🚨 THIS IS THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION (#3438, 2026-09-15).
     Keying an installation by `gh_repo:id` is what lets `Systemorph/Memex` and
-    `Systemorph/PartnerRe.Memex` each declare a `memex` — but on its own it also means a new
+    `Systemorph/Umbrella.Memex` each declare a `memex` — but on its own it also means a new
     deployments repository joins the fleet SILENTLY, its installations becoming their own slots
     with nobody having read a line about them. "A fork reds the lane" would then have been traded
     for "a fork is invisible to it", which is the same defect wearing the other costume.
@@ -1358,8 +1446,8 @@ def read_repository_roster(root: str) -> tuple[dict[str, str], list[str]]:
     if not path.is_file():
         return {}, []          # the instance roster reader already reds on a missing file
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        document = read_roster_document(path)
+    except (OSError, ValueError):
         return {}, []          # …and on an unreadable one
     repositories = document.get("repositories")
     if repositories is None:
@@ -1441,7 +1529,7 @@ def check_repository_roster(axis2: list[OverlayScan], declared: dict[str, str],
             + f", and `.github/acr-retention/{ROSTER_PATH}`'s `repositories` table does not name "
             "it. Installation identity is qualified by the repository that declares it, so a "
             "repository nobody has declared brings its installations into this run unread — which "
-            "is how `Systemorph/PartnerRe.Memex` reached the fleet on 2026-09-14 and took this "
+            "is how `Systemorph/Umbrella.Memex` reached the fleet on 2026-09-14 and took this "
             "lane down the same night. Add it, with what it is.")
     if complete:
         for repo in sorted(set(declared) - seen):
@@ -1498,8 +1586,8 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, 
 
     🚨 IDENTITY IS `gh_repo:id` (#3438, 2026-09-15). A `Hosting__Deployment` is unique inside ONE
     deployments repository and inside nothing larger, so two repositories may each declare a
-    `memex` — `Systemorph/Memex`'s is memex.systemorph.com and `Systemorph/PartnerRe.Memex`'s is
-    partnerre.meshweaver.cloud, and both are correct. The duplicate blocker still fires, and fires
+    `memex` — `Systemorph/Memex`'s is memex.systemorph.com and `Systemorph/Umbrella.Memex`'s is
+    globex.example.com, and both are correct. The duplicate blocker still fires, and fires
     for what it was always about: the SAME repository declaring one id in two overlays, where the
     ingress host really is ambiguous."""
     instances: dict[str, Instance] = {}
@@ -1585,16 +1673,16 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, 
             # one" — true of an ABSENT line, and it says nothing about a line that has gone WRONG.
             # A stale exemption is the looser mistake, and it is silent by construction: the
             # installation is skipped, so nothing ever contradicts it. Measured 2026-09-21 — the
-            # `pearl` entry read "never installed — pearl.meshweaver.cloud has no DNS record
+            # `fabrikam` entry read "never installed — fabrikam.example.com has no DNS record
             # (measured 2026-09-12)" and ended "Delete this entry the day it is provisioned";
-            # pearl was provisioned 2026-09-16 and had been answering for five days, outside this
+            # fabrikam was provisioned 2026-09-16 and had been answering for five days, outside this
             # lane's protected set AND outside the combo-verification roster derived from the same
             # file, with nothing anywhere saying so.
             #
             # So the exemption is held to the ONE question that can falsify it — does a portal
             # answer there? — using the probe seam this function already takes. It costs one HTTPS
             # call per exempted installation THAT NAMES A HOST, which in the committed fleet is
-            # ZERO: after `pearl`'s line goes the only exemption left is `partnerre`, whose overlay
+            # ZERO: after `fabrikam`'s line goes the only exemption left is `globex`, whose overlay
             # still reads `host: "TODO"` and yields no host at all, so it is skipped here and left
             # to the roster's own stale-entry check. The reading is the COMMIT, not
             # the absence of an error: `derive-combo-instances.py` passes a probe that answers
@@ -1728,7 +1816,7 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                 # assigning `unlockable_registries`, and this branch then read that empty list as
                 # "every foreign host is declared, and none of them fleet-unlockable". The comment
                 # here used to assert exactly that. Measured on the 2026-09-17→21 schedules: the
-                # lane printed *"pins images ONLY in memexaksacr43rzd6faaix36.azurecr.io, every one
+                # lane printed *"pins images ONLY in clientacr2.azurecr.io, every one
                 # of them declared `third-party`"* about a host `instances.json` did not mention at
                 # all — an instrument stating a classification that does not exist, one line below
                 # the blocker saying the record does not account for it. A reader who believes the
@@ -2565,7 +2653,7 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
     if not plan.instances and not any(scan.unreadable for scan in axis2):
         plan.blockers.append(
             "AXIS 3 found ZERO installations across the whole fleet. Three overlays declared one "
-            "on 2026-09-12 (memex, memex-cloud, pearl), so zero means the overlay reader stopped "
+            "on 2026-09-12 (memex, memex-cloud, fabrikam), so zero means the overlay reader stopped "
             "finding `Hosting__Deployment` — never that the fleet has no installations. "
             "Run --self-test.")
     repositories_of = {
@@ -3022,12 +3110,12 @@ def check_retention_record(root: str) -> int:
 # Design: Doc/Architecture/FleetRegistryRetention.
 
 # 🚨 `out-of-estate` IS THE FOURTH RULE, AND IT IS THE ONE THAT HAD TO BE EARNED (#3438,
-# 2026-09-15). `Systemorph/PartnerRe.Memex` joined the fleet on 2026-09-14 with a LIVE control
-# instance (partnerre.meshweaver.cloud, answering /api/version) whose overlay pinned our portal and
-# migration images in `memexaksacrqoqqdqnhlaksg.azurecr.io` — an ACR in the `PartnerRe Memex`
+# 2026-09-15). `Systemorph/Umbrella.Memex` joined the fleet on 2026-09-14 with a LIVE control
+# instance (globex.example.com, answering /api/version) whose overlay pinned our portal and
+# migration images in `clientacr1.azurecr.io` — an ACR in the client's
 # subscription, which this lane's OIDC credential does not reach at all. (That estate was torn down
-# on 2026-09-16 and rebuilt in PartnerRe's OWN subscription and tenant the next day; the live host
-# is `memexaksacr43rzd6faaix36.azurecr.io` and the reasoning below is unchanged by the move — what
+# on 2026-09-16 and rebuilt in the client's OWN subscription and tenant the next day; the live host
+# is `clientacr2.azurecr.io` and the reasoning below is unchanged by the move — what
 # the move cost is `check_registry_roster`, above.) Every existing rule was a
 # FALSE sentence about it: `not-ours` (the images ARE ours, mirrored), `nothing-deletes` (its
 # enumeration is held to a committed CHART this repository renders, and there is none), and
@@ -3339,8 +3427,8 @@ def read_registry_publications(root: str) -> dict[str, set[str]]:
     if not path.is_file():
         return declared
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        document = read_roster_document(path)
+    except (OSError, ValueError):
         return declared
     registries = document.get("registries")
     # 🚨 A NON-MAPPING `registries` MUST NOT RAISE HERE. `read_registry_dispositions` already reds
@@ -3380,8 +3468,8 @@ def read_registry_rules(root: str) -> dict[str, tuple[str, str]]:
     if not path.is_file():
         return rules
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        document = read_roster_document(path)
+    except (OSError, ValueError):
         return rules
     registries = document.get("registries")
     if not isinstance(registries, dict):
@@ -3756,8 +3844,8 @@ def check_registry_retention(root: str) -> int:
               "fleet pins in is accounted for, both for what locks it and for what deletes from it.")
         return 1
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        document = read_roster_document(path)
+    except (OSError, ValueError) as exc:
         print(f"::error::{path} is not readable JSON: {exc}")
         return 1
     registries = document.get("registries")
@@ -4751,7 +4839,7 @@ def self_test() -> int:
     # ── ARM 13b: the Hosting/Deployment RECORD axis (Memex#219) ────────────────────────────────
     # The record is the pin `helm-release.yml` APPLIES when its `image` input is empty, and it was
     # invisible twice over: not an overlay path, and a pin split across two keys.
-    check(is_deployment_record_path("mesh/Deployments/pearl.json"),
+    check(is_deployment_record_path("mesh/Deployments/fabrikam.json"),
           "ARM 13b: Memex's real record path was rejected")
     check(not is_deployment_record_path("mesh/Deployments/index.json"),
           "ARM 13b: the record INDEX was accepted as a record — it lists records, it pins nothing")
@@ -4760,11 +4848,11 @@ def self_test() -> int:
     check(not is_deployment_record_path("deployments/aks/memex/values.memex.public.yaml"),
           "ARM 13b: an overlay was accepted as a record; the two axes must stay separable")
 
-    # The REAL pearl shape, verbatim in the fields that matter (measured 2026-09-17): its record
+    # The REAL fabrikam shape, verbatim in the fields that matter (measured 2026-09-17): its record
     # pins an ACR tag its overlay does not, because the overlay pins the FLEET REGISTRY instead.
-    # That is the one live instance of this gap — `pearl` has never been installed, so AXIS 3's
+    # That is the one live instance of this gap — `fabrikam` has never been installed, so AXIS 3's
     # running-set protection cannot cover it either, and #219's own table names it.
-    pearl_record = json.dumps({
+    fabrikam_record = json.dumps({
         "$type": "Hosting/Deployment",
         "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
         "pinnedImageTag": "3.0.0-ci.8080",
@@ -4775,16 +4863,16 @@ def self_test() -> int:
              "isRegistrySource": True},
         ],
     })
-    pins, floating = extract_record_pins(pearl_record, "meshweaver")
+    pins, floating = extract_record_pins(fabrikam_record, "meshweaver")
     check(pins == [("memex-portal-ai", "3.0.0-ci.8080")] and not floating,
           f"ARM 13b: the record's SPLIT pin was not extracted: {pins!r} {floating!r}")
     # The `repo:tag`-shaped fields in the same record stay the ordinary extractor's job, so the two
     # compose rather than each half-knowing the other's shapes.
-    inline, _ = extract_overlay_pins(pearl_record, "meshweaver")
+    inline, _ = extract_overlay_pins(fabrikam_record, "meshweaver")
     check(("hosting-operator", "1979979") in inline,
           f"ARM 13b: the record's inline operator image was not extracted by the overlay rules: {inline!r}")
 
-    sources, source_error = extract_record_sources(pearl_record)
+    sources, source_error = extract_record_sources(fabrikam_record)
     check(source_error is None and sources == [
         ("FundReporting", "https://github.com/Systemorph/MeshWeaver.FundReporting")],
         f"ARM 13c: only registry-source mounts should produce a normalized source mapping: "
@@ -4831,10 +4919,10 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "mesh" / "Deployments").mkdir(parents=True)
-        (root / "mesh" / "Deployments" / "pearl.json").write_text(pearl_record, encoding="utf-8")
+        (root / "mesh" / "Deployments" / "fabrikam.json").write_text(fabrikam_record, encoding="utf-8")
         # The index sits beside it and must be read as pinning nothing rather than skipped silently.
         (root / "mesh" / "Deployments" / "index.json").write_text(
-            json.dumps({"deployments": ["pearl"]}), encoding="utf-8")
+            json.dumps({"deployments": ["fabrikam"]}), encoding="utf-8")
         scan = scan_overlays_local(str(root), "Systemorph/Fixture", "meshweaver")
         found = {(repo, tag) for repo, tag, _ in scan.pins}
     check(scan.unreadable is None, f"ARM 13b: the local scan refused the fixture tree: {scan.unreadable}")
@@ -4846,7 +4934,7 @@ def self_test() -> int:
           f"ARM 13b: the scan did not surface the record's inline operator image: {sorted(found)}")
     check(scan.sources == [(
         "FundReporting", "https://github.com/Systemorph/MeshWeaver.FundReporting",
-        "mesh/Deployments/pearl.json")] and not scan.source_errors,
+        "mesh/Deployments/fabrikam.json")] and not scan.source_errors,
         f"ARM 13c: registry sources were not wired through the record scanner: "
         f"{scan.sources!r} errors={scan.source_errors!r}")
     with tempfile.TemporaryDirectory() as tmp:
@@ -5909,14 +5997,14 @@ ingress:
           f"to retain' — the record's false sentence, reproduced by the report: {_ours_block}")
 
     # ── ARM 36: `out-of-estate` — our images in a store outside this fleet's reach (#3438) ──────
-    # 🚨 THE RULE EXISTS BECAUSE EVERY OTHER ONE WOULD HAVE BEEN FALSE about PartnerRe's estate
+    # 🚨 THE RULE EXISTS BECAUSE EVERY OTHER ONE WOULD HAVE BEEN FALSE about A client's estate
     # ACR, and it is SAFE only because a host this fleet PUSHES to cannot take it — derived from
     # the lanes rather than read from the record. Both halves are driven here: the control passes
     # and prints, and each refusal fires on its own.
     def _estate(**overrides) -> dict:
         retention = {
             "rule": "out-of-estate",
-            "estate": "the PartnerRe Memex subscription, recorded in Systemorph/PartnerRe.Memex",
+            "estate": "the client's own subscription, recorded in Systemorph/Umbrella.Memex",
             "cleanupAuthorized": False,
             "reason": "outside this lane's credential; the answer is theirs to give",
         }
@@ -5924,7 +6012,7 @@ ingress:
         for key in overrides.pop("drop", []):
             retention.pop(key, None)
         entry = {"disposition": "fleet-unlockable",
-                 "reason": "PartnerRe's estate registry; our images, which this lane "
+                 "reason": "a client's estate registry; our images, which this lane "
                            "cannot lock",
                  "retention": retention}
         entry.update(overrides)
@@ -5993,21 +6081,25 @@ ingress:
     check(code == 1 and "may not carry" in output,
           f"ARM 36: a `third-party` host — one whose images were never ours — declared that OUR "
           f"images there are somebody else's to retain: {output}")
-    # The committed record uses it, so the rule is exercised by the real file and not only by
-    # fixtures — and the host it names is NOT one this fleet publishes to.
-    _committed_registries = json.loads(
-        Path(".github/acr-retention/instances.json").read_text(encoding="utf-8"))["registries"]
+    # The hosts that use the rule are client estates, and a client estate is declared in the
+    # PRIVATE roster (`MW_ACR_PRIVATE_ROSTER`), never in this public file — so the report branch
+    # below is driven by the fixture declaration, which carries every field the real one does.
+    _committed_registries = _estate()
     _estate_hosts = sorted(host for host, entry in _committed_registries.items()
                            if ((entry.get("retention") or {}).get("rule")) == "out-of-estate")
     check(_estate_hosts,
-          "ARM 36: no committed registry declares `out-of-estate`, so the branch this repository's "
-          "own record depends on is driven by fixtures alone")
+          "ARM 36: the fixture estate declaration does not use `out-of-estate`, so the report "
+          "branch below is driven by nothing")
 
     # ── ARM 36b: the REPORT says so too, and it names the estate (#4400 review) ─────────────────
     # 🚨 ARM 36 validates the RECORD through `check_registry_retention` and never renders a line.
     # A regression to the old *"a cleanup must KEEP"* wording — a protected-set claim over a
     # registry whose own record says this fleet measures nothing about it — would leave the whole
     # suite green, and the report is the one artifact a reader checks the declaration against.
+    # The report reads the record's rules from the ROOT, so the fixture reaches it the way a real
+    # estate's line does: through the private roster, merged over the committed file.
+    _saved_private = os.environ.get(PRIVATE_ROSTER_ENV)
+    os.environ[PRIVATE_ROSTER_ENV] = json.dumps({"registries": _committed_registries})
     if _estate_hosts:
         _estate_host = _estate_hosts[0]
         _estate_scan = _scan2("Systemorph/Estate", FIXTURE_OVERLAY_FOREIGN.replace(
@@ -6053,6 +6145,9 @@ ingress:
               "its protected-set sentence, so the new branch is firing on the disposition rather "
               "than on the rule — and `cr.meshweaver.cloud`'s references really are a set a "
               "cleanup must keep")
+    os.environ.pop(PRIVATE_ROSTER_ENV, None)
+    if _saved_private is not None:
+        os.environ[PRIVATE_ROSTER_ENV] = _saved_private
 
     # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
     # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
@@ -6210,12 +6305,12 @@ ingress:
               f"exemption outlive the line written to end it: {problems}")
 
     # ── ARM 24e: TWO REPOSITORIES MAY EACH DECLARE A `memex`, and both are asked (#3438) ────────
-    # The live defect, as a fixture. `Systemorph/PartnerRe.Memex` was created 2026-09-14T21:30Z and
-    # its control instance is `memex` too — correctly, it is PartnerRe's memex — and the lane died
+    # The live defect, as a fixture. `Systemorph/Umbrella.Memex` was created 2026-09-14T21:30Z and
+    # its control instance is `memex` too — correctly, it is the client's memex — and the lane died
     # on `declared by two overlays … which host answers for it is ambiguous`. The cost was not the
     # red: it is that NEITHER installation was then asked anything, so `memex` — the one actually
     # exposed to the ACR purge — got no locks either, on a run whose green is `pause.reEnableWhen`.
-    _PARTNER_OVERLAY = """
+    _CLIENT_OVERLAY = """
 config:
   memex_portal:
     Hosting__Deployment: "memex"
@@ -6223,11 +6318,11 @@ portal:
   image: "cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8622"
 ingress:
   enabled: true
-  host: "partnerre.example.cloud"
+  host: "globex.example.cloud"
 """
     pair2 = [_scan2("Systemorph/Memex", FIXTURE_OVERLAY_INSTANCE,
                     where="deployments/aks/memex/values.memex.public.yaml"),
-             _scan2("Systemorph/PartnerRe.Memex", _PARTNER_OVERLAY,
+             _scan2("Systemorph/Umbrella.Memex", _CLIENT_OVERLAY,
                     where="deployments/aks/memex/values.memex.yaml")]
     plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
                         dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")})
@@ -6238,23 +6333,23 @@ ingress:
     check(not plan.blockers,
           f"ARM 24e: the cross-repository pair produced blockers: {plan.blockers}")
     check(sorted(i.key for i in plan.instances)
-          == ["Systemorph/Memex:memex", "Systemorph/PartnerRe.Memex:memex"],
+          == ["Systemorph/Memex:memex", "Systemorph/Umbrella.Memex:memex"],
           f"ARM 24e: the two installations were not both built: "
           f"{sorted(i.key for i in plan.instances)}")
     check(sorted(i.label for i in plan.instances)
-          == ["Systemorph/Memex:memex", "Systemorph/PartnerRe.Memex:memex"],
+          == ["Systemorph/Memex:memex", "Systemorph/Umbrella.Memex:memex"],
           "ARM 24e: two installations of the same id were LABELLED the same way, so every error "
           "and every report line about one of them would be about either")
     # 🚨 `next(..., None)` RATHER THAN `next(...)`. Under the pre-fix identity one of these does not
     # exist, and a StopIteration would end the suite on a traceback BEFORE any named failure is
     # printed — a red that says nothing about which arm caught what.
     _ours = next((i for i in plan.instances if i.gh_repo == "Systemorph/Memex"), None)
-    _theirs = next((i for i in plan.instances if i.gh_repo == "Systemorph/PartnerRe.Memex"), None)
+    _theirs = next((i for i in plan.instances if i.gh_repo == "Systemorph/Umbrella.Memex"), None)
     check(_ours is not None and _theirs is not None,
           "ARM 24e: one of the two repositories' installations was swallowed entirely — which is "
           "the live defect: the second declaration is dropped and the FIRST is never asked either")
     check(_ours is not None and _theirs is not None
-          and _ours.host == "memex.example.cloud" and _theirs.host == "partnerre.example.cloud",
+          and _ours.host == "memex.example.cloud" and _theirs.host == "globex.example.cloud",
           f"ARM 24e: the two installations did not keep their own ingress hosts: "
           f"{getattr(_ours, 'host', None)} / {getattr(_theirs, 'host', None)}")
     check(_ours is not None and _theirs is not None
@@ -6279,11 +6374,11 @@ ingress:
     # ── ARM 24g: the roster is resolved against `repo:id`, and cannot exempt the wrong one ──────
     plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
                         dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
-                        roster={"Systemorph/PartnerRe.Memex:memex":
-                                ("not-installed", "never stood up", "Systemorph/PartnerRe.Memex")})
+                        roster={"Systemorph/Umbrella.Memex:memex":
+                                ("not-installed", "never stood up", "Systemorph/Umbrella.Memex")})
     _states = {i.gh_repo: i.state for i in plan.instances}
     check(_states == {"Systemorph/Memex": "live",
-                      "Systemorph/PartnerRe.Memex": "not-installed"},
+                      "Systemorph/Umbrella.Memex": "not-installed"},
           f"ARM 24g: a roster entry naming its `repo` reached the wrong installation: {_states}")
     plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
                         dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
@@ -6310,7 +6405,7 @@ ingress:
               "ARM 24g: an `id` carrying the repository inline was accepted, so it could take the "
               "place of a qualified entry while naming no repository the scan produces")
         check(any("is not an `owner/name`" in p for p in _roster_problems(
-                  '{"instances": [{"id": "memex", "repo": "PartnerRe", "state": "retired", '
+                  '{"instances": [{"id": "memex", "repo": "Globex", "state": "retired", '
                   '"reason": "r"}]}')),
               "ARM 24g: a `repo` shorthand was accepted; it matches nothing, so the entry would "
               "exempt nobody while reading as a declaration")
@@ -6336,15 +6431,15 @@ ingress:
     # are driven, and the CONTROL — a fleet whose repositories are all declared — must pass, or the
     # arm would be a gate that reds on everything and gets ignored.
     check(not check_repository_roster(pair2, {"Systemorph/Memex": "ours",
-                                              "Systemorph/PartnerRe.Memex": "theirs"}),
+                                              "Systemorph/Umbrella.Memex": "theirs"}),
           "ARM 35: a fully declared fleet was refused by the repository roster")
     _missing = check_repository_roster(pair2, {"Systemorph/Memex": "ours"})
-    check(any("PartnerRe.Memex" in p and "does not name it" in p for p in _missing),
+    check(any("Umbrella.Memex" in p and "does not name it" in p for p in _missing),
           f"ARM 35: a repository carrying deployment overlays that the `repositories` table does "
           f"not name passed. That is a new deployments repository entering the fleet with nobody "
           f"having read a line about it: {_missing}")
     _stale = check_repository_roster(pair2, {"Systemorph/Memex": "ours",
-                                             "Systemorph/PartnerRe.Memex": "theirs",
+                                             "Systemorph/Umbrella.Memex": "theirs",
                                              "Systemorph/Gone": "decommissioned in 2019"})
     check(any("Systemorph/Gone" in p and "hides the next one" in p for p in _stale),
           f"ARM 35: a declaration for a repository no overlay answers to passed — a stale line "
@@ -6365,7 +6460,7 @@ ingress:
           "the line that is right")
     # ── the DENOMINATOR: only a full discovery may assert that a declaration names nobody ───────
     _partial = check_repository_roster(pair2, {"Systemorph/Memex": "ours",
-                                               "Systemorph/PartnerRe.Memex": "theirs",
+                                               "Systemorph/Umbrella.Memex": "theirs",
                                                "Systemorph/NotScannedHere": "elsewhere"},
                                        complete=False)
     check(not _partial,
@@ -6373,7 +6468,7 @@ ingress:
           f"never looked at is gone. Those modes deliberately scan part of the fleet, so the stale "
           f"direction would red every partial run on a record that is right: {_partial}")
     _partial_strict = check_repository_roster(pair2, {"Systemorph/Memex": "ours"}, complete=False)
-    check(any("PartnerRe.Memex" in p for p in _partial_strict),
+    check(any("Umbrella.Memex" in p for p in _partial_strict),
           f"ARM 35: a partial scan stopped holding the repositories IN FRONT OF IT to the table. "
           f"The two directions have different denominators; only one of them needs the whole "
           f"fleet: {_partial_strict}")
@@ -6402,7 +6497,7 @@ ingress:
     plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
                         dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
                         repositories={"Systemorph/Memex": "ours"})
-    check(any("PartnerRe.Memex" in b and "does not name it" in b for b in plan.blockers),
+    check(any("Umbrella.Memex" in b and "does not name it" in b for b in plan.blockers),
           f"ARM 35: the repository roster is not on the decision path — a repository the table "
           f"does not name reached the plan with no blocker: {plan.blockers}")
     # The committed table: it parses, it names every repository the fleet scan found on
@@ -6410,9 +6505,8 @@ ingress:
     _repos_table, _repo_problems = read_repository_roster(".")
     check(not _repo_problems,
           f"ARM 35: this repository's own `repositories` table does not validate: {_repo_problems}")
-    check({"Systemorph/Memex", "Systemorph/PartnerRe.Memex", "Systemorph/MeshWeaver"}
-          <= set(_repos_table),
-          f"ARM 35: the three repositories carrying deployment overlays on 2026-09-15 are not all "
+    check({"Systemorph/Memex", "Systemorph/MeshWeaver"} <= set(_repos_table),
+          f"ARM 35: the committed repositories carrying deployment overlays are not all "
           f"declared: {sorted(_repos_table)}")
     with tempfile.TemporaryDirectory() as scratch:
         folder = Path(scratch) / ".github" / "acr-retention"
@@ -6426,29 +6520,67 @@ ingress:
         check(any("has no `reason`" in p for p in read_repository_roster(scratch)[1]),
               "ARM 35: a repository declared with no reasoning was accepted, which is the hand "
               "list this file exists to replace")
-    _committed_roster, _ = read_instance_roster(".")
-    check(any(entry[2] for entry in _committed_roster.values()),
-          "ARM 35: no committed roster entry names its `repo`, so the qualified path this "
-          "repository's own record depends on is exercised by nothing")
+    # 🚨 THE PRIVATE ROSTER (`MW_ACR_PRIVATE_ROSTER`) is where a client estate's qualified entries
+    # live, so the qualified path is driven through the merge rather than through the public file:
+    # a private `repo`-qualified entry and a private repository reach the readers, and a private
+    # line that re-declares a committed key is REFUSED rather than silently replacing it.
+    _saved_private = os.environ.pop(PRIVATE_ROSTER_ENV, None)
+    try:
+        with tempfile.TemporaryDirectory() as scratch:
+            folder = Path(scratch) / ".github" / "acr-retention"
+            folder.mkdir(parents=True)
+            (folder / ROSTER_PATH).write_text(json.dumps({
+                "repositories": {"Systemorph/Memex": {"reason": "ours"}},
+                "registries": {},
+                "instances": [{"id": "build", "state": "live", "reason": "ours"}]}),
+                encoding="utf-8")
+            os.environ[PRIVATE_ROSTER_ENV] = json.dumps({
+                "repositories": {"Systemorph/Umbrella.Memex": {"reason": "a client's"}},
+                "instances": [{"id": "memex", "repo": "Systemorph/Umbrella.Memex",
+                               "state": "not-installed", "reason": "hand-over template"}]})
+            _merged_roster, _merged_problems = read_instance_roster(scratch)
+            check(not _merged_problems and any(entry[2] for entry in _merged_roster.values())
+                  and "build" in _merged_roster,
+                  f"ARM 35: the private roster's qualified entry did not reach the instance reader "
+                  f"beside the committed one: {_merged_roster} {_merged_problems}")
+            check("Systemorph/Umbrella.Memex" in read_repository_roster(scratch)[0],
+                  "ARM 35: the private roster's repository did not reach the repository table")
+            os.environ[PRIVATE_ROSTER_ENV] = json.dumps({
+                "repositories": {"Systemorph/Memex": {"reason": "overridden"}}})
+            _, _clash = read_instance_roster(scratch)
+            check(any("could not be read" in p for p in _clash),
+                  f"ARM 35: a private line re-declaring a committed repository was accepted: {_clash}")
+            os.environ[PRIVATE_ROSTER_ENV] = "{not json"
+            _, _bad = read_instance_roster(scratch)
+            check(any("could not be read" in p for p in _bad),
+                  "ARM 35: a malformed private roster read as an empty one")
+            os.environ.pop(PRIVATE_ROSTER_ENV, None)
+            _public_only, _ = read_instance_roster(scratch)
+            check(set(_public_only) == {"build"},
+                  f"ARM 35: with no private roster the committed one was not all there is: {_public_only}")
+    finally:
+        os.environ.pop(PRIVATE_ROSTER_ENV, None)
+        if _saved_private is not None:
+            os.environ[PRIVATE_ROSTER_ENV] = _saved_private
 
     # ── ARM 37: the REGISTRY table, both ways — and the sentence an undeclared host used to get ──
     # 🚨 THE LIVE CASE, AND IT IS THE HALF THAT HAD NEVER BEEN CHECKED. The strict direction
     # (`classify_foreign_registries`) refused correctly on 2026-09-17 and the lane was red for six
     # days. What produced that red was the OTHER direction going unguarded three days earlier:
-    # PartnerRe's estate was deleted on 2026-09-16 and rebuilt in PartnerRe's own subscription and
+    # A client's estate was deleted on 2026-09-16 and rebuilt in the client's own subscription and
     # tenant on 2026-09-17 with a new ACR, the overlay moved to it the same morning, and the
-    # declaration stayed on `memexaksacrqoqqdqnhlaksg.azurecr.io` — a registry that no longer exists
+    # declaration stayed on `clientacr1.azurecr.io` — a registry that no longer exists
     # in any subscription (measured read-only 2026-09-21: the old subscription holds ZERO
     # registries). A well-formed `disposition`, `reason` and `out-of-estate` retention block about
     # nothing validated green the whole time.
-    _live = {"memexaksacr43rzd6faaix36.azurecr.io": ("fleet-unlockable", "PartnerRe's own ACR")}
-    _dead = dict(_live, **{"memexaksacrqoqqdqnhlaksg.azurecr.io": ("fleet-unlockable", "gone")})
-    _referenced = {"memexaksacr43rzd6faaix36.azurecr.io"}
+    _live = {"clientacr2.azurecr.io": ("fleet-unlockable", "the client's own ACR")}
+    _dead = dict(_live, **{"clientacr1.azurecr.io": ("fleet-unlockable", "gone")})
+    _referenced = {"clientacr2.azurecr.io"}
     # The CONTROL first, or the arm is a gate that reds on everything and gets ignored.
     check(not check_registry_roster(_referenced, _live, set(), set()),
           "ARM 37: a registry the fleet actually pins in was called a stale declaration")
     _stale_reg = check_registry_roster(_referenced, _dead, set(), set())
-    check(any("qoqqdqnhlaksg" in p and "NOTHING in the fleet answers to it" in p
+    check(any("clientacr1" in p and "NOTHING in the fleet answers to it" in p
               for p in _stale_reg),
           f"ARM 37: a declaration for a registry no overlay pins, nothing publishes to and no lane "
           f"pushes to PASSED. That is exactly the line that stood for six days while the lane "
@@ -6570,7 +6702,7 @@ ingress:
           f"{plan.blockers}")
 
     # 🚨 ARM 37c: THE DIAGNOSTIC NAMES THE HOST IT IS ABOUT, AND NO OTHER (#5156 review). The first
-    # cut embedded PartnerRe's old hostname and the incident's own narrative in the generic blocker,
+    # cut embedded the client's old hostname and the incident's own narrative in the generic blocker,
     # so a DIFFERENT stale declaration would be reported with a sentence asserting that a specific
     # other registry had replaced it — a false statement pointing an operator at the wrong registry,
     # which is the exact defect class this whole diff removes.
@@ -6578,7 +6710,7 @@ ingress:
                                    set(), set())
     check(len(_other) == 1 and "someoneelse.example.io" in _other[0],
           f"ARM 37c: the stale blocker did not name the host it is about: {_other}")
-    check("qoqqdqnhlaksg" not in _other[0] and "43rzd6faaix36" not in _other[0],
+    check("clientacr1" not in _other[0] and "clientacr2" not in _other[0],
           f"ARM 37c: the generic stale blocker still names a registry from the incident it was "
           f"written for. On any other host that is a false claim about a replacement: {_other}")
 
@@ -6591,8 +6723,8 @@ ingress:
     # ── ARM 25b: a non-live declaration whose portal ANSWERS is stale, and reds (#3848) ─────────
     # ARM 25 covers an exemption naming NOBODY. This covers the other half, which is the one that
     # actually happened: an exemption naming a real installation that has since been stood up. The
-    # `pearl` line said "never installed — pearl.meshweaver.cloud has no DNS record (measured
-    # 2026-09-12)" and "Delete this entry the day it is provisioned"; pearl went live 2026-09-16
+    # `fabrikam` line said "never installed — fabrikam.example.com has no DNS record (measured
+    # 2026-09-12)" and "Delete this entry the day it is provisioned"; fabrikam went live 2026-09-16
     # and answered for five days while this file still exempted it, so its running images were
     # protected by nothing here and the combo roster derived from this same file covered it
     # nowhere. Nothing contradicted the line, because a non-live installation was never asked.
@@ -6796,6 +6928,9 @@ def main() -> int:
         repos = (consistency.discover_repos() if args.discover
                  else [r.strip() for r in args.repos.split(",") if r.strip()])
 
+    masked = mask_private_roster()
+    if masked:
+        print(f"private roster: {len(masked)} identifier(s) registered as log masks")
     release_enabled = (args.release_unpinned
                        or os.environ.get("MW_ACR_RELEASE_UNPINNED", "").strip().lower() == "true")
     print(f"scanning {len(repos)} repository(ies) on both pin axes: {', '.join(repos)}")

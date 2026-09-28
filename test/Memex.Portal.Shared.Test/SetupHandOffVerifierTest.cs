@@ -15,7 +15,7 @@ namespace Memex.Portal.Shared.Test;
 [Collection("handoff")]
 public class SetupHandOffVerifierTest
 {
-    private static readonly byte[] Body = Encoding.UTF8.GetBytes("""{"Deployment":"pearl"}""");
+    private static readonly byte[] Body = Encoding.UTF8.GetBytes("""{"Deployment":"fabrikam"}""");
     private const string Secret = "shared-secret";
     private static readonly DateTimeOffset Now = new(2026, 9, 16, 12, 0, 0, TimeSpan.Zero);
 
@@ -119,7 +119,7 @@ public class SetupHandOffVerifierTest
     [Fact]
     public void ASecretNeverPrintsItselfOnTheReceivingSideEither()
     {
-        var secret = new SetupHandOffSecret("Authentication__Microsoft__ClientSecret", "s3cret", "pearl-Authentication-Microsoft-ClientSecret");
+        var secret = new SetupHandOffSecret("Authentication__Microsoft__ClientSecret", "s3cret", "fabrikam-Authentication-Microsoft-ClientSecret");
         Assert.DoesNotContain("s3cret", secret.ToString());
         Assert.Contains("redacted", secret.ToString());
     }

@@ -79,7 +79,7 @@ Guard 1 was `event == "push"` — one value, not a set — and it discarded gree
 default branch's tree. `Systemorph/MeshWeaver.Reinsurance`'s `main` built green three times at
 `636ebd5` that day (11:17, 12:27, 12:55Z), every one with `event=repository_dispatch` from the
 release-follow lane, which rebuilds every module against a new platform pin **without a commit to
-push**. All three were dropped, and `Underwriting/_GitSync` on `memex.systemorph.com` sat 38 hours
+push**. All three were dropped, and `Underwriting/_GitSync` on the control instance sat 38 hours
 behind a merged main — with the webhook armed, every delivery answering 200 OK, and nothing anywhere
 reporting a problem. A dropped publish signal has no symptom except content that quietly stops
 arriving; there is no scheduled poll behind it to paper over the gap, by design.
@@ -253,7 +253,7 @@ package installed *here* that the registry does **not** carry is neither "up to 
 It is *absent from both loops*, and absence used to produce no log line, no ledger entry and no card
 state anywhere.
 
-The shape that made this expensive, measured on memex 2026-09-10:
+The shape that made this expensive, measured on the control instance 2026-09-10:
 
 | What was true | What every surface said |
 |---|---|
@@ -429,7 +429,7 @@ present:
 ## 🚨 A reminder is told ONCE — the gate the content-identity check cannot be (#3213)
 
 The content-identity gate above is the whole story for the **unattended** path and no part of it
-for the **reminder** path, and conflating the two shipped a real defect: on memex.meshweaver.cloud,
+for the **reminder** path, and conflating the two shipped a real defect: on the public instance,
 **124 of the newest 200 notification rows** were this one emitter, four rows for the same package
 in a single day, two packages accounting for over half of everything the mesh had written in four
 days.
@@ -559,7 +559,7 @@ recorded" instead.
 Answering 200 on a failed write is right — a non-2xx is the storm above — but on its own it made the
 event **gone for good**: the build record kept its previous value, the sync the green build
 authorises never ran (it hangs off the success branch), GitHub did not redeliver, and nothing else
-retried. A transient infrastructure fault became permanent data loss. Measured on `memex-cloud`:
+retried. A transient infrastructure fault became permanent data loss. Measured on the public instance:
 **154 of these in one week**, from two distinct inner causes — an owner that returned no verdict,
 and initial state that never arrived within 30 s.
 

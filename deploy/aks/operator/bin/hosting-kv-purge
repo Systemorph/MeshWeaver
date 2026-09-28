@@ -13,7 +13,7 @@
 # control instance's envelope key. That is the single most destructive typo available here.
 #
 # 🚨 IT ENUMERATES, it does not guess. This used to delete a hard-coded TWO suffixes
-# (Ai-KeyProtection-MasterKey, PluginCatalog-RegistryToken). Real instances carry more — atioz held
+# (Ai-KeyProtection-MasterKey, PluginCatalog-RegistryToken). Real instances carry more — initech held
 # five (2026-08-29: + Anthropic-ApiKey, Authentication-Microsoft-ClientSecret, Email-ClientSecret,
 # GitHub-OAuth-ClientSecret) — so a "successful" teardown left three live credentials in the vault
 # for an instance that no longer existed. Which secrets an instance owns depends on the providers

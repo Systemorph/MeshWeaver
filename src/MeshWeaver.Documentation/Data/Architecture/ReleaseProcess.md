@@ -219,7 +219,7 @@ distinguished only by its run number. A clean label is the only thing the defaul
 which is why it is what "releasing" means here.
 
 🚨 **The fleet's setting while no clean release above `3.0.0` exists: `policy: Continuous`,
-`pattern: 3.0.0-ci*`** on `memex` and `memex-cloud` — they follow the line's sealed sets. **Change
+`pattern: 3.0.0-ci*`** on every fleet instance — they follow the line's sealed sets. **Change
 it the day `3.0.1` is tagged**: either remove the pattern (the install then waits for clean
 releases — the default) or move it to `3.0.1-ci*` to keep following the next line's builds. A
 record that still reads `3.0.0-ci*` after the tag is not broken, it is finished: it selects nothing
@@ -373,7 +373,7 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
    > green on every catalogue is the only "validated" the fleet has — there is no tag for it, and
    > the clean `X.Y.Z` of step 4 remains the only tag-shaped promotion. Turning the wave on is the
    > MAJOR-bump exception. The recommended setup, end to end:
-   > `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+   > `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` over the mesh MCP).
 2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
    shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
    ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes

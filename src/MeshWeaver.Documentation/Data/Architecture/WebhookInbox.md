@@ -192,7 +192,7 @@ steps read their response file through `RESP="${RESP:-/tmp/resp}"`.
 
 `SecretConfigKey` is not a field on `DeploymentContent` — it can only ride in the free-form
 `extraPortalConfig` bag. And a `Hosting/Deployment` record is **git-synced**: the control instance's
-lives in the private `Systemorph/Memex` repo as `mesh/Deployments/memex-cloud.json`, so an edit made
+lives in the private deployments repository as `mesh/Deployments/<id>.json`, so an edit made
 on the *live node* that is not committed there is reverted by the next sync. Measured on that
 record's own version history:
 

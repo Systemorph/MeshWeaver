@@ -120,7 +120,7 @@ public class AdoptedBuildProvenanceTest
     /// <c>Critical</c> because only a human rebaking fixes it.
     ///
     /// <para>The flag is measured absent on memex and memex-cloud (and #2194 item 3 records the
-    /// same) — that is TWO instances, and says nothing about pearl, atioz, local installs, or any
+    /// same) — that is TWO instances, and says nothing about fabrikam, initech, local installs, or any
     /// external instance the registry serves. This branch exists because configuration lives on AKS
     /// in places this repo has never heard of.</para>
     /// </summary>

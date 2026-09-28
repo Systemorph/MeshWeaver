@@ -21,15 +21,15 @@ sitemap. It was the only MeshWeaver page Google showed. Google also still listed
 addresses on `systemorph.com` (`/team/`, `/contact/`, `/imprint/`, `/privacy-policy/`), every one of
 which landed on the homepage, which a search engine files as a soft 404.
 
-`memex.meshweaver.cloud`, the portal, had good crawler plumbing in its `<head>`: a per-page title,
+The public portal instance (here `portal.example.com`) had good crawler plumbing in its `<head>`: a per-page title,
 description, canonical link, Open Graph card, Course and Product JSON-LD for store items, a real
 `robots.txt` and a sitemap of 103 public roots. It had **zero pages in Google's index**, and the
 reason was in the `<body>`:
 
 ```
-$ curl -sA Googlebot/2.1 https://memex.meshweaver.cloud/Doc/Architecture/Localization
+$ curl -sA Googlebot/2.1 https://portal.example.com/Doc/Architecture/Localization
 <title>Localization · Memex</title>
-<link rel="canonical" href="https://memex.meshweaver.cloud/Doc/Architecture/Localization" />
+<link rel="canonical" href="https://portal.example.com/Doc/Architecture/Localization" />
 …
 <body>
   <div id="components-reconnect-modal"> Reconnecting… </div>
@@ -69,7 +69,7 @@ One process, two hosts, one address per page.
 | Host | Role | Indexed |
 |---|---|---|
 | `www.meshweaver.cloud` | **Public.** The landing, the documentation, the store, every course cover and free chapter, every public space. Canonical for all of it. | yes |
-| `memex.meshweaver.cloud` | **App.** Sign-in, the workspace, `/api`, `/mcp`, gRPC, the plugin registry. A stranger asking it for a public page is sent to the public host with `301`. | no |
+| the portal host (`portal.example.com`) | **App.** Sign-in, the workspace, `/api`, `/mcp`, gRPC, the plugin registry. A stranger asking it for a public page is sent to the public host with `301`. | no |
 | the brand hosts | `301` to the public host, per path, so the old WordPress addresses land on real pages. | — |
 
 Why not rename the portal host to `www`: the Entra, GitHub, Google, Apple and LinkedIn redirect
@@ -89,7 +89,7 @@ unchanged:
 - `Portal:LandingPath` — the node a signed-out visitor sees at `/` (the landing Space). Unset, the
   root stays the portal's own welcome route.
 
-- `Portal:AuthHost` — the host that owns SIGN-IN (`memex.meshweaver.cloud`). An OAuth
+- `Portal:AuthHost` — the host that owns SIGN-IN (the app host, e.g. `portal.example.com`). An OAuth
   challenge builds `redirect_uri` from the host the request arrived on, so a sign-in started on a
   brand host asks every identity provider to redirect to a host none of them has registered — measured
   on `www.meshweaver.cloud`, where Microsoft, Google and LinkedIn were each handed
@@ -122,7 +122,7 @@ Anonymous one. This widens nothing: Anonymous reads exactly what the gate admits
 Without the explicit identity, the owner read left `portal/reads-{meshId}` with none. The never-null
 guard refused it (`message=GetDataRequest, target=Store was posted with no AccessContext`). The
 resolver's fail-open then read the refusal as "not public", and the app host served every public
-page with `200` instead of redirecting it (MeshWeaver#5227, measured on memex.meshweaver.cloud:
+page with `200` instead of redirecting it (MeshWeaver#5227, measured on the public instance:
 every synthetic-probe run logged `app host: 200 -> (no redirect)` within a second of a
 `target=Store` refusal). `PublicHostRedirectAsksAsTheStrangerTest` runs the default decision over a
 real mesh with no identity anywhere. The older `PublicSiteTest` stubs the decision, so it could not
@@ -220,8 +220,8 @@ curl -sA Googlebot/2.1 https://www.meshweaver.cloud/Doc/Architecture/Localizatio
 curl -s https://www.meshweaver.cloud/sitemap.xml | grep -c 'AgenticPrimer/01-TheMagicWish'
 curl -s https://www.meshweaver.cloud/sitemap.xml | grep -c 'Doc/Architecture/'
 # the app host sends strangers away and keeps crawlers out
-curl -sI https://memex.meshweaver.cloud/Doc | grep -i '^location: https://www.meshweaver.cloud/Doc'
-curl -s https://memex.meshweaver.cloud/robots.txt | grep -c 'Disallow: /$'
+curl -sI https://portal.example.com/Doc | grep -i '^location: https://www.meshweaver.cloud/Doc'
+curl -s https://portal.example.com/robots.txt | grep -c 'Disallow: /$'
 # HEAD is answered
 curl -sI https://www.meshweaver.cloud/Doc | head -1
 ```

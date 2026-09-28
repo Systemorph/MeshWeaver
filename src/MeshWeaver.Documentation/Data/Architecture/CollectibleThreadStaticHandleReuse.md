@@ -250,11 +250,11 @@ The trigger is a **thread exit**. This process has two steady sources of them:
   `new Thread(_ => DrainQueue())`, and `DrainQueue` returns when `_tasks` is empty. The CPU lane has
   worked this way since the dedicated-thread compile lane, and every IO lane since #5678 (blocking
   leaves off the ThreadPool, merged 2026-09-25 06:43Z; the images running on
-  memex.systemorph.com / memex.meshweaver.cloud on 2026-09-26, core `4c8530d7dd`, contain it). Each
+  the control and public instances on 2026-09-26, core `4c8530d7dd`, contain it). Each
   blocking-leaf burst is therefore one thread exit, and one more chance to free a handle belonging to
   a context unloaded since that thread first ran.
 
-Combined with the recompile cadence measured on `memex` (one new compiled assembly every ~8 s for
+Combined with the recompile cadence measured on the control instance (one new compiled assembly every ~8 s for
 hours, #4654), the three conditions the defect needs (retire a context, reuse its index, exit a thread
 that held the old handle) are routine, not rare.
 

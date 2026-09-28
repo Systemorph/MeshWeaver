@@ -1,13 +1,13 @@
 ---
 Name: Deployment — AKS
 Category: Architecture
-Description: Deploying a code update to the shared AKS cluster (<aks-cluster>) that hosts the memex portal — build images, set image, roll out, verify
+Description: Deploying a code update to the shared AKS cluster (<aks-cluster>) that hosts the portal instances — build images, set image, roll out, verify
 Icon: Cloud
 ---
 
 # Deploying to AKS
 
-This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `<aks-cluster>`** (resource group `<aks-resource-group>`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
+This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `<aks-cluster>`** (resource group `<aks-resource-group>`, region `<region>`) — one namespace per portal instance, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
 
 > 🚨 **This runbook is the bootstrap / break-glass form of a `Roll`.** Since 2026-09-08 the rule is that operations go through the control instance's Hosting API: the instance is a `Deployments/<name>` record, its image pin is the roll, and a `Roll` (or `Restart`, `Suspend`, `Audit`, `Reconcile`) `Hosting/InstanceAction` is what the in-cluster operator executes — running exactly the commands below for you. Read them as what happens, not as what you type. Policy, and what the API does not answer yet: [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
 >
@@ -93,7 +93,7 @@ the `mesh-local` source plus a packageSourceMapping pinning `MeshWeaver.*`/`Meme
 what stops a typo'd `#r "nuget:MeshWeaver.X"` pulling a same-named package from another publisher on
 nuget.org. The directory that source points at does not exist in the image.
 
-## 2. Roll out (NS = `memex`)
+## 2. Roll out (NS = `<namespace>`)
 
 Portal-only code update (no schema change):
 
@@ -124,9 +124,9 @@ The portal container is `memex-portal` in Deployment `memex-portal-deployment`.
 
 ## 3. Verify
 
-- **Migration ran:** find the Job first — `kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration` — then `kubectl -n <NS> logs job/memex-migration-<revision> --tail=40` → expect `Database migration completed. Version: N`. A Job that reports `Complete` with that line is the success signal. 🚨 **A Job still `Running` past ten minutes is a FAILURE in progress, not a slow success**: the run has a budget (`migration.budgetMinutes`, default 10 — the runner fails RED naming the step that outlived it, and `activeDeadlineSeconds` ends the Job one minute later). A deployment that needs more writes the number into its overlay explicitly; a step that needs more is rewritten as bulk work (one set-based statement per partition, never a request per row — measured 2026-09-07: a row-at-a-time embedding backfill held memex-cloud's Job 4 h 30 min with its deploy long since reported failed).
+- **Migration ran:** find the Job first — `kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration` — then `kubectl -n <NS> logs job/memex-migration-<revision> --tail=40` → expect `Database migration completed. Version: N`. A Job that reports `Complete` with that line is the success signal. 🚨 **A Job still `Running` past ten minutes is a FAILURE in progress, not a slow success**: the run has a budget (`migration.budgetMinutes`, default 10 — the runner fails RED naming the step that outlived it, and `activeDeadlineSeconds` ends the Job one minute later). A deployment that needs more writes the number into its overlay explicitly; a step that needs more is rewritten as bulk work (one set-based statement per partition, never a request per row — measured 2026-09-07: a row-at-a-time embedding backfill held the public instance's Job 4 h 30 min with its deploy long since reported failed).
   - **A `CrashLoopBackOff` on a migration *Deployment* is NOT benign.** That is the legacy shape, and it is exactly the failure the Job replaced: the process exits 0, the Deployment restarts it, and every run rebuilds `public.top_level_index` across every partition schema. The chart records 310 restarts in a day pegging a full core. If you see it, the namespace is still on the legacy Deployment — do not wave it through.
-- **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<portal-host>/` → `200`. **The host is not derivable from the namespace** — namespace `memex` serves `memex.systemorph.com` (the DNS record `deploy/aks/README.md` → "Public ingress + TLS + DNS" creates), while `memex.meshweaver.cloud` is the *`memex-cloud`* namespace. Read the host off the namespace's own Ingress (`kubectl -n <NS> get ingress -o wide`) rather than templating it, or you will happily verify a portal you did not deploy to.
+- **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<portal-host>/` → `200`. **The host is not derivable from the namespace** — one instance's namespace serves a company host (the DNS record `deploy/aks/README.md` → "Public ingress + TLS + DNS" creates), while another instance's public host belongs to a differently named namespace. Read the host off the namespace's own Ingress (`kubectl -n <NS> get ingress -o wide`) rather than templating it, or you will happily verify a portal you did not deploy to.
 - **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke --subscription <subscription> … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
 
 ### The cluster runs what the chart describes — check it, don't assume it
@@ -182,7 +182,7 @@ an entry present on both the chart and the pod with a different value is reporte
 without printing either side.
 
 The **availability shape** — `spec.replicas`, the budget, the autoscaler — is compared because
-without it the check cannot see an outage. On 2026-08-14 `memex-cloud` served every request from
+without it the check cannot see an outage. On 2026-08-14 the public instance served every request from
 ONE pod, and none of the three reasons was a ConfigMap key: a hand-applied `minAvailable: 2`
 budget (the chart renders `maxUnavailable: 1`) sitting at `disruptionsAllowed: 0`, and a
 `ScaledObject` annotated `autoscaling.keda.sh/paused-replicas: "1"` — which pins the replica
@@ -248,13 +248,13 @@ What the command does, and refuses, is the whole contract (`deploy/aks/operator/
 Why this exists: on this fleet the portal's claims are NOT helm-managed (they were applied by hand
 once from `portal-pvcs.yaml`; `helm upgrade` never touches an object it does not own), so a bigger
 `size` on the record re-rendered a bigger number into the values file and changed nothing on the
-cluster. Measured 2026-09-08 13:51Z: `memex-data` in namespace `memex` was **16Gi with 3 MiB
-free** while memex-cloud's ran 128Gi. The `portal-pvcs.yaml` captures in the config repo are
+cluster. Measured 2026-09-08 13:51Z: `memex-data` in the control instance's namespace was **16Gi with 3 MiB
+free** while the public instance's ran 128Gi. The `portal-pvcs.yaml` captures in the config repo are
 descriptive; the record is what the operator applies.
 
 ### The chart must also agree with ITSELF — `check-chart-invariants.sh`
 
-Drift is only half of it. The `memex-cloud` outage above needed no cluster to detect: the chart
+Drift is only half of it. The public-instance outage above needed no cluster to detect: the chart
 in git described an impossibility. `deploy/aks/values.aks.yaml` asked for `keda.minReplicas: 2`,
 `scaledobject.yaml` rendered a floor of 2, `pdb.yaml` budgeted for two pods — and
 `deployment.yaml` hard-coded `replicas: 1`, so `replicas.portal: 2` had sat in values consumed by
@@ -287,12 +287,12 @@ what the portal's users see while that happens:
   when two are schedulable and still schedule when only one is (a drained node's replacement has
   to land on the survivor).
 
-🚨 **Measured 2026-09-09 (MeshWeaver#3772):** memex ran `replicas.portal: 2` with **no budget** —
-`pdb.yaml` was gated on `keda.enabled`, and memex's helm-release lane renders the vault values
-plus `values.memex.public.yaml`, never `deploy/aks/values.aks.yaml` where KEDA is on. Both pods
+🚨 **Measured 2026-09-09 (MeshWeaver#3772):** the control instance ran `replicas.portal: 2` with **no budget** —
+`pdb.yaml` was gated on `keda.enabled`, and its helm-release lane renders the vault values
+plus its public values overlay, never `deploy/aks/values.aks.yaml` where KEDA is on. Both pods
 sat on one node; a drain at 01:05:01Z shut both down in the same second and the portal answered
 503 until a replacement passed the startup gate (~90 s). Reading it needed the *cluster-wide*
-log — pods in three namespaces stopping together — because inside the memex namespace it looked
+log — pods in three namespaces stopping together — because inside that one namespace it looked
 like a rollout that changed nothing. `check-chart-invariants.py` now refuses a floor above one
 with no budget (invariant 14) or no spreading (invariant 15); before, it only asked whether a
 budget that exists has replicas under it.
@@ -324,13 +324,13 @@ in the mesh, executed on the `aks-ops` lane. `az aks upgrade`, `az aks nodepool 
   plane continues it — every step is idempotent.
 - **A stuck roll refuses it.** A portal Deployment whose template names an image its serving pods do
   not run is refused by name before anything starts — a drain would recreate those pods from the
-  template. Measured 2026-09-25: memex's template named `3.0.0-ci.9260` (deadlocks at bake) while
+  template. Measured 2026-09-25: the control instance's template named `3.0.0-ci.9260` (deadlocks at bake) while
   its serving pods were `3.0.0-ci.9218`, alive only because nothing had evicted them.
 
 The operator half is `deploy/aks/operator/bin/hosting-aks-upgrade` (behaviour-tested in
 `deploy/aks/operator/test/run-tests.sh`); the plan, the approval binding and the continuation are the
 Hosting plugin's — the full manual, with the exact action JSON, is `Hosting/ClusterUpgrade` in
-MeshWeaver.Plugins (`get Hosting/ClusterUpgrade` on the memex MCP).
+MeshWeaver.Plugins (`get Hosting/ClusterUpgrade` on the control instance's MCP).
 
 ## Self-update ops — pausing, pinning, and the rules that bite
 
@@ -378,7 +378,7 @@ Operational facts about the in-pod updater (learned the hard way — each cost a
   lists the synced Secret in `envFrom` is a **free rider**: it reads whatever some other pod's
   mount last wrote, and `envFrom` is resolved once, at container start. The migration Job was
   exactly that until #3548 — it mounted nothing and starts the instant `helm upgrade` applies, i.e.
-  before the portal pods that own the rotation have rolled. So on the `memex` release of
+  before the portal pods that own the rotation have rolled. So on the control instance's release of
   2026-09-07, the deploy that repointed `Embedding__ApiKey` from the Azure object to the OpenRouter
   one ran the embedding backfill with the PREVIOUS key: **1,260 × HTTP 401,
   `1274 upserted (0 embedded)`, and `Database migration completed`** — a green Job that
@@ -390,9 +390,9 @@ Operational facts about the in-pod updater (learned the hard way — each cost a
   renders its `envFrom`, and `KeyVaultCsiFreshnessGuard` fails any pod-bearing template that reads
   a class without mounting it.
 - **🚨 Namespace ↔ instance mapping**: this cluster hosts several instances whose Deployments all
-  share names (`memex-portal-deployment`): namespace `memex` = the systemorph.com company portal,
-  `memex-cloud` = **memex.meshweaver.cloud** (SPC `<database>-portal-ai-secrets`, KeyVault
-  `Systemorph`, `<database>-`-prefixed secret names), `prod` = the customer portal. Before ANY
+  share names (`memex-portal-deployment`), one namespace per instance — the control instance, the
+  public instance and each customer portal — and each with its own secret wiring (e.g. SPC
+  `<database>-portal-ai-secrets`, KeyVault `<vault>`, `<database>-`-prefixed secret names). Before ANY
   kubectl change, confirm the namespace matches the instance you mean — e.g. run a diagnostic on
   the target portal that prints its pod hostname and `kubectl get pods -A | grep <hostname>`.
 
@@ -402,7 +402,7 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
 
 **What the Helm chart already does** (no edits needed): when `selfUpdate.azureClientId` is set it annotates `memex-portal-sa` with `azure.workload.identity/client-id`, labels the pod `azure.workload.identity/use: "true"`, and sets `AZURE_CLIENT_ID`. The self-updater (`AcrTagLister`) then uses `ManagedIdentityCredential(AZURE_CLIENT_ID)` → AAD token → ACR token.
 
-**What the Azure side provides** (`deploy/aks/infra/modules/portal-identity.bicep`, wired from `deploy/aks/infra/main.bicep`): a **single shared** user-assigned managed identity (`<namePrefix>-portal-mi`) with **one federated credential per portal namespace** — subject `system:serviceaccount:<ns>:memex-portal-sa`, issuer = the cluster OIDC issuer, audience `api://AzureADTokenExchange` — for every namespace in the `portalNamespaces` param (`memex`, `memex-cloud`, and any customer portal namespaces). The UAMI gets **AcrPull** on `meshweaver.azurecr.io` (AcrPull includes the `metadata_read` the tag-list call needs). One UAMI → one AcrPull grant → the **same** `portalIdentityClientId` wired into `selfUpdate.azureClientId` for every namespace.
+**What the Azure side provides** (`deploy/aks/infra/modules/portal-identity.bicep`, wired from `deploy/aks/infra/main.bicep`): a **single shared** user-assigned managed identity (`<namePrefix>-portal-mi`) with **one federated credential per portal namespace** — subject `system:serviceaccount:<ns>:memex-portal-sa`, issuer = the cluster OIDC issuer, audience `api://AzureADTokenExchange` — for every namespace in the `portalNamespaces` param (every portal namespace, customer portals included). The UAMI gets **AcrPull** on `meshweaver.azurecr.io` (AcrPull includes the `metadata_read` the tag-list call needs). One UAMI → one AcrPull grant → the **same** `portalIdentityClientId` wired into `selfUpdate.azureClientId` for every namespace.
 
 ### One-time setup
 
@@ -420,8 +420,8 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
    ```
    (IaC alternative: deploy with `grantSharedAcrPull=true` — authors this via `infra/modules/acr-role-assignment.bicep` in the registry's RG; needs User Access Administrator on `meshweaver-shared`. A *per-deployment* ACR instead of the shared one is granted in-bicep automatically.)
 3. **Set `selfUpdate.azureClientId`** to `portalIdentityClientId` for each environment (the in-pod patch works without it; this only authenticates the tag-list). Same value everywhere:
-   - `memex` → the git-ignored `values.deploy.yaml` in the staging dir (template: `deploy/aks/scripts/values.deploy.example.yaml`), or `helm upgrade --set selfUpdate.azureClientId=<clientId>`.
-   - `memex-cloud` / customer portals → the git-ignored `deploy/aks/envs/<env>/values.<env>.yaml`.
+   - an instance deployed from the staging dir → the git-ignored `values.deploy.yaml` in the staging dir (template: `deploy/aks/scripts/values.deploy.example.yaml`), or `helm upgrade --set selfUpdate.azureClientId=<clientId>`.
+   - an env-directory instance (customer portals included) → the git-ignored `deploy/aks/envs/<env>/values.<env>.yaml`.
 
 > Adding a **new** portal namespace? It needs its own federated credential on the shared UAMI — add the namespace to `portalNamespaces` and re-run the infra deploy (idempotent), or `az identity federated-credential create --subscription <subscription> …` (see [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment)). The subject must be exactly `system:serviceaccount:<ns>:memex-portal-sa`.
 
@@ -460,13 +460,13 @@ deploy that needs it."* Only `helm upgrade` mints the Job.
 
 > **This is a property of the fleet, not of one namespace, and the remedy is an OPEN decision.** An
 > install rolls itself forward until it meets its first schema-bumping release and stops there; an
-> install that has not stopped has not arrived yet, not been configured differently (`memex-cloud`
+> install that has not stopped has not arrived yet, not been configured differently (the public instance
 > served `ci.7621` healthily the same day for exactly that reason). Clearing one instance at one tag
 > clears today and re-arms for the next bump. Why that matters for the control instance, what the
 > three candidate remedies trade, and how to pick a target when an operator does carry an install
 > across, are on [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall).
 
-**What that looks like when it fires** (memex, 2026-09-03 — MeshWeaver#3207): self-update rolled the
+**What that looks like when it fires** (the control instance, 2026-09-03 — MeshWeaver#3207): self-update rolled the
 portal to three successive builds needing `db_version` 55 against a database at 54. Each new pod hit
 `DbVersionGate`, logged `Critical`, and exited; the ReplicaSet never went Ready and the rollout
 recorded `ProgressDeadlineExceeded`. The cost was a pod crash-looping on a 5-minute back-off, each
@@ -514,7 +514,7 @@ only the first is a wait:
   external database whose `ConnectionStrings__memex` is NOT in the values (every record-driven instance,
   whose string arrives on a CSI SecretProviderClass) probes `config.<half>.MEMEX_HOST` — the values'
   string there is only the chart's in-cluster placeholder, and probing it spun forever on
-  `memex-postgres-service` (pearl, 2026-09-15; see
+  `memex-postgres-service` (an SME client instance, 2026-09-15; see
   [Deployment environment layers](/Doc/Architecture/DeploymentEnvLayers)). On a `postgres.enabled: false`
   release the chart refuses to render any probe of `memex-postgres-service`, whichever input names it.
   The probe's coverage is now asserted at render time by invariants 16 and 17 of
@@ -530,7 +530,7 @@ then go live. Kubernetes restarts it, and that pod recovers only once something 
 
 **Whether the NAMESPACE still serves depends entirely on the rollout strategy**, and this page used to
 say flatly that it does not. On a rolling update with `maxUnavailable: 0` and `maxSurge: 1` — what the
-chart ships and what memex ran on 2026-09-03 — the previous ReplicaSet keeps serving because the new pod
+chart ships and what the control instance ran on 2026-09-03 — the previous ReplicaSet keeps serving because the new pod
 never becomes Ready, so the failure is a stalled rollout (`ProgressDeadlineExceeded`) and not an outage.
 Lose that setting, or hit this on a fresh install / a full restart where there is no healthy ReplicaSet
 to fall back on, and the namespace genuinely has no serving portal. The gate protects the database from
@@ -555,13 +555,13 @@ different questions, and only one of them may kill the container over a verdict 
   image keeps serving.
 - **livenessProbe → `/alive`**: *is it making progress?* A GC-bound process restarts.
 
-The bake gate rode the startup probe until MeshWeaver#5544. On 2026-09-25/26 that killed every memex
+The bake gate rode the startup probe until MeshWeaver#5544. On 2026-09-25/26 that killed every control-instance
 container of both images at the three-hour mark, and the control instance was down for seven hours.
 The mechanism, the per-check table and the guards are in
 [The Bake Gate Only Stalls a Roll](/Doc/Architecture/TheBakeGateOnlyStallsARoll). For an instance
 that arms the gate: its `probes.startup` no longer has to cover a bake; the chart adds
-`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render. memex and
-memex-cloud therefore run `failureThreshold: 60` (600 s, a cold boot) instead of 1080 (3 h); the
+`probes.rollGate.bakeSeconds` to `progressDeadlineSeconds` instead, in every render. The fleet's
+instances therefore run `failureThreshold: 60` (600 s, a cold boot) instead of 1080 (3 h); the
 short budget is safe only on an image that carries the whole readiness-only split (#5749 for the bake
 gate AND #5754 for `required_modules`), which the page above explains.
 
@@ -580,8 +580,8 @@ operator to *"re-run with action=observe"* later. Measured 2026-09-07 on the liv
 
 | | |
 |---|---|
-| `memex` revision 35, run 34117537570 | observe gave up at its 25-minute budget with `migration-job=succeeded=0 failed=0 active=1` |
-| the same namespace at 16:20Z | **no Job, no pod, no events** — `kubectl get job -n memex` returns only the `assembly-cache-prune` Jobs |
+| the control instance's release, revision 35, run 34117537570 | observe gave up at its 25-minute budget with `migration-job=succeeded=0 failed=0 active=1` |
+| the same namespace at 16:20Z | **no Job, no pod, no events** — `kubectl get job -n <namespace>` returns only the `assembly-cache-prune` Jobs |
 
 An absent Job is indistinguishable from a Job that never existed, and a migration that *failed*
 reaps exactly the same way. The chart now sets **`ttlSecondsAfterFinished: 86400`** so the artefact
@@ -590,7 +590,7 @@ absent Job a success (Memex#188). **Neither half alone is enough** — a longer 
 verdict change only moves the cliff, and the verdict change without the longer TTL makes a
 legitimate `observe` re-run permanently red.
 
-**A `memex-cloud` migration is measured in HOURS, not minutes, and that is not a deadlock.**
+**A migration on the public instance (the largest mesh) is measured in HOURS, not minutes, and that is not a deadlock.**
 `memex-migration-28` ran 4 h 47 m on 2026-09-07 and was healthy throughout: the tail of its log is
 `[EmbeddingBackfill] <schema>: N embedded`, walking ~137 partition schemas alphabetically. The
 portal serves normally while it runs (`2/2` Ready on `3.0.0-ci.8009`), because `DbVersionGate`
@@ -609,7 +609,7 @@ Two keys in `memex-portal-secrets` / `memex-migration-secrets` address that abse
 until 2026-09-07 they rendered there unconditionally (Memex#204). Read by base64 **length** only —
 never by value:
 
-| key | `memex` | `memex-cloud` |
+| key | control instance | public instance |
 |---|---|---|
 | `MEMEX_PASSWORD` | b64len 40 | **b64len 0** |
 | `MEMEX_URI` | b64len 112 | b64len 76 → `postgresql://postgres:@memex-postgres-service:5432/memex` |
@@ -653,7 +653,7 @@ Empty `secrets` renders nothing, so an environment that has not opted in is byte
 before. With any entry the vault, tenant and identity are **required** and a half-declared block
 fails `helm template` naming the key. Names only: no value is ever in values or in the render.
 
-An instance that reads **more than one** vault-secret set — `memex` runs the hand-made `memex-kv`
+An instance that reads **more than one** vault-secret set — the control instance runs the hand-made `memex-kv`
 alongside the chart-owned `memex-portal-keyvault` — declares the rest under `keyVaultSecretClasses`,
 a list of the same shape. Order is precedence, and **one vault object may serve several keys**: that
 is how one credential lands under both `PluginCatalog__RegistryToken` and
@@ -665,7 +665,7 @@ layers a record could not previously see, are in
 hand-made object — `kubectl apply`-ed once from a laptop, present in no repository, rendered by
 nothing — and the values file could only point at it by name (`extraEnvFrom` / `extraVolumes`,
 now the **legacy escape hatch**). Which vault objects a pod carried was knowable only from the
-cluster. On 2026-08-30 the `memex` install crashed at boot with `EmailConfigurationGuard`
+cluster. On 2026-08-30 the control instance's install crashed at boot with `EmailConfigurationGuard`
 (`Email:Enabled=true`, `Email:ClientId` unset): its Email configuration existed TWICE on the live
 pod — the chart's ConfigMap rendering the defaults, and a hand-made Secret patched onto the live
 Deployment as explicit `env` entries in a different letter case — and .NET's case-insensitive
