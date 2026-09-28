@@ -178,8 +178,13 @@ Three properties, and each is the reason for a choice above:
   request that was never sent is the same class of untruth as the `unanswered=-` this issue already
   fixed on the commit stage.
 
-The stage bound survives as a **backstop**: every leg terminates on its own, so reaching it means
-the fan-out as a whole stopped progressing, and it says so rather than blaming a leaf.
+The stage bound is a **no-progress backstop**. It observes every leg answer before the refusal
+filter drops valid (`null`) results, so each answer resets its clock. That ordering matters on a
+large space: the `UWDeepfield` delete had 31,138 descendants, 64 in flight, and about 1,676 valid
+answers in 25 seconds. The old placement after the filter saw none of those answers and refused a
+fan-out that was still advancing. The fixed placement keeps the same stage and per-leg budgets;
+only a gap between answers can reach the stage backstop, while a silent individual leg reports
+itself by name.
 
 ### A leg that reports an ABSENCE is confirmed against storage first (#4680)
 
@@ -312,6 +317,9 @@ descendant carries a validator that never emits must be refused by that ONE path
 `Unavailable`, inside the stage's budget, with its siblings answered and the subtree untouched.
 Reverted against `main` it fails exactly as production did — the stage backstop, at the full budget,
 reporting the fan-out instead of the node.
+`DeletePreflightProgressTest` drives the pre-flight's timeout with virtual time: three valid
+answers over more than two stage budgets keep it alive, while one full budget with no answer still
+fails. It pins the ordering between the timeout and the valid-answer filter.
 
 ## Related
 
