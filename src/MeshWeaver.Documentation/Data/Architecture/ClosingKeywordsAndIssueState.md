@@ -94,10 +94,11 @@ the PR body, not every way GitHub can close an issue.
 The event is another part of the guarantee: GitHub's default `pull_request` activity types are
 `opened`, `synchronize`, and `reopened`, not `edited` ([workflow event docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)).
 Each caller must include `edited` in its `pull_request.types`; otherwise a body edit after a green
-run is not rescanned and the old check can remain green. The seven live node-repo callers
-currently use a plain `pull_request:` trigger, so they do not yet meet this contract. This core
-change therefore closes the unseen-body gap only on runs that it actually receives; fleet closure
-also requires the caller trigger updates.
+run is not rescanned and the old check can remain green. During the 2026-09-28 fleet audit, all
+seven live node-repo callers had a plain `pull_request:` trigger. Companion PRs in this rollout
+add `edited` to each trigger; until those changes merge, the core gate only checks runs it actually
+receives. The core change alone therefore does not close the fleet gap; the caller trigger updates
+are part of the same delivery.
 
 The lane fetches the canonical checker at its `scripts-ref` and runs its self-test before the
 scan. Callers using immutable workflow refs must advance the workflow and script refs together.
