@@ -203,6 +203,11 @@ The activity and the source's `lastSyncNote` name the offending file and field;
 `lastAttemptWasFinal = false`, so the same commit remains eligible after the image gains the
 new record type. A malformed node file follows the same all-or-nothing rule; files with no
 node parser, such as ordinary `.py` files, remain outside the import.
+The mesh serializer also emits `$type` on sealed nested records, such as a deployment's
+`keyVaultSecrets` and `gates` entries. These markers describe the record type, not an
+authored field: the strict importer recognizes them while still refusing any other
+unknown member at that same nesting level. Without that distinction, the first control
+roll after strict import refused five valid deployment files (#601).
 
 The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
 and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms

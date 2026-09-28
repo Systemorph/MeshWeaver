@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Data;
+using MeshWeaver.Deployment;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -53,11 +54,15 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
     private readonly EmptySnapshotRepoClient repoClient = new();
     private record OlderDeploymentContent(OlderAi Ai);
     private record OlderAi(string[] Tiers);
+    private record NestedDeploymentContent(SealedSecrets KeyVaultSecrets);
+    private sealed record SealedSecrets(string Name);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddGitHubSyncTypes()
             .WithMeshType<OlderDeploymentContent>()
+            .WithMeshType<NestedDeploymentContent>()
+            .WithMeshType<DeploymentContent>()
             .ConfigureServices(services =>
             {
                 services.AddGitHubSyncServices();
@@ -195,6 +200,81 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         config.LastSyncCommitSha.Should().Be(HeadSha);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ASealedNestedRecordWithItsWireDiscriminator_Imports()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        repoClient.Files =
+        [
+            new RepoFile("build.json", """
+                {"id":"build","nodeType":"Markdown","content":{"$type":"NestedDeploymentContent","keyVaultSecrets":{"$type":"SealedSecrets","name":"vault"}}}
+                """),
+        ];
+
+        await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var imported = await Mesh.GetWorkspace().GetMeshNodeStream($"{space}/build")
+            .Where(n => n?.ContentAs<NestedDeploymentContent>(Mesh.JsonSerializerOptions)
+                is { KeyVaultSecrets.Name: "vault" })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        imported.Should().NotBeNull();
+        var config = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is
+                { LastSyncCommitSha: HeadSha })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        config.Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnknownMemberBesideASealedNestedDiscriminator_RefusesTheSnapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        repoClient.Files =
+        [
+            new RepoFile("build.json", """
+                {"id":"build","nodeType":"Markdown","content":{"$type":"NestedDeploymentContent","keyVaultSecrets":{"$type":"SealedSecrets","name":"vault","futureOnlyField":"new"}}}
+                """),
+        ];
+
+        var refusal = await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .Materialize()
+            .Where(n => n.Kind == System.Reactive.NotificationKind.OnError)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        refusal.Exception!.Message.Should().Contain("futureOnlyField");
+        var config = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is
+                { LastSyncOutcome: GitHubSyncService.RefusedOutcome })
+            .Select(n => n!.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)!)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        config.LastSyncNote.Should().Contain("futureOnlyField");
+        config.LastSyncCommitSha.Should().NotBe(HeadSha);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ADeploymentRecordWithSealedNestedDiscriminators_Imports()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        repoClient.Files =
+        [
+            new RepoFile("build.json", """
+                {"id":"build","nodeType":"Markdown","content":{"$type":"DeploymentContent","keyVaultSecrets":{"$type":"KeyVaultSecretsSpec","name":"vault"},"gates":[{"$type":"GateSpec","language":"python","enabled":true}]}}
+                """),
+        ];
+
+        await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var imported = await Mesh.GetWorkspace().GetMeshNodeStream($"{space}/build")
+            .Where(n => n?.ContentAs<DeploymentContent>(Mesh.JsonSerializerOptions) is
+                { KeyVaultSecrets.Name: "vault", Gates.Count: 1 })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        imported.Should().NotBeNull();
     }
 
     private async Task<string> ArmedSpace(CancellationToken ct, string? subdirectory = MissingSubdirectory)
