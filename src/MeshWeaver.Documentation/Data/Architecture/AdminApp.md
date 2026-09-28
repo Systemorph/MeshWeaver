@@ -1,114 +1,161 @@
 ---
-Name: The Admin App and the Settings App
+Name: Settings by Owner — the Instance, Person and Node Apps
 Category: Architecture
-Description: /Admin is the Admin app — every platform-admin surface in one place, installed on every instance including the control image — and /{user}/Settings is the person's own settings app. What moved where, the gate on each, the redirects that keep old links working, the Inbox app every user gets, and how it reaches an instance.
+Description: Every settings tab lives in the app of the thing it CHANGES. /Admin is the instance app, titled with the instance's name; /{user}/Settings is the person app, titled with the person's name; a node's settings open from its ⋯ menu. The ownership rule, the mapping of every tab, the gates, the redirects that keep old links working, the Inbox app, and how it reaches an instance.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="11" r="3"/></svg>
 ---
 
-# The Admin App and the Settings App
+# Settings by Owner — the Instance, Person and Node Apps
 
-Two apps, one split rule:
+**The rule: every settings tab lives in the app of the thing it CHANGES.** There are three owners, and
+so three apps:
 
-- **`/Admin` — the Admin app.** Everything only a platform administrator may see or change. Nothing
-  personal.
-- **`/{user}/Settings` — the person's own settings app.** The signed-in person's own things. Nothing
-  admin-only, and nobody else may open it.
+| App | Where | Titled with | Who opens it | What it holds |
+|---|---|---|---|---|
+| **Instance app** | `/Admin` (node type `AdminApp`) | the instance's name — its public host, e.g. `memex.systemorph.com` (`AdminAppNodeType.InstanceName`) | platform admins only | what changes the INSTANCE |
+| **Person app** | `/{user}/Settings` (the person's own partition root) | the person's name | the person only | what changes the PERSON |
+| **Node settings** | the node's ⋯ menu → **Settings…** (`/{node}/Settings`) | the node's name | anyone who may read the node; each tab under its own permission | what changes THAT node |
+
+Two corollaries the old pages broke:
+
+- **A tab that acts on the signed-in person never appears on a node's or the instance's page.** API
+  tokens, connected instances and notification preferences were registered on EVERY node hub with
+  `Permission.None`, so they showed on every Space's settings page. Language and time zone were edited
+  in two places. "Who am I" sat in the instance app.
+- **A tab that acts on a Space appears only on the Space ROOT.** Node types, Groups, GitHub sync,
+  GitHub Issues, the Code workspace and Git history were offered on every node below the root, each
+  acting on the whole Space. And a per-node probe (Effective access) in the instance app read as a
+  global answer it never was.
 
 A platform administrator is exactly what [Access Control](../AccessControl) defines: an `Admin`-role
 grant in `Admin/_Access`, read through `hub.IsGlobalAdmin()`. It is not a data superuser, and nothing
 here changes that.
 
-## What `/Admin` was, and why
+## The mapping
 
-The node at `Admin` is the root of the system partition that holds the platform-admin grants
-(`Admin/_Access`), the update policy (`Admin/UpdatePolicy`), the setup-link claim (`Admin/SetupLink`)
-and the platform catalogs. Until this change no code registered that node, so:
+### Instance app — `/Admin`
 
-- on a **fresh database** (a freshly installed control instance) there was no row, and path resolution
-  synthesized a TYPELESS placeholder root (`PathResolutionService.SynthesizePartitionRoot`) whose hub
-  activated on the default configuration — an empty page;
-- on **long-lived databases** the row existed as a `Space` (measured on memex.systemorph.com and
-  memex.meshweaver.cloud, both `nodeType: Space`, no content), which the `auth` mirror put into the
-  Spaces catalog — so a platform admin found "Admin" among their workspaces, and `/Admin` rendered an
-  empty Space.
-
-## What `/Admin` is now
-
-`AdminAppNodeType` (core, `MeshWeaver.Graph`) registers the `AdminApp` NodeType **and** the `Admin` root
-node in code. Its default area is the per-node Settings page of the Admin node, so `/Admin` opens the
-app and every tab is linkable as `/Admin/Settings/{tabId}`. The root is hidden from search, create and
-content listings. Long-lived databases are retyped by migration **V59** (MeshWeaver.Plugins,
-`Memex.Database.Migration`): the `Space` row becomes `AdminApp` and its stale `auth` mirror row is
-removed; nothing else in the partition is touched.
-
-A module adds a tab with `config.AddAdminAppTab(definition)`: the tab appears only on the Admin hub
-and exactly while `IsGlobalAdmin` says the viewer is a platform admin — the verdict is observed LIVE
-(`AdminAppNodeType.LiveAdminVerdict`), so a grant revoked while the app is open removes the tab, and
-the "Who am I" grid follows the same stream. A data-contributed tab (a
-`UiContribution`) uses `Context: NodeSettings` with `Gates: { AdminOnly: true, NodeTypes: [AdminApp] }`.
-
-**A non-admin opening `/Admin`** is refused by the partition itself — the Admin partition is readable
-only by platform admins, exactly as before — and even if the page rendered, no administration tab
-would: every one waits for a positive admin verdict. Nothing about the app widens a read on
-`Admin/_Access`; the "Who am I" answer a non-admin needs lives in their own settings app.
-
-## Inventory — surface, before, after, gate
-
-### Moved into the Admin app
-
-| Surface | Before | Now | Gate |
+| Section | Tab | Id | Owner |
 |---|---|---|---|
-| **Overview** — this instance: host, platform version (image tag), commit, runtime, plugin registry, registry instance id, closed type set; then the About page (build, "is it current?", installed plugins) | did not exist (the About part is the global About tab, which stays) | `/Admin` (first tab, `Overview`) | platform admin |
-| **Who am I** — user id, name, e-mail, how the session was established, platform admin yes/no with the grant path, effective permissions on the own partition and on `Admin` | only `whoami` over MCP / REST | `/Admin/Settings/WhoAmI` (and `/{user}/Settings/Account`) | platform admin (Admin app); the owner (settings app) |
-| **Global Administration** — the `Admin/_Access` grants and "+ Add Admin" | `/{user}/Settings/GlobalAdmin` on the admin's own page | `/Admin/Settings/GlobalAdmin` | platform admin |
-| **Data Sources** | `/_Setting/GlobalSettings/DataSources` — the FIRST tab every signed-in user landed on — and a second list inside Global Administration | `/Admin/Settings/DataSources` | platform admin |
-| **Access Control / Effective Access** of the Admin partition | not reachable (the root was an empty page) | `/Admin/Settings/AccessControl`, `/Admin/Settings/EffectiveAccess` | permission on `Admin` (platform admins) |
-| **Registration** ("This instance" — consent, registry registration, plan, catalogue) | area `/{user}/Instance`, tile `{user}/_App/Instance` | `/Admin/Settings/Registration`; the old address redirects | platform admin |
-| **Instances** (AKS overview, control instance) | a tab on EVERY node's settings page for an admin | `/Admin/Settings/Instances` | platform admin + `Instances:Enabled` |
-| **Partitions** (partition sync overview) | `/{user}/Settings/PartitionSync` | `/Admin/Settings/PartitionSync` | platform admin |
-| **Sign-in providers** | `/{user}/Settings/SignInProviders` | `/Admin/Settings/SignInProviders` | platform admin, and only on the Admin hub (`SignInSetupAccess.Decide`) |
-| **Invitations**, **Inbox** (non-user mail), **Updates** (`Admin/UpdatePolicy`), **Published to the web**, **Privacy** (statement editor), **Control lane** (the self-update announcement key — [Self-Update Announcement Key](../SelfUpdateAnnouncementKey)) | `/_Setting/GlobalSettings/{id}` | `/Admin/Settings/{id}` | `AdminOnly` + `NodeTypes: [AdminApp]`; each area re-asserts the gate |
-| **Token Usage** (instance-wide spend) | `{node}/Settings/TokenUsage` gated on `Permission.All` of the page's node — which every person holds on their own partition, so it showed on everybody's settings page | `/Admin/Settings/TokenUsage` | platform admin |
-| **AI Admin** (model credit bill, providers) | `/{user}/Settings/AiAdmin` | `/Admin/Settings/AiAdmin` | platform admin |
-| **Coupons**, **Instance grants**, **Composition** | `/{user}/Settings/{id}` | `/Admin/Settings/{id}` | platform admin |
+| — | **Overview** — the instance facts no other tab carries (public host, closed type set), then the About page ONCE (version, commit, serving since, runtime, "is it current?", installed plugins) | `Overview` | core (`memex/Memex.Portal.Shared`) |
+| People & sign-in | **Administrators** — the `Admin/_Access` grants, add and remove: ONE tab where there were two (Global Administration + the Admin node's default Access Control, which listed the same grants) | `GlobalAdmin` | core |
+| People & sign-in | Sign-in providers | `SignInProviders` | Plugins |
+| People & sign-in | Invitations · Privacy · Published to the web | `Invitations` · `Privacy` · `Published` | core (seeded `UiContribution`s) |
+| Operations | Updates · Control lane · Inbox | `UpdatePolicy` · `ControlLane` · `Inbox` | core (seeded `UiContribution`s) |
+| Operations | Data sources | `DataSources` | core |
+| Operations | Registration (+ Control lane, merged Plugins-side) · Partitions | `Registration` · `PartitionSync` | Plugins |
+| Commercial | Coupons · Instance grants · Composition | `Coupons` · `InstanceGrants` · `Composition` | core (`MeshWeaver.PluginCatalog`) |
+| Commercial | AI usage & cost (Token usage + AI admin, one tab) | `TokenUsage` / `AiAdmin` | Plugins |
+| Fleet | Fleet (the AKS instances overview; control instance / `Instances:Enabled` only) | `Instances` | Plugins |
 
-### Stays in the person's own settings app — `/{user}/Settings`
+**Not in the instance app** any more: Who am I (the person app's Account), Effective access (a node
+probe), the Admin node's own Access Control (part of Administrators), Metadata, Node types, Groups,
+Versions, and every personal tab.
 
-| Surface | Gate |
+### Person app — `/{user}/Settings`
+
+| Tab | Id | Order | Owner |
+|---|---|---|---|
+| **Profile** — picture, display name, e-mail, bio, links, showcase, contributed profile sections: the `/{user}/EditProfile` area embedded, never copied | `Profile` | 0 | core |
+| **Account** — identity, how the session was established, platform-admin yes/no with the grant path, effective permissions on the own partition and on `Admin` (the view `whoami` answers over MCP and REST) | `Account` | 10 | core |
+| **Preferences** — language, time zone AND theme, in ONE place (the profile no longer carries language and time zone) | `Preferences` | 20 | core |
+| Notifications | `Notifications` | 30 | core (`memex`) |
+| API tokens | `ApiTokens` | 40 | core (`memex`) |
+| Connected instances — the person's own MeshWeaver installations and their keys | `MeshWeaverInstances` | 50 | core (`memex`) |
+| Subscription | (Store) | 60 | Plugins |
+| **Sharing** — Access control on the person's own partition root | `Sharing` | 70 | core |
+
+**Not in the person app:** Metadata, Node types, Groups, Effective access, the raw Access control
+(it is Sharing), Versions, Files, Partitions.
+
+The page opens **for its owner only**: a User node is public-read, so another signed-in viewer gets a
+refusal (`settings.ownSettingsOnly`), never the tabs that demand no permission of their own.
+
+### Node settings — ⋯ → Settings…
+
+| Tab | Where | Note |
+|---|---|---|
+| Metadata | every node | |
+| Versions | every node | the Versions area, embedded — offered where that area has a renderer |
+| Access control | every node | |
+| **Check access** (`EffectiveAccess`) | every node | "what can this person do on THIS node" — labelled so |
+| Node types · Groups | the Space ROOT only | `RestrictSettingsTabsToPartitionRoot` |
+| GitHub sync · GitHub Issues & PRs · Code workspace · Git history | the Space ROOT only | also self-filtered to Spaces the viewer may update |
+| Content indexing | the Space ROOT only | Plugins (registers through the same call) |
+
+**Removed from node settings:** Appearance (the theme is the viewer's — person app, Preferences) and
+Files (the ⋯ menu's **Files** opens the same browser). Stop/Resume synchronization stays a ⋯ entry.
+
+The ⋯ entry is `MeshNodeLayoutAreas.GetSettingsMenuItem` in the default `$Menu:Node` provider (order
+45, ⚙️, needs Read; on a person's root, the owner only), so every client that renders `$Menu:Node` —
+Blazor, portal-next, React Native — gets it without code of its own.
+
+### Not an app of anyone's — `/_Setting`
+
+**About** and **What's New** stay on the global settings page: they describe the platform to every
+signed-in viewer and change nothing.
+
+## The API a module uses
+
+| To … | call |
 |---|---|
-| **Account** (Who am I, new) | owner |
-| **Preferences** (time zone, language), **Notifications** (per feature), **API Tokens**, **MeshWeaver Instances** (keys for the person's own installations) | owner |
-| the node's own tabs (Metadata, Access Control, …) | owner, then the tab's own permission |
+| add an instance-app tab | `config.AddAdminAppTab(tab)` — yields the tab only on `/Admin`, only while `IsGlobalAdmin` confirms the viewer LIVE (`AdminAppNodeType.LiveAdminVerdict`); put it in a section with `Group = AdminAppNodeType.{People,Operations,Commercial,Fleet}Group` (+ `…GroupKey`, order band `…Order`) |
+| add a person-app tab | `config.AddPersonAppTab(tab)` — may ride every node hub; yields the tab only on the viewer's own root (`PersonApp.IsPersonAppHub`); slots are `PersonApp.*Order` |
+| keep a Space tab on the Space root | `config.RestrictSettingsTabsToPartitionRoot(tabId)` |
+| merge two tabs | `config.AliasSettingsTab(retiredId, survivingId)` on the hub whose page carries them |
+| title an app | `config.WithSettingsTitle((host, node) => …)` |
+| contribute a tab as DATA | a `UiContribution` with `Context: NodeSettings`; the instance app's are gated `Gates: { AdminOnly: true, NodeTypes: [AdminApp] }` |
 
-The whole page now opens **for its owner only**: a User node is public-read, so before this change
-any signed-in viewer could open another person's settings page and see every tab that demanded no
-permission of its own. Another person gets a refusal.
-
-### Stays on the global settings page — `/_Setting`
-
-**About** and **What's New** — every signed-in viewer may read them, and the profile menu links them.
-
-### Not moved, deliberately
-
-- the notification bell's platform-addressed feed — chrome, already admin-gated, not a settings page;
-- **Store** provisioning (`/Store`) — the Store is its own app and the only door to `SystemInstall`;
-- the fleet app `Hosting/Admin` — a control-instance package, not part of every image;
-- the AI menu catalogs (Models, Providers, Tiers) and a person's own AI bill — reached from the AI menu.
+`AddAdminAppTab` / `AddPersonAppTab` providers yield nothing anywhere else, so it is safe — and was
+always the practice — to register them on the default node hub.
 
 ## Old links keep working
 
-A relocated tab id is recorded on the hub configuration (`RelocateSettingsTabsToAdminApp`, done
-automatically by `AddAdminAppTab`). A settings page — per-node or global — asked for such an id answers
-with a redirect to `/Admin/Settings/{id}` instead of silently opening its first tab. The
-`{user}/Instance` area redirects to the Registration tab, so every "This instance" tile already seeded
-keeps working.
+A settings page asked for a tab it no longer carries answers with a REDIRECT to the tab's home, never
+by silently opening its own first tab (`SettingsRedirect`), in this order:
 
-## Navigation
+1. an alias on this hub — `/Admin/Settings/AccessControl` and `/Admin/Settings/EffectiveAccess` →
+   `/Admin/Settings/GlobalAdmin`; `/{user}/Settings/Appearance` → `Preferences`;
+   `/{user}/Settings/AccessControl` → `Sharing`;
+2. the retired node `Files` tab → the node's `Files` area;
+3. a Space-root tab asked for below the root → the same tab on the root
+   (`/Space/Doc/Settings/Groups` → `/Space/Settings/Groups`);
+4. a tab that moved into the instance app → `/Admin/Settings/{id}` (`RelocateSettingsTabsToAdminApp`,
+   automatic with `AddAdminAppTab`) — e.g. `/{user}/Settings/GlobalAdmin`, `/_Setting/GlobalSettings/Invitations`;
+5. a tab that moved into the person app → `/{viewer}/Settings/{id}` (`RelocateSettingsTabsToPersonApp`,
+   automatic with `AddPersonAppTab`) — e.g. `/Space/Settings/ApiTokens`, `/Admin/Settings/WhoAmI` →
+   `/{viewer}/Settings/Account`.
 
-The profile menu offers **My settings** (`/{user}/Settings`) to everyone and **Administration**
-(`/Admin`) to platform admins. The header's settings button at the root opens `/Admin` for a platform
-admin and the person's own settings app for everyone else. (Both used to point at `/User/{user}…`,
-a pre-v10 path.)
+The `{user}/Instance` area redirects to the Registration tab, so every "This instance" tile keeps working.
+
+## Entry points
+
+The same three doors in every client (Blazor, portal-next, React Native):
+
+- the avatar menu: **your name** → the person app; **the instance's name** → the instance app (platform
+  admins only); What's New stays public;
+- the node's ⋯ menu: **Settings…** → that node's settings;
+- no top-bar settings gear — node settings live in ⋯.
+
+The clients are MeshWeaver.Plugins code (`MeshWeaver.Blazor.Portal`, portal-next, `app/react-native`);
+core ships the three apps, the ⋯ entry and `AdminAppNodeType.InstanceName`, which they label the
+instance entry with.
+
+## Why `/Admin` is a type of its own
+
+The node at `Admin` is the root of the system partition that holds the platform-admin grants
+(`Admin/_Access`), the update policy (`Admin/UpdatePolicy`), the setup-link claim (`Admin/SetupLink`)
+and the platform catalogs. Before `AdminAppNodeType` no code registered that node, so a fresh database
+synthesized a TYPELESS placeholder root (an empty page) and long-lived databases held it as a `Space`
+(listed among the admin's workspaces, rendering an empty Space). `AdminAppNodeType` (core,
+`MeshWeaver.Graph`) registers the `AdminApp` NodeType and the `Admin` root node in code; its default
+area is the node's settings page, so `/Admin` opens the app and every tab is linkable as
+`/Admin/Settings/{tabId}`. Long-lived databases are retyped by migration V59 (MeshWeaver.Plugins,
+`Memex.Database.Migration`).
+
+**A non-admin opening `/Admin`** is refused by the partition itself — the Admin partition is readable
+only by platform admins — and even if the page rendered, no tab would: every one waits for a positive
+admin verdict. Nothing about the app widens a read on `Admin/_Access`.
 
 ## The Inbox app — installed for every user
 
@@ -128,11 +175,11 @@ new, a person who existed before gets the tile once, on their next sign-in.
 
 ## How it reaches an instance
 
-All of it is compiled platform code — core (`MeshWeaver.Graph`, `MeshWeaver.PluginCatalog`,
-`memex/Memex.Portal.Shared`) and the portal hosts and modules in MeshWeaver.Plugins — so it reaches an
-instance by an **image roll**, and the roll runs migration V59 (`DbVersion.Latest` 59) before the new
-pods serve. The control image (`Mesh:ClosedTypeSet=true`, Route A) is the same portal host, so the
-`AdminApp` type — registered in code — is part of its closed type set; no package install is needed.
-After the roll, a live `Admin` activation bound to the old (Space or typeless) configuration keeps
-serving it until a `DisposeRequest` reaches it: recycle `Admin` once (see
-[Stale State Until a Recycle](../StaleStateUntilRecycle)).
+All of it is compiled platform code — core (`MeshWeaver.Graph`, `MeshWeaver.GitSync`,
+`MeshWeaver.PluginCatalog`, `memex/Memex.Portal.Shared`) and the portal hosts and modules in
+MeshWeaver.Plugins — so it reaches an instance by an **image roll**; nothing here is node content,
+and no migration is needed beyond V59 above. The control image (`Mesh:ClosedTypeSet=true`) is the same
+portal host, so the `AdminApp` type is part of its closed type set. A roll ends the activations on the
+pods it replaces, so the new tab sets are what the next activation binds; a portal that absorbed a
+build WITHOUT a roll keeps serving the old settings pages until the `Admin` and user-root activations
+are recycled (see [Stale State Until a Recycle](../StaleStateUntilRecycle)).

@@ -87,12 +87,15 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         return GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(address), reference)
             .Select(change => change.Value.GetRawText())
-            // Labels are localized ("Global administration"), so the page is matched case-blind.
+            // Labels are localized ("Administrators"), so the page is matched case-blind.
             .Select(json => json.ToLowerInvariant());
     }
 
     private static LayoutAreaReference Settings(string? tab = null)
         => new(MeshNodeLayoutAreas.SettingsArea) { Id = tab };
+
+    /// <summary>A settings-menu entry as it appears in the rendered JSON (a NavLink's title).</summary>
+    private static string Tab(string label) => $"\"title\":\"{label}\"";
 
     // ── (a) Admin is not a Space ────────────────────────────────────────────────────────────
 
@@ -140,21 +143,50 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     {
         var page = await Render(PlatformAdmin, AdminAppNodeType.Path, Settings())
             .Should().Within(Budget)
-            .Match(json => json.Contains("global administration") && json.Contains("data sources")
-                           && json.Contains("who am i"),
+            .Match(json => json.Contains(Tab("administrators")) && json.Contains(Tab("data sources")),
                 "a confirmed platform admin sees the Admin app's tabs",
                 TestContext.Current.CancellationToken);
 
-        page.Should().Contain("access control", "the Admin partition's own grants are managed here");
-        page.Should().NotContain("\"title\":\"metadata\"", "node-management tabs mean nothing on the Admin root");
+        page.Should().NotContain(Tab("metadata"), "node-management tabs mean nothing on the Admin root");
+        // One Administrators tab — the Admin node's Access Control is part of it, not a second list.
+        page.Should().NotContain(Tab("access control"));
+        // Effective access is a per-NODE probe; on the instance it read as a global answer.
+        page.Should().NotContain(Tab("check access"));
+        // Who am I acts on the person: it is the person app's Account tab.
+        page.Should().NotContain(Tab("who am i"));
+        page.Should().NotContain(Tab("account"));
     }
+
+    /// <summary>The app's sections: Administrators under People &amp; sign-in, Data sources under Operations.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheAdminApp_IsSectioned_ByWhatItAdministers()
+        => await Render(PlatformAdmin, AdminAppNodeType.Path, Settings())
+            .Should().Within(Budget)
+            .Match(json => json.Contains(Tab("people \\u0026 sign-in")) && json.Contains(Tab("operations")),
+                "the tabs sit in the instance app's sections", TestContext.Current.CancellationToken);
+
+    /// <summary>The Admin node's old Access Control link lands on the ONE Administrators tab.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheAdminAccessControlLink_OpensAdministrators()
+        => await Render(PlatformAdmin, AdminAppNodeType.Path, Settings("AccessControl"))
+            .Should().Within(Budget)
+            .Match(json => json.Contains(AdminAppNodeType.TabHref(GlobalAdministrationTab.TabId).ToLowerInvariant()),
+                "the Admin node's grants ARE the administrators", TestContext.Current.CancellationToken);
+
+    /// <summary>The old <c>/Admin/Settings/WhoAmI</c> lands on the viewer's own Account tab.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheOldWhoAmILink_OpensThePersonsAccount()
+        => await Render(PlatformAdmin, AdminAppNodeType.Path, Settings(WhoAmISettingsTab.TabId))
+            .Should().Within(Budget)
+            .Match(json => json.Contains(PersonApp.TabHref(PlatformAdmin, PersonApp.AccountTab).ToLowerInvariant()),
+                "Who am I acts on the person, so it lives in the person app", TestContext.Current.CancellationToken);
 
     /// <summary><c>/Admin</c> with no area opens the app itself — the settings page of the Admin node.</summary>
     [Fact(Timeout = 60000)]
     public async Task TheAdminApp_IsTheDefaultPageOfAdmin()
         => await Render(PlatformAdmin, AdminAppNodeType.Path, new LayoutAreaReference(string.Empty))
             .Should().Within(Budget)
-            .Match(json => json.Contains("global administration"),
+            .Match(json => json.Contains(Tab("administrators")),
                 "/Admin lands on the Admin app", TestContext.Current.CancellationToken);
 
     // ── (c) nothing widens Admin/_Access ────────────────────────────────────────────────────
@@ -192,7 +224,7 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     [Fact(Timeout = 60000)]
     public async Task ANonAdmin_OpeningTheAdminApp_SeesNoAdministration()
         => await Render(Ordinary, AdminAppNodeType.Path, Settings())
-            .Where(json => json.Contains("global administration") || json.Contains("data sources"))
+            .Where(json => json.Contains(Tab("administrators")) || json.Contains(Tab("data sources")))
             .Should().NotEmit(TimeSpan.FromSeconds(8),
                 "the Admin partition refuses a non-admin, and every admin tab waits for a positive admin verdict",
                 TestContext.Current.CancellationToken);
@@ -213,8 +245,8 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .Match(json => json.Contains("account") && json.Contains("preferences"),
                 "the settings app renders the person's own tabs", TestContext.Current.CancellationToken);
 
-        page.Should().NotContain("global administration");
-        page.Should().NotContain("data sources");
+        page.Should().NotContain(Tab("administrators"));
+        page.Should().NotContain(Tab("data sources"));
     }
 
     [Fact(Timeout = 60000)]
