@@ -202,6 +202,8 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         // In the People & sign-in NavGroup, not loose and not in another section: the group control
         // lists its entries' area ids, and the probe's NavLink is one of them.
+        // The EntityStore's area keys are themselves JSON-encoded ids ("\"settings/2/1/…\""), so
+        // each property name is decoded once more to get the area id.
         using var doc = JsonDocument.Parse(page);
         var areas = doc.RootElement.GetProperty("areas");
         string? probeArea = null, peopleGroup = null;
