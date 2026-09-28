@@ -2546,8 +2546,9 @@ jobs:
       # carries several core merges, and ALL of them reach the fleet when it is armed; a first-parent
       # base would diff, and control-arm, only the last one. `arm-promoted-set.py armed-base` names the
       # newest armed set from memex-portal-ai's manifests (its version tag shares a manifest with the
-      # sha tag). `base_kind` records which rule produced `base`, and an UNRESOLVED base still promotes
-      # for CI but is never armed and never measured (see the script's header) — CI is never held, and
+      # core/Plugins pair tag; the bare sha tag may have moved to a newer pair). `base_kind` records
+      # which rule produced `base`, and an UNRESOLVED base still promotes for CI but is never armed
+      # and never measured (see the script's header) — CI is never held, and
       # the fleet never receives merges nobody measured.
       - name: "Promotion record (what `arm` needs to arm this set later)"
         env:
