@@ -36,6 +36,7 @@ namespace MeshWeaver.Graph.Test;
 public class SettingsByOwnerTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string Person = "owner-person";
+    private const string OtherPerson = "owner-other";
     private const string Space = "OwnerSpace";
     private const string Page = Space + "/Page";
     private const string ProbeTabId = "PersonalProbe";
@@ -63,6 +64,15 @@ public class SettingsByOwnerTest(ITestOutputHelper output) : MonolithMeshTestBas
                     Content = new User { FullName = "Owner Person", Email = $"{Person}@meshweaver.io" },
                 },
                 AssignmentNodeFactory.UserRole(Person, "Admin", Person),
+                new MeshNode(OtherPerson)
+                {
+                    NodeType = UserNodeType.NodeType,
+                    Name = "Other Person",
+                    State = MeshNodeState.Active,
+                    Content = new User { FullName = "Other Person", Email = $"{OtherPerson}@meshweaver.io" },
+                },
+                // Person may UPDATE the other person's root — yet its person app is not theirs.
+                AssignmentNodeFactory.UserRole(Person, "Admin", OtherPerson),
                 new MeshNode(Space) { Name = "Owner Space", NodeType = "Space" },
                 new MeshNode("Page", Space) { Name = "A Page" },
                 AssignmentNodeFactory.UserRole(Person, "Admin", Space));
@@ -177,16 +187,21 @@ public class SettingsByOwnerTest(ITestOutputHelper output) : MonolithMeshTestBas
 
     // ── node settings from the ⋯ menu ───────────────────────────────────────────────────────
 
+    private IObservable<IReadOnlyList<NodeMenuItemDefinition>> NodeMenu(string address)
+    {
+        ActAsPerson();
+        return GetClient().GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(
+                new Address(address), new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea))
+            .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
+            .Where(x => x is MenuControl)
+            .Select(x => (IReadOnlyList<NodeMenuItemDefinition>)((MenuControl)x!).Items);
+    }
+
     [Fact(Timeout = 60000)]
     public async Task TheNodeMenu_OffersSettings()
     {
-        ActAsPerson();
-        var items = await GetClient().GetWorkspace()
-            .GetRemoteStream<JsonElement, LayoutAreaReference>(
-                new Address(Page), new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea))
-            .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
-            .Where(x => x is MenuControl)
-            .Select(x => (IReadOnlyList<NodeMenuItemDefinition>)((MenuControl)x!).Items)
+        var items = await NodeMenu(Page)
             .Where(i => i.Any(m => m.Area == MeshNodeLayoutAreas.SettingsArea))
             .FirstAsync()
             .Timeout(Budget)
@@ -195,6 +210,38 @@ public class SettingsByOwnerTest(ITestOutputHelper output) : MonolithMeshTestBas
         var settings = items.Single(m => m.Area == MeshNodeLayoutAreas.SettingsArea);
         settings.Href.Should().Be(MeshNodeLayoutAreas.BuildUrl(Page, MeshNodeLayoutAreas.SettingsArea),
             "Settings… opens THIS node's settings");
+    }
+
+    /// <summary>
+    /// On a person's root, Settings… is the person app — which opens for its OWNER only. A viewer who
+    /// merely holds Update there (an Admin grant) is not offered an entry that would land on a
+    /// refusal; the owner is (the positive control is <see cref="TheOwnersMenu_OffersTheirSettings"/>).
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SomeoneElsesRoot_OffersNoSettings()
+    {
+        // The control: the menu has rendered for a viewer holding Update (Recycle needs it).
+        var items = await NodeMenu(OtherPerson)
+            .Where(i => i.Any(m => m.Area == MeshNodeLayoutAreas.RecycleArea))
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
+
+        items.Should().NotContain(m => m.Area == MeshNodeLayoutAreas.SettingsArea,
+            "another person's settings page refuses this viewer, so the menu does not offer it");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task TheOwnersMenu_OffersTheirSettings()
+    {
+        var items = await NodeMenu(Person)
+            .Where(i => i.Any(m => m.Area == MeshNodeLayoutAreas.RecycleArea))
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
+
+        items.Select(m => m.Area).Should().Contain(MeshNodeLayoutAreas.SettingsArea,
+            "the owner's ⋯ opens their own person app");
     }
 
     // ── pure pieces ─────────────────────────────────────────────────────────────────────────
@@ -213,6 +260,10 @@ public class SettingsByOwnerTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         AdminAppNodeType.InstanceName(configuration).Should().Be(expected);
     }
+
+    [Fact]
+    public void ThePersonAppHref_IsBuiltLikeItsTabLinks()
+        => PersonApp.TabHref("alice", "Profile").Should().StartWith(PersonApp.Href("alice") + "/");
 
     [Theory]
     [InlineData("alice", "alice", true)]

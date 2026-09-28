@@ -72,7 +72,8 @@ public static class PersonApp
 
     /// <summary>The person app of <paramref name="userId"/>: <c>/{userId}/Settings</c>.</summary>
     /// <param name="userId">The person's id (their partition key).</param>
-    public static string Href(string userId) => "/" + userId + "/" + MeshNodeLayoutAreas.SettingsArea;
+    public static string Href(string userId) =>
+        "/" + new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea).ToHref(userId);
 
     /// <summary>One tab of the person app: <c>/{userId}/Settings/{tabId}</c>. Built through
     /// <see cref="LayoutAreaReference.ToHref(object)"/> so it cannot drift from the menu's own links.</summary>

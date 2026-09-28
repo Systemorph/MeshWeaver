@@ -227,7 +227,7 @@ public static class SettingsLayoutArea
             catch (Exception ex)
             {
                 host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
+                    ?.CreateLogger(typeof(SettingsLayoutArea).FullName ?? nameof(SettingsLayoutArea))
                     .LogWarning(ex, "Settings title failed for {Path}; falling back to the node name",
                         host.Hub.Address);
             }
