@@ -106,7 +106,10 @@ def parse_diff(diff: str) -> list[dict]:
 
 
 def collect_diff(root: Path, base: str, paths: list[str] | None = None) -> list[dict]:
-    diff = git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--find-renames", f"{base}...HEAD",
+    # BASE against HEAD directly (not BASE...HEAD): needs only the two commits, never a merge base, so a
+    # shallow checkout plus one `git fetch --depth=1 origin <base>` is enough. On a PR's merge-commit
+    # checkout and on a push (before → after) that is exactly the change; only ADDED lines are read.
+    diff = git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--find-renames", base, "HEAD",
                "--", *(paths or []))
     return parse_diff(diff)
 
