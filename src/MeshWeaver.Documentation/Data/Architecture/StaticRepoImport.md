@@ -233,6 +233,16 @@ Changes iff a node or an inline content file is added, removed, or modified — 
 
 🚨 **The content files are in the set on purpose.** Until 2026-09-15 the fingerprint hashed nodes only, so a commit that only added, edited or removed a content file matched the previous import's marker. The import short-circuited as "already imported": the new file never landed and the removed one was never pruned. The gap stayed hidden while the synthesized Space root stamped `CreatedAt = UtcNow`, which changed the root's token on every import. MeshWeaver#4394 made the root stable and exposed it, and the GitSync prune tests in MeshWeaver.Plugins caught it. A partition with no inline content keeps its fingerprint unchanged. One with content re-imports once after the upgrade.
 
+### Git-diff scope and parsed-source drift
+
+GitSync's changed-path set normally limits writes to files changed between the last synced commit and the fetched head. The repository bytes do not capture every change in how those files are read, though: an older image can deserialize a typed JSON object without a newly-added property, persist the older shape, and later report the same repository commit as up to date. On a later sync, the new image parses that unchanged file into a different source node.
+
+For an existing node outside the Git diff, the importer now compares the current parsed-source token with the prior import manifest. A mismatch is enough evidence to re-evaluate that node through the ordinary upsert and conflict-policy path; a match still skips it. If the manifest is missing, an out-of-diff node remains skipped, preserving the guard against a missing/stale manifest causing a whole-partition rewrite. A drifted path joins the effective evaluated set only once its re-evaluation is actually WRITTEN, so the manifest records the new token once, not on every sync. Two-way imports still preserve a newer human-authored live node — and a drifted node they preserve keeps its PRIOR manifest token. Recording the new token for content that never landed is the #1326 false claim in the two-way direction: a later pass in which the server copy no longer wins would read "already at this content", skip the node, and leave it divergent for good. A Git-diff-scoped pass still cannot stamp a whole-partition success marker.
+
+The token is a hash over the parsed node with no I/O, and every scoped pass already computed it for every source node when writing the manifest — so detecting drift adds CPU proportional to the partition, never a read or a write.
+
+`ScopedImportMarkerTest` pins all three sides: a parsed-source token change outside the Git diff is re-imported; the same mismatch under two-way sync leaves a newer server edit untouched; and the next pass without the two-way protection re-imports that preserved node instead of skipping it on a claimed token.
+
 ### 2. Content-addressed Activity — the marker + the short-circuit
 
 The import is governed by TWO [Activity](/Doc/Architecture/ActivityControlPlane) nodes with deliberately different lifetimes.
