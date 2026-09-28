@@ -114,8 +114,8 @@ Every per-deployment page is the same three pieces, and none of them is new:
 
 1. **The record's block, bound to the record.** The form is the framework's form generator over the
    block's type (`ModelProvider`, `ModelTiers`, `SignInSpec`, `EmailSpec`, …) with a node-bound data
-   context pointing INTO the record: `LayoutAreaReference.GetMeshNodeDataContext(recordPath,
-   bindContent: false, subPath: "content/ai/openRouter")`. Every field reads from the record's node
+   context pointing INTO the record's content: `LayoutAreaReference.GetMeshNodeDataContext(recordPath,
+   bindContent: true, subPath: "ai/openRouter")`. Every field reads from the record's node
    stream and writes one field back through `GetMeshNodeStream(recordPath).Update(...)`. There is no
    `/data` copy and no Save button (see [Data Binding](/Doc/GUI/DataBinding)). A viewer without
    `Update` on the record gets the same form read-only.
@@ -139,6 +139,32 @@ Every per-deployment page is the same three pieces, and none of them is new:
 
 Everything on the page is platform controls in a real layout (`Stack`, `DataGrid`, the form
 generator, `WriteOnlySecretSection`); no page builds its own form or markup.
+
+## Adding a domain app: the shape, and the traps already paid for
+
+Each app is a thin copy of `Hosting/AiApp` (MeshWeaver.Plugins): a NodeType `Hosting/{X}App` whose
+sources list `shared=@Hosting/DomainApp/Source` (the picker, the page frame, the admin gate, Apply),
+an app node `Hosting/{X}`, a form record that mirrors the record's block with `[Description]` +
+`[Translation]` (the Deployment contract assembly cannot carry `[Translation]`), a module text
+table in English and German, and a `Test/` folder whose cases the `meshTests` lane runs.
+
+- **One content record PER APP.** `validate-repos` refuses a content type claimed by two NodeTypes
+  (it would stay an untyped `JsonElement`), so the shell carries none; each app declares its own
+  `{X}AppContent`.
+- **The picker declines node provenance** (`DomainAppShell.BoardProvenance`): it is a board over
+  other records, and the app node's created/updated says nothing about them.
+- **A partial listing is a fault, not a fleet.** The shell turns a frame with silent providers or an
+  empty coverage into `Listing.Fault` and shows it above whatever rows came back.
+- 🚨 **An app's `Test/` code references ONLY its own `Test/` folder.** The in-mesh compile of
+  `Hosting/{X}App` includes the folders its NodeType lists — its own `Source`/`Test` and the shared
+  `Source` folders (`Hosting/DomainApp/Source`, `Hosting/Deployment/Source`, …) — but never another
+  type's `Test/`. A case that calls a helper from `Hosting/Deployment/Test` compiles locally and
+  fails in CI with `CS0103` (measured on MeshWeaver.Plugins#2473's first run). The local
+  `MeshWeaver.Fleet.Control` build cannot catch it: it compiles every Hosting folder into ONE
+  assembly, so every `Test/` class is visible to every other. Copy the helper into the app's own
+  `Test/` folder, or move it to a shared `Source` folder if production code needs it too.
+- **Hosting's minor version is main + 1 at the merge you do after another app lands** — two app
+  pull requests in flight otherwise both claim the same number.
 
 ## Who may use which app
 
