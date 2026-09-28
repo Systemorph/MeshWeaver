@@ -1627,6 +1627,10 @@ def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str] | None:
     return sorted(loose - conflicted)
 
 
+# The run context the self-test's fixtures must never inherit (see main()'s --self-test).
+_SELF_TEST_ENV_ISOLATED = ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_BASE_REF", "MW_LOCK_BASE")
+
+
 def self_test() -> int:
     """Runs --resolve's real function in throwaway repos, including the case it must REFUSE."""
     import tempfile
@@ -2656,7 +2660,15 @@ def main() -> int:
               f"verified against {'the published tags and the trunk' if trunk else 'the local tags'})")
         return 0
     if "--self-test" in args:
-        return self_test()
+        # 🚨 HERMETIC: the fixtures must not see the CALLER's run. `_lock_base` and
+        # `is_manifest_lock_settlement_pr` read GITHUB_EVENT_NAME / GITHUB_EVENT_PATH / MW_LOCK_BASE,
+        # so on the settlement PR's own run (MeshWeaver.Plugins#2487) every fixture took the
+        # settlement branch and the self-test went red over the environment, not the code.
+        saved = {k: os.environ.pop(k) for k in _SELF_TEST_ENV_ISOLATED if k in os.environ}
+        try:
+            return self_test()
+        finally:
+            os.environ.update(saved)
     if "--list-packages" in args:
         return list_packages(root)
     if "--resolve" in args:
