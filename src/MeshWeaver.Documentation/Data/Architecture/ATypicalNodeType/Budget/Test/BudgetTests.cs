@@ -99,6 +99,14 @@ public static class BudgetTests
         var empty = BudgetLayoutAreas.View(null, BudgetTexts.English);
         Expect(empty is MarkdownControl { Markdown: string text } && text == BudgetTexts.English.NoBudget,
             "a node without content renders the notice");
+
+        // Controls compare BY VALUE, children included — which is what lets the live case below
+        // compare a rendered tree with the one the content implies. Pinned in both directions, so
+        // that comparison can never be vacuous.
+        Expect(view.Equals(BudgetLayoutAreas.View(Launch, BudgetTexts.English)),
+            "the same content must compose an equal view");
+        Expect(!view.Equals(BudgetLayoutAreas.View(Launch with { Spent = 751m }, BudgetTexts.English)),
+            "different figures must compose an unequal view");
     }
 
     /// <summary>
@@ -133,9 +141,12 @@ public static class BudgetTests
                 var expected = BudgetLayoutAreas.View(content, BudgetTexts.For(host.ViewerLocale()));
                 Expect(rendered is not null && rendered.GetType() == expected.GetType(),
                     $"the area rendered {rendered?.GetType().Name ?? "nothing"}, the content says {expected.GetType().Name}");
-                if (expected is MarkdownControl { Markdown: string notice })
-                    Expect(rendered is MarkdownControl { Markdown: string shown } && shown == notice,
-                        "the area's notice differs from the content's");
+                // By value, children included: the figures and the bar on a budget, the notice
+                // without one. View_ComposesPlatformControls proves this equality sees a figure change.
+                Expect(expected.Equals(rendered),
+                    content is null
+                        ? "the area's notice differs from the content's"
+                        : "the area's figures differ from the content's");
                 return Unit.Default;
             });
 

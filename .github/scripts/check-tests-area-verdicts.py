@@ -105,7 +105,9 @@ def tested_types(tree: Path) -> tuple[list[str], list[str]]:
             continue
         owner = test_dir.parent
         relative = owner.relative_to(tree).as_posix()
-        if is_nodetype(owner.with_suffix(".json")) or is_nodetype(owner / "index.json"):
+        # APPEND the suffix — `with_suffix` would REPLACE a dotted folder's last segment
+        # (`ACME.Foo` → `ACME.json`) and call a legitimate Test/ folder an orphan.
+        if is_nodetype(owner.with_name(owner.name + ".json")) or is_nodetype(owner / "index.json"):
             owned.append(relative)
         else:
             orphans.append(f"{relative}/Test")
@@ -189,14 +191,14 @@ ALL GREEN.
 """
 
 
-def _tree(root: Path, with_test: bool = True, owned: bool = True) -> Path:
-    (root / "P" / "Tested" / "Source").mkdir(parents=True)
-    (root / "P" / "Tested" / "Source" / "A.cs").write_text("class A {}")
+def _tree(root: Path, with_test: bool = True, owned: bool = True, name: str = "Tested") -> Path:
+    (root / "P" / name / "Source").mkdir(parents=True)
+    (root / "P" / name / "Source" / "A.cs").write_text("class A {}")
     if with_test:
-        (root / "P" / "Tested" / "Test").mkdir()
-        (root / "P" / "Tested" / "Test" / "ATests.cs").write_text("class ATests {}")
+        (root / "P" / name / "Test").mkdir()
+        (root / "P" / name / "Test" / "ATests.cs").write_text("class ATests {}")
     if owned:
-        (root / "P" / "Tested.json").write_text(NODETYPE)
+        (root / "P" / f"{name}.json").write_text(NODETYPE)
     (root / "P" / "Plain.json").write_text(NODETYPE)
     return root
 
@@ -206,6 +208,8 @@ def _self_test() -> int:
         # (name, log, tree options, require_tests) → expected pass?
         ("green: a Test/ folder that ran and counted", GREEN_LOG, {}, True),
         ("green: no Test/ folder and none required", GREEN_LOG, {"with_test": False}, False),
+        ("green: a dotted NodeType folder owns its Test/ folder",
+            GREEN_LOG.replace("P/Tested:", "P/Te.sted:"), {"name": "Te.sted"}, True),
     ]
     reds: list[tuple[str, str, dict, bool]] = [
         ("red: skipped", GREEN_LOG.replace("tests=ok", "tests=skipped"), {}, False),
