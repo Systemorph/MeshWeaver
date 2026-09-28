@@ -165,7 +165,7 @@ jobs:
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the closing-keyword gate has no ref to be fetched at"; exit 1; }
           gh api "repos/Systemorph/MeshWeaver/contents/scripts/check-closing-keywords.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-closing-keywords.py" \
             || { echo "::error::could not fetch scripts/check-closing-keywords.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the gate needs the older lane"; exit 1; }
-          head -c 400 "$RUNNER_TEMP/check-closing-keywords.py" | grep -q "check-closing-keywords" || { echo "::error::the fetched check-closing-keywords.py at ${SCRIPTS_REF} does not look like the gate"; exit 1; }
+          grep -q "check-closing-keywords" "$RUNNER_TEMP/check-closing-keywords.py" || { echo "::error::the fetched check-closing-keywords.py at ${SCRIPTS_REF} does not contain the gate marker"; exit 1; }
       - name: "Cross-repository closing-keyword gate can fail (self-test)"
         if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.ready.outputs.ok == 'true' }}
         run: python3 "$RUNNER_TEMP/check-closing-keywords.py" --self-test

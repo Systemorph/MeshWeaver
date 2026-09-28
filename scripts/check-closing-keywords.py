@@ -1041,6 +1041,25 @@ def self_test() -> int:
     if errors:
         failures.append(f"cross-only mode must not inspect unconfigured repositories: {errors}")
 
+    satellite_resolutions: list[tuple[str, int]] = []
+
+    def record_satellite_resolution(target_repo: str, number: int) -> dict | None:
+        satellite_resolutions.append((target_repo, number))
+        return _fake_resolve(target_repo, number)
+
+    errors, _, _ = evaluate(
+        f"Closes {satellite_repo}#5011",
+        satellite_repo,
+        record_satellite_resolution,
+        protected,
+        only_checked_repositories=True,
+    )
+    if errors or satellite_resolutions:
+        failures.append(
+            "cross-only mode must ignore an explicit caller-repository close without resolving it: "
+            f"{errors}, resolver calls={satellite_resolutions}"
+        )
+
     errors, _, _ = evaluate(
         "Closes Systemorph/MeshWeaver#5011\n\nVerified-closing: Systemorph/MeshWeaver#not-an-issue — verified on the core portal after its roll.",
         satellite_repo,
