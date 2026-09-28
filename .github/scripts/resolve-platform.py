@@ -32,9 +32,11 @@ THE RULE
      published nothing (the trio SKIPPED, e.g. core CD run 8197 / 8420) is not a release and is
      passed over, saying so. A run still sealing is waited for on a release trigger
      (`--wait-for-seal`), and otherwise passed over, saying so;
-  3. its images, resolved by TAG in ACR — `<version>-ci.<n>` first (promote's version tag), the
-     seven-character sha tag second (promote's identity tag) — to the digests the lane then takes
-     exactly as if the caller had pinned them. A set whose images are gone (retention purge,
+  3. its images, resolved by TAG in ACR — `<version>-ci.<n>` first (when the fleet has armed it),
+     then the promotion record's exact `<core7>-p<plugins7>` portal tag and core SHA tag for the
+     tester/migration. Older runs without a record retain their historical bare-SHA fallback.
+     The lane then takes the digests exactly as if the caller had pinned them. A set whose images
+     are gone (retention purge,
      MeshWeaver#3438) is passed over, saying so, and the next-newest sealed set is taken;
   4. the PLUGINS publication is found on its own: the newest core CD run whose `Plugins: bake +
      seal …` job succeeded — which may be an OLDER run than the core set — and is reported beside
@@ -130,8 +132,9 @@ substitution: a freeze is an instruction, not a preference.
 
 API-CALL BUDGET (the caller's GITHUB_TOKEN: 1,000 requests/hour per repository)
 ------------------------------------------------------------------------------
-One resolution: 1 (runs page) + 1 per run examined until the chosen set + 1 props read, + at most
-PLUGINS_LOOKBACK (40) when the chosen run's own seal is not green — typically 5-12 calls. The
+One resolution: 1 (runs page) + 1 per run examined until the chosen set + 1 props read + 2 for
+the chosen run's promotion-record listing/archive, + at most PLUGINS_LOOKBACK (40) when the chosen
+run's own seal is not green — typically 7-14 calls. The
 lanes add one resolution in `plan` / `publish-bake` plus one freshness check per gate shard, and
 one `contents` read per job to fetch this script. The registry HEADs are not GitHub calls.
 
@@ -165,6 +168,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import os
 import re
@@ -173,6 +177,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from datetime import datetime
 from typing import Callable, NamedTuple
 
@@ -204,11 +209,9 @@ POLL_SECONDS = 30
 # when the chosen run's own seal is not green — one `jobs` call each, so this bounds the budget.
 PLUGINS_LOOKBACK = 40
 
-# GitHub REST: path → JSON, or TEXT. A `list` because the check-run ANNOTATIONS endpoint answers a
-# bare array; a `str` because a job LOGS endpoint answers plain text (read only when a caller opts
-# into `--verify-source`). Every other path this script reads answers an object, so callers that
-# expect one keep reading `.get(...)` unchanged.
-Fetch = Callable[[str], dict | list | str]
+# GitHub REST: path → JSON, text log, or bounded promotion-record ZIP. The ZIP comes from the
+# run's exact gate-selected source pair; the run head can be different from the image source.
+Fetch = Callable[[str], dict | list | str | bytes]
 Resolve = Callable[[str, str], str | None]         # registry: (repo, tag) → digest or None (absent)
 
 
@@ -224,6 +227,11 @@ class ProvenanceUnavailable(ResolutionError):
 # stream with no declared length, so a cap is the difference between a bounded read and an OOM on a
 # runner; over the cap is a refusal, never a truncated parse that could match the wrong receipt.
 MAX_LOG_BYTES = 16 * 1024 * 1024
+MAX_PROMOTION_RECORD_BYTES = 64 * 1024
+# main-cd #9556 was the first sealed set after the promotion-record lane landed: its trio
+# succeeded and its run has the artifact. #9555/#9557 published nothing. From here onward a
+# sealed run without its record cannot prove which Plugins commit its moving bare core tag holds.
+PROMOTION_RECORD_FROM_RUN = 9556
 FINAL_BAKE_RECEIPT = re.compile(
     r"^(?:\d{4}-\d{2}-\d{2}T[\d:.]+Z )?bake published: ([^\r\n]+)$", re.MULTILINE)
 
@@ -248,6 +256,13 @@ def github_fetch_with(token: str) -> Fetch:
             request.add_unredirected_header("Authorization", f"Bearer {token}")
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
+                    # Actions artifact archives redirect to signed storage. The token is added
+                    # unredirected above, so the archive host receives only its signed URL.
+                    if path.endswith("/zip"):
+                        raw = response.read(MAX_PROMOTION_RECORD_BYTES + 1)
+                        if len(raw) > MAX_PROMOTION_RECORD_BYTES:
+                            raise ResolutionError(f"promotion record archive {path} is too large")
+                        return raw
                     # The ONE text read, and only for the path that has one (`--verify-source`).
                     if path.endswith("/logs"):
                         raw = response.read(MAX_LOG_BYTES + 1)
@@ -259,6 +274,8 @@ def github_fetch_with(token: str) -> Fetch:
                             raise ProvenanceUnavailable(f"job log {path} is not UTF-8 text") from error
                     return json.load(response)
             except ProvenanceUnavailable:
+                raise
+            except ResolutionError:
                 raise
             except urllib.error.HTTPError as error:
                 # A log that is GONE is a provenance answer, not a transport verdict: logs expire
@@ -1636,10 +1653,68 @@ def registry_resolver(user: str, password: str) -> Resolve:
     return resolve
 
 
+class PromotionIdentity(NamedTuple):
+    core_sha: str
+    plugins_sha: str
+    version: str
+
+    @property
+    def pair_tag(self) -> str:
+        return f"{self.core_sha[:7]}-p{self.plugins_sha[:7]}"
+
+
+def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionIdentity | None:
+    """Read the producer's exact source pair, including for an unarmed set.
+
+    The run head is not necessarily the source selected by gate. The small promotion-record
+    artifact is written from gate's core and Plugins commits before promotion; neither a moving
+    bare-SHA tag nor a registry tag listing can prove that pair.
+    """
+    path = f"/repos/{CORE_REPO}/actions/runs/{run_id}/artifacts?name=promotion-record&per_page=100"
+    listing = fetch(path)
+    if not isinstance(listing, dict):
+        raise ResolutionError(f"{path} returned no artifact listing")
+    artifacts = listing.get("artifacts", [])
+    if not isinstance(artifacts, list) or listing.get("total_count") != len(artifacts):
+        raise ResolutionError(f"{path} returned an incomplete artifact listing")
+    if not artifacts:
+        if run_number >= PROMOTION_RECORD_FROM_RUN:
+            raise ResolutionError(f"run #{run_number} has no promotion-record artifact; "
+                                  "its exact core/Plugins pair cannot be verified")
+        return None  # earlier releases predate the receipt
+    if len(artifacts) != 1 or artifacts[0].get("name") != "promotion-record" \
+            or artifacts[0].get("expired") or not isinstance(artifacts[0].get("id"), int):
+        raise ResolutionError(f"{path} has no unique retained promotion-record artifact")
+    archive = fetch(f"/repos/{CORE_REPO}/actions/artifacts/{artifacts[0]['id']}/zip")
+    if not isinstance(archive, bytes) or len(archive) > MAX_PROMOTION_RECORD_BYTES:
+        raise ResolutionError(f"run #{run_number} promotion-record archive is absent or too large")
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            if zipped.namelist() != ["promotion-record.json"]:
+                raise ValueError("expected only promotion-record.json")
+            if zipped.getinfo("promotion-record.json").file_size > MAX_PROMOTION_RECORD_BYTES:
+                raise ValueError("promotion-record.json is too large")
+            raw = zipped.read("promotion-record.json")
+        record = json.loads(raw)
+        core, plugins = record["core_sha"], record["plugins_sha"]
+        version = record["v_portal"]
+        if (record["run_number"] != run_number or not SHA.fullmatch(core)
+                or not SHA.fullmatch(plugins) or not SET_NAME.fullmatch(version)
+                or int(SET_NAME.fullmatch(version).group(2)) != run_number
+                or record["v_plugin"] != version or record["v_migration"] != version
+                or record["short"] != core[:7] or record["plugins_short"] != plugins[:7]
+                or record["key"] != f"pair-{core[:7]}-p{plugins[:7]}"):
+            raise ValueError("source pair or release version is inconsistent")
+        return PromotionIdentity(core, plugins, version)
+    except (ValueError, KeyError, TypeError, zipfile.BadZipFile) as error:
+        raise ResolutionError(f"run #{run_number} promotion-record is invalid: {error}") from error
+
+
 def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | None,
-                   short_sha: str, run_number: int, migration: str | None = None) -> tuple[dict[str, str], str] | str:
+                   short_sha: str, run_number: int, migration: str | None = None,
+                   pair_tag: str | None = None) -> tuple[dict[str, str], str] | str:
     """Required digests of one promoted set, or the reason they could not be had. The version tag is
-    tried in both historical shapes, then the identity tag promote writes in phase A."""
+    tried in both historical shapes, then the exact identity tags promote writes in phase A."""
     tags = [f"{version}-ci.{run_number}", f"{version}.ci.{run_number}"] if version else []
     out: dict[str, str] = {}
     via = ""
@@ -1648,13 +1723,17 @@ def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | No
         images.append((migration, "migration-image-digest"))
     for image, key in images:
         found = None
-        for tag in [t for t in tags] + [short_sha]:
+        # A promotion receipt makes the pair exact. The portal's bare core tag is moving across
+        # Plugins-only builds, so it cannot substitute if the recorded pair is absent.
+        identity_tags = [pair_tag] if image == portal and pair_tag else [short_sha]
+        for tag in tags + identity_tags:
             digest = resolve(image, tag)
             if digest:
                 found, via = digest, tag
                 break
         if not found:
-            return (f"{image} carries neither a version tag nor the identity tag `{short_sha}` "
+            identity = pair_tag if image == portal and pair_tag else short_sha
+            return (f"{image} carries neither a version tag nor the identity tag `{identity}` "
                     "for this set — purged by retention (MeshWeaver#3438) or never promoted")
         out[key] = found
     return out, via
@@ -1952,7 +2031,35 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 continue
             digests: dict[str, str] = {}
             if resolve is not None:
-                images = resolve_images(resolve, tester, portal, version, sha[:7], number, migration)
+                try:
+                    identity = promotion_identity(fetch, int(run["id"]), number)
+                except ResolutionError as error:
+                    skipped.append(f"{label} = {set_name}: promotion identity unverified — {error}")
+                    log(f"  skip {skipped[-1]}")
+                    if freeze_kind:
+                        raise ResolutionError(f"the freeze names {label}: {error}") from error
+                    continue
+                pair_tag = None
+                if identity is not None:
+                    if (version is not None and identity.version != f"{version}-ci.{number}") \
+                            or (verify_source and identity.core_sha != sha):
+                        skipped.append(f"{label} = {set_name}: promotion record disagrees with "
+                                       "the release or final bake receipt")
+                        log(f"  skip {skipped[-1]}")
+                        if freeze_kind:
+                            raise ResolutionError(f"the freeze names {label}: {skipped[-1]}")
+                        continue
+                    sha = identity.core_sha
+                    version = SET_NAME.fullmatch(identity.version).group(1)
+                    set_name = identity.version
+                    pair_tag = identity.pair_tag
+                    label = f"main-cd #{number} (promoted core {sha[:9]}, Plugins {identity.plugins_sha[:9]})"
+                    if freeze_kind == "sha" and sha != freeze_value:
+                        # The run head matched the freeze, but gate built an older core commit.
+                        # A freeze can never silently resolve to a different source.
+                        continue
+                images = resolve_images(resolve, tester, portal, version, sha[:7], number,
+                                        migration, pair_tag)
                 if isinstance(images, str):
                     skipped.append(f"{label} = {set_name}: sealed, but {images}")
                     log(f"  skip {skipped[-1]}")
@@ -2000,9 +2107,9 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 log(f"  {lag}")
             chosen = Chosen(sha, number, str(run.get("html_url", "")), set_name, digests,
                             v.plugins, source, lag=lag)
-            # The publication found on THIS run was named from the props at `head_sha`; when the
-            # receipt was read, the verified release is the better name for the same thing.
-            if verify_source and publication is not None and publication.run_number == number:
+            # The publication found on THIS run was initially named from props at `head_sha`;
+            # the selected set's verified name is the better name for that same publication.
+            if publication is not None and publication.run_number == number:
                 publication = publication._replace(set_name=set_name)
             if publication is not None:
                 break
@@ -2220,6 +2327,8 @@ PROPS = '<Project>\n  <PropertyGroup>\n    <PlatformVersion Condition="\'$(Platf
 def _fetch_for(runs: list[dict], jobs_by_run: dict[int, list[dict]],
                props: str | None = PROPS) -> Fetch:
     def fetch(path: str) -> dict:
+        if "/artifacts?name=promotion-record" in path:
+            return {"total_count": 0, "artifacts": []}
         if "/runs?" in path:
             page = int(re.search(r"[?&]page=(\d+)", path).group(1))
             return {"workflow_runs": runs if page == 1 else []}
@@ -2337,6 +2446,45 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
                         _registry(unarmed), tester, portal, log=logs.append),
          lambda c: c.sha == A and c.digests == {"image-digest": D1, "portal-image-digest": D2})
+    # A run may promote an earlier validated core commit. Its head SHA names neither the tester
+    # nor the portal; the portal's bare core tag can also point at another Plugins build.
+    actual_core, actual_plugins = "e" * 40, "f" * 40
+    record = {"run_number": 8207, "core_sha": actual_core, "plugins_sha": actual_plugins,
+              "short": actual_core[:7], "plugins_short": actual_plugins[:7],
+              "v_portal": "3.0.0-ci.8207", "v_plugin": "3.0.0-ci.8207",
+              "v_migration": "3.0.0-ci.8207",
+              "key": f"pair-{actual_core[:7]}-p{actual_plugins[:7]}"}
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as zipped:
+        zipped.writestr("promotion-record.json", json.dumps(record))
+    base_fetch = _fetch_for(two, {9207: _jobs(), 9203: _jobs()})
+    def pair_fetch(path: str) -> dict | bytes:
+        if f"/runs/9207/artifacts?name=promotion-record" in path:
+            return {"total_count": 1, "artifacts": [
+                {"id": 42, "name": "promotion-record", "expired": False}]}
+        if path.endswith("/artifacts/42/zip"):
+            return archive_buffer.getvalue()
+        return base_fetch(path)
+    paired = dict(full)
+    paired.pop(("memex-portal-ai", "3.0.0-ci.8207"))
+    paired[("mw-plugin-test", actual_core[:7])] = D1
+    paired[("memex-portal-ai", actual_core[:7])] = D4  # moving bare tag: wrong Plugins build
+    paired[("memex-portal-ai", f"{actual_core[:7]}-p{actual_plugins[:7]}")] = D2
+    case("unarmed set with run-head mismatch resolves the recorded pair", True,
+         lambda: choose(pair_fetch, _registry(paired), tester, portal, log=logs.append),
+         lambda c: c.sha == actual_core and c.digests["portal-image-digest"] == D2
+         and c.set_name == "3.0.0-ci.8207")
+    missing_pair = dict(paired)
+    missing_pair.pop(("memex-portal-ai", f"{actual_core[:7]}-p{actual_plugins[:7]}"))
+    case("recorded pair absent refuses the moving bare core tag", True,
+         lambda: choose(pair_fetch, _registry(missing_pair), tester, portal, log=logs.append),
+         lambda c: c.sha == B and any("#8207" in line and "purged" in line for line in logs))
+    case("SHA freeze never substitutes the run head for its promoted source", False,
+         lambda: choose(pair_fetch, _registry(paired), tester, portal, freeze=A, log=logs.append),
+         lambda message: "freeze" in message and "matched no" in message)
+    case("modern sealed run without a promotion record is refused", False,
+         lambda: promotion_identity(_fetch_for([], {}), 42, PROMOTION_RECORD_FROM_RUN),
+         lambda message: "no promotion-record" in message and "cannot be verified" in message)
     # 5c — policy `build-latest-green`: a RED core main never resolves forward into red. A newest
     # run that FAILED before promote published nothing, and the last green set is taken.
     case("newest core main RED (failed before promote) → the last green set, said so", True,
@@ -2605,7 +2753,6 @@ def self_test() -> int:
          lambda c: c.set_name == "3.0.0-ci.8207" and c.lag == "")
 
     # ── a transient GitHub 5xx is retried and named; a 4xx is a verdict on the first answer ──
-    import io
     real_urlopen, real_sleep = urllib.request.urlopen, time.sleep
 
     def http_error(code: int) -> urllib.error.HTTPError:
