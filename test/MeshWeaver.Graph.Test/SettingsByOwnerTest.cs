@@ -194,8 +194,8 @@ public class SettingsByOwnerTest(ITestOutputHelper output) : MonolithMeshTestBas
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
                 new Address(address), new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea))
             .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
-            .Where(x => x is MenuControl)
-            .Select(x => (IReadOnlyList<NodeMenuItemDefinition>)((MenuControl)x!).Items);
+            .OfType<MenuControl>()
+            .Select(x => (IReadOnlyList<NodeMenuItemDefinition>)x.Items);
     }
 
     [Fact(Timeout = 60000)]

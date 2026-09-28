@@ -275,7 +275,7 @@ public static class NodeMenuItemsExtensions
             // (which an admin may also hold), and the menu never offers a page that refuses.
             var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(menuPath,
                 isProtectedRoot && !PersonApp.IsOwnRoot(menuPath, renderViewerId) ? Permission.None : perms);
-            if (settings != null) items.Add(settings with { Order = 45, Icon = "⚙️" });
+            if (settings != null) items.Add(settings with { Icon = "⚙️" });
 
             var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
             if (recycle != null) items.Add(recycle with { Order = 50, Icon = "♻️" });
