@@ -372,9 +372,15 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
             // Deserialise to the CONCRETE type explicitly: STJ maps the JSON to its properties and
             // ignores the stale $type member, so recovery works regardless of whether `options`'
             // (frozen) registry knows the type — exactly the ContentAs<T> JsonElement contract.
-            recovered = content.Deserialize(contentType, options);
+            recovered = options.UnmappedMemberHandling == JsonUnmappedMemberHandling.Disallow
+                        && contentType.IsSealed
+                ? MeshWeaver.Messaging.Serialization.JsonElementNormalizer
+                    .DeserializeIgnoringDiscriminator(content, contentType, options)
+                : content.Deserialize(contentType, options);
         }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+        catch (Exception ex) when (
+            options.UnmappedMemberHandling != JsonUnmappedMemberHandling.Disallow
+            && (ex is JsonException or NotSupportedException or InvalidOperationException))
         {
             return null;
         }
