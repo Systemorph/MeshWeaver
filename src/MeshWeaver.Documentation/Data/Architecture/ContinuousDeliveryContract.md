@@ -105,20 +105,32 @@ contract.
 ### Rollback by ordering, not by compensation
 
 Tagging five repositories is not one atomic act, and a compensating delete cannot work anyway — for a
-moving pointer like `latest`, untagging *destroys* it rather than reverting it. So `promote` is
-**ordered so that a mid-flight failure is unobservable**:
+moving pointer like `latest`, untagging *destroys* it rather than reverting it. So the writes are
+**ordered so that a mid-flight failure is unobservable**, and since policy
+[`one-promotion-gate`](../PolicyNotProse) they are split across TWO jobs: `promote` makes the set
+usable by CI (phases A and B, in the run that built it), and `arm` makes it the FLEET's (phases C and D
+plus the release event, in whichever later run finds the set's MeshWeaver.Plugins verdict green —
+[The One Promotion Gate](../OnePromotionGate)):
 
-| Phase | What it writes | If it fails here |
-|---|---|---|
-| **A** | identity tags (`<version>`, `<sha>`) on every repo **except** `memex-portal-ai:<version>` | no consumer-visible release; the residue is inert tags nothing resolves |
-| **B** | moving pointers — `main` everywhere, `latest` on `mw-plugin-test`, the GHCR mirror | same: still nothing selectable |
-| **C** | **`memex-portal-ai:<version>`** — one manifest PUT, the last thing the pipeline does | a single PUT either happened or did not; there is no half-armed state |
+| Phase | Job | What it writes | If it fails here |
+|---|---|---|---|
+| **A** | `promote` | identity tags (`<version>`, `<sha>`, the pair tag `<core7>-p<plugins7>`) on every repo **except** `memex-portal-ai:<version>` | no consumer-visible release; the residue is inert tags nothing resolves |
+| **B** | `promote` | CI pointers — `main` everywhere, `latest` on `mw-plugin-test`, the GHCR mirror | still nothing an INSTALL selects; CI resolves the set from here on |
+| **C** | `arm` | **`memex-portal-ai:<version>`** — one manifest PUT | a single PUT either happened or did not; there is no half-armed image |
+| **D** | `arm` | the line pointers `<major>-latest` / `<major.minor>-latest` / `<patch>-latest` | the set is armed but the pointers lag — the arming is INCOMPLETE and is resumed (below) |
+| event | `notify-platform-update` | the signed release event, then the marker `memex-portal-ai:arm-complete-<version>` | the set is armed but unannounced — INCOMPLETE, resumed |
 
 Phase C is the **arming write** and nothing else is, because `SelfUpdateHostedService` lists tags for
 `memex-portal-ai` **only**, picks the newest `^\d+\.\d+\.\d+` one, and patches the portal Deployment
-to it. Everything the roll will need — the matching
-`memex-migration:<version>`, the bake image that certified these node types — is already tagged by
-phase A. **Do not move that step, and do not add anything after it.**
+to it. Everything the roll will need — the matching `memex-migration:<version>`, the bake image that
+certified these node types — is already tagged by phase A, possibly runs earlier. **Do not move phase
+C before phase A's tags exist, and do not let anything an install selects be written before it.**
+What follows phase C (D and the event) is NOT selectable by any install, so it may fail without a
+half-armed release — but it must not be FORGOTTEN: the cursor (the newest `<version>` tag) has already
+moved, so `arm` reads the `arm-complete-<version>` marker, and while the newest armed set lacks it and
+nothing newer is green, re-arms exactly that set (C is an idempotent re-tag, D and the event run
+again). `arm` is serialised across runs (job concurrency `main-cd-arm`), and the event re-checks at
+the send that no newer set was armed meanwhile, so an older set is never announced after a newer one.
 
 🚨 **The roll patches the portal and NOTHING else** — since #2797 there is no second PATCH, and a
 guard in MeshWeaver.Plugins fails the build if one comes back. The matching `memex-migration` image
@@ -786,7 +798,8 @@ Adding a sixth image touches **three** places, and missing any one of them recre
 this contract closes:
 
 1. its own build job, pushing **only** the staging tag;
-2. the `promote` job — identity tags in phase A, pointers in phase B (never after phase C);
+2. the `promote` job — identity tags in phase A, CI pointers in phase B; an image an INSTALL selects
+   by is additionally written by `arm` (phases C/D), never by `promote`;
 3. `check-image-set.sh` — otherwise nothing ever asserts it shipped.
 
 `check-image-set.sh` identifies the set by **short SHA** and not by version tag, because the SHA is

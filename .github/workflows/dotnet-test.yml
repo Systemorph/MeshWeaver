@@ -2440,6 +2440,12 @@ jobs:
     - name: "Every PR-reachable secret is asserted by a preflight — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pr-secret-preflight.py --self-test
+    # The dependent-suites request builds a paired Plugins pull request's head on Plugins' PRIVATE
+    # runners; this proves the one trust decision on that path — a FORK's head is refused — on the
+    # pull request that would weaken it, not on the first advisory run that meets a fork.
+    - name: "A paired Plugins FORK head is refused (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/paired-plugins-head.py --self-test
     - name: "Every PR-reachable secret is asserted by a preflight"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pr-secret-preflight.py --root .
@@ -3712,17 +3718,10 @@ jobs:
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
         PAIRED: ${{ steps.want.outputs.paired }}
-      run: |
-        set -euo pipefail
-        read -r state head < <(gh api "repos/Systemorph/MeshWeaver.Plugins/pulls/$PAIRED" --jq '"\(.state) \(.head.sha)"') \
-          || { echo "::error::cannot read MeshWeaver.Plugins#$PAIRED with the dispatch App's token — the pair declared in this PR's body cannot be tested together."; exit 1; }
-        [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::MeshWeaver.Plugins#$PAIRED has no readable head sha ('$head')"; exit 1; }
-        if [ "$state" != open ]; then
-          echo "::notice::MeshWeaver.Plugins#$PAIRED is $state — testing against Plugins' default branch instead (its change is there, or it was abandoned)."
-          head=""
-        fi
-        echo "plugins=$head" >> "$GITHUB_OUTPUT"
-        echo "paired Plugins head: ${head:-<default branch>}"
+      # 🚨 TRUST BOUNDARY: the head is built on MeshWeaver.Plugins' PRIVATE runners, beside the private
+      # source. Only a head that lives IN Systemorph/MeshWeaver.Plugins is taken; a FORK's head is
+      # REFUSED, red and named (the check the retired merge-queue path drew for a fork's core entry).
+      run: python3 .github/scripts/paired-plugins-head.py --pr "$PAIRED"
     # PRESENT is not a RECEIVER. A dispatch to a repository whose default branch has no workflow
     # listening would be accepted (204) and start nothing, and the waiter would then time out
     # blaming Plugins. Prove the receiver first and say so by name.

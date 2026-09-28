@@ -360,7 +360,7 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
   positive marker is refused too.
 - **Core dispatches ONE thing to a plugin repository: an ADVISORY request to test a CANDIDATE**
-  (policy `core-merge-never-blocked`; it was `dependent-suites-gate` until 2026-09-27).
+  (policy `core-merge-never-blocked`, which superseded `dependent-suites-gate` — the register carries when).
   `Dependent suites (MeshWeaver.Plugins, advisory)` in `dotnet-test.yml` runs on a PR labelled
   `dependent-suites` or declaring `Pairs-with: Systemorph/MeshWeaver.Plugins#<n>` (then with that
   PR's head — Doc/Architecture/PairedChangeSets), sends `core-candidate-suites`, and reports the

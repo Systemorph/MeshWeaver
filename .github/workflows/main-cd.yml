@@ -1334,7 +1334,7 @@ jobs:
           # message, so the next reader debugs the query and not promote.
           # 🚨 Read off MEMEX-MIGRATION, which promote's phase A tags `<version>` + `<short-sha>` on
           # one digest (CdImageVersionsShareOneSourceGuard: every leg's version is the same). NOT the
-          # portal: since policy `one-promotion-gate` (2026-09-27) the portal's version tag is the
+          # portal: under policy `one-promotion-gate` the portal's version tag is the
           # ARMING write, which `arm` makes only once the dependent suites pass — so a promoted but
           # not-yet-armed set would read "no version" here and stop a bake that is owed regardless.
           tags=$(az acr manifest list-metadata --registry meshweaver --name memex-migration \
@@ -2624,10 +2624,20 @@ jobs:
     if: always() && needs.preflight.result == 'success' && needs.promote.result != 'failure' && needs.promote.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # 🚨 ONE ARMING AT A TIME, ACROSS EVERY main-cd RUN. The workflow's own concurrency keeps the
+    # push lane and the reconcile lane in SEPARATE groups, so two runs can be here at once: each would
+    # read the cursor, select a different set, and the OLDER one could write phase C (and send its
+    # release event) after the NEWER one armed. A job-level group shared by every run serialises the
+    # read-select-write, so `select` always sees the previous arming's cursor. Never cancel: a
+    # half-written arming is exactly the state the resume below exists for, not something to cause.
+    concurrency:
+      group: main-cd-arm
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
       actions: read     # the promotion records are run ARTIFACTS of this workflow
+      packages: write   # phase D writes the line pointers to GHCR with GITHUB_TOKEN
     outputs:
       armed: ${{ steps.select.outputs.armed }}
       version: ${{ steps.select.outputs.v_portal }}
@@ -2657,15 +2667,16 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: The newest ARMED set (memex-portal-ai's newest version tag)
+      # The CURSOR (the newest version tag) and whether that set's arming COMPLETED: the marker
+      # `arm-complete-<version>` is written by notify-platform-update only after the release event
+      # was delivered. An incomplete newest set is resumed below when nothing newer is green.
+      - name: The newest ARMED set, and whether its arming completed
         id: armed
         run: |
           set -euo pipefail
-          tags=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 200 -o tsv)
-          max=$(printf '%s\n' "$tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
-          [ -n "$max" ] || { echo "::error::memex-portal-ai carries no version tag at all in its newest 200 tags — refusing to treat that as 'nothing armed' (it would arm anything)."; exit 1; }
-          echo "max=$max" >> "$GITHUB_OUTPUT"
-          echo "newest armed set: ci.$max"
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json"
       - name: Mint a MeshWeaver.Plugins token (read the verdicts)
         id: token
         uses: actions/create-github-app-token@v3
@@ -2681,9 +2692,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PLUGINS_TOKEN: ${{ steps.token.outputs.token }}
           ARMED_MAX: ${{ steps.armed.outputs.max }}
+          RESUME: ${{ steps.armed.outputs.complete == 'false' && steps.armed.outputs.version || '' }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/arm-promoted-set.py select --armed-max "$ARMED_MAX" ${OVERRIDE:+--override "$OVERRIDE"}
+          python3 .github/scripts/arm-promoted-set.py select --armed-max "$ARMED_MAX" \
+            ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login
         if: steps.select.outputs.armed == 'true'
         run: bash .github/scripts/acr-login.sh
@@ -2709,11 +2722,18 @@ jobs:
         env:
           V_PORTAL_SEL: ${{ steps.select.outputs.v_portal }}
           V_MIGRATION_SEL: ${{ steps.select.outputs.v_migration }}
+          V_PLUGIN_SEL: ${{ steps.select.outputs.v_plugin }}
           SHA_SEL: ${{ steps.select.outputs.short }}
           PLUGINS_SEL: ${{ steps.select.outputs.plugins_short }}
         run: |
+          set -euo pipefail
+          # Every variable the arming phases expand under `set -u` is exported HERE — phase C's
+          # summary names $V_PLUGIN, and an unbound one failed `arm` after the registry writes.
+          for v in V_PORTAL_SEL V_MIGRATION_SEL V_PLUGIN_SEL SHA_SEL PLUGINS_SEL; do
+            [ -n "${!v}" ] || { echo "::error::the selection gave no $v — refusing to arm half a set"; exit 1; }
+          done
           {
-            echo "V_PORTAL=$V_PORTAL_SEL"; echo "V_MIGRATION=$V_MIGRATION_SEL"; echo "SHA=$SHA_SEL"
+            echo "V_PORTAL=$V_PORTAL_SEL"; echo "V_MIGRATION=$V_MIGRATION_SEL"; echo "V_PLUGIN=$V_PLUGIN_SEL"; echo "SHA=$SHA_SEL"
             echo "SRC_PORTAL_TAG=$SHA_SEL-p$PLUGINS_SEL"
           } >> "$GITHUB_ENV"
       - name: "Phase C — arm the release: memex-portal-ai:<version>"
@@ -3413,7 +3433,7 @@ jobs:
   notify-platform-update:
     name: "Notify platform-update registry"
     # `preflight` is what guarantees URL + SECRET exist, so nothing in this job checks for them.
-    # 🚨 AFTER `arm`, never after promote (policy `one-promotion-gate`, 2026-09-27). This build fact
+    # 🚨 AFTER `arm`, never after promote (policy `one-promotion-gate`). This build fact
     # starts the fleet's rolls and names `memex-portal-ai:<version>`, which exists only once `arm`
     # wrote it — for a set whose dependent suites passed, possibly in a LATER run than the one that
     # built it. So the version and commits below are the ARMED set's, read from `arm`.
@@ -3440,7 +3460,29 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # 🚨 NEVER BACKWARDS, re-checked at the send. `arm` is serialised across runs, but this job is
+      # not part of that group: a run that armed set A can reach this step after a later run armed a
+      # NEWER set B and sent B's event. Sending A's now would announce an older build as the latest.
+      # A superseded set sends nothing and needs no completion marker (B's arming passed it).
+      - name: "Is this still the newest armed set?"
+        id: current
+        env:
+          V_SELF: ${{ needs.arm.outputs.version }}
+        run: |
+          set -euo pipefail
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
+          newest=$(printf '%s' "$st" | jq -r '.version')
+          n_newest="${newest##*ci.}"; n_self="${V_SELF##*ci.}"
+          if [ "$n_newest" -gt "$n_self" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$V_SELF was superseded by $newest before its release event — sending nothing (the newer set's arming announces the line)"
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: "Sign and POST the build fact"
+        if: steps.current.outputs.superseded == 'false'
         env:
           URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
           SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
@@ -3554,6 +3596,7 @@ jobs:
       # all, the `not-required` branch becomes reachable and fatal, with nothing for anyone to
       # remember to switch on.
       - name: "Did the inbox VERIFY the build fact?"
+        if: steps.current.outputs.superseded == 'false'
         run: |
           set -euo pipefail
           # Overridable ONLY so a guard can execute this exact script against synthetic answers
@@ -3580,6 +3623,20 @@ jobs:
               exit 1
               ;;
           esac
+      # 🚨 THE ARMING IS COMPLETE ONLY NOW. The cursor (the `<version>` tag) moved at phase C, before
+      # the line pointers and before this event; had either failed, the next run would see the set as
+      # armed and never retry them. This NON-selectable marker (not version-shaped, so no self-updater
+      # can pick it) is what `arm-promoted-set.py armed-state` reads: until it exists, `arm` RESUMES
+      # this set whenever nothing newer is green (policy `one-promotion-gate`).
+      - name: "Mark the arming complete: memex-portal-ai:arm-complete-<version>"
+        if: steps.current.outputs.superseded == 'false'
+        env:
+          V_SELF: ${{ needs.arm.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "meshweaver.azurecr.io/memex-portal-ai:arm-complete-$V_SELF" \
+            "meshweaver.azurecr.io/memex-portal-ai:$V_SELF"
+          echo "- arming of $V_SELF COMPLETE (pointers + release event); marker \`arm-complete-$V_SELF\`" >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
@@ -4366,7 +4423,7 @@ jobs:
     # re-publish and filed `ci-failure` ("no deployable image") over a set every install could
     # already roll to. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds this list, transitively.
     # 🚨 `notify-platform-update` (and `arm`, behind it) are NOT needs any more (policy
-    # `one-promotion-gate`, 2026-09-27): the fleet is armed asynchronously, when MeshWeaver.Plugins'
+    # `one-promotion-gate`): the fleet is armed asynchronously, when MeshWeaver.Plugins'
     # dependent suites pass against the pair — possibly in a later run. PLATFORM delivery (build,
     # promote for CI, verify, bake) is judged here; arming is judged by `arm` itself and alerted by
     # `alert-on-failure`.

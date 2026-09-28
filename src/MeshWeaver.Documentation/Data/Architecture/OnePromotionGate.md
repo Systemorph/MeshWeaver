@@ -101,6 +101,25 @@ finishes it dispatches main-cd so the arming does not wait for the hourly reconc
 nothing to Plugins for this (`CoreDispatchesToNoRepository` stands); it only READS the verdict ref,
 which is ledgered in `PlatformNeverDependsOnPluginsGuard.ApiReadLedger`.
 
+### An arming is COMPLETE only when the whole sequence landed — and it is serialised
+
+The cursor `arm` reads — the newest `<version>` tag on memex-portal-ai — moves at phase C, before phase
+D (the line pointers) and before the release event. A failure after phase C would otherwise leave the
+set counted as armed and never retried. So `notify-platform-update` writes a non-selectable marker,
+`memex-portal-ai:arm-complete-<version>`, only after the build fact was delivered;
+`arm-promoted-set.py armed-state` reports whether the newest armed set carries it; and while it does
+not and nothing newer is green, `select --resume <version>` re-arms exactly that set (phase C is an
+idempotent re-tag of the same digest; phase D and the event run again, and the control instance
+consumes a repeated build fact idempotently). A newer green set still wins — arming it moves the
+pointers and announces the line past the incomplete one. A set armed before the marker existed has no
+promotion record to resume from and is reported, never failed.
+
+Two runs can be in `arm` at once (the push lane and the reconcile lane are separate workflow
+concurrency groups), so the job carries its own group, `main-cd-arm`, never cancelled: the read of
+the cursor, the selection and the phase-C write happen one run at a time. The release event is a
+separate job and re-checks at the send that no newer set was armed meanwhile, so an older set is never
+announced after a newer one.
+
 ### The bundle's base is the newest ARMED set, never the first parent
 
 A promoted set usually carries several core merges — the batch window coalesces them, and `pending`

@@ -140,7 +140,7 @@ promotes a continuous set to a release, so an asymmetric set is not releasable e
 
 ### 🚨 The ordering constraint — why the flag is opt-in
 
-> Since policy `one-promotion-gate` (2026-09-27) phases C and D run in main-cd's `arm` job, for the
+> Under policy `one-promotion-gate` phases C and D run in main-cd's `arm` job, for the
 > newest promoted set whose dependent suites passed — often in a later run than the one that built
 > it. `--pointers` therefore never asserts the portal's `<version>`; the script says so.
 

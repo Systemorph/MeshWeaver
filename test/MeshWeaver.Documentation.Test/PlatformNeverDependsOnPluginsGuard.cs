@@ -101,11 +101,11 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "deleting half must land LAST). Both mint a scoped App installation token and "
                 + "read; neither checks anything out. `dependent-suites` reads the verdict "
                 + "MeshWeaver.Plugins writes at refs/core-candidate/<key> after running its suites "
-                + "against this candidate — a fact about the candidate, never Plugins source. Since "
-                + "2026-09-27 (policy `core-merge-never-blocked`) it is ADVISORY: no required "
+                + "against this candidate — a fact about the candidate, never Plugins source. Under "
+                + "policy `core-merge-never-blocked` it is ADVISORY: no required "
                 + "context reads it, so a sibling's state reports on a core PR and blocks nothing"),
             new KeyValuePair<string, string>("main-cd.yml",
-                "`arm` (policy `one-promotion-gate`, 2026-09-27) reads the dependent-suites verdict "
+                "`arm` (policy `one-promotion-gate`) reads the dependent-suites verdict "
                 + "MeshWeaver.Plugins writes at refs/core-candidate/pair-<core7>-p<plugins7> for a "
                 + "PROMOTED set, and arms the fleet (the portal's version tag, the line pointers, the "
                 + "release event) only for a green one. It is on no pull request and holds no platform "

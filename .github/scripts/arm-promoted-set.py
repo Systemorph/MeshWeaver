@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """arm-promoted-set.py — THE ONE PROMOTION GATE: which promoted set may the fleet roll to?
 
-    python3 .github/scripts/arm-promoted-set.py select --armed-max N [--override SET]
+    python3 .github/scripts/arm-promoted-set.py select --armed-max N [--override SET] [--resume SET]
+    python3 .github/scripts/arm-promoted-set.py armed-state --manifests portal.json   # the cursor
     python3 .github/scripts/arm-promoted-set.py pending            # MeshWeaver.Plugins' poller
     python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
     python3 .github/scripts/arm-promoted-set.py --self-test
@@ -32,6 +33,17 @@ the control instance. main-cd's `arm` job writes those, for the set this script 
 
 A set whose verdict is absent is WAITING, one whose verdict is red is REFUSED: neither is armed,
 and a newer set with a green verdict supersedes both. Silence is never a pass.
+
+ARMING IS COMPLETE ONLY WHEN THE WHOLE SEQUENCE LANDED. The cursor — the newest `<version>` tag on
+memex-portal-ai — moves at phase C, before phase D (the line pointers) and before the release event.
+If either of those fails, the next run would see the set as armed and skip it forever. So
+`notify-platform-update` writes a NON-selectable marker tag `arm-complete-<version>` on the portal
+manifest only after the build fact was delivered, `armed-state` reports whether the newest armed set
+carries it, and when it does not and nothing newer is green, `select --resume <version>` re-arms
+exactly that set (one with no promotion record — armed by the pre-gate `promote`, before the marker
+existed — cannot be resumed and is reported, not failed) (phase C is an idempotent re-tag of the same digest; phase D and the event run
+again — the control instance consumes a repeated build fact idempotently). A newer green set still
+wins: arming it moves the pointers and sends the event past the incomplete one.
 
 THE BUNDLE'S BASE — the newest ARMED set, never the first parent. A promoted set usually carries
 several core merges (the batch window; `pending` supersedes older pairs instead of queueing them), and
@@ -134,7 +146,28 @@ def check_record(rec: object) -> str | None:
     return None
 
 
-def armed_commit(manifests: object) -> tuple[str, str] | None:
+ARM_COMPLETE_PREFIX = "arm-complete-"
+
+
+def armed_state(manifests: object) -> tuple[int, str, bool] | None:
+    """(run number, version, complete) of the newest ARMED set, or None when nothing was ever armed.
+    `complete` = its manifest also carries `arm-complete-<version>`, which `notify-platform-update`
+    writes only after the release event was delivered. The marker is not version-shaped, so no
+    self-updater can ever select it. Pure."""
+    got = armed_commit(manifests, require_sha=False)
+    if got is None:
+        return None
+    version = got[0]
+    tags: list[str] = []
+    for row in manifests if isinstance(manifests, list) else []:
+        t = row.get("tags") if isinstance(row, dict) else None
+        if isinstance(t, list) and version in t:
+            tags = [str(x) for x in t]
+            break
+    return run_number_of(version) or 0, version, f"{ARM_COMPLETE_PREFIX}{version}" in tags
+
+
+def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str] | None:
     """(the newest ARMED version, its seven-character core sha) from memex-portal-ai's manifest
     metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
     tag at all (nothing was ever armed). Pure.
@@ -155,6 +188,8 @@ def armed_commit(manifests: object) -> tuple[str, str] | None:
                 best = (n, str(t), [str(x) for x in tags])
     if best is None:
         return None
+    if not require_sha:
+        return best[1], ""
     shas = [t for t in best[2] if SHORT_SHA_TAG.match(t)]
     if len(shas) != 1:
         raise ValueError(f"the newest armed manifest {best[1]} carries {len(shas)} seven-character sha tag(s) "
@@ -260,14 +295,16 @@ def judge(rec: dict, verdict: object | None, why: str) -> tuple[str, str]:
 
 
 def select(records: list[dict], verdicts: dict[str, tuple[object | None, str]], armed_max: int,
-           override: str = "") -> tuple[dict | None, list[str]]:
+           override: str = "", resume: str = "") -> tuple[dict | None, list[str]]:
     """(the record to arm or None, the report lines). Pure — the self-test drives it."""
     lines: list[str] = []
     if override:
         n = run_number_of(override)
         if n is None:
             raise ValueError(f"--override {override!r} is not a set name X.Y.Z[-pre]-ci.N")
-        hit = next((r for r in records if int(r["run_number"]) == n), None)
+        # The EXACT set named — never the run number alone: a record of the same run number on
+        # another version line would otherwise be armed while the summary claims the requested one.
+        hit = next((r for r in records if r["v_portal"] == override), None)
         if hit is None:
             raise ValueError(f"--override names {override}, which has no promotion record among the newest "
                              f"{RUNS_EXAMINED} main-cd runs — an override is an instruction; refusing to substitute")
@@ -282,6 +319,22 @@ def select(records: list[dict], verdicts: dict[str, tuple[object | None, str]], 
         lines.append(f"{rec['v_portal']} ({rec['key']}): {state} — {text}")
         if state == "green":
             return rec, lines
+    if resume:
+        # Nothing newer is green, and the newest ARMED set never completed its sequence (no
+        # `arm-complete-<version>` marker): re-arm exactly it. Its verdict was green when it was
+        # armed; the resume re-runs the idempotent tag writes and the event, and decides nothing new.
+        hit = next((r for r in records if r["v_portal"] == resume), None)
+        if hit is None:
+            # No promotion record to resume from: a set armed by the pre-gate `promote` (which wrote
+            # the pointers and the event itself, in the same job, before any marker existed), or one
+            # whose record aged out of the window. Said out loud — never red, because a red here
+            # would hold EVERY later arming run on a set that cannot be resumed at all.
+            lines.append(f"RESUME NOT POSSIBLE: {resume} carries no `arm-complete` marker and has no promotion record "
+                         f"among the newest {RUNS_EXAMINED} main-cd runs (armed before the marker existed, or aged out) "
+                         "— the next newer green set completes the line")
+            return None, lines
+        lines.append(f"RESUME: {resume} ({hit['key']}) was armed but its sequence never completed — re-arming it")
+        return hit, lines
     return None, lines
 
 
@@ -376,6 +429,20 @@ def self_test() -> int:
         check("an override naming no promoted set is RED", False)
     except ValueError:
         check("an override naming no promoted set is RED, never a substitution", True)
+    try:
+        select(records, {}, armed_max=0, override="3.0.1-ci.9459")
+        check("an override naming the right RUN on another version line is RED", False)
+    except ValueError:
+        check("an override naming the right RUN on another version line is RED (exact version, never the run number)", True)
+    # resume — the cursor moved at phase C but the sequence never finished
+    chosen, lines = select(records, {}, armed_max=9460, resume="3.0.0-ci.9460")
+    check("resume: nothing newer green → the incomplete newest armed set is re-armed", chosen is b and "RESUME" in lines[-1],
+          "\n".join(lines))
+    chosen, _ = select(records, {c["key"]: green(c)}, armed_max=9460, resume="3.0.0-ci.9460")
+    check("resume: a NEWER green set still wins (arming it completes the line past the incomplete one)", chosen is c)
+    chosen, lines = select(records, {}, armed_max=9460, resume="3.0.0-ci.9000")
+    check("resume: an incomplete set with NO record (armed before the marker existed) is SAID, not red — "
+          "a red would hold every later arming", chosen is None and "RESUME NOT POSSIBLE" in lines[-1], "\n".join(lines))
     # pending (the Plugins poller)
     check("pending: the newest unarmed pair without a verdict is returned",
           pending(records, {c["key"]: (None, "no verdict yet")}, armed_max=9458) is c)
@@ -440,6 +507,16 @@ def self_test() -> int:
     check("an UNRESOLVED base is never armed, even green — the next older green set is taken", chosen is b, "\n".join(lines))
     check("pending: an UNRESOLVED newest record is not measured (the next promotion retries)",
           pending([u, b, a], {u["key"]: (None, "no verdict yet")}, armed_max=9458) is None)
+    st = armed_state(live)
+    check("armed-state: the newest armed set WITHOUT its marker is incomplete", st == (9538, "3.0.0-ci.9538", False), str(st))
+    marked = [{"tags": live[0]["tags"] + ["arm-complete-3.0.0-ci.9538"]}] + live[1:]
+    st = armed_state(marked)
+    check("armed-state: WITH `arm-complete-<version>` it is complete", st == (9538, "3.0.0-ci.9538", True), str(st))
+    stale = [{"tags": ["3.0.0-ci.9538", "b9fe5ed"]}, {"tags": ["3.0.0-ci.9535", "arm-complete-3.0.0-ci.9535"]}]
+    check("armed-state: another set's marker does not complete the newest", armed_state(stale)[2] is False)
+    check("armed-state: the marker is never version-shaped (no self-updater can select it)",
+          run_number_of("arm-complete-3.0.0-ci.9538") is None)
+    check("armed-state: nothing ever armed is None", armed_state([{"tags": ["main"]}]) is None)
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -449,16 +526,36 @@ def self_test() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base"))
+    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base", "armed-state"))
     ap.add_argument("--manifests", type=Path, help="armed-base: memex-portal-ai manifest metadata (JSON list)")
     ap.add_argument("--armed-max", type=int, default=0,
                     help="run number of the newest ARMED set (memex-portal-ai's newest version tag)")
     ap.add_argument("--override", default="", help="arm exactly this set name, verdict or not")
+    ap.add_argument("--resume", default="",
+                    help="the newest armed set whose arming never completed; re-armed when nothing newer is green")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
     if not a.command:
         ap.error("a command is required")
+    if a.command == "armed-state":
+        try:
+            st = armed_state(json.loads(a.manifests.read_text())) if a.manifests else None
+        except (OSError, ValueError) as e:
+            print(f"::error::the arming cursor cannot be read: {e}")
+            return 1
+        if a.manifests is None:
+            ap.error("armed-state needs --manifests")
+        if st is None:
+            print("::error::memex-portal-ai carries no version tag at all — refusing to treat that as 'nothing armed' (it would arm anything)")
+            return 1
+        rows = {"max": str(st[0]), "version": st[1], "complete": "true" if st[2] else "false"}
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a") as f:
+                f.writelines(f"{k}={v}\n" for k, v in rows.items())
+        print(json.dumps(rows))
+        return 0
     if a.command == "armed-base":
         # Offline and pure: the caller reads the registry; this only interprets. Exit 1 = cannot say.
         try:
@@ -481,7 +578,8 @@ def main() -> int:
         print("::error::GH_TOKEN is empty — the promotion records cannot be read; refusing to decide on nothing")
         return 1
     try:
-        records = read_records(http_get, core_token, above=0 if a.override else a.armed_max)
+        above = 0 if a.override else (a.armed_max - 1 if a.resume else a.armed_max)
+        records = read_records(http_get, core_token, above=above)
     except RuntimeError as e:
         print(f"::error::{e}")
         return 1
@@ -498,7 +596,7 @@ def main() -> int:
         print(json.dumps(rows, indent=1))
         return 0
     try:
-        rec, lines = select(records, verdicts, a.armed_max, a.override)
+        rec, lines = select(records, verdicts, a.armed_max, a.override, a.resume)
     except ValueError as e:
         print(f"::error::{e}")
         return 1

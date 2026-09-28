@@ -137,8 +137,8 @@ public class PlatformBakeLaneGuard
 
         var body = string.Join('\n', lines.Skip(step)
             .TakeWhile((l, i) => i == 0 || !l.TrimStart().StartsWith("- name:", StringComparison.Ordinal)));
-        // 🚨 From memex-MIGRATION's tag set, not the portal's (policy `one-promotion-gate`,
-        // 2026-09-27): the portal's `<version>` is the ARMING write `arm` makes only once the
+        // 🚨 From memex-MIGRATION's tag set, not the portal's (policy
+        // `one-promotion-gate`): the portal's `<version>` is the ARMING write `arm` makes only once the
         // dependent suites pass, so a promoted-but-unarmed set has none — while promote's phase A
         // tags the migration `<version>` + `<short-sha>` on one digest, the same version by
         // construction (CdImageVersionsShareOneSourceGuard).

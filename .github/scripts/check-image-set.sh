@@ -248,7 +248,7 @@ if [ "$CHECK_POINTERS" -eq 1 ]; then
   if [ -z "$POINTER_VERSION" ]; then
     report "--pointers was given an EMPTY version, so the set's immutable pointer could not be asserted. The caller must pass the version this run promoted (every leg's \$(Version), e.g. 3.0.0-ci.8079). An empty value means the leg that computes it never ran — the set is not promoted."
   else
-    # 🚨 NOT the portal's `<version>` (policy `one-promotion-gate`, 2026-09-27): that tag is the
+    # 🚨 NOT the portal's `<version>` (policy `one-promotion-gate`): that tag is the
     # ARMING write — what SelfUpdateHostedService rolls to — and main-cd's `arm` job makes it only
     # once MeshWeaver.Plugins' dependent suites passed against this set's pair, often in a LATER
     # run. Asserting it here would red every promoted set that is still waiting for its verdict.
