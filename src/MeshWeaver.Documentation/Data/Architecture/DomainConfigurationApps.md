@@ -127,13 +127,13 @@ Every per-deployment page is the same three pieces, and none of them is new:
    `/data` copy and no Save button (see [Data Binding](/Doc/GUI/DataBinding)). A viewer without
    `Update` on the record gets the same form read-only.
 2. **The domain's vault objects, write-only.** A `SecretInventorySection` over the record's declared
-   vault objects whose config key belongs to the domain (the AI app claims `*__ApiKey` of the AI
+   vault objects whose config key belongs to the domain (the Models app claims `*__ApiKey` of the AI
    sections, the Sign-in app `Authentication__*__ClientSecret`, …). Save and Generate file a governed
    `SetSecrets` action; Disable/Enable/Delete/Recover file a `SecretLifecycle` action; the status
    list is the operator's `hosting-kv-status` reading (names, states, fingerprints; never a value).
    A domain claims config keys by prefix (`VaultSecretDomains`, next to the Plugins
    `VaultSecretSteward` that files the actions), so a module that adds a provider adds its key to
-   the AI app by naming it, with no change to the app. An object no domain claims is counted on the
+   the Models app by naming it, with no change to the app. An object no domain claims is counted on the
    picker, never dropped silently. 🚨 **`Ai__KeyProtection__MasterKey` belongs to NO domain**,
    although its name starts with `Ai__`: it encrypts every `enc:` value on the instance (instance
    secrets, every person's provider keys), and replacing it makes all of them unreadable. It is a
@@ -211,10 +211,10 @@ apps above.
 | **Set Key Vault secrets…** (`SecretDialog`) | control instance, `Deployments/<id>` page | paste values for every declared vault object; files `SetSecrets` | each domain app's vault section, by config key; the dialog is removed |
 | vault-secrets inventory (MeshWeaver.Plugins#2434, draft) | same page | status, generate, lifecycle | its verbs (`SecretStatus`, `SecretLifecycle`, the compose functions) are what every domain app's vault section files; the page button is removed |
 | announcement-key panel (MeshWeaver.Plugins#2435, held) | same page | issue/rotate/revoke | Integrations app, **Announcement key** section, register-only |
-| the record's `ai` block | edited as raw record content | JSON | AI app, bound form |
-| EU residency (MeshWeaver.Plugins#2448): the region/origin badges, the EU-only switch | chat model picker, model catalog columns | read + `RequiredDataResidency` | the badges stay where models are picked; the per-deployment switch (`ai.requiredDataResidency`) and the per-provider `dataResidency` are edited in the AI app, which shows the same badges |
+| the record's `ai` block | edited as raw record content | JSON | Models app, bound form |
+| EU residency (MeshWeaver.Plugins#2448): the region/origin badges, the EU-only switch | chat model picker, model catalog columns | read + `RequiredDataResidency` | the badges stay where models are picked; the per-deployment switch (`ai.requiredDataResidency`) and the per-provider `dataResidency` are edited in the Models app, which shows the same badges |
 | coding-assistant harnesses (Claude Code, GitHub Copilot, Codex, Cursor, Grok, OpenCode, Antigravity) | were separate Store apps with their own home tiles; which ones run is `Features:Ai:Clis:*` plus the loaded modules | config + per-user install | options of the **Threads** app (`AI/AiThreads`): each harness shows whether this instance offers it, its processing and origin marks, install, and its settings; per thread the choice is `/harness`. Owed: the fleet switch as an `ai` field in the Models app |
-| OpenRouter EU route (MeshWeaver.Plugins#2454) | seeded from config (`OpenRouterEU__*`) | config | AI app, the `openRouterEU` provider row (endpoint override, models, residency, retention); no key field, because the route borrows OpenRouter's |
+| OpenRouter EU route (MeshWeaver.Plugins#2454) | seeded from config (`OpenRouterEU__*`) | config | Models app, the `openRouterEU` provider row (endpoint override, models, residency, retention); no key field, because the route borrows OpenRouter's |
 | per-user provider keys | `Providers/ProvidersApp` (`ProviderSetup`) | write-only, `enc:` in the mesh | stays: it is the person's, not an admin's |
 | AI Admin, Token Usage | `/Admin/Settings/AiAdmin`, `/Admin/Settings/TokenUsage` | instance | stays (instance scope, domain AI) |
 | sign-in providers | `/Admin/Settings/SignInProviders` | instance, read + hand-over | stays; the fleet half is the Sign-in app |
