@@ -1896,6 +1896,8 @@
   "settings.groupCommercial": "Kommerzielles",
   "settings.groupFleet": "Flotte",
   "settings.aiUsageCost": "KI-Nutzung & Kosten",
+  "settings.signInProviders": "Anmeldeanbieter",
+  "settings.fleet": "Flotte",
   "settings.connectedInstances": "Verbundene Instanzen",
   "effectiveAccess.intro": "Prüfe, was eine Person auf **diesem Knoten** tun darf: gib ihre Benutzer-ID ein und klicke auf Prüfen."
 }

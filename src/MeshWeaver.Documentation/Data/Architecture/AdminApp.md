@@ -115,6 +115,22 @@ signed-in viewer and change nothing.
 `AddAdminAppTab` / `AddPersonAppTab` providers yield nothing anywhere else, so it is safe — and was
 always the practice — to register them on the default node hub.
 
+**A data-contributed tab is gated against the viewer resolved on the RENDER turn.** The
+settings page projects the `NodeSettings` contributions inside an `Observable.Defer` (so a hub
+without a node stream fails into the lane's `Catch`, not out of the aggregator). The admin verdict
+must NOT be resolved inside that `Defer`: the parameterless `IsGlobalAdmin()` reads the ambient
+`AccessService` context at the moment it is called, and at subscribe time on a distributed mesh
+that context is gone — the viewer reads as anonymous, `AdminOnly` never passes, and every seeded
+instance-app tab (Invitations, Privacy, Published to the web, Updates, Control lane, Inbox) is
+missing from `/Admin` while the same seeds pass the same gates in the node menu. The lane binds
+`AdminAppNodeType.LiveAdminVerdict(hub, viewer)` to the viewer captured before the `Defer`; the
+profile-section lane does the same. Pinned by
+`AdminAppTest.SeededAdminTabs_SurviveASubscriptionOffTheViewersDelivery` (the stream is built with
+the viewer set and subscribed with it — and the test host's fallback identity — cleared) and
+`AdminAppTest.ASeededAdminTab_ShowsInItsSection`. Measured on memex.meshweaver.cloud (3.0.0-ci.9554)
+and memex.systemorph.com (3.0.0-ci.9526): the six seeds listed in `$Menu:NodeSettings` and absent
+from the `/Admin` nav.
+
 ## Old links keep working
 
 A settings page asked for a tab it no longer carries answers with a REDIRECT to the tab's home, never
