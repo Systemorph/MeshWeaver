@@ -80,7 +80,7 @@ public record DeploymentContent
     /// instance (Settings → Updates). Maintainer, 2026-09-19: <i>"need to put this to the config where we start"</i>, after
     /// memex-cloud sat frozen for a week on a policy node that had no <c>policy</c> field at all.</para>
     /// </summary>
-    [Description("Version pattern the Continuous self-update follows, e.g. 3.0.0-ci* — seeds a NEW instance's Admin/UpdatePolicy")]
+    [Description("Version pattern the Continuous self-update follows, e.g. 3.0.0-ci* — seeds Admin/UpdatePolicy and, with a declared policy, is kept on it at every start")]
     public string? UpdatePattern { get; init; }
 
     /// <summary>

@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Generic;
 using System.Reactive;
@@ -122,6 +120,10 @@ public class SelfUpdateRecordIsAuthoritativeTest(ITestOutputHelper output) : Mon
     //  (c) Already equal — no write
     // ══════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// A node that already carries the record's policy and pattern is not written — its
+    /// <see cref="MeshNode.Version"/> does not move.
+    /// </summary>
     [Fact(Timeout = 240_000)]
     public async Task AnAlreadyMatchingNode_IsNotWritten()
     {
@@ -133,7 +135,9 @@ public class SelfUpdateRecordIsAuthoritativeTest(ITestOutputHelper output) : Mon
         declared.Should().Be(new UpdatePolicyNodeType.DeploymentDeclaration(UpdatePolicyKind.Continuous, FleetPattern),
             "the policy name is read case-insensitively and the pattern normalised");
 
-        await Converge(declared!);
+        if (declared is not { } matching)
+            throw new InvalidOperationException("the declaration was asserted non-null above");
+        await Converge(matching);
 
         (await CurrentNode()).Version.Should().Be(versionBefore, "a node that already carries the record's values is not written");
     }
@@ -142,6 +146,10 @@ public class SelfUpdateRecordIsAuthoritativeTest(ITestOutputHelper output) : Mon
     //  (d) Only policy and pattern move
     // ══════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// The convergence moves the policy and the pattern ONLY: <c>RequireCiGreen</c> and every
+    /// bookkeeping field (latest tag, last verdict and trigger, combo verdicts) survive it.
+    /// </summary>
     [Fact(Timeout = 240_000)]
     public async Task Convergence_PreservesEveryOtherField()
     {
@@ -247,8 +255,9 @@ public class SelfUpdateRecordIsAuthoritativeTest(ITestOutputHelper output) : Mon
             using (Access.ImpersonateAsSystem())
                 return Mesh.GetWorkspace()
                     .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                    .Where(node => node is not null)
-                    .Select(node => node!)
+                    .SelectMany(node => node is { } present
+                        ? Observable.Return(present)
+                        : Observable.Empty<MeshNode>())
                     .Subscribe(observer);
         });
 
