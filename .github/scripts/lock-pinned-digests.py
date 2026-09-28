@@ -1132,7 +1132,11 @@ def merge_roster(committed: dict, private: dict) -> dict:
         if not isinstance(extra, dict):
             raise ValueError(f"{PRIVATE_ROSTER_ENV}: `{table}` is not an object")
         base = merged.get(table)
-        base = dict(base) if isinstance(base, dict) else {}
+        if base is not None and not isinstance(base, dict):
+            # Fail closed: filling a malformed COMMITTED table from the private one would hand the
+            # readers' shape checks a valid object and hide the committed file's corruption.
+            raise ValueError(f"instances.json: `{table}` is not an object")
+        base = dict(base) if base is not None else {}
         clash = sorted(set(base) & set(extra))
         if clash:
             raise ValueError(f"{PRIVATE_ROSTER_ENV}: `{table}` re-declares {len(clash)} key(s) the "

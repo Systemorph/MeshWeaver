@@ -147,7 +147,7 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
                 "TODAY, and they do not carry the same cost. (1) Rename one installation — its "
                 "`Hosting__Deployment` is its inventory identity, so this moves whichever estate "
                 "owns the one that changes; this is the answer taken the first time it happened "
-                "(#3848: a client's `memex` became `umbrella-test`, see "
+                "(#3848: a client's `memex` became `globex-test`, see "
                 "Doc/Architecture/ComboGateWiring). (2) Key the maps by the qualified `repo:id` and say so "
                 "here — this removes the collision and then demands a credential for every "
                 "installation named, including any in an estate this fleet holds none for. "
@@ -331,9 +331,9 @@ SOURCE_SCANS = [
     ]),
     _scan("Systemorph/Umbrella.Memex", [], sources=[
         ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins",
-         "mesh/Deployments/umbrella-test.json"),
+         "mesh/Deployments/globex-test.json"),
         ("Umbrella", "https://github.com/Systemorph/Umbrella.Memex",
-         "mesh/Deployments/umbrella-test.json"),
+         "mesh/Deployments/globex-test.json"),
     ]),
 ]
 
@@ -378,7 +378,7 @@ def self_test() -> int:
         _scan("Systemorph/Memex", [], sources=[
             ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
         _scan("Systemorph/Umbrella.Memex", [], sources=[
-            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/umbrella-test.json")]),
+            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/globex-test.json")]),
     ])
     check(not source_blockers and same_source ==
           "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
@@ -438,7 +438,7 @@ def self_test() -> int:
         _scan("Systemorph/Memex", [
             ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
         _scan("Systemorph/Umbrella.Memex", [
-            ("memex", "umbrella.example.com", "deployments/aks/memex/values.memex.yaml")]),
+            ("memex", "globex.example.com", "deployments/aks/memex/values.memex.yaml")]),
     ], {})
     check(rows == [{"name": "memex", "baseUrl": "https://memex.systemorph.com"}]
           and any("both named `memex`" in b and "Systemorph/Umbrella.Memex" in b
@@ -467,10 +467,10 @@ def self_test() -> int:
         _scan("Systemorph/Memex", [
             ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
         _scan("Systemorph/Umbrella.Memex", [
-            ("umbrella-test", "umbrella.example.com",
+            ("globex-test", "globex.example.com",
              "deployments/aks/memex/values.memex.yaml")]),
     ], {})
-    check(blockers == [] and [r["name"] for r in rows] == ["memex", "umbrella-test"],
+    check(blockers == [] and sorted(r["name"] for r in rows) == ["globex-test", "memex"],
           "two repositories declaring different names derive both, with no blocker — even from "
           "overlays in same-named directories")
 
@@ -536,6 +536,12 @@ def main() -> int:
     if args.self_test:
         return self_test()
 
+    # 🚨 MASK FIRST, before ANY output. GitHub applies `::add-mask::` only to lines emitted AFTER
+    # it, and the very next print lists every discovered repository — a client estate's among them
+    # once the private roster is merged. Registered after that print, the mask covered nothing the
+    # print had already put in the public log. Not under --self-test (its fixtures are not secrets).
+    lock.mask_private_roster()      # public log: the private roster's identifiers stay private
+
     if args.root:
         repos = [args.repos or "local"]
     elif bool(args.repos) == bool(args.discover):
@@ -554,7 +560,6 @@ def main() -> int:
 
     print(f"deriving the combo-verification roster from {len(repos)} repository(ies): "
           + ", ".join(repos))
-    lock.mask_private_roster()      # public log: the private roster's identifiers stay private
     roster, roster_problems = lock.read_instance_roster(args.root or ".")
     scans = read_scans(repos, args.root)
     rows, excluded, blockers = derive(scans, roster)
