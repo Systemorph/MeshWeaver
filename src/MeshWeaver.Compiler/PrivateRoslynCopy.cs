@@ -71,7 +71,7 @@ internal static class PrivateRoslynCopy
     // A held copy is useful only once per process. Later failed compiles retain the cheap cold
     // control, without multiplying this diagnostic work across the poisoned suite.
     private static int heldCopyClaimed;
-    private const int HeldEmitCount = 64;
+    internal const int HeldEmitCount = 64;
 
     /// <summary>
     /// Emits <paramref name="source"/> through a freshly loaded private copy of Roslyn and reports
@@ -79,7 +79,16 @@ internal static class PrivateRoslynCopy
     /// </summary>
     /// <param name="source">The source to compile — the canary's, by default.</param>
     /// <returns>A verdict starting with <see cref="Prefix"/>.</returns>
-    internal static string Emit(string source)
+    internal static string Emit(string source) => EmitCore(source, forceHeld: false);
+
+    /// <summary>
+    /// Runs the held-copy measurement even if an earlier call claimed the process's automatic
+    /// measurement. This lets the control test prove that measurement without depending on
+    /// other tests' order; production uses <see cref="Emit"/>.
+    /// </summary>
+    internal static string EmitHeld(string source) => EmitCore(source, forceHeld: true);
+
+    private static string EmitCore(string source, bool forceHeld)
     {
         var sharedCore = typeof(Compilation).Assembly;
         var sharedCSharp = typeof(CSharpCompilation).Assembly;
@@ -107,8 +116,11 @@ internal static class PrivateRoslynCopy
                     + "the control would have executed the same code it is meant to control for)";
 
             var cold = EmitThrough(core, csharp, source, coreLib, s => stage = s);
-            if (!cold.StartsWith($"{Prefix}PRIVATE-COPY-EMITS", StringComparison.Ordinal)
-                || Interlocked.CompareExchange(ref heldCopyClaimed, 1, 0) != 0)
+            if (!cold.StartsWith($"{Prefix}PRIVATE-COPY-EMITS", StringComparison.Ordinal))
+                return cold;
+
+            var alreadyClaimed = Interlocked.CompareExchange(ref heldCopyClaimed, 1, 0) != 0;
+            if (alreadyClaimed && !forceHeld)
                 return cold;
 
             // Reuse BOTH private assemblies and their load context. Calling Emit again would
