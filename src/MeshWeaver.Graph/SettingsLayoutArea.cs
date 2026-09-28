@@ -26,11 +26,10 @@ public static class SettingsLayoutArea
 {
     internal const string MetadataTab = "Metadata";
     internal const string NodeTypesTab = "NodeTypes";
-    internal const string FilesTab = "Files";
     internal const string AccessControlTab = "AccessControl";
     internal const string GroupsTab = "Groups";
     internal const string EffectiveAccessTab = "EffectiveAccess";
-    internal const string AppearanceTab = "Appearance";
+    internal const string VersionsTab = "Versions";
 
     /// <summary>
     /// Renders the unified Settings page with Splitter layout.
@@ -49,9 +48,10 @@ public static class SettingsLayoutArea
         // (Metadata) tab while the nav still highlights the URL tab.
         var tabId = host.Reference.Id?.ToString()?.Split('?')[0];
 
-        // A tab that moved into the Admin app answers an old link with a redirect into the app,
+        // A tab that moved — into the Admin app, into the person app, up to the partition root, or
+        // into another tab of this page — answers an old link with a redirect to where it lives now,
         // rather than silently falling back to this page's first tab.
-        if (AdminAppNodeType.RedirectIfRelocated(host, tabId) is { } redirect)
+        if (SettingsRedirect.For(host, tabId) is { } redirect)
             return Observable.Return<UiControl?>(redirect);
 
         var ownNode = host.Workspace.GetMeshNodeStream();
@@ -178,6 +178,7 @@ public static class SettingsLayoutArea
         // "Datenschutz" by typing it, not only by typing "Privacy").
         var access = host.Hub.ServiceProvider.GetService<AccessService>();
         items = [.. items.Select(i => i.Localized(access))];
+        var title = Title(host, node);
 
         var searchBox = (new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Search settings…")
@@ -191,7 +192,7 @@ public static class SettingsLayoutArea
             .WithView(
                 (h, c) => h.GetDataStream<string>(searchDataId)
                     .StartWith(string.Empty)
-                    .Select(q => (UiControl)BuildNavMenu(node, hubAddress, hubPath, FilterMenuItems(items, q), selectedTab)),
+                    .Select(q => (UiControl)BuildNavMenu(title, hubAddress, hubPath, FilterMenuItems(items, q), selectedTab)),
                 "SettingsMenu");
     }
 
@@ -213,8 +214,31 @@ public static class SettingsLayoutArea
             .ToList();
     }
 
+    /// <summary>
+    /// The settings page's title: the hub's <see cref="SettingsMenuItemsExtensions.WithSettingsTitle"/>
+    /// when it names one, else the node's own name, else the hub path.
+    /// </summary>
+    internal static string Title(LayoutAreaHost host, MeshNode? node)
+    {
+        string? title = null;
+        if (host.Hub.Configuration.Get<SettingsTitle>() is { } custom)
+        {
+            try { title = custom.Title(host, node); }
+            catch (Exception ex)
+            {
+                host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
+                    .LogWarning(ex, "Settings title failed for {Path}; falling back to the node name",
+                        host.Hub.Address);
+            }
+        }
+        return title is { Length: > 0 } ? title
+            : node?.Name is { Length: > 0 } name ? name
+            : host.Hub.Address.ToString();
+    }
+
     private static UiControl BuildNavMenu(
-        MeshNode? node,
+        string title,
         object hubAddress,
         string hubPath,
         IReadOnlyList<SettingsMenuItemDefinition> items,
@@ -222,11 +246,12 @@ public static class SettingsLayoutArea
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Back to node link (always present)
+        // Back to node link (always present). Its label is the page's TITLE — the app this settings
+        // page is: the instance's name on the Admin app, the person's name on the person app, the
+        // node's own name on a node's settings (WithSettingsTitle).
         var backHref = $"/{hubPath}";
-        var nodeName = node?.Name ?? "Back";
         navMenu = navMenu.WithView(
-            new NavLinkControl(nodeName, FluentIcons.ArrowLeft(), backHref)
+            new NavLinkControl(title, FluentIcons.ArrowLeft(), backHref)
         );
 
         // Separate top-level items from grouped items
@@ -343,51 +368,6 @@ public static class SettingsLayoutArea
         return stack;
     }
 
-    internal static UiControl BuildFilesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
-    {
-        stack = stack.WithView(Controls.H2(host.Localize("settings.files")).WithStyle("margin: 0 0 24px 0;"));
-
-        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
-        var collections = contentService?.GetAllCollectionConfigs()?.ToList();
-
-        if (collections is not { Count: > 0 })
-        {
-            stack = stack.WithView(new FileBrowserControl("content"));
-            return stack;
-        }
-
-        var options = collections
-            .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
-            .ToArray();
-
-        var selectDataId = "filesTabCollectionSelect";
-        var optionsDataId = "filesTabCollectionOptions";
-
-        host.UpdateData(selectDataId, new Dictionary<string, object?> { ["collection"] = collections[0].Name });
-        host.UpdateData(optionsDataId, options);
-
-        stack = stack.WithView(new ComboboxControl(
-            new JsonPointerReference("collection"),
-            new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsDataId)))
-        {
-            Label = "Collection",
-            Autocomplete = ComboboxAutocomplete.Both,
-            DataContext = LayoutAreaReference.GetDataPointer(selectDataId)
-        });
-
-        stack = stack.WithView((h, _) =>
-            h.Stream.GetDataStream<Dictionary<string, object?>>(selectDataId)
-                .Select(data =>
-                {
-                    var selected = data?.GetValueOrDefault("collection")?.ToString();
-                    if (string.IsNullOrEmpty(selected))
-                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
-                    return (UiControl?)new FileBrowserControl(selected);
-                }));
-
-        return stack;
-    }
-
     internal static UiControl BuildAccessControlTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         // EMBEDDED AREA, not a compiled call: the AccessControl view rides the
@@ -444,9 +424,8 @@ public static class SettingsLayoutArea
         }
 
         stack = stack.WithView(Controls.H2(host.Localize("settings.effectiveAccess")).WithStyle("margin: 0 0 16px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "Test what permissions a user has on this node. Enter a user ID and press Enter or click Check.</p>"));
+        stack = stack.WithView(Controls.Markdown(host.Localize("effectiveAccess.intro"))
+            .WithStyle("font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
 
         var formId = $"effectiveAccess_{hubPath.Replace("/", "_")}";
         var resultId = $"effectiveAccessResult_{hubPath.Replace("/", "_")}";
@@ -501,12 +480,13 @@ public static class SettingsLayoutArea
         return stack;
     }
 
-    internal static UiControl BuildAppearanceTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
-    {
-        stack = stack.WithView(Controls.H2(host.Localize("settings.appearance")).WithStyle("margin: 0 0 24px 0;"));
-        stack = stack.WithView(new AppearanceControl());
-        return stack;
-    }
+    internal static UiControl BuildVersionsTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+        // EMBEDDED AREA, like Access Control: the Versions view rides the MeshWeaver.Graph.Views
+        // module; the tab names the area and whoever serves it renders.
+        => stack.WithView(
+            Controls.LayoutArea(host.Hub.Address, MeshNodeLayoutAreas.VersionsArea)
+                .WithShowProgress(false),
+            "VersionsContent");
 
     #endregion
 

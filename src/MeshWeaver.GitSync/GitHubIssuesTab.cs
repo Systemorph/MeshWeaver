@@ -43,9 +43,12 @@ public static class GitHubIssuesTab
     private const string IssuesGridId = "ghIssuesGrid";
     private const string PrGridId = "ghPrGrid";
 
-    /// <summary>Registers the GitHub Issues &amp; PRs settings tab provider (shown on any node within a Space).</summary>
+    /// <summary>Registers the GitHub Issues &amp; PRs settings tab provider (shown on the Space root).</summary>
     public static MessageHubConfiguration AddGitHubIssuesTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab))
+            // It acts on the whole Space, so it is offered on the Space ROOT's settings only — never
+            // on every node below it; a descendant's old link redirects to the root's tab.
+            .RestrictSettingsTabsToPartitionRoot(TabId);
 
     private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetTab(
         LayoutAreaHost host, RenderingContext ctx)

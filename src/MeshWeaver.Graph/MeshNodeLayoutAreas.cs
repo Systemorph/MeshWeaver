@@ -1132,6 +1132,21 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
+    /// The node menu's "Settings…" entry — opens THIS node's settings page
+    /// (<c>/{node}/Settings</c>). Offered to a viewer who may read the node: the page itself shows
+    /// each tab only under the tab's own permission, and read-only for a viewer without Update.
+    /// </summary>
+    /// <param name="hubPath">The node path.</param>
+    /// <param name="perms">The viewer's effective permissions on the node.</param>
+    public static NodeMenuItemDefinition? GetSettingsMenuItem(string hubPath, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Read))
+            return null;
+        return new("Settings…", SettingsArea, Order: 45, Href: BuildUrl(hubPath, SettingsArea))
+            { LabelKey = "menu.settings" };
+    }
+
+    /// <summary>
     /// Returns the Threads menu item (always visible).
     /// </summary>
     public static NodeMenuItemDefinition GetThreadsMenuItem(string hubPath)

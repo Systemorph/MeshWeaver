@@ -983,10 +983,13 @@ public static class MemexConfiguration
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
                         // The course-shell areas (StartExercise / GoToMyCopy / CourseNav / Learn)
+                        // The three PERSONAL tabs — API tokens, Connected instances (register your
+                        // own MeshWeaver installation, get it an instance key) and Notifications
+                        // (bell/email per category) — ride every node hub but are tabs of the PERSON
+                        // APP (PersonApp.AddPersonAppTab): they show on the viewer's own
+                        // /{user}/Settings only, and an old link on any other page redirects there.
                         .AddApiTokensSettingsTab()
-                        // Register your own MeshWeaver installation and get it an instance key.
                         .AddInstancesSettingsTab()
-                        // Per-user "Notifications" tab: choose bell/email per notification category.
                         .AddNotificationsSettingsTab()
                         // The AI top-bar menu entry ("New thread") is GUI: its action is a click-time
                         // sentinel resolved in the circuit, so the portal GUI module registers it via
@@ -1006,7 +1009,8 @@ public static class MemexConfiguration
                         // The Admin app's landing tab (/Admin): this instance's facts + About.
                         // Inert on every hub but the Admin app's (AdminAppNodeType.AddAdminAppTab).
                         .AddAdminAppOverviewTab()
-                        // GitHub Sync tab — shows only on Space nodes (self-filtered).
+                        // GitHub Sync tab — the Space ROOT's settings only (self-filtered on Space,
+                        // RestrictSettingsTabsToPartitionRoot for the descendants).
                         .AddGitHubSyncSettingsTab()
                         // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.
                         .AddGitHubIssuesTab()

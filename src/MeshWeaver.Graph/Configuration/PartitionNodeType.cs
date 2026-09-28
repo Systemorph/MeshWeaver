@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -73,14 +72,6 @@ public static class PartitionNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<PartitionDefinition>())
             .AddDefaultLayoutAreas()
-            .AddGlobalSettingsMenuItems(
-                new GlobalSettingsMenuItemDefinition(
-                    Id: "Partitions",
-                    Label: "Partitions",
-                    ContentBuilder: PartitionSettingsTab.BuildPartitionsTab,
-                    Icon: FluentIcons.Database(),
-                    Order: 10)
-                { LabelKey = "settings.partitions" })
             .AddLayout(layout => layout
                 .WithDefaultArea(MeshNodeLayoutAreas.SearchArea)
                 // #4500: repointing the default area to Search — without re-registering a renderer

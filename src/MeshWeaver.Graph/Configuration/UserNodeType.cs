@@ -126,69 +126,18 @@ public static class UserNodeType
             .WithPortalCreate()
             .AddDefaultLayoutAreas()
             .AddUserActivityLayoutAreas()
-            // The person's identity and grants — the same view as the Admin app's "Who am I".
-            .AddSettingsMenuItems(WhoAmISettingsTab.AccountTab)
+            // The PERSON APP: Profile, Account, Preferences, Sharing (+ the personal tabs modules
+            // register through PersonApp.AddPersonAppTab); node management hidden.
+            .AddPersonAppTabs()
             // Platform administration moved to the Admin app; an old link redirects there.
             .RelocateSettingsTabsToAdminApp(GlobalAdministrationTab.TabId)
             .ApplyNodeHubContributions(NodeType)
-            .AddUserPreferencesSettingsTab()
             .AddLayout(layout => layout
                 .WithDefaultArea(UserActivityLayoutAreas.ActivityArea)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, OwnSettings)
                 // The Inbox app — what needs you, what is running, what just finished.
                 .WithView(InboxLayoutArea.AreaName, InboxLayoutArea.Render))
     };
-
-    private const string PreferencesTab = "Preferences";
-
-    /// <summary>
-    /// Adds a "Preferences" tab to the User node's Settings page — the manual override for the two
-    /// per-viewer display preferences: the display time zone and the UI language. Requires
-    /// <see cref="Permission.Update"/> (self-edit → the owner, plus admins), so a visitor never sees
-    /// it. Both pickers are data-bound DIRECTLY to the user node via
-    /// <see cref="MeshNodeContentEditorControl"/>; setting either writes a non-empty value, which the
-    /// browser auto-detect then never overwrites (write-once, see <see cref="TimeZonePreference"/>
-    /// and <see cref="LocalePreference"/>).
-    /// </summary>
-    private static MessageHubConfiguration AddUserPreferencesSettingsTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemDefinition(
-            Id: PreferencesTab,
-            Label: "Preferences",
-            ContentBuilder: BuildPreferencesTab,
-            Icon: Application.Styles.FluentIcons.Clock(),
-            Order: 50,
-            RequiredPermission: Permission.Update,
-            Keywords: ["preferences", "time zone", "timezone", "clock", "display", "locale",
-                "region", "utc", "dst", "language", "sprache", "deutsch", "german", "english",
-                "translation"])
-        { LabelKey = "settings.preferences" });
-
-    private static UiControl BuildPreferencesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
-    {
-        // The viewer's own language — this tab's chrome is localized like everything else.
-        var access = host.Hub.ServiceProvider.GetService<AccessService>();
-        var locale = access.ViewerLocale();
-
-        stack = stack.WithView(Controls.H2(access.Localize("settings.preferences"))
-            .WithStyle("margin: 0 0 8px 0;"));
-        if (node is null)
-            return stack.WithView(Controls.Html("<p><em>User not found.</em></p>"));
-
-        foreach (var key in PreferencesDescriptionKeys)
-            stack = stack.WithView(Controls.Markdown(access.Localize(key))
-                .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
-
-        // Data-bound editor: reads/writes User.TimeZoneId and User.Locale straight on the node
-        // stream (IMeshNodeStreamCache) — no /data replica, no save loop. The tab is only shown to
-        // a user with Update on this node, so editing is always permitted here.
-        var editor = new MeshNodeContentEditorControl(node.Path)
-        {
-            CanEdit = true,
-            Fields = PreferenceFields(key => access.Localize(key))
-        };
-        stack = stack.WithView(editor);
-        return stack;
-    }
 
     /// <summary>
     /// The catalog keys for the tab's explanatory prose, in render order — one paragraph per
@@ -335,8 +284,8 @@ public static class UserNodeType
     }
 
     /// <summary>
-    /// The person's own settings app — <c>/{user}/Settings</c> — for the person it belongs to, and
-    /// for nobody else. A User node is public-read (<c>WithUserNodePublicRead</c>), so without this
+    /// The person app — <c>/{user}/Settings</c>, <see cref="PersonApp"/> — for the person it belongs
+    /// to, and for nobody else. A User node is public-read (<c>WithUserNodePublicRead</c>), so without this
     /// gate any signed-in viewer could open another person's settings page and see every tab that
     /// demands no permission of its own. Platform administration is not here at all: it lives in
     /// the Admin app (<see cref="AdminAppNodeType"/>).

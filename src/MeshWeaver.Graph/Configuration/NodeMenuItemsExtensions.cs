@@ -201,7 +201,7 @@ public static class NodeMenuItemsExtensions
             // its own without either side knowing about the other.
             //   10-18  edit / organize            ✏️ 🔖 🕶️ ➡️ 📋 🗑️
             //   30-38  content / history / sync    📁 🕘 🔌 (🔄)
-            //   50     lifecycle                   ♻️
+            //   45-50  settings / lifecycle        ⚙️ ♻️
 
             // A USER partition root (the user's home) is NOT a normal editable node: Edit / Move /
             // Copy / Delete on the root would rewrite, relocate, duplicate or WIPE the entire
@@ -255,7 +255,15 @@ public static class NodeMenuItemsExtensions
             var stopSync = StopSyncLayoutArea.GetMenuItem(menuNode, menuPath, perms);
             if (stopSync != null) items.Add(stopSync with { Order = 34, Icon = "🔌" });
 
-            // ── Group 3: lifecycle ──
+            // ── Group 3: settings / lifecycle ──
+            // "Settings…" opens THIS node's settings — its metadata, access, versions (and, on a
+            // Space root, the Space's own management). It acts on the node, so it lives in the
+            // node's menu; a person's own things are in the person app, the instance's in /Admin.
+            // On a person's root it is the person app itself, offered to its owner only.
+            var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(menuPath,
+                isProtectedRoot && !perms.HasFlag(Permission.Update) ? Permission.None : perms);
+            if (settings != null) items.Add(settings with { Order = 45, Icon = "⚙️" });
+
             var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
             if (recycle != null) items.Add(recycle with { Order = 50, Icon = "♻️" });
 
