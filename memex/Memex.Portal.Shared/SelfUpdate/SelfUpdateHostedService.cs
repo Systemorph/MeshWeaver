@@ -570,7 +570,9 @@ public class SelfUpdateHostedService : IHostedService
     /// exactly when the update it polls for is what would have recovered it):
     /// <list type="number">
     /// <item>Seed <c>Admin/UpdatePolicy</c> if absent (storm-safe, via a query — never a point-read
-    /// of a maybe-absent node); a seeding fault retries at the polling cadence.</item>
+    /// of a maybe-absent node); a seeding fault retries at the polling cadence. When the deployment
+    /// record declares a policy (<c>SelfUpdate:DefaultPolicy</c> is set), converge the EXISTING
+    /// node's policy and pattern to it (<see cref="UpdatePolicyNodeType.ConvergeToDeclaration"/>).</item>
     /// <item>The live node stream, and NOTHING ELSE. 🚨 The configured default is never emitted
     /// here (MeshWeaver#2731/#2797): it used to be prepended once, before the first live emission,
     /// and that one synthetic value drove a full <see cref="RunOnce"/> — ACR listing, candidate
@@ -603,9 +605,30 @@ public class SelfUpdateHostedService : IHostedService
     private IObservable<UpdatePolicyContent> CreatePolicySource()
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        // 🚨 The deployment record is AUTHORITATIVE when it declares a policy (policy
+        // `self-update-record-authoritative`): read off the RAW configuration key, so an unset key —
+        // which the options binder reads as Stable — stays "nothing declared" and the in-portal
+        // choice stands. Without this the record's value was a seed only, and an instance whose
+        // node predated the seeding followed a stale node for ever (Doc/Architecture/SelfUpdateFreeze,
+        // "The build instance").
+        var declared = UpdatePolicyNodeType.DeclaredByDeployment(ResolveConfiguration(), _logger);
         return Observable
             .Defer(() => UpdatePolicyNodeType.EnsureExists(
-                _hub, accessService, _options.DefaultPolicy, _logger, _options.DefaultPattern))
+                    _hub, accessService, _options.DefaultPolicy, _logger, _options.DefaultPattern)
+                .SelectMany(path => declared is null
+                    ? Observable.Return(path)
+                    : UpdatePolicyNodeType.ConvergeToDeclaration(_hub, accessService, declared, _logger)
+                        // A convergence that cannot land (content this build cannot read — the
+                        // typed write refuses rather than overwrite) must not gate the poller
+                        // (#1020): the install then follows the node as it stands, and says so.
+                        .Catch((Exception ex) =>
+                        {
+                            _logger?.LogWarning(ex,
+                                "[SelfUpdate] could not converge {Path} to the deployment record ({Policy}, "
+                                + "pattern: {Pattern}); this install follows the node as it stands until the next start.",
+                                UpdatePolicyNodeType.NodePath, declared.Policy, declared.Pattern ?? "none");
+                            return Observable.Return(path);
+                        })))
             .RetryWhen(ResubscribeAfterRetryInterval("policy-node seeding"))
             .Take(1)
             .SelectMany(_ => Observable

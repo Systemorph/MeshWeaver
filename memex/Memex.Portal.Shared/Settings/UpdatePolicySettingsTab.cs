@@ -39,6 +39,14 @@ public static class UpdatePolicySettingsTab
         stack = stack.WithView(Controls.H2(host.Localize("ui.platformUpdates")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Markdown(host.Localize("ui.mdUpdatePolicyIntro")));
 
+        // 🚨 When the deployment record declares the policy, the self-updater converges the node to
+        // it at every start (policy `self-update-record-authoritative`), so a local edit below does
+        // not stick past the next restart. Say so rather than let the editor pretend otherwise.
+        if (UpdatePolicyNodeType.DeclaredByDeployment(host.Hub.ServiceProvider.GetService<IConfiguration>())
+            is { } declared)
+            stack = stack.WithView(Controls.Markdown(host.Localize(
+                "ui.mdUpdatePolicyManagedByRecord", declared.Policy, declared.Pattern ?? "—")));
+
         // Running version (the installed platform version baked into the binary).
         stack = stack.WithView(Controls.Markdown(
             $"**Running version:** `{ShippedReleaseSeed.InstalledPlatformVersion}`"));
