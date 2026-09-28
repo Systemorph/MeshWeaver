@@ -163,8 +163,8 @@ verifies.
 > **`/opt/platform`** in every runner pod of BOTH ARC scale sets, holding, per SEALED set,
 > `app/` (the tester image's `/app`) and `platform-refs/` (the portal's), with a `.complete` marker
 > written last and the 3 newest sets kept by the `ci-platform-refresh` CronJob. So
-> `node-repo-gate.yml` has **two modes**, chosen by MEASURING whether that mount exists — never by a
-> label and never by an input:
+> `node-repo-gate.yml` has **two modes**, chosen by measuring the mount and whether it holds the
+> run's exact tester-and-portal pair — never by a runner label:
 >
 > * **volume** — the shard reads both `/app` trees off the share, composes the gate host into
 >   `$RUNNER_TEMP` and runs the tester **as a process** on a .NET that `actions/setup-dotnet` puts
@@ -172,16 +172,18 @@ verifies.
 >   `runner` input therefore now accepts the plain, non-privileged **`aks-silos`** set, and that is
 >   the label to use; `aks-silos-dind` still works and takes the same path with its sidecar idle.
 > * **container** — the mount is absent (a GitHub-hosted `ubuntu-latest` runner, whose `/opt` is
->   empty), so the shard pulls both images and runs the tester in one, byte-identically to before.
->   A caller that passes nothing is here, unchanged.
+>   empty), or a complete cached tester set names a different valid portal digest. The shard pulls
+>   **both** run-pinned images by exact digest and runs the tester in a container. The latter case
+>   requires a Docker-capable runner; the plain `aks-silos` set cannot serve it.
 >
-> 🚨 **There is no fallback between them.** Once the mount is there, a set that is missing,
-> half-written or paired with another portal is RED naming `ci-platform-refresh`; it never degrades
-> into a registry pull, because "the refresh job died yesterday" must not read as "CI is a bit
-> slower today". `.github/scripts/resolve-gate-platform.sh` makes that decision and carries a
-> `--self-test` that fires every one of those refusals against a synthetic volume, run on every
-> platform PR beside `compose-gate-host.sh`'s. A runner with NEITHER the volume NOR a daemon is red
-> naming both.
+> 🚨 **A missing, half-written or corrupt mounted set stays RED**, naming
+> `ci-platform-refresh`; pulling there would hide a dead refresh job. A complete set with a
+> *different valid portal digest* is a cache-pair miss: the directory key contains only the tester
+> digest, and a portal-only rebuild can advance the other half without changing that key. The
+> resolver logs this distinction and takes the exact-digest container path, never passing the
+> cached portal as the run's portal. Its `--self-test` covers both the safe miss and every refusal
+> against synthetic volumes. A runner unable to serve that pair from the mount and without a
+> Docker daemon fails, naming both conditions.
 >
 > **What the volume does not carry, measured 2026-09-12 on set 3.0.0-ci.8417:** the .NET host. Both
 > images are Ubuntu 24.04 and so is `ghcr.io/actions/actions-runner:2.337.0`, with the same
