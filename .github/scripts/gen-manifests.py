@@ -1003,7 +1003,7 @@ def is_manifest_lock_settlement_pr() -> bool:
 
 def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
     """Verify the CI-owned lock PR is only the exact settlement the current main tree requires."""
-    changed = git(root, ["diff", "--name-only", base, "HEAD", "--"])
+    changed = git(root, ["diff", "--name-only", base, "HEAD"])
     if changed is None:
         return [f"cannot read the settlement PR diff against {base[:12]} — refusing to accept it"]
     paths = sorted(p.strip() for p in changed.splitlines() if p.strip())
@@ -1025,6 +1025,9 @@ def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
                 f"(current verified main: {trunk[:12] if trunk else 'unavailable'}) — "
                 "the next main run must refresh the generated lock branch"]
 
+    # `settle()` delegates its writes to `generate(..., settling=True)`, whose only write target is
+    # each enumerated plugin's manifest.lock; the postconditions are reads. The positive self-test
+    # also asserts the entire checkout is clean after this validator returns.
     lock_files = [plugin / "manifest.lock" for plugin in plugin_dirs(root)]
     before = {path: path.read_bytes() if path.is_file() else None for path in lock_files}
     try:
