@@ -91,7 +91,7 @@ two agree, and the resolver is what retires the copy:
     python3 scripts/platform-script.py gen-manifests.py --resolve     # finish a merge whose ONLY conflicts are locks
     …and for a repo whose config declares `lockOwner: main` (see LOCK_OWNERS):
     python3 scripts/platform-script.py gen-manifests.py --materialize # write THIS tree's locks, no network, never commit
-    python3 scripts/platform-script.py gen-manifests.py --settle      # MAIN only: write + prove the claim, then commit
+    python3 scripts/platform-script.py gen-manifests.py --settle      # MAIN only: write + prove the claim for its settlement PR
     …plus --no-fetch on either deriving command: still VERIFY the baseline against the remote, just
     never write to the object/tag database. It can only make the run stricter — a stale checkout
     fails instead of catching itself up.
@@ -163,8 +163,9 @@ SCHEMA = "mw-manifest/1"
 #           regenerates and commits them and `--check` fails a stale one. The historical contract.
 #   main    the lock is a MAIN artifact. A pull request commits NO lock change (`--check` fails one
 #           that does); main's settle job (`--settle`) regenerates the locks over the merged tree
-#           and commits them; a CI job that reads a lock off a tree main has not settled yet runs
-#           `--materialize` first (local, deterministic, never committed).
+#           and opens/refreshes the required-check settlement PR; a CI job that reads a lock off a
+#           tree main has not settled yet runs `--materialize` first (local, deterministic, never
+#           committed).
 #
 # Why `main` exists: a lock's trailer (`moduleVersion`, `sourceCommit`, `version`) changes on EVERY
 # content change to its module, and its `files` lines are neighbours, so two pull requests touching
@@ -924,7 +925,7 @@ def materialize(root: Path) -> int:
         print(f"  ✎ {plugin.name}: v{version}, moduleVersion {content_hash}  (committed: {was})")
         written += 1
     print(f"✓ materialized {written} of {len(modules)} lock(s) for this tree — main-owned locks: "
-          f"these are NOT to be committed (main's settle job commits them after the merge)")
+          f"these are NOT to be committed on this PR (main's settle job proposes them after the merge)")
     return 0
 
 
@@ -1067,7 +1068,7 @@ def check_untouched(root: Path, base: str) -> list[str]:
     if not touched:
         return []
     return [f"this pull request changes {len(touched)} manifest.lock file(s), and this repo's locks "
-            f"are MAIN-owned (lockOwner: main) — main's settle job writes them after the merge, and a "
+            f"are MAIN-owned (lockOwner: main) — main's settle job proposes them after the merge, and a "
             f"lock committed here is exactly what turns every other open pull request DIRTY: "
             + ", ".join(touched[:12]) + (" …" if len(touched) > 12 else ""),
             f"fix: git checkout {base[:12]} -- {' '.join(touched[:12])}"
@@ -1260,7 +1261,7 @@ def generate(root: Path, fetch: bool = True, settling: bool = False) -> int:
         # Not an error: the post-merge hook and a habitual `gen-manifests.py` both land here, and
         # the right outcome for both is to write NOTHING a commit could sweep up.
         print("  = this repo's locks are MAIN-owned (lockOwner: main) — nothing written. A pull "
-              "request commits no lock; main's settle job writes them after the merge.")
+              "request commits no lock; main's settle job proposes them in a required-check PR after the merge.")
         print("    For a local view of this tree's locks (never to be committed): --materialize")
         return 0
     # Deriving a version from a stale tag database is the ORIGINAL sin: the wrong number is written
