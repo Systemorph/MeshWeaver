@@ -63,6 +63,56 @@ public static class SettingsMenuItemsExtensions
     }
 
     /// <summary>
+    /// Restricts the named tabs to a PARTITION ROOT — a hub whose path is a single segment (a Space,
+    /// a person's partition, the Admin app). A tab that acts on a whole Space (its node types, its
+    /// groups, its GitHub sync, its working tree) means nothing on a descendant's settings page, where
+    /// it used to be offered on every node below the root. The tab is filtered out wherever the page
+    /// is not a root, whoever registered it, and a link to it on a descendant redirects to the same
+    /// tab on the root (<see cref="SettingsRedirect"/>).
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="tabIds">The tab ids that belong to the partition root only.</param>
+    public static MessageHubConfiguration RestrictSettingsTabsToPartitionRoot(
+        this MessageHubConfiguration config, params string[] tabIds)
+    {
+        var existing = config.Get<PartitionRootSettingsTabs>() ?? PartitionRootSettingsTabs.Empty;
+        return config.Set(existing with { Ids = existing.Ids.Union(tabIds) });
+    }
+
+    /// <summary>
+    /// On THIS hub's settings page, a request for <paramref name="fromTabId"/> opens
+    /// <paramref name="toTabId"/> instead (a redirect, so the address bar shows the tab that is
+    /// rendered). For tabs merged into one: the retired id keeps answering.
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="fromTabId">The retired tab id.</param>
+    /// <param name="toTabId">The tab that now carries its content.</param>
+    public static MessageHubConfiguration AliasSettingsTab(
+        this MessageHubConfiguration config, string fromTabId, string toTabId)
+    {
+        var existing = config.Get<SettingsTabAliases>() ?? SettingsTabAliases.Empty;
+        return config.Set(existing with { Map = existing.Map.SetItem(fromTabId, toTabId) });
+    }
+
+    /// <summary>
+    /// The title of this hub's settings page — the name of the APP the page is, shown at the top of
+    /// its navigation. Without one the page is titled with the node's own name. The Admin app is
+    /// titled with the instance's name, the person app with the person's name: every settings page
+    /// says whose things it changes.
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="title">The title, given the page's host and node; <c>null</c> falls back to the
+    /// node's name.</param>
+    public static MessageHubConfiguration WithSettingsTitle(
+        this MessageHubConfiguration config, Func<LayoutAreaHost, MeshNode?, string?> title)
+        => config.Set(new SettingsTitle(title));
+
+    /// <summary>True when <paramref name="hubPath"/> is a partition root (a single path segment).</summary>
+    /// <param name="hubPath">The hub path.</param>
+    internal static bool IsPartitionRoot(string? hubPath)
+        => !string.IsNullOrEmpty(hubPath) && !hubPath.Contains('/');
+
+    /// <summary>
     /// The live, UNFILTERED settings-tab set: every registered provider subscribed once
     /// (subscribe-all-upfront via <c>CombineLatest</c>), merged and sorted by <c>Order</c>,
     /// re-emitting whenever any provider's live check (e.g. global-admin, a GitHub probe)
@@ -103,14 +153,19 @@ public static class SettingsMenuItemsExtensions
             .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
                 _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
 
-        var hidden = config.Get<HiddenSettingsTabs>();
+        var hidden = config.Get<HiddenSettingsTabs>()?.Ids;
+        // Space-root-only tabs leave every page that is not a partition root.
+        var rootOnly = IsPartitionRoot(host.Hub.Address.ToString())
+            ? null
+            : config.Get<PartitionRootSettingsTabs>()?.Ids;
         return Observable.CombineLatest(streams)
             .Select(lists =>
             {
                 var items = new List<SettingsMenuItemDefinition>();
                 foreach (var list in lists)
                     if (list is not null)
-                        items.AddRange(hidden is null ? list : list.Where(i => !hidden.Ids.Contains(i.Id)));
+                        items.AddRange(list.Where(i =>
+                            !(hidden?.Contains(i.Id) ?? false) && !(rootOnly?.Contains(i.Id) ?? false)));
                 items.Sort((a, b) => a.Order.CompareTo(b.Order));
                 return (IReadOnlyList<SettingsMenuItemDefinition>)items;
             });
@@ -194,9 +249,15 @@ public static class SettingsMenuItemsExtensions
     }
 
     /// <summary>
-    /// Registers the default settings menu items (Metadata, NodeTypes, Files,
-    /// AccessControl, Groups, EffectiveAccess, Appearance).
-    /// Guarded to avoid double registration.
+    /// Registers the default NODE settings tabs — the ones that act on the node whose page this is:
+    /// Metadata, Access Control, Effective Access (check what a person may do on THIS node) and
+    /// Versions on every node, plus Node Types and Groups on a partition root only
+    /// (<see cref="RestrictSettingsTabsToPartitionRoot"/>).
+    ///
+    /// <para>What is deliberately NOT here: <b>Files</b> (the node's ⋯ menu opens the file browser —
+    /// a second copy on the settings page was the same browser under another name) and
+    /// <b>Appearance</b> (the theme is the viewer's own preference, not the node's — it lives in the
+    /// person app's Preferences tab, <see cref="PersonApp"/>). Guarded against double registration.</para>
     /// </summary>
     public static MessageHubConfiguration AddDefaultSettingsMenuItems(
         this MessageHubConfiguration config)
@@ -230,17 +291,6 @@ public static class SettingsMenuItemsExtensions
             { LabelKey = "settings.nodeTypes", GroupKey = "settings.groupManagement" },
 
             new SettingsMenuItemDefinition(
-                Id: SettingsLayoutArea.FilesTab,
-                Label: "Files",
-                ContentBuilder: SettingsLayoutArea.BuildFilesTab,
-                Group: "Management",
-                Icon: FluentIcons.Folder(),
-                Order: 110,
-                Keywords: ["files", "documents", "uploads", "attachments", "content",
-                    "collections", "blobs"])
-            { LabelKey = "settings.files", GroupKey = "settings.groupManagement" },
-
-            new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.AccessControlTab,
                 Label: "Access Control",
                 ContentBuilder: SettingsLayoutArea.BuildAccessControlTab,
@@ -264,26 +314,39 @@ public static class SettingsMenuItemsExtensions
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.EffectiveAccessTab,
-                Label: "Effective Access",
+                Label: "Check access",
                 ContentBuilder: SettingsLayoutArea.BuildEffectiveAccessTab,
                 Group: "Security",
                 Icon: FluentIcons.PersonSearch(),
                 Order: 220,
-                Keywords: ["effective access", "permissions", "test", "user", "check",
+                Keywords: ["effective access", "check access", "permissions", "test", "user", "check",
                     "evaluate", "who can", "audit"])
-            { LabelKey = "settings.effectiveAccess", GroupKey = "settings.groupSecurity" },
-
-            new SettingsMenuItemDefinition(
-                Id: SettingsLayoutArea.AppearanceTab,
-                Label: "Appearance",
-                ContentBuilder: SettingsLayoutArea.BuildAppearanceTab,
-                Icon: FluentIcons.PaintBrush(),
-                Order: 900,
-                Keywords: ["appearance", "theme", "color", "dark mode", "light mode",
-                    "display", "style", "layout"])
-            { LabelKey = "settings.appearance" }
-        );
+            { LabelKey = "settings.effectiveAccess", GroupKey = "settings.groupSecurity" })
+            .AddSettingsMenuItems(new SettingsMenuItemProvider(VersionsTab))
+            // The Space's own management — never offered on the nodes below it.
+            .RestrictSettingsTabsToPartitionRoot(SettingsLayoutArea.NodeTypesTab, SettingsLayoutArea.GroupsTab);
     }
+
+    /// <summary>
+    /// The node's Versions — the history view, embedded — offered only where the Versions area has a
+    /// renderer (it rides the optional <c>MeshWeaver.Graph.Views</c> module; see
+    /// <see cref="MeshNodeLayoutAreas.CanRenderArea"/>, which fails OPEN when the definition cannot say).
+    /// </summary>
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> VersionsTab(
+        LayoutAreaHost host, RenderingContext _)
+        => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>(
+            MeshNodeLayoutAreas.CanRenderArea(host.LayoutDefinition, MeshNodeLayoutAreas.VersionsArea)
+                ? [VersionsTabDefinition]
+                : []);
+
+    private static SettingsMenuItemDefinition VersionsTabDefinition { get; } = new(
+        Id: SettingsLayoutArea.VersionsTab,
+        Label: "Versions",
+        ContentBuilder: SettingsLayoutArea.BuildVersionsTab,
+        Icon: FluentIcons.History(),
+        Order: 50,
+        Keywords: ["versions", "history", "restore", "compare", "previous", "undo"])
+    { LabelKey = "menu.versions" };
 }
 
 /// <summary>
@@ -296,6 +359,32 @@ internal record SettingsMenuProviderCollection(
         IEnumerable<SettingsMenuItemProvider> newProviders)
         => new(Providers.Concat(newProviders).ToList());
 }
+
+/// <summary>
+/// Tab ids shown only on a partition root (<see cref="SettingsMenuItemsExtensions.RestrictSettingsTabsToPartitionRoot"/>).
+/// </summary>
+/// <param name="Ids">The root-only tab ids.</param>
+internal sealed record PartitionRootSettingsTabs(System.Collections.Immutable.ImmutableHashSet<string> Ids)
+{
+    /// <summary>No root-only tabs.</summary>
+    public static PartitionRootSettingsTabs Empty { get; } =
+        new(System.Collections.Immutable.ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// Retired tab id → the tab that now carries it (<see cref="SettingsMenuItemsExtensions.AliasSettingsTab"/>).
+/// </summary>
+/// <param name="Map">The aliases.</param>
+internal sealed record SettingsTabAliases(System.Collections.Immutable.ImmutableDictionary<string, string> Map)
+{
+    /// <summary>No aliases.</summary>
+    public static SettingsTabAliases Empty { get; } =
+        new(System.Collections.Immutable.ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase));
+}
+
+/// <summary>The settings page's title (<see cref="SettingsMenuItemsExtensions.WithSettingsTitle"/>).</summary>
+/// <param name="Title">The title function.</param>
+internal sealed record SettingsTitle(Func<LayoutAreaHost, MeshNode?, string?> Title);
 
 /// <summary>
 /// Tab ids a hub's settings page leaves out (<see cref="SettingsMenuItemsExtensions.HideSettingsTabs"/>).

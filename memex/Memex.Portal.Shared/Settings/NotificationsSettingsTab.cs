@@ -32,18 +32,18 @@ public static class NotificationsSettingsTab
     public const string TabId = "Notifications";
 
     public static MessageHubConfiguration AddNotificationsSettingsTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(
+        // A tab of the PERSON APP (PersonApp.AddPersonAppTab): the preferences are the signed-in
+        // person's, so the tab shows on their own settings page only.
+        => config.AddPersonAppTab(
             new SettingsMenuItemDefinition(
                 Id: TabId,
                 Label: "Notifications",
                 ContentBuilder: BuildContent,
-                Group: "Preferences",
                 Icon: FluentIcons.Alert(),
-                GroupIcon: FluentIcons.Person(),
-                Order: 240,
+                Order: PersonApp.NotificationsOrder,
                 RequiredPermission: Permission.None,
                 Keywords: ["notifications", "teams", "email", "bell", "channels", "approvals", "inbox", "triage"])
-            { LabelKey = "settings.notifications", GroupKey = "settings.groupPreferences" });
+            { LabelKey = "settings.notifications" });
 
     /// <summary>
     /// The features the tab offers a row for: the platform's own

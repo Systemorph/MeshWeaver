@@ -83,7 +83,8 @@ use the new address; the Deployment record page builds its link with
 
 ### Instance scope — each instance's Admin app
 
-These are tabs of `/Admin` (see [The Admin App](../AdminApp)), grouped under the same domain names:
+These are tabs of `/Admin` (see [The Admin App](../AdminApp)), listed here by domain — the app itself
+groups its tabs by section (People & sign-in, Operations, Commercial, Fleet):
 
 | domain | tab | what it changes live |
 |---|---|---|

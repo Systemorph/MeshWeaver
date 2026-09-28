@@ -1364,8 +1364,9 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// The owner's profile page (<see cref="EditProfileArea"/>, <c>/{user}/EditProfile</c>) — picture,
-    /// basics (display name, sign-in email, language, time zone), bio, links and showcase, followed by
+    /// The owner's profile page (<see cref="EditProfileArea"/>, <c>/{user}/EditProfile</c>, also the
+    /// person app's Profile tab) — picture, basics (display name, sign-in email), bio, links and
+    /// showcase, followed by
     /// every section a module contributed through
     /// <see cref="ProfileSectionsExtensions.AddProfileSections(MessageHubConfiguration, ProfileSectionProvider[])"/>.
     /// Gated on <see cref="Permission.Update"/> (self-edit → the owner only; visitors get
@@ -1455,7 +1456,8 @@ public static class UserActivityLayoutAreas
     /// <item><b>Picture</b> — <see cref="NodeImageUploadControl"/>: upload/replace/remove, stored in
     /// the node's own <c>content</c> collection and referenced from <see cref="MeshNode.Icon"/>.</item>
     /// <item><b>Basics</b> — the display name (<see cref="MeshNode.Name"/>, which is what the header,
-    /// mentions and cards show), the sign-in email read-only, and the language + time zone.</item>
+    /// mentions and cards show) and the sign-in email read-only. Language and time zone live in the
+    /// person app's Preferences tab only.</item>
     /// <item><b>Bio</b>, <b>Links</b> — node-bound markdown editors.</item>
     /// <item><b>Showcase</b> — pinned cards with the inline unpin overlay.</item>
     /// <item>Then every contributed section, already rendered and permission-filtered.</item>
@@ -1530,14 +1532,9 @@ public static class UserActivityLayoutAreas
                         nameof(User.Email).ToCamelCase()!, L("profile.email"), MeshNodeEditorFieldKind.Text)),
                 })
                 .WithView(Controls.Label(L("profile.emailHint"))
-                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;"))
-                // Language + time zone — the SAME fields, control and node the Settings →
-                // Preferences tab binds, so the two surfaces can never drift apart.
-                .WithView(new MeshNodeContentEditorControl(userPath)
-                {
-                    CanEdit = true,
-                    Fields = UserNodeType.PreferenceFields(key => L(key)),
-                }),
+                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;")),
+            // Language and time zone are NOT here: they are preferences, edited in ONE place —
+            // the person app's Preferences tab (PersonApp) — never on two surfaces at once.
             BasicsSectionId));
 
         // Bio — node-bound markdown editor (JsonPointer "bio" against the User content context).

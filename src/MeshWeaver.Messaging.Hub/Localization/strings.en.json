@@ -330,7 +330,7 @@
   "settings.files": "Files",
   "settings.accessControl": "Access control",
   "settings.groups": "Groups",
-  "settings.effectiveAccess": "Effective access",
+  "settings.effectiveAccess": "Check access",
   "settings.appearance": "Appearance",
   "settings.dataSources": "Data sources",
   "settings.preferences": "Preferences",
@@ -1885,5 +1885,17 @@
   "secret.test.refused": "refused by the control instance (401): it holds no key matching this one — the two fingerprints differ",
   "secret.test.unsupported": "the control instance does not support key tests yet (it stored the test instead of only verifying it)",
   "secret.test.unverified": "the control instance answered {code} but did not report a verified signature (signature: {signature})",
-  "secret.test.status": "the control instance answered {code}"
+  "secret.test.status": "the control instance answered {code}",
+  "menu.settings": "Settings…",
+  "settings.profile": "Profile",
+  "settings.sharing": "Sharing",
+  "personApp.sharingIntro": "Who may read or change the things in your own partition — your home, your threads, your files. Grant someone a role here to share them.",
+  "settings.administrators": "Administrators",
+  "settings.groupPeople": "People & sign-in",
+  "settings.groupOperations": "Operations",
+  "settings.groupCommercial": "Commercial",
+  "settings.groupFleet": "Fleet",
+  "settings.aiUsageCost": "AI usage & cost",
+  "settings.connectedInstances": "Connected instances",
+  "effectiveAccess.intro": "Check what a person can do on **this node**: enter their user id and press Check."
 }

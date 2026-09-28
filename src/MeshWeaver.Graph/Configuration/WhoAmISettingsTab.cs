@@ -18,11 +18,12 @@ namespace MeshWeaver.Graph.Configuration;
 /// session was established, whether the person is a platform administrator, and the effective
 /// permissions on their own partition and on the Admin partition.
 ///
-/// <para>One view, two homes: the <see cref="AccountTabId"/> tab of a person's own settings app
-/// (<c>/{user}/Settings/Account</c>) and the <see cref="TabId"/> tab of the Admin app
-/// (<c>/Admin/Settings/WhoAmI</c>), where an administrator checks the identity they are acting
-/// under. It shows ONLY the viewer's own session — never another person's — so it widens nothing:
-/// the answer is the same one <c>whoami</c> gives over MCP and REST.</para>
+/// <para>One home: the <see cref="AccountTabId"/> tab of the person app
+/// (<c>/{user}/Settings/Account</c>, <see cref="PersonApp"/>). It acts on — and describes — the
+/// PERSON, so it is not a tab of the Admin app any more; the old <c>/Admin/Settings/WhoAmI</c>
+/// (<see cref="TabId"/>) redirects there. It shows ONLY the viewer's own session — never another
+/// person's — so it widens nothing: the answer is the same one <c>whoami</c> gives over MCP and
+/// REST.</para>
 ///
 /// <para>Rendered as a <see cref="DataGridControl"/> over plain rows (the platform's one way to
 /// show structured data), live: the admin verdict and the permission folds enrich after the first
@@ -30,7 +31,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class WhoAmISettingsTab
 {
-    /// <summary>The tab id inside the Admin app.</summary>
+    /// <summary>The tab's former id inside the Admin app — an old link redirects to <see cref="AccountTabId"/>.</summary>
     public const string TabId = "WhoAmI";
 
     /// <summary>The tab id inside a person's own settings app.</summary>
@@ -42,23 +43,13 @@ public static class WhoAmISettingsTab
         ["who am i", "whoami", "identity", "account", "user id", "email", "roles", "grants",
             "permissions", "platform admin", "signed in"];
 
-    /// <summary>The Admin app's "Who am I" tab.</summary>
-    internal static SettingsMenuItemDefinition AdminAppTab { get; } = new(
-        Id: TabId,
-        Label: "Who am I",
-        ContentBuilder: (host, stack, _) => Build(host, stack),
-        Icon: FluentIcons.PersonCircle(),
-        Order: 1,
-        Keywords: SearchKeywords)
-    { LabelKey = "settings.whoAmI" };
-
-    /// <summary>The personal settings app's "Account" tab — the same view.</summary>
+    /// <summary>The person app's "Account" tab.</summary>
     internal static SettingsMenuItemDefinition AccountTab { get; } = new(
         Id: AccountTabId,
         Label: "Account",
         ContentBuilder: (host, stack, _) => Build(host, stack),
         Icon: FluentIcons.PersonCircle(),
-        Order: 1,
+        Order: PersonApp.AccountOrder,
         RequiredPermission: Permission.Update,
         Keywords: SearchKeywords)
     { LabelKey = "settings.account" };
@@ -87,7 +78,7 @@ public static class WhoAmISettingsTab
             ctx?.Name ?? "", ctx?.Email ?? "", ctx?.IsApiToken == true, ctx?.ImpersonatedBy);
 
         stack = stack
-            .WithView(Controls.H2(host.Localize("settings.whoAmI")).WithStyle("margin: 0 0 8px 0;"))
+            .WithView(Controls.H2(host.Localize("settings.account")).WithStyle("margin: 0 0 8px 0;"))
             .WithView(Controls.Markdown(host.Localize("whoAmI.intro")));
 
         if (session.UserId.Length == 0)
