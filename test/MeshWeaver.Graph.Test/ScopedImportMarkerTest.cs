@@ -7,6 +7,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -14,36 +15,42 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// 🚨 A SCOPED IMPORT MAY NOT LEAVE A FULL-CONTENT "ALREADY IMPORTED" MARKER (issue #1326).
+/// 🚨 A SCOPED IMPORT MAY NOT LEAVE A FULL-CONTENT "ALREADY IMPORTED" MARKER (issue #1326), and a Git
+/// diff cannot stand in for the current parser's view of unchanged source files.
 ///
 /// <para>The importer short-circuits on a content-addressed marker: a Succeeded activity at
 /// <c>{Partition}/_Activity/import-{fingerprint}</c> means "this partition already holds exactly this
 /// content", so a later run with the same fingerprint returns <c>Skipped</c> — <b>without reading the
 /// partition at all</b>. The fingerprint hashes EVERY source node.</para>
 ///
-/// <para>But a git-diff-scoped run (<c>changedNodePaths</c>, the routine webhook path) only evaluates
-/// the handful of nodes the diff named. Stamping the FULL-content marker after such a run asserts
-/// completeness on the evidence of a partial pass — and it is permanent: from then on every import of
-/// that same repo content reports <c>Skipped (0 nodes)</c>, and <c>GitHubSyncService</c> reads that as
-/// "the mesh already has this commit" and advances <c>LastSyncCommitSha</c> to the head, so the next
-/// diff is empty forever. A Space that under-imported once could never converge again; only
-/// <c>force</c> — which bypasses both the diff and the marker — fixed it. That is the memex-cloud
-/// report of 2026-08-12 (<c>ThreeBody</c>: "Imported Skipped (0 node(s))" while genuinely behind).</para>
+/// <para>A git-diff-scoped run (<c>changedNodePaths</c>, the routine webhook path) normally evaluates
+/// only the nodes named by the diff. However, an unchanged JSON file can parse into different typed
+/// content after a model upgrade: an older image may have silently discarded a property that a newer
+/// image now recognizes. The per-node import manifest detects that materialization drift and makes the
+/// importer re-evaluate just that node, while missing/stale manifest entries keep the existing cheap
+/// out-of-diff skip.</para>
 ///
-/// <para>What is asserted is CONVERGENCE, not a log string: after a scoped run that could not have
-/// seen node C, a later import of the same content must actually materialize C. Before the fix that
-/// import returned <c>Skipped</c> and C stayed missing forever.</para>
+/// <para>A scoped pass still cannot stamp a whole-partition success marker (issue #1326), because the
+/// git diff does not prove every node was evaluated. These tests assert the actual live node content
+/// and verify the normal two-way conflict path still preserves a newer server-authored edit.</para>
 /// </summary>
 public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private static readonly AccessContext Author = new()
+    {
+        ObjectId = "alice",
+        Name = "Alice",
+        Email = "alice@acme.com",
+    };
+
     [Fact(Timeout = 240000)]
-    public async Task ScopedImport_DoesNotMakeALaterFullImportSkipTheNodesItNeverSaw()
+    public async Task ScopedImport_ReconcilesManifestDriftOutsideGitDiff_WithoutStampingAFullMarker()
     {
         var partition = "Sc" + Guid.NewGuid().ToString("N")[..8];
         var source = new FakeRepoSource(partition)
         {
             Root = Space(partition),
-            Nodes = [Page(partition, "A", "v1"), Page(partition, "B", "v1")],
+            Nodes = [Page(partition, "A", "v1"), Page(partition, "B", "v1"), Page(partition, "C", "v1")],
         };
 
         // 1. The FIRST import is unscoped — it really did materialize the whole content, so it may
@@ -53,24 +60,33 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
         first.Outcome.Should().Be("Imported");
         (await Body($"{partition}/A")).Should().Contain("v1");
         (await Body($"{partition}/B")).Should().Contain("v1");
+        (await Body($"{partition}/C")).Should().Contain("v1");
 
-        // 2. BOTH pages change in the repo, but the git diff the webhook computed names only A. A
-        //    scoped run skips the upsert of every EXISTING node outside the scope — so B is left at
-        //    v1 while the source (and the fingerprint) say v2. That is exactly "the Space is behind":
-        //    the nodes are all there, their content is stale.
-        source.Nodes = [Page(partition, "A", "v2"), Page(partition, "B", "v2")];
+        // 2. BOTH parsed pages change, but the git diff names only A. In GitSync this can happen
+        //    when a newer platform's JSON model recognizes fields the previous model discarded: the
+        //    repo bytes for B are unchanged, but the source token from parsing them has advanced.
+        //    The manifest proves the token differs, so B must be re-evaluated despite being outside
+        //    the Git diff.
+        source.Nodes = [Page(partition, "A", "v2"), Page(partition, "B", "v2"), Page(partition, "C", "v1")];
         var scoped = await StaticRepoImporter
             .ImportSource(Mesh, source, null, null, new HashSet<string> { $"{partition}/A" })
             .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"scoped run: outcome={scoped.Outcome} count={scoped.Count} "
             + $"written=[{string.Join(", ", scoped.WrittenPaths)}]");
-        (await Body($"{partition}/B")).Should().Contain("v1",
-            "the scope excluded B, so the scoped run must have left it stale — otherwise this test is "
-            + "not exercising the under-import it exists to detect");
+        scoped.WrittenPaths.Should().Contain($"{partition}/B",
+            "the token recorded by the prior parser differs, so the importer must evaluate this node "
+            + "even though Git reports no file change");
+        scoped.WrittenPaths.Should().NotContain($"{partition}/C",
+            "a matching manifest token outside the Git diff must remain a no-op");
+        (await Body($"{partition}/B")).Should().Contain("v2",
+            "an unchanged Git file can parse to different content after a model upgrade; the token "
+            + "mismatch must re-materialize it");
+        (await Body($"{partition}/C")).Should().Contain("v1",
+            "an unchanged parser output outside the diff should remain untouched");
 
         // 3. …and now the same content is imported WITHOUT a scope (a manual "Update", a boot import).
-        //    It must actually reconcile. Before the fix the scoped run had already stamped this exact
-        //    fingerprint Succeeded, so this returned "Skipped" and B stayed at v1 forever.
+        //    A scoped run still cannot stamp the full-content success marker, even when manifest drift
+        //    happened to bring every node up to date.
         var full = await StaticRepoImporter.ImportSource(Mesh, source)
             .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"unscoped run: outcome={full.Outcome} count={full.Count}");
@@ -80,8 +96,64 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
             + "import to skip on its fingerprint — that marker is the 'Skipped (0 nodes) while behind' "
             + "lie, and it is permanent once written");
         (await Body($"{partition}/B")).Should().Contain("v2",
-            "the unscoped import must converge the partition to the source; a Space left stale by a "
-            + "scoped run has no other way back (only `force` bypassed the marker)");
+            "the unscoped import must agree with the source after the schema-drift re-evaluation");
+    }
+
+    [Fact(Timeout = 240000)]
+    public async Task ScopedImport_ManifestDriftStillPreservesANewerTwoWayServerEdit()
+    {
+        var partition = "Sc" + Guid.NewGuid().ToString("N")[..8];
+        var path = $"{partition}/A";
+        var horizon = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var source = new FakeRepoSource(partition)
+        {
+            Root = Space(partition),
+            Nodes = [Page(partition, "A", "repo-v1")],
+        };
+
+        (await StaticRepoImporter.ImportSource(Mesh, source)
+                .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken))
+            .Outcome.Should().Be("Imported");
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        IObservable<MeshNode> edit;
+        using (access.SwitchAccessContext(Author))
+            edit = Mesh.GetWorkspace().GetMeshNodeStream(path).Update(node => node with
+            {
+                Content = new MarkdownContent { Content = "# Page A\n\nlocal-edit" }
+            });
+        await edit.FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        source.Nodes = [Page(partition, "A", "repo-v2")];
+        var reimport = await StaticRepoImporter.ImportSource(
+                Mesh,
+                source,
+                policy: new ImportConflictPolicy(PreserveServerNewer: true, Since: horizon),
+                changedNodePaths: new HashSet<string>())
+            .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        reimport.Preserved.Should().Be(1,
+            "a parsed-token drift makes the node eligible for conflict evaluation; it does not "
+            + "disable the two-way protection");
+        reimport.WrittenPaths.Should().NotContain(path);
+        (await Body(path)).Should().Contain("local-edit",
+            "the newer server-authored node must remain authoritative under two-way sync");
+
+        // A PRESERVED drifted node was not written, so the manifest may not claim its new source
+        // token (#1326's rule, the two-way direction). Were it claimed, a later pass in which the
+        // server copy no longer wins — here: no two-way policy at all, e.g. the local edit was
+        // discarded — would read "already at this content", skip the node, and leave it divergent
+        // from the source for good. Keeping the prior token is what makes this pass evaluate it.
+        var afterDiscard = await StaticRepoImporter.ImportSource(
+                Mesh,
+                source,
+                changedNodePaths: new HashSet<string>())
+            .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
+        afterDiscard.WrittenPaths.Should().Contain(path,
+            "the preserved pass must not have recorded repo-v2's token in the manifest; the node "
+            + "still differs from what the manifest last saw land, so it must be re-evaluated");
+        (await Body(path)).Should().Contain("repo-v2",
+            "once the server copy no longer wins, the source must converge the node");
     }
 
     /// <summary>

@@ -24,7 +24,8 @@ delivery**, and it writes exactly this set across the three repositories of the 
 | `<version>` e.g. `3.0.0-ci.8079` | `memex-migration`, `mw-plugin-test` | phase A | immutable pointer |
 | `main` | all three | phase B | moving pointer |
 | `latest` | `mw-plugin-test` **only** | phase B | moving pointer, repo-scoped |
-| `<version>` | `memex-portal-ai` | **phase C** | immutable pointer — *the arming write* |
+| `<version>` | `memex-portal-ai` | **phase C — in `arm`, not `promote`** | immutable pointer — *the arming write*, made only once MeshWeaver.Plugins' dependent suites passed against this set's pair (policy `one-promotion-gate`, [One Promotion Gate](/Doc/Architecture/OnePromotionGate)) |
+| `<major>-latest`, `<major.minor>-latest`, `<major.minor.patch>-latest` | `memex-portal-ai`, `memex-migration` | **phase D — in `arm`** | moving line pointers; never moved backwards |
 
 The three legs compute `$(Version)` from the same root `Directory.Build.props` inside one workflow
 run, so `GITHUB_RUN_NUMBER` is shared and the three version strings are **equal by construction**.
@@ -139,6 +140,10 @@ promotes a continuous set to a release, so an asymmetric set is not releasable e
 
 ### 🚨 The ordering constraint — why the flag is opt-in
 
+> Under policy `one-promotion-gate` phases C and D run in main-cd's `arm` job, for the
+> newest promoted set whose dependent suites passed — often in a later run than the one that built
+> it. `--pointers` therefore never asserts the portal's `<version>`; the script says so.
+
 `promote`'s phases are ordered so that a mid-flight failure is unobservable
 ([The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)), and phase C —
 `memex-portal-ai:<version>` — is the **arming write**: the single manifest PUT that
@@ -147,7 +152,7 @@ assertion has to be opted into by a caller that runs there:
 
 | Caller | Passes `--pointers`? | Why |
 |---|---|---|
-| `verify-images` (`needs: promote`) | **yes** | it asserts what the run shipped; phase C is behind it |
+| `verify-images` (`needs: promote`) | **yes** | it asserts what promote shipped — `main`, `latest` and `<version>` on the migration and the tester; NOT the portal's `<version>`, which `arm` writes later (policy `one-promotion-gate`) |
 | `release.yml` "The set is complete" | **yes** | it promotes an already-promoted set; phase C is long past |
 | `gate`'s reconcile probe | **never** | it runs *before* `promote`; this run's version does not exist yet |
 
