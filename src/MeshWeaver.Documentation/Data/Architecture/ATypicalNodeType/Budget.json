@@ -1,0 +1,18 @@
+{
+  "id": "Budget",
+  "namespace": "Doc/Architecture/ATypicalNodeType",
+  "name": "Budget",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A planned amount and the spend against it — the typical NodeType: a content record, its rules, a view, and a Tests area the build queue executes.",
+  "icon": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='#0f766e'/><rect x='5' y='13' width='3' height='6' fill='#fff'/><rect x='10.5' y='9' width='3' height='10' fill='#fff'/><rect x='16' y='5' width='3' height='14' fill='#fff'/></svg>",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Budget",
+    "namespace": "Doc/Architecture/ATypicalNodeType",
+    "displayName": "Budget",
+    "description": "Content shape Budget: purpose, currency, planned, spent. Remaining, utilisation and health are derived by BudgetRules and never stored. Doc/Architecture/ATypicalNodeType explains every file.",
+    "configuration": "config => config.WithContentType<Budget>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddBudgetLayoutAreas().WithView(\"Tests\", BudgetTestsArea.Tests))"
+  }
+}
