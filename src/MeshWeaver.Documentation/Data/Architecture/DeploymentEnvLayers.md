@@ -9,7 +9,7 @@ Icon: Layer
 
 A `Hosting/Deployment` record is supposed to be the ONE source of an instance's deployment: change
 the record, re-render, deploy. That claim is only as good as the record's ability to describe what
-the instance actually runs — and on 2026-09-06 it could not. Re-rendering `memex` from its own
+the instance actually runs — and on 2026-09-06 it could not. Re-rendering the control instance from its own
 record and diffing the result structurally against the deployed overlay gave **41 differences**, and
 every one of them was a silent loss. This page records the five layers, what each one is, and the
 record shape that can hold all of them.
@@ -28,7 +28,7 @@ list is a precedence order, and the last source that carries a key is the value 
 | last | inline `env:` on the Deployment | **nothing** — `kubectl` put it there | `inlineEnv` (declarative) |
 
 Layers 2 and 5 are the ones a record could not previously see at all. Layer 2 comes from a values
-file captured into Key Vault (`helm-values-memex`), which no repository holds; layer 5 comes from
+file captured into Key Vault (`helm-values-<release>`), which no repository holds; layer 5 comes from
 somebody's `kubectl set env`, which no file renders. `HelmValues.EnvPrecedence` folds all five into
 one answer per key: every layer that supplies it, and therefore which one wins.
 
@@ -36,22 +36,22 @@ one answer per key: every layer that supplies it, and therefore which one wins.
 
 Until this change the record had exactly one slot for a `SecretProviderClass`
 (`keyVaultSecrets`), plus a legacy escape hatch that could only *point at* a hand-made one by name.
-`memex` runs **two** classes:
+The control instance runs **two** classes:
 
-- `memex-kv` → Secret `memex-kv-secrets`, hand-made, 13 keys — the mesh connection string, the
+- `<instance>-kv` → Secret `<instance>-kv-secrets`, hand-made, 13 keys — the mesh connection string, the
   GitHub App private key, the AI provider keys, the webhook secrets;
 - `memex-portal-keyvault` → Secret `memex-portal-keyvault`, chart-owned, the plugin-registry token.
 
 With one slot the record had to CHOOSE, and whichever it named, a re-render destroyed the other. It
-named `memex-kv` while the deployed overlay named `memex-portal-keyvault`, so a re-render would
+named `<instance>-kv` while the deployed overlay named `memex-portal-keyvault`, so a re-render would
 have:
 
 1. **deleted both `PluginCatalog` mappings** — the fix that had made the registry poll work that
    same morning after 740 consecutive 401s;
-2. **dropped `extraEnvFrom: memex-kv-secrets`**, detaching all 13 keys of the hand-made class from
+2. **dropped `extraEnvFrom: <instance>-kv-secrets`**, detaching all 13 keys of the hand-made class from
    the pod;
 3. **added a mapping for a vault object that does not exist**
-   (`memexsystemorph-PluginCatalog-RegistryToken`, derived from the record's prefix) — and a
+   (`<prefix>-PluginCatalog-RegistryToken`, derived from the record's prefix) — and a
    declared object the vault does not hold fails the *whole* CSI mount, so every new pod stays in
    `ContainerCreating` and the rollout stalls.
 
@@ -61,18 +61,18 @@ change.
 ## One vault object may serve several keys
 
 The projection used to refuse `maps vault object X onto more than one key — state distinct vault
-objects`. That rule was wrong, and it refused the shape that fixes the registry poll: `memex` reads
+objects`. That rule was wrong, and it refused the shape that fixes the registry poll: the control instance reads
 one credential under **two** names because two code paths look for two names —
 `PluginCatalog__RegistryToken` (the legacy single-registry key) and
 `PluginCatalog__Registries__0__Token` (the per-registry key of the named registry) — both from the
 one vault object `PluginCatalog-RegistryToken`. Nothing about that is ambiguous: both land, both are
 read, and rotating the object rotates both. A rotation writes THAT object — the one the declaring
-class names — never the one the prefix rule would derive: memex's prefix is `memexsystemorph-`, and
-`memexsystemorph-PluginCatalog-RegistryToken` is an object nothing reads
+class names — never the one the prefix rule would derive: its prefix is `<prefix>-`, and
+`<prefix>-PluginCatalog-RegistryToken` is an object nothing reads
 ([Registry-key rotation](../RegistryKeyRotation)).
 
-The same rule was silently losing a key on `memex-cloud`, where one object
-(`memexcloud-AzureAIS-ApiKey`) has served both `AzureAIS__ApiKey` and `AzureFoundry__ApiKey` since
+The same rule was silently losing a key on the public instance, where one object
+(`<prefix>-AzureAIS-ApiKey`) has served both `AzureAIS__ApiKey` and `AzureFoundry__ApiKey` since
 before the record existed: the record could hold only one of the two.
 
 **The correct rule is the other way round.** A KEY has exactly one home — two sources for one key
@@ -102,12 +102,12 @@ Three things the fleet's own entries show, none of which was written down anywhe
   while the ConfigMap renders it *empty*. Deleting the inline entry would blank the key, not fall
   back to anything.
 - **Some entries disagree with the ConfigMap, and the pod wins.**
-  `Features__Ai__Providers__AzureOpenAI` runs `true` on `memex` while every committed file says
-  `false`; `PreWarm__GateReadiness` runs `false` on `memex-cloud` while the ConfigMap says `true`,
+  `Features__Ai__Providers__AzureOpenAI` runs `true` on the control instance while every committed file says
+  `false`; `PreWarm__GateReadiness` runs `false` on the public instance while the ConfigMap says `true`,
   which renders the NodeType bake gate inert there. Removing that one entry is what *arms* the gate
-  on `memex-cloud` — the opposite act to `memex`, where the inline entry already agrees.
-- **Some have no other home today.** `Features__Ai__Clis__ClaudeCode` / `__Copilot` on `memex`, and
-  `Speech__{Endpoint,Enabled,Language}` and `Commerce__BaseUrl` on `memex-cloud`, are supplied by
+  on the public instance — the opposite act to the control instance, where the inline entry already agrees.
+- **Some have no other home today.** `Features__Ai__Clis__ClaudeCode` / `__Copilot` on the control instance, and
+  `Speech__{Endpoint,Enabled,Language}` and `Commerce__BaseUrl` on the public instance, are supplied by
   the inline entry alone. Be precise about why: the chart *can* render each of them, but only when
   the values file declares the key (`{{- if hasKey .Values.config.memex_portal "…" }}`), and no
   committed file declares any of them — so the ConfigMap carries no such key at all and the inline
@@ -184,8 +184,8 @@ still takes the break-glass read above.
 
 Three further things this key showed, each of which generalises:
 
-- **Precedence within `envFrom` decides which copy is the fall-through.** On `memex` the order is
-  ConfigMap, `memex-portal-secrets`, `memex-portal-keyvault`, `memex-kv-secrets`; last wins, so the
+- **Precedence within `envFrom` decides which copy is the fall-through.** On the control instance the order is
+  ConfigMap, `memex-portal-secrets`, `memex-portal-keyvault`, `<instance>-kv-secrets`; last wins, so the
   vault-synced class outranks the chart's Secret. That is why a chart Secret carrying a *stale* copy
   of a key is inert rather than dangerous — but also why deleting the vault class, not the chart
   one, is the change that would silently swap identities.
@@ -223,7 +223,7 @@ for one. Four sources said so, and they agreed — measured 2026-09-10:
   fixed name, not a list an overlay can extend. There is no values-driven inline-env list anywhere
   in the chart: every configurable key reaches the pod through `envFrom`. So **no values edit, in
   any overlay or on any record, can delete an inline entry — nothing in a repository created one.**
-  The one committed JSON patch in the fleet, `deployments/aks/memex-cloud/portal-patch.json`, adds
+  The one committed JSON patch in the fleet, `deployments/aks/<env>/portal-patch.json`, adds
   volumes, mounts, an `envFrom` source, `resources` and a `nodeSelector`, and touches
   `/containers/0/env` not at all.
 - **The record cannot delete it either, and that is the contract.** `InlineEnvOverride` is
@@ -260,10 +260,10 @@ gave it one.
 ## What else the record gained
 
 - **`gates`** — the language gate sidecars (`python`, `node`, `pandas`). The chart has been able to
-  render them from `grpc.gates` all along, but nothing declared them: `memex` has run two of them
+  render them from `grpc.gates` all along, but nothing declared them: the control instance has run two of them
   since a `kubectl patch` on 2026-08-24, so the record described a one-container pod while three
   containers ran.
-- **`vaultValuesKeys`** — the keys the chart's own Secret supplies. Six of `memex`'s eleven are also
+- **`vaultValuesKeys`** — the keys the chart's own Secret supplies. Six of the control instance's eleven are also
   supplied by a declared class, which sits later in `envFrom` and therefore wins; without the list,
   nothing said the chart's Secret carried them at all.
 
@@ -325,11 +325,11 @@ rename there fails the guard instead of silently making it match nothing.
 ## The falsification test
 
 The shape is only worth having if rendering the record reproduces what is actually running. Rendering
-`memex`'s extended record through `HelmValues` and then through `helm template`, and comparing the
+the control instance's extended record through `HelmValues` and then through `helm template`, and comparing the
 result against the live cluster objects, reproduces: the same two `SecretProviderClass` objects with
 the same vault, tenant and identity; all 2 + 13 object→key mappings in the same order, duplicates
 included; the same four `envFrom` sources in the same order; the same CSI volumes and mount paths;
-and the same three containers. `memex-cloud` reproduces the same way, including its
+and the same three containers. The public instance reproduces the same way, including its
 one-object-two-keys `AzureAIS` mapping.
 
 One entry does **not** reproduce, and it is a real defect rather than a modelling gap: both committed
@@ -353,7 +353,7 @@ feed the chart, and until 2026-09-14 they disagreed about that layer:
 helm replaces a Secret wholesale on every upgrade, so the operator path did not deploy *less* — it
 rewrote layer 2 with `ConnectionStrings__orleans = Host=memex-postgres-service;…;Database=orleans`,
 a Service no AKS release renders (`postgres.enabled: false`). The mesh string survived it only
-because layer 3 (`memex-kv`, later in `envFrom`) shadows `ConnectionStrings__memex`; nothing
+because layer 3 (`<instance>-kv`, later in `envFrom`) shadows `ConnectionStrings__memex`; nothing
 shadows the orleans string anywhere in the fleet, so every new pod died at silo start on a name
 that never resolved:
 
@@ -362,7 +362,7 @@ that never resolved:
 
 Measured twice on the control instance, both record-driven Reconciles: helm revision 44
 (2026-09-09 02:35Z; `--atomic` then rolled it back onto the lane's revision 43, which is why the
-portal recovered) and revision 55 (2026-09-14 20:14Z, `Ops/Actions/reconcile-memex-20260914-nav-rail`,
+portal recovered) and revision 55 (2026-09-14 20:14Z, `Ops/Actions/reconcile-<record>-20260914-nav-rail`,
 pod `…-77476b68-l4gw8`, 85 failed boots in the following hour). Every Roll and Restart in between
 was healthy because neither touches the Secret. The init container passed both times because the
 operator image predated the probe fix (#4173): it waited for `config.MEMEX_HOST`, which the record
@@ -393,7 +393,7 @@ Three things changed, so that neither path can produce that render again:
 list the later `-f` file names and LEAVES one it omits, and `HelmValues` omits an empty list — a
 record that mounts nothing renders no `extraVolumes:` key at all, where a committed overlay may
 write `extraVolumes: []`. So a legacy list left in the half by an old whole-release capture deploys
-BESIDE whatever the record renders for the same wiring. Measured on memex, 2026-09-25, the V58
+BESIDE whatever the record renders for the same wiring. Measured on the control instance, 2026-09-25, the V58
 migration Reconcile: the half still carried `extraVolumes`/`extraVolumeMounts`/`extraEnvFrom` for
 the SecretProviderClass the record declares under `keyVaultSecretClasses`, the chart rendered the
 volume twice, and `helm upgrade` refused with
@@ -407,7 +407,7 @@ else runs and refuses, naming them, any key outside the allow-list `secrets`, `p
 none of the families, are refused too. The remedy it names is a governed `HelmRelease` action with
 `helmAction: capture`, which re-stores the half filtered to its families and keeps the previous
 version as the rollback. Before capturing, check that every leaf the half ALONE supplies is inert
-or declared on the record: on memex-cloud (measured 2026-09-25 against a local `HelmValues.Render`
+or declared on the record: on the public instance (measured 2026-09-25 against a local `HelmValues.Render`
 of the live record) those leaves were `image.*`, `ingress.tls.*`, `portal.image` and
 `migration.image` — the chart reads neither of the first two, and `hosting-deploy` `--set`s the
 last two — so nothing the portal reads left the render.
@@ -417,18 +417,18 @@ instance is a shadowed placeholder by design (layer 3 supplies the real one), so
 still accepts it. That left one known consequence for the first operator image carrying the #4173
 probe: on an instance with no vault half, the probe derived its target from that placeholder.
 
-**It happened — pearl, 2026-09-15 10:15–10:30Z**, the first record-driven Provision on chart
+**It happened — an SME client instance, 2026-09-15 10:15–10:30Z**, the first record-driven Provision on chart
 `0a45bccfc`: the migration Job and the portal both looped `waiting for postgres at
 memex-postgres-service:5432` / `nc: bad address 'memex-postgres-service'`, on a release that renders
 no such Service — while the record had rendered the right server into `config.<half>.MEMEX_HOST`
-(`memexaks-pg.postgres.database.azure.com`). `build`, provisioned on the pre-#4173 chart that probed
+(`<pg-server>.postgres.database.azure.com`). The build instance, provisioned on the pre-#4173 chart that probed
 MEMEX_HOST, came up.
 
 So the chart now chooses the mesh endpoint in one place, `memex.meshProbeGroup`
 (`templates/_database.tpl`), per half: `postgres.enabled` → the in-cluster Service (the only case
 that may name it); a values `ConnectionStrings__memex` → the host it names (#4173, unchanged);
 otherwise — the Key Vault case — `config.<half>.MEMEX_HOST:MEMEX_PORT`; and with neither the render
-**fails**, the #3780 rule. `check-chart-invariants.sh` guards it three ways: a pearl-shaped fixture
+**fails**, the #3780 rule. `check-chart-invariants.sh` guards it three ways: a fixture shaped like that provisioned instance
 (no values string, a CSI class mapping `ConnectionStrings__memex`) whose probe must be the
 record's host; invariant 17, that no wait-for-postgres ever names `memex-postgres-service` on a
 release that does not render it; and a second refusal control for the no-host render. Feeding

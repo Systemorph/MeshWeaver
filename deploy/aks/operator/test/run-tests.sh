@@ -130,7 +130,7 @@ refuses "unknown flags are not ignored"    "unknown argument"                   
 # ---------------------------------------------------------------------------
 # THE CERTIFICATE, end to end. A new instance is not provisioned until its own host answers over
 # its OWN certificate: an ingress without one is served the controller's fallback — another
-# instance's certificate — and pearl.meshweaver.cloud spent nine hours in exactly that state on
+# instance's certificate — and fabrikam.example.com spent nine hours in exactly that state on
 # 2026-09-15 while its portal was healthy. These assert the two halves that were missing: the TLS
 # step refuses a record that asks cert-manager for nothing, and the verify step tells a wrong
 # certificate apart from a dead application instead of blaming the pods for both.
@@ -1874,7 +1874,7 @@ refuses_hard "a vault name that is not a plain name is refused before anything r
 rm -rf "$_vh_dir"
 
 # ── hosting-deploy keeps the RUNNING image when the values carry no portal.image KEY ────────────
-# 🚨 Systemorph/Memex#458, measured on pearl 2026-09-21 11:25Z. The record names an imagePullSecret
+# 🚨 Systemorph/Memex#458, measured on fabrikam 2026-09-21 11:25Z. The record names an imagePullSecret
 # and pins no tag, so HelmValues rendered `portal:` + `  imagePullSecret:` and NO image. The old
 # test (`grep -q '^portal:'`) took that block as "the values carry an image", skipped the keep-running
 # read, and helm fell through to the chart default ghcr :latest (3.0.0-rc13, 2026-08-31) — a
@@ -1890,7 +1890,7 @@ _ki_running="cr.example.test/memex-portal-ai:3.0.0-ci.9101"
 printf '%s' "$_ki_running" > "$_ki_dir/running-image"
 _ki_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_ki_dir" HOSTING_DEPLOY_STUB_LOG="$_ki_log" \
   hosting-deploy --namespace memex --release memex --database memex --values "$_ki_vals" 2>&1; }
-# pearl's shape: the pull Secret alone under portal:
+# fabrikam's shape: the pull Secret alone under portal:
 printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\nselfUpdate:\n  registry: "cr.example.test"\n' > "$_ki_vals"
 _ki_out="$(_ki_run)"; _ki_rc=$?
 _ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
@@ -2165,7 +2165,7 @@ DBR_CHART="$(mktemp -d)"
 dbr() {
   ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
            HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
-    hosting-db-release --namespace pearl --release pearl-db --database pearl )
+    hosting-db-release --namespace fabrikam --release fabrikam-db --database fabrikam )
 }
 
 refuses_hard "a Forbidden on nodes is REFUSED, not an absent node pool" \
@@ -2206,13 +2206,13 @@ esac
 # — the same `2>/dev/null`, in the same file, inside a PIPE where no `||` could have caught it.
 # Measured on main before this change, ALL THREE of Forbidden, absent-Secret and
 # present-but-no-password-key produced ONE sentence, byte for byte:
-#   "its credentials Secret pearl-db-app carries no password … Read the operator's log in
+#   "its credentials Secret fabrikam-db-app carries no password … Read the operator's log in
 #    cnpg-system."
 # So a missing ClusterRole grant sent the reader to CloudNativePG's log, and the operator stated
 # the CONTENTS of a Secret it had never read. Three states, three sentences, or this is red.
 _dbs_out() { ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
                       HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
-               hosting-db-release --namespace pearl --release pearl-db --database pearl ) 2>&1; }
+               hosting-db-release --namespace fabrikam --release fabrikam-db --database fabrikam ) 2>&1; }
 
 _dbs="$(_dbs_out "secret" "")"
 case "$_dbs" in
@@ -2225,7 +2225,7 @@ esac
 _dbs="$(_dbs_out "" "secret")"
 case "$_dbs" in
   *"REFUSED"*) bad "an ABSENT credentials Secret is ABSENT, not refused" "the discrimination points the wrong way: ${_dbs}" ;;
-  *"is ABSENT in pearl"*) ok "an ABSENT credentials Secret is ABSENT, not refused" ;;
+  *"is ABSENT in fabrikam"*) ok "an ABSENT credentials Secret is ABSENT, not refused" ;;
   *) bad "an ABSENT credentials Secret is ABSENT, not refused" "said neither: ${_dbs}" ;;
 esac
 
@@ -2242,7 +2242,7 @@ esac
 # reads. Without this every assertion above would pass on a command that refuses unconditionally.
 _dbs="$(_dbs_out "" "")"; _dbs_rc=$?
 case "$_dbs" in
-  *"::hosting:: db_release=pearl-db"*)
+  *"::hosting:: db_release=fabrikam-db"*)
     [ "$_dbs_rc" -eq 0 ] && ok "a healthy database release reports db_release and exits 0" \
       || bad "a healthy database release reports db_release and exits 0" "rc=${_dbs_rc}: ${_dbs}" ;;
   *) bad "a healthy database release reports db_release and exits 0" "never reported it: ${_dbs}" ;;
@@ -2293,7 +2293,7 @@ _mg_job="memex-migration-roll-3-0-0-ci-9101"
 _mg_new() { _mg_dir="$(mktemp -d)"; cp -R "$MG_FIXTURES/." "$_mg_dir/"; _mg_log="$_mg_dir/calls.log"; : > "$_mg_log"; }
 _mg_run() { env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
   HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 "$@" \
-  hosting-migrate --namespace pearl --release pearl --image "$_mg_img" 2>&1; }
+  hosting-migrate --namespace fabrikam --release fabrikam --image "$_mg_img" 2>&1; }
 
 # absent → created from the release's Job, retargeted, waited on, completed
 _mg_new; echo 2 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
@@ -2323,8 +2323,8 @@ if [ "$(jq -r '.spec.template.spec.imagePullSecrets[0].name' "$_mg_c")" = "regis
 else
   bad "the Job is the release's own" "$(cat "$_mg_c")"
 fi
-_mg_get="$(grep -n '^kubectl -n pearl get job' "$_mg_log" | tail -1 | cut -d: -f1)"
-_mg_create="$(grep -n '^kubectl -n pearl create -f -' "$_mg_log" | head -1 | cut -d: -f1)"
+_mg_get="$(grep -n '^kubectl -n fabrikam get job' "$_mg_log" | tail -1 | cut -d: -f1)"
+_mg_create="$(grep -n '^kubectl -n fabrikam create -f -' "$_mg_log" | head -1 | cut -d: -f1)"
 [ -n "$_mg_create" ] && [ -n "$_mg_get" ] && [ "$_mg_get" -gt "$_mg_create" ] \
   && ok "the Job's status is read AFTER it was created (the wait is real)" \
   || bad "the Job's status is read after it was created" "$(cat "$_mg_log")"
@@ -2405,7 +2405,7 @@ rm -rf "$_mg_dir"
 # dry run: reads, narrates the create, creates nothing, waits for nothing
 _mg_new
 _mg_out="$(_mg_run env HOSTING_DRY_RUN=true)"; _mg_rc=$?
-if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q 'DRY-RUN would run: kubectl -n pearl create -f -' \
+if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q 'DRY-RUN would run: kubectl -n fabrikam create -f -' \
    && [ ! -f "$_mg_dir/created.json" ] && ! printf '%s' "$_mg_out" | grep -q 'migration=completed'; then
   ok "a dry run narrates the Job, creates nothing and claims no migration"
 else
@@ -2414,17 +2414,17 @@ fi
 rm -rf "$_mg_dir"
 
 refuses_hard "hosting-migrate refuses a PORTAL image — only memex-migration runs as the migration" "not a plain memex-migration image reference" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image cr.example.test/memex-portal-ai:3.0.0-ci.9101
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam --image cr.example.test/memex-portal-ai:3.0.0-ci.9101
 refuses_hard "hosting-migrate refuses an image reference with a metacharacter" "not a plain memex-migration image reference" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image 'cr.example.test/memex-migration:1;rm -rf /'
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam --image 'cr.example.test/memex-migration:1;rm -rf /'
 refuses_hard "hosting-migrate needs --release" "missing required flag --release" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --image "$_mg_img"
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --image "$_mg_img"
 refuses_hard "hosting-migrate refuses --image AND --tag together" "both set" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image "$_mg_img" --tag 3.0.0-ci.9101
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam --image "$_mg_img" --tag 3.0.0-ci.9101
 refuses_hard "hosting-migrate refuses a --tag with a metacharacter" "not a plain image tag" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --tag '1;rm -rf /'
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --tag '1;rm -rf /'
 refuses_hard "hosting-migrate needs --image or --tag" "missing required flag --image (or --tag)" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam
 
 # ── hosting-migrate --tag: the interlock's form — release and migration repository are the RELEASE'S ──
 # run.sh's interlock knows only the namespace and the tag the plan's `set image` moves to. The
@@ -2432,11 +2432,11 @@ refuses_hard "hosting-migrate needs --image or --tag" "missing required flag --i
 # "no release"), and the image is the release's own migration repository at the new tag.
 _mg_tag_run() { env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
   HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 "$@" \
-  hosting-migrate --namespace pearl --tag 3.0.0-ci.9101 2>&1; }
-_mg_new; echo pearl > "$_mg_dir/release-name"; echo 1 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
+  hosting-migrate --namespace fabrikam --tag 3.0.0-ci.9101 2>&1; }
+_mg_new; echo fabrikam > "$_mg_dir/release-name"; echo 1 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
 _mg_out="$(_mg_tag_run env)"; _mg_rc=$?
 if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q '::hosting:: migration=completed' \
-   && grep -q '^helm get manifest pearl --namespace pearl' "$_mg_log" \
+   && grep -q '^helm get manifest fabrikam --namespace fabrikam' "$_mg_log" \
    && [ "$(jq -r '.spec.template.spec.containers[0].image' "$_mg_dir/created.json")" = "$_mg_img" ] \
    && [ "$(jq -r '.metadata.name' "$_mg_dir/created.json")" = "$_mg_job" ]; then
   ok "--tag reads the release off the Deployment and moves the release's OWN migration repository to the tag"

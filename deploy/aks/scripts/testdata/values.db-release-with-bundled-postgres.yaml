@@ -3,4 +3,4 @@
 postgres:
   enabled: true
 database:
-  release: pearl-db
+  release: fabrikam-db

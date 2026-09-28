@@ -117,9 +117,9 @@ NodeType's bytes to a PATH (`IAssemblyStore.TryGetAssemblyPath`) and each module
 path, and opens them only when `NuGetPackageWriter.Write` builds the archive. Between the two, the
 store's own housekeeping can remove the file: `FileSystemAssemblyStore` evicts every version of a
 type beyond the newest three on each write, so a type recompiled a few times while a consumer
-downloads loses the version the route resolved. Measured on memex-cloud 2026-09-26 17:38Z (pod
+downloads loses the version the route resolved. Measured on the public instance 2026-09-26 17:38Z (pod
 `memex-portal-deployment-6c7669df84-9b4rz`, six occurrences; the frames' line numbers match `main`
-and the image memex-cloud served that day, `4c8530d7dd`, line for line):
+and the image the public instance served that day, `4c8530d7dd`, line for line):
 `FileNotFoundException` for `/data/assembly-cache/Collaboration_Review/v1172-….dll` out of the
 route's `File.OpenRead`, an unhandled 500. The type's record has moved on by then, so the answer is
 the transient one: the route maps a missing file or directory at the open to **`503` +
@@ -279,8 +279,8 @@ Measured on the fleet's own portals, twice, with a different identity pair each 
 
 | when | consumer | registry | `bundle_adoption` |
 |---|---|---|---|
-| 2026-09-09 | memex.systemorph.com `s414bfb2…` | memex.meshweaver.cloud `s72c27af…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
-| 2026-09-11 | memex.systemorph.com `s3e3c802…` | memex.meshweaver.cloud `s01d65c9…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
+| 2026-09-09 | the control instance `s414bfb2…` | the public (registry) instance `s72c27af…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
+| 2026-09-11 | the control instance `s3e3c802…` | the public (registry) instance `s01d65c9…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
 
 Both readings are the whole population of that process's attempts, not a truncation: the ledger's
 capacity is 500 and the payload names ten then counts the rest. The second was taken on portals
@@ -554,7 +554,7 @@ A sealed publication is bytes compiled from **one commit** of the producing repo
 through the git sync. They must be the same commit, or every bundle is — correctly — declined on its
 source fingerprint (#2813) and the instance compiles every type from whatever it holds.
 
-Measured on memex.systemorph.com, 2026-09-08, two ways they were NOT the same commit:
+Measured on the control instance, 2026-09-08, two ways they were NOT the same commit:
 
 1. **The hook fires before the seal.** The `workflow_run` green-build hook arrives when the
    repository's build goes green, which is BEFORE its publish-bake job seals the bundles for this
@@ -718,7 +718,7 @@ stopped throwing, and #3876 stayed open on exactly that bar after its four reade
 opens were fixed. What the portal can and cannot answer, measured 2026-09-11:
 
 - **The durable counter is the incident node, not the log.** `Admin/_LogIncident/<fingerprint>` on
-  the **control instance** (memex.systemorph.com — the same path on memex.meshweaver.cloud answers
+  the **control instance** (the same path on the public instance answers
   `Not found`) carries `occurrences`, `firstSeen`, `lastSeen` and the pod names, and it outlives
   Loki's retention. For `af1ee515fdf60bd1` it read **7 occurrences, last 2026-09-10T02:35:29Z**.
 - 🚨 **The ISSUE is not that counter, and can silently stop tracking it.** The node also carries
@@ -734,7 +734,7 @@ opens were fixed. What the portal can and cannot answer, measured 2026-09-11:
   ancestry (a queue-merged commit fails `is-ancestor`).
 - 🚨 **`Logs`' `sinceMinutes` is a REQUEST, not a coverage guarantee, and the run never reports the
   window it actually covered.** `{ "requestedAction": "Logs", "query": "_complete",
-  "sinceMinutes": 2880 }` against `memex-cloud` returned `entryCount: 0` carrying its `logQl` — an
+  "sinceMinutes": 2880 }` against the public instance returned `entryCount: 0` carrying its `logQl` — an
   answer by the rule in [Operating From The Portal](../OperatingFromThePortal), and still worth
   nothing here: the positive control, the same query for a string that *does* occur, landed **21
   lines spanning only 05:29Z–06:24Z**. The zero evidences under an hour rather than the two days

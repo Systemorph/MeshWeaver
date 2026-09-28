@@ -18,7 +18,7 @@ every lane ran the OTHER way or somewhere else:
 
 So an operation that has to act INSIDE another instance's mesh — recycle an address, delete a
 space nobody may delete — could only be filed on that instance's own mesh, which needs the Hosting
-package there. `memex-cloud` does not run Hosting. This lane closes that gap with the smallest
+package there. The public instance does not run Hosting. This lane closes that gap with the smallest
 surface that is still safe: two operations, one signed request per step, and the target as the
 authority over what it runs.
 
@@ -26,7 +26,7 @@ authority over what it runs.
 
 ```
 control instance                                            target instance
-Hosting/InstanceAction (DeleteSpace, deployment=memex-cloud)
+Hosting/InstanceAction (DeleteSpace, deployment=<public>)
   │ 1. dry run: POST /api/control-lane  ─── signed, K_dep ──►  verify · admit · claim Admin/ControlLane/{id}
   │                                                              plan (as system, writes nothing)
   │ ◄── report Planned {plan, digest}  ─── signed, K_dep ────  POST {control}/api/hooks/Hosting/PlatformBuilds
@@ -216,8 +216,8 @@ exist on the target, or the event is refused.
 
 Minting a key is a GUI act on the control instance, never a vault command, and no agent creates or
 reads a secret value (policy `secrets-write-only-entry`,
-[Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry)). On `Deployments/memex-cloud`,
-use **Set Key Vault secrets…** → **Generate** for `memexcloud-Hosting-ControlLaneKey`. Both ends of the
+[Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry)). On `Deployments/<id>`,
+use **Set Key Vault secrets…** → **Generate** for `<id>-Hosting-ControlLaneKey`. Both ends of the
 lane read the vault, so the value is minted in the operator Job and never shown. The status the page
 shows (present, enabled, updated, and the `mw-fp` fingerprint) comes from vault metadata alone.
 

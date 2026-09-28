@@ -53,7 +53,7 @@ Progressing=False  ProgressDeadlineExceeded
 Every outside-in probe — the portal answers, users work, `/alive` is green — reports health, because
 the instance *is* healthy. It is healthy at the **old build**.
 
-On `memex`, 2026-09-03 ([#3207](https://github.com/Systemorph/MeshWeaver/issues/3207)), three
+On the control instance, 2026-09-03 ([#3207](https://github.com/Systemorph/MeshWeaver/issues/3207)), three
 self-updates wedged this way between 07:20Z and 10:27Z (`ci.7647`, `ci.7651`, `ci.7658`), the last
 one on a 5-minute back-off at 14 restarts, each attempt writing a ~685 MB core dump. Nothing
 alerted. It surfaced only because an unrelated config-drift audit went looking at the ReplicaSets.
@@ -80,7 +80,7 @@ Two consequences follow, and both are easy to miss:
   the section below. Where the leg cannot run, the per-occurrence cure is still the cure — the
   difference is that the instance now says so before rolling rather than after.
 - **An instance that has not hit the wall is not configured differently — it has not arrived yet.**
-  `memex-cloud` served `ci.7621` and was healthy on the same day, for the single reason that no build
+  The public instance served `ci.7621` and was healthy on the same day, for the single reason that no build
   it had selected needed schema 55. Its next selection past `ci.7647` meets the wall identically.
   Every install stands on the same wall; only the arrival time differs.
 
@@ -204,7 +204,7 @@ that it stops being indistinguishable from a migrated one.
 > the same fact here. Making the expected version a published property of a release — option (b)
 > below — is what would let a refusal name two numbers instead of one missing capability.
 
-### Measured, 2026-09-19 (memex-cloud)
+### Measured, 2026-09-19 (the public instance)
 
 Image `3.0.0-ci.8411` (commit `c84c6c05`, predating `DbVersion.Latest = 56`). A `Roll` to
 `3.0.0-ci.8955` — the same single `set image` write the self-updater makes:

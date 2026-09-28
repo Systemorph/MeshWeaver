@@ -146,7 +146,7 @@ unavailable. A handle the receiver cannot resolve is likewise reported as the fa
 as a file quietly written empty. Trading a loud refusal for a quiet success would be this page's own
 defect one layer down.
 
-🚨 **Measure it on a repo-backed install.** `memex.meshweaver.cloud` serves the Education assets from
+🚨 **Measure it on a repo-backed install.** The public instance serves the Education assets from
 its own store — they were uploaded there by hand on 2026-07-17/18 — so that portal cannot answer
 whether a sync would deliver them.
 

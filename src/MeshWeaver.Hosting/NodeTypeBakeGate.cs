@@ -283,7 +283,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// early and the health payload said nothing, so an instance that could not compile its content
     /// looked indistinguishable from one with nothing to report. They never gate — they are named
     /// so an operator can see WHY a fresh portal is Degraded rather than guessing at the edge's
-    /// 503 (pearl.meshweaver.cloud, 2026-09-15).</para>
+    /// 503 (fabrikam.example.com, 2026-09-15).</para>
     /// </summary>
     public IReadOnlyDictionary<string, string> WithoutBaseline => withoutBaseline;
 

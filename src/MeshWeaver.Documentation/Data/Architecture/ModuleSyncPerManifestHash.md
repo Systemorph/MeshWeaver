@@ -33,7 +33,7 @@ at or below the running one. When the newer seals all come from newer platforms,
 stays where it is — for as long as the instance is not rolled — and every Space of the repository
 stays with it.
 
-Measured on the control instance (memex.systemorph.com, 2026-09-25): image `3.0.0-ci.9218`,
+Measured on the control instance (2026-09-25): image `3.0.0-ci.9218`,
 `Hosting/_GitSync` read `lastSyncOutcome: Held` at Plugins commit `7545d355`, and every newer Plugins
 publication was sealed only by `3.0.0-ci.9321` or later, which the ladder does not adopt here. The
 migrate-first Roll planner (MeshWeaver.Plugins#2219) is **Hosting** code, so it never reached the

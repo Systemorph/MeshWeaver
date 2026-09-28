@@ -37,7 +37,7 @@ of a restart.
 
 ## Measured
 
-`Admin/_LogIncident/d1cd36f53a5f3a6c` on memex-cloud — the plugin gate, **11,927 occurrences**
+`Admin/_LogIncident/d1cd36f53a5f3a6c` on the public instance — the plugin gate, **11,927 occurrences**
 (MeshWeaver#1246). All ten retained samples fall in the 24 minutes after the 2026-09-16 21:24Z
 restart; the incident went quiet at 21:48Z. Every path they name, read afterwards:
 

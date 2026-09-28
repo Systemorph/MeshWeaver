@@ -162,7 +162,7 @@ the image ships the module (the `Modules:Assemblies` entry the store entry displ
 `EffectiveModule.BaselineEntry`, resolved onto `ModuleInstallCandidate.ImageBaseline`), the image's
 copy runs, recorded as `@image` and worded *"runs the image-shipped baseline; v1.3.0 (gen B) landed
 but does not load here: …"*. Before that step a refused store generation shadowed the image copy
-that loads by construction (memex.systemorph.com, 2026-09-08 — every skinned control on its
+that loads by construction (the control instance, 2026-09-08 — every skinned control on its
 fallback HTML). Only when nothing loads is the module incompatible, as before; an uninstall clears both
 pointers. This is rule R1 of the [Module Adoption Policy](../ModuleAdoptionPolicy): *an
 installation runs the newest generation of every module that loads, and keeps the one it has until
@@ -321,7 +321,7 @@ continuous (`RegistryUpdateReconciler`), restarts are not synchronised, and a De
 therefore boot on either side of a landing wave. Two pods of one Deployment, on one image, run two
 module sets — indefinitely, until both restart.
 
-**Measured on memex-cloud, 2026-09-06.** Three portal pods, one ReplicaSet, one image
+**Measured on the public instance, 2026-09-06.** Three portal pods, one ReplicaSet, one image
 (`3.0.0-rc9.ci.7693`), started 11:33:39, 11:41:04 and 12:51:21 around a landing wave at
 12:18–12:27. Comparing `/tmp/meshweaver-pinned-modules/*/` across them: **39 of 40 pinned module
 generations differed** between the two older pods and the newest one — e.g.
@@ -380,7 +380,7 @@ portal's boot path — before the host listened — and on an Azure Files (CIFS)
 rename-then-recursive-delete of orphaned generations is one SMB round-trip per file: minutes of
 uninterruptible IO for a handful of directories. Rollout time thereby became a function of how much
 garbage the previous generation left on a network volume, which is unbounded and invisible until
-the probe kills the pod: memex-cloud's roll to ci.6559 sat as PID 1 in `Dsl` at
+the probe kills the pod: the public instance's roll to ci.6559 sat as PID 1 in `Dsl` at
 `wchan=wait_for_response`, never bound :8080, blew the 300 s startup probe — whose kill cannot land
 on a process parked in uninterruptible IO — and looped, wedging the whole `helm upgrade`. Raising
 the probe budget would only move the cliff.
@@ -539,7 +539,7 @@ a store install LANDS its bytes as a fresh generation under the deployment's wri
 root (`modules/<Name>@<id>/`). So "the pack" is not a place — and until this report existed nothing
 said which of them a running portal had actually loaded.
 
-Measured on memex-cloud 2026-08-25: the portal ran an image built from the fix's own merge commit,
+Measured on the public instance 2026-08-25: the portal ran an image built from the fix's own merge commit,
 the store held **two** newer copies of `MeshWeaver.Blazor.Views` that both contained the fix, and
 `/proc/1/maps` showed the process had mapped the **image** copy — which did not. Every lane was
 green. The mechanism is not a bug in any single step:
@@ -568,7 +568,7 @@ or the line would be noise.
 ### The file is not the source (#4158)
 
 🚨 **`mvid=` and `written=` are both properties of the FILE**, and reading them as an answer about the
-SOURCE is a measured failure mode. On memex.meshweaver.cloud, 2026-09-10 (MeshWeaver.Plugins#1585),
+SOURCE is a measured failure mode. On the public instance, 2026-09-10 (MeshWeaver.Plugins#1585),
 the loaded `MeshWeaver.AI` bundle had the newest generation, the newest `written=` and types that
 predated two merged pull requests. Both fields said "newest" — truthfully, because the file genuinely
 was the newest one on the volume. The reading *"the registry serves stale bytes"* was written down and

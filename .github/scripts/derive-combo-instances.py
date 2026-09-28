@@ -147,7 +147,7 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
                 "TODAY, and they do not carry the same cost. (1) Rename one installation — its "
                 "`Hosting__Deployment` is its inventory identity, so this moves whichever estate "
                 "owns the one that changes; this is the answer taken the first time it happened "
-                "(#3848: PartnerRe's `memex` became `partnerre-test`, see "
+                "(#3848: a client's `memex` became `globex-test`, see "
                 "Doc/Architecture/ComboGateWiring). (2) Key the maps by the qualified `repo:id` and say so "
                 "here — this removes the collision and then demands a credential for every "
                 "installation named, including any in an estate this fleet holds none for. "
@@ -329,11 +329,11 @@ SOURCE_SCANS = [
         ("FundReporting", "https://github.com/Systemorph/MeshWeaver.FundReporting",
          "mesh/Deployments/memex.json"),
     ]),
-    _scan("Systemorph/PartnerRe.Memex", [], sources=[
+    _scan("Systemorph/Umbrella.Memex", [], sources=[
         ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins",
-         "mesh/Deployments/partnerre-test.json"),
-        ("PartnerRe", "https://github.com/Systemorph/PartnerRe.Memex",
-         "mesh/Deployments/partnerre-test.json"),
+         "mesh/Deployments/globex-test.json"),
+        ("Umbrella", "https://github.com/Systemorph/Umbrella.Memex",
+         "mesh/Deployments/globex-test.json"),
     ]),
 ]
 
@@ -367,8 +367,8 @@ def self_test() -> int:
     sources, source_blockers = derive_sources(SOURCE_SCANS)
     check(source_blockers == [] and sources == (
         "FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting "
-        "PartnerRe=https://github.com/Systemorph/PartnerRe.Memex "
-        "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins"),
+        "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins "
+        "Umbrella=https://github.com/Systemorph/Umbrella.Memex"),
         "registry sources union across deployment repositories, deduplicate identical mappings, "
         "and sort deterministically")
     _, source_blockers = derive_sources([_scan("Systemorph/Memex", [])])
@@ -377,8 +377,8 @@ def self_test() -> int:
     same_source, source_blockers = derive_sources([
         _scan("Systemorph/Memex", [], sources=[
             ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
-        _scan("Systemorph/PartnerRe.Memex", [], sources=[
-            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/partnerre-test.json")]),
+        _scan("Systemorph/Umbrella.Memex", [], sources=[
+            ("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/globex-test.json")]),
     ])
     check(not source_blockers and same_source ==
           "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
@@ -386,7 +386,7 @@ def self_test() -> int:
     _, source_blockers = derive_sources([
         _scan("Systemorph/Memex", [], sources=[
             ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
-        _scan("Systemorph/PartnerRe.Memex", [], sources=[
+        _scan("Systemorph/Umbrella.Memex", [], sources=[
             ("plugins", "https://github.com/Systemorph/Other.Plugins", "Deployments/memex.json")]),
     ])
     check(any("case-insensitive registry source" in blocker and "Plugins" in blocker
@@ -437,11 +437,11 @@ def self_test() -> int:
     rows, _, blockers = derive([
         _scan("Systemorph/Memex", [
             ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
-        _scan("Systemorph/PartnerRe.Memex", [
-            ("memex", "partnerre.meshweaver.cloud", "deployments/aks/memex/values.memex.yaml")]),
+        _scan("Systemorph/Umbrella.Memex", [
+            ("memex", "globex.example.com", "deployments/aks/memex/values.memex.yaml")]),
     ], {})
     check(rows == [{"name": "memex", "baseUrl": "https://memex.systemorph.com"}]
-          and any("both named `memex`" in b and "Systemorph/PartnerRe.Memex" in b
+          and any("both named `memex`" in b and "Systemorph/Umbrella.Memex" in b
                   and "Systemorph/Memex" in b for b in blockers),
           "one NAME declared by two repositories is a RED naming both, though upstream allows it")
 
@@ -461,16 +461,16 @@ def self_test() -> int:
           "existing flag expresses it, and still flags it as the looser direction")
 
     # …and two repositories declaring DIFFERENT names is the ordinary multi-repo fleet: no blocker.
-    # Spelled as the fleet resolved #3848: PartnerRe's installation keeps its `memex` NAMESPACE and
+    # Spelled as the fleet resolved #3848: the client's installation keeps its `memex` NAMESPACE and
     # overlay directory and changes only its `Hosting__Deployment`, which is all this lane keys on.
     rows, _, blockers = derive([
         _scan("Systemorph/Memex", [
             ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
-        _scan("Systemorph/PartnerRe.Memex", [
-            ("partnerre-test", "partnerre.meshweaver.cloud",
+        _scan("Systemorph/Umbrella.Memex", [
+            ("globex-test", "globex.example.com",
              "deployments/aks/memex/values.memex.yaml")]),
     ], {})
-    check(blockers == [] and [r["name"] for r in rows] == ["memex", "partnerre-test"],
+    check(blockers == [] and sorted(r["name"] for r in rows) == ["globex-test", "memex"],
           "two repositories declaring different names derive both, with no blocker — even from "
           "overlays in same-named directories")
 
@@ -535,6 +535,12 @@ def main() -> int:
 
     if args.self_test:
         return self_test()
+
+    # 🚨 MASK FIRST, before ANY output. GitHub applies `::add-mask::` only to lines emitted AFTER
+    # it, and the very next print lists every discovered repository — a client estate's among them
+    # once the private roster is merged. Registered after that print, the mask covered nothing the
+    # print had already put in the public log. Not under --self-test (its fixtures are not secrets).
+    lock.mask_private_roster()      # public log: the private roster's identifiers stay private
 
     if args.root:
         repos = [args.repos or "local"]

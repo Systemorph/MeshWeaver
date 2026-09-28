@@ -24,7 +24,7 @@ Confidence, stated separately because it differs:
 - **MEASURED** (this repository, a real monolith mesh, 2026-09-20): the C# fold lets both well-known
   subjects read a child carrying their own Viewer deny. Pinned by
   `PublicReadIsNotSuppressedByADenyTest`.
-- **MEASURED** (`memex.meshweaver.cloud`, read-only, 2026-09-20): the `Feedback` partition is
+- **MEASURED** (the public instance, read-only, 2026-09-20): the `Feedback` partition is
   world-readable including its submission inbox, and carries no deny at all.
 - **READ, NOT EXECUTED**: the PostgreSQL projection's own comment states the opposite behaviour. No
   Postgres portal was exercised for this page, so the divergence is inferred from that comment plus

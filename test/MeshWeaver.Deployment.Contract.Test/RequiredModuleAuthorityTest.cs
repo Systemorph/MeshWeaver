@@ -12,7 +12,7 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// provider replaces the entries it NAMES and leaves every other index of the earlier one standing.
 /// An array can express "replace entry N" and can never express "these and only these" — so a
 /// record's list, rendered on its own, is an OVERLAY on the image's list and not a statement of
-/// what the instance requires. Two consequences, both measured on pearl.meshweaver.cloud on
+/// what the instance requires. Two consequences, both measured on fabrikam.example.com on
 /// 2026-09-16: a list SHORTER than the image's requires the image's tail it never named, and an
 /// EMPTY list renders nothing at all, so the image's list stands in full.</para>
 ///

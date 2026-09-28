@@ -1,7 +1,7 @@
 ---
 Name: Self-Update Target Selection
 Category: Architecture
-Description: How a running install picks the release it rolls to — the sealed-publication lineage (the CD run number) rather than the version string, and the three-valued answer to "does the tag I run still exist". The 2026-09-07 memex-cloud roll onto a withdrawn line, why every gate said yes, and why the install could not leave.
+Description: How a running install picks the release it rolls to — the sealed-publication lineage (the CD run number) rather than the version string, and the three-valued answer to "does the tag I run still exist". The 2026-09-07 roll of the public instance onto a withdrawn line, why every gate said yes, and why the install could not leave.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/><path d="M12 8v4l3 2"/></svg>
 ---
 
@@ -21,14 +21,14 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > selection changes — an install still ranks by lineage and takes the newest sealed set its
 > availability + link gates admit (a sealed set of the same line, `Modules:VersionStrictness`
 > `Family`) — but "no bundle yet for this identity" is now the ordinary state for up to a day, not a
-> fault. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+> fault. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the control instance's MCP).
 
 **A version string is a LABEL a human maintains. The CD run number is the ORDER a machine
 produced. The self-updater must rank candidates by the second, because the first can be wrong —
 and when it is wrong, SemVer makes the mistake permanent.**
 
 Two defects, one file, one shape: an install's self-update picked the wrong target and then could
-not recover. Both were live on `memex` and `memex-cloud` on 2026-09-07 and both needed an operator
+not recover. Both were live on the control instance and the public instance on 2026-09-07 and both needed an operator
 `kubectl set image` to undo.
 
 ## 1. The incident
@@ -265,7 +265,7 @@ can act on none of it. Two places in the code already say so:
   ([#3650](https://github.com/Systemorph/MeshWeaver/issues/3650)) is not taken either.
 
 So the whole effect of such a check is a log line plus a bookkeeping stamp repeating a sentence the
-node already carries. Measured on memex, 2026-09-09 01:30–06:36Z, policy `None`, two replicas:
+node already carries. Measured on the control instance, 2026-09-09 01:30–06:36Z, policy `None`, two replicas:
 
 | | |
 |---|---|
@@ -293,7 +293,7 @@ Under any policy that can act, every trigger is a decision point.
 
 🚨 **This is the opposite of the `Where` that #2553 removed, and they are one line apart.** That one
 dropped *every* check under `None`, so an install an administrator had deliberately pinned and an
-install whose updater was broken both left the record empty — indistinguishable, and memex sat three
+install whose updater was broken both left the record empty — indistinguishable, and the control instance sat three
 builds behind for seven hours in that state. What #3790 stops is only the **repetition**, at a rate
 nobody here chooses, of an answer already on the node. Because the regression that would undo #2553
 is one enum member away, the rule is pinned as a truth table over every trigger × every policy
@@ -333,7 +333,7 @@ candidate is actually evaluated. `LastCheckedAt` is written by `RecordCheck` on 
 a check can decline to evaluate — which is exactly what §5 made it do — those two clocks separate,
 and nothing in the record says so.
 
-Measured on `memex`, `get @Admin/UpdatePolicy`, 2026-09-09 10:42Z:
+Measured on the control instance, `get @Admin/UpdatePolicy`, 2026-09-09 10:42Z:
 
 ```
 heldAt          : 2026-09-07T22:27:17Z
@@ -344,7 +344,7 @@ lastCheckVerdict: "updates are disabled on this install (Admin/UpdatePolicy = No
 ```
 
 **A frozen verdict beside a fresh timestamp reads as a current one.** Issue #3706 was filed on that
-record: it quoted three module floors as *"holding every self-update on memex forever"*. Those lines
+record: it quoted three module floors as *"holding every self-update on this instance forever"*. Those lines
 were computed at 22:27Z on 09-07; [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) made
 floors advisory at 00:22Z and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) reduced
 the hold to measured unloadability at 01:10Z the next morning. **The evidence predated its own fix by
@@ -378,7 +378,7 @@ reason is still quoted in full.
 ## 8. A record naming a package NOBODY publishes — named, never held
 
 §7 explains why #3706's *evidence* was stale. This is the part of #3706 that was real, and it sat on
-the other side of the same reading: memex's install records still named `Plugins/Agent`,
+the other side of the same reading: the control instance's install records still named `Plugins/Agent`,
 `Plugins/Skill` and `Plugins/PlatformUI` after those packages had been withdrawn — Agent and Skill
 **deliberately** (`MeshWeaver.Plugins@7afbd745`, *"remove agents and skill package and serve from the
 main ai package"*; the AI engine's `BuiltInAgentProvider` / `BuiltInSkillProvider` are the live

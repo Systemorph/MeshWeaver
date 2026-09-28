@@ -7,8 +7,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Environment Composition
 
-Two portals run the same image and must not carry the same content. `memex.meshweaver.cloud` lists
-**all of Plugins**; `memex.systemorph.com` lists **the same, without the games and fun stuff**. This
+Two portals run the same image and must not carry the same content. The public instance lists
+**all of Plugins**; a working (company) instance lists **the same, without the games and fun stuff**. This
 page is how that is said — once, in each environment's own values file, with no rebuild and no
 hand-patching of a live cluster.
 
@@ -53,13 +53,13 @@ anywhere in platform code.
 
 ### The two portals, in full
 
-One shared declaration; the environment that does not want the games flips a single key. 🚨 The
-Kubernetes namespace names **invert** the host names — check the row, not your memory:
+One shared declaration; the environment that does not want the games flips a single key. 🚨 Read
+the namespace off the instance's own record, never off its host name — the two need not match:
 
-| namespace | host | called | its values file adds |
-|---|---|---|---|
-| `memex-cloud` | memex.meshweaver.cloud | **memex** | *(nothing — both flags declared, both on)* |
-| `memex` | memex.systemorph.com | **systemorph** | `features.games.enabled: false` |
+| instance | its values file adds |
+|---|---|
+| the public instance | *(nothing — both flags declared, both on)* |
+| a working instance | `features.games.enabled: false` |
 
 ```yaml
 # shared
@@ -71,7 +71,7 @@ features:
     description: "Games and demos."
     packages: ["Plugins/Chess", "Plugins/DoublePendulum", "Plugins/FractalStars", "Plugins/ThreeBody"]
 
-# values.<systemorph>.yaml — the ONE line that differs
+# values.<working-instance>.yaml — the ONE line that differs
 features:
   games:
     enabled: false

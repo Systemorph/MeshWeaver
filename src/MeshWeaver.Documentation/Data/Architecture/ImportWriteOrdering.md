@@ -28,11 +28,11 @@ The importer wrote nodes in whatever order the source enumerated them, five at a
 
 What made that permanent rather than transient is the interaction with the last-sync baseline guard. `GitHubSyncService.MayAdvanceBaseline` holds the baseline whenever a node failed to land — added by #2229 item C, *precisely* so a later pass would retry the refused instance once its type node existed. It works exactly as designed. But the retry re-ran **the same pass with the same ordering**, so the same instance was refused again, the baseline was held again, and the cycle repeated. #2229 item C converted a permanent silent miss into a permanent loud loop — strictly better, and still not landing the content.
 
-Measured on memex-cloud:
+Measured on the public instance:
 
 | Measurement | Window | Value |
 |---|---|---|
-| `is not registered` in `namespace="memex-cloud"` | 90 min | **6,902** |
+| `is not registered` in `namespace="<public-ns>"` | 90 min | **6,902** |
 | Refusals of one single node (`EUR-COMM_FIRE-PROP`) | 120 min | **40** |
 
 Forty attempts, one node, zero progress: **non-convergent**, not merely slow. The write order was the defect, so more retries, a longer backoff, or a watchdog could not have helped — each would only have made the loop cheaper to ignore.
@@ -141,9 +141,9 @@ source ever ships such a root, that placeholder — not a wider plan — is the 
 | Encoded decision | Incident | Where it lives |
 |---|---|---|
 | The **content-addressed marker** `import-{fingerprint}` — the one id that cannot be minted fresh per attempt, because the "already imported" short-circuit is derived from the content | #919 | `Import`, before `Run` |
-| A **fresh attempt node per run** — a single poisoned row at the deterministic id made every retry re-target the same broken node and burn the 30 s "no initial state arrived" abort | memex Store, 2026-08-07 | `Import`, before `Run` |
+| A **fresh attempt node per run** — a single poisoned row at the deterministic id made every retry re-target the same broken node and burn the 30 s "no initial state arrived" abort | the control instance's Store, 2026-08-07 | `Import`, before `Run` |
 | **Schema provisioning strictly before the activity-lock create** — the lock lives *inside* the partition schema, so on an unprovisioned partition the create faults `42P01` and is misreported as `AlreadyRunning` | — | `Import` → `ProvisionPartitions` |
-| **Bookkeeping written as System while content keeps its original identity** — a grant-less partition could not otherwise record the progress of the sync sent to repair it | memex Store, 2026-08-07 | `Upsert` → `AsSystem` |
+| **Bookkeeping written as System while content keeps its original identity** — a grant-less partition could not otherwise record the progress of the sync sent to repair it | the control instance's Store, 2026-08-07 | `Upsert` → `AsSystem` |
 
 Also unchanged: root-first (`EnsureRoot` before any child), the claimed-node and claimed-root skips, the git-diff scope, the per-node manifest's incremental skip, two-way conflict preservation, the prune phase and its five guards, the phase-batched activity log (per-item appends are O(n²)), and the `BatchSize` concurrency bound — the barrier is *between* stages, never inside one.
 

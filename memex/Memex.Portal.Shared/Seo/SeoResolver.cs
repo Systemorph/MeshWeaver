@@ -93,8 +93,8 @@ public sealed record SeoPageData(MeshNode Node, string? Description, string? Ima
 /// that was withheld.
 ///
 /// <para><b>What it fixes.</b> A link into a private subtree of a PUBLIC root unfurled as the bare
-/// site card. Measured 2026-09-20 on <c>www.meshweaver.cloud</c>: <c>/PG3Reporting</c> carried
-/// <c>og:title "Fund Reporting"</c>, a description and <c>/api/og/PG3Reporting.png</c>, while every
+/// site card. Measured 2026-09-20 on <c>www.meshweaver.cloud</c>: <c>/InitechReporting</c> carried
+/// <c>og:title "Fund Reporting"</c>, a description and <c>/api/og/InitechReporting.png</c>, while every
 /// descendant — <c>…/Funds</c>, <c>…/Funds/InsuranceCore</c>,
 /// <c>…/Funds/InsuranceCore/2026-06-30</c> — carried <c>og:title "MeshWeaver"</c> and
 /// <c>/api/og.png</c>. Not depth (<c>/Doc/Architecture/AccessControl</c> unfurls fully on the same
@@ -373,7 +373,7 @@ public static class SeoResolver
             .Take(1)
             // 🚨 The walk starts at the deepest node that EXISTS, not at the URL's last segment.
             // ResolvePath already falls back to the nearest existing ancestor — that is how
-            // `/PG3Reporting/Subscribe`, a layout-area route, resolves to `PG3Reporting` and unfurls
+            // `/InitechReporting/Subscribe`, a layout-area route, resolves to `InitechReporting` and unfurls
             // as it today — so a resolution of null means NO node matches any prefix of this URL.
             // There is nothing above it to find, and the honest answer is the site card.
             .SelectMany(resolution => resolution is null

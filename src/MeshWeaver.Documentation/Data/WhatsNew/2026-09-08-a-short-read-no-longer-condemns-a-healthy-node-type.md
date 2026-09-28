@@ -9,7 +9,7 @@ Order: -20260908
 # A short read no longer condemns a healthy node type
 
 Every portal, on startup, looks up the source files belonging to each of its node types and compiles
-them. On 2026-09-08 one boot of memex.systemorph.com got a short answer from that lookup: it found
+them. On 2026-09-08 one boot of the control instance got a short answer from that lookup: it found
 1145 code files where the boots before and after it — three of them running the very same image —
 each found more than 1236.
 

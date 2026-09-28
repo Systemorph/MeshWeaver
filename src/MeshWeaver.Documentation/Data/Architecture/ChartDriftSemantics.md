@@ -80,10 +80,10 @@ belong together because each half had been believed of the other case:
 
 | out-of-band edit | in the chart's manifest? | after `helm upgrade` |
 |---|---|---|
-| `startupProbe.httpGet.path` patched `/health` → `/ready` on `memex` | **yes** — `probes.startup.path` | **reset** |
-| inline `env:` `PreWarm__GateReadiness=false` added on `memex-cloud` | **no** — the chart renders that key into the ConfigMap, never inline | **survives** |
+| `startupProbe.httpGet.path` patched `/health` → `/ready` on the control instance | **yes** — `probes.startup.path` | **reset** |
+| inline `env:` `PreWarm__GateReadiness=false` added on the public instance | **no** — the chart renders that key into the ConfigMap, never inline | **survives** |
 
-The evidence is two consecutive verdicts of the gate itself, on `memex`, either side of a `Reconcile`
+The evidence is two consecutive verdicts of the gate itself, on the control instance, either side of a `Reconcile`
 that upgraded the release for an unrelated reason:
 
 - run `35426956173` (2026-09-19): `DIFFERS startupProbe` — chart
@@ -93,7 +93,7 @@ that upgraded the release for an unrelated reason:
 - run `35570080512` (2026-09-21): **no `startupProbe` finding at all.** The four `DIFFERS` are two
   ConfigMap keys and the two inert `initialDelaySeconds` probes; 19 divergences across 216 fields.
 
-and, for the other half, the same run's own closing line on `memex-cloud`, which states the rule
+and, for the other half, the same run's own closing line on the public instance, which states the rule
 without being asked: `0 pending deletions: no live-and-unrendered key is in the release manifest, so
 nothing here is removed by the next helm upgrade.` Its
 `SHADOWS inline env PreWarm__GateReadiness … 🚨 THE TWO DISAGREE` is unchanged from the day it was
@@ -103,13 +103,13 @@ first reported.
 directions, and each direction has a cost.**
 
 - Believing a rendered probe field survives hides a **behaviour change a deploy has already made**.
-  The `memex` startup probe is the NodeType bake gate's only reader (`readinessProbe` is deliberately
+  The control instance's startup probe is the NodeType bake gate's only reader (`readinessProbe` is deliberately
   on `/ready`; see [Probe semantics](../ProbeSemantics)), so restoring `/health` re-armed the gate on
   the control instance without anyone deciding to — and the next roll then held its new replica out
   of the Service for the length of a full bake, which reads as a stalled rollout to whoever does not
   know the probe moved.
 - Believing an inline entry is cleared by a deploy sends an operator to file a `Reconcile` that
-  **cannot** change what the pod reads. On `memex-cloud` the entry has to be deleted deliberately,
+  **cannot** change what the pod reads. On the public instance the entry has to be deleted deliberately,
   and its value disagrees with the ConfigMap, so the deletion is a behaviour change rather than
   hygiene.
 
@@ -126,7 +126,7 @@ This is not hypothetical on this fleet:
 
 - **#2235** — the ConfigMap said `Hosting/PlatformBuilds`, the pod ran `Store/Payments`, every
   signal was green, and release broadcast 404'd for eleven days.
-- **memex boot crash, 2026-08-30** — `EMAIL__*` patched onto the Deployment beside the chart's own
+- **Control-instance boot crash, 2026-08-30** — `EMAIL__*` patched onto the Deployment beside the chart's own
   `Email__*` ConfigMap keys. Linux env is case-**sensitive** so the pod carried both; .NET's
   configuration provider is case-**insensitive** and the last enumerated wins, so the effective
   value was a coin toss per pod start. It died on `EmailConfigurationGuard` with SIGABRT, and the
@@ -160,7 +160,7 @@ A shadowed secret is the worst version of this: the shadowed copy is inert, and 
 in use sits in plaintext on the Deployment spec, in no committed source, readable by anything that
 can `get deploy`.
 
-That was live on `memex` as measured 2026-09-03 (MeshWeaver#3201): `PluginCatalog__RegistryToken`
+That was live on the control instance as measured 2026-09-03 (MeshWeaver#3201): `PluginCatalog__RegistryToken`
 existed both in `secret/memex-portal-secrets` and as an inline entry, and **the two values differed**
 — so the portal authenticated to the plugin registry with the plaintext copy while the secret's copy
 went unused. It also meant the obvious cleanup was wrong: deleting the inline entry did not restore
@@ -168,7 +168,7 @@ the status quo.
 
 🚨 **The divergence half of that is CLOSED; the shadow half is not.** Re-measured in-cluster
 2026-09-08T01:03Z: both portals now have a Key Vault-synced copy
-(`memex-portal-keyvault` / `memexcloud-portal-keyvault`), and on each one the inline value and the
+(`memex-portal-keyvault` / `<release>-portal-keyvault`), and on each one the inline value and the
 vault copy are **EQUAL** — `Systemorph/Memex#180` promoted each instance's *in-use* token verbatim
 rather than picking a winner, so removing the inline entry is now a no-op in value terms. What
 remains is the plaintext inline entry itself, on both pod specs, still outranking every `envFrom`.
@@ -183,21 +183,21 @@ and in a way the checker cannot see — which is why the conclusion belongs here
 output:
 
 - **Both sides are valid.** The live inline key and the shadowed copy each authenticate to
-  `https://memex.meshweaver.cloud/api/plugins` — verified out of band from inside the cluster, with
+  `https://registry.example.com/api/plugins` (the plugin registry instance) — verified out of band from inside the cluster, with
   an anonymous call and a syntactically-valid bogus key as the two controls (both `401`).
 - **They are different registered instances.** Hashing each credential *inside the cluster* and
   comparing against the `MeshWeaverInstance.keyHash` the registry stores identifies the inline key
-  as instance `memex` — the portal's own identity, and the correct one. The shadowed copy matches
+  as the control instance's own registered instance — the portal's own identity, and the correct one. The shadowed copy matches
   no enumerable instance, and its catalog projection is `Plugins/*` **plus** `Crm/*`, a strict
-  superset of what instance `memex` is granted.
+  superset of what the control instance is granted.
 - **So the reflex cleanup re-identifies the deployment.** Deleting the inline entry would not have
   "switched onto an unverified token"; it would have made the portal authenticate as a *different
   instance*, silently widening what it may pull from 44 packages to 45.
 - **There was never a Key Vault copy** *(as measured on 2026-09-04 — step 1 below has since
   created one; see the dated note under "Clearing it")*. `secret/memex-portal-secrets` is
   helm-rendered (`app.kubernetes.io/managed-by=Helm`), not CSI-provisioned. The CSI-backed secrets
-  in those namespaces were `memex-kv-secrets` and `memexcloud-portal-ai-secrets`, neither of which
-  carried this key, and the `Systemorph` vault held no `PluginCatalog-RegistryToken` entry for
+  in those namespaces were `memex-kv-secrets` and `<release>-portal-ai-secrets`, neither of which
+  carried this key, and the operator's Key Vault held no `PluginCatalog-RegistryToken` entry for
   either portal. `deployments/aks/secretproviderclass.reference.yaml` in `Systemorph/Memex` already
   templates that wiring; it was never applied to either live SecretProviderClass.
 
@@ -208,8 +208,8 @@ provenance it never observed. The comparator asserted a Key Vault origin here un
 the self-test now fails if that claim returns.
 
 Neither namespace sets `PluginCatalog__InstanceId` and neither carries a `PluginCatalog__BootstrapKey`,
-so nothing self-registers: **the token IS the identity**. memex's own ConfigMap asks for
-`PluginCatalog__InstallByDefault__0=Plugins/*`, which is exactly instance `memex`'s grant and not the
+so nothing self-registers: **the token IS the identity**. The control instance's own ConfigMap asks for
+`PluginCatalog__InstallByDefault__0=Plugins/*`, which is exactly the control instance's grant and not the
 shadowed copy's — the configuration and the live key agree, and only the shadowed copy is the odd one
 out.
 
@@ -217,9 +217,9 @@ out.
 
 The order is forced by the fact that the live key is the correct one:
 
-1. **Vault the LIVE key of each portal** — `PluginCatalog-RegistryToken` (`memex`; no `memex-`
-   prefix, that is the name the vault actually carries) and `memexcloud-PluginCatalog-RegistryToken`
-   (`memex-cloud`) in the `Systemorph` vault, then declare the object plus its `secretObjects.data`
+1. **Vault the LIVE key of each portal** — `PluginCatalog-RegistryToken` (the control instance; no release
+   prefix, that is the name the vault actually carries) and `<release>-PluginCatalog-RegistryToken`
+   (the public instance) in the operator's Key Vault, then declare the object plus its `secretObjects.data`
    mapping so a SecretProviderClass in the namespace supplies it. Additive and inert: the CSI
    secrets sit *after* `memex-portal-secrets` in `envFrom`, and the inline entry outranks both until
    it is deleted.
@@ -231,15 +231,15 @@ The order is forced by the fact that the live key is the correct one:
    `get deploy`.
 
 **Step 1 landed 2026-09-06** (`Systemorph/Memex` [#180](https://github.com/Systemorph/Memex/pull/180)):
-each portal's in-use key is now in the `Systemorph` vault under the two names in step 1, and both
+each portal's in-use key is now in the operator's Key Vault under the two names in step 1, and both
 `values.<env>.public.yaml` declare a chart-owned `keyVaultSecrets` block that renders a *new*
-SecretProviderClass (`memex-portal-keyvault`, `memexcloud-portal-keyvault`), the CSI volume, its
+SecretProviderClass (`memex-portal-keyvault`, `<release>-portal-keyvault`), the CSI volume, its
 mount and the `envFrom` from one declaration — rather than appending to the hand-made `memex-kv` /
-`memexcloud-portal-ai-secrets` classes, so the four objects cannot drift apart.
+`<release>-portal-ai-secrets` classes, so the four objects cannot drift apart.
 
 🚨 **That is inert on the pod, exactly as step 1 says, and it is worth restating because the PR
 first argued otherwise.** The pull request claimed the hand-applied inline `env:` would be dropped by
-the next `helm upgrade`, and inferred a latent credential outage on `memex-cloud` (the namespace
+the next `helm upgrade`, and inferred a latent credential outage on the public instance (the namespace
 where the inline entry is the only copy on the pod). **Both are false.** The upgrade does not delete
 it — helm removes only what it previously owned, measured 2026-09-03
 on v3.21.1 and v4.2.4 with a positive control — so the portal keeps authenticating exactly as it does
@@ -250,7 +250,7 @@ not urgent, and on its own it changes nothing. The correction is recorded in `Sy
 `docs/inventory.md` and on MeshWeaver#3201.
 
 🚨 **Rotating an instance key needs no re-granting.** `PluginGrant` nodes are keyed by
-`instanceId` (`Admin/_PluginGrant/memex`, `…/memex-cloud`), and re-issuing a key replaces
+`instanceId` (`Admin/_PluginGrant/<instance-id>`), and re-issuing a key replaces
 `MeshWeaverInstance.KeyHash` on the *same* instance record — so entitlement, plan and install history
 survive untouched. What must be updated is every **holder of the key value**, and measured on
 2026-09-04 that is a short list: the Key Vault entry from step 1, and nothing else. No GitHub Actions
@@ -275,7 +275,7 @@ effect. Disagreeing means somebody is already reading a setting no pod uses.
 
 ## The probes are inert, and the chart is authoritative
 
-`DIFFERS livenessProbe` / `readinessProbe` on `memex` — live carries `initialDelaySeconds` 60 and
+`DIFFERS livenessProbe` / `readinessProbe` on the control instance — live carries `initialDelaySeconds` 60 and
 20, this chart carries none — was read three times as *"live is authoritative, add them to the
 chart"*. It is the opposite:
 
@@ -283,7 +283,7 @@ chart"*. It is the opposite:
   the live pod carries that startup probe byte-identically (`/health`, `periodSeconds: 5`,
   `failureThreshold: 60` — a 300 s window). A delay measured from container start can therefore
   never be the thing protecting a slow boot.
-- `memex-cloud` runs this exact probe block with **no `initialDelaySeconds` at all**, and is
+- The public instance runs this exact probe block with **no `initialDelaySeconds` at all**, and is
   healthy — the "loaded gun" already fired there, harmlessly.
 
 So the divergence is real but **inert**, and adding `initialDelaySeconds` to the chart would
@@ -393,7 +393,7 @@ required input turns out to be unreadable in production goes red for a missing-i
 first scheduled run, which is indistinguishable from finding drift. So the input was measured rather
 than assumed: `helm version --short` inside `az aks command invoke` answers **v3.21.1+gc56dd00** —
 the binary is there, on the transport that matters — and `helm get manifest` returns a manifest for
-both production releases (`memex` in `memex`, 76 386 bytes; `memexcloud` in `memex-cloud`, 79 884
+both production releases (the control instance's, 76 386 bytes; the public instance's, 79 884
 bytes). Every object the comparator hard-requires is in both: the `memex-portal-config` ConfigMap,
 the `memex-portal-deployment` Deployment, and the `memex-portal` container inside it. None of the
 three "the manifest parses but lacks an object" failure paths can fire on either namespace.
@@ -409,8 +409,8 @@ for a ConfigMap key gives the length — reading only key names is what turns th
 false alarm.
 
 The baseline observation, measured **by hand** on 2026-09-04 over all 36 `CLUSTER-ONLY` findings —
-the last time anyone had to: **13 owned-but-retired** (`memex` 7, `memex-cloud` 6) and **23
-never-owned** (`memex` 12, `memex-cloud` 11). Every one of the 13 was zero-length live, so all
+the last time anyone had to: **13 owned-but-retired** (control instance 7, public instance 6) and **23
+never-owned** (control instance 12, public instance 11). Every one of the 13 was zero-length live, so all
 thirteen deletions were no-ops — but that is a property of *those* keys on *that* day, not of the
 sub-class, which is why the check reads the value on every run rather than recording the conclusion.
 `Systemorph/Memex#152` asked for exactly this check in the opposite direction ("a key that is live
@@ -436,23 +436,23 @@ piece of work from the one "a deploy will break it" describes.
 
 ## The backlog, classified — run 33843264982, 2026-09-04
 
-"91 divergences" is not a worklist. **81 today** (`memex` 35 across 188 compared fields,
-`memex-cloud` 46 across 204), and they are seven groups, not eighty-one decisions. Counts are from
+"91 divergences" is not a worklist. **81 today** (control instance 35 across 188 compared fields,
+public instance 46 across 204), and they are seven groups, not eighty-one decisions. Counts are from
 the run's own log; the owned/never-owned split and the value probes are read-only cluster reads.
 
 | # | group | count | what it is | what clears it |
 |---|---|---|---|---|
-| 1 | **Disagreeing `SHADOWS`** | **8** | the pod runs a value the ConfigMap contradicts — `PreWarm__BatchBake`/`PrebuiltBundleRoot` and `PluginCatalog__RegistryUrl` (both namespaces), `PreWarm__GateReadiness` + `Features__Ai__Providers__AzureOpenAI` (memex) | chart value first, **then** delete the inline entry |
-| 2 | **The registry credential** | **2** | `PluginCatalog__RegistryToken`: on memex a `SHADOWS` over `secret/memex-portal-secrets` whose two values differ **and belong to different registered instances**; on memex-cloud the inline entry is the ONLY copy, and neither portal has a Key Vault entry at all | MeshWeaver#3201 — the live inline key is the CORRECT one for each portal (hash-confirmed); vault *it*, then delete inline, then rotate. Never adopt the shadowed copy |
+| 1 | **Disagreeing `SHADOWS`** | **8** | the pod runs a value the ConfigMap contradicts — `PreWarm__BatchBake`/`PrebuiltBundleRoot` and `PluginCatalog__RegistryUrl` (both namespaces), `PreWarm__GateReadiness` + `Features__Ai__Providers__AzureOpenAI` (control instance) | chart value first, **then** delete the inline entry |
+| 2 | **The registry credential** | **2** | `PluginCatalog__RegistryToken`: on the control instance a `SHADOWS` over `secret/memex-portal-secrets` whose two values differ **and belong to different registered instances**; on the public instance the inline entry is the ONLY copy, and neither portal has a Key Vault entry at all | MeshWeaver#3201 — the live inline key is the CORRECT one for each portal (hash-confirmed); vault *it*, then delete inline, then rotate. Never adopt the shadowed copy |
 | 3 | **Agreeing `SHADOWS`** | **29** | not wrong today; the ConfigMap is simply not what the pod reads, so the next chart change to any of them silently fails — Kestrel endpoints, `PluginCatalog__Sources__*`, `WebhookInbox__Targets__0` | same two steps, no urgency |
-| 4 | **Chart-retired, helm-owned** | **13** | `FrameworkBroadcast__Subscribers__0..3` (both) plus `Authentication__DevAdminUsers`/`__Google__ClientId` (both) and `__LinkedIn__ClientId` (memex). All 13 are in the release manifest and zero-length live | the next `helm upgrade` deletes them; verify each is still empty first |
+| 4 | **Chart-retired, helm-owned** | **13** | `FrameworkBroadcast__Subscribers__0..3` (both) plus `Authentication__DevAdminUsers`/`__Google__ClientId` (both) and `__LinkedIn__ClientId` (control instance). All 13 are in the release manifest and zero-length live | the next `helm upgrade` deletes them; verify each is still empty first |
 | 5 | **Cluster-only, never owned** | **22** | live-edited settings the chart had no key for until MeshWeaver#3199 — AI providers, `LogWatch__*`, `Speech__*`, `Commerce__BaseUrl`, `Features__Ai__Clis__*`, `Portal__ReactAppUrl` | put them on the `Hosting/Deployment` record — `Systemorph/Memex#148` |
-| 6 | **Committed, never deployed** | **5** | memex-cloud's overlay carries `PreWarm__{BatchBake,BuildProtocol,DynamicTypes,GateReadiness}: "true"` and `probes.startup.failureThreshold: 1080`; live runs the shipped defaults | a deploy, not a cleanup — this is `deploy-drift`'s class surfacing here |
-| 7 | **Ruled inert** | **2** | the memex liveness/readiness `initialDelaySeconds` — see above; the chart is authoritative | nothing; do not "fix" it |
+| 6 | **Committed, never deployed** | **5** | the public instance's overlay carries `PreWarm__{BatchBake,BuildProtocol,DynamicTypes,GateReadiness}: "true"` and `probes.startup.failureThreshold: 1080`; live runs the shipped defaults | a deploy, not a cleanup — this is `deploy-drift`'s class surfacing here |
+| 7 | **Ruled inert** | **2** | the control instance's liveness/readiness `initialDelaySeconds` — see above; the chart is authoritative | nothing; do not "fix" it |
 
 🚨 **Group 2 has moved since this snapshot and the row is no longer current.** *"neither portal has
-a Key Vault entry at all"* stopped being true on 2026-09-06 for `memex` and by 2026-09-08 for
-`memex-cloud`: `Systemorph/Memex#180` declared a chart-owned `keyVaultSecrets` class on both, and
+a Key Vault entry at all"* stopped being true on 2026-09-06 for the control instance and by 2026-09-08 for
+the public instance: `Systemorph/Memex#180` declared a chart-owned `keyVaultSecrets` class on both, and
 re-measured 2026-09-08T01:03Z the inline value and the vault copy are **EQUAL** on each portal. The
 table stays as it was measured; read this line with it. The remaining act — delete the inline entry
 — has no repository half; since 2026-09-11 it is a `Reconcile` over the record's `retiredBy`
@@ -460,7 +460,7 @@ table stays as it was measured; read this line with it. The remaining act — de
 
 Zero `COLLIDES` and zero `CHART-ONLY` — as on 2026-09-03, which is the only other run since #3168
 introduced those two classes, so "consecutive" is a two-run claim and nothing more. The `EMAIL__*`
-collisions that crashed memex at boot on 2026-08-30, and the four blanked `ModelTier__*`, are gone
+collisions that crashed the control instance at boot on 2026-08-30, and the four blanked `ModelTier__*`, are gone
 from both namespaces.
 
 **76 → 81 in a day, and nothing drifted.** The five new findings are the `Authentication__*` keys in
@@ -471,7 +471,7 @@ and 21). **A count that moves is not automatically drift** — check the chart's
 reading a rise as a regression.
 
 **Group 6 carries the one coupled hazard on the list.** `PreWarm__GateReadiness` reaches the pod
-through an inline `env:` that shadows the ConfigMap, so a `helm upgrade` of `memex-cloud` would raise
+through an inline `env:` that shadows the ConfigMap, so a `helm upgrade` of the public instance would raise
 `probes.startup.failureThreshold` to 1080 — a pod-template field helm owns — while the gate it is
 paired with stays off, because the inline entry still wins. `progressDeadlineSeconds` is derived as
 `periodSeconds × failureThreshold + 600`, so a genuinely failed rollout would take **3 h 10 m** to be
