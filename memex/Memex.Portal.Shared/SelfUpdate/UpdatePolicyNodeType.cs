@@ -12,6 +12,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Hosting.SelfUpdate;   // UpdatePolicyKind — the policy value
@@ -334,8 +335,10 @@ public static class UpdatePolicyNodeType
     /// Create-on-absent (idempotent, reactive, as System) of <c>Admin/UpdatePolicy</c> with the given
     /// default policy. Existence is read via <c>GetQuery</c> (empty-on-absent) — NEVER a point
     /// <c>GetMeshNodeStream(path)</c> probe of the maybe-absent node (which NotFound-resubscribe-storms
-    /// on a fresh DB). Emits the node path when it exists. An existing node is left untouched (its
-    /// admin-chosen policy is preserved). <paramref name="defaultPattern"/> is seeded beside the
+    /// on a fresh DB). Emits the node path when it exists. An existing node is left untouched HERE
+    /// (its admin-chosen policy is preserved) — when the deployment record declares a policy the
+    /// caller follows this with <see cref="ConvergeToDeclaration"/>, which is what makes the record
+    /// authoritative (policy <c>self-update-record-authoritative</c>). <paramref name="defaultPattern"/> is seeded beside the
     /// policy (<see cref="UpdatePolicyContent.Pattern"/>); null seeds none.
     /// </summary>
     public static IObservable<string> EnsureExists(
@@ -386,6 +389,115 @@ public static class UpdatePolicyNodeType
                             : Observable.Throw<string>(ex));
                 }));
     }
+
+    /// <summary>
+    /// The configuration key the deployment record's <c>updatePolicy</c> renders as
+    /// (<c>SelfUpdate__DefaultPolicy</c> in the pod environment). Read RAW, never through the bound
+    /// <c>SelfUpdateOptions</c>: the binder answers <see cref="UpdatePolicyKind.Stable"/> for an
+    /// unset key, and "the record declares Stable" and "nothing declares anything" are different
+    /// facts here — policy <c>self-update-record-authoritative</c>.
+    /// </summary>
+    public const string DeclaredPolicyConfigKey = "SelfUpdate:DefaultPolicy";
+
+    /// <summary>The configuration key the deployment record's <c>updatePattern</c> renders as
+    /// (<c>SelfUpdate__DefaultPattern</c>). Rendered together with
+    /// <see cref="DeclaredPolicyConfigKey"/>; an absent pattern under a declared policy means the
+    /// record declares NO pattern.</summary>
+    public const string DeclaredPatternConfigKey = "SelfUpdate:DefaultPattern";
+
+    /// <summary>
+    /// What the deployment record declares for the platform image policy — the values
+    /// <see cref="ConvergeToDeclaration"/> makes <c>Admin/UpdatePolicy</c> carry.
+    /// </summary>
+    /// <param name="Policy">The declared strategy.</param>
+    /// <param name="Pattern">The declared version pattern, normalised; <c>null</c> = none.</param>
+    public sealed record DeploymentDeclaration(UpdatePolicyKind Policy, string? Pattern);
+
+    /// <summary>
+    /// The policy the deployment record DECLARES through configuration, or <c>null</c> when it
+    /// declares none (the key is unset or blank) — the non-fleet install, whose in-portal choice
+    /// stands. A value that is not a policy name is logged at Warning and treated as undeclared:
+    /// the renderer refuses anything but the three names, so such a value did not come from a record.
+    /// </summary>
+    public static DeploymentDeclaration? DeclaredByDeployment(IConfiguration? configuration, ILogger? logger = null)
+    {
+        var raw = configuration?[DeclaredPolicyConfigKey];
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (!Enum.TryParse<UpdatePolicyKind>(raw.Trim(), ignoreCase: true, out var policy)
+            || !Enum.IsDefined(policy))
+        {
+            logger?.LogWarning(
+                "[SelfUpdate] {Key} is set but is not an update policy name; Admin/UpdatePolicy is "
+                + "left as it is (the value is not repeated here).", DeclaredPolicyConfigKey);
+            return null;
+        }
+        return new DeploymentDeclaration(policy, UpdateChannelPattern.Normalize(configuration?[DeclaredPatternConfigKey]));
+    }
+
+    /// <summary>Whether <paramref name="content"/> already carries exactly what
+    /// <paramref name="declared"/> says. An ABSENT policy field never matches.</summary>
+    public static bool Carries(UpdatePolicyContent content, DeploymentDeclaration declared) =>
+        content.DeclaredPolicy == declared.Policy
+        && string.Equals(UpdateChannelPattern.Normalize(content.Pattern), declared.Pattern, StringComparison.Ordinal);
+
+    /// <summary>
+    /// 🚨 <b>Makes an EXISTING <c>Admin/UpdatePolicy</c> carry the policy and pattern the deployment
+    /// record declares</b> — policy <c>self-update-record-authoritative</c>. Call after
+    /// <see cref="EnsureExists"/>; emits the node path.
+    ///
+    /// <para>Why it exists: the record's <c>updatePolicy</c>/<c>updatePattern</c> render as the
+    /// SEED keys, and <see cref="EnsureExists"/> returns early for a node that exists, so an
+    /// instance whose node predates the seeding kept whatever it was created with for ever. The
+    /// build instance was that instance: record <c>Continuous</c> + <c>3.0.0-ci*</c>, node created
+    /// <c>Stable</c> with no pattern, and every check answered "none newer than the installed
+    /// 3.0.0-ci.9412" while the armed set was 3.0.0-ci.9564 (Doc/Architecture/SelfUpdateFreeze).</para>
+    ///
+    /// <para>Touches <see cref="UpdatePolicyContent.Policy"/> and
+    /// <see cref="UpdatePolicyContent.Pattern"/> ONLY — never <c>RequireCiGreen</c> nor any
+    /// bookkeeping field — through the TYPED write (see <see cref="ParseContent"/>), as System.
+    /// Already equal ⇒ no write at all. Cold.</para>
+    /// </summary>
+    public static IObservable<string> ConvergeToDeclaration(
+        IMessageHub hub, AccessService? accessService, DeploymentDeclaration declared, ILogger? logger = null)
+    {
+        var workspace = hub.GetWorkspace();
+        var jsonOptions = hub.JsonSerializerOptions;
+        // Two sealed System scopes rather than one around the whole chain: RunAsSystem impersonates
+        // at SUBSCRIBE, and the write is created on the read's emission — it gets its own scope so
+        // it is issued as System whatever thread the read emitted on.
+        return accessService
+            .RunAsSystem(() => workspace.GetMeshNodeStream(NodePath)
+                // EnsureExists ran first, so the node exists; a null is the stream not loaded yet.
+                .Where(node => node is not null)
+                .Take(1)
+                .Select(node => Parse(node, jsonOptions)))
+            .SelectMany(current =>
+            {
+                if (Carries(current, declared))
+                    return Observable.Return(NodePath);
+                logger?.LogInformation(
+                    "[SelfUpdate] converging {Path} to the deployment record: {Old} → {New}",
+                    NodePath, Describe(current.DeclaredPolicy, current.Pattern),
+                    Describe(declared.Policy, declared.Pattern));
+                return accessService.RunAsSystem(() => workspace.GetMeshNodeStream(NodePath)
+                    .Update<UpdatePolicyContent>((node, cur) =>
+                    {
+                        var content = cur ?? new UpdatePolicyContent();
+                        return Carries(content, declared)
+                            ? node
+                            : node with
+                            {
+                                Content = content with { Policy = declared.Policy, Pattern = declared.Pattern },
+                            };
+                    })
+                    .Take(1)
+                    .Select(_ => NodePath));
+            });
+    }
+
+    private static string Describe(UpdatePolicyKind? policy, string? pattern) =>
+        $"{(policy?.ToString() ?? "(absent)")} (pattern: {UpdateChannelPattern.Normalize(pattern) ?? "none"})";
 
     /// <summary>How many combo verdicts <c>Admin/UpdatePolicy</c> retains. Candidates supersede
     /// fast; the node must never grow without bound.</summary>
