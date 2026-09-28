@@ -132,10 +132,9 @@ unmeasured — exactly how #5635/#5647/#5655 would reach the fleet if they lande
 So `promote`'s record step takes `base` from the newest armed set: `arm-promoted-set.py armed-base`
 reads memex-portal-ai's manifests (the armed `<version>` tag shares its manifest with the
 `<core7>-p<plugins7>` pair tag). The bare core sha tag can move to a newer pair for the same core;
-this happened on `3.0.0-ci.9564`, leaving its armed manifest with only the pair tag. The commit is
-resolved and
-checked to be an ANCESTOR of the candidate, and `base..candidate` is then exactly the merges the fleet
-has not seen. The record says which rule produced `base` in `base_kind`:
+this happened on `3.0.0-ci.9564`, leaving its armed manifest with only the pair tag. The core commit
+is resolved from that tag and checked to be an ANCESTOR of the candidate. `base..candidate` is then
+exactly the merges the fleet has not seen. The record says which rule produced `base` in `base_kind`:
 
 | `base_kind` | when | what happens |
 |---|---|---|
