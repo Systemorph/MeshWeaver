@@ -66,12 +66,12 @@ public static class InstanceGrantAdminSettingsTab
             Id: TabId,
             Label: "Instance grants",
             ContentBuilder: BuildContent,
-            Group: "Administration",
+            Group: AdminAppNodeType.CommercialGroup,
             Icon: FluentIcons.Shield(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 335,
+            GroupIcon: FluentIcons.Money(),
+            Order: AdminAppNodeType.CommercialOrder + 10,
             Keywords: ["instance", "grant", "plugin", "registry", "entitlement", "authorize"])
-        { LabelKey = "instanceGrants.title", GroupKey = "settings.groupAdministration" };
+        { LabelKey = "instanceGrants.title", GroupKey = AdminAppNodeType.CommercialGroupKey };
 
         // The Admin app is the tab's home (/Admin/Settings/InstanceGrants), for confirmed platform
         // admins only; everywhere else — a person's own settings page included — it contributes nothing.

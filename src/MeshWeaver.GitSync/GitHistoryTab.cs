@@ -43,9 +43,12 @@ public static class GitHistoryTab
     private const string WtRowsId = "ghWtRows";          // working-tree change grid data
     private const string CommitFileRowsId = "ghCommitFiles"; // selected-commit change grid data
 
-    /// <summary>Registers the Git-history settings tab provider (shown on any node within a Space).</summary>
+    /// <summary>Registers the Git-history settings tab provider (shown on the Space root).</summary>
     public static MessageHubConfiguration AddGitHistoryTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab))
+            // It acts on the whole Space, so it is offered on the Space ROOT's settings only — never
+            // on every node below it; a descendant's old link redirects to the root's tab.
+            .RestrictSettingsTabsToPartitionRoot(TabId);
 
     private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetTab(
         LayoutAreaHost host, RenderingContext ctx)

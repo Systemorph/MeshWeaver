@@ -39,7 +39,7 @@ public static class GlobalSettingsLayoutArea
 
         // A platform-admin tab that moved into the Admin app (Invitations, Updates, Data Sources, …)
         // redirects an old /_Setting/GlobalSettings/{id} link into the app.
-        if (AdminAppNodeType.RedirectIfRelocated(host, tabId?.Split('?')[0]) is { } redirect)
+        if (SettingsRedirect.For(host, tabId?.Split('?')[0]) is { } redirect)
             return Observable.Return<UiControl?>(redirect);
 
         // Reactive menu evaluation — re-renders when a provider's live admin check resolves.
@@ -169,12 +169,12 @@ public static class GlobalSettingsLayoutArea
         Id: DataSourcesTab,
         Label: "Data Sources",
         ContentBuilder: (host, stack, _) => BuildDataSourcesTab(host, stack),
-        Group: AdminAppNodeType.AdministrationGroup,
+        Group: AdminAppNodeType.OperationsGroup,
         Icon: FluentIcons.Database(),
-        GroupIcon: FluentIcons.Shield(),
-        Order: 302,
+        GroupIcon: FluentIcons.Wrench(),
+        Order: AdminAppNodeType.OperationsOrder + 30,
         Keywords: ["data sources", "sources", "repositories", "install", "export"])
-    { LabelKey = "settings.dataSources", GroupKey = AdminAppNodeType.AdministrationGroupKey };
+    { LabelKey = "settings.dataSources", GroupKey = AdminAppNodeType.OperationsGroupKey };
 
     /// <summary>
     /// Data Sources tab: lists all MeshDataSource nodes with status and actions.
