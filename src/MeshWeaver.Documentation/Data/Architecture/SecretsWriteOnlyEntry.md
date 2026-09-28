@@ -75,8 +75,11 @@ person's own Azure credential:
 2. The value is encrypted with the platform key protector (`enc:`) onto a `Hosting/InstanceAction` node
    on the control instance. It is refused, not stored, if encryption is unavailable. The field is
    cleared and nothing is bound back.
-3. The control plane authorises the invoker. Destructive operations (**Delete**, **Purge**) need a second
-   person's approval.
+3. The control plane authorises the invoker. Every **write** (Set, Replace, Generate: a `SetSecrets`) and every
+   lifecycle change parks on its governed action node until a global administrator other than the requester
+   approves it. On a single-admin installation the configured maintainer (`Hosting:Operator:Maintainer`)
+   may approve their own request instead. **Delete** and **Purge** are also marked destructive for that
+   approver. A **status** read changes nothing and needs no approval.
 4. One operator Job, running under the **writer** identity, decrypts the value for exactly that Job and
    writes it through a mode-600 file (`--file`, never argv, never a log line). It stamps the tags,
    confirms the new version through `list-versions` (a metadata read), and then removes the ciphertext.
@@ -95,9 +98,9 @@ the two verbs that carry **no value** run on that lane as `hosting-operator`:
 
 - **Generate** (`SetSecrets` with only `generate:`): the lane runs `hosting-kv-set --generate`. The value is
   minted inside the run, written through a mode-600 file and never shown. It is never in the dispatch payload
-  or the bundle. Like every `SetSecrets`, the action **parks on the control instance for a second global
-  administrator's approval** (the governed action's own approval gate, the same one a Roll waits on). The
-  lane then re-verifies that approval token before it runs.
+  or the bundle. Like every `SetSecrets`, the action **parks for approval** on its governed action node, the
+  gate described in step 3 of *The governed write path* above (the same gate a Roll waits on). The lane then
+  re-verifies the signed approval token before it runs.
 - **Read status** (`SecretStatus`): the lane runs `hosting-kv-status`, a metadata read. It needs no approval.
 
 **The accepted interim risk.** This path does not have the property the design exists for: the identity
@@ -105,7 +108,7 @@ that writes cannot read. `hosting-operator` holds **get, list, set** on the vaul
 stands*, below), and also the inert *Key Vault Secrets Officer* RBAC role. So during the interim a secret is
 written by an identity that *could* read it back. The two verbs never do: their scripts call only
 `list`/`list-versions`/`set` (the behaviour tests' stub `az` refuses `secret show`), and no value crosses the
-lane. What compensates is that nothing value-bearing travels, and the run is approved in the mesh. Each
+lane. What compensates is that nothing value-bearing travels, and the write is approved in the mesh. The lane holds `hosting-operator` through its existing federated OIDC credential; no stored credential was added for this interim. Each
 such run records a `writerIdentityNote` beginning `TRANSITIONAL` on its node and in its log, so a reader can
 tell it apart from a writer-identity run. The invariants above (*exactly two kinds of access*; *one operator
 Job under the writer identity*) are the target. For these two verbs they do not hold until the exception ends.
@@ -199,7 +202,7 @@ principals hold secret permissions on it:
 | principal | secrets today | target |
 |---|---|---|
 | CSI add-on identity (the READER, one identity for every pod in the cluster) | get, list | get |
-| `hosting-operator` (operator Jobs, `infra-deploy`) | get, list, set | none: its secret work moves to the writer |
+| `hosting-operator` (operator Jobs, `infra-deploy`, and Memex `aks-ops.yml`, which exchanges its OIDC token for this identity through a federated credential that already existed for the lane's other work) | get, list, set | none: its secret work moves to the writer |
 | `github-actions-deploy` (Memex `helm-release` / `infra-deploy`) | get, list, set | none |
 | a user principal | backup, delete, get, list, recover, restore, set | none: break-glass is an Owner re-granting temporarily |
 | two principals the directory no longer resolves | get (+ delete, set) | removed |
