@@ -91,10 +91,7 @@ already soft-deleted). Their behaviour tests run against a stub `az` that plays 
 
 ### Interim: the value-free verbs on the Actions lane
 
-🚧 **TRANSITIONAL** (policy `secret-actions-interim-actions-lane`). The writer identity is not provisioned
-yet. The control instance runs its actions on the Actions executor (Systemorph/Memex `aks-ops.yml`), not as
-in-cluster Jobs. So until the writer exists and every secret action moves to the in-cluster Job under it,
-the two verbs that carry **no value** run on that lane as `hosting-operator`:
+🚧 **TRANSITIONAL** (policy `secret-actions-interim-actions-lane`, **proposed**: it takes effect once its executor half, MeshWeaver.Plugins#2528, is rolled onto the control instance; until then the control plane refuses both verbs at *Check executor*). The writer identity is not provisioned yet. The control instance runs its actions on the Actions executor (Systemorph/Memex `aks-ops.yml`), not as in-cluster Jobs. **Once that half is live**, and until the writer exists and every secret action moves to the in-cluster Job under it, the two verbs that carry **no value** run on that lane as `hosting-operator`:
 
 - **Generate** (`SetSecrets` with only `generate:`): the lane runs `hosting-kv-set --generate`. The value is
   minted inside the run, written through a mode-600 file and never shown. It is never in the dispatch payload
@@ -108,8 +105,8 @@ that writes cannot read. `hosting-operator` holds **get, list, set** on the vaul
 stands*, below), and also the inert *Key Vault Secrets Officer* RBAC role. So during the interim a secret is
 written by an identity that *could* read it back. The two verbs never do: their scripts call only
 `list`/`list-versions`/`set` (the behaviour tests' stub `az` refuses `secret show`), and no value crosses the
-lane. What compensates is that nothing value-bearing travels, and the write is approved in the mesh. The lane holds `hosting-operator` through its existing federated OIDC credential; no stored credential was added for this interim. Each
-such run records a `writerIdentityNote` beginning `TRANSITIONAL` on its node and in its log, so a reader can
+lane. What compensates is that nothing value-bearing travels, and the write is approved in the mesh. The lane holds `hosting-operator` through its existing federated OIDC credential; no stored credential was added for this interim. Once the
+exception is in force, each such run records a `writerIdentityNote` beginning `TRANSITIONAL` on its node and in its log, so a reader can
 tell it apart from a writer-identity run. The invariants above (*exactly two kinds of access*; *one operator
 Job under the writer identity*) are the target. For these two verbs they do not hold until the exception ends.
 
