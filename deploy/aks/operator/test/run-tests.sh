@@ -371,6 +371,32 @@ kve() {  # kve [env…] -- <args…> — runs against a fresh state dir; sets $_
 }
 KVE_DB=(--db-connection acme-db-connection --db-host pg.postgres.database.azure.com --db-port 5432 --db-user memexadmin --db-name acmedb --db-password-secret memex-postgres-password)
 
+# The caller's plan decides whether this instance actually consumes the issued registry key. The
+# legacy direct invocation remains strict; a plan can skip the key only for a record that neither
+# maps the token, registers at a consumer registry, nor creates a pull Secret from it.
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme --skip-registry-key
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure skips the unused registry key when the plan explicitly says so" || bad "unused registry key is skippable" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_out" in *"PluginCatalog-RegistryToken"*) bad "skip does not inspect or report the unused registry key" "said: ${_kve_out}" ;; *) ok "skip does not inspect or report the unused registry key" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme
+[ "$_kve_rc" -ne 0 ] && ok "kv-ensure remains strict unless the plan explicitly skips the registry key" || bad "legacy invocation still requires registry key" "exited 0: ${_kve_out}"
+case "$_kve_out" in *"missing: acme-PluginCatalog-RegistryToken"*) ok "the refusal names the missing registry object" ;; *) bad "missing registry object is named" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey custom-registry-token" \
+  -- --vault Systemorph --prefix acme- --namespace acme --registry-key-vault RegistryVault --registry-key-object custom-registry-token
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure checks the registry object's declared vault and name" || bad "declared registry object is accepted" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret list --vault-name RegistryVault"*|*"secret show --vault-name RegistryVault --name custom-registry-token"*) ok "the declared registry vault and object reach the existence check" ;; *) bad "declared registry target is used" "az saw: ${_kve_log}" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "kv-ensure requires both registry target fields" "must be supplied together" \
+  hosting-kv-ensure --vault V --namespace n --registry-key-object custom
+refuses_hard "kv-ensure refuses contradictory registry requirements" "cannot be combined" \
+  hosting-kv-ensure --vault V --namespace n --skip-registry-key --registry-key-vault V --registry-key-object custom
+unset _kve_out _kve_rc _kve_log _kve_state
+
 # Absent: composed from the flags and the password read from the vault, written through --file.
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
   -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
