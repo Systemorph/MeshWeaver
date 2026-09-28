@@ -21,6 +21,10 @@ on:
         description: "Warn instead of failing (private repositories)."
         type: boolean
         default: false
+      paths:
+        description: "Newline-separated git pathspecs to check (':(exclude)x' excludes). Empty = the whole change."
+        type: string
+        default: ""
       script-ref:
         description: "Ref of Systemorph/MeshWeaver to take the checker from."
         type: string
@@ -58,10 +62,12 @@ jobs:
         NAME_CHECK_TOKEN: ${{ secrets.NAME_CHECK_TOKEN }}
         BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         REPORT_ONLY: ${{ inputs.report-only }}
+        PATHS: ${{ inputs.paths }}
       run: |
         set -euo pipefail
         args=()
         [ "$REPORT_ONLY" = "true" ] && args+=(--report-only)
+        while IFS= read -r p; do [ -n "$p" ] && args+=(--path "$p"); done <<< "${PATHS:-}"
         # A push whose `before` is all zeros (a new branch) or unknown checks the whole tree.
         if [ -n "${BASE_SHA:-}" ] && [ "${BASE_SHA}" != "0000000000000000000000000000000000000000" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
           args+=(--base "$BASE_SHA")

@@ -104,14 +104,15 @@ def parse_diff(diff: str) -> list[dict]:
     return out
 
 
-def collect_diff(root: Path, base: str) -> list[dict]:
-    diff = git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--find-renames", f"{base}...HEAD")
+def collect_diff(root: Path, base: str, paths: list[str] | None = None) -> list[dict]:
+    diff = git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--find-renames", f"{base}...HEAD",
+               "--", *(paths or []))
     return parse_diff(diff)
 
 
-def collect_tree(root: Path) -> list[dict]:
+def collect_tree(root: Path, paths: list[str] | None = None) -> list[dict]:
     out: list[dict] = []
-    for rel in git(root, "ls-files", "-z").split("\0"):
+    for rel in git(root, "ls-files", "-z", "--", *(paths or [])).split("\0"):
         if not rel:
             continue
         out.append({"file": rel, "line": 0, "text": rel})
@@ -322,6 +323,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--root", default=".")
     ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "local/repo"))
     ap.add_argument("--report-only", action="store_true", help="private repositories: warn instead of failing")
+    ap.add_argument("--path", action="append", default=[], metavar="PATHSPEC",
+                    help="limit the check to these git pathspecs (repeatable; ':(exclude)x' excludes). Default: everything")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args(argv)
     if a.self_test:
@@ -332,7 +335,7 @@ def main(argv: list[str]) -> int:
     lines: list[dict] = []
     try:
         sha = git(root, "rev-parse", "HEAD").strip()
-        lines = collect_diff(root, a.base) if a.base else collect_tree(root)
+        lines = collect_diff(root, a.base, a.path) if a.base else collect_tree(root, a.path)
         if not lines:
             print("No added text to check.")
             status, hits = "Pass", []
@@ -475,6 +478,8 @@ def self_test() -> int:
         check("…and no line text is printed", "written for" not in out)
         rc, out = run(ok_env)
         check("the whole tree is checked without --base, and fails too", rc == 1)
+        rc, out = run(ok_env, "--base", "HEAD~1", "--path", "docs", "--path", ":(exclude)a.md")
+        check("pathspecs limit what is checked (nothing under docs/, a.md excluded)", rc == 0)
         (r / "a.md").write_text("clean\n")
         (r / "zorblax-notes.md").unlink()
         subprocess.run(["git", "-C", str(r), "commit", "-qam", "fix"], check=True)
