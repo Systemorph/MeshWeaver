@@ -552,6 +552,51 @@ advances when this instance IMAGE does (a roll), NOT when another publication la
 behind, holding a CRM data migration and an unrelated invoice feature. **"Merged, green and verified on
 `origin/main`" says nothing about a portal having it**; check the seal before promising a date.
 
+## The build instance: the record said Continuous, the node said Stable
+
+Measured 2026-09-28. The fleet's build instance (build.meshweaver.cloud, record `Deployments/build`
+on the control instance: `updatePolicy: Continuous`, `updatePattern: 3.0.0-ci*`) stayed on
+`cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.9412` while the armed set was `3.0.0-ci.9564`,
+mirrored to cr.meshweaver.cloud at 15:28Z (digest verified in main-cd run 36443591670). Every check
+logged the same line:
+
+```
+[SelfUpdate] check (Startup|SafetyNet|ModuleSetProposed): no newer release: 1403 tag(s) listed,
+none newer than the installed 3.0.0-ci.9412.
+```
+
+So it never announced `self-update-available`, and the control plane never opened a Roll.
+
+**Cause.** The record's policy and pattern render as `SelfUpdate__DefaultPolicy` /
+`SelfUpdate__DefaultPattern`, and those were SEED keys only: `UpdatePolicyNodeType.EnsureExists`
+returns early for a node that exists. Build was provisioned on 2026-09-12, before the record's policy
+was rendered into the portal configuration at all (d38e790ba5, 2026-09-19). Its node was therefore
+created with the image's own default, `Stable` and no pattern, and the record's `Continuous` never
+reached it. `Stable` and "`Continuous` without a pattern" both admit clean releases only, hence
+"none newer". The contrast is pearl, created 2026-09-21 against the same registry: its
+`Admin/UpdatePolicy` reads `policy: Continuous, pattern: 3.0.0-ci*, latestAvailableTag:
+3.0.0-ci.9564`.
+
+🚨 **What was not read:** build's own `Admin/UpdatePolicy` node. No MCP server reaches the build
+instance, so the node's `Stable`/no-pattern content is INFERRED from the log line, the two creation
+dates and pearl's contrast, not observed.
+
+**Fix (policy `self-update-record-authoritative`).** When `SelfUpdate:DefaultPolicy` is SET in the
+configuration, the self-updater's seeding stage now also converges the EXISTING node's `policy` and
+`pattern` to the configured values (`UpdatePolicyNodeType.ConvergeToDeclaration`, called from
+`SelfUpdateHostedService.CreatePolicySource`). It is read off the RAW configuration key, because the
+options binder answers `Stable` for an unset key. It touches those two fields only, never
+`requireCiGreen` or any bookkeeping field. It writes nothing when they already match, and it logs
+`[SelfUpdate] converging Admin/UpdatePolicy to the deployment record: <old> → <new>` when it writes.
+With the key unset nothing changes: the node is seeded once and then belongs to the admin, which is
+what a non-fleet install relies on. While the record declares the policy, Settings → Updates says
+so, because a change made there lasts only until the next start.
+
+🚨 **An instance that is already stuck needs ONE roll to receive the fix.** Its running self-updater
+is the old one, and the old one cannot select the image that carries the new one: to it there is
+still nothing newer. File a governed `Roll` of that deployment to the armed set on the control
+instance. From that start on, the converged node selects continuous builds on its own.
+
 ## How to read these instruments
 
 - **`lastCheckVerdict` first, always.** It is the only field written on every tick. If it says

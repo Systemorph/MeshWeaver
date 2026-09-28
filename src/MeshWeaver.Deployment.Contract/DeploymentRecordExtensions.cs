@@ -119,9 +119,10 @@ public static class DeploymentRecordExtensions
 
     /// <summary>
     /// The version pattern the Continuous self-update follows (<c>3.0.0-ci*</c> on the fleet's
-    /// line). Together with <see cref="WithUpdatePolicy"/> this is what a NEW instance starts with:
-    /// both render into the portal's config (<c>SelfUpdate__DefaultPolicy</c> /
-    /// <c>SelfUpdate__DefaultPattern</c>) and seed its <c>Admin/UpdatePolicy</c> on first creation.
+    /// line). Together with <see cref="WithUpdatePolicy"/> it renders into the portal's config
+    /// (<c>SelfUpdate__DefaultPolicy</c> / <c>SelfUpdate__DefaultPattern</c>), seeds its
+    /// <c>Admin/UpdatePolicy</c> on first creation and, once a policy is declared, is converged onto
+    /// the existing node at every start (policy <c>self-update-record-authoritative</c>).
     /// Null or blank clears it. See <see cref="DeploymentContent.UpdatePattern"/>.
     /// </summary>
     public static DeploymentContent WithUpdatePattern(this DeploymentContent d, string? pattern) =>

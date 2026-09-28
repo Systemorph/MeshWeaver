@@ -587,11 +587,14 @@ public static class DeploymentPortalConfig
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
-        // 🚨 What a NEW instance STARTS with (maintainer 2026-09-19: "need to put this to the config
-        // where we start"). The record's platform policy and pattern render as the self-updater's
-        // SEED keys: the first creation of Admin/UpdatePolicy copies them, an existing node is never
-        // touched. Absent renders nothing, and nothing is the chart's own default (Stable, no
-        // pattern) — a record that says nothing must not narrow or widen what the image ships.
+        // 🚨 The record's platform policy and pattern are AUTHORITATIVE when declared (policy
+        // `self-update-record-authoritative`): the first creation of Admin/UpdatePolicy copies them,
+        // and at every start the self-updater converges an EXISTING node's policy and pattern to
+        // them (a seed-only reading left an instance whose node predated the seeding on a stale
+        // node for ever — Doc/Architecture/SelfUpdateFreeze, "The build instance"). Absent renders
+        // nothing, and nothing is the chart's own default (Stable, no pattern) and leaves an
+        // existing node as its admin set it — a record that says nothing must not narrow or widen
+        // what the image ships.
         // The value binds to an ENUM on the pod (SelfUpdateOptions.DefaultPolicy): a misspelling that
         // reached the ConfigMap would abort the host in the configuration binder, on the new
         // ReplicaSet, while the old pods keep serving — the #2210 shape. So the renderer refuses
