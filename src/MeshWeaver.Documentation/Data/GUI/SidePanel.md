@@ -41,7 +41,7 @@ The portal uses a **split-view layout**: a resizable **side panel** that slides 
   <text x="578" y="79" fill="#fff" fill-opacity=".75" font-size="11">↺ Resume</text>
   <text x="700" y="79" text-anchor="middle" fill="#fff" fill-opacity=".75" font-size="11">↗  ✕</text>
   <rect x="504" y="98" width="228" height="140" rx="6" fill="#0d2a18" stroke="currentColor" stroke-opacity=".2" stroke-width="1"/>
-  <text x="618" y="120" text-anchor="middle" fill="#fff" fill-opacity=".7" font-size="12">AI Chat Thread</text>
+  <text x="618" y="120" text-anchor="middle" fill="#fff" fill-opacity=".7" font-size="12">Thread</text>
   <rect x="516" y="132" width="204" height="18" rx="4" fill="#1a3a2a" stroke="currentColor" stroke-opacity=".15"/>
   <text x="618" y="145" text-anchor="middle" fill="#fff" fill-opacity=".45" font-size="10">user message</text>
   <rect x="516" y="156" width="204" height="18" rx="4" fill="#1a3a2a" stroke="#43a047" stroke-opacity=".4"/>

@@ -10,7 +10,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 **Configuration and secrets live in the app that owns their domain** (policy
 [`domain-config-apps`](../PolicyNotProse)). There is one app for AI providers and their keys, one for
 databases, one for sign-in, and so on. A person who wants to change the AI setup of a deployment opens
-the AI app, not the deployment's record page, and finds every AI setting and every AI key there.
+the **Models** app (the AI domain's fleet app), not the deployment's record page, and finds every AI
+setting and every AI key there.
 
 This page is the design: the inventory of what exists today, the app map, and what each app reads,
 writes and gates. It builds on three existing pieces and invents none of their parts:
@@ -67,12 +68,18 @@ every page is deep-linkable.
 
 | app | address | reads and writes on the record | vault objects (write-only) | notes |
 |---|---|---|---|---|
-| **AI** | `/Hosting/Ai` → `/Hosting/Ai/Deployment/{id}` | `ai`: providers (`anthropic`, `azureAis`, `azureFoundry`, `openRouter`, `openRouterEU`: endpoint, models, order, enabled, `dataResidency`, `dataRetention`), `requiredDataResidency`, `tiers` (heavy/standard/light/utility) | the objects mapped to `{Section}__ApiKey` (`Anthropic__ApiKey`, `AzureFoundry__ApiKey`, `OpenRouter__ApiKey`, …) | the EU/origin badges; the EU route holds no key of its own (it borrows OpenRouter's) |
+| **Models** (the AI domain) | `/Hosting/Models` → `/Hosting/Models/Deployment/{id}` (the former `/Hosting/Ai/…` addresses redirect here) | `ai`: providers (`anthropic`, `azureAis`, `azureFoundry`, `openRouter`, `openRouterEU`: endpoint, models, order, enabled, `dataResidency`, `dataRetention`), `requiredDataResidency`, `tiers` (heavy/standard/light/utility) | the objects mapped to `{Section}__ApiKey` (`Anthropic__ApiKey`, `AzureFoundry__ApiKey`, `OpenRouter__ApiKey`, …) | the EU/origin badges; the EU route holds no key of its own (it borrows OpenRouter's) |
 | **Databases** | `/Hosting/Databases` → `/Hosting/Databases/Deployment/{id}` | `database`, `databaseServer`, `databaseHost`, `databasePort`, `databaseUsername`, `inClusterPostgres`, `inClusterDatabase`, `migrationImageRepository`, `backupStore` | `databaseConnectionSecret` (default `{prefix}db-connection`), the Orleans connection, `storageConnectionSecret` | read-only migration status (the schema version and the last migration Job's verdict) and the backup list; a restore stays a governed `Restore` action |
 | **Sign-in** | `/Hosting/SignIn` → `/Hosting/SignIn/Deployment/{id}` | `signIn`: Microsoft client id + tenant, Google, LinkedIn, Apple client ids, `enableDevLogin` | `Authentication__{Microsoft,Google,LinkedIn}__ClientSecret`, `GitHub__OAuth__ClientSecret`, `Bootstrap__Secret` | an empty client id turns a scheme off; blank leaves it to the vault half (see `SignInSpec`) |
 | **Email** | `/Hosting/Email` → `/Hosting/Email/Deployment/{id}` | `email`: enabled, sender app client id, tenant, mailbox, managed identity, inbound, webhook base URL, forward address | `Email__ClientSecret` | the agent-send mode (`Email:AgentSend`) is instance config, not a secret |
 | **Payments** | `/Hosting/Payments` → `/Hosting/Payments/Deployment/{id}` | the commerce base URL (today an `extraPortalConfig` entry; owed: a `payments` block on the record) | `Commerce__Stripe__SecretKey`, `Commerce__Stripe__WebhookSecret` | live vs test is DERIVED from the key prefix (`sk_live_` / `sk_test_`), so it is shown, never toggled; the webhook secret is generated in the portal and shown once, because Stripe must hold it too |
 | **Integrations** | `/Hosting/Integrations` → `/Hosting/Integrations/Deployment/{id}` | `gitHubApp`, `opsGitHubApp` (client id, installation id, owner), `webhookInbox` slots, `registryInstanceId`, `announcementKeySecret`, `controlLaneKeySecret` | `GitHub__App__PrivateKey`, `GitHub__Webhook__Secret`, the registry instance key (issued straight into the vault, never read back), the per-deployment announcement key | the announcement key is **generated on the target instance** and only **registered** here (below) |
+
+**The Models app was called the AI app** and lived at `/Hosting/Ai`. The node `Hosting/Ai` is now a
+`Redirect` (`scope: Subtree`, see [Moved-Node Redirects](../NodeRedirects)), so a bookmark to
+`/Hosting/Ai/Deployment/{id}` lands on `/Hosting/Models/Deployment/{id}`. Links written from now on
+use the new address; the Deployment record page builds its link with
+`DeploymentRecordPage.AppHref("Models", id)`.
 
 ### Instance scope — each instance's Admin app
 
@@ -120,13 +127,13 @@ Every per-deployment page is the same three pieces, and none of them is new:
    `/data` copy and no Save button (see [Data Binding](/Doc/GUI/DataBinding)). A viewer without
    `Update` on the record gets the same form read-only.
 2. **The domain's vault objects, write-only.** A `SecretInventorySection` over the record's declared
-   vault objects whose config key belongs to the domain (the AI app claims `*__ApiKey` of the AI
+   vault objects whose config key belongs to the domain (the Models app claims `*__ApiKey` of the AI
    sections, the Sign-in app `Authentication__*__ClientSecret`, …). Save and Generate file a governed
    `SetSecrets` action; Disable/Enable/Delete/Recover file a `SecretLifecycle` action; the status
    list is the operator's `hosting-kv-status` reading (names, states, fingerprints; never a value).
    A domain claims config keys by prefix (`VaultSecretDomains`, next to the Plugins
    `VaultSecretSteward` that files the actions), so a module that adds a provider adds its key to
-   the AI app by naming it, with no change to the app. An object no domain claims is counted on the
+   the Models app by naming it, with no change to the app. An object no domain claims is counted on the
    picker, never dropped silently. 🚨 **`Ai__KeyProtection__MasterKey` belongs to NO domain**,
    although its name starts with `Ai__`: it encrypts every `enc:` value on the instance (instance
    secrets, every person's provider keys), and replacing it makes all of them unreadable. It is a
@@ -142,7 +149,8 @@ generator, `WriteOnlySecretSection`); no page builds its own form or markup.
 
 ## Adding a domain app: the shape, and the traps already paid for
 
-Each app is a thin copy of `Hosting/AiApp` (MeshWeaver.Plugins): a NodeType `Hosting/{X}App` whose
+Each app is a thin copy of `Hosting/AiApp` (MeshWeaver.Plugins — the Models app's NodeType kept its
+original id when the app was renamed; only its node, address and name moved): a NodeType `Hosting/{X}App` whose
 sources list `shared=@Hosting/DomainApp/Source` (the picker, the page frame, the admin gate, Apply),
 an app node `Hosting/{X}`, a form record that mirrors the record's block with `[Description]` +
 `[Translation]` (the Deployment contract assembly cannot carry `[Translation]`), a module text
@@ -203,9 +211,10 @@ apps above.
 | **Set Key Vault secrets…** (`SecretDialog`) | control instance, `Deployments/<id>` page | paste values for every declared vault object; files `SetSecrets` | each domain app's vault section, by config key; the dialog is removed |
 | vault-secrets inventory (MeshWeaver.Plugins#2434, draft) | same page | status, generate, lifecycle | its verbs (`SecretStatus`, `SecretLifecycle`, the compose functions) are what every domain app's vault section files; the page button is removed |
 | announcement-key panel (MeshWeaver.Plugins#2435, held) | same page | issue/rotate/revoke | Integrations app, **Announcement key** section, register-only |
-| the record's `ai` block | edited as raw record content | JSON | AI app, bound form |
-| EU residency (MeshWeaver.Plugins#2448): the region/origin badges, the EU-only switch | chat model picker, model catalog columns | read + `RequiredDataResidency` | the badges stay where models are picked; the per-deployment switch (`ai.requiredDataResidency`) and the per-provider `dataResidency` are edited in the AI app, which shows the same badges |
-| OpenRouter EU route (MeshWeaver.Plugins#2454) | seeded from config (`OpenRouterEU__*`) | config | AI app, the `openRouterEU` provider row (endpoint override, models, residency, retention); no key field, because the route borrows OpenRouter's |
+| the record's `ai` block | edited as raw record content | JSON | Models app, bound form |
+| EU residency (MeshWeaver.Plugins#2448): the region/origin badges, the EU-only switch | chat model picker, model catalog columns | read + `RequiredDataResidency` | the badges stay where models are picked; the per-deployment switch (`ai.requiredDataResidency`) and the per-provider `dataResidency` are edited in the Models app, which shows the same badges |
+| coding-assistant harnesses (Claude Code, GitHub Copilot, Codex, Cursor, Grok, OpenCode, Antigravity) | were separate Store apps with their own home tiles; which ones run is `Features:Ai:Clis:*` plus the loaded modules | config + per-user install | options of the **Threads** app (`AI/AiThreads`): each harness shows whether this instance offers it, its processing and origin marks, install, and its settings; per thread the choice is `/harness`. Owed: the fleet switch as an `ai` field in the Models app |
+| OpenRouter EU route (MeshWeaver.Plugins#2454) | seeded from config (`OpenRouterEU__*`) | config | Models app, the `openRouterEU` provider row (endpoint override, models, residency, retention); no key field, because the route borrows OpenRouter's |
 | per-user provider keys | `Providers/ProvidersApp` (`ProviderSetup`) | write-only, `enc:` in the mesh | stays: it is the person's, not an admin's |
 | AI Admin, Token Usage | `/Admin/Settings/AiAdmin`, `/Admin/Settings/TokenUsage` | instance | stays (instance scope, domain AI) |
 | sign-in providers | `/Admin/Settings/SignInProviders` | instance, read + hand-over | stays; the fleet half is the Sign-in app |
@@ -220,7 +229,7 @@ apps above.
 
 ## Build order
 
-1. **AI app** — the most-edited block, and the one the EU residency work already reshaped. First,
+1. **Models app** (the AI domain, `/Hosting/Models`) — the most-edited block, and the one the EU residency work already reshaped. First,
    end to end: picker, bound `ai` form with the badges, the AI vault section, Apply.
 2. **Integrations** — it unblocks MeshWeaver.Plugins#2435 (the announcement key), which is held for
    exactly this.
