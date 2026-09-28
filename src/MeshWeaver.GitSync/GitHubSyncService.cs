@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting;
@@ -82,6 +83,8 @@ public sealed class GitHubSyncService
         {
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         };
+        strictOptions.TypeInfoResolver = new StrictImportTypeInfoResolver(
+            strictOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver());
         strictImportParsers = new FileFormatParserRegistry(strictOptions, contributedParsers);
     }
 
