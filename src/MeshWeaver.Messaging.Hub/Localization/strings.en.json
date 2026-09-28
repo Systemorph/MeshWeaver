@@ -1890,6 +1890,7 @@
   "settings.groupOperations": "Operations",
   "settings.groupCommercial": "Commercial",
   "settings.groupFleet": "Fleet",
+  "settings.aiUsageCost": "AI usage & cost",
   "settings.connectedInstances": "Connected instances",
   "effectiveAccess.intro": "Check what a person can do on **this node**: enter their user id and press Check."
 }

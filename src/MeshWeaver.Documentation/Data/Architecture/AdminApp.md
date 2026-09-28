@@ -48,6 +48,12 @@ here changes that.
 | Commercial | AI usage & cost (Token usage + AI admin, one tab) | `TokenUsage` / `AiAdmin` | Plugins |
 | Fleet | Fleet (the AKS instances overview; control instance / `Instances:Enabled` only) | `Instances` | Plugins |
 
+The AI usage tab reads EVERY person's usage with a pathless `nodeType:TokenUsage` query. A usage row
+is a `_Thread` satellite (`{ns}/_Thread/{id}/_Usage/{model}`, placed in the `threads` table by its
+segment), so `TokenUsage` is listed on the `_Thread` entry of `SatelliteTableMapping.Defaults`: without
+it the pathless query read the primary table on Postgres and, in memory, dropped every row as a
+satellite path in a non-satellite query — the tab read nothing on either backend.
+
 **Not in the instance app** any more: Who am I (the person app's Account), Effective access (a node
 probe), the Admin node's own Access Control (part of Administrators), Metadata, Node types, Groups,
 Versions, and every personal tab.
