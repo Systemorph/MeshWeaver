@@ -7,6 +7,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -44,11 +45,79 @@ public static class AdminAppNodeType
     /// <summary>The app's own href.</summary>
     public const string Href = "/" + Path;
 
-    /// <summary>The settings-menu group the moved administration tabs keep inside the app.</summary>
+    /// <summary>
+    /// The settings-menu group the moved administration tabs used to share. Kept for modules that
+    /// still name it; a tab should carry one of the SECTION groups instead —
+    /// <see cref="PeopleGroup"/>, <see cref="OperationsGroup"/>, <see cref="CommercialGroup"/>,
+    /// <see cref="FleetGroup"/>.
+    /// </summary>
     public const string AdministrationGroup = "Administration";
 
     /// <summary>Localization key of <see cref="AdministrationGroup"/>.</summary>
     public const string AdministrationGroupKey = "settings.groupAdministration";
+
+    /// <summary>Section: who may sign in and who administers — Administrators, Sign-in providers,
+    /// Invitations, Privacy, Published to the web.</summary>
+    public const string PeopleGroup = "People & sign-in";
+
+    /// <summary>Localization key of <see cref="PeopleGroup"/>.</summary>
+    public const string PeopleGroupKey = "settings.groupPeople";
+
+    /// <summary>Section: running the instance — Updates, Registration and Control lane, Data sources,
+    /// Partitions, Inbox.</summary>
+    public const string OperationsGroup = "Operations";
+
+    /// <summary>Localization key of <see cref="OperationsGroup"/>.</summary>
+    public const string OperationsGroupKey = "settings.groupOperations";
+
+    /// <summary>Section: what the instance sells and spends — Coupons, Instance grants, Composition,
+    /// AI usage and cost.</summary>
+    public const string CommercialGroup = "Commercial";
+
+    /// <summary>Localization key of <see cref="CommercialGroup"/>.</summary>
+    public const string CommercialGroupKey = "settings.groupCommercial";
+
+    /// <summary>Section: the other instances this one controls (the control instance only).</summary>
+    public const string FleetGroup = "Fleet";
+
+    /// <summary>Localization key of <see cref="FleetGroup"/>.</summary>
+    public const string FleetGroupKey = "settings.groupFleet";
+
+    /// <summary>First slot of the <see cref="PeopleGroup"/> band (300-399).</summary>
+    public const int PeopleOrder = 300;
+
+    /// <summary>First slot of the <see cref="OperationsGroup"/> band (400-499).</summary>
+    public const int OperationsOrder = 400;
+
+    /// <summary>First slot of the <see cref="CommercialGroup"/> band (500-599).</summary>
+    public const int CommercialOrder = 500;
+
+    /// <summary>First slot of the <see cref="FleetGroup"/> band (600-699).</summary>
+    public const int FleetOrder = 600;
+
+    /// <summary>
+    /// The instance's NAME — the host of its public address (<c>Portal:BaseUrl</c>, else
+    /// <c>PublicBaseUrl</c>), e.g. <c>memex.systemorph.com</c>. The Admin app is titled with it, so
+    /// the page says WHICH instance it administers; <c>null</c> when neither key is configured.
+    /// </summary>
+    /// <param name="configuration">The host configuration.</param>
+    public static string? InstanceName(IConfiguration? configuration)
+    {
+        var baseUrl = configuration?["Portal:BaseUrl"];
+        if (string.IsNullOrWhiteSpace(baseUrl))
+            baseUrl = configuration?["PublicBaseUrl"];
+        if (string.IsNullOrWhiteSpace(baseUrl))
+            return null;
+        return Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Host)
+            ? uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}"
+            : baseUrl.Trim();
+    }
+
+    /// <summary>The instance's name, read from the service provider's configuration
+    /// (<see cref="InstanceName(IConfiguration?)"/>).</summary>
+    /// <param name="services">The service provider.</param>
+    public static string? InstanceName(IServiceProvider services)
+        => InstanceName(services.GetService<IConfiguration>());
 
     /// <summary>
     /// The viewer's platform-admin verdict, LIVE: <c>false</c> first (the menu renders at once),
@@ -157,15 +226,17 @@ public static class AdminAppNodeType
     }
 
     /// <summary>
-    /// The default per-node settings tabs that mean nothing on the Admin partition root — its
-    /// metadata, node types, files, groups and appearance are not administration. Access Control
-    /// (the Admin partition's own grants) and Effective Access stay: they are the platform's role
-    /// management.
+    /// The default node-settings tabs that mean nothing in the Admin app — the Admin root's metadata,
+    /// node types, groups and versions are not administration. Its Access Control lists exactly the
+    /// platform-admin grants, so it is not a tab of its own: it is part of the ONE Administrators tab
+    /// (<see cref="GlobalAdministrationTab"/>). Effective Access is a node-management probe ("what may
+    /// this person do on THIS node"), and on the instance it read as a global answer it never was.
     /// </summary>
     internal static readonly ImmutableArray<string> HiddenDefaultTabs =
     [
-        SettingsLayoutArea.MetadataTab, SettingsLayoutArea.NodeTypesTab, SettingsLayoutArea.FilesTab,
-        SettingsLayoutArea.GroupsTab, SettingsLayoutArea.AppearanceTab,
+        SettingsLayoutArea.MetadataTab, SettingsLayoutArea.NodeTypesTab, SettingsLayoutArea.GroupsTab,
+        SettingsLayoutArea.AccessControlTab, SettingsLayoutArea.EffectiveAccessTab,
+        SettingsLayoutArea.VersionsTab,
     ];
 
     /// <summary>
@@ -209,9 +280,15 @@ public static class AdminAppNodeType
         HubConfiguration = config => config
             .AddDefaultLayoutAreas()
             .HideSettingsTabs([.. HiddenDefaultTabs])
-            .AddAdminAppTab(WhoAmISettingsTab.AdminAppTab, relocated: false)
+            // The app is titled with the INSTANCE's name — the page says which instance it administers.
+            .WithSettingsTitle((host, _) => InstanceName(host.Hub.ServiceProvider))
             .AddAdminAppTab(GlobalAdministrationTab.Definition)
             .AddAdminAppTab(GlobalSettingsLayoutArea.DataSourcesAdminTab)
+            // The Admin node's own grants ARE the administrators: one tab, not two.
+            .AliasSettingsTab(SettingsLayoutArea.AccessControlTab, GlobalAdministrationTab.TabId)
+            .AliasSettingsTab(SettingsLayoutArea.EffectiveAccessTab, GlobalAdministrationTab.TabId)
+            // "Who am I" acts on the person, not the instance: it is the person app's Account tab.
+            .RelocateSettingsTabToPersonApp(WhoAmISettingsTab.TabId, PersonApp.AccountTab)
             .ApplyNodeHubContributions(NodeType)
             .AddLayout(layout => layout
                 .WithDefaultArea(MeshNodeLayoutAreas.SettingsArea)

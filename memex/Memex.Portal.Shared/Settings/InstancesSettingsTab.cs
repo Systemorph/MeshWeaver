@@ -34,19 +34,19 @@ public static class InstancesSettingsTab
     private const string ResultDataId = "instanceRegisterResult";
     private const string ListDataId = "instanceList";
 
-    /// <summary>Registers the tab under Security, beside API Tokens. Available to every signed-in
-    /// user — registering an installation grants it nothing, so it needs no permission gate.</summary>
+    /// <summary>Registers the person app's "Connected instances" tab, beside API Tokens. Available to
+    /// every signed-in person on their own settings page — registering an installation grants it
+    /// nothing, so it needs no permission gate — and nowhere else (<see cref="PersonApp.AddPersonAppTab"/>).</summary>
     public static MessageHubConfiguration AddInstancesSettingsTab(this MessageHubConfiguration config) =>
-        config.AddSettingsMenuItems(
+        config.AddPersonAppTab(
             new SettingsMenuItemDefinition(
                 Id: TabId,
-                Label: "Instances",
+                Label: "Connected instances",
                 ContentBuilder: BuildContent,
-                Group: "Security",
                 Icon: FluentIcons.Server(),
-                Order: 235,
+                Order: PersonApp.ConnectedInstancesOrder,
                 RequiredPermission: Permission.None)
-            { LabelKey = "settings.instances", GroupKey = "settings.groupSecurity" });
+            { LabelKey = "settings.connectedInstances" });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {

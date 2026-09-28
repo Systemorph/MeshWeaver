@@ -49,12 +49,13 @@ public static class CouponAdminSettingsTab
             Id: TabId,
             Label: "Coupons",
             ContentBuilder: BuildContent,
-            Group: "Administration",
+            Group: AdminAppNodeType.CommercialGroup,
             Icon: FluentIcons.TicketDiagonal(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 330,
+            GroupIcon: FluentIcons.Money(),
+            Order: AdminAppNodeType.CommercialOrder,
             Keywords: ["coupons", "coupon codes", "discount", "redeem", "redemption", "store",
-                "entitlement", "unlock", "voucher", "promo"]);
+                "entitlement", "unlock", "voucher", "promo"])
+        { GroupKey = AdminAppNodeType.CommercialGroupKey };
 
         // The Admin app is the tab's home (/Admin/Settings/Coupons), for confirmed platform
         // admins only; everywhere else — a person's own settings page included — it contributes nothing.

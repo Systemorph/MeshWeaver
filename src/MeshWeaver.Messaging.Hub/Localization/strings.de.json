@@ -327,7 +327,7 @@
   "settings.files": "Dateien",
   "settings.accessControl": "Zugriffssteuerung",
   "settings.groups": "Gruppen",
-  "settings.effectiveAccess": "Effektive Berechtigungen",
+  "settings.effectiveAccess": "Zugriff prüfen",
   "settings.appearance": "Darstellung",
   "settings.dataSources": "Datenquellen",
   "settings.preferences": "Persönliche Einstellungen",
@@ -1880,5 +1880,17 @@
   "secret.test.refused": "von der Kontrollinstanz abgelehnt (401): Sie hat keinen passenden Schlüssel – die beiden Fingerabdrücke unterscheiden sich",
   "secret.test.unsupported": "die Kontrollinstanz unterstützt noch keine Schlüsseltests (sie hat den Test gespeichert statt ihn nur zu prüfen)",
   "secret.test.unverified": "die Kontrollinstanz antwortete {code}, meldete aber keine bestätigte Signatur (Signatur: {signature})",
-  "secret.test.status": "die Kontrollinstanz antwortete {code}"
+  "secret.test.status": "die Kontrollinstanz antwortete {code}",
+  "menu.settings": "Einstellungen…",
+  "settings.profile": "Profil",
+  "settings.sharing": "Freigabe",
+  "personApp.sharingIntro": "Wer die Inhalte deiner eigenen Partition lesen oder ändern darf — deine Startseite, deine Threads, deine Dateien. Gib hier jemandem eine Rolle, um sie zu teilen.",
+  "settings.administrators": "Administratoren",
+  "settings.groupPeople": "Personen & Anmeldung",
+  "settings.groupOperations": "Betrieb",
+  "settings.groupCommercial": "Kommerzielles",
+  "settings.groupFleet": "Flotte",
+  "settings.aiUsageCost": "KI-Nutzung & Kosten",
+  "settings.connectedInstances": "Verbundene Instanzen",
+  "effectiveAccess.intro": "Prüfe, was eine Person auf **diesem Knoten** tun darf: gib ihre Benutzer-ID ein und klicke auf Prüfen."
 }
