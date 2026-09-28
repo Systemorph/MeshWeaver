@@ -139,7 +139,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// </summary>
     /// <param name="error">The terminal of the response wait.</param>
     internal static bool IsShuttingDownRefusal(Exception error) =>
-        error is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown };
+        error is DeliveryFailureException { Failure: { } failure } && IsShuttingDownRefusal(failure);
+
+    /// <summary>The same classification over the failure itself — the late arm receives the
+    /// <see cref="DeliveryFailure"/> unwrapped. The ONE definition of a ShuttingDown refusal.</summary>
+    /// <param name="failure">The owner's late failure.</param>
+    internal static bool IsShuttingDownRefusal(DeliveryFailure failure) =>
+        failure.ErrorType == ErrorType.ShuttingDown;
 
     // 🚨 How long a CONFLICT re-attempt waits for this hub's mirror to carry state the owner has
     // not already refused. Not a retry interval and not a backoff — it is the bound on ONE wait
@@ -2615,7 +2621,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         failure.Message ?? $"Access denied updating '{_path}'"));
                                     return;
                                 }
-                                if (failure.ErrorType == ErrorType.ShuttingDown
+                                if (IsShuttingDownRefusal(failure)
                                     && attempt < MaxOwnerDisposingReenqueues)
                                 {
                                     // The routed OwnerDisposing, late — see IsShuttingDownRefusal.

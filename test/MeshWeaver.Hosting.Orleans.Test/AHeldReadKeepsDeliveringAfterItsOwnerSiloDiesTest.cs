@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Reactive.Linq;
 using System.Threading;
