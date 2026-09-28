@@ -19,7 +19,7 @@ namespace MeshWeaver.Layout.Test;
 /// <see cref="LayoutClientConfiguration.ViewDispatchLogCategory"/> names the control, its
 /// <c>$type</c>, its skins, the area, the hub and every map that declined by owner.
 ///
-/// <para><b>Why.</b> On memex (2026-09-08) the PartnerRe Workspace area rendered as the TEXT of a
+/// <para><b>Why.</b> On memex (2026-09-08) a client Workspace area rendered as the TEXT of a
 /// <c>StackControl</c> — every map had declined and the escaped-HTML fallback took it — and nothing
 /// on that path logged above Debug. A control that turns into text has to say which packs were
 /// asked, so the reader can tell "no pack registered on this hub" from "the pack registered and

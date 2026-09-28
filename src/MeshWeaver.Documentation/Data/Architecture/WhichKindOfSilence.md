@@ -111,7 +111,7 @@ said.
 ## A heap step names its allocator: the `[HEAPSTEP]` line
 
 The heartbeat's `heap=` field (`GC.GetTotalMemory(false)`) is what showed MeshWeaver#5555's shape.
-memex-cloud replicas took **multi-GiB live-heap steps**: +2 to +10 GiB inside one 100 s sample, on
+The public instance's replicas took **multi-GiB live-heap steps**: +2 to +10 GiB inside one 100 s sample, on
 several replicas within seconds of each other (01:00:02Z and 01:00:11Z; 03:31:48Z and 03:31:56Z on
 2026-09-24). The heap stayed up through gen-2 collections, and one replica died of
 `OutOfMemoryException`. The field says **how much** was added. It cannot say **what** was added,
@@ -161,7 +161,7 @@ and 18:15Z. `Logs` actions `Ops/Actions/logs-memexcloud-20260926-heapstep-5555` 
 
 - **Every step past warm-up has the same allocation mix.** `System.String` is 53–56 % of the sampled
   bytes, `System.Byte[]` 25–31 %, and `System.Text.Json.JsonDocument` 2–4 %. The mix is the same on
-  memex and on memex-cloud, and across pods. A window allocated 4–7 GiB in 10 s. Only the first ticks
+  the control instance and on the public instance, and across pods. A window allocated 4–7 GiB in 10 s. Only the first ticks
   after boot differ, when assembly loading (`CoffHeader`) and serializer set-up are in the mix.
 - **The steps are churn, not retention.** With server GC, a gen-0 budget is gigabytes, so
   `GC.GetTotalMemory(false)` includes garbage until the next collection. On

@@ -101,7 +101,7 @@ Attach to a live mesh:
 
 ```bash
 python -m meshweaver.examples.standalone_hub \
-    --url https://memex.meshweaver.cloud --token mw_… \
+    --url https://portal.example.com --token mw_… \
     --namespace PythonDemo --address py/stats
 ```
 

@@ -37,7 +37,7 @@ OUT=~/.cache/zap-scan-$(date -u +%F); mkdir -p "$OUT/public" "$OUT/auth"
 
 # 1. Public, ACTIVE — anonymous, so safe against production.
 docker run --rm -v "$OUT/public":/zap/wrk/:rw -t "$ZAP" \
-  zap-full-scan.py -t https://memex.meshweaver.cloud \
+  zap-full-scan.py -t https://portal.example.com \
   -r public-full.html -J public-full.json -w public-full.md \
   > "$OUT/public/public-full.log" 2>&1; echo "public scan exit=$?"
 
@@ -45,7 +45,7 @@ docker run --rm -v "$OUT/public":/zap/wrk/:rw -t "$ZAP" \
 #    (the OIDC `.AspNetCore.Cookies` session; an API token does not authenticate the SPA).
 #    -j turns on the AJAX spider, which is what reaches the assets a signed-in page loads.
 docker run --rm -v "$OUT/auth":/zap/wrk/:rw -t "$ZAP" \
-  zap-baseline.py -t https://memex.meshweaver.cloud -j \
+  zap-baseline.py -t https://portal.example.com -j \
   -r auth-report.html -J auth-report.json -w auth-report.md \
   -z "-config replacer.full_list(0).description=sess -config replacer.full_list(0).enabled=true \
       -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie \
@@ -181,7 +181,7 @@ page.on('pageerror', e => errors.push(e.message));
 page.on('console', m => m.type() === 'error' && errors.push(m.text()));
 page.on('response', r => r.status() >= 400 && failed.push(`${r.url()} ${r.status()}`));
 
-await page.goto('https://memex.meshweaver.cloud/login', { waitUntil: 'load' });
+await page.goto('https://portal.example.com/login', { waitUntil: 'load' });
 await page.evaluate(() => window.monacoReady);
 
 console.log(await page.evaluate(async () => {
@@ -240,9 +240,9 @@ await browser.close();
 ### 2026-09-11 — run against both portals
 
 `curl` on the served bytes, then the headless run above against
-`https://memex.meshweaver.cloud/login`:
+`https://portal.example.com/login`:
 
-| | memex.meshweaver.cloud | memex.systemorph.com |
+| | public instance | control instance |
 |---|---|---|
 | `/api/version` | `3.0.0+6231c4da` | `3.0.0+45306a33` |
 | `…/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` | 200 · 4,483,269 B · `sha256:8e991296…b039e846` | 200 · 4,483,269 B · **same sha256** |
@@ -257,7 +257,7 @@ committed.** MeshWeaver.Plugins#1640 moved the pin to 3.4.15 the same day — se
 below for the new bytes — so both portals answer `8e991296…` until the next roll and `51408c8f…`
 after it. Neither reading changes rule 10003: both versions are above the retire.js floor.
 
-🚨 **memex.systemorph.com has now rolled.** On 2026-09-08 it was still on `ci.8059` and still served
+🚨 **The control instance has now rolled.** On 2026-09-08 it was still on `ci.8059` and still served
 the flagged 3.6 MB chunk; it no longer does. The pre-fix control described in the previous section
 is therefore **expired** — the fleet no longer has a portal on the old side of the filter, and
 reconstructing it now means pulling an old image.
@@ -353,7 +353,7 @@ that one.
 
 ## Findings by release
 
-### 3.0.0 — scanned 2026-09-06 against memex.meshweaver.cloud, ZAP 2.17.0
+### 3.0.0 — scanned 2026-09-06 against the public instance, ZAP 2.17.0
 
 The full report of this scan — coverage, attack classes exercised, the delta against 23 August, live header verification, CORS posture and limitations — is [OWASP ZAP Scan — 3.0.0 (6 September 2026)](/Doc/Architecture/SecurityScan_3_0_0). The table below carries the CURRENT disposition of each rule, which may be newer than the report's.
 
@@ -364,7 +364,7 @@ The full report of this scan — coverage, attack classes exercised, the delta a
 
 | rule | level | run | instances | disposition |
 |---|---|---|---|---|
-| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed and DELIVERED, re-scan still owed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`. Delivery measured 2026-09-07 on the served bytes, not on the merge: `GET /_content/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` answers 200 / 4,483,269 bytes / `sha256:8e991296e5e49dca83a02afa00a0eca20128a5c530b9996ce00830e6b039e846` on **both** memex.meshweaver.cloud and memex.systemorph.com — byte-identical to the committed bundle on MeshWeaver.Plugins `main` — carrying `/*! @license DOMPurify 3.4.14` (`versions.json`: monaco-editor 0.56.0, dompurify 3.4.14). Corroborated by an anonymous re-scan on 2026-09-07 that provably reached the bundle (10003 PASS over 1330 URLs, 10096 on `monaco.js`); the issue still closes on the AUTHENTICATED re-scan. Residue CLOSED by MeshWeaver#3617 (MeshWeaver.Plugins#1482): the retired `min/vs` tree is no longer published, measured 2026-09-08 on the shipped image (366 files under `_content/BlazorMonaco` → 3; 726 retired endpoints → 0) and on the wire (the flagged `editor.api-CalNCsUg.js` answers **404** on a portal running ≥ `ci.8079`) — see *What the scanner cannot see*. That removes the URL the alert instanced, and with it the only DOMPurify 3.2.7 the origin served; it does NOT by itself settle rule 10003, which is a verdict over every library the signed-in portal loads. 🚨 **A package bump is still not an alternative remedy, re-measured against the live registry 2026-09-11**: the NuGet flat-container index for `blazormonaco` answers HTTP 200 with **3.5.0 still the newest release**, and `blazormonaco.3.5.0.nupkg` (HTTP 200, 4,514,906 B) still carries `min/vs/loader.js` declaring Monaco **0.42.0-dev-20230906** and an `editor.api` banner-stamped **DOMPurify 3.2.7**. Upstream `monaco-editor` is 0.56.0 — the version the portal already builds — and it vendors DOMPurify 3.4.8, below the retire.js floor, so even a hypothetical BlazorMonaco carrying current Monaco would not by itself clear the rule. The pin is now held by `BlazorMonacoPinGuard` (core, `test/MeshWeaver.Documentation.Test/`). 2026-09-11: **both** portals answer **404** on the flagged URL (memex.systemorph.com has rolled), and the editor is verified working end to end — see *Verifying the editor still works*. |
+| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed and DELIVERED, re-scan still owed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`. Delivery measured 2026-09-07 on the served bytes, not on the merge: `GET /_content/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` answers 200 / 4,483,269 bytes / `sha256:8e991296e5e49dca83a02afa00a0eca20128a5c530b9996ce00830e6b039e846` on **both** the public and the control instance — byte-identical to the committed bundle on MeshWeaver.Plugins `main` — carrying `/*! @license DOMPurify 3.4.14` (`versions.json`: monaco-editor 0.56.0, dompurify 3.4.14). Corroborated by an anonymous re-scan on 2026-09-07 that provably reached the bundle (10003 PASS over 1330 URLs, 10096 on `monaco.js`); the issue still closes on the AUTHENTICATED re-scan. Residue CLOSED by MeshWeaver#3617 (MeshWeaver.Plugins#1482): the retired `min/vs` tree is no longer published, measured 2026-09-08 on the shipped image (366 files under `_content/BlazorMonaco` → 3; 726 retired endpoints → 0) and on the wire (the flagged `editor.api-CalNCsUg.js` answers **404** on a portal running ≥ `ci.8079`) — see *What the scanner cannot see*. That removes the URL the alert instanced, and with it the only DOMPurify 3.2.7 the origin served; it does NOT by itself settle rule 10003, which is a verdict over every library the signed-in portal loads. 🚨 **A package bump is still not an alternative remedy, re-measured against the live registry 2026-09-11**: the NuGet flat-container index for `blazormonaco` answers HTTP 200 with **3.5.0 still the newest release**, and `blazormonaco.3.5.0.nupkg` (HTTP 200, 4,514,906 B) still carries `min/vs/loader.js` declaring Monaco **0.42.0-dev-20230906** and an `editor.api` banner-stamped **DOMPurify 3.2.7**. Upstream `monaco-editor` is 0.56.0 — the version the portal already builds — and it vendors DOMPurify 3.4.8, below the retire.js floor, so even a hypothetical BlazorMonaco carrying current Monaco would not by itself clear the rule. The pin is now held by `BlazorMonacoPinGuard` (core, `test/MeshWeaver.Documentation.Test/`). 2026-09-11: **both** portals answer **404** on the flagged URL (the control instance has rolled), and the editor is verified working end to end — see *Verifying the editor still works*. |
 | Backup File Disclosure [10095] | Medium | public | 21 | **False positive, measured**: every instance is `/static/NodeTypeIcons/Copy (n) of <icon>.svg`, and that route synthesises an icon for ANY name — a nonsense name answers 200 with a 547-byte SVG of its own, while `bot.svg.bak` is 404 — so no file is disclosed; the rule keys on "a variant of the URL also answers 200". Carried: the fallback icon is the feature. |
 | Proxy Disclosure [40025] | Medium | public | systemic | **False positive, measured**: `TRACE` and `OPTIONS` answer 405 (`allow: GET, POST`) with no `Server`/`Via` header; the "Unknown proxy" is ZAP's inference from the refusal. Carried. |
 | CSP: Failure to Define Directive with No Fallback [10055] | Medium | both | 15 / 10 | **Carried by design** — see the row below; `form-action 'self' https:` is declared on every response measured (`/`, `/login`), so the missing directive the rule names is to be re-read on the next scan. |
@@ -380,7 +380,7 @@ bundle; the advisory list had grown by 2026-09-06, which is what turned it into 
 #### 2026-09-07 re-scan of rule 10003 — anonymous, passive, and NOT the acceptance run
 
 After the fix rolled, an **anonymous** `zap-baseline.py -j -m 5` at the same pinned ZAP 2.17.0
-against memex.meshweaver.cloud read
+against the public instance read
 `FAIL-NEW: 0 · WARN-NEW: 9 · PASS: 58` over **1330 URLs**, with
 **`PASS: Vulnerable JS Library (Powered by Retire.js) [10003]`**.
 
@@ -404,8 +404,8 @@ settle is any library the signed-in portal loads and the anonymous shell does no
 
 MeshWeaver.Plugins#1482 merged 2026-09-07T23:14:40Z. That morning the fleet was mid-roll and running
 one portal image on each side of that merge, which is what made the *before* column still
-measurable: `memex-cloud` had taken `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8079` (built
-2026-09-08T05:55:35Z, well after the merge), while `memex` was still on `…:3.0.0-ci.8059`, built
+measurable: the public instance had taken `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8079` (built
+2026-09-08T05:55:35Z, well after the merge), while the control instance was still on `…:3.0.0-ci.8059`, built
 2026-09-07T23:06:50Z — eight minutes short of the merge, so it cannot carry the filter.
 
 🚨 Neither image is *adjacent* to the merge, and the tag numbers do not say so: `ci.8058` finished
@@ -414,7 +414,7 @@ earliest whose build could have carried it. **Tag order is not build order** —
 off the registry (`az acr repository show-tags --orderby time_desc --detail`) rather than sorting
 the numbers.
 
-| | `ci.8059` → memex.systemorph.com | `ci.8079` → memex.meshweaver.cloud |
+| | `ci.8059` → control instance | `ci.8079` → public instance |
 |---|---|---|
 | files under `/app/wwwroot/_content/BlazorMonaco/` **in the image** | **366** | **3** — `jsInterop.js`, `.br`, `.gz` |
 | endpoints in the shipped `Memex.Portal.Distributed.staticwebassets.endpoints.json` | 1,419 | 693 |
@@ -461,10 +461,10 @@ Three method notes, each of which was needed to reach that verdict:
   advertising it. The import map falling to zero — with the image's own endpoints manifest agreeing —
   is what makes this a publish-time removal rather than a suppressed response.
 - **A mid-roll fleet is a free control, and it expires.** The *before* column exists only because
-  memex.systemorph.com had not yet taken `ci.8079`. Measure both sides while the laggard is still
+  the control instance had not yet taken `ci.8079`. Measure both sides while the laggard is still
   behind; once it rolls, the pre-fix state is reconstructible only by pulling an old image.
 
-One residual, named here so it is not rediscovered as a finding: `Systemorph/Memex` still holds
+One residual, named here so it is not rediscovered as a finding: the estate's private deployments repository still holds
 `Memex.Portal.Shared/App.razor` loading `…/min/vs/loader.js` (last touched 2026-08-13). That tree is
 a **frozen copy that ships to nobody** — the running portal is built by MeshWeaver.Plugins from
 `src/Memex.Portal.Distributed`, and that repository's `Portal copies are frozen` gate holds the copy

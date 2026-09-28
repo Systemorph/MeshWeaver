@@ -118,7 +118,7 @@ public static class WebhookInboxEndpoints
             case WebhookInbox.DeliveryStatus.Accepted when result.VerifyOnly:
                 // A sender TESTING its key (WebhookInbox.VerifyOnlyHeader): verified, nothing stored.
                 // `sender` names which per-sender key verified (a name, never a value), so the sender
-                // can show its operator "accepted as 'pearl'" rather than a bare yes.
+                // can show its operator "accepted as 'fabrikam'" rather than a bare yes.
                 logger?.LogInformation(
                     "Webhook verify-only test for target '{Target}' verified{Sender} — nothing stored",
                     target, result.SenderKey is { } testedAs ? $" with the per-sender key '{testedAs}'" : "");

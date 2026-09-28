@@ -16,7 +16,7 @@ non-default source format. Installing one means importing its nodes and compilin
 live. But you do **not** want *every* installation to hold GitHub credentials for a private plugins
 repo just to receive a plugin.
 
-The registry solves that. **One** MeshWeaver instance (memex.meshweaver.cloud) is the registry: it
+The registry solves that. **One** MeshWeaver instance (the plugin registry instance) is the registry: it
 alone holds the source credential, reads the plugins repo, and **re-serves the catalog over an
 authenticated HTTP surface**. Every other installation browses and installs from the registry, never
 from git. The credential is **encapsulated in the registry** — exactly like npm or NuGet, where the
@@ -251,7 +251,7 @@ Every registry decision above refuses a package the plan does not cover **silent
 the same answer as "no such package" — and logs which it was on the registry. That is the
 enumeration defence, and it stays: a registered instance must not learn what a registry carries
 from the shape of its refusals. But it made one case invisible where it mattered. A fresh instance
-on the free plan (`build.meshweaver.cloud`, 2026-09-12) never saw the enterprise `Hosting` package
+on the free plan (the build instance, 2026-09-12) never saw the enterprise `Hosting` package
 the registry itself declares `preInstalled`; the instance showed `canPatch=False` (pointing at
 `Modules:Assemblies`), `/health` said "install the package from the registry" — which the instance
 cannot do — and the Plugin Catalog had no card for it. One cause, three consequences, nothing on
@@ -326,9 +326,9 @@ the instance starts on `free`. Fetching a source's **sealed publication whole**
 the publication carries every plan's bundles.
 
 **Open registration — the free tier by default.** A local install (`memex-local registry
-https://memex.meshweaver.cloud`, no key) registers with **no** bootstrap key at all. The registry
+https://registry.example.com`, no key) registers with **no** bootstrap key at all. The registry
 accepts that only where its operator minted a registration key for the plan un-keyed callers enrol
-into — `free` on memex.meshweaver.cloud — and configured it as `PluginCatalog:OpenRegistration:Key`
+into — `free` on the plugin registry instance — and configured it as `PluginCatalog:OpenRegistration:Key`
 (the chart's `secrets.memex_portal.PluginCatalog__OpenRegistration__Key`). The registration then runs
 exactly as if the caller had presented that key: owned by its minting admin, on the `free` plan,
 seeded `<source>/*`, revocable by revoking the key. Everywhere else an un-keyed registration is
@@ -436,7 +436,7 @@ browsable `Plugins` Space: a Space partition would (correctly) deny read to ever
 > inventory on the **About** tab (`CatalogLayoutAreas.ObserveInstalledManifests`). Install / Update /
 > Remove actions still gate on `hub.IsGlobalAdmin` where they need to.
 
-The catalog reads `PluginCatalog:RegistryUrl` (e.g. `https://memex.meshweaver.cloud`) — or, to consume
+The catalog reads `PluginCatalog:RegistryUrl` (e.g. `https://registry.example.com`) — or, to consume
 **several registries**, a `PluginCatalog:Registries` list of `{ Name, Url, Ref, Token }` entries,
 rendered as one titled catalog section each. It lists each registry's packages via
 `RegistryPackageSource` (an `IPackageSource` over HTTP, on the mesh's Http I/O pool), and joins them

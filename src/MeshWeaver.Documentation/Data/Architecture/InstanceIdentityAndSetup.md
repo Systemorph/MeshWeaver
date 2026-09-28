@@ -33,11 +33,11 @@ The survey behind this design (three read-only sweeps of core, `MeshWeaver.Plugi
 |---|---|---|
 | Instance record | `MeshWeaverInstance` (`src/MeshWeaver.Mesh.Contract/Security/MeshWeaverInstance.cs`) hashed into an index under the registry's admin tree; grant at `Admin/_PluginGrant/{id}` | A row, not a place: nothing else about the instance can live "with" it, and the id is not a node id |
 | Registry authentication | Opaque `mwi_` bearer key on every fetch (`InstanceRegistryAuthenticator`); an HMAC `mwa_` short-lived token exists for the **sync** lane only (`SyncAccessToken`, `POST /api/instances/token`) | Not a JWT; the long-lived secret travels on every request; the token lane is not used for package fetches |
-| Licence | `PlanTierRanks` + `PluginGrantEntry.Tier` (`Plugins/*@free`) decide `/api/plugins` and every bundle route; `Admin/Tiers/*` is the ladder | *"A plan-less entry covers every tier"* — every instance registered before the plan lane (memex-cloud included: `Plugins/*`, `Education/*`, `Crm/*`) can pull `pro`/`enterprise` bundles. The plan is encoded in grant strings, N places to get wrong, and "no suffix" silently means "everything" (#2804) |
+| Licence | `PlanTierRanks` + `PluginGrantEntry.Tier` (`Plugins/*@free`) decide `/api/plugins` and every bundle route; `Admin/Tiers/*` is the ladder | *"A plan-less entry covers every tier"* — every instance registered before the plan lane (the plugin registry's own instance included: `Plugins/*`, `Education/*`, `Crm/*`) can pull `pro`/`enterprise` bundles. The plan is encoded in grant strings, N places to get wrong, and "no suffix" silently means "everything" (#2804) |
 | Registration | `POST /api/instances/register` with an `mwr_` key minted for a plan, or open (un-keyed → the registry's configured free-plan key); first-boot auto-registration (`InstanceAutoRegistrationService`) | Works; keeps working unchanged in spirit — only where the result lands changes |
 | First-run setup | `InstanceManifest` (`instance.json` on the writable root; `AwaitingStorage → AwaitingModules → Complete`), `InstanceSetupDefaults` (`PostgreSql` preselected, `Plugins/*`, the required modules), `MeshBuilder.IsAwaitingSetup` (#2550) | **Nothing reads `IsAwaitingSetup`** — the host has no setup surface; `memex-local` asks no questions at all |
 | A setup wizard | `Hosting/FleetConsole/Source/SetupDialog.cs` — six steps (Identity · Main database · Main storage · Boot modules · Packages & repos · Review), files a `Hosting/InstanceRequest` | Provisions *another* instance in a fleet, not the one you are on; its module step is a free list with no plan |
-| Environment changes | `Hosting/Deployment` (the full instance shape, ~60 fields, all `[Description]`+`[Translation]`), `HelmValues.Render` (a values file that `hosting-deploy` **refuses unless** it carries `# GENERATED from the Hosting/Deployment record`), `Hosting/InstanceAction` verbs run by the in-cluster `hosting-operator` Job | `Hosting/Deployment/*` is **empty** on every mesh we run. memex-cloud's configuration is hand-maintained in Key Vault (`helm-values-memexcloud`) and a Memex-repo overlay, applied by a hand-dispatched workflow (Systemorph/Memex#152) |
+| Environment changes | `Hosting/Deployment` (the full instance shape, ~60 fields, all `[Description]`+`[Translation]`), `HelmValues.Render` (a values file that `hosting-deploy` **refuses unless** it carries `# GENERATED from the Hosting/Deployment record`), `Hosting/InstanceAction` verbs run by the in-cluster `hosting-operator` Job | `Hosting/Deployment/*` is **empty** on every mesh we run. The plugin registry instance's configuration is hand-maintained in Key Vault (a `helm-values-<instance>` secret) and a Memex-repo overlay, applied by a hand-dispatched workflow (Systemorph/Memex#152) |
 | The app | `Hosting` is a Store package with `app: true`, `entryPoint: Hosting/Console` — it has a home tile | `tier: enterprise` — the one package every instance is supposed to run cannot be installed by a free instance |
 | E2E | Plugins `e2e/{instance-lifecycle,instance-request,setup-dialog}.spec.ts` (dry-run, `.invalid` DNS); core `MeshWeaver.Testcontainers` (#2790, a disposable memex with `WithPostgres`); `memex-local instance up` (mint → migrate → deploy → register → install) | No suite joins install → wizard → registered instance → plan-limited modules → promotion |
 
@@ -45,19 +45,19 @@ The survey behind this design (three read-only sweeps of core, `MeshWeaver.Plugi
 
 ### 1. An instance is a partition
 
-On the registry mesh (memex.meshweaver.cloud) every client instance is a **partition root node**,
+On the registry mesh (the plugin registry instance) every client instance is a **partition root node**,
 exactly as a user is: node type `Instance`, node id = the instance id, path = the id. The instance
 id therefore obeys the partition-id alphabet (`3–48` chars, `[a-z0-9-]`, no leading/trailing
 hyphen — the rule `MeshWeaverInstanceService.IsValidInstanceId` already enforces).
 
 ```
-memex-cloud/                       ← the registry's own instance partition (IsPluginRegistry)
+registry/                          ← the registry's own instance partition (IsPluginRegistry)
 roland-rolands-macbook-pro/        ← a Homebrew install
   (root node, nodeType Instance)   ← DisplayName, HomeUrl, Owner*, Plan, Status, CreatedAt, LastSeenAt, IsDisabled
   _PluginGrant/grant               ← which SOURCES/packages this instance may see (never which tiers)
   _Credential/{kid}                ← the credential(s) the instance authenticates with (hash / public key, never the secret)
   _Activity/…                      ← registrations, promotions, token issues — the audit trail, where activities always go
-  Deployment                       ← the Hosting/Deployment record for THIS instance (slice 2 puts memex-cloud's here)
+  Deployment                       ← the Hosting/Deployment record for THIS instance (slice 2 puts the registry's own here)
   Inventory                        ← the module inventory the instance reports (today Hosting/Modules inbox → moves here)
 ```
 
@@ -70,7 +70,7 @@ What this buys, beyond tidiness:
 - **Promotion is one field.** A global admin sets `Plan` on the root node (the Instance grants
   admin tab gains a plan column with a dropdown fed by the `Admin/Tiers` ladder, never free text);
   the next fetch sees it — the authenticator caches for one minute.
-- **The registry's own instance is not special.** memex-cloud is the partition `memex-cloud/` with
+- **The registry's own instance is not special.** It is the partition `registry/` with
   `IsPluginRegistry: true` and plan `dedicated`; the same code that describes a Homebrew install
   describes it.
 
@@ -98,7 +98,7 @@ public record InstanceContent
 
 **Migration.** Existing `MeshWeaverInstance` index entries become partitions with the same id;
 `Admin/_PluginGrant/{id}` moves to `{id}/_PluginGrant/grant` with its `@plan` suffixes **removed**
-and the plan written on the root — the *highest* plan any entry named, else `free`. memex-cloud and
+and the plan written on the root — the *highest* plan any entry named, else `free`. The registry's own instance and
 the maintainer's own instances are promoted explicitly (`dedicated`, which is all-access). The
 migration is a Repair vN migration, never a raw SQL update ([Postgres schema architecture](../PostgresSchemaArchitecture)).
 
@@ -244,9 +244,9 @@ route accepts it (legacy `mwi_` on the fetch routes for one release, logged). Te
 within the cache window"*; a JWT verifier test with a forged signature, an expired token, an
 unknown `sub`, and a disabled instance.
 
-### Slice 2 — memex-cloud is described by a record (Systemorph/Memex#152)
+### Slice 2 — the registry's own instance is described by a record (Systemorph/Memex#152)
 
-The first `Hosting/Deployment` record anywhere: `memex-cloud/Deployment` on the registry, absorbing
+The first `Hosting/Deployment` record anywhere: `registry/Deployment` on the registry, absorbing
 the Key Vault values (secrets by **name**) and the Memex-repo overlay; `HelmValues.Render` produces
 the values `hosting-deploy` accepts; the operator applies it as an `InstanceAction`; the Key Vault
 values secret and the overlay file are deleted, and `helm-release.yml`'s `capture/adopt/deploy`
@@ -286,4 +286,4 @@ partition's record with the plan-aware module picker; the Playwright suite in §
 - [Deployment on AKS](../DeploymentAKS) · [Memex Cloud deployment](../MemexCloudDeployment)
 - [Apps home](../AppsHome) — how an `app: true` package gets its tile
 - [Disposable mesh E2E](../DisposableMeshE2E) — the harness shape the suite in §6 follows
-- Issues: #2804 (licence on the instance), Systemorph/Memex#152 (memex-cloud record, transferred from #2805), #2417 (a local install as a registry consumer), #2483 (build principal — the second issuer of the shared verifier), #2550 (the manifest the wizard writes)
+- Issues: #2804 (licence on the instance), Systemorph/Memex#152 (the registry instance's record, transferred from #2805), #2417 (a local install as a registry consumer), #2483 (build principal — the second issuer of the shared verifier), #2550 (the manifest the wizard writes)

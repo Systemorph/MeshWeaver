@@ -17,7 +17,7 @@ namespace MeshWeaver.Layout.Test;
 /// replica that ends up answering. When those disagree, this frame is what the reader gets.
 ///
 /// <para>Measured 2026-09-17 on memex.systemorph.com: the maintainer opened
-/// <c>CollaborationNotus/PrereadToNotus20260918</c> — a customer letter — and the page carried
+/// <c>CollaborationInitech/PrereadToInitech20260918</c> — a customer letter — and the page carried
 /// <i>"No renderer is registered for area Approvals on hub Approvals/Workspace"</i> followed by
 /// sixty framework area names. The portal was mid-roll: the <c>Approvals/Desk</c> NodeType's
 /// compiled assembly is stamped with a framework identity (<c>saec4a2d…</c>) that neither READY

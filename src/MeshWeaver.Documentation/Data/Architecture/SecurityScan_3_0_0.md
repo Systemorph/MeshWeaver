@@ -17,7 +17,7 @@ Icon: Shield
 
 | | |
 |---|---|
-| **Target** | `https://memex.meshweaver.cloud` (production portal) |
+| **Target** | `https://portal.example.com` (the public production instance) |
 | **Tool** | **OWASP ZAP 2.17.0** (`ghcr.io/zaproxy/zaproxy:stable`) — `zap-full-scan.py` (full active) and `zap-baseline.py -j` (passive rules + AJAX spider) |
 | **Scan type** | **Two passes: the public surface and the signed-in application.** A full active attack scan of the public surface; an authenticated crawl performed as a real signed-in user (a genuine browser sign-in was captured and its session replayed on every request) |
 | **Date** | 2026-09-06 · active scan 05:40–06:20 UTC (40 min, 10-minute spider cap, 30-minute scan cap) · authenticated pass 05:40–05:52 UTC |
@@ -109,7 +109,7 @@ strict-transport-security: max-age=31536000; includeSubDomains
 ## Appendix — raw scan output (OWASP ZAP 2.17.0, 6 September 2026)
 
 ```text
-== Public surface — zap-full-scan.py (active) — https://memex.meshweaver.cloud — 2026-09-06 05:40–06:20 UTC
+== Public surface — zap-full-scan.py (active) — https://portal.example.com — 2026-09-06 05:40–06:20 UTC
 Total of 333 URLs
 WARN-NEW: CSP: Failure to Define Directive with No Fallback [10055] x 15
 WARN-NEW: Backup File Disclosure [10095] x 21                    (21 SVG icons named "Copy of …" — false positive)

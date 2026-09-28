@@ -481,14 +481,14 @@ independent reasons**:
 
 🚨 **And the gap is narrower than it first looks, which is why it was measured before it was
 fixed.** Four of the five records pin a tag that a committed overlay *also* pins, so axis 2 already
-covered them. **`pearl` is the exception, and it is the one #219's own table names** — its overlay
+covered them. **An SME client instance is the exception, and it is the one #219's own table names** — its overlay
 pins the **fleet registry** (`cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8080`), which this
 ACR-locking lane correctly sees as foreign, while its **record** pins
 `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8080` plus `hosting-operator:1979979` — in scope,
-and protected by nothing. `pearl` has never been installed, so axis 3's running-set protection
+and protected by nothing. That instance has never been installed, so axis 3's running-set protection
 cannot cover it either: it would seed from exactly the tag a purge is free to take.
 
-An **empty** `pinnedImageTag` is reported as FLOATING, not as a pin — `memex-cloud` is that today,
+An **empty** `pinnedImageTag` is reported as FLOATING, not as a pin — the public instance is that today,
 and asking the registry to lock a tag that does not exist would turn a correct reading into a red.
 
 A lock set built from axis 1 alone leaves every overlay-pinned manifest unprotected — and
@@ -610,7 +610,7 @@ protecting what was found beats protecting nothing — while releases are not. B
 
 **Seven manifests are pinned and unprotected right now**, and four of them sit in repositories the
 7-day step sweeps: the `3.0.0-ci.7926` portal/migration pair both live deployments run,
-`memex-portal-next:3.0.0-next.43`, and the pearl overlay's `3.0.0-rc9.ci.7601` pair.
+`memex-portal-next:3.0.0-next.43`, and the SME client overlay's `3.0.0-rc9.ci.7601` pair.
 `hosting-operator:1.0.0` and `whisper-swiss-german:1.7.4` are in no filter today, so locking them is
 protection against a future filter addition rather than against tonight.
 

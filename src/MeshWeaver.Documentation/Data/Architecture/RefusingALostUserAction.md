@@ -374,7 +374,7 @@ The line, as it stood:
 
 ```
 REFUSING ClickedEvent on area Overview/Actions/1 for stream iUuXw_4bgUmNKx3-U8N3eQ on hub
-rbuergi/Requests/provision-pearl-20260914: the target stream is gone (disposed circuit, released
+rbuergi/Requests/provision-fabrikam-20260914: the target stream is gone (disposed circuit, released
 read stream, or never-created sync hub), so the action the user asked for did NOT run and never
 will.
 ```
@@ -382,7 +382,7 @@ will.
 Three causes, one sentence, one fingerprint. `Admin/_LogIncident/c3ea7263f217a7f3` carried three
 occurrences: 2026-09-10 22:08Z and 2026-09-11 09:34Z, both on **pre-fix images**, and 2026-09-14
 22:14:51Z on an image that provably carries the fix
-(`memex.meshweaver.cloud/api/version` → `c84c6c0550`, and
+(the public instance's `/api/version` → `c84c6c0550`, and
 `git merge-base --is-ancestor 1594bb31e4 c84c6c0550` → true). The third one's owner is a **per-node
 request hub** and its `sync/{id}` had never been registered on the activation that received the
 click — the third cause, which the client-side ordering fix cannot reach by construction.
@@ -587,7 +587,7 @@ falsifies its own filing.
 
 ### The measurement that does not fit the filed cause
 
-memex-cloud, one pod, occurrences 5–8 of `Admin/_LogIncident/c3ea7263f217a7f3`:
+The public instance, one pod, occurrences 5–8 of `Admin/_LogIncident/c3ea7263f217a7f3`:
 
 ```
 16:47:18.478  REFUSING ClickedEvent on area Catalog/Categories/Cat-Education
@@ -607,7 +607,7 @@ the page still rendered.
 
 The 2026-09-10 occurrence has the same shape with one click (`Catalog/Categories/Cat-Insurance`, the
 same `Store` hub), and the two middle ones name a per-node request hub and a per-node exercise hub —
-`rbuergi/Requests/provision-pearl-20260914`,
+`rbuergi/Requests/provision-fabrikam-20260914`,
 `AgenticOffice/03-Rechnung/Exercise/VierFehlerarten` — the addresses that go idle and deactivate.
 All eight are owner-side.
 

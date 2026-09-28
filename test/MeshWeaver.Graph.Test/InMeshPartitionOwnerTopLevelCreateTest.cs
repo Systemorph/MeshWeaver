@@ -20,7 +20,7 @@ namespace MeshWeaver.Graph.Test;
 /// <para><b>The defect.</b> <c>Crm/Client</c> declares <c>ownsPartition: true</c> in its
 /// <see cref="NodeTypeDefinition"/>, and the CRM guide's recipe for a new client is a top-level
 /// <c>create</c>. On memex.systemorph.com that create was refused for EVERYONE — platform admins
-/// included — with <c>Access denied: Create permission required for node 'Notus'</c>. Every check on
+/// included — with <c>Access denied: Create permission required for node 'Initech'</c>. Every check on
 /// the create path asked only the STATIC registry whether a type owns its partition:</para>
 /// <list type="number">
 ///   <item><c>RlsNodeValidator</c>: only <c>Space</c> carries an access rule that lets an

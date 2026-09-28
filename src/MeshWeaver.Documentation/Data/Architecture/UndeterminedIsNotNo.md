@@ -41,7 +41,7 @@ folding an unreadable answer into it feels safe. It is not, for two reasons.
 
 `Doc/Architecture/BuildCoordination` describes the pre-warmer's two doors — the
 `SubscribeRequest` to `Admin/Build`, and, when that cannot be opened at all, a direct read of the
-durable build root. Issue #3404 is what forced the second door into existence: on `memex-cloud`,
+durable build root. Issue #3404 is what forced the second door into existence: on the public instance,
 2026-09-06, two pods refused readiness at 11:44:32Z and 11:49:37Z for a fingerprint whose GO had
 been written on an already-`Ready` build root at **11:28:56Z**. They refused a build that had
 already been approved.
@@ -161,7 +161,7 @@ it re-throws the original `BuildCoordinationUnreachableException` (so `Describes
 still separates *no verdict* from *a bad verdict* in the health payload), and it says the witness
 was **unreadable**, quoting why — never that there is no GO.
 
-### 🚨 On `memex-cloud` the hold is LATENT, not live — and that is why this must land first
+### 🚨 On the public instance the hold is LATENT, not live — and that is why this must land first
 
 The refusals are real; the *rollout hold* in #3404's title did not happen on 2026-09-06. The
 pre-warmer logs its fault two ways, and which one it picks is the evidence:
@@ -174,7 +174,7 @@ pre-warmer logs its fault two ways, and which one it picks is the evidence:
 All **three** logged occurrences in #3404 carry the second line and **none** carries the first. So on
 those pods the bake gate was disarmed, and the pods went Ready having verified nothing.
 
-That matches what the deployment was measured to be doing: `memex-cloud`'s ConfigMap, values file
+That matches what the deployment was measured to be doing: the public instance's ConfigMap, values file
 and rendered manifest all say `PreWarm__GateReadiness: "true"`, while the pods run `false` from an
 inline `env:` entry set on the Deployment on 2026-09-03T17:32:45Z. **An inline `env:` overrides
 `envFrom`**, so every artefact reads armed and the process is not — and the state can only be read

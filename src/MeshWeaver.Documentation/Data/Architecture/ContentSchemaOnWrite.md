@@ -18,7 +18,7 @@ nobody can attribute.
 
 ## What was measured
 
-memex.systemorph.com, 2026-09-17 ([#4601](https://github.com/Systemorph/MeshWeaver/issues/4601)).
+The control instance, 2026-09-17 ([#4601](https://github.com/Systemorph/MeshWeaver/issues/4601)).
 A `patch` that put a JSON object into a member declared `public string?`:
 
 ```json

@@ -90,7 +90,7 @@ builder.Build().Run();
 
 `AddMemex(name, record)` starts from a record you already have; `AddMemexFromFile(name, path)`
 reads one (a bare record, or a full mesh node with a `content` object — what `get
-Deployments/memex` returns). `MemexOptions` is what is left of the old options type: the default
+Deployments/<name>` returns). `MemexOptions` is what is left of the old options type: the default
 image registry, the default portal repository, the derived default tag (`<major>-latest`) and
 `DefaultRecord(name)`.
 
@@ -127,7 +127,7 @@ discovered:
 | `Mcp__BaseUrl` | the in-cluster portal Service | not emitted by the derivation (never a blank) — the adapter sets the key to the endpoint Aspire allocates, substituted at publish |
 | Plugin-catalog boot wiring (`PluginCatalog__*`) | the operator's catalog config file, not the ConfigMap | emitted as environment — Aspire has no second file |
 
-`FluentBuilderTest.TheSameRecordRendersTheSameKeysForHelmAndForAspire` renders the real `memex`
+`FluentBuilderTest.TheSameRecordRendersTheSameKeysForHelmAndForAspire` renders a real fleet
 record both ways and asserts the difference is exactly these three.
 
 ## The parity table

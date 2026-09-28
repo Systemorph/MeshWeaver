@@ -11,7 +11,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 
 | Route | Target | How | Doc |
 |---|---|---|---|
-| **AKS** | Shared cluster `<aks-cluster>` — every `Deployments/<name>` record (memex, memex-cloud, …) | A `Roll` `Hosting/InstanceAction` on the control instance (the record's image pin); the operator runs build images → `kubectl set image` + rollout. Direct `az aks command invoke` is break-glass | [OperatingFromThePortal.md](/Doc/Architecture/OperatingFromThePortal) · [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
+| **AKS** | Shared cluster `<aks-cluster>` — every `Deployments/<name>` record (each portal instance of the estate) | A `Roll` `Hosting/InstanceAction` on the control instance (the record's image pin); the operator runs build images → `kubectl set image` + rollout. Direct `az aks command invoke` is break-glass | [OperatingFromThePortal.md](/Doc/Architecture/OperatingFromThePortal) · [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 
 🚨 **The Deployment record is the ONE input; Aspire and Helm render from it; the image receives it as configuration (`Deployment:Record`); Aspire emits a record, never a chart.** An instance is a `DeploymentContent` record (`Deployments/<name>` on the control instance), built fluently (`builder.AddMemex("memex").WithImage(…).WithPluginRepo(…)…`) or by hand, and every route reads that record — nothing is configured twice. Maintainer, 2026-09-08; [ConfiguringAnInstanceFromAspire.md](/Doc/Architecture/ConfiguringAnInstanceFromAspire) carries the fluent surface and the parity table.
@@ -28,12 +28,12 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | Understand the release model, merge gates, version channels, and **policy-driven self-update** | [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) |
 | Know what CD **guarantees** about a published image set — all-or-nothing publication, the promote ordering, the self-healing reconciler — and why you verify the IMAGE and never the green tick | [ContinuousDeliveryContract.md](/Doc/Architecture/ContinuousDeliveryContract) |
 | Work out whether an install can actually **take** the newest release — the schema boundary self-update cannot cross, why the resulting stall is invisible, and the three conditions a tag must clear before it is a safe `helm upgrade` target | [SelfUpdateSchemaWall.md](/Doc/Architecture/SelfUpdateSchemaWall) |
-| Ship a code update to the `memex` portal on the shared AKS cluster | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
+| Ship a code update to a portal instance on the shared AKS cluster | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | Deploy an Aspire-orchestrated `test`/`prod` Container Apps environment | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 | Deliver to a client whose change management allows **only Azure DevOps pipelines** to touch the cluster — GitHub for code and the merge, the GitHub App triggers one pipeline run per sealed image set, the pipeline runs `helm upgrade` behind the client's own approvals | [HybridGitHubAzureDevOps.md](/Doc/Architecture/HybridGitHubAzureDevOps) |
 | Understand the private-AKS-cluster architecture & operations behind the shared portal | [MemexCloudDeployment.md](/Doc/Architecture/MemexCloudDeployment) |
 | Add a **new tenant environment** on the existing shared AKS platform | [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment) |
-| Run a **prod-like memex locally on a Mac** (Colima k3s, arm64) | [LocalColimaMac.md](/Doc/Architecture/LocalColimaMac) |
+| Run a **prod-like Memex locally on a Mac** (Colima k3s, arm64) | [LocalColimaMac.md](/Doc/Architecture/LocalColimaMac) |
 | Instance-specific configuration options (`portal.example.com`) | [DeploymentOptions.md](/Doc/Architecture/DeploymentOptions) |
 | Reclaim space — delete old ACR images / prune local Docker, safely | [ImageCleanup.md](/Doc/Architecture/ImageCleanup) |
 | Turn production errors into tickets automatically — deploy the red-log watcher, route incidents to repositories, or work out why nothing is being reported | [LogWatchTriage.md](/Doc/Architecture/LogWatchTriage) |
@@ -47,25 +47,25 @@ The two routes provision and run on different platforms (raw AKS deployments + H
 **The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
 register release and publish event"*) is three sentences:**
 
-1. **Every publishing pipeline ENDS with one call to memex.** Core's CD, after the image set is
+1. **Every publishing pipeline ENDS with one call to the control instance.** Core's CD, after the image set is
    promoted, POSTs the signed platform build (`event: platform-build`) into the control instance's
    `Hosting/PlatformBuilds` inbox (`notify-platform-update`). Every node repository's
    `node-repo-publish-bake.yml` run, after its bundles are sealed for an identity, POSTs the signed
    publication record (`event: bundle-publication` — source, identity, commit, tester + portal image)
    into the same inbox (`register-publication`, its last job). Nothing runs after that call, and no
    pipeline sends a `repository_dispatch` to another repository.
-2. **memex REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
+2. **The control instance REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
    platform build, `Hosting/Publications/<identity>/<source>` for a bundle publication — the source
    of truth for "what is published for which identity" (what the self-update availability check reads).
-3. **memex PUBLISHES the event** from that registration: `FrameworkReleaseBroadcaster` sends
+3. **The control instance PUBLISHES the event** from that registration: `FrameworkReleaseBroadcaster` sends
    `meshweaver-framework-released` (platform) or `meshweaver-upstream-published` (bundle publication,
    `client_payload.version` = the identity) to the subscribed repositories — the repositories the
    control instance's `Hosting/Deployment` records name as registry sources. The subscribers' CI
    receives it, resolves both images from the version, builds and publishes for that identity — and
-   ends by calling memex (1).
+   ends by calling the control instance (1).
 
 ```
- pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
+ pipeline (core CD | a node repo's publish-bake)        control instance                      subscriber CI
  ───────────────────────────────────────────────        ────────────────────────              ─────────────
  promote / seal ✅                                       WebhookInbox Hosting/PlatformBuilds
    └─ ONE signed POST ──(platform-build |──────────────▶│ verify HMAC
@@ -76,7 +76,7 @@ register release and publish event"*) is three sentences:**
                                                          └─ PUBLISH   repository_dispatch ─────────────▶ on: repository_dispatch:
                                                             meshweaver-framework-released |               types: [meshweaver-framework-released,
                                                             meshweaver-upstream-published                        meshweaver-upstream-published]
-                                                                                                          → bake for the version → seal → POST memex
+                                                                                                          → bake for the version → seal → POST control
 ```
 
 Where the pieces are: the POST steps in `main-cd.yml` and `node-repo-publish-bake.yml` (this repo);
@@ -89,7 +89,7 @@ under `.github/workflows` — there is no ledger — and
 Operator view: after a promote, the control instance's log carries `[PlatformBuilds] verified build …`,
 then `[PlatformBuilds] release broadcast for <version>: N subscriber(s) dispatched.`; each subscribed
 repository shows a `repository_dispatch` run whose payload carries `source: memex`; the node repos'
-pin-bump PRs follow. A 2xx on the pipeline's POST proves only that memex STORED the record.
+pin-bump PRs follow. A 2xx on the pipeline's POST proves only that the control instance STORED the record.
 
 # Running Locally
 

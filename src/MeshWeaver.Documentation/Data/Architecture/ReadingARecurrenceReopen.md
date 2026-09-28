@@ -81,8 +81,8 @@ seen after their close, and then stopped.
 | **awaiting delivery** | **0 in this wave** | every close in the wave predates both running images |
 
 **Awaiting delivery is empty here by construction.** The newest close in the population is
-2026-09-08T21:04Z, while memex.systemorph.com runs `afde4ea` (2026-09-15 21:50Z) and
-memex.meshweaver.cloud runs `c84c6c0` (2026-09-12 09:30Z). Every fix that closed a wave issue is in
+2026-09-08T21:04Z, while the control instance runs `afde4ea` (2026-09-15 21:50Z) and
+the public instance runs `c84c6c0` (2026-09-12 09:30Z). Every fix that closed a wave issue is in
 both running images by at least four days, so **no wave issue can be excused as delivery lag**.
 (Whether a given close carried a *fix* at all is a separate question, answered per issue below; the
 delivery argument only establishes that if there was one, it is running.) The genuine
@@ -198,13 +198,13 @@ the same afternoon:
 
 | incident node | carries issue | `status` | newest `lastSeen` | `namespace` |
 |---|---|---|---|---|
-| `d1cd36f53a5f3a6c` | #1246 | **Superseded** → `c3a4225a446594c7` | 2026-09-19 05:20:00Z | memex-cloud |
-| `465a6677047a571b` (Feedback gating, 2 paths) | **#1246**, inherited | Filed | 2026-09-19 08:59:06Z | memex-cloud |
-| `c3a4225a446594c7` (Feedback gating, 1 path) | **#4814**, new (already closed) | Filed | 2026-09-19 07:49:05Z | memex-cloud |
-| `4ff70ec1124b1b3c` (Feedback gating, 3 paths) | **#4806**, new | Filed | 2026-09-19 09:40:44Z | memex |
-| `b03482717d5ba39a` | #3659 | superseded (its own fold comment says so) | 2026-09-19 07:41:12Z | memex-cloud |
-| `fc3bfaea16374d50` (`DefaultViews` absence) | **#3659**, inherited | Filed | 2026-09-19 07:41:12Z | **memex** |
-| `c93238020fe2f0b5` (`ClaimsDeepfield` absence) | **#4812**, new | Filed | 2026-09-19 09:09:51Z | memex-cloud |
+| `d1cd36f53a5f3a6c` | #1246 | **Superseded** → `c3a4225a446594c7` | 2026-09-19 05:20:00Z | `<public-ns>` |
+| `465a6677047a571b` (Feedback gating, 2 paths) | **#1246**, inherited | Filed | 2026-09-19 08:59:06Z | `<public-ns>` |
+| `c3a4225a446594c7` (Feedback gating, 1 path) | **#4814**, new (already closed) | Filed | 2026-09-19 07:49:05Z | `<public-ns>` |
+| `4ff70ec1124b1b3c` (Feedback gating, 3 paths) | **#4806**, new | Filed | 2026-09-19 09:40:44Z | `<control-ns>` |
+| `b03482717d5ba39a` | #3659 | superseded (its own fold comment says so) | 2026-09-19 07:41:12Z | `<public-ns>` |
+| `fc3bfaea16374d50` (`DefaultViews` absence) | **#3659**, inherited | Filed | 2026-09-19 07:41:12Z | **`<control-ns>`** |
+| `c93238020fe2f0b5` (`ClaimsDeepfield` absence) | **#4812**, new | Filed | 2026-09-19 09:09:51Z | `<public-ns>` |
 
 Three consequences, each of which reverses a reading a triage pass would otherwise make.
 
@@ -215,7 +215,7 @@ Three consequences, each of which reverses a reading a triage pass would otherwi
    cannot show it: the last fold comment looks exactly like every earlier one.
 2. **The residue that held a ticket open may have MOVED to another ticket.** #3659 was held open on
    2026-09-17 for one operator item — `ClaimsDeepfield`, 82 of 83 declared nodes absent on
-   memex-cloud, unhealed for three weeks. That shape is now its own fingerprint with its own,
+   the public instance, unhealed for three weeks. That shape is now its own fingerprint with its own,
    correctly-titled issue (**#4812**), still folding as of 09:09:51Z. Closing #3659 no longer buries
    it. So check every successor's `issueNumber` before concluding a ticket still owns its residue —
    and before concluding that closing it would lose something.
@@ -228,17 +228,17 @@ Three consequences, each of which reverses a reading a triage pass would otherwi
 `content.namespace` is one value on a node whose samples accumulate for weeks, and a split can hand
 a successor a namespace that no longer matches the sample you are reading. It is worse than stale:
 **one fingerprint can span deployments while that field holds a single value.** `4ff70ec1124b1b3c`
-carries `namespace: memex` and its pod list contains both `…-6cd5d8f887-2kcwk` (in
-`Ops/Status/memex`'s roster, `3.0.0-ci.8968`) and `…-69956b6dbc-{v5r29,s246c}` (in
-`Ops/Status/memex-cloud`'s, `3.0.0-ci.8969`). No single value can be right for that node.
+carries `namespace: <control-ns>` and its pod list contains both `…-6cd5d8f887-2kcwk` (in
+`Ops/Status/<control>`'s roster, `3.0.0-ci.8968`) and `…-69956b6dbc-{v5r29,s246c}` (in
+`Ops/Status/<public>`'s, `3.0.0-ci.8969`). No single value can be right for that node.
 
 🚨 **A pod name IS decisive — but only once you resolve it against a roster, never by reading it.**
 Every portal runs a Deployment called `memex-portal-deployment`, so the name carries no cluster; what
 separates them is the replicaset hash, and which hash belongs to which deployment is knowable only
-from `Ops/Status/<deployment>`'s `replicas[]`. Measured 2026-09-19: memex-cloud was on
-`…-69956b6dbc-*` (`3.0.0-ci.8969`, commit `c25f86ae85b7…`) and memex on `…-6cd5d8f887-*`
-(`3.0.0-ci.8968`, `96f88406b4…`). So a sample naming `…-69956b6dbc-s246c` is memex-cloud's **even
-though the node it sits on says `namespace: memex`** — and an earlier draft of this paragraph had it
+from `Ops/Status/<deployment>`'s `replicas[]`. Measured 2026-09-19: the public instance was on
+`…-69956b6dbc-*` (`3.0.0-ci.8969`, commit `c25f86ae85b7…`) and the control instance on `…-6cd5d8f887-*`
+(`3.0.0-ci.8968`, `96f88406b4…`). So a sample naming `…-69956b6dbc-s246c` is the public instance's **even
+though the node it sits on says `namespace: <control-ns>`** — and an earlier draft of this paragraph had it
 backwards, inferring the pod's cluster from the node's namespace, which is the error the paragraph
 exists to name.
 
@@ -246,8 +246,8 @@ exists to name.
 scraped, is a record version quoted in the log line.** #3659's 05:29:06Z
 sample says `taken over Plugins/DefaultViews v48 (written 2026-09-19T00:24:55Z)`. Read the same hour
 on both portals, `Plugins/DefaultViews` is **v31** (written 2026-09-18T21:31:10Z) on
-memex.meshweaver.cloud and **v54** (2026-09-19T07:50:02Z) on memex.systemorph.com. memex-cloud never
-held a v48, so that sample is the other portal's — and an ancestry argument about *memex-cloud's*
+the public instance and **v54** (2026-09-19T07:50:02Z) on the control instance. The public instance never
+held a v48, so that sample is the other portal's — and an ancestry argument about *the public instance's*
 running image says nothing about it. The same trick works on any line that names a node version, a
 module version or an `installedAtUtc`.
 
@@ -257,18 +257,18 @@ A close review at 2026-09-19T10:35Z could not establish *"not seen since the rol
 issues, because no incident anywhere in the readable population had folded a sighting since
 07:28:51Z — a reading indistinguishable from a stopped watcher, and correctly refused as evidence.
 By 15:41Z the same instrument had folded sightings from pods in
-`Ops/Status/memex-cloud`'s own roster. 🚨 **What qualifies each row below is the POD, never the
+`Ops/Status/<public>`'s own roster. 🚨 **What qualifies each row below is the POD, never the
 incident node's `namespace`** — for the reason in the section just above, two of these three nodes
-carry `namespace: memex` while the pod they name is in memex-cloud's roster:
+carry `namespace: <control-ns>` while the pod they name is in the public instance's roster:
 
-| incident node | sighting | pod | in memex-cloud's roster? |
+| incident node | sighting | pod | in the public instance's roster? |
 |---|---|---|---|
 | `465a6677047a571b` | 08:57:30Z, 08:59:06Z | `…-69956b6dbc-gx6z6` | yes — **currently running**, started 08:39:58Z |
 | `4ff70ec1124b1b3c` | 09:08:04Z, 09:09:45Z, 09:14:38Z | `…-69956b6dbc-s246c` | yes — **currently running**, started 08:34:53Z |
 | `c93238020fe2f0b5` | 09:09:51Z | `…-69956b6dbc-g6bbb` | same generation, since replaced |
 
-(`Ops/Status/memex-cloud` sampled 18:53:13Z lists exactly `…-69956b6dbc-{gx6z6,ndnxt,s246c}` on
-`3.0.0-ci.8969`; `Ops/Status/memex` lists `…-6cd5d8f887-{2kcwk,lvmpf}` on `3.0.0-ci.8968`. That is
+(`Ops/Status/<public>` sampled 18:53:13Z lists exactly `…-69956b6dbc-{gx6z6,ndnxt,s246c}` on
+`3.0.0-ci.8969`; `Ops/Status/<control>` lists `…-6cd5d8f887-{2kcwk,lvmpf}` on `3.0.0-ci.8968`. That is
 what makes the pod decisive and the namespace field not.)
 
 🚨 **The control does not have to be the fingerprint you are judging.** Any fold naming a pod from
@@ -284,7 +284,7 @@ advancing is triage bookkeeping and is NOT such a control.
 not carry"* — they do not, but `Ops/Status/<deployment>` does, whenever kube-state-metrics is
 scraping the namespace (`notScraped: false`; it flips, #4218). Its `replicas[]` carries `pod`,
 `image`, `generation`, `commit`, `startedAt` and `restarts` per replica, so a sample's pod name
-resolves to an image and a start time in one read. Measured 2026-09-19T18:53:13Z for memex-cloud:
+resolves to an image and a start time in one read. Measured 2026-09-19T18:53:13Z for the public instance:
 three replicas on `3.0.0-ci.8969` / `c25f86ae85b7…`, started 08:34:53 / 08:39:58 / 08:39:59Z.
 
 That closes the teardown ambiguity in the direction the section above leaves open: a sample whose pod

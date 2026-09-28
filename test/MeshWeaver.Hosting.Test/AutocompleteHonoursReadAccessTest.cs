@@ -22,8 +22,8 @@ namespace MeshWeaver.Hosting.Test;
 /// with a hard-coded <c>UserId = null</c> and ran it through
 /// <c>RunQueryNodes(…, useSecurityFilter: false)</c>. Same storage, same query shape and the same
 /// <c>ValidateRead</c> chain as the secured read — only those two inputs differed. Measured on
-/// <c>memex.systemorph.com</c> on 2026-09-10: <c>autocomplete '@/Helvetia/'</c> named five nodes
-/// (<c>Helvetia</c>, <c>Helvetia/Engagement</c>, …) for an identity whose <c>get</c> and
+/// <c>memex.systemorph.com</c> on 2026-09-10: <c>autocomplete '@/Initech/'</c> named five nodes
+/// (<c>Initech</c>, <c>Initech/Engagement</c>, …) for an identity whose <c>get</c> and
 /// <c>search</c> on those very paths answered nothing, and the drill-down of a readable partition
 /// returned strings like <i>"Pricing Comparison (Internal)"</i> — document titles, not just ids.</para>
 ///

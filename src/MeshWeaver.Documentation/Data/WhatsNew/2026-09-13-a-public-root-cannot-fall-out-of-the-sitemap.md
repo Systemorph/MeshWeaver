@@ -13,7 +13,7 @@ filter: with more than 500 `Space` mains on the mesh — every course installed 
 is one, every store plugin copy is one — which top-level roots landed inside the first 500 was
 decided by the storage's order, and a public root that did not make the window vanished from the
 sitemap. Nothing errored; the sitemap just listed fewer URLs, which is exactly what made it
-invisible. Measured on memex.meshweaver.cloud with 13 `Space` mains, so the window had not been
+invisible. Measured on the public instance with 13 `Space` mains, so the window had not been
 hit yet — this was fixed before it bit.
 
 The query language already pushes a root filter down — `namespace:` with an empty value is

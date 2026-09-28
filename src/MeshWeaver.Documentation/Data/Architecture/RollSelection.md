@@ -173,9 +173,9 @@ Both, and each has discriminated on a different real incident — so neither hal
 
 | Incident | What the publication looked like | Which half caught it | Since MeshWeaver#3651 |
 |---|---|---|---|
-| memex.meshweaver.cloud, `3.0.0-rc9.ci.7676` (held 2026-09-03) | 38 of 77 installed packages had **no sealed bundle** under identity `sf61a0f5d75…` | **presence** | **named as the boot compile**, and the release is selected — a decline only under `Modules:RequirePrebuilt` |
-| memex-cloud, `3.0.0-ci.7621` ([#3175](../ReleaseGates)) | every package present; a bundle's NodeTypes recorded a module MVID the same identity's sealed module set did not carry | **adoptability** | unchanged — a torn set still declines |
-| memex.systemorph.com, `3.0.0-ci.7926` (2026-09-06) | complete **and** consistent | **neither** — see below | unchanged |
+| the public instance, `3.0.0-rc9.ci.7676` (held 2026-09-03) | 38 of 77 installed packages had **no sealed bundle** under identity `sf61a0f5d75…` | **presence** | **named as the boot compile**, and the release is selected — a decline only under `Modules:RequirePrebuilt` |
+| the public instance, `3.0.0-ci.7621` ([#3175](../ReleaseGates)) | every package present; a bundle's NodeTypes recorded a module MVID the same identity's sealed module set did not carry | **adoptability** | unchanged — a torn set still declines |
+| the control instance, `3.0.0-ci.7926` (2026-09-06) | complete **and** consistent | **neither** — see below | unchanged |
 | every production portal, `3.0.0-ci.8009` → all eleven candidates (2026-09-07) | complete for the platform's own content; the satellites not yet baked for the new identity; every landed module **would have loaded** | **presence** held it (behind the floors) — wrongly | the **link check** clears every candidate; the unbaked satellites are the named cost |
 
 The predicate carries all three, and `RollSelection` inherits them unchanged.
@@ -185,7 +185,7 @@ The predicate carries all three, and `RollSelection` inherits them unchanged.
 This is the incident that prompted the directive, and it is worth stating exactly, because a reader
 will otherwise assume this algorithm covers it.
 
-memex.systemorph.com rolled to `3.0.0-ci.7926` at 19:17Z on 2026-09-06. Its bake gate found
+The control instance rolled to `3.0.0-ci.7926` at 19:17Z on 2026-09-06. Its bake gate found
 `Feedback/Feedback` regressed and refused readiness — correctly. The refused pod nonetheless kept
 running and kept stamping module generations, two images served one mesh for two hours, and
 `Crm/Offer` and `Crm/Opportunity` went unloadable: every deal and offer page on the client portal was

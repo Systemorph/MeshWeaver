@@ -55,7 +55,7 @@ with no error arm. **Look there first** — before the dump, before the GC, befo
 
 `139 = 128 + 11`, and `.github/workflows/dotnet-test.yml` classifies it for you
 (`[CI] <name> exit=139 SIGNAL SIGSEGV`). But **`createdump` also fires on unhandled MANAGED
-exceptions**, and the spew is identical. 2026-08-26: `memex.systemorph.com` crash-looping with
+exceptions**, and the spew is identical. 2026-08-26: the control instance crash-looping with
 `lastExit=139` + a core dump was read as a native fault and a plausible-looking disposal defect was
 shipped as "the prod fix". One line of the actual dump said otherwise:
 

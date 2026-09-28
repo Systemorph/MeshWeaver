@@ -15,7 +15,7 @@ held five publications each carrying its own copy of `MeshWeaver.AI`. When the u
 identity with a newer build, the copies diverged, and a portal reading the identity found two builds
 of one assembly — the state `Modules:VersionStrictness` readers answer *"sealed set inconsistent —
 nothing rolls"* for, and the reason a page rendered empty on one replica and fine on the next
-(MeshWeaver#3732, measured on memex.systemorph.com on 2026-09-08 and again on 2026-09-11).
+(MeshWeaver#3732, measured on the control instance on 2026-09-08 and again on 2026-09-11).
 
 A publication now seals **only the modules its repository owns**. Upstream modules are still composed
 into the bake's compile surface and still checked for one-build-per-name; they are just not

@@ -77,7 +77,7 @@ stream with NO live subscriber SUCCEEDS: nothing faults, the continuation never 
 the NACK is simply gone"* — and #1486 removed the stream from the **co-hosted** NACK path for that
 reason. The forward and reply legs to a *remote* silo still depend on it.
 
-### What it looked like in production (memex-cloud, issue #1729)
+### What it looked like in production (the public instance, issue #1729)
 
 Two portal replicas. Probing each pod directly, bypassing the ingress:
 
@@ -116,7 +116,7 @@ a second knob, so the two can never drift apart:
 
 | `Features:Orleans:Clustering` | Silos | PubSubStore |
 |---|---|---|
-| `AdoNet` | many (AKS `memex-cloud`, HA self-host) | **`AddAdoNetGrainStorage` on the `orleans` Postgres database** |
+| `AdoNet` | many (AKS portal instances, HA self-host) | **`AddAdoNetGrainStorage` on the `orleans` Postgres database** |
 | `Localhost` | one | memory |
 | Bake mode (`Deployment:Mode=Bake`) | one, forced localhost | memory |
 | `AzureTables` (ACA route) | many | memory — **still exposed**, see *Residual* below |
@@ -339,7 +339,7 @@ psql "$ORLEANS_CONNECTION_STRING" \
 #    ACROSS the next rolling deploy — a fresh pod always works until a silo departs.
 for i in $(seq 10); do
   curl -o /dev/null -w "%{http_code} %{time_total}\n" --max-time 10 \
-    "https://memex.meshweaver.cloud/api/content/AgenticEngineering/content/og.png"
+    "https://portal.example.com/api/content/AgenticEngineering/content/og.png"
 done
 ```
 

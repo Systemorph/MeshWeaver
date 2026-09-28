@@ -20,7 +20,7 @@ and in every satellite invokes the image's entrypoint directly, so nothing insta
 Create an API token in your portal (Profile → API Tokens), then:
 
 ```bash
-memex login mw_yourtoken --base-url https://memex.meshweaver.cloud
+memex login mw_yourtoken --base-url https://portal.example.com
 ```
 
 The token and base URL are stored in `~/.memex/config.json`; `$MEMEX_TOKEN` / `$MEMEX_BASE_URL` or `--token` / `--base-url` override per call.

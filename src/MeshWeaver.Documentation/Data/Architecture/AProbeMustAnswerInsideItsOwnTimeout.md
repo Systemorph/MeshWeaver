@@ -32,7 +32,7 @@ a state the pod cannot leave.
 
 ## What was measured
 
-memex.systemorph.com, 2026-09-17, consecutive reads from outside the cluster:
+The control instance, 2026-09-17, consecutive reads from outside the cluster:
 
 | endpoint | response | 14:53Z | 15:22Z |
 |---|---|---|---|
@@ -63,7 +63,7 @@ for the two **healthy, serving** replicas beside it.
 three timings were taken on `3.0.0-ci.8710` — core commit `afde4eab` (2026-09-15 21:50Z), which
 **predates** every merge of the night the roll was meant to deliver (the unloadable-build fix merged
 2026-09-16 21:59Z; an ancestry check says it is not in that image). The latency is not something the
-candidate image introduced — and `memex-cloud`, on the older `3.0.0-ci.8411`, answers in 0.14–0.75 s,
+candidate image introduced — and the public instance, on the older `3.0.0-ci.8411`, answers in 0.14–0.75 s,
 so it is not a property of the image line either. It is a property of **this instance**.
 
 What is still unmeasured is the latency on a pod that is **starting**. The fleet watch's own 8 s
@@ -196,7 +196,7 @@ which is the whole of the seconds above), over a synthetic module volume:
 | 400 modules, 1,602 files | 48.2 / 48.9 / 50.6 / 51.4 / 56.4 ms | median **0.0074 ms** over 200 probes |
 
 🚨 **Read the columns, not the ratio.** The left column is what grows with the volume — 3.3× the
-files cost ~2.7× the time, and memex's share is two orders of magnitude larger again. The right one
+files cost ~2.7× the time, and the control instance's share is two orders of magnitude larger again. The right one
 does not move, because it is no longer a function of the volume at all. A probe whose first reading
 does not exist yet measured **0.30 ms** and performed **zero** walks.
 
@@ -277,33 +277,33 @@ nameable in one `curl` instead of an argument.
 
 `timeoutSeconds` for this probe is **5 s** on the shipped chart and on three of the four environment
 overlays — instances raise `periodSeconds` and `failureThreshold` to fit a cold bake, and leave the
-per-probe timeout alone. The fourth is `memex`, raised to **30 s** during the 2026-09-17 incident,
+per-probe timeout alone. The fourth is the control instance's, raised to **30 s** during the 2026-09-17 incident,
 which is a stopgap with a condition attached: **it comes back to 5 once the image carrying the
 `required_modules` fix is running.** Read that number as debt, not as the setting — a raised
-per-probe timeout is how the next growth becomes invisible, and the `build`, `memex-cloud` and
-`pearl` overlays are at 5 precisely because nothing has needed to hide anything from them.
+per-probe timeout is how the next growth becomes invisible, and the build instance's, the public instance's and
+an SME client instance's overlays are at 5 precisely because nothing has needed to hide anything from them.
 
 So the quantity that decides whether a roll can ever finish is `/health` latency against a fixed
 five seconds:
 
 | instance | `/health` warm | headroom against 5 s |
 |---|---|---|
-| memex | 8.12 / 9.62 / 9.52 s | **none — every probe times out** |
-| memex-cloud | 0.14 / 0.75 s | ~7× |
+| control instance | 8.12 / 9.62 / 9.52 s | **none — every probe times out** |
+| public instance | 0.14 / 0.75 s | ~7× |
 
 Re-measured after the outage, 2026-09-17 **20:19Z**, from outside the cluster (so TLS and ingress are
 in the number), with the fix merged in core and its portal half still open:
 
 | instance | `/health` | what its own timing line says | headroom against 5 s |
 |---|---|---|---|
-| memex | **9.10 s** | `timing: 8968ms total over 17 check(s) … required_modules 8968ms; pending_module_activation 21ms; data_volume_free_space 14ms; 14 more under 10ms` | **none** — it answers only because the startup probe is patched to `/ready` |
-| memex-cloud | **1.66 s** | *no timing line* — this instance is on an image from before the line shipped | ~3× |
+| control instance | **9.10 s** | `timing: 8968ms total over 17 check(s) … required_modules 8968ms; pending_module_activation 21ms; data_volume_free_space 14ms; 14 more under 10ms` | **none** — it answers only because the startup probe is patched to `/ready` |
+| public instance | **1.66 s** | *no timing line* — this instance is on an image from before the line shipped | ~3× |
 
-🚨 **Read the second row as the next one to watch, not as the comfortable one.** `memex-cloud` is the
+🚨 **Read the second row as the next one to watch, not as the comfortable one.** The public instance is the
 instance with 714 module generations and 33,383 files on its share — the volume whose size is the
 whole of the first row's number — and it is at the chart's `timeoutSeconds: 5` with no override.
 Three times is not seven, it cannot yet say which check is spending it, and the growth that closed
-memex's headroom is growth it has more of.
+the control instance's headroom is growth it has more of.
 
 Two things follow. First, this is **not** a property of the image: both instances were running
 images from the same line. Second, a warm reading is not the reading that matters — a booting
@@ -317,7 +317,7 @@ Every check that answers quickly on this endpoint follows one pattern: the **wor
 into a mesh-scoped instance registry, and the **check** reads the last reading. `content-types`
 (0.06 ms), `bake-report`, `source-discovery` and `publication-seal` are all that shape, and
 `pending_module_activation` was moved to it — "the module-activation probe reads the volume once per
-change" — precisely because reading a volume per probe had already made memex-cloud's rollouts fail
+change" — precisely because reading a volume per probe had already made the public instance's rollouts fail
 startup once.
 
 A check that performs live IO per request — a database round trip, a `statfs` against a network
@@ -384,7 +384,7 @@ aborted request at Debug.
 A check that catches **every** exception defeats that. Aspire's `AddNpgsqlDataSource` registers
 `HealthChecks.NpgSql.NpgSqlHealthCheck` as `PostgreSql`, and its body is one `catch (Exception)` —
 the caller's cancellation included — returned as `Unhealthy`, which the service logs at `fail:`
-with the cancellation's stack. On memex-cloud that produced nine "Health check PostgreSql with
+with the cancellation's stack. On the public instance that produced nine "Health check PostgreSql with
 status Unhealthy" lines on 2026-09-22/23, "completed after" anywhere from **37 ms to 12.4 s**, each
 cancelled wherever the connector happened to be (`SslStream.ForceAuthenticationAsync`,
 `NpgsqlWriteBuffer.Flush`). No Npgsql or server timeout produces that spread; the clock that ran out
