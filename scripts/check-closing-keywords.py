@@ -73,9 +73,12 @@ WHAT THE PARSER SEES, and why this file mirrors it rather than improving on it:
   * A keyword inside a code span or a fence fires nothing (measured: #3018's `` `Fixes #2897` ``
     left #2897 open). Both are stripped before the scan.
   * A keyword anywhere else fires — headings, future tense, past-tense narration, a disclaimer.
-  * Cross-repository references (`owner/repo#N`) close in THAT repository. This gate reads issues
-    in its own repository only; a cross-repository reference is named in the run and label-checked
-    nowhere. That limit is printed on every run rather than being silent.
+  * Cross-repository references (`owner/repo#N`) close in THAT repository. By default this gate
+    reads issues in its own repository only; a cross-repository reference is named in the run and
+    label-checked nowhere. A caller may explicitly protect a public repository. Satellite PRs use
+    that mode for Systemorph/MeshWeaver: only explicit core references are checked, using the
+    anonymous public REST API with positive and negative controls. A failure to prove that reader
+    works is red, never an absent issue.
 
 NOT ESTABLISHED (stated because a gate's blind spots belong with it, not in a commit message):
   * whether GitHub's parser reads a keyword inside a BLOCKQUOTE. This gate scans quoted lines, the
@@ -86,6 +89,8 @@ NOT ESTABLISHED (stated because a gate's blind spots belong with it, not in a co
 
 Usage:
     check-closing-keywords.py --repo <owner/repo> --pr-body-file <file>
+    check-closing-keywords.py --repo <caller/repo> --protect-public-repo Systemorph/MeshWeaver \
+        --only-protected-repos --pr-body-file <file>
     check-closing-keywords.py --self-test
 """
 
@@ -96,6 +101,8 @@ import json
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 # ── the parser this file mirrors ────────────────────────────────────────────────────────────────
 
@@ -173,6 +180,11 @@ BLOCKING_LABELS = ("sev:B", "sev:H")
 # path uses. The worst of the 99 merged bodies measured (two days to 2026-09-22T11:17Z) resolves
 # TWO subjects, so this sits ~30x above anything real and cannot become a wall.
 MAX_RESOLVED_SUBJECTS = 60
+# Anonymous REST is limited to 60 requests/hour per source IP. The protected satellite path needs
+# two controlled reads plus one per distinct issue, so keep one PR well below that shared ceiling.
+MAX_ANONYMOUS_ISSUE_SUBJECTS = 20
+PUBLIC_ISSUE_READ_PROBES = {"systemorph/meshweaver": 5011}
+PUBLIC_ISSUE_NOT_FOUND_SENTINEL = 2147483647
 
 
 class Undecidable(Exception):
@@ -241,6 +253,7 @@ class Reference:
         self.keyword = match.group("keyword")
         self.number = int(match.group("number"))
         self.slug = match.group("slug") or match.group("urlslug") or repo
+        self.explicit_repository = bool(match.group("slug") or match.group("urlslug"))
         self.local = self.slug.lower() == repo.lower()
         self.possessive = bool(match.group("possessive"))
         self.negation = negation_before(prose, match.start())
@@ -296,15 +309,21 @@ def _escape_blocks(body: str) -> list[str]:
     return out
 
 
-def escapes(body: str, repo: str) -> tuple[dict[int, str], list[str]]:
-    """({issue number: reason}, [declarations REFUSED, with the reason]).
+def escapes(
+    body: str,
+    repo: str,
+    checked_repositories: set[str] | None = None,
+    only_checked_repositories: bool = False,
+) -> tuple[dict[tuple[str, int], str], list[str]]:
+    """({(repository, issue number): reason}, [declarations REFUSED, with the reason]).
 
     🚨 A line that starts `Verified-closing:` and does not qualify is a FAILURE, never an ignored
     line. An author who believes they declared something and a gate that believes they did not is
     the disagreement these gates exist to remove, and from the outside it is indistinguishable
     from a skip.
     """
-    released: dict[int, str] = {}
+    checked = {r.lower() for r in (checked_repositories or {repo})}
+    released: dict[tuple[str, int], str] = {}
     refused: list[str] = []
     for block in _escape_blocks(body):
         shown = block if len(block) <= 160 else block[:157] + "…"
@@ -324,14 +343,25 @@ def escapes(body: str, repo: str) -> tuple[dict[int, str], list[str]]:
                 "whole point of the escape."
             )
             continue
-        numbers = [
-            int(r.group("number"))
+        references = [
+            (
+                (r.group("slug") or r.group("urlslug") or repo).lower(),
+                int(r.group("number")),
+            )
             for r in ANY_REFERENCE_RE.finditer(split.group("refs"))
-            if (r.group("slug") or r.group("urlslug") or repo).lower() == repo.lower()
         ]
-        if not numbers:
+        targets = [(target_repo, number) for target_repo, number in references if target_repo in checked]
+        # A local Verified-closing declaration belongs to the caller's own gate, not the
+        # cross-repository-only satellite scan. It cannot release a core issue because no
+        # unqualified reference is interpreted as Systemorph/MeshWeaver in that mode.
+        # Cross-only mode ignores declarations with no parsed protected target. The declaration
+        # cannot release anything in scope without such a target, and reason prose is not a target.
+        if only_checked_repositories and not targets:
+            continue
+        if not targets:
             refused.append(
-                f"`{shown}` — the declaration names no issue in {repo}. The escape is "
+                f"`{shown}` — the declaration names no issue in the checked repositories "
+                f"({', '.join(sorted(checked))}). The escape is "
                 "PER-ISSUE: `Verified-closing: #N — <reason>`, never a blanket waiver."
             )
             continue
@@ -344,8 +374,8 @@ def escapes(body: str, repo: str) -> tuple[dict[int, str], list[str]]:
                 "reviewer, which an empty one is not."
             )
             continue
-        for n in numbers:
-            released[n] = reason
+        for target in targets:
+            released[target] = reason
     return released, refused
 
 
@@ -394,64 +424,184 @@ def resolve_via_gh(repo: str, number: int) -> dict | None:
     }
 
 
+def _public_issue_request(repo: str, number: int) -> dict | None:
+    """Read a public issue anonymously; distinguish a proven 404 from every other failure."""
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/issues/{number}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "MeshWeaver-closing-keyword-gate",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        response_body = exc.read(1024).decode("utf-8", errors="replace")
+        headers = exc.headers or {}
+        remaining = headers.get("X-RateLimit-Remaining", "")
+        reset = headers.get("X-RateLimit-Reset", "")
+        retry_after = headers.get("Retry-After", "")
+        if (
+            exc.code == 429
+            or remaining == "0"
+            or "rate limit" in str(exc.reason).lower()
+            or "rate limit" in response_body.lower()
+        ):
+            details = ", ".join(
+                part for part in (
+                    f"x-ratelimit-reset={reset}" if reset else "",
+                    f"retry-after={retry_after}s" if retry_after else "",
+                ) if part
+            )
+            raise Undecidable(
+                f"anonymous GitHub REST read of {repo}#{number} was rate-limited "
+                f"(HTTP {exc.code}{'; ' + details if details else ''}); no retry was attempted. "
+                "Wait until the indicated window resets before rerunning the gate."
+            ) from exc
+        raise Undecidable(
+            f"anonymous GitHub REST read of {repo}#{number} returned HTTP {exc.code}; "
+            "only a controlled 404 proves absence."
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise Undecidable(
+            f"anonymous GitHub REST read of {repo}#{number} failed: {exc}; "
+            "a network failure is not an absent issue."
+        ) from exc
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise Undecidable(f"the anonymous REST response for {repo}#{number} is not JSON: {exc}") from exc
+    if not isinstance(parsed, dict) or parsed.get("number") != number:
+        raise Undecidable(
+            f"the anonymous REST response for {repo}#{number} identifies something else "
+            f"({parsed.get('number') if isinstance(parsed, dict) else type(parsed).__name__})."
+        )
+    expected_repository_url = f"https://api.github.com/repos/{repo}".lower()
+    if str(parsed.get("repository_url", "")).lower() != expected_repository_url:
+        raise Undecidable(
+            f"the anonymous REST response for {repo}#{number} identifies repository "
+            f"{parsed.get('repository_url')!r}, not {expected_repository_url}."
+        )
+    labels = parsed.get("labels")
+    if not isinstance(labels, list) or any(
+        not isinstance(label, dict) or not isinstance(label.get("name"), str) for label in labels
+    ):
+        raise Undecidable(f"the anonymous REST response for {repo}#{number} has no readable labels array.")
+    return {
+        "number": number,
+        "is_pull_request": "pull_request" in parsed,
+        "state": parsed.get("state"),
+        "labels": [label["name"] for label in labels],
+    }
+
+
+def public_issue_resolver():
+    """Build a public resolver whose positive and negative controls run before any verdict."""
+    verified: set[str] = set()
+    cache: dict[tuple[str, int], dict | None] = {}
+
+    def resolve(repo: str, number: int) -> dict | None:
+        normalized = repo.lower()
+        if normalized not in PUBLIC_ISSUE_READ_PROBES:
+            raise Undecidable(f"no positive public-read control is configured for {repo}.")
+        if normalized not in verified:
+            probe_number = PUBLIC_ISSUE_READ_PROBES[normalized]
+            positive = _public_issue_request(repo, probe_number)
+            if positive is None:
+                raise Undecidable(
+                    f"the public-read positive control {repo}#{probe_number} returned 404; "
+                    "issue-label visibility was not proven."
+                )
+            negative = _public_issue_request(repo, PUBLIC_ISSUE_NOT_FOUND_SENTINEL)
+            if negative is not None:
+                raise Undecidable(
+                    f"the public-read negative control {repo}#{PUBLIC_ISSUE_NOT_FOUND_SENTINEL} "
+                    "did not return 404; the resolver cannot distinguish absence from a read failure."
+                )
+            cache[(normalized, probe_number)] = positive
+            verified.add(normalized)
+        key = (normalized, number)
+        if key not in cache:
+            cache[key] = _public_issue_request(repo, number)
+        return cache[key]
+
+    return resolve
+
+
 # ── the verdict ─────────────────────────────────────────────────────────────────────────────────
 
 
-def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[str]]:
+def evaluate(
+    body: str,
+    repo: str,
+    resolve,
+    checked_repositories: set[str] | None = None,
+    only_checked_repositories: bool = False,
+) -> tuple[list[str], list[str], list[str]]:
     """(errors, notes, honoured) — errors is what makes the gate red."""
     errors: list[str] = []
     notes: list[str] = []
     honoured: list[str] = []
+    checked = {r.lower() for r in (checked_repositories or {repo})}
 
-    released, refused = escapes(body, repo)
+    released, refused = escapes(body, repo, checked, only_checked_repositories)
     errors.extend(f"A `Verified-closing:` declaration was refused: {r}" for r in refused)
 
     refs = closing_references(body, repo)
+    if only_checked_repositories:
+        refs = [ref for ref in refs if ref.explicit_repository and ref.slug.lower() in checked]
     if not refs:
-        notes.append("No closing keyword binds any issue reference in this body.")
-    closed_here = {r.number for r in refs if r.local and not r.negation}
+        notes.append(
+            "No closing keyword binds an explicit reference to a protected repository."
+            if only_checked_repositories
+            else "No closing keyword binds any issue reference in this body."
+        )
+    closed_here = {
+        (r.slug.lower(), r.number) for r in refs if r.slug.lower() in checked and not r.negation
+    }
 
-    # 🚨 The bound, asserted BEFORE any work starts rather than discovered by being killed at the
-    # job's cap. `subjects` is the real cost — one resolution per distinct local issue number,
-    # however many times and in however many shapes the body names it.
-    subjects = {r.number for r in refs if r.local}
-    if len(subjects) > MAX_RESOLVED_SUBJECTS:
+    # Bound by distinct repository/issue pairs before any REST work begins.
+    subjects = {(r.slug.lower(), r.number) for r in refs if r.slug.lower() in checked}
+    subject_limit = (
+        MAX_ANONYMOUS_ISSUE_SUBJECTS if only_checked_repositories else MAX_RESOLVED_SUBJECTS
+    )
+    if len(subjects) > subject_limit:
         raise Undecidable(
-            f"this body binds closing keywords to {len(subjects)} distinct issues in {repo}, over "
-            f"the cap of {MAX_RESOLVED_SUBJECTS}. Each distinct issue costs one API read, and a "
-            "job killed at its five-minute cap produces no verdict at all — which is "
-            "indistinguishable from the gate not running. Refusing up front instead. If a pull "
-            "request really does close this many issues, say so on the thread and raise the cap "
-            "deliberately; do not widen it to make one run pass."
+            f"this body binds closing keywords to {len(subjects)} distinct issues in "
+            f"{', '.join(sorted(checked))}, over the cap of {subject_limit}. Each distinct "
+            "issue costs one API read, and a job killed at its cap produces no verdict at all. "
+            "Refusing up front instead. Split this into smaller pull requests."
         )
 
-    # Memoised per run: bounded by DISTINCT subjects, not by matches and not by problem-kind. A
-    # `None` answer (the number names nothing here) is cached too — an absent issue must not be
-    # asked about twice.
-    resolved: dict[int, dict | None] = {}
+    resolved: dict[tuple[str, int], dict | None] = {}
 
-    def resolve_once(number: int) -> dict | None:
-        if number not in resolved:
-            resolved[number] = resolve(repo, number)
-        return resolved[number]
+    def resolve_once(target_repo: str, number: int) -> dict | None:
+        key = (target_repo.lower(), number)
+        if key not in resolved:
+            resolved[key] = resolve(target_repo, number)
+        return resolved[key]
 
-    for n, reason in sorted(released.items()):
-        if n not in closed_here:
+    for target, reason in sorted(released.items()):
+        target_repo, number = target
+        display = f"{target_repo}#{number}" if target_repo != repo.lower() else f"#{number}"
+        if target not in closed_here:
             errors.append(
-                f"`Verified-closing: #{n}` releases nothing: no closing keyword in this body "
-                f"binds #{n} (a negated one does not count — delete the negation instead). "
+                f"`Verified-closing: {display}` releases nothing: no closing keyword in this body "
+                f"binds {display} (a negated one does not count — delete the negation instead). "
                 "The escape permits a close; it does not perform one, so a plain `Closes "
-                f"#{n}` still has to be there. Remove the declaration or add the keyword."
+                f"{display}` still has to be there. Remove the declaration or add the keyword."
             )
         else:
             notes.append(
-                f"Escape declared for #{n} — it releases the severity check for that issue and "
+                f"Escape declared for {display} — it releases the severity check for that issue and "
                 "nothing else."
             )
 
-    # One report per (issue, problem): a body that writes the same closing keyword five times has
-    # one defect, not five, while a negation and a possessive aimed at the SAME issue are two
-    # different mistakes with two different remedies and are both named.
     seen: set[tuple[str, int, bool, bool]] = set()
     for ref in refs:
         key = (ref.slug.lower(), ref.number, bool(ref.negation), ref.possessive)
@@ -459,18 +609,17 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
             continue
         seen.add(key)
 
-        # Resolve FIRST, even for a reference that is already condemned by its wording. A
-        # possessive aimed at a `sev:H` would otherwise be reworded to a plain close and refused
-        # again on the next run — two pushes for one defect, which is how a gate earns its
-        # reputation as a wall. One code path also means an unresolvable reference is Undecidable
-        # here exactly as it is everywhere else in this file.
-        issue = resolve_once(ref.number) if ref.local else None
+        in_scope = ref.slug.lower() in checked
+        target_reference = (
+            f"{ref.slug}#{ref.number}" if not ref.local else f"#{ref.number}"
+        )
+        issue = resolve_once(ref.slug, ref.number) if in_scope else None
         also = ""
         if issue and not issue["is_pull_request"]:
             blocking_now = [lbl for lbl in issue["labels"] if lbl in BLOCKING_LABELS]
             if blocking_now:
                 also = (
-                    f" 🚨 And #{ref.number} carries `{blocking_now[0]}`, so a merge may not close "
+                    f" 🚨 And {ref.slug}#{ref.number} carries `{blocking_now[0]}`, so a merge may not close "
                     "it at all: a plain closing keyword here would be refused too (policy "
                     "`severity-closes-on-verification`)."
                 )
@@ -480,9 +629,9 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
                 f"NEGATED CLOSING KEYWORD — `{ref.text}` (negated by “{ref.negation}”). "
                 "GitHub matches the keyword immediately before the number and reads NOTHING of the "
                 "sentence around it, so the words that make this a disclaimer are the words that "
-                f"close #{ref.number} on merge — measured on #5201/#5057, closed two seconds "
+                f"close {target_reference} on merge — measured on #5201/#5057, closed two seconds "
                 "after the merge. Write `Refs "
-                f"#{ref.number}` or `see #{ref.number}` instead. An escape cannot release this: "
+                f"{target_reference}` or `see {target_reference}` instead. An escape cannot release this: "
                 "if you do mean to close it, delete the negation." + also
             )
             continue
@@ -490,27 +639,27 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
         if ref.possessive:
             errors.append(
                 f"POSSESSIVE CLOSING REFERENCE — `{ref.text}` claims to close a PART of "
-                f"#{ref.number}; GitHub closes the whole issue. Measured on #5174/#2299: the body "
+                f"{target_reference}; GitHub closes the whole issue. Measured on #5174/#2299: the body "
                 "said two sentences later that the issue stays open for the half it did not fix, "
                 "and the merge closed it anyway, which left a live root with no open record. Move "
                 "the keyword off the number — `Fixes the <half> of "
-                f"#{ref.number}` closes nothing and still reads." + also
+                f"{target_reference}` closes nothing and still reads." + also
             )
             continue
 
-        if not ref.local:
+        if not in_scope:
             notes.append(
-                f"`{ref.text}` closes in {ref.slug}, not in {repo} — this gate reads "
-                f"{repo}'s issues only, so no label was checked for it."
+                f"`{ref.text}` closes in {ref.slug}, not in {repo} — this gate reads only its "
+                "configured repositories, so no label was checked for it."
             )
             continue
 
         if issue is None:
-            notes.append(f"`{ref.text}` — #{ref.number} does not exist here; it closes nothing.")
+            notes.append(f"`{ref.text}` — {ref.slug}#{ref.number} does not exist; it closes nothing.")
             continue
         if issue["is_pull_request"]:
             notes.append(
-                f"`{ref.text}` — #{ref.number} is a pull request, not an issue; a closing "
+                f"`{ref.text}` — {ref.slug}#{ref.number} is a pull request, not an issue; a closing "
                 "keyword closes no pull request."
             )
             continue
@@ -518,36 +667,45 @@ def evaluate(body: str, repo: str, resolve) -> tuple[list[str], list[str], list[
         blocking = [lbl for lbl in issue["labels"] if lbl in BLOCKING_LABELS]
         if not blocking:
             notes.append(
-                f"`{ref.text}` closes #{ref.number} "
+                f"`{ref.text}` closes {ref.slug}#{ref.number} "
                 f"(labels: {', '.join(issue['labels']) or 'none'}) — allowed."
             )
             continue
 
         label = blocking[0]
-        if ref.number in released:
+        target = (ref.slug.lower(), ref.number)
+        if target in released:
             honoured.append(
-                f"#{ref.number} is `{label}` and is closed by this body under a declared "
-                f"verification: {released[ref.number]}"
+                f"{ref.slug}#{ref.number} is `{label}` and is closed by this body under a declared "
+                f"verification: {released[target]}"
             )
             continue
 
         errors.append(
-            f"RELEASE-BLOCKING ISSUE CLOSED BY A MERGE — `{ref.text}` closes #{ref.number}, "
-            f"which carries `{label}`. A `sev:B`/`sev:H` issue closes on POST-ROLL PRODUCTION "
-            "VERIFICATION, never on a merge: the merge puts the fix on main, and what the label "
-            "gates is whether the defect is gone from the running portal (policy "
-            "`severity-closes-on-verification`). Closing it here takes it out of the release "
-            "readiness count on evidence nobody has. Write `Refs "
-            f"#{ref.number}` and close it after the roll — or, if the verification has already "
-            f"happened, declare it: `Verified-closing: #{ref.number} — <what was verified, and "
-            "where>`."
+            f"RELEASE-BLOCKING ISSUE CLOSED BY A MERGE — `{ref.text}` closes "
+            f"{target_reference}, which carries `{label}`. A `sev:B`/`sev:H` issue closes on "
+            "POST-ROLL PRODUCTION VERIFICATION, never on a merge: the merge puts the fix on main, "
+            "and what the label gates is whether the defect is gone from the running portal "
+            "(policy `severity-closes-on-verification`). Closing it here takes it out of the "
+            "release readiness count on evidence nobody has. Write `Refs "
+            f"{target_reference}` and close it after the roll — or, if the verification has already "
+            f"happened, declare it: `Verified-closing: {target_reference} — <what was verified, "
+            "and where>`."
         )
 
     return errors, notes, honoured
 
 
-def run(body: str, repo: str, resolve) -> int:
-    errors, notes, honoured = evaluate(body, repo, resolve)
+def run(
+    body: str,
+    repo: str,
+    resolve,
+    checked_repositories: set[str] | None = None,
+    only_checked_repositories: bool = False,
+) -> int:
+    errors, notes, honoured = evaluate(
+        body, repo, resolve, checked_repositories, only_checked_repositories
+    )
 
     print(f"Closing-keyword scan of the pull-request body ({len(body.encode('utf-8'))} bytes):")
     for note in notes:
@@ -599,6 +757,8 @@ BODY_5190 = (
 # A resolver that answers from a table — no network in the self-test. #2299 and #5057 carry the
 # labels they carried on the day; #4000 is an ordinary bug; #7777 is a pull request; #9999 is absent.
 _FAKE_ISSUES = {
+    5011: {"number": 5011, "is_pull_request": False, "state": "open",
+           "labels": ["bug", "sev:H", "area:ci"]},
     2299: {"number": 2299, "is_pull_request": False, "state": "open",
            "labels": ["bug", "sev:H", "area:orleans"]},
     5057: {"number": 5057, "is_pull_request": False, "state": "open",
@@ -817,6 +977,185 @@ def self_test() -> int:
                 f"{which}: expected an error naming {marker}, got {errors or 'nothing'}"
             )
 
+    protected = {REPO.lower()}
+    satellite_repo = "Systemorph/MeshWeaver.Plugins"
+    core_close = "Closes Systemorph/MeshWeaver#5011"
+    errors, _, _ = evaluate(
+        core_close, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
+    )
+    if not any("RELEASE-BLOCKING ISSUE CLOSED BY A MERGE" in error for error in errors):
+        failures.append(f"satellite explicit core close must see core sev:H labels, got {errors}")
+    elif not any("Refs Systemorph/MeshWeaver#5011" in error for error in errors):
+        failures.append(f"the satellite remedy must preserve the explicit core reference: {errors}")
+
+    errors, _, _ = evaluate(
+        "This does not close Systemorph/MeshWeaver#5011",
+        satellite_repo,
+        _fake_resolve,
+        protected,
+        only_checked_repositories=True,
+    )
+    if not any(
+        "Refs Systemorph/MeshWeaver#5011" in error and "NEGATED CLOSING KEYWORD" in error
+        for error in errors
+    ):
+        failures.append(f"a negated satellite reference must retain the explicit core repo in its remedy: {errors}")
+
+    errors, _, _ = evaluate(
+        "Closes https://github.com/Systemorph/MeshWeaver/issues/5011",
+        satellite_repo,
+        _fake_resolve,
+        protected,
+        only_checked_repositories=True,
+    )
+    if not any("RELEASE-BLOCKING ISSUE CLOSED BY A MERGE" in error for error in errors):
+        failures.append(f"a full core issue URL must be checked in the satellite lane, got {errors}")
+
+    verified_core_close = (
+        f"{core_close}\n\nVerified-closing: Systemorph/MeshWeaver#5011 — verified on the "
+        "running core portal after its roll; the incident has not recurred in the logs."
+    )
+    errors, _, honoured = evaluate(
+        verified_core_close, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
+    )
+    if errors or not any("Systemorph/MeshWeaver#5011" in item for item in honoured):
+        failures.append(f"an explicit verified core close must release only that core issue: {errors}, {honoured}")
+
+    errors, _, _ = evaluate(
+        "Closes #5011\n\nVerified-closing: #5011 — verified against the Systemorph/MeshWeaver core build after its roll.",
+        satellite_repo,
+        _fake_resolve,
+        protected,
+        only_checked_repositories=True,
+    )
+    if errors:
+        failures.append(f"cross-only mode must ignore local unqualified references and escapes: {errors}")
+
+    errors, _, _ = evaluate(
+        "Closes Systemorph/MeshWeaver.Education#5011",
+        satellite_repo,
+        _fake_resolve,
+        protected,
+        only_checked_repositories=True,
+    )
+    if errors:
+        failures.append(f"cross-only mode must not inspect unconfigured repositories: {errors}")
+
+    satellite_resolutions: list[tuple[str, int]] = []
+
+    def record_satellite_resolution(target_repo: str, number: int) -> dict | None:
+        satellite_resolutions.append((target_repo, number))
+        return _fake_resolve(target_repo, number)
+
+    errors, _, _ = evaluate(
+        f"Closes {satellite_repo}#5011",
+        satellite_repo,
+        record_satellite_resolution,
+        protected,
+        only_checked_repositories=True,
+    )
+    if errors or satellite_resolutions:
+        failures.append(
+            "cross-only mode must ignore an explicit caller-repository close without resolving it: "
+            f"{errors}, resolver calls={satellite_resolutions}"
+        )
+
+    errors, _, _ = evaluate(
+        "Closes Systemorph/MeshWeaver#5011\n\nVerified-closing: Systemorph/MeshWeaver#not-an-issue — verified on the core portal after its roll.",
+        satellite_repo,
+        _fake_resolve,
+        protected,
+        only_checked_repositories=True,
+    )
+    if not any("RELEASE-BLOCKING ISSUE CLOSED BY A MERGE" in error for error in errors):
+        failures.append(f"a malformed core escape must not release a real protected close: {errors}")
+
+    at_public_cap = "\n".join(
+        f"Closes {REPO}#{number}"
+        for number in range(12000, 12000 + MAX_ANONYMOUS_ISSUE_SUBJECTS)
+    )
+    try:
+        errors, _, _ = evaluate(
+            at_public_cap, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
+        )
+        if errors:
+            failures.append(f"exactly {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be evaluated: {errors}")
+    except Undecidable as exc:
+        failures.append(f"exactly {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be within the cap: {exc}")
+
+    over_public_cap = f"{at_public_cap}\nCloses {REPO}#{12000 + MAX_ANONYMOUS_ISSUE_SUBJECTS}"
+    try:
+        evaluate(
+            over_public_cap, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
+        )
+        failures.append(f"more than {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be refused")
+    except Undecidable as exc:
+        if f"over the cap of {MAX_ANONYMOUS_ISSUE_SUBJECTS}" not in str(exc):
+            failures.append(f"public subject cap refusal must name its bound: {exc}")
+
+    # The public resolver must exercise both controls before returning a verdict, cache the
+    # positive read, and fail closed if either control stops proving its promised status.
+    from unittest.mock import patch
+
+    public_calls: list[int] = []
+
+    def controlled_public_read(target_repo: str, number: int) -> dict | None:
+        public_calls.append(number)
+        if number == PUBLIC_ISSUE_READ_PROBES[REPO.lower()]:
+            return _FAKE_ISSUES[number]
+        if number == PUBLIC_ISSUE_NOT_FOUND_SENTINEL:
+            return None
+        return _FAKE_ISSUES.get(number)
+
+    with patch(__name__ + "._public_issue_request", side_effect=controlled_public_read):
+        resolver = public_issue_resolver()
+        answer = resolver(REPO, 5011)
+        resolver(REPO, 5011)
+    if answer != _FAKE_ISSUES[5011] or public_calls != [5011, PUBLIC_ISSUE_NOT_FOUND_SENTINEL]:
+        failures.append(f"public resolver must run positive/negative controls once and cache: {public_calls}")
+
+    with patch(__name__ + "._public_issue_request", return_value=None):
+        try:
+            public_issue_resolver()(REPO, 5057)
+            failures.append("public resolver must fail when its positive control is absent")
+        except Undecidable:
+            pass
+
+    with patch(
+        __name__ + "._public_issue_request",
+        side_effect=lambda target_repo, number: (
+            _FAKE_ISSUES[5011]
+            if number == PUBLIC_ISSUE_NOT_FOUND_SENTINEL
+            else _FAKE_ISSUES.get(number)
+        ),
+    ):
+        try:
+            public_issue_resolver()(REPO, 5057)
+            failures.append("public resolver must fail when its negative control is not absent")
+        except Undecidable:
+            pass
+
+    from email.message import Message
+    from io import BytesIO
+
+    rate_headers = Message()
+    rate_headers["X-RateLimit-Remaining"] = "0"
+    rate_headers["X-RateLimit-Reset"] = "1893456000"
+    rate_error = urllib.error.HTTPError(
+        "https://api.github.com/repos/Systemorph/MeshWeaver/issues/5057",
+        403,
+        "Forbidden",
+        rate_headers,
+        BytesIO(b'{"message":"API rate limit exceeded"}'),
+    )
+    with patch(__name__ + ".urllib.request.urlopen", side_effect=rate_error):
+        try:
+            _public_issue_request(REPO, 5057)
+            failures.append("a REST rate-limit response must be Undecidable")
+        except Undecidable as exc:
+            if "rate-limited" not in str(exc) or "x-ratelimit-reset=1893456000" not in str(exc):
+                failures.append(f"a REST rate-limit response must explain its reset, got: {exc}")
+
     # 🚨 THE WORK IS BOUNDED BY DISTINCT SUBJECTS, not by matches, not by problem-kind. Counted by
     # a resolver that records what it was asked, because "it is memoised" is the kind of claim that
     # stays true in prose long after a refactor has made it false.
@@ -919,6 +1258,17 @@ def self_test() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", help="owner/repository whose issues this body can close")
+    ap.add_argument(
+        "--protect-public-repo",
+        action="append",
+        default=[],
+        help="also check an explicitly referenced public repository (repeatable)",
+    )
+    ap.add_argument(
+        "--only-protected-repos",
+        action="store_true",
+        help="ignore local and unconfigured references; require explicit references to protected repos",
+    )
     ap.add_argument("--pr-body-file", help="file holding the pull-request body")
     ap.add_argument("--self-test", action="store_true", help="prove the gate is not vacuous")
     args = ap.parse_args()
@@ -933,6 +1283,20 @@ def main() -> int:
         print(f"::error::--repo must identify one owner/repository, got {args.repo!r}")
         return 1
 
+    protected: dict[str, str] = {}
+    for protected_repo in args.protect_public_repo:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", protected_repo):
+            print(f"::error::--protect-public-repo must identify one owner/repository, got {protected_repo!r}")
+            return 1
+        normalized = protected_repo.lower()
+        if normalized not in PUBLIC_ISSUE_READ_PROBES:
+            print(f"::error::no positive public-read control is configured for {protected_repo}")
+            return 1
+        protected[normalized] = protected_repo
+    if args.only_protected_repos and not protected:
+        print("::error::--only-protected-repos requires at least one --protect-public-repo")
+        return 1
+
     try:
         with open(args.pr_body_file, encoding="utf-8") as fh:
             body = fh.read()
@@ -941,7 +1305,15 @@ def main() -> int:
         return 1
 
     try:
-        return run(body, args.repo, resolve_via_gh)
+        checked = set(protected) if args.only_protected_repos else set(protected) | {args.repo.lower()}
+        public_resolve = public_issue_resolver()
+
+        def resolve(target_repo: str, number: int) -> dict | None:
+            if target_repo.lower() in protected:
+                return public_resolve(protected[target_repo.lower()], number)
+            return resolve_via_gh(target_repo, number)
+
+        return run(body, args.repo, resolve, checked, args.only_protected_repos)
     except Undecidable as exc:
         print(f"::error::the closing-keyword gate could not read its subject: {exc}")
         return 1
