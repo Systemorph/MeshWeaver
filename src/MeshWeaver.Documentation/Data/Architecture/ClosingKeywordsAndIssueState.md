@@ -86,12 +86,25 @@ own message and its own remedy:
 The reusable `node-repo-validate.yml` lane also runs this gate on satellite pull requests, but
 only for explicit references to `Systemorph/MeshWeaver` (`Systemorph/MeshWeaver#N` or a full core
 issue URL). An unqualified `#N` remains a reference in the satellite itself and is outside this
-cross-repository scan. This closes the fleet gap where a satellite merge could close a core
-`sev:B`/`sev:H` without core CI ever seeing the body. The lane fetches the canonical checker at
-its `scripts-ref` and runs its self-test before the scan. Callers using immutable workflow refs
-must advance the workflow and script refs together. The seven live node-repo callers currently use
-`node-repo-validate.yml@main` with `scripts-ref: main`, so a core merge reaches their next PR run
-without a caller change.
+cross-repository scan. It checks the PR body carried by the event that starts the run; it does not
+inspect source commit messages or a merge message edited at merge time. GitHub also supports
+closing issues from commit messages, so this lane's guarantee is specifically about references in
+the PR body, not every way GitHub can close an issue.
+
+The event is another part of the guarantee: GitHub's default `pull_request` activity types are
+`opened`, `synchronize`, and `reopened`, not `edited` ([workflow event docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)).
+Each caller must include `edited` in its `pull_request.types`; otherwise a body edit after a green
+run is not rescanned and the old check can remain green. The seven live node-repo callers
+currently use a plain `pull_request:` trigger, so they do not yet meet this contract. This core
+change therefore closes the unseen-body gap only on runs that it actually receives; fleet closure
+also requires the caller trigger updates.
+
+The lane fetches the canonical checker at its `scripts-ref` and runs its self-test before the
+scan. Callers using immutable workflow refs must advance the workflow and script refs together.
+The seven live node-repo callers currently use `node-repo-validate.yml@main` with
+`scripts-ref: main`, so a core merge activates this gate on each caller's next PR run without a
+caller code change; that floating shared-workflow contract is separate from the `edited` trigger
+requirement.
 
 The satellite lane reads core issue labels through GitHub's public REST API without a token. It
 first proves both directions: known core issue #5011 must be readable, and the impossible issue
@@ -131,8 +144,9 @@ than the thing it guards produces verdicts an author cannot act on:
   disclaimer;
 - **`owner/repo#N` closes in that repository.** The default gate reads its own repository's issues;
   the satellite lane additionally reads only the explicitly protected public core repository.
-  Other cross-repository references are named and left unlabelled by this gate. An unqualified
-  number is never reinterpreted as a core issue.
+  Other cross-repository references are named and left unlabelled by the default gate. In
+  protected-repository-only satellite mode, unconfigured cross-repository references are ignored
+  rather than checked. An unqualified number is never reinterpreted as a core issue.
 
 ### The escape
 
