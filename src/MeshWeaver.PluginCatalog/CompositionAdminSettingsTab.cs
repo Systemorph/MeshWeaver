@@ -64,12 +64,12 @@ public static class CompositionAdminSettingsTab
             Id: TabId,
             Label: "Composition",
             ContentBuilder: BuildContent,
-            Group: "Administration",
+            Group: AdminAppNodeType.CommercialGroup,
             Icon: FluentIcons.Flag(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 336,
+            GroupIcon: FluentIcons.Money(),
+            Order: AdminAppNodeType.CommercialOrder + 20,
             Keywords: ["composition", "feature", "flag", "environment", "package", "parameter"])
-        { LabelKey = "composition.title", GroupKey = "settings.groupAdministration" };
+        { LabelKey = "composition.title", GroupKey = AdminAppNodeType.CommercialGroupKey };
 
         // The Admin app is the tab's home (/Admin/Settings/Composition), for confirmed platform
         // admins only; everywhere else — a person's own settings page included — it contributes nothing.
