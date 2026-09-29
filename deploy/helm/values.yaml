@@ -1025,6 +1025,11 @@ config:
     # control instance: the repositories the issue sweep lists and the org webhook's issue intake
     # triages, one comma-separated value. Empty = the code's default (the active fleet).
     Hosting__Triage__Repositories: ""
+    # The issue sweep's off-switch ("false" disarms it on an instance that holds the inbox secret but
+    # must not triage yet) and the declaration of a CRM-less instance ("Configuration": the list above
+    # IS the scope). Both empty = not rendered: the sweep follows the inbox, the scope follows the CRM.
+    Hosting__Triage__IssueSweep__Enabled: ""
+    Hosting__Triage__ScopeSource: ""
     # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713). The signed inbox
     # the Feedback plugin hands a technical submission to; the fleet value is
     # https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds. Empty = hand-over OFF (the
