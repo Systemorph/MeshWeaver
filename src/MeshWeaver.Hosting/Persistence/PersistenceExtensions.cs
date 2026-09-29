@@ -135,8 +135,8 @@ public static class PersistenceExtensions
                         // construction — the hub is built on top of this adapter) read the node
                         // being deleted. See VersionWritingStorageAdapter → "Types that keep no history".
                         staticNodeLookup: path => sp.FindStaticNode(path),
-                        readOptions: () => sp.GetService<IMessageHub>()?.JsonSerializerOptions
-                                           ?? new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                        // Null when the hub is not resolvable → the decorator's own static fallback.
+                        readOptions: () => sp.GetService<IMessageHub>()?.JsonSerializerOptions,
                         logger: sp.GetService<ILogger<VersionWritingStorageAdapter>>()),
                     sp.GetService<ILogger<MonotonicWriteGuardStorageAdapter>>()),
                 sp.GetService<MeshWeaver.Mesh.Services.RecentlyDeletedRegistry>(),

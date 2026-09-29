@@ -161,6 +161,42 @@ public sealed class NodeTypesThatKeepNoHistoryTest : IDisposable
             "history outlives an ordinary delete — point-in-time restore depends on it");
     }
 
+    /// <summary>Review finding on #5886: a null NodeType used to throw inside the delete's
+    /// pre-read (StringComparer.Ordinal.GetHashCode(null), from a selector, past the Catch), so the
+    /// delete itself failed. An untyped node keeps history and deletes normally.</summary>
+    [Fact]
+    public async Task Deleting_an_untyped_node_deletes_it_and_keeps_its_history()
+    {
+        const string path = "Governance/Loose/u1";
+        await adapter.Write(MeshNode.FromPath(path) with { NodeType = null, Version = 1, Content = "x" }, Options)
+            .Timeout(Budget).Await();
+
+        await adapter.DeleteMany([path]).Timeout(Budget).Await();
+
+        (await store.Read(path, Options).Timeout(Budget).Await()).Should().BeNull("the delete must run");
+        (await History(path)).Should().HaveCount(1, "an untyped node keeps its history");
+    }
+
+    /// <summary>A node type is an unvalidated string: the node at that path may hold content of any
+    /// shape. That must keep history, never fault a committed write.</summary>
+    [Fact]
+    public async Task A_type_path_naming_a_non_definition_node_keeps_history_and_does_not_fault()
+    {
+        const string notADefinition = "Governance/NotAType";
+        await store.Write(MeshNode.FromPath(notADefinition) with
+        {
+            NodeType = "Markdown",
+            Version = 1,
+            Content = JsonDocument.Parse("[1, 2, 3]").RootElement.Clone(),
+        }, Options).Timeout(Budget).Await();
+        const string path = "Governance/Odd/o1";
+
+        var saved = await adapter.Write(Instance(path, notADefinition, 1, "v1"), Options).Timeout(Budget).Await();
+
+        saved.Should().NotBeNull();
+        (await History(path)).Should().HaveCount(1);
+    }
+
     [Fact]
     public async Task The_purge_touches_only_the_node_it_names()
     {

@@ -43,7 +43,7 @@ internal class VersionWritingStorageAdapter(
     IStorageAdapter inner,
     IVersionQuery? versionQuery,
     Func<string, MeshNode?>? staticNodeLookup = null,
-    Func<JsonSerializerOptions>? readOptions = null,
+    Func<JsonSerializerOptions?>? readOptions = null,
     ILogger? logger = null) : IStorageAdapter
 {
     /// <summary>How long reading a NodeType definition may take before the decision falls back to
@@ -186,6 +186,13 @@ internal class VersionWritingStorageAdapter(
         // A path-shaped type is read off the storage this decorator wraps FIRST — the common case
         // (an in-mesh type) is one primary-key read, and the full static-node enumeration is paid
         // only for a type the store does not hold.
+        //
+        // 🚨 That read happens on EVERY write of an in-mesh-typed node, and it is the accepted cost,
+        // not an oversight: it is what makes an opt-out take effect on the very next write, on every
+        // replica. A per-type verdict cache would have to be invalidated when the DEFINITION changes
+        // — which this decorator only sees for writes on its own replica, never another replica's —
+        // and a stale "keeps history" is exactly the confidential snapshot the opt-out exists to
+        // prevent. One primary-key read per write is cheaper than that failure mode.
         return inner.Read(nodeType, options)
             .Take(1)
             .Select(definition => (definition ?? staticNodeLookup?.Invoke(nodeType)) is not { } found
@@ -201,8 +208,26 @@ internal class VersionWritingStorageAdapter(
             });
     }
 
-    private static bool Declares(MeshNode definition, JsonSerializerOptions options)
-        => definition.ContentAs<NodeTypeDefinition>(options) is not { KeepsHistory: false };
+    /// <summary>
+    /// Whether the definition node does NOT opt out. Total by construction: a node type is an
+    /// unvalidated string, so the node at that path may hold content of any shape, and a throw
+    /// from inside a <c>Select</c> selector would escape the adjacent <c>Catch</c> and fault a
+    /// write that already committed. Anything unreadable keeps history.
+    /// </summary>
+    private bool Declares(MeshNode definition, JsonSerializerOptions options)
+    {
+        try
+        {
+            return definition.ContentAs<NodeTypeDefinition>(options) is not { KeepsHistory: false };
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "The node at {Path} could not be read as a NodeType definition — keeping version history",
+                definition.Path);
+            return true;
+        }
+    }
 
     /// <summary>
     /// The subset of <paramref name="paths"/> whose node exists and whose type keeps no history —
@@ -215,6 +240,10 @@ internal class VersionWritingStorageAdapter(
             .ToList()
             .SelectMany(nodes => nodes
                 .Select(n => n.NodeType)
+                // A node with no type keeps history (KeepsHistory answers true for it) — and a null
+                // would throw inside StringComparer.Ordinal.GetHashCode, from a selector, past the
+                // Catch below, failing the delete itself.
+                .OfType<string>()
                 .Distinct(StringComparer.Ordinal)
                 .Select(type => KeepsHistory(type, options).Select(keeps => (Type: type, Keeps: keeps)))
                 .Concat()
@@ -248,6 +277,9 @@ internal class VersionWritingStorageAdapter(
     /// a retained snapshot of a type that declared it keeps none is exactly the fact an operator
     /// has to be able to see.
     /// </summary>
+    /// <remarks>Only reached when a version store exists: <see cref="Write"/> and
+    /// <see cref="WriteIfVersion"/> return the bare inner write when <c>versionQuery</c> is null,
+    /// and the three deletes do the same.</remarks>
     private IObservable<bool> Purge(string path)
         => versionQuery!.PurgeVersions(path)
             .Catch<bool, Exception>(ex =>
