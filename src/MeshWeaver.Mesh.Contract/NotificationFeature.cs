@@ -407,6 +407,13 @@ public sealed record NotificationRequest
     /// </summary>
     public string? Feature { get; init; }
 
+    /// <summary>
+    /// The APP this notification belongs to — the id or plugin path of the recipient's installed
+    /// app (<see cref="NotificationApps.Attribute"/>). Null = derived from the target/main node path;
+    /// a path in no installed app is the platform's own, which no app preference gates.
+    /// </summary>
+    public string? App { get; init; }
+
     /// <summary>Explicit click target; defaults to <see cref="MainNodePath"/>.</summary>
     public string? TargetNodePath { get; init; }
 
