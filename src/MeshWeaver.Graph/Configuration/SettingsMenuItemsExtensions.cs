@@ -153,6 +153,17 @@ public static class SettingsMenuItemsExtensions
             .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
                 _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
 
+        // Data-contributed PERSON-APP tabs (UiContribution nodes with Context = PersonApp): the
+        // lane an in-app extension appears on inside the viewer's own settings app
+        // (Doc/Architecture/InAppExtensions). Only on the person-app hub — never on a Space's, a
+        // node's or another person's settings page. Seeded empty so a slow access probe never
+        // holds the built-in tabs back.
+        if (host.IsPersonAppHub())
+            streams.Add(ContributedPersonAppTabs(host)
+                .StartWith([])
+                .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
+                    _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
+
         var hidden = config.Get<HiddenSettingsTabs>()?.Ids;
         // Space-root-only tabs leave every page that is not a partition root.
         var rootOnly = IsPartitionRoot(host.Hub.Address.ToString())
@@ -231,6 +242,84 @@ public static class SettingsMenuItemsExtensions
                         .ProjectNodeSettingsTabs(contributions, menuPath, node, isAdmin, viewerId));
         });
     }
+
+    /// <summary>
+    /// The DATA-contributed PERSON-APP tabs: every <see cref="UiContribution"/> in the shared
+    /// catalog declaring <see cref="UiContribution.PersonAppContext"/>, projected through the closed
+    /// gate vocabulary (<see cref="UiContributionProjection.ProjectPersonAppTabs"/>). The caller adds
+    /// this lane on the viewer's own user root only. Fails closed for an anonymous or virtual viewer.
+    ///
+    /// <para><see cref="UiContributionGates.RequireAddressAccess"/> is applied HERE, live: for each
+    /// tab that demands it, the viewer's effective permissions on the embedded address are read
+    /// (<c>GetEffectivePermissions</c>, seeded <see cref="Permission.None"/> so a pending read hides
+    /// the tab rather than stalling the page) and the tab passes only while they include
+    /// <see cref="Permission.Read"/>. That is what makes an in-app extension's tab appear the moment
+    /// the viewer acquires it and disappear when the grant goes — the same stream, no reload.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>>
+        ContributedPersonAppTabs(LayoutAreaHost host)
+    {
+        var catalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (catalog is null)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = accessService?.Context ?? accessService?.CircuitContext;
+        if (viewer is not { ObjectId: { Length: > 0 } viewerObjectId, IsVirtual: false })
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var viewerId = accessService.ViewerId();
+        var userPath = host.Hub.Address.ToString();
+        // Bound on the render turn, never inside the Defer (see ContributedSettingsTabs).
+        var adminVerdict = AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerObjectId);
+
+        return Observable.Defer(() =>
+        {
+            var ownNode = host.Workspace.GetMeshNodeStream()
+                .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
+            return catalog.Contributions
+                .CombineLatest(ownNode, adminVerdict,
+                    (contributions, node, isAdmin) => UiContributionProjection
+                        .ProjectPersonAppTabs(contributions, userPath, node, isAdmin, viewerId))
+                .Select(projected => ApplyAddressAccess(projected,
+                    address => host.Hub.GetEffectivePermissions(address, viewerObjectId)))
+                .Switch();
+        });
+    }
+
+    /// <summary>
+    /// Folds the live <see cref="UiContributionGates.RequireAddressAccess"/> answers into the
+    /// projected tabs: a tab with no probe passes as is; a probed one passes only while the viewer
+    /// holds <see cref="Permission.Read"/> on its address. A pending probe hides the tab (seeded
+    /// false), and a faulting one hides that one tab only.
+    /// </summary>
+    /// <param name="projected">The projected tabs with the address each must probe (or null).</param>
+    /// <param name="permissionsOf">The viewer's live effective permissions on an address.</param>
+    internal static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> ApplyAddressAccess(
+        IReadOnlyList<(SettingsMenuItemDefinition Tab, string? AccessAddress)> projected,
+        Func<string, IObservable<Permission>> permissionsOf)
+    {
+        if (projected.Count == 0)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+        var verdicts = projected.Select(entry => entry.AccessAddress is not { Length: > 0 } address
+                ? Observable.Return(true)
+                : Observable.Defer(() => permissionsOf(address))
+                    .Select(PassesAddressAccess)
+                    .StartWith(false)
+                    .Catch<bool, Exception>(_ => Observable.Return(false))
+                    .DistinctUntilChanged())
+            .ToList();
+        return Observable.CombineLatest(verdicts)
+            .Select(passes => (IReadOnlyList<SettingsMenuItemDefinition>)projected
+                .Where((_, i) => passes[i])
+                .Select(entry => entry.Tab)
+                .ToList());
+    }
+
+    /// <summary>The <see cref="UiContributionGates.RequireAddressAccess"/> verdict for one permission
+    /// answer: Read on the embedded address. Pure.</summary>
+    /// <param name="permissions">The viewer's effective permissions on the address.</param>
+    internal static bool PassesAddressAccess(Permission permissions) => permissions.HasFlag(Permission.Read);
 
     /// <summary>
     /// The settings menu's permission gate — PURE, so both directions are assertable without a
