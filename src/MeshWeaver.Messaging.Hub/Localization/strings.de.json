@@ -243,6 +243,8 @@
   "threads.harnessesIntro": "Jeder Thread läuft auf dem Harness, das Sie mit `/harness` dafür wählen — dem integrierten MeshWeaver-Agenten oder einem der Coding-Assistenten unten. Installieren Sie eines in **Ihre** Auswahl und verbinden Sie dann in einem Thread mit `/login` Ihr eigenes Konto; Ihr Konto wird nie mit diesem Mesh geteilt. Die Markierungen zeigen, wo Prompts verarbeitet werden (🇪🇺 nur EU, 🌍 global, ❔ nicht festgestellt — die letzten beiden gelten nicht als EU) und wo der Hersteller seinen Sitz hat.",
   "threads.harnessNotOffered": "Auf dieser Instanz nicht angeboten — welche Harnesses eine Instanz ausführt, gehört zu ihrer KI-Konfiguration.",
   "threads.harnessSettings": "Harness-Einstellungen",
+  "threads.modelProvidersTitle": "Modellanbieter",
+  "threads.modelProvidersIntro": "Die Modelle, auf denen Ihre Threads laufen, stammen von diesen Anbietern. Eine Administratorin oder ein Administrator verbindet einen Anbieter für die ganze Instanz; jede Karte zeigt, ob er hier installiert ist, und öffnet seine Einrichtung.",
   "theme.switchToLight": "Zum hellen Design wechseln",
   "theme.switchToDark": "Zum dunklen Design wechseln",
   "chat.new": "Neuer Chat",
