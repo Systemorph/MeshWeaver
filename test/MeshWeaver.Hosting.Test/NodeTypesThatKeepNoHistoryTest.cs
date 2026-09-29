@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
@@ -129,6 +130,60 @@ public sealed class NodeTypesThatKeepNoHistoryTest : IDisposable
 
         lookups.Should().Be(1, "five writes of one type must resolve its definition once");
         (await History("Governance/Counted/c1")).Should().HaveCount(5, "and the type still keeps its history");
+    }
+
+    /// <summary>The in-mesh branch — the routed storage read that was the FleetConsole cost — is also
+    /// paid once per type; a definition change reaching the store's change feed makes the next write
+    /// read it again (review finding on #5899).</summary>
+    [Fact]
+    public async Task An_in_mesh_definition_is_read_once_per_type_and_again_after_it_changes()
+    {
+        await DeclareInMeshType(OrdinaryType, keepsHistory: null).Timeout(Budget).Await();
+        var counting = new CountingReads(store, OrdinaryType);
+        var adapter2 = new VersionWritingStorageAdapter(counting, versions, readOptions: () => Options);
+        const string path = "Governance/Counted/d1";
+
+        for (var v = 1; v <= 4; v++)
+            await adapter2.Write(Instance(path, OrdinaryType, v, $"v{v}"), Options).Timeout(Budget).Await();
+        counting.DefinitionReads.Should().Be(1, "four writes of one in-mesh type read its definition once");
+
+        // The definition changes through the store (another replica's shape) — the feed invalidates.
+        await DeclareInMeshType(OrdinaryType, keepsHistory: false).Timeout(Budget).Await();
+        await adapter2.Write(Instance(path, OrdinaryType, 5, "cleared"), Options).Timeout(Budget).Await();
+
+        counting.DefinitionReads.Should().Be(2, "the changed definition is read again");
+        (await History(path)).Should().BeEmpty("and its new verdict applies — the node's history is purged");
+    }
+
+    private sealed class CountingReads(InMemoryStorageAdapter inner, string countedPath) : IStorageAdapter
+    {
+        private int definitionReads;
+        public int DefinitionReads => Volatile.Read(ref definitionReads);
+
+        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        {
+            if (string.Equals(path, countedPath, StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref definitionReads);
+            return inner.Read(path, options);
+        }
+
+        public IObservable<DataChangeNotification> Changes => inner.Changes;
+        public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+            => ((IStorageAdapter)inner).ReadMany(paths, options);
+        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
+            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
+        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options) => inner.Write(node, options);
+        public IObservable<string> Delete(string path) => inner.Delete(path);
+        public IObservable<bool> Exists(string path) => inner.Exists(path);
+        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
+            => inner.GetPartitionObjects(nodePath, subPath, options);
+        public IObservable<Unit> SavePartitionObjects(
+            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
+        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+            => inner.DeletePartitionObjects(nodePath, subPath);
+        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
     }
 
     [Fact]

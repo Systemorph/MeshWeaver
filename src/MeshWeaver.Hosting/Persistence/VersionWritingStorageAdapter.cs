@@ -73,6 +73,11 @@ internal class VersionWritingStorageAdapter(
     /// </summary>
     private readonly ConcurrentDictionary<string, bool> verdicts = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Per-type invalidation generation: <see cref="Invalidate"/> bumps it, and a verdict
+    /// resolved from a read that STARTED before the bump is discarded rather than installed — so an
+    /// invalidation that overtakes an in-flight read cannot be consumed by a stale verdict.</summary>
+    private readonly ConcurrentDictionary<string, long> generations = new(StringComparer.OrdinalIgnoreCase);
+
     private int invalidationArmed;
 
     // 🚨 Decorator MUST forward Changes — without this it falls back to the
@@ -209,17 +214,26 @@ internal class VersionWritingStorageAdapter(
         ArmInvalidation();
         if (verdicts.TryGetValue(nodeType, out var cached))
             return Observable.Return(cached);
-        return ResolveKeepsHistory(nodeType, options);
+        return ResolveKeepsHistory(nodeType, readOptions?.Invoke() ?? options);
     }
 
-    /// <summary>The uncached lookup behind <see cref="KeepsHistory"/>; caches a definite answer.</summary>
+    /// <summary>
+    /// The uncached lookup behind <see cref="KeepsHistory"/>; caches a definite answer. Resolved with
+    /// the adapter's OWN read options when it has them, so the cached verdict does not depend on
+    /// whichever writer happened to ask first.
+    /// </summary>
     private IObservable<bool> ResolveKeepsHistory(string nodeType, JsonSerializerOptions options)
     {
+        // Registering the type here (and only here) keeps `generations` bounded by the number of
+        // TYPES ever asked about, never by the number of paths written.
+        var generation = generations.GetOrAdd(nodeType, 0);
+
         // A slash-less type is never an in-mesh row (a definition always lives INSIDE a partition —
-        // the rule PartitionOwningTypes applies), so only the host's static nodes can declare it;
-        // those are seed-first, so a built-in type is found at once.
+        // the rule PartitionOwningTypes applies), so only the host's static nodes can declare it.
+        // Those are registered when the mesh is built and never change for its lifetime, so this
+        // verdict needs no invalidation.
         if (!nodeType.Contains('/'))
-            return Observable.Return(Remember(nodeType,
+            return Observable.Return(Remember(nodeType, generation,
                 staticNodeLookup?.Invoke(nodeType) is not { } builtIn || Declares(builtIn, options)));
 
         // A path-shaped type is read off the storage this decorator wraps FIRST — the common case
@@ -227,9 +241,9 @@ internal class VersionWritingStorageAdapter(
         // only for a type the store does not hold. Once per type: see `verdicts`.
         return inner.Read(nodeType, options)
             .Take(1)
-            .Select(definition => Remember(nodeType,
+            .DefaultIfEmpty(null)
+            .Select(definition => Remember(nodeType, generation,
                 (definition ?? staticNodeLookup?.Invoke(nodeType)) is not { } found || Declares(found, options)))
-            .DefaultIfEmpty(true)
             .Timeout(DefinitionReadTimeout, Observable.Defer(() =>
             {
                 logger?.LogWarning(
@@ -246,17 +260,23 @@ internal class VersionWritingStorageAdapter(
             });
     }
 
-    private bool Remember(string nodeType, bool keeps)
+    /// <summary>Installs a verdict unless the type was invalidated after its read started.</summary>
+    private bool Remember(string nodeType, long generation, bool keeps)
     {
-        verdicts[nodeType] = keeps;
+        if (generations.GetValueOrDefault(nodeType) == generation)
+            verdicts[nodeType] = keeps;
         return keeps;
     }
 
     /// <summary>Drops the cached verdict for a definition that this decorator just wrote or deleted.</summary>
     private void Invalidate(string? path)
     {
-        if (!string.IsNullOrEmpty(path) && !verdicts.IsEmpty)
-            verdicts.TryRemove(path, out _);
+        if (string.IsNullOrEmpty(path))
+            return;
+        if (!generations.ContainsKey(path))
+            return;                         // not a type anyone resolved — nothing cached, nothing in flight
+        generations.AddOrUpdate(path, 1, (_, g) => g + 1);
+        verdicts.TryRemove(path, out _);
     }
 
     /// <summary>
@@ -270,8 +290,15 @@ internal class VersionWritingStorageAdapter(
             return;
         inner.Changes.Subscribe(
             change => Invalidate(change.Path),
-            ex => logger?.LogWarning(ex,
-                "The storage change feed faulted — cached keeps-history verdicts are no longer invalidated by other writers"));
+            ex =>
+            {
+                // A faulted feed can no longer invalidate: forget every verdict and disarm, so the
+                // next write re-arms the subscription and re-resolves from the store.
+                logger?.LogWarning(ex,
+                    "The storage change feed faulted — dropping every cached keeps-history verdict and re-subscribing on the next write");
+                verdicts.Clear();
+                Interlocked.Exchange(ref invalidationArmed, 0);
+            });
     }
 
     /// <summary>
