@@ -68,6 +68,24 @@ public class NotificationPreferencesTest
     }
 
     [Fact]
+    public void TryResolveGrant_SystemIssuedGrant_IsSuppressed()
+    {
+        // A free-app entitlement written by the Store sweep as System — the Parties burst of
+        // 2026-09-29 (72 users notified) — must never notify.
+        var node = Assignment(subject: "bob", role: "Viewer", denied: false, createdBy: WellKnownUsers.System, mainNode: "Parties");
+        Assert.False(AccessGrantNotifier.TryResolveGrant(node, Options, out _, out _, out _));
+    }
+
+    [Fact]
+    public void TryResolveGrant_PersonIssuedGrant_StillNotifies()
+    {
+        var node = Assignment(subject: "bob", role: "Viewer", denied: false, createdBy: "alice", mainNode: "Parties");
+        Assert.True(AccessGrantNotifier.TryResolveGrant(node, Options, out var recipient, out var granted, out _));
+        Assert.Equal("bob", recipient);
+        Assert.Equal("Parties", granted);
+    }
+
+    [Fact]
     public void TryResolveGrant_NoTargetNode_IsIgnored()
     {
         var node = Assignment(subject: "bob", role: "Editor", denied: false, createdBy: "admin", mainNode: "");
