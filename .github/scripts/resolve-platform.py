@@ -62,30 +62,37 @@ page 1 began ~260 runs behind the newest (#8423 and #8420 while #8676 was sealed
 minutes later was correct, and the walk above took the first sealed set it met — a set three days
 old, reported as the newest. With a floor that is a red naming the floor; without one (every
 satellite but Plugins) it is a SILENT compile, test and publish against an old platform. So page 1
-is checked against two facts the listing cannot fake, and a listing that fails either is RED:
+is checked against independent facts, and a listing that fails a check is refused — except that
+PROVABLE staleness (a ceiling shortfall or a recent-run witness) is re-read first, and a re-read
+that now contains the witnessed run is resolved from even if that run has since aged past the AGE
+guard (see the next section):
 
   * AGE — core CD runs on `main` at least hourly (an hourly `schedule` plus every main build;
     measured over 300 runs, 09-11 → 09-15: the widest gap was 1.7 h). A page whose newest main run
     is older than LISTING_MAX_AGE_HOURS cannot be the newest page;
   * the CEILING, when one was asked for — the run this repository's `main` has already PASSED on
-    exists, so a page whose newest run is older than it is provably stale.
+    exists, so a page whose newest run is older than it is provably stale;
+  * a RECENT-RUN WITNESS — a second query for this workflow and branch, filtered to runs created
+    within LISTING_MAX_AGE_HOURS. A run number newer than page 1 proves that the page omitted a run,
+    even when its newest row is too young to trip the AGE guard (#73).
 
 A freeze is exempt (it names one set, and an incident is when it must keep working), and a
 freshness check keeps its baseline on this refusal like on any other.
 
-🚨 THE CEILING BRANCH IS RE-READ BEFORE IT IS REFUSED (MeshWeaver#4750), THE AGE BRANCH IS NOT.
-The two branches are not the same kind of fact. A ceiling shortfall is PROVEN — a run numbered at
-least as high as the ceiling exists, because this repository's own `main` passed on it, so a page
-1 without one is a read inconsistency and nothing else, and it has a crisp condition to re-read
-FOR. The age branch is an INFERENCE from core CD's cadence: a genuinely quiet core serves the same
-page every time, so re-reading burns the budget to reach the same refusal. So a provable staleness
-re-reads page 1 up to STALE_REREADS times on a short backoff and refuses only if it is STILL
-stale — the refusal, the conditions and the strictness are unchanged, and only the number of times
-the page is asked for before it moved. Measured 2026-09-18: three occurrences in one day (two PRs
-and, once, `main` itself — 17, 17 and 18 downstream jobs red), every hand re-run green minutes
-later with no code change. That is the same argument already accepted for a 502, and it is NOT a
-gate testing its own input: the answer a re-read is allowed to change is GitHub's, never this
-script's verdict about it.
+🚨 PROVABLE STALENESS IS RE-READ BEFORE IT IS REFUSED (MeshWeaver#4750, #73). A ceiling shortfall
+has a run number the calling repository's `main` already passed on. A recent-run witness has a run
+number returned by the independent created-filter query. Either gives a crisp condition to re-read
+FOR: the page must contain that run. The AGE branch alone is still an inference from core CD's
+cadence: a genuinely quiet core serves the same page every time, so it is refused without
+re-reading. When there is no ceiling shortfall, the recent-run query is read once; if it cannot be
+read, freshness is unverified and the resolver fails closed. If it answers but finds no newer run,
+it proves nothing and the page is used as served (or refused by the AGE guard). With a positive
+witness, page 1 is re-read up to STALE_REREADS times on a short backoff and refused only if it is
+STILL stale — the refusal and strictness are unchanged, only the number of times the page is asked
+for before it moved. Measured 2026-09-18: three occurrences in one day (two PRs and, once, `main`
+itself — 17, 17 and 18 downstream jobs red), every hand re-run green minutes later with no code
+change. That is the same argument already accepted for a 502, and it is NOT a gate testing its own
+input: the answer a re-read is allowed to change is GitHub's, never this script's verdict about it.
 
 🚨 THE CEILING READS A SECOND LISTING — the CALLING repository's own main runs
 (`ci.yml/runs?branch=main&status=success`) — and GitHub serves that one stale too. Its AGE proves
@@ -132,9 +139,10 @@ substitution: a freeze is an instruction, not a preference.
 
 API-CALL BUDGET (the caller's GITHUB_TOKEN: 1,000 requests/hour per repository)
 ------------------------------------------------------------------------------
-One resolution: 1 (runs page) + 1 per run examined until the chosen set + 1 props read + 2 for
-the chosen run's promotion-record listing/archive, + at most PLUGINS_LOOKBACK (40) when the chosen
-run's own seal is not green — typically 7-14 calls. The
+One resolution: 1 (runs page) + at most 1 recent-run witness query (omitted when a ceiling already
+proves staleness) + 1 per run examined until the chosen set + 1 props read + 2 for the chosen run's
+promotion-record listing/archive, + at most PLUGINS_LOOKBACK (40) when the chosen run's own seal is
+not green — typically 7-15 calls. The
 lanes add one resolution in `plan` / `publish-bake` plus one freshness check per gate shard, and
 one `contents` read per job to fetch this script. The registry HEADs are not GitHub calls.
 
@@ -178,7 +186,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, NamedTuple
 
 CORE_REPO = "Systemorph/MeshWeaver"
@@ -328,6 +336,17 @@ def cd_runs(fetch: Fetch, page: int) -> list[dict]:
     return list(data.get("workflow_runs") or [])
 
 
+def recent_cd_runs(fetch: Fetch, now: float) -> list[dict]:
+    """A differently-filtered view of recent main-CD runs, independent of the page-1 snapshot."""
+    since = datetime.fromtimestamp(now - LISTING_MAX_AGE_HOURS * 3600, timezone.utc)
+    created = ">=" + since.strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = urllib.parse.urlencode({"branch": CORE_BRANCH, "created": created, "per_page": 100})
+    data = fetch(f"/repos/{CORE_REPO}/actions/workflows/{CORE_CD_WORKFLOW}/runs?{query}")
+    if not isinstance(data, dict):
+        raise ResolutionError("the recent core-CD run listing returned no JSON object")
+    return list(data.get("workflow_runs") or [])
+
+
 # Core CD runs on `main` at least hourly (see the module docstring: the widest gap in 300 measured
 # runs was 1.7 h), so a page 1 whose newest main run is older than this is a stale snapshot. Wide on
 # purpose: a false refusal reds every satellite at once, and the stale pages measured were ~3 days
@@ -380,17 +399,40 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
 
 def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | None:
     """The page's newest main run when it is BELOW a declared ceiling — the ONE staleness this
-    script can PROVE rather than infer — or None.
+    helper can prove rather than infer — or None.
 
     PROVEN, because the ceiling is a run number the CALLING repository's own `main` has already
     passed on: a run numbered at least that high EXISTS, so a page 1 that does not contain one is
     a GitHub read inconsistency and can be nothing else. The AGE branch of `stale_listing` is an
     INFERENCE from core CD's measured cadence instead — a genuinely quiet core serves the same
-    page for hours — which is the whole reason only this branch is re-read (MeshWeaver#4750)."""
+    page for hours. The independent recent-run query in `recent_listing_witness` is the second
+    positive witness used by `settle_page_one` for a stale-but-young page (#73)."""
     if passed_ceiling is None:
         return None
     newest = _newest_main_run(runs)
     return newest if newest is not None and newest < passed_ceiling else None
+
+
+def recent_listing_witness(fetch: Fetch, runs: list[dict], now: float) -> tuple[dict | None, str]:
+    """A recent main-CD run omitted by page 1 proves that listing snapshot is stale.
+
+    The created filter is an independent API query. Every run newer than the page's newest row
+    falls inside the same 12-hour window; run numbers are monotonic within this workflow.
+    """
+    recent = recent_cd_runs(fetch, now)
+    newest_listed = _newest_main_run(runs)
+    witnesses = [r for r in recent
+                 if r.get("head_branch") in (None, CORE_BRANCH)
+                 and r.get("run_number") is not None
+                 and (newest_listed is None or int(r["run_number"]) > newest_listed)]
+    if not witnesses:
+        return None, (f"recent-run probe: the independently filtered listing ({len(recent)} row(s) "
+                      f"within {LISTING_MAX_AGE_HOURS} h) holds no main-CD run newer than page 1's "
+                      f"newest ({newest_listed if newest_listed is not None else 'none'})")
+    witness = max(witnesses, key=lambda r: int(r["run_number"]))
+    return witness, (f"recent-run probe: main-CD #{int(witness['run_number'])} "
+                     f"(created {witness.get('created_at') or '?'}) is newer than page 1's "
+                     f"newest ({newest_listed if newest_listed is not None else 'none'})")
 
 
 # ─────────────── RE-READING A PROVABLY STALE PAGE 1 (MeshWeaver#4750) ───────────────
@@ -409,8 +451,10 @@ def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | Non
 # 🚨 THE SAFETY PROPERTY IS UNCHANGED. A page that is still stale after the re-reads is still
 # REFUSED, never resolved from — the same bounded retry already accepted for a 502, and for the
 # same reason: GitHub failing to answer is not an answer. What a re-read must never become is a
-# gate asking again until it likes the reply, which is why it runs ONLY where the staleness is
-# provable (`ceiling_shortfall`) and why the refusal is unconditional once the budget is spent.
+# gate asking again until it likes the reply, which is why it runs ONLY where the staleness has a
+# positive witness (`ceiling_shortfall` or `recent_listing_witness`) and why the refusal is
+# unconditional once the budget is spent. An age-only inference without a witness is still refused
+# without re-reading.
 STALE_REREADS = 3
 STALE_REREAD_BACKOFF_SECONDS = 20.0   # 20 s, 40 s, 60 s — 2 minutes inside the lane's 25.
 
@@ -431,8 +475,26 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
     main run — because a function that logs only its verdict leaves "re-read twice and it cleared"
     indistinguishable from "the condition never fired", which is the same ambiguity as the refusal
     this exists to remove."""
-    why_stale = stale_listing(runs, passed_ceiling, now())
-    if why_stale is None or ceiling_shortfall(runs, passed_ceiling) is None:
+    observed_at = now()
+    why_stale = stale_listing(runs, passed_ceiling, observed_at)
+    shortfall = ceiling_shortfall(runs, passed_ceiling)
+    witness: dict | None = None
+    witness_note = ""
+    if shortfall is None:
+        # A ceiling is already a positive witness. Otherwise ask the same workflow for runs
+        # created within the age guard, a distinct query that catches stale-but-young page-1
+        # snapshots such as MeshWeaver#73. A failed read is not evidence of freshness.
+        try:
+            witness, witness_note = recent_listing_witness(fetch, runs, observed_at)
+        except ResolutionError as error:
+            raise ResolutionError("the independent recent core-CD listing could not be read — "
+                                  f"page 1 freshness is unverified: {error}") from error
+        log(f"  {witness_note}")
+        if witness is not None:
+            why_stale = (f"page 1 omits main-CD #{int(witness['run_number'])}, created "
+                         f"{witness.get('created_at') or '?'}, found by an independent recent-run "
+                         "query")
+    if why_stale is None or (shortfall is None and witness is None):
         return runs, why_stale, 0, 0
     rereads = empties = 0
     for attempt in range(1, STALE_REREADS + 1):
@@ -453,7 +515,17 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
             continue
         runs = fresh
         newest = _newest_main_run(runs)
+        shortfall = ceiling_shortfall(runs, passed_ceiling)
         why_stale = stale_listing(runs, passed_ceiling, now())
+        if shortfall is None and witness is not None:
+            if newest is not None and newest >= int(witness["run_number"]):
+                # This positive witness now appears on the re-read. It clears both the
+                # witness-based finding and an age-only inference about the prior snapshot.
+                why_stale = None
+            else:
+                why_stale = (f"page 1 still omits main-CD #{int(witness['run_number'])}, created "
+                             f"{witness.get('created_at') or '?'}, found by an independent recent-run "
+                             "query")
         log(f"  re-read {attempt} of {STALE_REREADS}: page 1 holds {len(runs)} run(s), newest "
             f"main-cd #{newest if newest is not None else '?'} — "
             + ("SETTLED, resolving from it" if why_stale is None else f"still stale ({why_stale})"))
@@ -2330,6 +2402,8 @@ def _fetch_for(runs: list[dict], jobs_by_run: dict[int, list[dict]],
         if "/artifacts?name=promotion-record" in path:
             return {"total_count": 0, "artifacts": []}
         if "/runs?" in path:
+            if "created=" in path:
+                return {"workflow_runs": []}
             page = int(re.search(r"[?&]page=(\d+)", path).group(1))
             return {"workflow_runs": runs if page == 1 else []}
         if "/jobs" in path:
@@ -2938,6 +3012,42 @@ def self_test() -> int:
                 return {"workflow_runs": pages[index]}
             return base(path)
         return fetch, state
+
+    def _with_recent_witness(fetch: Fetch, state: dict, witness: dict) -> Fetch:
+        def witnessed(path: str) -> dict:
+            if "/runs?" in path and "created=" in path:
+                state["witness_reads"] = state.get("witness_reads", 0) + 1
+                return {"workflow_runs": [witness]}
+            return fetch(path)
+        return witnessed
+
+    # ── #73: a stale page can be younger than the 12-hour age guard ───────────────────────────
+    # A higher run from the independent created-filtered query proves the cached page omitted it.
+    recent_at = made_at + 8.5 * 3600
+    recent_witness = _run(8676, C, created_at="2026-09-12T20:00:00Z")
+    recent_settled = [recent_witness] + aged
+    fetch_young_stale, young_stale = _flipping_page_one([aged, recent_settled])
+    fetch_young_stale = _with_recent_witness(fetch_young_stale, young_stale, recent_witness)
+    case("#73: an 8.5-hour page 1 is re-read when the independent recent query finds a newer run",
+         True,
+         lambda: choose(fetch_young_stale, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: recent_at, sleep=young_stale["slept"].append),
+         lambda c: c.sha == C and young_stale["page1"] == 2
+         and young_stale["witness_reads"] == 1 and young_stale["slept"] == [20.0]
+         and any("recent-run probe: main-CD #8676" in l for l in logs)
+         and any(l.strip().startswith("re-read 1 of 3:") and "#8676" in l and "SETTLED" in l
+                 for l in logs))
+
+    def unreadable_recent_witness(path: str) -> dict:
+        if "created=" in path:
+            raise ResolutionError("synthetic recent-query read failure")
+        return _fetch_for(aged, sealed_two)(path)
+
+    case("#73: an unreadable independent recent query cannot certify the page as fresh", False,
+         lambda: choose(unreadable_recent_witness, _registry(full), tester, portal,
+                        log=logs.append, now=lambda: recent_at),
+         lambda message: "page 1 freshness is unverified" in message
+                         and "synthetic recent-query read failure" in message)
 
     fetch_settles, settles = _flipping_page_one([aged, settled])
     case("#4750: a page 1 stale by the CEILING is RE-READ, and a settled re-read resolves", True,
@@ -4196,8 +4306,9 @@ def self_test() -> int:
           "GitHub 5xx is retried (bounded) and named as a server error, a run "
           "listing whose page 1 is provably STALE (its newest run over 12 h old, or older than the "
           "set main has passed) is refused rather than resolved from — after a bounded RE-READ, "
-          "which it proves line by line, where the staleness is the PROVABLE kind (the ceiling) "
-          "and never where it is an inference (the age) or a freeze, and whose refusal keeps the "
+          "which it proves line by line, where the staleness is the PROVABLE kind (the ceiling or "
+          "recent-run witness), while age-only staleness stays non-retried and an unreadable recent "
+          "probe fails closed, and freezes remain exempt, and whose refusal keeps the "
           "#4433 sentence verbatim, a `status=success` main listing that an UNFILTERED read PROVES stale (a newer completed-success vouching main run it lacks) is re-read and then refused under the same #4433 prefix — while a red main, an in-progress or pull-request run, or an unreadable probe proves nothing and keeps the page as served, and every dead end is RED "
           "naming why.")
     return 0
