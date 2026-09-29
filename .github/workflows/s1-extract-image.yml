@@ -46,16 +46,15 @@ env:
   LINE: gliner-multi-2.1
 
 jobs:
+  # Pull requests: build only — the image build IS the test. Nothing from a PR reaches ACR, and this job
+  # holds no secret (check-pr-secret-preflight.py: a PR-reachable job consuming a secret needs a preflight).
   build:
-    name: Build s1-extract (export + offline tests in the image)${{ github.ref == 'refs/heads/main' && ' and push to ACR' || '' }}
+    name: Build s1-extract (export + offline tests in the image)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: read
-      id-token: write   # OIDC to Azure, main only (the federated credential is scoped to main)
     steps:
       - uses: actions/checkout@v7
-
       # torch (CPU) + the exported 1.1 GB model + the export stage's onnx toolchain do not fit the
       # hosted runner's free disk as shipped; reclaim the preinstalled toolchains this job never uses.
       - name: Free disk space
@@ -68,38 +67,54 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-
       # The Dockerfile's export stage smoke-tests the ONNX export (it must find an organisation) and
       # the runtime stage runs the service tests offline — so a green build IS the test.
+      - name: Build
+        run: docker build -t s1-extract:ci deploy/s1-extract
+
+  # main (push or dispatch): build the same way, push both tags, read them back.
+  publish:
+    name: Build and push s1-extract to ACR
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write   # OIDC to Azure (the federated credential is scoped to main)
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          dotnet: true
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
       - name: Build
         run: |
           set -euo pipefail
           short="${GITHUB_SHA::7}"
           docker build -t "$ACR/s1-extract:${LINE}-${short}" -t "$ACR/s1-extract:${LINE}" deploy/s1-extract
-          docker image inspect "$ACR/s1-extract:${LINE}-${short}" --format 'built {{.Id}} ({{.Size}} bytes)'
-
       - name: Ensure Azure CLI
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: bash .github/scripts/acr-login.sh
       - name: Push s1-extract:<line>-<sha> and :<line>
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           short="${GITHUB_SHA::7}"
           docker push "$ACR/s1-extract:${LINE}-${short}"
           docker push "$ACR/s1-extract:${LINE}"
       - name: Verify the tags exist in the registry (read back, never the green tick)
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           short="${GITHUB_SHA::7}"
