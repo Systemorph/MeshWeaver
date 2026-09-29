@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -52,6 +53,43 @@ internal class VersionWritingStorageAdapter(
 
     private static readonly JsonSerializerOptions FallbackReadOptions = new() { PropertyNameCaseInsensitive = true };
 
+    /// <summary>
+    /// The resolved <see cref="NodeTypeDefinition.KeepsHistory"/> verdict per node type (keyed by
+    /// type path), so a write pays the definition lookup once per type, not once per write.
+    /// Instance field on the mesh-scoped singleton — never static.
+    ///
+    /// <para>🚨 Invalidated, never expired: an entry goes when the DEFINITION changes — synchronously
+    /// when this decorator writes or deletes it, and through <see cref="IStorageAdapter.Changes"/>
+    /// (the cross-replica change feed on Postgres) when another replica does. Only DEFINITE answers
+    /// are cached; a timed-out or faulted read keeps history for that one write and is asked again
+    /// next time. A write in the window before another replica's opt-out reaches this feed still
+    /// gets a snapshot — and the next write or the delete of that node purges it, so nothing
+    /// outlives the window.</para>
+    ///
+    /// <para>Why: MeshWeaver#5886 looked the definition up on EVERY write (a static-node
+    /// enumeration or a routed storage read), and the platform bake's
+    /// <c>Hosting/FleetConsole</c> gate — three sequential <c>CreateOrUpdateNode</c>s inside a 10 s
+    /// budget — went red on the first two sets carrying it and on none before.</para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, CachedVerdict> verdicts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>One type's cache entry: the invalidation <paramref name="Generation"/> and the verdict
+    /// resolved AT that generation (null = none). ONE entry replaced atomically, so an install and an
+    /// invalidation of the same type can never interleave: <see cref="Remember"/> installs only by
+    /// compare-and-swap against the exact entry its read started from, and <see cref="Invalidate"/>
+    /// always moves the generation on, which makes that swap fail.</summary>
+    private sealed record CachedVerdict(long Generation, bool? Keeps);
+
+    private int invalidationArmed;
+
+    /// <summary>When the change feed last ended (fault or completion), in UTC ticks; 0 = never.
+    /// While it is recent the cache is bypassed rather than re-armed on every write — see
+    /// <see cref="ArmInvalidation"/>.</summary>
+    private long feedEndedAtTicks;
+
+    /// <summary>How long after the change feed ended before a re-subscription is attempted.</summary>
+    private static readonly TimeSpan FeedRearmInterval = TimeSpan.FromMinutes(1);
+
     // 🚨 Decorator MUST forward Changes — without this it falls back to the
     // interface default Observable.Empty, and every synced query subscribed
     // to persistence.Changes on this decorator stops receiving notifications.
@@ -89,6 +127,7 @@ internal class VersionWritingStorageAdapter(
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
+        Invalidate(node.Path);
         var write = inner.Write(node, options);
         if (versionQuery is null)
             return write;
@@ -117,6 +156,7 @@ internal class VersionWritingStorageAdapter(
     public IObservable<bool?> WriteIfVersion(
         MeshNode node, long expectedVersion, JsonSerializerOptions options)
     {
+        Invalidate(node.Path);
         var write = inner.WriteIfVersion(node, expectedVersion, options);
         if (versionQuery is null)
             return write;
@@ -138,6 +178,7 @@ internal class VersionWritingStorageAdapter(
     /// its type keeps none.</remarks>
     public IObservable<string> Delete(string path)
     {
+        Invalidate(path);
         if (versionQuery is null)
             return inner.Delete(path);
         return PathsWithoutHistory([path])
@@ -148,6 +189,7 @@ internal class VersionWritingStorageAdapter(
     /// <inheritdoc />
     public IObservable<bool> DeleteIfExists(string path)
     {
+        Invalidate(path);
         if (versionQuery is null)
             return inner.DeleteIfExists(path);
         return PathsWithoutHistory([path])
@@ -158,6 +200,8 @@ internal class VersionWritingStorageAdapter(
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
     {
+        foreach (var path in paths)
+            Invalidate(path);
         if (versionQuery is null || paths.Count == 0)
             return inner.DeleteMany(paths);
         return PathsWithoutHistory(paths)
@@ -177,28 +221,51 @@ internal class VersionWritingStorageAdapter(
             || string.Equals(nodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
             return Observable.Return(true);
 
+        if (!ArmInvalidation())
+            // No live feed can invalidate a cached verdict, so none is used or kept: every write
+            // resolves its type afresh until the feed is back.
+            return ResolveKeepsHistory(nodeType, readOptions?.Invoke() ?? options, cache: false);
+        if (verdicts.TryGetValue(nodeType, out var entry) && entry.Keeps is { } cached)
+            return Observable.Return(cached);
+        return ResolveKeepsHistory(nodeType, readOptions?.Invoke() ?? options, cache: true);
+    }
+
+    /// <summary>
+    /// The uncached lookup behind <see cref="KeepsHistory"/>; caches a definite answer. Resolved with
+    /// the adapter's OWN read options when it has them, so the cached verdict does not depend on
+    /// whichever writer happened to ask first.
+    /// </summary>
+    private IObservable<bool> ResolveKeepsHistory(string nodeType, JsonSerializerOptions options, bool cache)
+    {
+        // Registering the type here (and only here) keeps the map bounded by the number of TYPES
+        // ever asked about, never by the number of paths written.
+        var started = cache ? verdicts.GetOrAdd(nodeType, new CachedVerdict(0, null)) : null;
+
         // A slash-less type is never an in-mesh row (a definition always lives INSIDE a partition —
-        // the rule PartitionOwningTypes applies), so only the host's static nodes can declare it;
-        // those are seed-first, so a built-in type is found at once.
+        // the rule PartitionOwningTypes applies), so only the host's static nodes can declare it.
+        // Those come from MeshBuilder.AddMeshNodes and the IStaticNodeProviders registered when the
+        // mesh is built (StaticNodeProviderExtensions.ResolveStaticNodes owns that resolution); a
+        // plugin installed at runtime brings in-mesh NodeTypes — storage rows, covered by both
+        // invalidation paths — never static ones. So this verdict needs no invalidation.
         if (!nodeType.Contains('/'))
-            return Observable.Return(staticNodeLookup?.Invoke(nodeType) is not { } builtIn || Declares(builtIn, options));
+            return Observable.Return(Remember(nodeType, started,
+                staticNodeLookup?.Invoke(nodeType) is not { } builtIn || Declares(builtIn, options)));
 
         // A path-shaped type is read off the storage this decorator wraps FIRST — the common case
         // (an in-mesh type) is one primary-key read, and the full static-node enumeration is paid
-        // only for a type the store does not hold.
-        //
-        // 🚨 That read happens on EVERY write of an in-mesh-typed node, and it is the accepted cost,
-        // not an oversight: it is what makes an opt-out take effect on the very next write, on every
-        // replica. A per-type verdict cache would have to be invalidated when the DEFINITION changes
-        // — which this decorator only sees for writes on its own replica, never another replica's —
-        // and a stale "keeps history" is exactly the confidential snapshot the opt-out exists to
-        // prevent. One primary-key read per write is cheaper than that failure mode.
+        // only for a type the store does not hold. Once per type: see `verdicts`.
         return inner.Read(nodeType, options)
             .Take(1)
-            .Select(definition => (definition ?? staticNodeLookup?.Invoke(nodeType)) is not { } found
-                                  || Declares(found, options))
-            .DefaultIfEmpty(true)
-            .Timeout(DefinitionReadTimeout, Observable.Return(true))
+            .DefaultIfEmpty(null)
+            .Select(definition => Remember(nodeType, started,
+                (definition ?? staticNodeLookup?.Invoke(nodeType)) is not { } found || Declares(found, options)))
+            .Timeout(DefinitionReadTimeout, Observable.Defer(() =>
+            {
+                logger?.LogWarning(
+                    "Reading NodeType {NodeType} to decide whether it keeps version history did not answer within {Timeout} — keeping history for this write",
+                    nodeType, DefinitionReadTimeout);
+                return Observable.Return(true);
+            }))
             .Catch<bool, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
@@ -206,6 +273,66 @@ internal class VersionWritingStorageAdapter(
                     nodeType);
                 return Observable.Return(true);
             });
+    }
+
+    /// <summary>Installs a verdict by compare-and-swap against the entry the read started from, so a
+    /// type invalidated at ANY point after that — before the check or between check and store — keeps
+    /// no verdict from it.</summary>
+    private bool Remember(string nodeType, CachedVerdict? started, bool keeps)
+    {
+        if (started is not null)
+            verdicts.TryUpdate(nodeType, started with { Keeps = keeps }, started);
+        return keeps;
+    }
+
+    /// <summary>Drops the cached verdict for a definition that was written or deleted, moving its
+    /// generation on so a verdict still being resolved from the old definition is not installed.</summary>
+    private void Invalidate(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return;
+        // Only a type someone resolved has an entry; a written path that is not one is ignored (no
+        // entry is created, so the map stays bounded by the number of types).
+        while (verdicts.TryGetValue(path, out var current)
+               && !verdicts.TryUpdate(path, new CachedVerdict(current.Generation + 1, null), current))
+        {
+        }
+    }
+
+    /// <summary>
+    /// Subscribes to the wrapped store's change feed (once while it lives), dropping the cached
+    /// verdict of any definition another writer — another replica, or a write that bypassed this
+    /// decorator — changed. Returns whether a live feed backs the cache.
+    ///
+    /// <para>If the feed ENDS (faults, or completes), every verdict is forgotten and the cache is
+    /// bypassed; a re-subscription is attempted at most once per <see cref="FeedRearmInterval"/>, so
+    /// a persistently broken feed degrades to "uncached, one warning a minute", never to a
+    /// clear/re-arm/warn loop per write.</para>
+    /// </summary>
+    private bool ArmInvalidation()
+    {
+        if (Volatile.Read(ref invalidationArmed) == 1)
+            return true;
+        var endedAt = Interlocked.Read(ref feedEndedAtTicks);
+        if (endedAt != 0 && DateTimeOffset.UtcNow.UtcTicks - endedAt < FeedRearmInterval.Ticks)
+            return false;
+        if (Interlocked.CompareExchange(ref invalidationArmed, 1, 0) != 0)
+            return true;
+        inner.Changes.Subscribe(
+            change => Invalidate(change.Path),
+            ex => FeedEnded(ex, "faulted"),
+            () => FeedEnded(null, "completed"));
+        return Volatile.Read(ref invalidationArmed) == 1;
+    }
+
+    private void FeedEnded(Exception? ex, string how)
+    {
+        logger?.LogWarning(ex,
+            "The storage change feed {How} — dropping every cached keeps-history verdict; types are resolved per write until it is re-subscribed (at most once a minute)",
+            how);
+        Interlocked.Exchange(ref feedEndedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
+        verdicts.Clear();
+        Interlocked.Exchange(ref invalidationArmed, 0);
     }
 
     /// <summary>
