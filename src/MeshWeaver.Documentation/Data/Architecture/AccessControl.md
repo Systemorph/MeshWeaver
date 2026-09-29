@@ -687,6 +687,13 @@ Access control uses these shipped node types:
 - **Content**: `AccessObject` record (Id, Name, Description, Icon)
 - Used as subjects in AccessAssignment nodes
 
+## Service identity
+
+- **NodeType**: `"ServiceIdentity"`, records at `Admin/_ServiceIdentity/svc-{name}`
+- **Subject id**: the node id — always `svc-…`, a prefix no username may carry
+- A non-person principal (integration, bot, CI job) with its own `mw_` tokens; granted like any
+  subject, audited under its own id, never a global admin. See [Service Identities](../ServiceIdentities).
+
 ## Group
 
 - **NodeType**: `"Group"`
