@@ -357,16 +357,18 @@ So every write that met an owner on a pod being rolled was lost with a terminal 
 watch's `Ops/Status/*` rows, an instance action's status record, any `stream.Update` whose owner sat on
 the old ReplicaSet for the length of the termination grace period.
 
-`AHeldReadKeepsDeliveringWhileItsOwnerSiloLingersTest` (MeshWeaver.Hosting.Orleans.Test) pins it.
-Silo B hosts the owner and is told to stop and left lingering. Silo A holds the node's stream open (the
-fleet-watch heartbeat and running-action resumer shape), writes the node, and receives the
-cross-process invalidation that `StorageChangeFeedRelay` gives every replica in production. Before the
-fix the **write** failed in about a second with `MeshNode Unknown … Rejecting now`, so no reader could
-ever see it. After it, the write lands on the handed-off activation and the held read delivers it.
-Its two siblings pin the rest of the roll: `…AfterItsOwnerSiloDiesTest` (kill) and
-`…AfterItsOwnerSiloDrainsTest` (graceful stop), each asserting that a write after the move reaches the
-**already-held** read, not only that the owner re-activates (the half
-`AKilledOwnerSiloIsReactivatedByItsHoldersTest` covers).
+`AWriteDuringAPodRollIsReDrivenTest` (MeshWeaver.FaultInjection.Test, on the
+[fault-injection harness](../FaultInjectionHarness)) pins it. Silo 1 hosts the owner and is told to
+stop and left lingering (`FaultInjectionCluster.Linger`). Silo 0 holds the node's stream open (the
+fleet-watch heartbeat and running-action resumer shape) and writes the node; the cross-process
+invalidation arrives through the harness's LISTEN model, as it does on every replica in production.
+Before the fix the **write** failed in about a second with `MeshNode Unknown … Rejecting now`, so no
+reader could ever see it. After it, the write lands on the handed-off activation and the held read
+delivers it. Its siblings pin the rest of the roll: `AHeldReadSurvivesItsSourceSiloBeingKilledTest`
+(kill) and `AHeldReadSurvivesItsSourceSiloDrainingTest` (graceful stop), each asserting that a write
+after the move reaches the **already-held** read, not only that the owner re-activates (the half
+`AKilledOwnerSiloIsReactivatedByItsHoldersTest` covers). They replaced the hand-published
+`AHeldReadKeepsDelivering…` trio in MeshWeaver.Hosting.Orleans.Test.
 
 **The fix is classification, not a retry.** `MeshNodeStreamHandle.IsShuttingDownRefusal` recognises
 the routed refusal, and both arms of the response wait (the prompt one and the late

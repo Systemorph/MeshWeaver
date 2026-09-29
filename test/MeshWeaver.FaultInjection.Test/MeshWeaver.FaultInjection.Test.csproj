@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- One isolated regression per production incident, each driven by a deterministic fault from
+         MeshWeaver.Testing.FaultInjection and each with a recorded negative control. See
+         Doc/Architecture/FaultInjectionHarness. Its own project (not MeshWeaver.Hosting.Orleans.Test)
+         because the multi-silo cases would push that suite past the per-project headroom line in
+         .github/scripts/shard-assign.sh. -->
+    <!-- Orleans warns on every silo start without server GC; this suite starts several per run. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ProjectGuid>{8e4b1f72-2c3a-4d59-b6e0-5f1a9c7d3e24}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Testing.FaultInjection\MeshWeaver.Testing.FaultInjection.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Orleans.TestBase\MeshWeaver.Hosting.Orleans.TestBase.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.TestingHost" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
+  </ItemGroup>
+</Project>

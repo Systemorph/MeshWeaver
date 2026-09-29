@@ -422,6 +422,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [Writing Tests](WritingTests)
 - [Negative Controls](NegativeControls) — a pin is only a pin if it fails against the defect
+- [Fault-Injection Harness](FaultInjectionHarness) — deterministic, releasable faults (silo kill / drain / linger, flush hold, NotFound window, change-feed and first-frame holds, webhook loss) and one isolated regression per production incident, each with its negative control
 - [Reactive Test Assertions](ReactiveTestAssertions)
 - [Test State Isolation](TestStateIsolation)
 - [Disposable-mesh e2e](DisposableMeshE2E)
