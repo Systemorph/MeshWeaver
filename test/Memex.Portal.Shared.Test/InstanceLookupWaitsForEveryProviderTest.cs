@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -16,6 +17,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.PluginCatalog;
+using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -64,8 +66,9 @@ public class InstanceLookupWaitsForEveryProviderTest(ITestOutputHelper output) :
         using var connection = answer.Connect();
         try
         {
-            SpinWait.SpinUntil(() => provider.PendingLookups > 0, TimeSpan.FromSeconds(30))
-                .Should().BeTrue("the lookup must reach the provider that holds the instance");
+            await provider.LookupReached.Should().Within(TestTimeouts.Convergence)
+                .Emit("the lookup must reach the provider that holds the instance, or nothing below is measured",
+                    cancellationToken: cancellationToken);
         }
         finally
         {
@@ -132,12 +135,12 @@ public class InstanceLookupWaitsForEveryProviderTest(ITestOutputHelper output) :
     private sealed class LateInstanceProvider : IMeshQueryProvider
     {
         private readonly ReplaySubject<bool> released = new(1);
-        private int pendingLookups;
+        private readonly AsyncSubject<Unit> lookupReached = new();
 
         public string Name => nameof(LateInstanceProvider);
 
-        /// <summary>How many lookups of <see cref="LateInstance"/> have subscribed.</summary>
-        public int PendingLookups => Volatile.Read(ref pendingLookups);
+        /// <summary>Producer → test: completes when a lookup of <see cref="LateInstance"/> has subscribed.</summary>
+        public IObservable<Unit> LookupReached => lookupReached;
 
         /// <summary>Lets the held lookups answer.</summary>
         public void Release() => released.OnNext(true);
@@ -154,7 +157,8 @@ public class InstanceLookupWaitsForEveryProviderTest(ITestOutputHelper output) :
                         && q.Contains($"id:{LateInstance}", StringComparison.Ordinal));
                 if (!lookup)
                     return Observable.Return(Initial(Array.Empty<T>()));
-                Interlocked.Increment(ref pendingLookups);
+                lookupReached.OnNext(Unit.Default);
+                lookupReached.OnCompleted();
                 var record = new MeshNode(LateInstance, "late-owner/" + MeshWeaverInstanceNodeType.NodeType)
                 {
                     NodeType = MeshWeaverInstanceNodeType.NodeType,
