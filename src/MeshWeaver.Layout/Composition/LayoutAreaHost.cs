@@ -86,6 +86,20 @@ public record LayoutAreaHost : IDisposable
     internal AccessService? ViewerAccess { get; }
 
     /// <summary>
+    /// The viewer this host renders for: the delivery-scoped <see cref="AccessContext"/> of the
+    /// subscription that opened it, captured when the host was constructed (the same value the
+    /// render initialization restores). <c>null</c> when the subscription carried none.
+    ///
+    /// <para>🚨 For a read a view issues LATER — in a view that renders on a live emission (a
+    /// permission fold enriching, a query answering), which on a distributed mesh runs off the
+    /// viewer's delivery with no ambient identity. A read that resolves its viewer from the ambient
+    /// context there runs as nobody: the anonymous view, which on an instance closed to logged-out
+    /// callers (<c>Access:DenyAnonymous</c>) is nothing at all, and renders as "there is none".
+    /// Stamp such a read with this viewer explicitly (<c>MeshQueryRequest.ForViewer</c>).</para>
+    /// </summary>
+    public AccessContext? ViewerContext { get; }
+
+    /// <summary>
     /// The area this host actually renders: <see cref="LayoutAreaReference.Area"/> when the
     /// reference names one, otherwise the DEFAULT area the ctor resolved. Kept so failure
     /// paths always report a real area name — <c>Reference.Area</c> is <c>null</c> for every
@@ -139,6 +153,7 @@ public record LayoutAreaHost : IDisposable
         // scope that may already be disposed.
         renderSubscribeScheduler = workspace.Hub.ServiceProvider.GetService<IPooledSubscribeScheduler>();
         var capturedAccessContext = accessService?.Context;
+        ViewerContext = capturedAccessContext;
         var ctorLogger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Layout.LayoutAreaHost");
         // 🚨 TimeZoneId and Locale are logged BECAUSE they are the fields that differ between a
