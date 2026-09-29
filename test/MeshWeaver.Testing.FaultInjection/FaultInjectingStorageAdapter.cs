@@ -108,9 +108,16 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     {
         var hold = new FaultSwitch($"{Name}: hold the change feed",
             s => Interlocked.CompareExchange(ref _feedHold, null, s));
-        if (Interlocked.CompareExchange(ref _feedHold, hold, null) is { IsClosed: true } existing)
-            throw new InvalidOperationException($"{existing.Name} is already in force.");
-        return hold;
+        while (true)
+        {
+            var existing = Volatile.Read(ref _feedHold);
+            if (existing is { IsClosed: true })
+                throw new InvalidOperationException($"{existing.Name} is already in force.");
+            // A released predecessor whose slot-clear has not run yet is replaced, never kept:
+            // the returned switch is always the one the pipeline reads.
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _feedHold, hold, existing), existing))
+                return hold;
+        }
     }
 
     /// <summary>Each write of <paramref name="path"/> that met a closed <see cref="HoldWrites"/> (replayed).</summary>
@@ -169,12 +176,15 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         => Observable.Defer(() =>
         {
             // One held node holds the batch: the batch is one flush, and it lands or waits as one.
-            var held = nodes.Where(n => WriteHold(n.Path) is not null).ToList();
-            if (held.Count == 0)
+            // Capture each switch ONCE: a release between two lookups would otherwise hand the
+            // gate a switch that is no longer registered.
+            var held = nodes.Select(n => (Node: n, Hold: WriteHold(n.Path)))
+                .Where(h => h.Hold is not null).ToList();
+            if (held.Count == 0 || held[0].Hold is not { } gate)
                 return _inner.WriteMany(nodes, options);
-            foreach (var n in held)
-                HeldWriteSubject(Norm(n.Path)).OnNext(n);
-            return WriteHold(held[0].Path)!.Gate(
+            foreach (var (node, _) in held)
+                HeldWriteSubject(Norm(node.Path)).OnNext(node);
+            return gate.Gate(
                 Observable.Defer(() => _inner.WriteMany(nodes, options)),
                 $"WriteMany [{string.Join(", ", nodes.Select(n => n.Path))}]");
         });
@@ -273,10 +283,14 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         return Observable.Return(answer);
     }
 
-    private IObservable<T> Resolved<T>((FaultSwitch Fault, string Parent) root, string what, Func<string, IObservable<T>> resolve)
+    private static IObservable<(MeshNode? Node, int MatchedSegments)> Resolved(
+        (FaultSwitch Fault, string Parent) root, string what,
+        Func<string, IObservable<(MeshNode? Node, int MatchedSegments)>> resolve)
     {
         root.Fault.NoteArrival(what);
-        return root.Parent.Length == 0 ? Observable.Return(default(T)!) : resolve(root.Parent);
+        return root.Parent.Length == 0
+            ? Observable.Return(((MeshNode?)null, 0))
+            : resolve(root.Parent);
     }
 
     private FaultSwitch? WriteHold(string? path)

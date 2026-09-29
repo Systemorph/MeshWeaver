@@ -76,11 +76,24 @@ public sealed class HeldFirstFrameQueryProvider(string partition) : IMeshQueryPr
         => text.Equals(Partition, StringComparison.OrdinalIgnoreCase)
            || text.StartsWith(Partition + "/", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The same partition test <see cref="Matches"/> applies (the query's <c>namespace:</c> values
+    /// and its path's first segment, exactly as the fan-in extracts them), so the two can never
+    /// disagree about which queries are held.
+    /// </summary>
+    private bool Targets(string query)
+    {
+        var parsed = new QueryParser().Parse(query);
+        if (parsed.ExtractNamespaces().Any(Names))
+            return true;
+        return !string.IsNullOrEmpty(parsed.Path) && Names(parsed.Path);
+    }
+
     private IObservable<TFrame> Held<TFrame>(MeshQueryRequest request, TFrame emptyFrame)
         => Observable.Defer(() =>
         {
             var frame = Observable.Return(emptyFrame).Concat(Observable.Never<TFrame>());
-            var mine = request.EffectiveQueries.Any(q => q.Contains(Partition, StringComparison.OrdinalIgnoreCase));
+            var mine = request.EffectiveQueries.Any(Targets);
             return mine && System.Threading.Volatile.Read(ref _hold) is { IsClosed: true } hold
                 ? hold.Gate(frame, $"first frame of '{string.Join(" | ", request.EffectiveQueries)}'")
                 : frame;

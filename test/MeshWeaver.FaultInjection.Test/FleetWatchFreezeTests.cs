@@ -187,7 +187,8 @@ public class AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest(AHeldReadFree
                 "PINNED GAP (#5011): the heartbeat is fire-and-forget and the owner's goodbye cannot leave a "
                 + "lingering host, so with its change feed withheld the held read has NO channel that tells it "
                 + "the owner moved — it neither delivers nor ends", ct);
-            await feed!.Arrivals.Where(a => a.Contains(h.Path, StringComparison.OrdinalIgnoreCase))
+            feed.Should().NotBeNull("the freeze variant withholds the holder's feed");
+            await (feed?.Arrivals ?? Observable.Empty<string>()).Where(a => a.Contains(h.Path, StringComparison.OrdinalIgnoreCase))
                 .Should().Within(TestTimeouts.Convergence)
                 .Emit("the write's notification reached the holder's feed and is being withheld — otherwise "
                       + "the freeze is not attributable to it", ct);
@@ -196,7 +197,8 @@ public class AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest(AHeldReadFree
             await held.Delivers("v2").Should().Within(TestTimeouts.Convergence)
                 .Emit("released, the one withheld notification is enough: the held read re-subscribes and "
                       + "delivers — the change feed is the sole channel that recovers it", ct);
-        withheld!.IsClosed.Should().BeFalse();
+        withheld.Should().NotBeNull("the freeze variant withholds the holder's feed");
+        withheld?.IsClosed.Should().BeFalse("the feed hold was released in the fixture's finally");
     }
 
     /// <summary>Three silos.</summary>

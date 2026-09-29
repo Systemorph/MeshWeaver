@@ -92,7 +92,7 @@ public class ARoutedWriteRightAfterItsCreateTest(ARoutedWriteRightAfterItsCreate
                 .Should().Within(TestTimeouts.Convergence).Emit("the prober's write settles", ct);
             inTheGap.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
                 "TODAY a read-minted window fast-fails the write until the create's notification arrives");
-            inTheGap.Exception!.Message.Should().Contain(path, "and it fails loudly, naming the path");
+            (inTheGap.Exception?.Message ?? "").Should().Contain(path, "and it fails loudly, naming the path");
             await late.Arrivals.Where(a => a.Contains(path, StringComparison.OrdinalIgnoreCase))
                 .Should().Within(TestTimeouts.Convergence)
                 .Emit("the create's notification really is the one being held", ct);
@@ -156,7 +156,7 @@ public class ARoutedWriteRightAfterItsCreateTest(ARoutedWriteRightAfterItsCreate
         written.Kind.Should().Be(System.Reactive.NotificationKind.OnNext,
             $"the first routed write after an ACKNOWLEDGED create must reach the node the probe missed: "
             + $"{written.Exception?.Message}");
-        written.Value!.Name.Should().Be("patched");
+        written.Value?.Name.Should().Be("patched");
         if (late is not null)
             await late.Arrivals.Where(a => a.Contains(path, StringComparison.OrdinalIgnoreCase))
                 .Should().Within(TestTimeouts.Convergence)
@@ -204,7 +204,7 @@ public class ARoutedWriteRightAfterItsCreateTest(ARoutedWriteRightAfterItsCreate
                 .Emit("the write's route resolution met the window (otherwise this measured nothing)", ct);
             intoTheWindow.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
                 "the router answers a path it cannot resolve with NotFound");
-            intoTheWindow.Exception!.Message.Should().Contain(path,
+            (intoTheWindow.Exception?.Message ?? "").Should().Contain(path,
                 "the failure names the path it could not reach, so the caller can tell which write was lost");
         }
 

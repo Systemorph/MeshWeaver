@@ -40,9 +40,9 @@ public sealed record FaultedDelivery(InboxFault Fault, string What);
 public sealed class FaultInjectingHttpHandler : DelegatingHandler
 {
     private readonly ReplaySubject<FaultedDelivery> _faulted = new();
-    private FaultSwitch? _refuse;
-    private FaultSwitch? _failAfter;
-    private HttpStatusCode _status = HttpStatusCode.InternalServerError;
+    private (FaultSwitch Switch, HttpStatusCode Status)? _refuse;
+    private (FaultSwitch Switch, HttpStatusCode Status)? _failAfter;
+    private readonly object _arm = new();
 
     /// <summary>Creates the handler over <paramref name="inner"/>, the inbox's own handler.</summary>
     /// <param name="inner">The handler that reaches the inbox.</param>
@@ -54,45 +54,52 @@ public sealed class FaultInjectingHttpHandler : DelegatingHandler
     /// <summary>Until released, answer every delivery with <paramref name="status"/> and never forward it.</summary>
     /// <param name="status">What the sender sees; 500 by default.</param>
     public FaultSwitch Refuse(HttpStatusCode status = HttpStatusCode.InternalServerError)
-    {
-        _status = status;
-        return Arm(ref _refuse, $"inbox refuses with {(int)status}");
-    }
+        => Arm(ref _refuse, status, $"inbox refuses with {(int)status}");
 
     /// <summary>Until released, forward every delivery and then answer <paramref name="status"/> anyway.</summary>
     /// <param name="status">What the sender sees; 500 by default.</param>
     public FaultSwitch FailAfterDelivery(HttpStatusCode status = HttpStatusCode.InternalServerError)
-    {
-        _status = status;
-        return Arm(ref _failAfter, $"inbox fails after delivery with {(int)status}");
-    }
+        => Arm(ref _failAfter, status, $"inbox fails after delivery with {(int)status}");
 
     /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var what = $"{request.Method} {request.RequestUri}";
-        if (Volatile.Read(ref _refuse) is { IsClosed: true } refuse)
+        if (Current(ref _refuse) is { } refuse)
         {
-            refuse.NoteArrival(what);
+            refuse.Switch.NoteArrival(what);
             _faulted.OnNext(new FaultedDelivery(InboxFault.Refused, what));
-            return new HttpResponseMessage(_status) { RequestMessage = request };
+            return new HttpResponseMessage(refuse.Status) { RequestMessage = request };
         }
         var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        if (Volatile.Read(ref _failAfter) is { IsClosed: true } failAfter)
+        if (Current(ref _failAfter) is { } failAfter)
         {
-            failAfter.NoteArrival(what);
+            failAfter.Switch.NoteArrival(what);
             _faulted.OnNext(new FaultedDelivery(InboxFault.DeliveredButFailed, what));
             response.Dispose();
-            return new HttpResponseMessage(_status) { RequestMessage = request };
+            return new HttpResponseMessage(failAfter.Status) { RequestMessage = request };
         }
         return response;
     }
 
-    private static FaultSwitch Arm(ref FaultSwitch? slot, string name)
+    /// <summary>Each switch carries its OWN status, so two faults in force never answer with each other's.</summary>
+    private FaultSwitch Arm(ref (FaultSwitch Switch, HttpStatusCode Status)? slot, HttpStatusCode status, string name)
     {
         var fault = new FaultSwitch(name);
-        Interlocked.Exchange(ref slot, fault)?.Release();
+        (FaultSwitch Switch, HttpStatusCode Status)? previous;
+        lock (_arm)
+        {
+            previous = slot;
+            slot = (fault, status);
+        }
+        previous?.Switch.Release();
         return fault;
+    }
+
+    private (FaultSwitch Switch, HttpStatusCode Status)? Current(ref (FaultSwitch Switch, HttpStatusCode Status)? slot)
+    {
+        lock (_arm)
+            return slot is { Switch.IsClosed: true } armed ? armed : null;
     }
 }
 
@@ -101,7 +108,8 @@ public sealed class FaultInjectingHttpHandler : DelegatingHandler
 /// <c>deliver: message → IObservable&lt;result&gt;</c> so that, while a switch is closed, a delivery
 /// faults with <see cref="InboxDeliveryFailedException"/> either before the inbox ran
 /// (<see cref="Refuse"/>) or after it did (<see cref="FailAfterDelivery"/>). Cold, like every
-/// delivery it wraps.
+/// delivery it wraps. A delivery is request/response: the inbox's FIRST answer is the delivery's
+/// outcome, so an inbox that answers and stays open does not hold the sender.
 /// </summary>
 /// <typeparam name="TMessage">What is delivered.</typeparam>
 /// <typeparam name="TResult">What the inbox answers.</typeparam>
@@ -133,7 +141,7 @@ public sealed class FaultInjectingInbox<TMessage, TResult>(Func<TMessage, IObser
                 return Observable.Throw<TResult>(new InboxDeliveryFailedException(InboxFault.Refused, what));
             }
             if (Volatile.Read(ref _failAfter) is { IsClosed: true } failAfter)
-                return deliver(message).LastOrDefaultAsync().SelectMany(_ =>
+                return deliver(message).Take(1).DefaultIfEmpty().SelectMany(_ =>
                 {
                     failAfter.NoteArrival(what);
                     _faulted.OnNext(new FaultedDelivery(InboxFault.DeliveredButFailed, what));

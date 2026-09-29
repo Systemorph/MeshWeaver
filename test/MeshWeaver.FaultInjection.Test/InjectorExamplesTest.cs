@@ -57,7 +57,7 @@ public class InjectorExamplesTest(ITestOutputHelper output) : MonolithMeshTestBa
                 .Should().Within(TestTimeouts.Convergence).Emit("the commit's flush reached the hold", ct);
             var stored = await Storage.Inner.Read(path, Mesh.JsonSerializerOptions)
                 .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
-            stored!.Name.Should().Be("stored", "while the flush is held, storage still has the previous state");
+            stored?.Name.Should().Be("stored", "while the flush is held, storage still has the previous state");
         }
 
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
@@ -88,7 +88,7 @@ public class InjectorExamplesTest(ITestOutputHelper output) : MonolithMeshTestBa
         }
 
         (await Storage.Read(path, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
-            .Emit(cancellationToken: ct))!.Name.Should().Be("exists");
+            .Emit(cancellationToken: ct))?.Name.Should().Be("exists");
     }
 
     /// <summary>

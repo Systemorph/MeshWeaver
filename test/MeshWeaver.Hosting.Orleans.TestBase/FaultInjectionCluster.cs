@@ -52,7 +52,7 @@ public class FaultInjectionCluster : IAsyncLifetime
     public static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(1);
 
     private readonly OrleansTestBackingStore _backingStore = new();
-    private OrleansTestClusterHost _host = null!;
+    private OrleansTestClusterHost? _host;
     private ImmutableList<SiloHandle> _silos = ImmutableList<SiloHandle>.Empty;
 
     /// <summary>How many silos the cluster starts with. Two unless a derived fixture says otherwise.</summary>
@@ -62,7 +62,8 @@ public class FaultInjectionCluster : IAsyncLifetime
     protected virtual Type SiloConfiguratorType => typeof(FaultInjectionSiloConfigurator);
 
     /// <summary>The Orleans test cluster.</summary>
-    public TestCluster Cluster => _host.Cluster;
+    public TestCluster Cluster => (_host ?? throw new InvalidOperationException(
+        "The fault-injection cluster is not deployed yet — InitializeAsync has not run.")).Cluster;
 
     /// <summary>The cross-process change relay (the LISTEN/NOTIFY model), on by default.</summary>
     public CrossProcessChangeRelay Relay { get; } = new();
@@ -74,7 +75,8 @@ public class FaultInjectionCluster : IAsyncLifetime
             builder =>
             {
                 builder.Options.InitialSilosCount = (short)SiloCount;
-                builder.Options.SiloBuilderConfiguratorTypes.Add(SiloConfiguratorType.AssemblyQualifiedName!);
+                builder.Options.SiloBuilderConfiguratorTypes.Add(SiloConfiguratorType.AssemblyQualifiedName
+                    ?? throw new InvalidOperationException($"{SiloConfiguratorType} has no assembly-qualified name."));
                 // TestCluster's only silo-host hook; see TwoSiloCacheUpdateFixture for why the
                 // shared store must be handed in here rather than registered by the configurator.
                 builder.CreateSiloAsync = async (siloName, configuration) =>
@@ -99,6 +101,11 @@ public class FaultInjectionCluster : IAsyncLifetime
             Silo(i).GetServices<IPartitionStorageProvider>()
                 .Count(p => ReferenceEquals(p.Adapter, injector))
                 .Should().Be(1, $"silo {i}'s writable in-memory store must be served through its fault injector");
+            // And the silo's IStorageAdapter — under the platform's guard decorators — is the
+            // partition router over those providers, never the raw in-memory adapter, which would
+            // reach the store around every injected fault.
+            Silo(i).GetRawStorageAdapter<PersistenceService>().Should().NotBeNull(
+                $"silo {i}'s IStorageAdapter must route through its partition providers, where the injector sits");
         }
     }
 
@@ -106,7 +113,8 @@ public class FaultInjectionCluster : IAsyncLifetime
     public ValueTask DisposeAsync()
     {
         Relay.Dispose();
-        OrleansClusterDisposal.DisposeInBackground(_host);
+        if (_host is not null)
+            OrleansClusterDisposal.DisposeInBackground(_host);
         return ValueTask.CompletedTask;
     }
 
@@ -207,7 +215,8 @@ public class FaultInjectionCluster : IAsyncLifetime
     private static IPartitionStorageProvider Build(ServiceDescriptor descriptor, IServiceProvider sp)
         => (IPartitionStorageProvider)(descriptor.ImplementationInstance
             ?? descriptor.ImplementationFactory?.Invoke(sp)
-            ?? ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType!));
+            ?? ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType
+                ?? throw new InvalidOperationException($"A partition provider registration has no implementation: {descriptor}")));
 }
 
 /// <summary>
