@@ -67,7 +67,7 @@ resource portalIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-1
 // the namespace the portal Deployment + memex-portal-sa actually run in.
 // One at a time: Azure refuses concurrent federated-credential writes on one identity
 // (ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity) — hit as soon as an estate
-// runs a second portal namespace (PartnerRe.Memex, 2026-09-29).
+// runs a second portal namespace.
 @batchSize(1)
 resource portalFederatedCredentials 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2024-11-30' = [
   for ns in namespaces: {
