@@ -434,14 +434,43 @@ public static class CatalogLayoutAreas
     /// deserialized to its <see cref="PackageManifest"/> and sorted by display name. This is the
     /// read-only "what is running on this instance" view the About tab shows every user — the
     /// catalog's ALL page joins the SAME records against a package source for install status.
+    ///
+    /// <para>🚨 Two properties a consumer can rely on. A live instance's Overview said "No plugins are
+    /// installed on this instance" over dozens of installs; the first property is the reproduced
+    /// cause (<c>AdminAppFirstFrameTest</c>), the second hardens the read against losing its
+    /// viewer:</para>
+    /// <list type="bullet">
+    /// <item><description><b>It emits the registry's ANSWER, never a placeholder.</b> The first
+    /// emission is the query's Initial — so an empty list means the registry IS empty, and a view
+    /// may say so. (The catalog pages seed their own frame; this inventory does not.)</description></item>
+    /// <item><description><b>It reads as the VIEWER the page renders for</b>, stamped explicitly
+    /// (<see cref="MeshQueryRequest.ForViewer"/>) from the host's viewer rather than resolved from
+    /// the ambient context when the query subscribes — which, for a view rendered on a live
+    /// emission on a distributed mesh, is nobody: the anonymous view, and on an instance closed to
+    /// logged-out callers that is an empty registry.</description></item>
+    /// </list>
     /// </summary>
     public static IObservable<IReadOnlyList<PackageManifest>> ObserveInstalledManifests(LayoutAreaHost host)
-        => ObserveInstalled(host).Select(nodes => (IReadOnlyList<PackageManifest>)nodes
-            .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
-            .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
-            .Select(m => m!)
-            .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
-            .ToList());
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null)
+            return Observable.Return<IReadOnlyList<PackageManifest>>([]);
+        var request = MeshQueryRequest.FromQuery(AllInstalledQuery);
+        // The subscriber the page was opened for first; the ambient context only when the host
+        // carries none. A logged-out (virtual) visitor or a hub credential is never stamped as a
+        // signed-in viewer — those reads keep the framework's own resolution.
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        if ((host.ViewerContext ?? access?.Context ?? access?.CircuitContext)
+            is { ObjectId: { Length: > 0 } viewerId, IsVirtual: false, IsHub: false })
+            request = request.ForViewer(viewerId);
+        return FoldInstalledAnswers(mesh.Query<MeshNode>(request))
+            .Select(nodes => (IReadOnlyList<PackageManifest>)nodes
+                .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
+                .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
+                .Select(m => m!)
+                .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
+                .ToList());
+    }
 
     // The install records a card page joins against: the whole registry for the ALL page (its
     // orphan section needs every record), and for a category page ONLY its members — one exact-path
@@ -485,6 +514,11 @@ public static class CatalogLayoutAreas
     // Folds a query's change stream into the current path-keyed set, seeded empty so the page never
     // waits on the registry's first frame.
     private static IObservable<IReadOnlyList<MeshNode>> FoldInstalled(IObservable<QueryResultChange<MeshNode>> changes) =>
+        FoldInstalledAnswers(changes).StartWith((IReadOnlyList<MeshNode>)[]);
+
+    // The same fold WITHOUT the seed: every emission is the registry's answer (its Initial, then
+    // each change), so an empty list means empty — never "not answered yet".
+    private static IObservable<IReadOnlyList<MeshNode>> FoldInstalledAnswers(IObservable<QueryResultChange<MeshNode>> changes) =>
         changes
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
@@ -499,8 +533,7 @@ public static class CatalogLayoutAreas
                     };
                 return map;
             })
-            .Select(m => (IReadOnlyList<MeshNode>)m.Values.ToList())
-            .StartWith((IReadOnlyList<MeshNode>)[]);
+            .Select(m => (IReadOnlyList<MeshNode>)m.Values.ToList());
 
     // The page frame every catalog page opens with: title, the authored intro, the source line.
     private static StackControl Frame(

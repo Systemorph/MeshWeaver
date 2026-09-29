@@ -132,6 +132,33 @@ the viewer set and subscribed with it — and the test host's fallback identity 
 and memex.systemorph.com (3.0.0-ci.9526): the six seeds listed in `$Menu:NodeSettings` and absent
 from the `/Admin` nav.
 
+**…and the nav never paints before that verdict — or the catalog — has ANSWERED.** Binding the
+viewer correctly was not enough: the lane still opened its verdict with a synthetic `false`, and the
+contribution catalog opened with an empty set. The page waits for the viewer's permissions on the
+node (the same evaluator fold) before it renders, and each lane subscribes its OWN verdict — so
+which lanes made the first frame was a race the compiled Admin-app tabs won and the seeded ones
+lost. Anything that reads ONE frame — an MCP `get @Admin/area/Settings`, a first paint — saw the
+six seeds missing. Settings-nav lanes now take `AdminAppNodeType.AnsweredAdminVerdict` (no seed;
+`AdminOnlyTab` and the contributed lane both), and `UiContributionCatalog.Contributions` emits the
+catalog query's answer, never a placeholder (the node menus seed their own slice, as before).
+Pinned by `AdminAppTest.ASeededAdminTab_IsInTheFirstRenderedNav` and, with the real seeds,
+a runtime admin grant and a request-only identity, by
+`AdminAppFirstFrameTest.TheFirstRenderedNav_CarriesTheSeededInstanceTabs_InTheirSections`. Measured on
+memex.meshweaver.cloud (3.0.0-ci.9606, which carries the render-turn fix above) and
+memex.systemorph.com (3.0.0-ci.9590).
+
+**The Overview's installed-plugin list is the registry's answer, read as the viewer.**
+`CatalogLayoutAreas.ObserveInstalledManifests` emits nothing until the install-registry query
+answers (no empty seed rendered as "No plugins are installed on this instance"), and it stamps the
+query with the viewer the page was opened for (`LayoutAreaHost.ViewerContext` →
+`MeshQueryRequest.ForViewer`) instead of leaving it to the ambient context at subscribe time. The
+seed is the reproduced cause; the stamp is hardening — a view rendered on a live emission runs off
+the viewer's delivery, and there an unstamped read would be anonymous, which on an instance with
+`Access:DenyAnonymous` is an empty registry even though `Plugins` is `PublicRead` (not reproduced
+on the in-process test mesh, whose reads keep the caller's context). Both instances above said "No plugins are installed" over dozens of installs. Pinned
+by `AdminAppFirstFrameTest.TheInstalledPluginSection_FirstSaysWhatIsInstalled` (red before: the
+section's first word was the empty seed).
+
 ## Old links keep working
 
 A settings page asked for a tab it no longer carries answers with a REDIRECT to the tab's home, never
