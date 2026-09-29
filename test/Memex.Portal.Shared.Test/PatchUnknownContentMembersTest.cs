@@ -32,14 +32,14 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class PatchUnknownContentMembersTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan Budget = TestTimeouts.Convergence;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddUpdatePolicyType();
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task Patch_WithUndeclaredContentMembers_IsRefusedNamingThem_AndWritesNothing()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -61,7 +61,7 @@ public class PatchUnknownContentMembersTest(ITestOutputHelper output) : Monolith
         UpdatePolicyNodeType.Parse(after, Mesh.JsonSerializerOptions).Policy.Should().Be(UpdatePolicyKind.Stable);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task Patch_ThatChangesNothing_ReportsNoChange_NotPatched()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -76,7 +76,7 @@ public class PatchUnknownContentMembersTest(ITestOutputHelper output) : Monolith
         (await ReadNode(ct)).Version.Should().Be(before.Version);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task Patch_ThatChangesADeclaredMember_StillReportsPatched_AndBumpsTheVersion()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -93,7 +93,7 @@ public class PatchUnknownContentMembersTest(ITestOutputHelper output) : Monolith
         result.Should().Contain($"v{before.Version} →", "the success line carries the version delta");
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task Update_WithUndeclaredContentMembers_IsRefusedNamingThem()
     {
         var ct = TestContext.Current.CancellationToken;
