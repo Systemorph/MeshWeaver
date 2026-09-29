@@ -130,8 +130,9 @@ public sealed class PluginBundleClient
     /// null for a NodeType-only bundle (#1664). Additive: an older registry simply omits it.</param>
     /// <param name="MinMeshVersion">The module's declared platform FLOOR — surfaced on the index
     /// so a consumer can say what the bundle claims ("declares platform ≥ X; running Y") before
-    /// downloading it. ADVISORY since #3648: it skips nothing; the consumer's landing measures the
-    /// bytes. Null = none.</param>
+    /// downloading it — and so the update decision can HOLD a bundle whose floor is above the
+    /// running platform without downloading a byte (policy <c>package-min-mesh-version</c>,
+    /// <see cref="ModuleUpdateDecision"/>'s <c>floorHold</c>). Null = none.</param>
     public sealed record BundleRef(
         string Plugin, string Version, string Url, string? Module = null,
         string? MinMeshVersion = null)
@@ -434,7 +435,11 @@ public sealed class PluginBundleClient
                             // registry advertises for these module bytes is the other half of
                             // "already landed", and it is the value LandFromBundle records below,
                             // so the two sides converge after one landing.
-                            bundle?.FrameworkMvid);
+                            bundle?.FrameworkMvid,
+                            // 🚨 policy package-min-mesh-version: a bundle whose declared floor is
+                            // above the running platform is held — the landed generation keeps
+                            // running and the bundle lands once the platform rolls to it.
+                            floorHold: PackagePlatformFloorGate.HoldFor(_hub));
 
                         if (verdict.Action != ModuleUpdateAction.Land)
                         {

@@ -220,13 +220,15 @@ public record PackageManifest
     /// <summary>
     /// The package's declared platform FLOOR (<c>content.minMeshVersion</c> — the field plugin
     /// authors already write): the minimum MeshWeaver version its author says the compiled module
-    /// requires. 🚨 ADVISORY at runtime since #3648: every decision point words it
-    /// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) onto its log line and status row
-    /// as "declares platform ≥ X; running Y" and none refuses, holds or skips on it — whether the
-    /// module loads is measured by the link probe at landing and at boot. Its one remaining gate
-    /// is at PACK time (<c>check-module-platform-floor.py</c>): a floor the build platform cannot
-    /// satisfy is an authoring error. Null = none declared (most modules need none). Carried onto
-    /// the install record and surfaced on the registry's bundle index.
+    /// requires. 🚨 It HOLDS at runtime (policy <c>package-min-mesh-version</c>): a version whose
+    /// floor is comparable with the running platform and strictly above it is not used — an
+    /// update is held and the installed version keeps running (<see cref="HeldUpdate"/>), a fresh
+    /// install is refused, a module bundle is not landed — decided by
+    /// <see cref="MeshWeaver.Plugin.Packaging.PlatformFloor"/>, where a floor that cannot be
+    /// ordered against the running version proceeds as advisory. The pack-time lint
+    /// (<c>check-module-platform-floor.py</c>) still refuses a floor the build platform cannot
+    /// satisfy. Null = none declared (most modules need none). Carried onto the install record and
+    /// surfaced on the registry's bundle index.
     /// </summary>
     public string? MinMeshVersion { get; init; }
 
@@ -549,6 +551,38 @@ public record PackageManifest
     /// re-stamp that drops this field cannot resurrect the storm.</para>
     /// </summary>
     public string? NotifiedModuleVersion { get; init; }
+
+    /// <summary>
+    /// 🚨 Why the newest version the source serves is NOT installed here — set on the INSTALL
+    /// RECORD when that candidate's declared <see cref="MinMeshVersion"/> is above the running
+    /// platform (policy <c>package-min-mesh-version</c>, <see cref="PackagePlatformFloorGate"/>):
+    /// <c>"held: {candidate} needs platform ≥ X, running Y — updates when the platform rolls"</c>.
+    /// The installed version keeps running. Diagnostic copy for the record page and the log, not a
+    /// UI string. Null when nothing is held — every successful install re-stamps the record from the
+    /// candidate manifest and clears it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HeldUpdate { get; init; }
+
+    /// <summary>
+    /// Whether the BLOCKING TICKET for <see cref="HeldUpdate"/> reached the control instance:
+    /// <c>"blocking ticket dispatched: …"</c>, or <c>"NOT dispatched: {why}"</c> — no control inbox
+    /// configured, the inbox refused it, or no dispatch channel is registered on this host. A hold
+    /// nobody is told about is the defect the policy exists to remove, so the absence of a route
+    /// is itself stated here. Null when nothing is held.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HeldUpdateDispatch { get; init; }
+
+    /// <summary>
+    /// When the blocking ticket for the CURRENT <see cref="HeldUpdate"/> was last ACCEPTED by the
+    /// control inbox — the de-duplication key: a ticket is sent once per held state
+    /// (package, version, floor, running) and re-sent only when that state changes, after
+    /// <see cref="PackagePlatformFloorGate.RedispatchInterval"/>, or when the last attempt was not
+    /// accepted (null). Never set by a failed attempt.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? HeldUpdateDispatchedAt { get; init; }
 
     /// <summary>
     /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF

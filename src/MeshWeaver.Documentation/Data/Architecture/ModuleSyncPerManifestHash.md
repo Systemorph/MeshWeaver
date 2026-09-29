@@ -53,7 +53,7 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 
 | Order | Condition | Outcome | Written |
 |---|---|---|---|
-| 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformCompatibility.ProducerIsNewer`, the ladder's own comparison; unknown on either side is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
+| 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
 
