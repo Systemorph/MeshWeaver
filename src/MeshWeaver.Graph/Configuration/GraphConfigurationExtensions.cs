@@ -97,6 +97,8 @@ public static class GraphConfigurationExtensions
                 .AddLogonActionType()
                 .AddKernel()
                 .AddApiTokenType()
+                // Non-person principals (Admin/_ServiceIdentity) — Doc/Architecture/ServiceIdentities.
+                .AddServiceIdentityType()
                 .AddLicenseType()
                 .AddMeshWeaverInstanceType()
                 .AddMeshDataSourceType()
@@ -398,6 +400,10 @@ public static class GraphConfigurationExtensions
                 // Instance secrets are written only through the InstanceSecrets verbs (rights,
                 // slot and encryption checked, then written as system); a direct write is refused.
                 services.AddScoped<INodeValidator, InstanceSecretWriteGuard>();
+
+                // A service principal never holds platform administration: no Admin-partition grant
+                // may name one, and a service caller writes nothing in the Admin partition.
+                services.AddScoped<INodeValidator, Security.ServicePrincipalAdminGuard>();
 
                 // Delivery for the compile pipeline's parked-failure bell. The pipeline lives in
                 // MeshWeaver.Compiler and cannot reference NotificationService (it reads the

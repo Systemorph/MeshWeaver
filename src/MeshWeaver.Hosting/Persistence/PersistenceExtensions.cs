@@ -129,7 +129,15 @@ public static class PersistenceExtensions
                 new MonotonicWriteGuardStorageAdapter(
                     new VersionWritingStorageAdapter(
                         sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
-                        sp.GetService<IVersionQuery>()),
+                        sp.GetService<IVersionQuery>(),
+                        // A C#-registered NodeType's KeepsHistory is read off the host's static
+                        // nodes; the mesh hub's options (resolved at DELETE time, never at
+                        // construction — the hub is built on top of this adapter) read the node
+                        // being deleted. See VersionWritingStorageAdapter → "Types that keep no history".
+                        staticNodeLookup: path => sp.FindStaticNode(path),
+                        // Null when the hub is not resolvable → the decorator's own static fallback.
+                        readOptions: () => sp.GetService<IMessageHub>()?.JsonSerializerOptions,
+                        logger: sp.GetService<ILogger<VersionWritingStorageAdapter>>()),
                     sp.GetService<ILogger<MonotonicWriteGuardStorageAdapter>>()),
                 sp.GetService<MeshWeaver.Mesh.Services.RecentlyDeletedRegistry>(),
                 sp.GetService<ILogger<SubtreeDeletionGuardStorageAdapter>>()));

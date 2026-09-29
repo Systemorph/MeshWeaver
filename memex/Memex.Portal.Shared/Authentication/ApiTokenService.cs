@@ -122,12 +122,21 @@ internal class ApiTokenService(
     public IObservable<TokenCreationResult> CreateToken(
         string userId, string userName, string userEmail, string label, DateTimeOffset? expiresAt = null)
     {
+        // 🚨 A person's surfaces never mint for a SERVICE principal. A service's tokens are issued
+        // only through CreateServiceToken, which reads the service's record in the Admin partition
+        // first — a token minted here for a `svc-…` id would carry no identity path, so revoking
+        // the service could not reach it (and validation refuses it anyway, see
+        // ConfirmServicePrincipal). Doc/Architecture/ServiceIdentities.
+        if (ServiceIdentity.IsServiceObjectId(userId))
+            return Observable.Throw<TokenCreationResult>(new InvalidOperationException(
+                $"'{userId}' is a service principal — its tokens are issued by a global admin on the "
+                + "Service identities tab, never through a personal token surface."));
+
         var rawBytes = RandomNumberGenerator.GetBytes(TokenByteLength);
         var rawToken = TokenPrefix + Convert.ToBase64String(rawBytes)
             .Replace("+", "-").Replace("/", "_").TrimEnd('=');
 
         var hash = HashToken(rawToken);
-        var hashPrefix = hash[..12];
 
         // Per-user partition layout (Repair v10): tokens live at
         // {userId}/ApiToken/{hashPrefix}, NOT under User/{userId}/ApiToken.
@@ -146,9 +155,8 @@ internal class ApiTokenService(
 
         var rolesObs = ResolveSelfScopeRoles(assignmentPath);
 
-        return rolesObs.SelectMany(capturedRoles =>
-        {
-            var apiToken = new ApiToken
+        return rolesObs.SelectMany(capturedRoles => Mint(
+            rawToken, userTokenNamespace, userId, new ApiToken
             {
                 TokenHash = hash,
                 UserId = userId,
@@ -158,14 +166,89 @@ internal class ApiTokenService(
                 CreatedAt = DateTimeOffset.UtcNow,
                 ExpiresAt = expiresAt,
                 Roles = capturedRoles,
-            };
+            }));
+    }
 
-            var userNode = new MeshNode(hashPrefix, userTokenNamespace)
+    /// <summary>
+    /// Issues a token for the SERVICE principal <paramref name="serviceObjectId"/> — the one surface
+    /// that mints for a principal other than the caller, and it can name only a service.
+    ///
+    /// <para>🚨 The record is read FIRST, from the authoritative store: a name that is not a service
+    /// object id, a record that does not exist, or a revoked identity is refused before anything is
+    /// written. So this cannot be pointed at a person — a person's id has no record under
+    /// <see cref="ServiceIdentity.Namespace"/>, and the prefix check refuses it before the read.</para>
+    ///
+    /// <para>The token row lives beneath the record (<see cref="ServiceIdentity.TokenNamespace"/>),
+    /// in the Admin partition, so the write itself runs under the CALLER's identity and only a global
+    /// admin can make it. It carries <see cref="ApiToken.ServiceIdentityPath"/>, which validation
+    /// reads on every use. The raw token is returned once; only its hash is stored.</para>
+    /// </summary>
+    /// <param name="serviceObjectId">The service object id (<c>svc-…</c>).</param>
+    /// <param name="label">What the token is for.</param>
+    /// <param name="expiresAt">Optional end of term.</param>
+    /// <returns>The raw token and the stored node, once both rows are readable.</returns>
+    public IObservable<TokenCreationResult> CreateServiceToken(
+        string serviceObjectId, string label, DateTimeOffset? expiresAt = null)
+    {
+        if (!ServiceIdentity.IsServiceObjectId(serviceObjectId))
+            return Observable.Throw<TokenCreationResult>(new InvalidOperationException(
+                $"'{serviceObjectId}' is not a service principal. Service tokens are issued only for a "
+                + "service identity; a person mints their own tokens, signed in as themselves."));
+
+        var identityPath = ServiceIdentity.PathFor(serviceObjectId);
+        return storage.Read(identityPath, hub.JsonSerializerOptions)
+            .Take(1)
+            // An empty completion is "no record" and is refused below like a null one — never a
+            // mint that completes with neither a token nor an error.
+            .DefaultIfEmpty()
+            .SelectMany(record =>
+            {
+                var identity = record?.ContentAs<ServiceIdentity>(hub.JsonSerializerOptions);
+                if (record is null || identity is null)
+                    return Observable.Throw<TokenCreationResult>(new InvalidOperationException(
+                        $"No service identity '{serviceObjectId}' exists at {identityPath}."));
+                if (identity.IsRevoked)
+                    return Observable.Throw<TokenCreationResult>(new InvalidOperationException(
+                        $"The service identity '{serviceObjectId}' is revoked; it cannot be issued tokens."));
+
+                var rawBytes = RandomNumberGenerator.GetBytes(TokenByteLength);
+                var rawToken = TokenPrefix + Convert.ToBase64String(rawBytes)
+                    .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+                var tokenNamespace = ServiceIdentity.TokenNamespace(serviceObjectId);
+                CleanupExpired(tokenNamespace);
+                return Mint(rawToken, tokenNamespace, identityPath, new ApiToken
+                {
+                    TokenHash = HashToken(rawToken),
+                    UserId = serviceObjectId,
+                    UserName = record.Name ?? serviceObjectId,
+                    UserEmail = "",
+                    Label = label,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    ExpiresAt = expiresAt,
+                    ServiceIdentityPath = identityPath,
+                });
+            });
+    }
+
+    /// <summary>
+    /// Writes one token: the row at <c>{tokenNamespace}/{hashPrefix}</c> under the caller's identity,
+    /// then the global <c>ApiToken/{hashPrefix}</c> index entry as System, then confirms both are
+    /// readable from the shared store before the raw token leaves the server.
+    /// </summary>
+    private IObservable<TokenCreationResult> Mint(
+        string rawToken, string tokenNamespace, string mainNode, ApiToken apiToken)
+    {
+        var hash = apiToken.TokenHash;
+        var hashPrefix = hash[..12];
+        var label = apiToken.Label;
+        var userId = apiToken.UserId;
+        {
+            var userNode = new MeshNode(hashPrefix, tokenNamespace)
             {
                 Name = $"API Token: {label}",
                 NodeType = NodeTypeApiToken,
                 State = MeshNodeState.Active,
-                MainNode = userId,
+                MainNode = mainNode,
                 Content = apiToken,
             };
 
@@ -226,7 +309,7 @@ internal class ApiTokenService(
                             .SelectMany(__ => ConfirmReadable(created.Path))
                             .Select(___ => new TokenCreationResult(rawToken, created)));
                 });
-        });
+        }
     }
 
     /// <summary>
@@ -469,8 +552,57 @@ internal class ApiTokenService(
                         indexNode,
                         (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode),
                         hash, hashPrefix, elapsed));
-                });
+                })
+                .SelectMany(result => ConfirmServicePrincipal(result, hashPrefix));
         });
+    }
+
+    /// <summary>
+    /// The service-principal half of validation (Doc/Architecture/ServiceIdentities). A valid token
+    /// that carries <see cref="ApiToken.ServiceIdentityPath"/> authenticates only while its
+    /// <see cref="ServiceIdentity"/> record exists and is not revoked — read from the SAME
+    /// authoritative store as the token itself, on every use, so revoking the identity revokes every
+    /// token it holds on the very next request, on every replica. A token that names a service
+    /// object id WITHOUT an identity path was not minted by <see cref="CreateServiceToken"/> and is
+    /// refused outright. A person's token passes through unchanged.
+    /// </summary>
+    private IObservable<TokenValidationResult> ConfirmServicePrincipal(TokenValidationResult result, string hashPrefix)
+    {
+        if (result.Status != TokenValidationStatus.Valid || result.Token is not { } token)
+            return Observable.Return(result);
+
+        if (string.IsNullOrEmpty(token.ServiceIdentityPath))
+        {
+            if (!ServiceIdentity.IsServiceObjectId(token.UserId))
+                return Observable.Return(result);
+            logger.LogWarning(
+                "API token validation failed at {Stage} for hash prefix {HashPrefix}: the token names service principal {UserId} but carries no identity path",
+                "service-identity-missing", hashPrefix, token.UserId);
+            return Observable.Return(TokenValidationResult.Invalid("Service token without an identity record"));
+        }
+
+        var path = token.ServiceIdentityPath;
+        return storage.Read(path, hub.JsonSerializerOptions)
+            .Take(1)
+            // An empty completion is "no record" (→ Invalid), never an absent verdict.
+            .DefaultIfEmpty()
+            .Timeout(ValidationReadTimeout)
+            .Select(record =>
+            {
+                var refusal = ServiceIdentity.Refuse(
+                    record?.ContentAs<ServiceIdentity>(hub.JsonSerializerOptions), token.UserId, path);
+                if (refusal is null)
+                    return result;
+                logger.LogWarning(
+                    "API token validation failed at {Stage} for hash prefix {HashPrefix}: {Reason}",
+                    "service-identity-refused", hashPrefix, refusal);
+                return TokenValidationResult.Invalid(refusal);
+            })
+            // No verdict about the identity is no verdict about the token (issue #637): Unavailable,
+            // never Invalid, and never Valid either — a revoked service must not slip through a
+            // storage blip.
+            .Catch<TokenValidationResult, Exception>(ex => Observable.Return(TokenValidationResult.Unavailable(
+                $"service identity read for token validation did not complete ({ex.GetType().Name})")));
     }
 
     /// <summary>
@@ -698,7 +830,10 @@ internal class ApiTokenService(
             && TryClaimStampDispatch(hash, now))
         {
             Interlocked.Increment(ref stampDispatchCount);
-            hub.GetWorkspace()
+            // A service token's row lives in the Admin partition, which the service itself may not
+            // write (ServicePrincipalAdminGuard) — the stamp is platform telemetry, so it is written
+            // as System there. A person's row keeps the shape it always had.
+            IObservable<MeshNode> Stamp() => hub.GetWorkspace()
                 .GetMeshNodeStream(tokenNode.Path)
                 .Update(node =>
                 {
@@ -714,7 +849,10 @@ internal class ApiTokenService(
                     if (current.LastUsedAt is { } last && now - last < LastUsedStampInterval)
                         return node;
                     return node with { Content = current with { LastUsedAt = now } };
-                })
+                });
+            (string.IsNullOrEmpty(apiToken.ServiceIdentityPath)
+                    ? Stamp()
+                    : hub.ServiceProvider.GetService<AccessService>().RunAsSystem(Stamp))
                 .Subscribe(_ => { }, _ => { });
         }
 
@@ -928,6 +1066,27 @@ internal class ApiTokenService(
                 }
                 return (IReadOnlyList<ApiTokenInfo>)tokens;
             });
+    }
+
+    /// <summary>
+    /// Live list of a SERVICE principal's tokens — the synced query over its token namespace beneath
+    /// the record (<see cref="ServiceIdentity.TokenNamespace"/>). Readable by whoever can read the
+    /// Admin partition, i.e. a global admin.
+    /// </summary>
+    /// <param name="serviceObjectId">The service object id.</param>
+    /// <returns>Every emission is the complete list.</returns>
+    public IObservable<IReadOnlyList<ApiTokenInfo>> GetTokensForService(string serviceObjectId)
+    {
+        var tokenNamespace = ServiceIdentity.TokenNamespace(serviceObjectId);
+        return hub.GetWorkspace()
+            .GetQuery($"service-tokens:{serviceObjectId}", $"namespace:{tokenNamespace} nodeType:{NodeTypeApiToken}")
+            .Select(snapshot => (IReadOnlyList<ApiTokenInfo>)snapshot
+                .Where(node => node.Path is not null)
+                .SelectMany(node => node.ContentAs<ApiToken>(hub.JsonSerializerOptions) is { } token
+                    ? [ToInfo(node, token)]
+                    : Array.Empty<ApiTokenInfo>())
+                .OrderByDescending(info => info.CreatedAt)
+                .ToList());
     }
 
     /// <summary>

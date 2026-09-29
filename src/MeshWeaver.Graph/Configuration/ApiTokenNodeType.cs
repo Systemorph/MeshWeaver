@@ -149,32 +149,32 @@ public static class ApiTokenNodeType
                     tokenNodeObs = Observable.Return<MeshNode?>(node);
                 }
 
-                return tokenNodeObs.Select(tokenNode =>
+                return tokenNodeObs.SelectMany(tokenNode =>
                 {
                     var apiToken = tokenNode.ContentAs<ApiToken>(hub.JsonSerializerOptions) ?? ExtractApiToken(tokenNode, hub.JsonSerializerOptions);
 
                     if (apiToken == null)
                     {
                         hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
-                        return Unit.Default;
+                        return Observable.Return(Unit.Default);
                     }
 
                     if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
                     {
                         hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
-                        return Unit.Default;
+                        return Observable.Return(Unit.Default);
                     }
 
                     if (apiToken.IsRevoked)
                     {
                         hub.Post(ValidateTokenResponse.Fail("Token revoked"), o => o.ResponseFor(request));
-                        return Unit.Default;
+                        return Observable.Return(Unit.Default);
                     }
 
                     if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
                     {
                         hub.Post(ValidateTokenResponse.Fail("Token expired"), o => o.ResponseFor(request));
-                        return Unit.Default;
+                        return Observable.Return(Unit.Default);
                     }
 
                     // Include the roles captured on the ApiToken at creation time.
@@ -185,8 +185,51 @@ public static class ApiTokenNodeType
                     // outlive the authority it was copied from.
                     var response = ValidateTokenResponse.Ok(
                         apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
-                    hub.Post(response, o => o.ResponseFor(request));
-                    return Unit.Default;
+
+                    if (string.IsNullOrEmpty(apiToken.ServiceIdentityPath))
+                    {
+                        // A person's token. One that names a SERVICE object id without an identity
+                        // path was not minted by the service surface — refuse it (the same verdict
+                        // ApiTokenService.ConfirmServicePrincipal reaches).
+                        hub.Post(ServiceIdentity.IsServiceObjectId(apiToken.UserId)
+                                ? ValidateTokenResponse.Fail("Service token without an identity record")
+                                : response,
+                            o => o.ResponseFor(request));
+                        return Observable.Return(Unit.Default);
+                    }
+
+                    // A SERVICE token authenticates only while its ServiceIdentity record exists and
+                    // is not revoked — read on every use, so revoking the identity revokes every
+                    // token it holds at once (Doc/Architecture/ServiceIdentities).
+                    //
+                    // Read from the AUTHORITATIVE store, exactly as ApiTokenService.ConfirmServicePrincipal
+                    // does, so the two paths reach the same verdict: an ABSENT record (deleted rather
+                    // than revoked) reads as null → Refuse's "no record" arm → a definitive Fail, never
+                    // a routing NotFound that would surface as Unavailable. A read that faults or does
+                    // not answer within the bound errors into the outer Subscribe's onError, which
+                    // posts Unavailable — a verdict is ALWAYS posted, never a hang.
+                    var identityPath = apiToken.ServiceIdentityPath;
+                    var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+                    var identityRead = storage is not null
+                        ? storage.Read(identityPath, hub.JsonSerializerOptions)
+                        : accessService.RunAsSystem(
+                            () => hub.GetMeshNode(identityPath, TimeSpan.FromSeconds(10)));
+                    return identityRead
+                        .Take(1)
+                        // An empty completion is "no record", never silence.
+                        .DefaultIfEmpty()
+                        .Timeout(TimeSpan.FromSeconds(10))
+                        .Select(identityNode =>
+                        {
+                            var refusal = ServiceIdentity.Refuse(
+                                identityNode.ContentAs<ServiceIdentity>(hub.JsonSerializerOptions),
+                                apiToken.UserId, identityPath);
+                            hub.Post(refusal is null
+                                    ? response with { IsService = true }
+                                    : ValidateTokenResponse.Fail(refusal),
+                                o => o.ResponseFor(request));
+                            return Unit.Default;
+                        });
                 });
             }))
             .Subscribe(

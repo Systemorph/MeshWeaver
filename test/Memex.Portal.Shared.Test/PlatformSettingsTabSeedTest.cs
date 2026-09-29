@@ -27,6 +27,8 @@ public class PlatformSettingsTabSeedTest
         UpdatePolicySettingsTab.TabId,
         PublishedSettingsTab.TabId,
         ControlLaneSettingsTab.TabId,
+        // New as a seed (never a compiled tab) — its id is its deep link from the start.
+        ServiceIdentitiesSettingsTab.TabId,
     ];
 
     /// <summary>The tabs whose compiled providers gated on the platform-admin check.</summary>
@@ -38,6 +40,7 @@ public class PlatformSettingsTabSeedTest
         UpdatePolicySettingsTab.TabId,
         PublishedSettingsTab.TabId,
         ControlLaneSettingsTab.TabId,
+        ServiceIdentitiesSettingsTab.TabId,
     ];
 
     [Fact]
@@ -183,6 +186,7 @@ public class PlatformSettingsTabSeedTest
             [UpdatePolicySettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
             [ControlLaneSettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
             [InboxSettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
+            [ServiceIdentitiesSettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
         };
         Assert.Equal(AdminTabIds.OrderBy(i => i, StringComparer.Ordinal),
             expected.Keys.OrderBy(i => i, StringComparer.Ordinal));

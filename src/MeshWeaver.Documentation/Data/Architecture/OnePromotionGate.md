@@ -77,16 +77,19 @@ endpoint, which answers 404 for this repository.
 - **CI** — the platform resolver (`.github/scripts/resolve-platform.py`) takes the newest set whose
   platform trio is sealed (promote, verify, platform bake: every one of them runs ~5–30 minutes after
   a green core main commit and none waits for the fleet's gate), resolving a set that is promoted
-  but not yet ARMED by the portal's identity tag. A red core `main` publishes nothing, so the last
-  green set is taken. Plugins pull requests no longer hold back to the set Plugins `main` last
+  but not yet ARMED by the portal's `<core7>-p<plugins7>` tag from that run's promotion-record
+  artifact. The run head can differ from the commit whose image the gate built, and the portal's
+  bare core tag can move when Plugins changes. The resolver checks the recorded pair and refuses
+  a missing pair instead of selecting the moving bare tag. A red core `main` publishes nothing, so
+  the last green set is taken. Plugins pull requests no longer hold back to the set Plugins `main` last
   passed on by default; the label `platform:main-passed` asks for that ceiling.
 
 ### Page-one freshness
 
 GitHub can return a cached page 1 of core main-CD runs that is stale but still younger than the
 12-hour age guard. That made a consumer quietly choose an older sealed set even though newer sets
-had completed (#73). For resolutions without a caller-supplied main-passed ceiling, the resolver
-now compares page 1 with a second query for main-CD runs created within that same 12-hour window.
+had completed (#73). Whenever a resolution has no proven ceiling shortfall — with no ceiling, or
+with a caller-supplied main-passed ceiling that page 1 satisfies — the resolver now compares page 1 with a second query for main-CD runs created within that same 12-hour window.
 A higher run number is a positive witness that page 1 omitted a run; the resolver re-reads page 1
 up to the bounded retry limit and refuses to resolve from it if it remains stale. If the independent
 query cannot be read, freshness is unverified and the resolver fails closed. A successful query
@@ -176,6 +179,20 @@ a `Roll` `Hosting/InstanceAction`, not here.
   `scripts/resolve-line-pointer.sh`; the pointer moves only in `arm`'s phase D.
 - `memex-portal-ai:main` and the identity/pair tags move at promote — they are CI pointers, not a
   roll target of any instance.
+- **The control image follows the same gate.** `memex-control` is the same build as
+  `memex-portal-ai` under another repository name (`-p:MemexControlImage=true`, which adds
+  `MeshWeaver.Fleet.Control` and `MeshWeaver.SelfUpdate.Aks` and closes the type set — see
+  [Closed Type Set](../ClosedTypeSet)). Its own lane (`control-image` → `control-acceptance` →
+  `control-promote`) stays outside the fleet's delivery verdict, and `control-promote` writes only
+  identity tags: `<core7>`, the pair `<core7>-p<plugins7>` and `main`. The version tag and the line
+  pointers are written by `control-arm`, which runs after `arm` in every main-cd run
+  (`arm-promoted-set.py control-follow`): it reads the newest ARMED version and its pair tag off
+  memex-portal-ai and tags the accepted control image of that pair. An armed set without an accepted
+  control image is a warning naming the version the control image stays on — never a red on the
+  fleet's delivery, and healed by the next run once the pair is accepted. The version tag is written
+  to the fleet registry first and to ACR last, so its presence on ACR means both registries carry it.
+  Before this, `control-promote` wrote the version and the pointers at promotion, so an instance on
+  `memex-control` with a Continuous policy would have rolled to sets the gate had not armed.
 
 ### Containment is answerable
 

@@ -227,6 +227,25 @@ public record NodeTypeDefinition
     public string? StorageTable { get; init; }
 
     /// <summary>
+    /// Whether instances of this type keep VERSION HISTORY. Defaults to <c>true</c> — every write
+    /// is snapshotted, which is what Versions, VersionDiff, RestoreVersion and
+    /// RestoreFromPointInTime read.
+    ///
+    /// <para>Set <c>false</c> (JSON <c>"keepsHistory": false</c>, in a C#-registered definition or
+    /// in an in-mesh NodeType node's content alike) for a type whose content is TRANSIENT and must
+    /// not outlive its current value — a request carrying confidential input until it is answered,
+    /// where a snapshot would keep that input after the node itself has cleared it. The storage
+    /// layer's version writer then records NO snapshot for a write of such a node, removes any
+    /// history a store wrote on its own (a database trigger) right after the write, and purges the
+    /// node's whole history when the node is deleted. See
+    /// <c>Doc/Architecture/MeshNodeVersioning</c> → "Types That Keep No History".</para>
+    ///
+    /// <para>🚨 An instance of such a type cannot be restored to an earlier version and does not
+    /// appear in point-in-time restores — that is the point, not a side effect.</para>
+    /// </summary>
+    public bool KeepsHistory { get; init; } = true;
+
+    /// <summary>
     /// Locations of the Code nodes to compile with this NodeType's
     /// <see cref="Configuration"/> lambda. Each entry is either:
     /// <list type="bullet">

@@ -259,6 +259,55 @@ version list, and reading it as a write log says the opposite of what happened.
 timestamps, or a node the pass CREATED (`CreateNodeRequest` always stamps `CreatedDate`). Use the
 version list for *what changed and in what order*, never for *when*.
 
+## Types That Keep No History
+
+Every write is snapshotted into version history by default — the `VersionWritingStorageAdapter`
+decorator chains `IVersionQuery.WriteVersion` off each persisted write, and on Postgres a per-schema
+trigger (`mesh_node_copy_to_history`) records one as well. That is right for documents and wrong for
+a **transient** type: a request that carries confidential input only until it is answered (a
+`Governance/NameCheck` request holds submitted source lines from a private repository until the
+watcher clears them) would otherwise keep that input in history for as long as the history exists.
+
+A NodeType opts out with `KeepsHistory = false` on its `NodeTypeDefinition` — in C#, or in an
+in-mesh NodeType node's content:
+
+```json
+"content": {
+  "$type": "NodeTypeDefinition",
+  "keepsHistory": false,
+  "configuration": "config => config.WithContentType<NameCheckContent>()…"
+}
+```
+
+What the storage layer then does for a node of that type:
+
+| Event | Behaviour |
+|---|---|
+| Write | **No snapshot** is written, and the node's history is **purged** (`IVersionQuery.PurgeVersions`) right after the write — a store that snapshots on its own (the Postgres trigger) has recorded one by then, and a type that opted out *after* history accumulated loses it on its next write. |
+| Delete (`Delete`, `DeleteIfExists`, `DeleteMany`) | The node is read first (its type decides), deleted, then its history is purged. |
+| An ordinary type | Unchanged: every write snapshots, a delete keeps the history (point-in-time restore depends on it). |
+
+The decision is taken **in the storage layer**, with no hub and no routing: the definition of an
+in-mesh type is read off the storage the decorator wraps (a primary-key read of the NodeType row),
+a C#-registered one off the host's static nodes — **once per type**, then cached. The cached
+verdict is dropped when the definition changes: at once when this decorator writes or deletes it,
+and through the storage change feed when another replica does. A write that lands in the window
+before another replica's opt-out reaches the feed still gets a snapshot, and the node's next write
+or its delete purges it. **A definition that cannot be read keeps history** for that write — the
+failure mode is a retained snapshot, never a destroyed one — and is asked again on the next.
+
+🚨 **`PurgeVersions` answers a statement, never a guess.** `true` means the store holds no history
+for the path any more; `false` means the store cannot purge. The interface default answers `true`
+only for a store that retains nothing (`RetainsHistory = false`) — a retaining store that has not
+implemented the purge answers `false`, and the decorator logs a Warning naming the store and the
+path, because a retained snapshot of a type that declared it keeps none is exactly the fact an
+operator must be able to see. Core implements it for `FileSystemVersionStore`, `RoutingVersionQuery`
+and `NoOpVersionQuery`; the database backends live in MeshWeaver.Plugins and implement it there.
+
+🚨 **Not transactional with the write.** On a store whose history is written by a trigger, the
+snapshot exists between the write's commit and the purge that follows it. A reader of history in
+that window can see it; nothing survives it.
+
 ## What This Is Not
 
 This is in-mesh change tracking for the live `MeshNode` graph. It is entirely unrelated to **data versioning** of the *content* held by NodeTypes — historical queries, time-travel, and the `{path}@V{n}` snapshot convention are a separate concern covered in [DataVersioning](/Doc/Architecture/DataVersioning) (which is a guide to backend mechanisms, not a framework API).

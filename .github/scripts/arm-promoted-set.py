@@ -5,6 +5,7 @@
     python3 .github/scripts/arm-promoted-set.py armed-state --manifests portal.json   # the cursor
     python3 .github/scripts/arm-promoted-set.py pending            # MeshWeaver.Plugins' poller
     python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
+    python3 .github/scripts/arm-promoted-set.py control-follow --manifests portal.json --control-manifests control.json
     python3 .github/scripts/arm-promoted-set.py --self-test
 
 Policy `one-promotion-gate` (register: Doc/Architecture/PolicyNotProse). Design of record:
@@ -198,6 +199,60 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
         raise ValueError(f"the newest armed manifest {best[1]} names {len(shas)} distinct core commits "
                          f"({best[2]}) — cannot name its core commit")
     return best[1], next(iter(shas))
+
+
+def control_follow(portal_manifests: object, control_manifests: object) -> dict:
+    """What the CONTROL image (`memex-control`) must be told about the newest ARMED set. Pure.
+
+    The control image is the same build as memex-portal-ai under another repository name
+    (`-p:MemexControlImage=true`), so it follows the SAME promotion gate: `control-promote` writes
+    only identity tags (the core sha and the `<core7>-p<plugins7>` pair), and a version tag — the
+    thing a Continuous record with `updatePattern: 3.0.0-ci*` rolls to — and the line pointers are
+    written only for a set `arm` armed on memex-portal-ai. The pair tag is the join: the armed
+    version shares its manifest with exactly one pair tag, and the accepted control image of that
+    pair carries the same pair tag (the bare sha tag is re-pointed by a rebuild, the pair is not).
+
+    Returns {"action", "version", "pair", "move_pointers", "control_newest"}:
+      * `none`    — nothing was ever armed;
+      * `done`    — memex-control already carries the armed version;
+      * `tag`     — its accepted image for the armed pair exists: tag the version (and the line
+                    pointers when `move_pointers` — never backwards past a newer control version);
+      * `missing` — no accepted control image for the armed pair (its control lane failed or has not
+                    finished): the control image stays where it is, and the caller SAYS so.
+    An armed manifest naming zero or several pairs is a ValueError — never a guess."""
+    got = armed_commit(portal_manifests, require_sha=False)
+    if got is None:
+        return {"action": "none", "version": "", "pair": "", "move_pointers": False, "control_newest": ""}
+    version = got[0]
+    armed_tags: list[str] = []
+    for row in portal_manifests:  # armed_commit validated it is a list
+        t = row.get("tags") if isinstance(row, dict) else None
+        if isinstance(t, list) and version in t:
+            armed_tags = [str(x) for x in t]
+            break
+    pairs = sorted({t for t in armed_tags if PAIR_TAG.match(t)})
+    if len(pairs) != 1:
+        raise ValueError(f"the armed manifest {version} names {len(pairs)} pair tags ({armed_tags}) — "
+                         f"cannot name the control image that belongs to it")
+    if not isinstance(control_manifests, list):
+        raise ValueError("the memex-control manifest metadata is not a JSON list")
+    control_tags: set[str] = set()
+    for row in control_manifests:
+        t = row.get("tags") if isinstance(row, dict) else None
+        if isinstance(t, list):
+            control_tags.update(str(x) for x in t)
+    numbered = [(n, t) for t in control_tags if (n := run_number_of(t)) is not None]
+    newest = max(numbered)[1] if numbered else ""
+    n_self = run_number_of(version) or 0
+    if version in control_tags:
+        action = "done"
+    elif pairs[0] in control_tags:
+        action = "tag"
+    else:
+        action = "missing"
+    return {"action": action, "version": version, "pair": pairs[0],
+            "move_pointers": action == "tag" and (not numbered or n_self >= max(numbered)[0]),
+            "control_newest": newest}
 
 
 # ───────────────────────────────── transport ──────────────────────────────────────────────
@@ -525,6 +580,27 @@ def self_test() -> int:
     check("armed-state: the marker is never version-shaped (no self-updater can select it)",
           run_number_of("arm-complete-3.0.0-ci.9538") is None)
     check("armed-state: nothing ever armed is None", armed_state([{"tags": ["main"]}]) is None)
+    armed_p = [{"tags": ["3.0.0-ci.9598", "0d14493", "0d14493-pc791b44", "arm-complete-3.0.0-ci.9598"]},
+               {"tags": ["3.0.0-ci.9590", "5145540-pa5ef923"]}]
+    cf = control_follow(armed_p, [{"tags": ["0d14493", "0d14493-pc791b44", "main"]},
+                                  {"tags": ["3.0.0-ci.9590", "5145540", "3-latest"]}])
+    check("control-follow: the accepted control image of the ARMED pair is tagged with its version",
+          cf["action"] == "tag" and cf["version"] == "3.0.0-ci.9598" and cf["pair"] == "0d14493-pc791b44"
+          and cf["move_pointers"] is True, str(cf))
+    cf = control_follow(armed_p, [{"tags": ["3.0.0-ci.9598", "0d14493-pc791b44"]}])
+    check("control-follow: already carrying the armed version is DONE (idempotent)", cf["action"] == "done", str(cf))
+    cf = control_follow(armed_p, [{"tags": ["0d14493", "0d14493-p1111111"]}, {"tags": ["3.0.0-ci.9590"]}])
+    check("control-follow: a control image of ANOTHER pair of the same core is not the armed one (MISSING)",
+          cf["action"] == "missing" and cf["control_newest"] == "3.0.0-ci.9590", str(cf))
+    cf = control_follow(armed_p, [{"tags": ["0d14493-pc791b44"]}, {"tags": ["3.0.0-ci.9601"]}])
+    check("control-follow: never moves the line pointers backwards past a newer control version",
+          cf["action"] == "tag" and cf["move_pointers"] is False, str(cf))
+    check("control-follow: nothing armed is NONE", control_follow([{"tags": ["main"]}], [])["action"] == "none")
+    try:
+        control_follow([{"tags": ["3.0.0-ci.9598", "0d14493"]}], [])
+        check("control-follow: an armed manifest with no pair tag is RED", False)
+    except ValueError:
+        check("control-follow: an armed manifest with no pair tag is RED, never a guess", True)
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -534,8 +610,9 @@ def self_test() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base", "armed-state"))
+    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base", "armed-state", "control-follow"))
     ap.add_argument("--manifests", type=Path, help="armed-base: memex-portal-ai manifest metadata (JSON list)")
+    ap.add_argument("--control-manifests", type=Path, help="control-follow: memex-control manifest metadata (JSON list)")
     ap.add_argument("--armed-max", type=int, default=0,
                     help="run number of the newest ARMED set (memex-portal-ai's newest version tag)")
     ap.add_argument("--override", default="", help="arm exactly this set name, verdict or not")
@@ -562,6 +639,20 @@ def main() -> int:
         if out:
             with open(out, "a") as f:
                 f.writelines(f"{k}={v}\n" for k, v in rows.items())
+        print(json.dumps(rows))
+        return 0
+    if a.command == "control-follow":
+        if a.manifests is None or a.control_manifests is None:
+            ap.error("control-follow needs --manifests and --control-manifests")
+        try:
+            rows = control_follow(json.loads(a.manifests.read_text()), json.loads(a.control_manifests.read_text()))
+        except (OSError, ValueError) as e:
+            print(f"::error::the control image's arming cannot be decided: {e}")
+            return 1
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a") as f:
+                f.writelines(f"{k}={str(v).lower() if isinstance(v, bool) else v}\n" for k, v in rows.items())
         print(json.dumps(rows))
         return 0
     if a.command == "armed-base":

@@ -203,8 +203,10 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
 - [Settings by Owner — the Instance, Person and Node Apps](AdminApp) — every settings tab lives in the app of the thing it changes: `/Admin` (the instance, titled with its name, platform admins only), `/{user}/Settings` (the person, titled with their name, the owner only) and a node's ⋯ → Settings…; the mapping of every tab, the module API, the redirects that keep old links working, and the Inbox app every user gets
+- [In-App Extensions](InAppExtensions) — packages that extend an app instead of being one: the Threads app's harnesses and model providers, the person app's signing authority; `hostedIn` + `extensionSlot`, the Store's Extensions shelf (Get or Buy there is the in-app purchase), and the `PersonApp` contribution gated on `requireAddressAccess`
 - [Domain Configuration Apps](DomainConfigurationApps) — configuration and secrets live in the app that owns their domain (AI, Databases, Sign-in, Email, Payments, Integrations), never as panels on the Deployment record page: the fleet apps on the control instance per deployment, the instance-scope tabs in each Admin app, what each reads, writes and gates, and how a change reaches the portal
 - [Invitation-Only Onboarding](InvitationOnlyOnboarding)
+- [Service Identities](ServiceIdentities) — non-person principals (an integration, a bot, a CI job) with their own `mw_` tokens: created by a global admin in the Admin partition, granted like any subject, audited under their own `svc-…` id, revoked with every token at once, and never a global admin
 - [The Redirect-Target Contract](RedirectTargetContract) — every `returnUrl` sink validates local-only, so every source must mint local; a wrong source is refused rather than followed, which costs the whole flow and logs nothing
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
@@ -422,6 +424,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [Writing Tests](WritingTests)
 - [Negative Controls](NegativeControls) — a pin is only a pin if it fails against the defect
+- [Fault-Injection Harness](FaultInjectionHarness) — deterministic, releasable faults (silo kill / drain / linger, flush hold, NotFound window, change-feed and first-frame holds, webhook loss) and one isolated regression per production incident, each with its negative control
 - [Reactive Test Assertions](ReactiveTestAssertions)
 - [Test State Isolation](TestStateIsolation)
 - [Disposable-mesh e2e](DisposableMeshE2E)

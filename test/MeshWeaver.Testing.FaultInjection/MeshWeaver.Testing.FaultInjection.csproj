@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- A LIBRARY test-support assembly (the test-tree props default to Exe): the deterministic
+         fault injectors every isolated regression test builds on. Never packed or published; a
+         satellite repo reaches it by ProjectReference through its platform checkout, the way it
+         already reaches MeshWeaver.Fixture. See Doc/Architecture/FaultInjectionHarness. -->
+    <OutputType>Library</OutputType>
+    <MeshWeaverTestSupportLibrary>true</MeshWeaverTestSupportLibrary>
+    <ProjectGuid>{3c8f2a41-6d0e-4b7a-9e15-7a2d4f6c1b90}</ProjectGuid>
+    <Description>Deterministic fault injectors for MeshWeaver tests: storage flush hold, hidden path (route NotFound), change-feed hold, held first query frame, cross-process change relay, faulting HTTP inbox. No Orleans dependency; the silo injectors live in MeshWeaver.Hosting.Orleans.TestBase.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The test tree's global usings name Xunit (and the assertion library, which comes with it). -->
+    <PackageReference Include="xunit.v3.extensibility.core" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+</Project>

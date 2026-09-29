@@ -60,6 +60,12 @@ public static class PersonApp
     /// <summary>Slot of the Sharing tab.</summary>
     public const int SharingOrder = 70;
 
+    /// <summary>The person app's OWN tab ids (and the retired Appearance id, which aliases into
+    /// Preferences). A data-contributed person-app tab can never take one: the settings fold drops a
+    /// contributed tab whose id is already on the page, and seed validation reports it.</summary>
+    public static readonly ImmutableHashSet<string> BuiltInTabIds = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase, ProfileTab, AccountTab, PreferencesTab, SharingTab, AppearanceTabId);
+
     /// <summary>The node-settings tabs that mean nothing in the person app: the partition's metadata,
     /// node types, groups and effective-access probe are node management, not the person's things;
     /// its Access control is re-offered as <see cref="SharingTab"/>.</summary>
