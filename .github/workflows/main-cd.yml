@@ -2232,7 +2232,10 @@ jobs:
           # fleet instead of rolling to every promoted set. The PAIR tag `<core7>-p<plugins7>` is the
           # join `control-arm` reads: the armed portal manifest carries the same pair tag, and unlike
           # the bare sha a rebuild of the same core commit never re-points it.
-          [ -n "$PLUGINS_SHORT" ] || { echo "::error::gate gave no plugins_short — the control image cannot carry its pair tag, so it could never be armed"; exit 1; }
+          # The SAME expression, from the SAME gate outputs, as `promote`'s portal pair tag — and held
+          # to the shape `control-arm` joins on (arm-promoted-set.py PAIR_TAG), so a drift in either
+          # output reds HERE instead of leaving every armed set `missing` with only a warning.
+          [[ "$SHA-p$PLUGINS_SHORT" =~ ^[0-9a-f]{7}-p[0-9a-f]{7}$ ]] || { echo "::error::the pair tag '$SHA-p$PLUGINS_SHORT' is not <core7>-p<plugins7> — control-arm could never join it to the armed portal manifest"; exit 1; }
           args=(); margs=()
           for t in "$SHA" "$SHA-p$PLUGINS_SHORT" main; do
             args+=(--tag "${{ env.ACR }}/memex-control:$t"); margs+=("${{ env.REGISTRY }}/memex-control:$t")
@@ -2268,6 +2271,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      issues: write     # a red here reports itself on the control-image issue, as the control lane does
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2292,6 +2296,11 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/control-manifests.json"
           python3 .github/scripts/arm-promoted-set.py control-follow \
             --manifests "$RUNNER_TEMP/portal-manifests.json" --control-manifests "$RUNNER_TEMP/control-manifests.json"
+      - name: Already armed — say where memex-control is
+        if: steps.follow.outputs.action == 'done'
+        env:
+          V: ${{ steps.follow.outputs.version }}
+        run: echo "- memex-control already carries the armed set \`$V\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
       - name: The armed set has no accepted control image — say so
         if: steps.follow.outputs.action == 'missing'
         env:
@@ -2331,6 +2340,29 @@ jobs:
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$PAIR" "${margs[@]}"
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$PAIR"
           echo "- memex-control ARMED: \`$V\` ← pair \`$PAIR\`${MOVE:+ (line pointers: $MOVE)} (ACR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+      # 📣 Like the rest of the control lane, a red here is NOT a fleet-delivery failure — this job is
+      # deliberately outside `alert-on-failure` and `delivery-verdict` — so it reports itself on the
+      # one open `control-image` issue instead of paging. `control-lane-report` closes that issue on
+      # the next promotion; a later green control-arm heals the tag itself.
+      - name: Report a red control-arm on the control-image issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          V: ${{ steps.follow.outputs.version }}
+        run: |
+          set -euo pipefail
+          body="control-arm failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — memex-control was not tagged for the armed set \`${V:-unknown}\`. The fleet's own delivery (memex-portal-ai) is NOT affected. The next main-cd run re-reads and re-tags; read the failed step for the cause."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label control-image --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh label create control-image --repo "$GITHUB_REPOSITORY" \
+              --description "The control-instance image lane (main-cd control-*) failed" \
+              --color D93F0B --force || echo "::warning::could not ensure the control-image label (continuing)"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "control-arm failed on main: run ${GITHUB_RUN_ID}" \
+              --label control-image --body "$body"
+          fi
 
   # 📣 THE CONTROL LANE REPORTS ITSELF. It is outside `alert-on-failure` on purpose (its red must
   # not read as "the fleet did not ship"), so without this job a failure here would leave nothing
