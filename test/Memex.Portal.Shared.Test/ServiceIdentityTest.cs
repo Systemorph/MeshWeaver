@@ -168,6 +168,28 @@ public class ServiceIdentityTest(ITestOutputHelper output) : MonolithMeshTestBas
             "a revoked identity is issued nothing");
     }
 
+    /// <summary>
+    /// An admin may DELETE a record instead of revoking it. Both validation paths must still answer
+    /// a definitive negative — the hub path used to route to an absent node, which is a NotFound
+    /// (or a stall), not a verdict.
+    /// </summary>
+    [Fact]
+    public async Task DeletingTheIdentityRecord_RefusesItsTokens_OnBothPaths()
+    {
+        var tokens = Tokens();
+        var (serviceId, token) = await ServiceWithToken(tokens, "Deleted Bot");
+        (await tokens.Validate(token.RawToken).Should().Emit()).Status.Should().Be(TokenValidationStatus.Valid);
+
+        BecomeAdmin();
+        await NodeFactory.DeleteNode(ServiceIdentity.PathFor(serviceId)).Should().Emit();
+
+        (await tokens.Validate(token.RawToken).Should().Emit()).Status.Should().Be(TokenValidationStatus.Invalid,
+            "an absent identity record authenticates nobody");
+        var viaHub = await UserContextMiddleware.ValidateTokenViaHub(token.RawToken, Mesh).Should().Emit();
+        viaHub!.Success.Should().BeFalse();
+        viaHub.IsUnavailable.Should().BeFalse("an absent record is a verdict, not an outage");
+    }
+
     [Fact]
     public async Task RotatingAToken_IssuesANewOne_AndRevokesTheOld()
     {
@@ -220,6 +242,18 @@ public class ServiceIdentityTest(ITestOutputHelper output) : MonolithMeshTestBas
             "positive control: the same static Admin-partition grant makes a PERSON a global admin");
         (await Mesh.IsGlobalAdmin(SeededAdminService).Should().Emit()).Should().BeFalse(
             "a service principal never administers the platform, whatever a grant says");
+
+        // The CURRENT-caller form every admin gate calls (AdminOnlyTab, AdminMenuGate) — it resolves
+        // the ambient caller and delegates to the explicit overload, so the refusal holds there too.
+        Become(new AccessContext
+        {
+            ObjectId = SeededAdminService, Name = SeededAdminService, IsApiToken = true, IsService = true,
+        });
+        (await Mesh.IsGlobalAdmin().Should().Emit()).Should().BeFalse(
+            "the current-caller form must refuse a service exactly as the explicit one does");
+        Become(new AccessContext { ObjectId = SeededAdminPerson, Name = SeededAdminPerson });
+        (await Mesh.IsGlobalAdmin().Should().Emit()).Should().BeTrue(
+            "positive control for the current-caller form");
 
         var tokens = Tokens();
         var (serviceId, _) = await ServiceWithToken(tokens, "Would Be Admin");

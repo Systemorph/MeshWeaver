@@ -581,6 +581,8 @@ internal class ApiTokenService(
         var path = token.ServiceIdentityPath;
         return storage.Read(path, hub.JsonSerializerOptions)
             .Take(1)
+            // An empty completion is "no record" (→ Invalid), never an absent verdict.
+            .DefaultIfEmpty()
             .Timeout(ValidationReadTimeout)
             .Select(record =>
             {

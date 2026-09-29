@@ -34,7 +34,9 @@ gate for direct links). Create an identity, issue a token (shown once), rotate a
 with the same label and term length is minted **first**, then the old one is revoked), revoke a token,
 grant access at a path with a role, revoke the identity.
 
-A grant is written **as the admin**. A global admin is not a data superuser, so the grant succeeds
+A grant **sets** the service's role at that scope — re-granting a different role replaces the
+previous one (one role per scope for a machine principal; compose several on the node's Access
+Control tab). A grant is written **as the admin**. A global admin is not a data superuser, so the grant succeeds
 exactly where that admin may grant at the target scope — the tab does not widen anyone's reach. A
 scope owner who is not a platform admin grants a service the same way they grant anyone: an
 `AccessAssignment` whose subject is the `svc-…` id.
@@ -54,6 +56,10 @@ tokens. Both validation paths apply the same predicate (`ServiceIdentity.Refuse`
   `Unavailable` (503, retryable), never `Invalid` and never `Valid`.
 - `ApiTokenNodeType.HandleValidateToken` (the request middleware's hub path): answers
   `ValidateTokenResponse.IsService = true`, which becomes `AccessContext.IsService`.
+
+Both read the record from the authoritative store: a record that was **deleted** rather than revoked
+reads as absent and refuses the token definitively (401), exactly like a revoked one; only a store
+that cannot answer yields the retryable 503.
 
 A token that names a `svc-…` id **without** an identity path was not minted by the service surface and
 is refused on both paths.

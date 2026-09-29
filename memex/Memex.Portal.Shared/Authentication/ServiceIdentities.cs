@@ -87,9 +87,13 @@ internal static class ServiceIdentities
     }
 
     /// <summary>
-    /// Grants the service <paramref name="objectId"/> the role <paramref name="role"/> at
-    /// <paramref name="scopePath"/> — the <c>{scope}/_Access/{objectId}_Access</c>
+    /// Sets the service <paramref name="objectId"/>'s role at <paramref name="scopePath"/> to
+    /// <paramref name="role"/> — the <c>{scope}/_Access/{objectId}_Access</c>
     /// <see cref="AccessAssignment"/> every principal's grant is (create-or-update, idempotent).
+    /// 🚨 It SETS, it does not add: a service holds one role per scope through this verb, so granting
+    /// <c>Viewer</c> where it held <c>Editor</c> replaces the <c>Editor</c> grant. That is the intent
+    /// for a machine principal (least privilege, one answer per scope); compose several roles on one
+    /// subject through the node's Access Control tab instead.
     /// Refused for a non-service id, and — by <c>ServicePrincipalAdminGuard</c> — anywhere in the
     /// Admin partition.
     /// </summary>

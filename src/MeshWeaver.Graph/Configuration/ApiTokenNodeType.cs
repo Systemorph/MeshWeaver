@@ -201,9 +201,24 @@ public static class ApiTokenNodeType
                     // A SERVICE token authenticates only while its ServiceIdentity record exists and
                     // is not revoked — read on every use, so revoking the identity revokes every
                     // token it holds at once (Doc/Architecture/ServiceIdentities).
+                    //
+                    // Read from the AUTHORITATIVE store, exactly as ApiTokenService.ConfirmServicePrincipal
+                    // does, so the two paths reach the same verdict: an ABSENT record (deleted rather
+                    // than revoked) reads as null → Refuse's "no record" arm → a definitive Fail, never
+                    // a routing NotFound that would surface as Unavailable. A read that faults or does
+                    // not answer within the bound errors into the outer Subscribe's onError, which
+                    // posts Unavailable — a verdict is ALWAYS posted, never a hang.
                     var identityPath = apiToken.ServiceIdentityPath;
-                    return accessService.RunAsSystem(
-                            () => hub.GetMeshNode(identityPath, TimeSpan.FromSeconds(10)))
+                    var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+                    var identityRead = storage is not null
+                        ? storage.Read(identityPath, hub.JsonSerializerOptions)
+                        : accessService.RunAsSystem(
+                            () => hub.GetMeshNode(identityPath, TimeSpan.FromSeconds(10)));
+                    return identityRead
+                        .Take(1)
+                        // An empty completion is "no record", never silence.
+                        .DefaultIfEmpty()
+                        .Timeout(TimeSpan.FromSeconds(10))
                         .Select(identityNode =>
                         {
                             var refusal = ServiceIdentity.Refuse(
