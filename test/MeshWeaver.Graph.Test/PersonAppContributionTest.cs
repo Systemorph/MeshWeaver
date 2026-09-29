@@ -208,13 +208,14 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public void AddressAccess_ShowsOnlyTheTabsWhoseAddressTheViewerCanRead()
     {
-        var permissions = new Dictionary<string, IObservable<Permission>>
+        var outcomes = new Dictionary<string, IObservable<PermissionCheckOutcome>>
         {
-            ["Held"] = Observable.Return(Permission.Read),
-            ["NotHeld"] = Observable.Return(Permission.None),
-            ["Pending"] = Observable.Never<Permission>(),
-            ["Faulting"] = Observable.Throw<Permission>(new InvalidOperationException("probe failed")),
+            ["Held"] = Observable.Return(PermissionCheckOutcome.Granted),
+            ["NotHeld"] = Observable.Return(PermissionCheckOutcome.Denied),
+            ["Pending"] = Observable.Never<PermissionCheckOutcome>(),
+            ["Undetermined"] = Observable.Return(PermissionCheckOutcome.Undetermined("fold faulted: probe")),
         };
+        var undetermined = new List<(string Address, string Reason)>();
         string[]? shown = null;
         // Every probe here answers synchronously (or never), so the first frame is emitted during
         // Subscribe — collected on the calling thread, no blocking bridge.
@@ -223,28 +224,31 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
                 (PlainTab("held"), "Held"),
                 (PlainTab("notHeld"), "NotHeld"),
                 (PlainTab("pending"), "Pending"),
-                (PlainTab("faulting"), "Faulting"),
+                (PlainTab("undetermined"), "Undetermined"),
                 (PlainTab("unprobed"), null),
             ],
-            address => permissions[address])
+            address => outcomes[address],
+            (address, reason) => undetermined.Add((address, reason)))
             .Select(tabs => tabs.Select(t => t.Id).ToArray())
             .Subscribe(ids => shown ??= ids);
 
         shown.Should().Equal(["held", "unprobed"],
-            "a tab shows only once its address is readable; unheld, pending and failed probes hide it");
+            "a tab shows only on a GRANTED verdict; denied, pending and undetermined all hide it");
+        undetermined.Should().ContainSingle().Which.Should().Be(("Undetermined", "fold faulted: probe"),
+            "an undetermined verdict is REPORTED (a degraded dependency), never read as 'not held' in silence");
     }
 
     [Fact]
-    public void AddressAccess_FollowsTheLivePermission_AcquiringShowsTheTab_RevokingHidesItAgain()
+    public void AddressAccess_FollowsTheLiveVerdict_AcquiringShowsTheTab_RevokingHidesItAgain()
     {
-        var permission = new System.Reactive.Subjects.BehaviorSubject<Permission>(Permission.None);
+        var verdict = new System.Reactive.Subjects.BehaviorSubject<PermissionCheckOutcome>(PermissionCheckOutcome.Denied);
         var frames = new List<string[]>();
         using var _ = SettingsMenuItemsExtensions.ApplyAddressAccess(
-                [(PlainTab("extension"), "Ext")], _ => permission)
+                [(PlainTab("extension"), "Ext")], _ => verdict)
             .Subscribe(tabs => frames.Add(tabs.Select(t => t.Id).ToArray()));
 
-        permission.OnNext(Permission.Read);
-        permission.OnNext(Permission.None);
+        verdict.OnNext(PermissionCheckOutcome.Granted);
+        verdict.OnNext(PermissionCheckOutcome.Denied);
 
         frames.Should().HaveCount(3, "one frame for not held, one for acquired, one for revoked");
         frames[0].Should().BeEmpty();
@@ -252,12 +256,25 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
         frames[2].Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(Permission.None, false)]
-    [InlineData(Permission.Read, true)]
-    [InlineData(Permission.All, true)]
-    public void AddressAccess_IsReadOnTheEmbeddedAddress(Permission permissions, bool expected)
-        => SettingsMenuItemsExtensions.PassesAddressAccess(permissions).Should().Be(expected);
+    [Fact]
+    public void AContributedTab_NeverShadowsATabAlreadyOnThePage()
+    {
+        var kept = SettingsMenuItemsExtensions.WithoutShadowingTabs(
+            [PlainTab(PersonApp.SharingTab), PlainTab(PersonApp.PreferencesTab)],
+            [PlainTab("sharing"), PlainTab("SigningAuthority"), PlainTab("SigningAuthority")]);
+
+        kept.Select(t => t.Id).Should().Equal(["SigningAuthority"],
+            "a contributed 'sharing' cannot replace the built-in Sharing (case-insensitive), and a duplicate contribution lands once");
+    }
+
+    [Fact]
+    public void AddressAccess_IsAGrantedVerdictOnTheEmbeddedAddress()
+    {
+        SettingsMenuItemsExtensions.PassesAddressAccess(PermissionCheckOutcome.Granted).Should().BeTrue();
+        SettingsMenuItemsExtensions.PassesAddressAccess(PermissionCheckOutcome.Denied).Should().BeFalse();
+        SettingsMenuItemsExtensions.PassesAddressAccess(PermissionCheckOutcome.Undetermined("x")).Should().BeFalse(
+            "no verdict is not a grant — fail closed");
+    }
 
     [Fact]
     public void SeedValidation_KnowsThePersonAppContext_AndReportsAnInertGateAndAForeignAddress()
@@ -284,5 +301,15 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
 
         problems.Should().Contain(p => p.Contains("P/Tabs/inert") && p.Contains("RequireAddressAccess"));
         problems.Should().Contain(p => p.Contains("P/Tabs/foreign") && p.Contains("outside"));
+
+        UiContributionSeedValidation.Validate(
+        [
+            new MeshNode("Sharing", "P/Tabs")
+            {
+                NodeType = UiContributionNodeType.NodeType,
+                Content = new UiContribution { Context = UiContribution.PersonAppContext, Area = "A" },
+            },
+        ]).Should().Contain(p => p.Contains("P/Tabs/Sharing") && p.Contains("collides"),
+            "a contribution named like a built-in person-app tab is reported");
     }
 }

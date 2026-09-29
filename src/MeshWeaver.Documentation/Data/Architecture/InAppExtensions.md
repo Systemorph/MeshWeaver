@@ -86,7 +86,11 @@ surface is a `UiContribution` with **`Context: PersonApp`**:
 - **`requireAddressAccess`** is the "has the viewer acquired it" gate: a Store package is gated, so an
   un-entitled viewer cannot read below its root, and "may read the embedded address" IS "holds the
   extension". It follows the viewer's LIVE effective permissions: Get shows the tab without a reload, a
-  revoked grant hides it, and a pending or failed read hides it (missing evidence ⇒ do not show).
+  revoked grant hides it, and a pending or undetermined verdict hides it (missing evidence ⇒ do not
+  show). The probe is `CheckPermissionOutcome`, so an undetermined verdict is logged as a degraded
+  dependency rather than read as "not held".
+- A contributed tab **never shadows a tab already on the page**: one whose id equals a built-in
+  person-app tab (`Sharing`, `Preferences`, …) is dropped, and seed validation reports it.
 
 For a **compiled host** (Threads, in `MeshWeaver.AI`) the host renders its extensions' settings
 itself, as it always could — the harness option links to `{user}/Harness/{id}`; a model provider opens

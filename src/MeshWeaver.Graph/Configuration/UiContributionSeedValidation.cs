@@ -136,6 +136,12 @@ public static class UiContributionSeedValidation
                 && !UiContributionProjection.IsInContributorsPartition(embedded.Trim('/'), path))
                 problems.Add($"{path}: Address '{embedded}' lies outside the contribution's own partition — the projection drops the entry, silently");
 
+            // A person-app tab id is the contribution node's id; one naming a built-in tab would be
+            // dropped by the settings fold (a contribution never shadows Sharing, Preferences, …).
+            if (content.Context == UiContribution.PersonAppContext
+                && PersonApp.BuiltInTabIds.Contains(node.Id is { Length: > 0 } tabId ? tabId : content.Area ?? ""))
+                problems.Add($"{path}: its tab id collides with a built-in person-app tab ({string.Join(", ", PersonApp.BuiltInTabIds.OrderBy(i => i, StringComparer.Ordinal))}) — the settings page keeps the built-in and drops this one");
+
             // RequireAddressAccess probes the embedded address; with none there is nothing to probe
             // and the gate the author meant to narrow with is inert.
             if (content.Gates?.RequireAddressAccess == true && content.Address is not { Length: > 0 })
