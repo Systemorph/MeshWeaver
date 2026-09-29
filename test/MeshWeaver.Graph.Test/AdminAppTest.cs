@@ -221,6 +221,28 @@ public class AdminAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     }
 
     /// <summary>
+    /// The seeded tab is in the FIRST rendered nav, not only eventually: an MCP
+    /// <c>get @Admin/area/Settings</c> (<c>MeshOperations.RenderArea</c>) takes one frame and closes,
+    /// and on a live instance that frame lacked every seeded Admin-app tab while the compiled ones
+    /// were there. The contributed lane opened its admin verdict with a synthetic <c>false</c> (and
+    /// the contribution catalog with an empty set), so the page — which waits for the viewer's
+    /// permissions anyway — could paint before that lane had answered.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ASeededAdminTab_IsInTheFirstRenderedNav()
+    {
+        // The first frame whose nav carries the compiled Administrators tab is the frame a reader
+        // that takes ONE frame sees; the seeded tab must be in it too, not in a later one.
+        var nav = await Render(PlatformAdmin, AdminAppNodeType.Path, Settings())
+            .Where(json => json.Contains(Tab("administrators")))
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
+        nav.Should().Contain(Tab("seeded probe"),
+            "the nav's first render carries the seeded Admin-app tab, not a nav painted before its lane answered");
+    }
+
+    /// <summary>
     /// 🚨 The production defect: the contributed lane resolved the viewer's platform-admin verdict
     /// when the tab stream was SUBSCRIBED, not when the page was rendered. On a distributed mesh the
     /// subscription runs off the viewer's delivery, where <see cref="AccessService.Context"/> is
