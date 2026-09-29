@@ -1825,10 +1825,15 @@ public partial class MeshOperations
         return Observable.Defer(() =>
         {
             List<MeshNode>? nodeList;
+            // The caller's RAW array too, element for element: the typed deserialisation below drops
+            // every content member the bound type does not declare, and only the raw JSON still
+            // names what was dropped (see UnknownContentMembers).
+            JsonArray? rawArray;
             try
             {
                 var sanitized = RepairJson(nodes);
                 nodeList = JsonSerializer.Deserialize<List<MeshNode>>(sanitized, hub.JsonSerializerOptions);
+                rawArray = JsonNode.Parse(sanitized) as JsonArray;
             }
             catch (JsonException ex)
             {
@@ -1842,8 +1847,9 @@ public partial class MeshOperations
             // Per-node outputs combine in input order via Concat so the caller sees a deterministic
             // result string even for batches.
             var perNode = ImmutableList<IObservable<string>>.Empty;
-            foreach (var rawNode in nodeList)
+            for (var index = 0; index < nodeList.Count; index++)
             {
+                var rawNode = nodeList[index];
                 if (rawNode == null)
                 {
                     perNode = perNode.Add(Observable.Return(
@@ -1864,6 +1870,19 @@ public partial class MeshOperations
                 if (meshNode.Content == null)
                 {
                     perNode = perNode.Add(BuildNullContentError(meshNode.Path, meshNode.NodeType!));
+                    continue;
+                }
+
+                // 🚨 Same silent drop as Patch: a content member the bound type does not declare is
+                // lost by the typed deserialisation above, and the landed-write check could never
+                // see it, so "Updated:" was reported for a field that was never written. Refuse it.
+                if ((rawArray is not null && index < rawArray.Count ? rawArray[index] : null) is JsonObject rawElement
+                    && rawElement["content"] is JsonObject rawContent
+                    && UnknownContentMembers(rawContent, meshNode.Content, hub.JsonSerializerOptions)
+                        is { Count: > 0 } unknownMembers)
+                {
+                    perNode = perNode.Add(Observable.Return(UnknownContentMembersMessage(
+                        "update", meshNode.Path, meshNode.NodeType, meshNode.Content.GetType(), unknownMembers)));
                     continue;
                 }
 
@@ -2080,6 +2099,30 @@ public partial class MeshOperations
                     // re-validates it, so a bad value is refused rather than stored.
                     MainNode = jsonObj.ContainsKey("mainNode") ? partial.MainNode : existing.MainNode,
                 };
+
+                // 🚨 REFUSE content members the bound type does not declare. The merged content was
+                // deserialised into the TYPE this portal has bound for the NodeType, and System.Text.Json
+                // drops a member that type does not declare without a word. ProjectTouched then reads
+                // the dropped key as "serializer omits it ⇒ expect absent", the live node satisfies that
+                // on its first emission, and the tool answered "Patched:" for a write that changed
+                // nothing. Measured on a Crm/Counterparty node whose NodeType had just gained
+                // aliases/domains/matchCaseSensitive: "Patched" twice, version unchanged, keys absent on
+                // read-back — because the running type was the one compiled BEFORE the fields existed.
+                if (callerDelta["content"] is JsonObject callerContent
+                    && UnknownContentMembers(callerContent, partial.Content, hub.JsonSerializerOptions)
+                        is { Count: > 0 } unknownMembers)
+                    return Observable.Return(UnknownContentMembersMessage(
+                        "patch", resolvedPath, existing.NodeType, partial.Content!.GetType(), unknownMembers));
+
+                // 🚨 A patch that changes NOTHING is not "Patched". Compare what would be stored with
+                // what is stored; equal ⇒ say so and write nothing, so a caller can tell "my value is
+                // already there" from "my value landed" (the version tells the second story).
+                if (JsonNode.DeepEquals(
+                        JsonSerializer.SerializeToNode(existing, hub.JsonSerializerOptions),
+                        JsonSerializer.SerializeToNode(merged, hub.JsonSerializerOptions)))
+                    return Observable.Return(
+                        $"No change: {existing.Path} (v{existing.Version}) — every field in the patch already "
+                        + "holds that value, so nothing was written.");
 
                 // Validate merged content against the NodeType's schema when the
                 // caller touched content. Surface the schema in the error so an
@@ -4933,6 +4976,66 @@ public partial class MeshOperations
         fields.Select(pair => pair.Key)
             .Where(key => !PatchableFields.Contains(key))
             .ToList();
+
+    /// <summary>
+    /// The top-level keys of a caller's content object that the TYPED content does not declare —
+    /// members <see cref="System.Text.Json"/> drops without error when the content is deserialised
+    /// into that type, so a write carrying them silently loses them. Pure, so the rule is testable
+    /// without a hub.
+    ///
+    /// <para>Answers nothing (empty) when there is no typed content to judge against: untyped content
+    /// (<see cref="JsonElement"/> / <see cref="JsonNode"/>) keeps every key, a type with a
+    /// <c>[JsonExtensionData]</c> member keeps unknown keys by design, and a type serialised by a custom
+    /// converter has no property list to compare. Keys starting with <c>$</c> are wire metadata
+    /// (<c>$type</c>) and never members. Nested objects are not descended into: the top level is where
+    /// a NodeType gains fields, and it is the shape that was measured dropping them.</para>
+    /// </summary>
+    /// <param name="callerContent">The content keys the caller SENT (not the merged blob).</param>
+    /// <param name="typedContent">The content as deserialised by this hub.</param>
+    /// <param name="options">The hub's serializer options — they define the member names.</param>
+    /// <returns>The undeclared keys, in the caller's order.</returns>
+    internal static IReadOnlyList<string> UnknownContentMembers(
+        JsonObject? callerContent, object? typedContent, JsonSerializerOptions options)
+    {
+        if (callerContent is null or { Count: 0 } || typedContent is null or JsonElement or JsonNode)
+            return [];
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo typeInfo;
+        try
+        {
+            typeInfo = options.GetTypeInfo(typedContent.GetType());
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+        {
+            return [];
+        }
+        if (typeInfo.Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object
+            || typeInfo.Properties.Any(p => p.IsExtensionData))
+            return [];
+        var known = typeInfo.Properties
+            .Select(p => p.Name)
+            .ToImmutableHashSet(options.PropertyNameCaseInsensitive
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
+        return callerContent
+            .Select(pair => pair.Key)
+            .Where(key => !key.StartsWith('$') && !known.Contains(key))
+            .ToList();
+    }
+
+    /// <summary>The refusal a write with undeclared content members answers — names the members, the
+    /// bound type and the NodeType, and the remedy when the type is stale.</summary>
+    private static string UnknownContentMembersMessage(
+        string verb, string path, string? nodeType, Type boundType, IReadOnlyList<string> members) =>
+        $"Error: refused {verb} of {path}: unknown content member(s) "
+        + $"{string.Join(", ", members.Select(m => $"'{m}'"))} for type {boundType.Name}"
+        + (string.IsNullOrEmpty(nodeType) ? "" : $" (NodeType '{nodeType}')")
+        + ". The type this portal has bound does not declare "
+        + (members.Count == 1 ? "it" : "them")
+        + ", so the write would drop "
+        + (members.Count == 1 ? "it" : "them")
+        + " silently. Check the spelling against the content schema (get @<path>/schema/). If the NodeType "
+        + "was just changed to add " + (members.Count == 1 ? "this field" : "these fields")
+        + ", the running type is stale: recompile the NodeType and recycle it, then retry. Nothing was written.";
 
     /// <summary>
     /// Returns the node with a fresh RELEASE REQUEST stamped on its content:
