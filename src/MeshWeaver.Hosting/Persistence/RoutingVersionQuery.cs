@@ -57,6 +57,12 @@ public class RoutingVersionQuery : IVersionQuery
     /// <inheritdoc />
     public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
         => GetQuery(node.Path)?.WriteVersion(node, options) ?? Observable.Return(node);
+
+    /// <inheritdoc />
+    /// <remarks>A path no partition provider claims has no store that could hold its history, so
+    /// nothing remains — <c>true</c>.</remarks>
+    public IObservable<bool> PurgeVersions(string path)
+        => GetQuery(path)?.PurgeVersions(path) ?? Observable.Return(true);
 }
 
 /// <summary>
@@ -88,4 +94,8 @@ public class NoOpVersionQuery : IVersionQuery
     /// <inheritdoc />
     public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
         => Observable.Return<MeshNode?>(null);
+
+    /// <inheritdoc />
+    /// <remarks>Nothing is ever recorded here, so nothing remains.</remarks>
+    public IObservable<bool> PurgeVersions(string path) => Observable.Return(true);
 }
