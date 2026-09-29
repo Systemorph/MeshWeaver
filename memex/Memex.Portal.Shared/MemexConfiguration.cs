@@ -799,6 +799,11 @@ public static class MemexConfiguration
                 // inbox secret itself is NOT a slot, so the portal can never replace it.
                 .AddInstanceSecretSlot(SelfUpdate.SelfUpdateHandover.SecretKey)
                 .AddInstanceSecretSlot(SelfUpdate.SelfUpdateHandover.LocalSecretKey + ":*")
+                // A package update held on its declared minMeshVersion floor is ticketed to the
+                // control instance as ONE blocking event, on the self-update announcement's own
+                // channel (policy package-min-mesh-version) — never a silent hold.
+                .ConfigureServices(services => services
+                    .AddSingleton<MeshWeaver.PluginCatalog.IPackageHoldDispatch, SelfUpdate.PackageHoldHandover>())
                 // The control→instance lane (Doc/Architecture/ControlLane): POST /api/control-lane
                 // on a TARGET, and the signing half on the control instance. Registered on every
                 // portal and armed on none until ControlLane:Key + Hosting:Deployment are set.

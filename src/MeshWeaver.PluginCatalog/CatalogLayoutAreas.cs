@@ -1064,7 +1064,52 @@ public static class CatalogLayoutAreas
             // the Store's Provision click, the auto-update reconciler), so this is the ONE place it
             // needs to sit.
             .SelectMany(_ => PackageParameters.Require(hub, pkg, logger))
-            .SelectMany(_ => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId));
+            // …then the PLATFORM floor (policy package-min-mesh-version): an update whose candidate
+            // declares a minMeshVersion above the running platform is HELD before a file travels —
+            // the installed version keeps running and the record says why. Every lane funnels
+            // here (the boot install, the Store's click, the auto-update apply).
+            .SelectMany(_ => HoldIfPlatformBelowFloor(hub, pkg, logger,
+                () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId)));
+    }
+
+    /// <summary>
+    /// 🚨 The UPDATE half of policy <c>package-min-mesh-version</c> on the one install orchestrator:
+    /// when <paramref name="pkg"/>'s declared floor is held on this platform
+    /// (<see cref="PackagePlatformFloorGate.Evaluate"/>) and an install record with a DIFFERENT
+    /// content hash exists, nothing is fetched or written — the installed version keeps running
+    /// (rule R1), the record carries <see cref="PackageManifest.HeldUpdate"/>, and the result is an
+    /// empty <see cref="InstallResult"/>. Everything else proceeds to <paramref name="proceed"/>:
+    /// a satisfied or advisory floor, and a record at the SAME hash (the skip / heal path —
+    /// re-landing what is already here replaces nothing). With no record at all the install is a
+    /// FRESH one and is refused before anything is fetched
+    /// (<see cref="PackagePlatformFloorGate.RequireForFreshInstall"/>).
+    /// </summary>
+    private static IObservable<InstallResult> HoldIfPlatformBelowFloor(
+        IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed)
+    {
+        var verdict = PackagePlatformFloorGate.Evaluate(hub, pkg);
+        if (!verdict.IsHeld)
+            return proceed();
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return proceed();
+
+        return persistence.Read($"{PackageInstaller.InstalledPartition}/{pkg.Id}", hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty()
+            .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
+            .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
+            .SelectMany(record =>
+                record is null
+                    // A FRESH install: refused here, before a single file is fetched — the
+                    // installer's own gate says the same thing to callers that reach it directly.
+                    ? PackagePlatformFloorGate.RequireForFreshInstall(hub, pkg, logger).SelectMany(_ => proceed())
+                    : !string.IsNullOrEmpty(pkg.ModuleVersion)
+                      && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
+                        ? proceed()
+                        : PackagePlatformFloorGate.RecordHold(hub, pkg, record, verdict, logger)
+                            .Select(_ => new InstallResult(0, 0)));
     }
 
     /// <summary>

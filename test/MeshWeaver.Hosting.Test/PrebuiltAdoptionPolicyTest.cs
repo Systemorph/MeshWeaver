@@ -103,6 +103,24 @@ public class PrebuiltAdoptionPolicyTest : IDisposable
             .Adopts.Should().BeTrue("a satisfied floor does not decline");
     }
 
+    /// <summary>
+    /// 🚨 The floor here is THE one floor decision (<c>PlatformFloor</c>, policy
+    /// <c>package-min-mesh-version</c>), not a private SemVer comparison: an rc floor on the running
+    /// line is UNORDERED against a ci build and must not decline (SemVer's ci &lt; rc would — the
+    /// 2026-09-07 trap), while two continuous builds compare by run number.
+    /// </summary>
+    [Fact]
+    public void TheFloor_IsTheSharedDecision_NotSemVer()
+    {
+        PrebuiltAdoptionPolicy.Decide(VersionStrictness.Family, Older(floor: "3.1.0-rc8"), Live)
+            .Adopts.Should().BeTrue("an rc floor is unordered against 3.1.0-ci.9000 — advisory, never a decline");
+        PrebuiltAdoptionPolicy.Decide(VersionStrictness.Family, Older(floor: "3.1.0-ci.8999"), Live)
+            .Adopts.Should().BeTrue("run 8999 is below the running run 9000");
+        var above = PrebuiltAdoptionPolicy.Decide(VersionStrictness.Family, Older(floor: "3.1.0-ci.9001"), Live);
+        above.Verdict.Should().Be(AdoptionVerdict.Decline, "run 9001 is above the running run 9000");
+        above.Reason.Should().Contain("3.1.0-ci.9001").And.Contain("3.1.0-ci.9000");
+    }
+
     // ── Minimum: floor + links only ───────────────────────────────────────────────────────────
 
     [Fact]

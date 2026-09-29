@@ -192,7 +192,29 @@ public class SelfUpdateHandover
         public string? Reason { get; init; }
         public string DetectedAt { get; init; } = "";
         public string Reporter { get; init; } = SelfUpdateHandover.Reporter;
+
+        // ── a package-update-held ticket (PackageHoldHandover) only; omitted otherwise ──
+        /// <summary>The package whose update is held — a <see cref="PackageHeldEvent"/> only.</summary>
+        public string? Package { get; init; }
+        /// <summary>The held version — a <see cref="PackageHeldEvent"/> only.</summary>
+        public string? HeldVersion { get; init; }
+        /// <summary>The held version's declared <c>minMeshVersion</c> — a <see cref="PackageHeldEvent"/> only.</summary>
+        public string? Floor { get; init; }
+        /// <summary>The version that keeps running — a <see cref="PackageHeldEvent"/> only.</summary>
+        public string? InstalledVersion { get; init; }
+        /// <summary>What would unblock it — a <see cref="PackageHeldEvent"/> only.</summary>
+        public string? Unblocks { get; init; }
+        /// <summary>How the control plane should classify it (<c>blocking</c>) — a <see cref="PackageHeldEvent"/> only.</summary>
+        public string? Severity { get; init; }
     }
+
+    /// <summary>
+    /// The event a held package update is ticketed as (policy <c>package-min-mesh-version</c>,
+    /// <see cref="PackageHoldHandover"/>): one BLOCKING ticket per (deployment, package, held
+    /// version, floor, running) — the instance de-duplicates on its install record and re-sends
+    /// only when that state changes or once a day.
+    /// </summary>
+    public const string PackageHeldEvent = "package-update-held";
 
     /// <summary>Where one announcement went, for the verdict and the log.</summary>
     public sealed record Outcome(Route Route, string Destination, string Detail);

@@ -20,7 +20,7 @@ compiles it:
 |---|---|---|
 | [The Module Platform Link Gate](../ModulePlatformLinkGate) | a module **assembly**'s linked types | **the platform actually running** — it refuses a generation the process cannot load |
 | `node-repo-compile-check.yml` → `compile-check.py` (`compile-check / Compile every NodeType (vs core)`, a required context on most satellites) | every NodeType's **resolved Source**, concatenated with hoisted usings, the way the mesh does it | the **reference set of a resolved platform image** — for MeshWeaver.Plugins, `scripts/resolve-platform.py` picks *the newest SEALED set of core's main-cd* |
-| `minMeshVersion` floor ([Module Adoption Policy](../ModuleAdoptionPolicy)) | a version string the author writes | advisory since 2026-09-07, and per module rather than per source node |
+| `minMeshVersion` floor ([Module Adoption Policy](../ModuleAdoptionPolicy)) | the version string a package version declares | holds the version when it is comparable with the running platform and above it (policy `package-min-mesh-version`; advisory under #3648 before it); per package version rather than per source node |
 
 The second row is the one that matters here, and it is not a hole: it was introduced precisely so
 that API-drifted Source could no longer merge green and park on a live mesh. **It ran on the commit
