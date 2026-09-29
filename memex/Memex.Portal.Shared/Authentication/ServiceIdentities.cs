@@ -67,8 +67,22 @@ internal static class ServiceIdentities
         if (!ServiceIdentity.IsServiceObjectId(objectId))
             return Observable.Throw<MeshNode>(new ArgumentException($"'{objectId}' is not a service object id."));
         var revokedBy = hub.ServiceProvider.GetRequiredService<AccessService>().Context?.ObjectId;
-        return hub.GetWorkspace()
-            .GetMeshNodeStream(ServiceIdentity.PathFor(objectId))
+        var path = ServiceIdentity.PathFor(objectId);
+        // Existence first, from the authoritative store (a point read of an absent node is a routing
+        // NotFound, not an answer): a typo'd or deleted id is refused by name, never "revoked".
+        return hub.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Read(path, hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty()
+            .SelectMany(record => record?.ContentAs<ServiceIdentity>(hub.JsonSerializerOptions) is null
+                ? Observable.Throw<MeshNode>(new ArgumentException(
+                    $"No service identity '{objectId}' exists at {path}."))
+                : RevokeExisting(hub, path, revokedBy));
+    }
+
+    private static IObservable<MeshNode> RevokeExisting(IMessageHub hub, string path, string? revokedBy)
+        => hub.GetWorkspace()
+            .GetMeshNodeStream(path)
             .Update(node =>
             {
                 var identity = node.ContentAs<ServiceIdentity>(hub.JsonSerializerOptions);
@@ -84,7 +98,6 @@ internal static class ServiceIdentities
                     },
                 };
             });
-    }
 
     /// <summary>
     /// Sets the service <paramref name="objectId"/>'s role at <paramref name="scopePath"/> to

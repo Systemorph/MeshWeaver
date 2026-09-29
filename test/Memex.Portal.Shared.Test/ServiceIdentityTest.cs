@@ -116,19 +116,21 @@ public class ServiceIdentityTest(ITestOutputHelper output) : MonolithMeshTestBas
         // Both validation paths agree: the auth handler's (storage-direct) and the middleware's (hub).
         var validated = await tokens.Validate(token.RawToken).Should().Emit();
         validated.Status.Should().Be(TokenValidationStatus.Valid);
-        validated.Token!.UserId.Should().Be(serviceId,
+        validated.Token.Should().NotBeNull();
+        validated.Token?.UserId.Should().Be(serviceId,
             "a service token authenticates as the service principal, never as the admin who issued it");
-        validated.Token.ServiceIdentityPath.Should().Be(ServiceIdentity.PathFor(serviceId));
+        validated.Token?.ServiceIdentityPath.Should().Be(ServiceIdentity.PathFor(serviceId));
 
         var viaHub = await UserContextMiddleware.ValidateTokenViaHub(token.RawToken, Mesh).Should().Emit();
-        viaHub!.Success.Should().BeTrue();
-        viaHub.IsService.Should().BeTrue();
-        viaHub.UserId.Should().Be(serviceId);
+        viaHub.Should().NotBeNull();
+        viaHub?.Success.Should().BeTrue();
+        viaHub?.IsService.Should().BeTrue();
+        viaHub?.UserId.Should().Be(serviceId);
 
         Become(new AccessContext
         {
-            ObjectId = viaHub.UserId!,
-            Name = viaHub.UserName ?? "",
+            ObjectId = viaHub?.UserId ?? "",
+            Name = viaHub?.UserName ?? "",
             IsApiToken = true,
             IsService = true,
         });
@@ -162,7 +164,7 @@ public class ServiceIdentityTest(ITestOutputHelper output) : MonolithMeshTestBas
         after.Status.Should().Be(TokenValidationStatus.Invalid,
             "validation reads the identity on every use — revoking it revokes its tokens at once");
         var viaHub = await UserContextMiddleware.ValidateTokenViaHub(token.RawToken, Mesh).Should().Emit();
-        viaHub!.Success.Should().BeFalse("the middleware path must agree with the auth handler's");
+        viaHub?.Success.Should().BeFalse("the middleware path must agree with the auth handler's");
 
         (await Refusal(tokens.CreateServiceToken(serviceId, "after revoke"))).Should().NotBeNull(
             "a revoked identity is issued nothing");
@@ -186,8 +188,17 @@ public class ServiceIdentityTest(ITestOutputHelper output) : MonolithMeshTestBas
         (await tokens.Validate(token.RawToken).Should().Emit()).Status.Should().Be(TokenValidationStatus.Invalid,
             "an absent identity record authenticates nobody");
         var viaHub = await UserContextMiddleware.ValidateTokenViaHub(token.RawToken, Mesh).Should().Emit();
-        viaHub!.Success.Should().BeFalse();
-        viaHub.IsUnavailable.Should().BeFalse("an absent record is a verdict, not an outage");
+        viaHub?.Success.Should().BeFalse();
+        viaHub?.IsUnavailable.Should().BeFalse("an absent record is a verdict, not an outage");
+    }
+
+    [Fact]
+    public async Task RevokingAnUnknownIdentity_IsRefusedByName()
+    {
+        BecomeAdmin();
+        var refusal = await Refusal(ServiceIdentities.Revoke(Mesh, "svc-typo"));
+        refusal.Should().Contain("No service identity 'svc-typo'",
+            "a typo'd or deleted id is refused, never reported as revoked");
     }
 
     [Fact]

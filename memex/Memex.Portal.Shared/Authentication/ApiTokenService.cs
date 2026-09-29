@@ -198,6 +198,9 @@ internal class ApiTokenService(
         var identityPath = ServiceIdentity.PathFor(serviceObjectId);
         return storage.Read(identityPath, hub.JsonSerializerOptions)
             .Take(1)
+            // An empty completion is "no record" and is refused below like a null one — never a
+            // mint that completes with neither a token nor an error.
+            .DefaultIfEmpty()
             .SelectMany(record =>
             {
                 var identity = record?.ContentAs<ServiceIdentity>(hub.JsonSerializerOptions);
@@ -1079,9 +1082,9 @@ internal class ApiTokenService(
             .GetQuery($"service-tokens:{serviceObjectId}", $"namespace:{tokenNamespace} nodeType:{NodeTypeApiToken}")
             .Select(snapshot => (IReadOnlyList<ApiTokenInfo>)snapshot
                 .Where(node => node.Path is not null)
-                .Select(node => (Node: node, Token: node.ContentAs<ApiToken>(hub.JsonSerializerOptions)))
-                .Where(pair => pair.Token is not null)
-                .Select(pair => ToInfo(pair.Node, pair.Token!))
+                .SelectMany(node => node.ContentAs<ApiToken>(hub.JsonSerializerOptions) is { } token
+                    ? [ToInfo(node, token)]
+                    : Array.Empty<ApiTokenInfo>())
                 .OrderByDescending(info => info.CreatedAt)
                 .ToList());
     }

@@ -137,9 +137,9 @@ public record ServiceIdentity
     /// <returns>The refusal reason, or <c>null</c>.</returns>
     public static string? Refuse(ServiceIdentity? identity, string? objectId, string? identityPath)
     {
-        if (!IsServiceObjectId(objectId))
+        if (objectId is null || !IsServiceObjectId(objectId))
             return $"the token carries an identity path but '{objectId}' is not a service object id";
-        if (!string.Equals(identityPath, PathFor(objectId!), StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(identityPath, PathFor(objectId), StringComparison.OrdinalIgnoreCase))
             return $"the token's identity path '{identityPath}' is not the record of '{objectId}'";
         if (identity is null)
             return $"no service identity record at '{identityPath}'";
