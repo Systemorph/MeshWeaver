@@ -111,6 +111,7 @@ signed-in viewer and change nothing.
 | merge two tabs | `config.AliasSettingsTab(retiredId, survivingId)` on the hub whose page carries them |
 | title an app | `config.WithSettingsTitle((host, node) => …)` |
 | contribute a tab as DATA | a `UiContribution` with `Context: NodeSettings`; the instance app's are gated `Gates: { AdminOnly: true, NodeTypes: [AdminApp] }` |
+| contribute a PERSON-APP tab as DATA | a `UiContribution` with `Context: PersonApp`, embedding `Area` of `Address` (inside the contribution's own partition); add `Gates: { RequireAddressAccess: true }` for an [in-app extension](../InAppExtensions) so the tab shows only once the viewer holds it |
 
 `AddAdminAppTab` / `AddPersonAppTab` providers yield nothing anywhere else, so it is safe — and was
 always the practice — to register them on the default node hub.

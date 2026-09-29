@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -153,6 +154,24 @@ public static class SettingsMenuItemsExtensions
             .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
                 _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
 
+        // Data-contributed PERSON-APP tabs (UiContribution nodes with Context = PersonApp): the
+        // lane an in-app extension appears on inside the viewer's own settings app
+        // (Doc/Architecture/InAppExtensions). Only on the person-app hub — never on a Space's, a
+        // node's or another person's settings page. Seeded empty so a slow access probe never
+        // holds the built-in tabs back.
+        // The lane is added LAST, and the fold below never lets one of its tabs shadow a tab the
+        // compiled providers or the NodeSettings lane already registered under the same id — a
+        // contribution must not swap a surface like Sharing in under a familiar label.
+        var personAppLane = -1;
+        if (host.IsPersonAppHub())
+        {
+            personAppLane = streams.Count;
+            streams.Add(ContributedPersonAppTabs(host)
+                .StartWith([])
+                .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
+                    _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
+        }
+
         var hidden = config.Get<HiddenSettingsTabs>()?.Ids;
         // Space-root-only tabs leave every page that is not a partition root.
         var rootOnly = IsPartitionRoot(host.Hub.Address.ToString())
@@ -162,10 +181,15 @@ public static class SettingsMenuItemsExtensions
             .Select(lists =>
             {
                 var items = new List<SettingsMenuItemDefinition>();
-                foreach (var list in lists)
-                    if (list is not null)
-                        items.AddRange(list.Where(i =>
-                            !(hidden?.Contains(i.Id) ?? false) && !(rootOnly?.Contains(i.Id) ?? false)));
+                for (var lane = 0; lane < lists.Count; lane++)
+                {
+                    var list = lists[lane];
+                    if (list is null)
+                        continue;
+                    var visible = list.Where(i =>
+                        !(hidden?.Contains(i.Id) ?? false) && !(rootOnly?.Contains(i.Id) ?? false)).ToList();
+                    items.AddRange(lane == personAppLane ? WithoutShadowingTabs(items, visible) : visible);
+                }
                 items.Sort((a, b) => a.Order.CompareTo(b.Order));
                 return (IReadOnlyList<SettingsMenuItemDefinition>)items;
             });
@@ -230,6 +254,116 @@ public static class SettingsMenuItemsExtensions
                     (contributions, node, isAdmin) => UiContributionProjection
                         .ProjectNodeSettingsTabs(contributions, menuPath, node, isAdmin, viewerId));
         });
+    }
+
+    /// <summary>
+    /// The DATA-contributed PERSON-APP tabs: every <see cref="UiContribution"/> in the shared
+    /// catalog declaring <see cref="UiContribution.PersonAppContext"/>, projected through the closed
+    /// gate vocabulary (<see cref="UiContributionProjection.ProjectPersonAppTabs"/>). The caller adds
+    /// this lane on the viewer's own user root only. Fails closed for an anonymous or virtual viewer.
+    ///
+    /// <para><see cref="UiContributionGates.RequireAddressAccess"/> is applied HERE, live: for each
+    /// tab that demands it, the viewer's effective permissions on the embedded address are read
+    /// (<c>GetEffectivePermissions</c>, seeded <see cref="Permission.None"/> so a pending read hides
+    /// the tab rather than stalling the page) and the tab passes only while they include
+    /// <see cref="Permission.Read"/>. That is what makes an in-app extension's tab appear the moment
+    /// the viewer acquires it and disappear when the grant goes — the same stream, no reload.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>>
+        ContributedPersonAppTabs(LayoutAreaHost host)
+    {
+        var catalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (catalog is null)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = accessService?.Context ?? accessService?.CircuitContext;
+        if (viewer is not { ObjectId: { Length: > 0 } viewerObjectId, IsVirtual: false })
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var viewerId = accessService.ViewerId();
+        var userPath = host.Hub.Address.ToString();
+        // Bound on the render turn, never inside the Defer (see ContributedSettingsTabs).
+        var adminVerdict = AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerObjectId);
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.Configuration.PersonAppTabs");
+
+        return Observable.Defer(() =>
+        {
+            var ownNode = host.Workspace.GetMeshNodeStream()
+                .Select(node => (MeshNode?)node)
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+            return catalog.Contributions
+                .CombineLatest(ownNode, adminVerdict,
+                    (contributions, node, isAdmin) => UiContributionProjection
+                        .ProjectPersonAppTabs(contributions, userPath, node, isAdmin, viewerId))
+                .Select(projected => ApplyAddressAccess(projected,
+                    address => host.Hub.CheckPermissionOutcome(address, viewerObjectId, Permission.Read),
+                    (address, reason) => logger?.LogWarning(
+                        "Person-app tab hidden: no verdict on Read of '{Address}' for viewer {Viewer} (degraded dependency): {Reason}",
+                        address, viewerObjectId, reason)))
+                .Switch();
+        });
+    }
+
+    /// <summary>
+    /// Folds the live <see cref="UiContributionGates.RequireAddressAccess"/> answers into the
+    /// projected tabs: a tab with no probe passes as is; a probed one passes only on a GRANTED
+    /// verdict for <see cref="Permission.Read"/> on its address. A pending probe hides the tab
+    /// (seeded false). An UNDETERMINED verdict — the fold faulted or never answered — also hides it
+    /// (fail closed), but as the projection of a named outcome, never a swallowed exception: the
+    /// reason goes to <paramref name="onUndetermined"/> so a degraded dependency is logged, not read
+    /// as "the viewer does not hold this extension".
+    /// </summary>
+    /// <param name="projected">The projected tabs with the address each must probe (or null).</param>
+    /// <param name="outcomeOf">The viewer's live Read verdict on an address
+    /// (<c>CheckPermissionOutcome</c>, which classifies faults and silence as undetermined).</param>
+    /// <param name="onUndetermined">Told the address and reason of every undetermined verdict.</param>
+    internal static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> ApplyAddressAccess(
+        IReadOnlyList<(SettingsMenuItemDefinition Tab, string? AccessAddress)> projected,
+        Func<string, IObservable<PermissionCheckOutcome>> outcomeOf,
+        Action<string, string>? onUndetermined = null)
+    {
+        if (projected.Count == 0)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+        var verdicts = projected.Select(entry => entry.AccessAddress is not { Length: > 0 } address
+                ? Observable.Return(true)
+                : Observable.Defer(() => outcomeOf(address))
+                    .Do(outcome =>
+                    {
+                        if (outcome.IsUndetermined)
+                            onUndetermined?.Invoke(address, outcome.UndeterminedReason!);
+                    })
+                    .Select(PassesAddressAccess)
+                    .StartWith(false)
+                    .DistinctUntilChanged())
+            .ToList();
+        return Observable.CombineLatest(verdicts)
+            .Select(passes => (IReadOnlyList<SettingsMenuItemDefinition>)projected
+                .Where((_, i) => passes[i])
+                .Select(entry => entry.Tab)
+                .ToList());
+    }
+
+    /// <summary>The <see cref="UiContributionGates.RequireAddressAccess"/> verdict for one outcome:
+    /// GRANTED Read on the embedded address. Denied and undetermined both hide the tab. Pure.</summary>
+    /// <param name="outcome">The viewer's Read verdict on the address.</param>
+    internal static bool PassesAddressAccess(PermissionCheckOutcome outcome) => outcome.IsGranted;
+
+    /// <summary>
+    /// The contributed person-app tabs that do NOT shadow an established tab: a tab whose id is
+    /// already on the page (a compiled person-app tab such as <c>Sharing</c> or <c>Preferences</c>,
+    /// or a NodeSettings contribution) is dropped, so a package can never swap a surface in under a
+    /// familiar label. Case-insensitive, like the settings routes. Pure.
+    /// </summary>
+    /// <param name="established">The tabs already on the page.</param>
+    /// <param name="contributed">The person-app lane's tabs.</param>
+    internal static IReadOnlyList<SettingsMenuItemDefinition> WithoutShadowingTabs(
+        IReadOnlyList<SettingsMenuItemDefinition> established,
+        IReadOnlyList<SettingsMenuItemDefinition> contributed)
+    {
+        var taken = new HashSet<string>(established.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
+        return contributed.Where(t => taken.Add(t.Id)).ToList();
     }
 
     /// <summary>
