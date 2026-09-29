@@ -152,10 +152,20 @@ sweep re-fed exactly what the sender lost.
 | 4 | Steward's first write after its create (Plugins#2530) | `ARoutedWriteRightAfterItsCreateTest` (5 cases) | `HidePath`, `Relay.Hold`, a real pre-create probe | `MeshNodeStreamCache.ResetFailureState` made a no-op → the probe case red: `No node found at '…/Item'` |
 | 6 | Fleet watch freeze (#5011) | `AHeldReadSurvivesItsSourceSilo{BeingKilled,Draining}Test`, `AHeldReadOnAThirdSilo…`, `AHeldReadFollowsItsOwnersHandOffTest`, `AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest` | `Kill`, `Drain`, `Linger`, `HoldChangeFeed`, `HandOffTarget` | held-stream heartbeat pushed beyond the budget → all four kill/drain cases red (the owner never re-activates) |
 
-Cases 2, 3, 5, 7 and 8 exercise code that lives in MeshWeaver.Plugins (the Feedback submit, the
-Hosting record resolution, the plan-approve page, the running-action resumer, the PR steward's
-sweep). They move onto this harness there, by `ProjectReference` through the platform checkout,
-once the platform pin carries it.
+Cases 2, 3, 5, 7 and 8 exercise code that lives in MeshWeaver.Plugins, which reaches this harness by
+`ProjectReference` through its platform checkout (`Requires-platform: MeshWeaver#5879`):
+
+| # | Incident | Test (MeshWeaver.Plugins) | Injector | Negative control |
+|---|---|---|---|---|
+| 2 | Lost portal feedback (Plugins#2536, #5670) | `FeedbackSubmitRelocationTest` (Hosting.Monolith.Test) | `HoldWrites` | the hand-over fix reverted → red: the move enumerated the source while its flush was held |
+| 3 | Index grace too early (Plugins#2511) | `ASlowFirstFrameResolvesTheRecordTest` (Fleet.Control.Test) | `HeldFirstFrameQueryProvider`, held `IndexGrace + 2 s` | grace started with the reads → red: `Unseen` after 10.0 s |
+| 5 | Stale plan approve (Plugins#2542) | `AStalePlanApproveAcrossReplicasTest` (Fleet.Control.Test) | two silos, page and owner apart, `HoldChangeFeed` | page frozen on its first render → red; any digest accepted → red |
+| 8 | Webhook 500 during a roll (Plugins#2530) | `ALostWebhookIsReFedByTheSweepTest` (Fleet.Control.Test) | `FaultInjectingInbox.Refuse` | the sweep not kicking an unrecorded head → red |
+| 7 | Stuck Roll Verify (Plugins#2403) | not landed — see below | `Kill` | — |
+
+Each test file names what it compiles from the in-mesh sources (the Hosting package's `Source/*.cs`
+reach a test through `MeshWeaver.Fleet.Control`, which links them) and what, if anything, it supplies
+because the test mesh lacks it (case 8: the one GitHub read, as the sweep's pure rule takes it).
 
 ## What the cases found
 
@@ -185,6 +195,23 @@ pinned). Whether the steward met that second shape is **not established**. Separ
 routed into a transient NotFound window fails loudly naming the path, and the write-side breaker
 then holds the path shut for one base cooldown (2 s, measured) because no change event follows to
 clear it; the next natural write after that lands.
+
+**Plugins#2403 — the resumer's hold, intermittently without a heartbeat.** The case-7 test (two
+silos; the action's hub live on the old pod; `RunningActionResumer` started on the new pod; the old
+pod killed) cannot be made to discriminate yet, which is why it is not landed:
+
+- With the production read-stream idle release (10 min) it passes even when the resumer's hold is
+  removed. A still-warm cached stream's heartbeat is what re-activates the action, so the control is
+  invalid.
+- With the idle release shortened to 500 ms (`MeshNodeStreamCacheOptions`), which is what isolates
+  the hold, the same configuration was red in 2 of 5 runs. In a red run's message trace the new pod
+  sends no heartbeat for the action at all after the resumer's first emission; in the green runs it
+  sends one every second, and one of them re-activates the action after the kill.
+
+That is the #5011 shape again — a held read attached to nothing. Why the heartbeat is absent is **not
+established**; it is filed to triage with the traces. A core probe of the same hold that passed was
+also green with the idle sweep ignoring live subscribers, so it did not discriminate and was not
+kept.
 
 ## See also
 
