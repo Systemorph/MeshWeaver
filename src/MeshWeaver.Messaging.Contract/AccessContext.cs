@@ -66,6 +66,16 @@ public record AccessContext
     public bool IsApiToken { get; init; }
 
     /// <summary>
+    /// When true, this context is a SERVICE principal (a non-person identity, <c>ServiceIdentity</c>):
+    /// <see cref="ObjectId"/> is a service object id (<c>svc-…</c>) and the context was established by
+    /// one of that service's API tokens. Set ONLY by token validation — a session that resolves to a
+    /// service object id without it is refused by the request middleware, and a service context never
+    /// gets person-only treatment (onboarding, login tracking, logon actions). See
+    /// Doc/Architecture/ServiceIdentities.
+    /// </summary>
+    public bool IsService { get; init; }
+
+    /// <summary>
     /// When true, this context is a HUB credential: <see cref="ObjectId"/> is the hub's own
     /// mesh address (set by <c>ImpersonateAsHub</c>), not a user/group identity. A hub
     /// initializes and syncs its own EntityStore under this credential and a sub-hub subscribes
