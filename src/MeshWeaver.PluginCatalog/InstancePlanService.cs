@@ -50,10 +50,15 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
             Query = MeshWideQuery.Declare(
                 $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId.Trim()}"),
         };
-        return accessService.RunAsSystem(() => meshService.Query(request))
+        // 🚨 The MERGED Initial, never the first frame of the progressive fan-in: that one is seeded
+        // empty per provider, so an instance held by a provider that answers asynchronously (the
+        // Postgres store, in production) is not in it — the lookup then said "no registered
+        // instance" for every id.
+        return accessService.RunAsSystem(() => meshService.Query<MeshNode>(request))
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
             .Timeout(ReadTimeout)
-            .Select(results => results
+            .Select(change => change.Items
                 // The key-hash INDEX rows share the node type but live under the global index
                 // namespace and carry a hash prefix as their id — they never match an instance id,
                 // and the filter makes that explicit rather than incidental.
