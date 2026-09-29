@@ -165,6 +165,20 @@ a `Roll` `Hosting/InstanceAction`, not here.
   `scripts/resolve-line-pointer.sh`; the pointer moves only in `arm`'s phase D.
 - `memex-portal-ai:main` and the identity/pair tags move at promote — they are CI pointers, not a
   roll target of any instance.
+- **The control image follows the same gate.** `memex-control` is the same build as
+  `memex-portal-ai` under another repository name (`-p:MemexControlImage=true`, which adds
+  `MeshWeaver.Fleet.Control` and `MeshWeaver.SelfUpdate.Aks` and closes the type set — see
+  [Closed Type Set](../ClosedTypeSet)). Its own lane (`control-image` → `control-acceptance` →
+  `control-promote`) stays outside the fleet's delivery verdict, and `control-promote` writes only
+  identity tags: `<core7>`, the pair `<core7>-p<plugins7>` and `main`. The version tag and the line
+  pointers are written by `control-arm`, which runs after `arm` in every main-cd run
+  (`arm-promoted-set.py control-follow`): it reads the newest ARMED version and its pair tag off
+  memex-portal-ai and tags the accepted control image of that pair. An armed set without an accepted
+  control image is a warning naming the version the control image stays on — never a red on the
+  fleet's delivery, and healed by the next run once the pair is accepted. The version tag is written
+  to the fleet registry first and to ACR last, so its presence on ACR means both registries carry it.
+  Before this, `control-promote` wrote the version and the pointers at promotion, so an instance on
+  `memex-control` with a Continuous policy would have rolled to sets the gate had not armed.
 
 ### Containment is answerable
 
