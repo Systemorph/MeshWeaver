@@ -227,6 +227,69 @@ internal static class UiContributionProjection
     }
 
     /// <summary>
+    /// Projects the catalog's <see cref="UiContribution.PersonAppContext"/> entries into TABS of the
+    /// person app for the user node at <paramref name="userPath"/> — the data twin of
+    /// <c>PersonApp.AddPersonAppTab</c>, and the surface an in-app extension appears on inside the
+    /// person app (<c>Doc/Architecture/InAppExtensions</c>). The caller renders these ONLY on the
+    /// viewer's own user root; this projection applies the rest of the vocabulary:
+    /// <list type="bullet">
+    /// <item><description>the closed node-shape gates against the USER node;</description></item>
+    /// <item><description>the partition rule of an embedding contribution
+    /// (<see cref="IsInContributorsPartition"/>) — an address outside the contribution's own
+    /// partition drops the entry;</description></item>
+    /// <item><description>the permission floor, carried onto the definition and applied at the
+    /// render fold against the LATEST permissions (never baked in here — #1962).</description></item>
+    /// </list>
+    /// <see cref="UiContributionGates.RequireAddressAccess"/> needs a LIVE read the pure projection
+    /// cannot make, so it is returned as <c>AccessAddress</c> — the path the caller must see the
+    /// viewer holding Read on before the tab shows; null when the entry demands no such probe.
+    /// </summary>
+    /// <param name="contributions">The catalog snapshot.</param>
+    /// <param name="userPath">The user node whose person app is being rendered.</param>
+    /// <param name="userNode">That node, for the node-shape gates (null while it loads).</param>
+    /// <param name="isAdmin">Whether the viewer is a platform admin.</param>
+    /// <param name="viewerId">The viewer's id, for the viewer-home gate.</param>
+    public static IReadOnlyList<(SettingsMenuItemDefinition Tab, string? AccessAddress)> ProjectPersonAppTabs(
+        IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
+        string userPath,
+        MeshNode? userNode,
+        bool isAdmin,
+        string? viewerId)
+    {
+        var tabs = new List<(SettingsMenuItemDefinition, string?)>();
+        foreach (var (node, contribution) in contributions)
+        {
+            if (contribution.Context != UiContribution.PersonAppContext)
+                continue;
+            if (contribution.Area is not { Length: > 0 } area)
+                continue;
+            if (!PassesNodeGates(contribution.Gates, userPath, userNode, isAdmin, viewerId))
+                continue;
+
+            var address = contribution.Address is { Length: > 0 } declared ? declared.Trim('/') : null;
+            if (address is not null && !IsInContributorsPartition(address, node.Path))
+                continue;
+            var tab = new SettingsMenuItemDefinition(
+                Id: node.Id is { Length: > 0 } id ? id : area,
+                Label: contribution.Label ?? area,
+                // Embed INTO the pane's stack, like every contributed settings tab; the area renders
+                // on the declared hub (the extension's own) in the viewer's context, with its own
+                // access checks — or on the user node's hub when no address is declared.
+                ContentBuilder: (h, stack, _) => stack.WithView(Controls.LayoutArea(
+                    address is null ? h.Hub.Address : (object)(Address)address, area)),
+                Group: contribution.Group,
+                Icon: Icon.Parse(contribution.Icon),
+                GroupIcon: Icon.Parse(contribution.GroupIcon),
+                Order: contribution.Order,
+                RequiredPermission: RequiredPermissionFloor(contribution),
+                Keywords: contribution.Keywords)
+                { LabelKey = contribution.LabelKey, GroupKey = contribution.GroupKey };
+            tabs.Add((tab, contribution.Gates?.RequireAddressAccess == true ? address : null));
+        }
+        return tabs;
+    }
+
+    /// <summary>
     /// 🚨 The render-target authorization for an embedding contribution: a contribution may only
     /// embed an address inside ITS OWN partition (the first segment of the contribution node's
     /// path) — <c>Store/ProfileSections/subscription</c> may embed <c>Store</c> or

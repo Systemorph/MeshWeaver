@@ -54,6 +54,7 @@ public static class UiContributionSeedValidation
         UiContribution.NodeSettingsContext,
         UiContribution.TopBarContext,
         UiContribution.ProfileContext,
+        UiContribution.PersonAppContext,
         NodeMenuItemsExtensions.AiMenuContext,
         NodeMenuItemsExtensions.GitHubMenuContext,
     ];
@@ -127,6 +128,18 @@ public static class UiContributionSeedValidation
             {
                 problems.Add($"{path}: Href '{href}' is not portal-internal — the projection discards it and the entry quietly opens the derived area URL instead");
             }
+
+            // An embedding contribution may only render an address inside its OWN partition; the
+            // projection drops any other one, silently.
+            if (content.Context is UiContribution.ProfileContext or UiContribution.PersonAppContext
+                && content.Address is { Length: > 0 } embedded
+                && !UiContributionProjection.IsInContributorsPartition(embedded.Trim('/'), path))
+                problems.Add($"{path}: Address '{embedded}' lies outside the contribution's own partition — the projection drops the entry, silently");
+
+            // RequireAddressAccess probes the embedded address; with none there is nothing to probe
+            // and the gate the author meant to narrow with is inert.
+            if (content.Gates?.RequireAddressAccess == true && content.Address is not { Length: > 0 })
+                problems.Add($"{path}: Gates.RequireAddressAccess without an Address — nothing to probe, so the gate is inert");
 
             if (content.Label is { Length: > 0 } && content.LabelKey is not { Length: > 0 })
                 problems.Add($"{path}: Label '{content.Label}' has no LabelKey — it ships English to every non-English viewer");
